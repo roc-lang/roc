@@ -1031,8 +1031,6 @@ fn from_can_when<'a>(
         for when_branch in branches {
             let mono_expr = from_can(env, when_branch.value.value, procs, None);
 
-            // let mono_patterns = Vec::with_capacity_in(when_branch.patterns.len(), env.arena);
-
             for loc_pattern in when_branch.patterns {
                 let mono_pattern = from_can_pattern(env, &loc_pattern.value);
 

@@ -737,57 +737,6 @@ fn canonicalize_when_branch<'a>(
     )
 }
 
-/*
-fn canonicalize_when_branch<'a>(
-    env: &mut Env<'a>,
-    var_store: &VarStore,
-    scope: &Scope,
-    region: Region,
-    loc_pattern: &Located<ast::Pattern<'a>>,
-    loc_expr: &'a Located<ast::Expr<'a>>,
-    output: &mut Output,
-) -> (Located<Pattern>, Located<Expr>, References) {
-    // Each case branch gets a new scope for canonicalization.
-    // Shadow `scope` to make sure we don't accidentally use the original one for the
-    // rest of this block, but keep the original around for later diffing.
-    let original_scope = scope;
-    let mut scope = original_scope.clone();
-
-    let loc_can_pattern = canonicalize_pattern(
-        env,
-        var_store,
-        &mut scope,
-        WhenBranch,
-        &loc_pattern.value,
-        loc_pattern.region,
-    );
-
-    let (can_expr, branch_output) =
-        canonicalize_expr(env, var_store, &mut scope, region, &loc_expr.value);
-
-    // If we already recorded a tail call then keep it, else use this branch's tail call
-    match output.tail_call {
-        Some(_) => {}
-        None => output.tail_call = branch_output.tail_call,
-    };
-
-    // Now that we've collected all the references for this branch, check to see if
-    // any of the new idents it defined were unused. If any were, report it.
-    for (symbol, region) in scope.symbols() {
-        let symbol = *symbol;
-
-        if !output.references.has_lookup(symbol)
-            && !branch_output.references.has_lookup(symbol)
-            && !original_scope.contains_symbol(symbol)
-        {
-            env.problem(Problem::UnusedDef(symbol, *region));
-        }
-    }
-
-    (loc_can_pattern, can_expr, branch_output.references)
-}
-*/
-
 pub fn local_successors<'a>(
     references: &'a References,
     closures: &'a MutMap<Symbol, References>,

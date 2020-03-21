@@ -95,8 +95,8 @@ impl<'a> Layout<'a> {
                 true
             }
             Pointer(_) => {
-                // TODO is this accurate?
-                true
+                // We cannot memcpy pointers, because  then we would have the same pointer in multiple places!
+                false
             }
         }
     }
