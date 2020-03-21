@@ -1195,7 +1195,7 @@ fn call_with_args<'a, 'ctx, 'env>(
     }
 }
 
-fn load_list_len<'a, 'ctx, 'env>(
+fn load_list_len<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
