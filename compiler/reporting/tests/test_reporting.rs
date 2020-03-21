@@ -11,7 +11,9 @@ mod helpers;
 mod test_report {
     use crate::helpers::test_home;
     use roc_module::symbol::{Interns, ModuleId};
-    use roc_reporting::report::{can_problem, plain_text, Report, ReportText, DEFAULT_PALETTE};
+    use roc_reporting::report::{
+        can_problem, plain_text, Report, ReportText, DEFAULT_PALETTE, RED_CODE, RESET_CODE,
+    };
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use roc_types::types;
@@ -82,6 +84,12 @@ mod test_report {
         assert_eq!(buf, expected_rendering);
     }
 
+    fn human_readable(str: &str) -> String {
+        return str
+            .replace(RED_CODE, "<red>")
+            .replace(RESET_CODE, "<reset>");
+    }
+
     fn report_renders_in_color_from_src(src: &str, report: Report, expected_rendering: &str) {
         let (_type_problems, _can_problems, mut subs, home, interns) = infer_expr_help(src);
         let mut buf: String = String::new();
@@ -96,7 +104,7 @@ mod test_report {
             DEFAULT_PALETTE,
         );
 
-        assert_eq!(buf, expected_rendering);
+        assert_eq!(human_readable(&buf), expected_rendering);
     }
 
     fn report_renders_in_color(report: Report, expected_rendering: &str) {
@@ -245,10 +253,7 @@ mod test_report {
 
     #[test]
     fn report_in_color() {
-        report_renders_in_color(
-            to_simple_report(plain_text("y")),
-            "\u{001b}[31my\u{001b}[0m",
-        );
+        report_renders_in_color(to_simple_report(plain_text("y")), "<red>y<reset>");
     }
 
     #[test]
