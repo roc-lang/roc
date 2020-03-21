@@ -250,7 +250,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 // The first field in the struct should be the pointer.
                 let struct_val = builder
                     .build_insert_value(
-                        struct_type.const_zero(),
+                        struct_type.get_undef(),
                         BasicValueEnum::PointerValue(ptr_type.const_null()),
                         Builtin::WRAPPER_PTR,
                         "insert_ptr",
@@ -290,7 +290,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 // Store the pointer
                 struct_val = builder
                     .build_insert_value(
-                        struct_type.const_zero(),
+                        struct_type.get_undef(),
                         ptr_val,
                         Builtin::WRAPPER_PTR,
                         "insert_ptr",
@@ -1250,14 +1250,14 @@ fn clone_list<'a, 'ctx, 'env>(
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
 
-    //// Create a fresh wrapper struct for the newly populated array
+    // Create a fresh wrapper struct for the newly populated array
     let struct_type = collection_wrapper(ctx, ptr_val.get_type(), env.ptr_bytes);
     let mut struct_val;
 
     // Store the pointer
     struct_val = builder
         .build_insert_value(
-            struct_type.const_zero(),
+            struct_type.get_undef(),
             ptr_val,
             Builtin::WRAPPER_PTR,
             "insert_ptr",
