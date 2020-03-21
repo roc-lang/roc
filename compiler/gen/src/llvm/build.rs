@@ -287,7 +287,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
                 let mut struct_val;
 
-                // Field 0: pointer
+                // Store the pointer
                 struct_val = builder
                     .build_insert_value(
                         struct_type.const_zero(),
@@ -297,7 +297,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     )
                     .unwrap();
 
-                // Field 1: length
+                // Store the length
                 struct_val = builder
                     .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
                     .unwrap();
@@ -997,18 +997,14 @@ fn call_with_args<'a, 'ctx, 'env>(
         Symbol::LIST_LEN => {
             debug_assert!(args.len() == 1);
 
-            let wrapper_struct = args[0].0.into_struct_value();
-            let builder = env.builder;
-
-            // Get the usize int length
-            builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "unwrapped_list_len").unwrap().into_int_value().into()
+            BasicValueEnum::IntValue(load_list_len(env.builder, args[0].0.into_struct_value()))
         }
         Symbol::LIST_IS_EMPTY => {
             debug_assert!(args.len() == 1);
 
             let list_struct = args[0].0.into_struct_value();
             let builder = env.builder;
-            let list_len = builder.build_extract_value(list_struct, 1, "unwrapped_list_len").unwrap().into_int_value();
+            let list_len = load_list_len(builder, list_struct);
             let zero = env.ptr_int().const_zero();
             let answer = builder.build_int_compare(IntPredicate::EQ, list_len, zero, "is_zero");
 
@@ -1073,16 +1069,15 @@ fn call_with_args<'a, 'ctx, 'env>(
             let wrapper_struct = args[0].0.into_struct_value();
             let elem_index = args[1].0.into_int_value();
 
-            // Get the length from the wrapper struct
-            let _list_len = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "unwrapped_list_len").unwrap().into_int_value();
+            // Get the usize length from the wrapper struct
+            let _list_len = load_list_len(builder, wrapper_struct);
 
             // TODO here, check to see if the requested index exceeds the length of the array.
 
             match list_layout {
                 Layout::Builtin(Builtin::List(elem_layout)) => {
-                    // Get the pointer to the array data
-                    let array_data_ptr = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "unwrapped_list_ptr").unwrap().into_pointer_value();
-
+                    // Load the pointer to the array data
+                    let array_data_ptr = load_list_ptr(builder, wrapper_struct);
                     let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
                     let elem_size = env.context.i64_type().const_int(elem_bytes, false);
 
@@ -1090,7 +1085,9 @@ fn call_with_args<'a, 'ctx, 'env>(
                     let offset_bytes = builder.build_int_mul(elem_index, elem_size, "mul_offset");
 
                     // We already checked the bounds earlier.
-                    let elem_ptr = unsafe { builder.build_in_bounds_gep(array_data_ptr, &[offset_bytes], "elem") };
+                    let elem_ptr = unsafe {
+                        builder.build_in_bounds_gep(array_data_ptr, &[offset_bytes], "elem")
+                    };
 
                     builder.build_load(elem_ptr, "List.get")
                 }
@@ -1099,7 +1096,7 @@ fn call_with_args<'a, 'ctx, 'env>(
                 }
             }
         }
-        Symbol::LIST_SET /* TODO clone first for LIST_SET! */ | Symbol::LIST_SET_IN_PLACE => {
+        Symbol::LIST_SET => {
             let builder = env.builder;
 
             debug_assert!(args.len() == 3);
@@ -1108,14 +1105,17 @@ fn call_with_args<'a, 'ctx, 'env>(
             let elem_index = args[1].0.into_int_value();
             let (elem, elem_layout) = args[2];
 
-            // Slot 1 in the wrapper struct is the length
-            let _list_len = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "unwrapped_list_len").unwrap().into_int_value();
+            // Load the usize length
+            let _list_len = load_list_len(builder, wrapper_struct);
 
             // TODO here, check to see if the requested index exceeds the length of the array.
             // If so, bail out and return the list unaltered.
 
-            // Slot 0 in the wrapper struct is the pointer to the array data
-            let array_data_ptr = builder.build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "unwrapped_list_ptr").unwrap().into_pointer_value();
+            // TODO pass the length and data ptr to clone_list, so it doesn't load them twice
+            let wrapper_struct = clone_list(env, wrapper_struct, elem_layout);
+
+            // Load the pointer to the elements
+            let array_data_ptr = load_list_ptr(builder, wrapper_struct);
 
             let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
             let elem_size = env.context.i64_type().const_int(elem_bytes, false);
@@ -1124,7 +1124,42 @@ fn call_with_args<'a, 'ctx, 'env>(
             let offset_bytes = builder.build_int_mul(elem_index, elem_size, "mul_offset");
 
             // We already checked the bounds earlier.
-            let elem_ptr = unsafe { builder.build_in_bounds_gep(array_data_ptr, &[offset_bytes], "elem") };
+            let elem_ptr =
+                unsafe { builder.build_in_bounds_gep(array_data_ptr, &[offset_bytes], "elem") };
+
+            // Mutate the array in-place.
+            builder.build_store(elem_ptr, elem);
+
+            // Return the wrapper unchanged, since pointer, length and capacity are all unchanged
+            wrapper_struct.into()
+        }
+        Symbol::LIST_SET_IN_PLACE => {
+            let builder = env.builder;
+
+            debug_assert!(args.len() == 3);
+
+            let wrapper_struct = args[0].0.into_struct_value();
+            let elem_index = args[1].0.into_int_value();
+            let (elem, elem_layout) = args[2];
+
+            // Load the usize length
+            let _list_len = load_list_len(builder, wrapper_struct);
+
+            // TODO here, check to see if the requested index exceeds the length of the array.
+            // If so, bail out and return the list unaltered.
+
+            // Load the pointer to the elements
+            let array_data_ptr = load_list_ptr(builder, wrapper_struct);
+
+            let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+            let elem_size = env.context.i64_type().const_int(elem_bytes, false);
+
+            // Calculate the offset at runtime by multiplying the index by the size of an element.
+            let offset_bytes = builder.build_int_mul(elem_index, elem_size, "mul_offset");
+
+            // We already checked the bounds earlier.
+            let elem_ptr =
+                unsafe { builder.build_in_bounds_gep(array_data_ptr, &[offset_bytes], "elem") };
 
             // Mutate the array in-place.
             builder.build_store(elem_ptr, elem);
@@ -1144,11 +1179,95 @@ fn call_with_args<'a, 'ctx, 'env>(
                 arg_vals.push(*arg);
             }
 
-            let call = env.builder.build_call(fn_val, arg_vals.into_bump_slice(), "call");
+            let call = env
+                .builder
+                .build_call(fn_val, arg_vals.into_bump_slice(), "call");
 
             call.try_as_basic_value()
                 .left()
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
         }
     }
+}
+
+fn load_list_len<'a, 'ctx, 'env>(
+    builder: &Builder<'ctx>,
+    wrapper_struct: StructValue<'ctx>,
+) -> IntValue<'ctx> {
+    builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "list_len")
+        .unwrap()
+        .into_int_value()
+}
+
+fn load_list_ptr<'ctx>(
+    builder: &Builder<'ctx>,
+    wrapper_struct: StructValue<'ctx>,
+) -> PointerValue<'ctx> {
+    builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "list_ptr")
+        .unwrap()
+        .into_pointer_value()
+}
+
+fn clone_list<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    wrapper_struct: StructValue<'ctx>,
+    elem_layout: &Layout<'_>,
+) -> StructValue<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+    let elems_ptr = load_list_ptr(builder, wrapper_struct);
+    let list_len = load_list_len(builder, wrapper_struct);
+    let ptr_bytes = env.ptr_bytes;
+
+    // Calculate the number of bytes we'll need to allocate.
+    let elem_bytes = env
+        .ptr_int()
+        .const_int(elem_layout.stack_size(env.ptr_bytes) as u64, false);
+    let size = env
+        .builder
+        .build_int_mul(elem_bytes, list_len, "mul_len_by_elem_bytes");
+
+    // Allocate space for the new array that we'll copy into.
+    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let ptr_val = builder
+        .build_array_malloc(elem_type, list_len, "list_ptr")
+        .unwrap();
+
+    // Either memcpy or deep clone the array elements
+    if elem_layout.safe_to_memcpy() {
+        // Copy the bytes from the original array into the new
+        // one we just malloc'd.
+        //
+        // TODO how do we decide when to do the small memcpy vs the normal one?
+        builder
+            .build_memcpy(ptr_val, ptr_bytes, elems_ptr, ptr_bytes, size)
+            .unwrap_or_else(|err| {
+                panic!("Error while attempting LLVM memcpy: {:?}", err);
+            });
+    } else {
+        panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
+    }
+
+    //// Create a fresh wrapper struct for the newly populated array
+    let struct_type = collection_wrapper(ctx, ptr_val.get_type(), env.ptr_bytes);
+    let mut struct_val;
+
+    // Store the pointer
+    struct_val = builder
+        .build_insert_value(
+            struct_type.const_zero(),
+            ptr_val,
+            Builtin::WRAPPER_PTR,
+            "insert_ptr",
+        )
+        .unwrap();
+
+    // Store the length
+    struct_val = builder
+        .build_insert_value(struct_val, list_len, Builtin::WRAPPER_LEN, "insert_len")
+        .unwrap();
+
+    struct_val.into_struct_value()
 }
