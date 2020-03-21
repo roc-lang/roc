@@ -1101,21 +1101,26 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             debug_assert!(args.len() == 3);
 
-            let wrapper_struct = args[0].0.into_struct_value();
             let elem_index = args[1].0.into_int_value();
             let (elem, elem_layout) = args[2];
+            let (wrapper_struct, array_data_ptr) = {
+                // This original wrapper_struct should only stay in scope long enough to clone it.
+                // From then on, we should only ever reference the clone!
+                let wrapper_struct = args[0].0.into_struct_value();
 
-            // Load the usize length
-            let _list_len = load_list_len(builder, wrapper_struct);
+                // Load the usize length
+                let list_len = load_list_len(builder, wrapper_struct);
 
-            // TODO here, check to see if the requested index exceeds the length of the array.
-            // If so, bail out and return the list unaltered.
+                // TODO here, check to see if the requested index exceeds the length of the array.
+                // If so, bail out and return the list unaltered.
 
-            // TODO pass the length and data ptr to clone_list, so it doesn't load them twice
-            let wrapper_struct = clone_list(env, wrapper_struct, elem_layout);
-
-            // Load the pointer to the elements
-            let array_data_ptr = load_list_ptr(builder, wrapper_struct);
+                clone_list(
+                    env,
+                    list_len,
+                    load_list_ptr(builder, wrapper_struct),
+                    elem_layout,
+                )
+            };
 
             let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
             let elem_size = env.ptr_int().const_int(elem_bytes, false);
@@ -1212,13 +1217,12 @@ fn load_list_ptr<'ctx>(
 
 fn clone_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    wrapper_struct: StructValue<'ctx>,
+    list_len: IntValue<'ctx>,
+    elems_ptr: PointerValue<'ctx>,
     elem_layout: &Layout<'_>,
-) -> StructValue<'ctx> {
+) -> (StructValue<'ctx>, PointerValue<'ctx>) {
     let builder = env.builder;
     let ctx = env.context;
-    let elems_ptr = load_list_ptr(builder, wrapper_struct);
-    let list_len = load_list_len(builder, wrapper_struct);
     let ptr_bytes = env.ptr_bytes;
 
     // Calculate the number of bytes we'll need to allocate.
@@ -1269,5 +1273,5 @@ fn clone_list<'a, 'ctx, 'env>(
         .build_insert_value(struct_val, list_len, Builtin::WRAPPER_LEN, "insert_len")
         .unwrap();
 
-    struct_val.into_struct_value()
+    (struct_val.into_struct_value(), ptr_val)
 }
