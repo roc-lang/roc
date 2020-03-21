@@ -103,12 +103,15 @@ fn newline() -> ReportText {
     plain_text("\n")
 }
 
+pub const RED_CODE: &str = "\u{001b}[31m";
+pub const WHITE_CODE: &str = "\u{001b}[31m";
+
 fn red(str: &str) -> String {
     let mut buf = String::new();
 
-    buf.push_str("\u{001b}[31m");
+    buf.push_str(RED_CODE);
     buf.push_str(str);
-    buf.push_str("\u{001b}[0m");
+    buf.push_str(RESET_CODE);
 
     buf
 }
@@ -116,14 +119,14 @@ fn red(str: &str) -> String {
 fn white(str: &str) -> String {
     let mut buf = String::new();
 
-    buf.push_str("\u{001b}[31m");
+    buf.push_str(WHITE_CODE);
     buf.push_str(str);
-    buf.push_str(RESET);
+    buf.push_str(RESET_CODE);
 
     buf
 }
 
-const RESET: &str = "\u{001b}[0m";
+pub const RESET_CODE: &str = "\u{001b}[0m";
 
 impl ReportText {
     /// Render to CI console output, where no colors are available.
