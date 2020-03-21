@@ -1079,7 +1079,7 @@ fn call_with_args<'a, 'ctx, 'env>(
                     // Load the pointer to the array data
                     let array_data_ptr = load_list_ptr(builder, wrapper_struct);
                     let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-                    let elem_size = env.context.i64_type().const_int(elem_bytes, false);
+                    let elem_size = env.ptr_int().const_int(elem_bytes, false);
 
                     // Calculate the offset at runtime by multiplying the index by the size of an element.
                     let offset_bytes = builder.build_int_mul(elem_index, elem_size, "mul_offset");
@@ -1118,7 +1118,7 @@ fn call_with_args<'a, 'ctx, 'env>(
             let array_data_ptr = load_list_ptr(builder, wrapper_struct);
 
             let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-            let elem_size = env.context.i64_type().const_int(elem_bytes, false);
+            let elem_size = env.ptr_int().const_int(elem_bytes, false);
 
             // Calculate the offset at runtime by multiplying the index by the size of an element.
             let offset_bytes = builder.build_int_mul(elem_index, elem_size, "mul_offset");
