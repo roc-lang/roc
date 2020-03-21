@@ -131,11 +131,17 @@ pub enum Context {
     BadCase,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum Guard {
+    HasGuard,
+    NoGuard,
+}
+
 /// Check
 
 pub fn check<'a>(
     region: Region,
-    patterns: &[Located<crate::expr::Pattern<'a>>],
+    patterns: &[(Located<crate::expr::Pattern<'a>>, Guard)],
 ) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
     check_patterns(region, Context::BadArg, patterns, &mut errors);
@@ -150,7 +156,7 @@ pub fn check<'a>(
 pub fn check_patterns<'a>(
     region: Region,
     context: Context,
-    patterns: &[Located<crate::expr::Pattern<'a>>],
+    patterns: &[(Located<crate::expr::Pattern<'a>>, Guard)],
     errors: &mut Vec<Error>,
 ) {
     match to_nonredundant_rows(region, patterns) {
@@ -283,14 +289,52 @@ fn recover_ctor(
 /// INVARIANT: Produces a list of rows where (forall row. length row == 1)
 fn to_nonredundant_rows<'a>(
     overall_region: Region,
-    patterns: &[Located<crate::expr::Pattern<'a>>],
+    patterns: &[(Located<crate::expr::Pattern<'a>>, Guard)],
 ) -> Result<Vec<Vec<Pattern>>, Error> {
     let mut checked_rows = Vec::with_capacity(patterns.len());
 
-    for loc_pat in patterns {
+    // If any of the branches has a guard, e.g.
+    //
+    // when x is
+    //      y if y < 10 -> "foo"
+    //      _ -> "bar"
+    //
+    // then we treat it as a pattern match on the pattern and a boolean, wrapped in the #Guard
+    // constructor. We can use this special constructor name to generate better error messages.
+    // This transformation of the pattern match only works because we only report exhaustiveness
+    // errors: the Pattern created in this file is not used for code gen.
+    //
+    // when x is
+    //      #Guard y True -> "foo"
+    //      #Guard _ _    -> "bar"
+    let any_has_guard = patterns.iter().any(|(_, guard)| guard == &Guard::HasGuard);
+
+    for (loc_pat, guard) in patterns {
         let region = loc_pat.region;
 
-        let next_row = vec![simplify(&loc_pat.value)];
+        let next_row = if any_has_guard {
+            let guard_pattern = match guard {
+                Guard::HasGuard => Pattern::Literal(Literal::Bit(true)),
+                Guard::NoGuard => Pattern::Anything,
+            };
+
+            let union = Union {
+                alternatives: vec![Ctor {
+                    name: TagName::Global("#Guard".into()),
+                    arity: 2,
+                }],
+            };
+
+            let tag_name = TagName::Global("#Guard".into());
+
+            vec![Pattern::Ctor(
+                union,
+                tag_name,
+                vec![simplify(&loc_pat.value), guard_pattern],
+            )]
+        } else {
+            vec![simplify(&loc_pat.value)]
+        };
 
         if is_useful(&checked_rows, &next_row) {
             checked_rows.push(next_row);

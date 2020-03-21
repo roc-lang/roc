@@ -444,26 +444,25 @@ fn to_relevant_branch<'a>(
             start,
             found_pattern: (guard, pattern),
             end,
-        } => match test {
-            Test::Guarded(None, _guard_expr) => {
-                // theory: Some(branch)
-                todo!();
+        } => {
+            let actual_test = match test {
+                Test::Guarded(Some(box_test), _guard_expr) => box_test,
+                _ => test,
+            };
+
+            if let Some(mut new_branch) =
+                to_relevant_branch_help(actual_test, path, start, end, branch, guard, pattern)
+            {
+                // guards can/should only occur at the top level. When we recurse on these
+                // branches, the guard is not relevant any more. Not setthing the guard to None
+                // leads to infinite recursion.
+                new_branch.patterns.iter_mut().for_each(|(_, guard, _)| {
+                    *guard = None;
+                });
+
+                new_branches.push(new_branch);
             }
-            Test::Guarded(Some(box_test), _guard_expr) => {
-                if let Some(new_branch) =
-                    to_relevant_branch_help(box_test, path, start, end, branch, guard, pattern)
-                {
-                    new_branches.push(new_branch);
-                }
-            }
-            _ => {
-                if let Some(new_branch) =
-                    to_relevant_branch_help(test, path, start, end, branch, guard, pattern)
-                {
-                    new_branches.push(new_branch);
-                }
-            }
-        },
+        }
     }
 }
 
@@ -502,7 +501,7 @@ fn to_relevant_branch_help<'a>(
                             tag_id: *tag_id,
                             path: Box::new(path.clone()),
                         },
-                        guard.clone(),
+                        None,
                         pattern,
                     )
                 });
@@ -548,7 +547,7 @@ fn to_relevant_branch_help<'a>(
                                             tag_id: *tag_id,
                                             path: Box::new(path.clone()),
                                         },
-                                        guard.clone(),
+                                        None,
                                         pattern,
                                     )
                                 });

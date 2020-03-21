@@ -1540,20 +1540,20 @@ mod test_gen {
         );
     }
 
-    //    #[test]
-    //    fn if_guard_exhaustiveness() {
-    //        assert_evals_to!(
-    //            indoc!(
-    //                r#"
-    //                when 2 is
-    //                    _ if False -> 0
-    //                    _ -> 42
-    //                "#
-    //            ),
-    //            42,
-    //            i64
-    //        );
-    //    }
+    #[test]
+    fn if_guard_exhaustiveness() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when 2 is
+                    _ if False -> 0
+                    _ -> 42
+                "#
+            ),
+            42,
+            i64
+        );
+    }
 
     //    #[test]
     //    fn linked_list_empty() {

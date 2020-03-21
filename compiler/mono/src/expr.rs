@@ -1,5 +1,5 @@
 use crate::layout::{Builtin, Layout};
-use crate::pattern::Ctor;
+use crate::pattern::{Ctor, Guard};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_can;
@@ -996,9 +996,18 @@ fn from_can_when<'a>(
         let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
 
         // record pattern matches can have 1 branch and typecheck, but may still not be exhaustive
+        let guard = if first.guard.is_some() {
+            Guard::HasGuard
+        } else {
+            Guard::NoGuard
+        };
+
         match crate::pattern::check(
             Region::zero(),
-            &[Located::at(loc_when_pattern.region, mono_pattern.clone())],
+            &[(
+                Located::at(loc_when_pattern.region, mono_pattern.clone()),
+                guard,
+            )],
         ) {
             Ok(_) => {}
             Err(errors) => panic!("Errors in patterns: {:?}", errors),
@@ -1037,10 +1046,19 @@ fn from_can_when<'a>(
                 None
             };
 
+            let guard = if mono_guard.is_some() {
+                Guard::HasGuard
+            } else {
+                Guard::NoGuard
+            };
+
             for loc_pattern in when_branch.patterns {
                 let mono_pattern = from_can_pattern(env, &loc_pattern.value);
 
-                loc_branches.push(Located::at(loc_pattern.region, mono_pattern.clone()));
+                loc_branches.push((
+                    Located::at(loc_pattern.region, mono_pattern.clone()),
+                    guard.clone(),
+                ));
 
                 let mut stores = Vec::with_capacity_in(1, env.arena);
 
