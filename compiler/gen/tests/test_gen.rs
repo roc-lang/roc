@@ -554,11 +554,11 @@ mod test_gen {
 
     #[test]
     fn get_int_list() {
-        assert_evals_to!("List.getUnsafe [ 12, 9, 6, 3 ] 1", 9, i64);
+        assert_evals_to!("List.getUnsafe [ 12, 9, 6 ] 1", 9, i64);
     }
 
     #[test]
-    fn set_unique_int_list() {
+    fn get_set_unique_int_list() {
         assert_evals_to!("List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1", 42, i64);
     }
 
