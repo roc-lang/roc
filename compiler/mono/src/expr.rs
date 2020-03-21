@@ -983,57 +983,57 @@ fn from_can_when<'a>(
         // A when-expression with no branches is a runtime error.
         // We can't know what to return!
         panic!("TODO compile a 0-branch when-expression to a RuntimeError");
+    } else if branches.len() == 1 && branches[0].patterns.len() == 1 && branches[0].guard.is_none()
+    {
+        let first = branches.remove(0);
+        // A when-expression with exactly 1 branch is essentially a LetNonRec.
+        // As such, we can compile it direcly to a Store.
+        let arena = env.arena;
+        let mut stored = Vec::with_capacity_in(1, arena);
+
+        let loc_when_pattern = &first.patterns[0];
+
+        let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
+
+        // record pattern matches can have 1 branch and typecheck, but may still not be exhaustive
+        match crate::pattern::check(
+            Region::zero(),
+            &[Located::at(loc_when_pattern.region, mono_pattern.clone())],
+        ) {
+            Ok(_) => {}
+            Err(errors) => panic!("Errors in patterns: {:?}", errors),
+        }
+
+        let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+            .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+        let cond_symbol = env.fresh_symbol();
+        let cond = from_can(env, loc_cond.value, procs, None);
+        stored.push((cond_symbol, cond_layout.clone(), cond));
+
+        // NOTE this will still store shadowed names. I think that is fine because the branch
+        // will throw an error anyway.
+        let ret = match store_pattern(env, &mono_pattern, cond_symbol, cond_layout, &mut stored) {
+            Ok(_) => from_can(env, first.value.value, procs, None),
+            Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
+        };
+
+        Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
     } else {
-        let mut first = branches.remove(0);
+        let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+            .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
 
-        if branches.is_empty() && first.patterns.len() == 1 && first.guard.is_none() {
-            // A when-expression with exactly 1 branch is essentially a LetNonRec.
-            // As such, we can compile it direcly to a Store.
-            let arena = env.arena;
-            let mut stored = Vec::with_capacity_in(1, arena);
+        let cond = from_can(env, loc_cond.value, procs, None);
+        let cond_symbol = env.fresh_symbol();
 
-            let loc_when_pattern = first.patterns.remove(0);
+        let mut loc_branches = std::vec::Vec::new();
+        let mut opt_branches = std::vec::Vec::new();
 
-            let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
+        for when_branch in branches {
+            let mono_expr = from_can(env, when_branch.value.value, procs, None);
 
-            // record pattern matches can have 1 branch and typecheck, but may still not be exhaustive
-            match crate::pattern::check(
-                Region::zero(),
-                &[Located::at(loc_when_pattern.region, mono_pattern.clone())],
-            ) {
-                Ok(_) => {}
-                Err(errors) => panic!("Errors in patterns: {:?}", errors),
-            }
+            // let mono_patterns = Vec::with_capacity_in(when_branch.patterns.len(), env.arena);
 
-            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
-                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
-            let cond_symbol = env.fresh_symbol();
-            let cond = from_can(env, loc_cond.value, procs, None);
-            stored.push((cond_symbol, cond_layout.clone(), cond));
-
-            // NOTE this will still store shadowed names. I think that is fine because the branch
-            // will throw an error anyway.
-            let ret = match store_pattern(env, &mono_pattern, cond_symbol, cond_layout, &mut stored)
-            {
-                Ok(_) => from_can(env, first.value.value, procs, None),
-                Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
-            };
-
-            Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
-        } else {
-            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
-                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
-
-            let cond = from_can(env, loc_cond.value, procs, None);
-            let cond_symbol = env.fresh_symbol();
-
-            let mut loc_branches = std::vec::Vec::new();
-            let mut opt_branches = std::vec::Vec::new();
-
-            for when_branch in branches {
-                let loc_pattern = &when_branch.patterns[0];
-                let loc_expr = when_branch.value;
-
+            for loc_pattern in when_branch.patterns {
                 let mono_pattern = from_can_pattern(env, &loc_pattern.value);
 
                 loc_branches.push(Located::at(loc_pattern.region, mono_pattern.clone()));
@@ -1047,36 +1047,37 @@ fn from_can_when<'a>(
                     cond_layout.clone(),
                     &mut stores,
                 ) {
-                    Ok(_) => Expr::Store(
-                        stores.into_bump_slice(),
-                        env.arena.alloc(from_can(env, loc_expr.value, procs, None)),
-                    ),
+                    Ok(_) => {
+                        Expr::Store(stores.into_bump_slice(), env.arena.alloc(mono_expr.clone()))
+                    }
                     Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
                 };
 
                 opt_branches.push((mono_pattern, mono_expr));
             }
-
-            match crate::pattern::check(Region::zero(), &loc_branches) {
-                Ok(_) => {}
-                Err(errors) => panic!("Errors in patterns: {:?}", errors),
-            }
-
-            let ret_layout = Layout::from_var(env.arena, expr_var, env.subs, env.pointer_size)
-                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
-
-            let branching = crate::decision_tree::optimize_when(
-                env,
-                cond_symbol,
-                cond_layout.clone(),
-                ret_layout,
-                opt_branches,
-            );
-
-            let stores = env.arena.alloc([(cond_symbol, cond_layout, cond)]);
-
-            Expr::Store(stores, env.arena.alloc(branching))
         }
+
+        match crate::pattern::check(Region::zero(), &loc_branches) {
+            Ok(_) => {}
+            Err(errors) => {
+                panic!("Errors in patterns: {:?}", errors);
+            }
+        }
+
+        let ret_layout = Layout::from_var(env.arena, expr_var, env.subs, env.pointer_size)
+            .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+
+        let branching = crate::decision_tree::optimize_when(
+            env,
+            cond_symbol,
+            cond_layout.clone(),
+            ret_layout,
+            opt_branches,
+        );
+
+        let stores = env.arena.alloc([(cond_symbol, cond_layout, cond)]);
+
+        Expr::Store(stores, env.arena.alloc(branching))
     }
 }
 
