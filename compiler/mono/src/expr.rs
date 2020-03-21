@@ -1031,6 +1031,12 @@ fn from_can_when<'a>(
         for when_branch in branches {
             let mono_expr = from_can(env, when_branch.value.value, procs, None);
 
+            let mono_guard = if let Some(loc_guard) = when_branch.guard {
+                Some(from_can(env, loc_guard.value, procs, None))
+            } else {
+                None
+            };
+
             for loc_pattern in when_branch.patterns {
                 let mono_pattern = from_can_pattern(env, &loc_pattern.value);
 
@@ -1051,7 +1057,7 @@ fn from_can_when<'a>(
                     Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
                 };
 
-                opt_branches.push((mono_pattern, mono_expr));
+                opt_branches.push((mono_pattern, mono_guard.clone(), mono_expr));
             }
         }
 

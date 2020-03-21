@@ -19,12 +19,12 @@ type Label = u64;
 /// some normal branches and gives out a decision tree that has "labels" at all
 /// the leafs and a dictionary that maps these "labels" to the code that should
 /// run.
-pub fn compile(raw_branches: Vec<(Pattern<'_>, u64)>) -> DecisionTree {
+pub fn compile<'a>(raw_branches: Vec<(Option<Expr<'a>>, Pattern<'a>, u64)>) -> DecisionTree<'a> {
     let formatted = raw_branches
         .into_iter()
-        .map(|(pattern, index)| Branch {
+        .map(|(guard, pattern, index)| Branch {
             goal: index,
-            patterns: vec![(Path::Empty, pattern)],
+            patterns: vec![(Path::Empty, guard, pattern)],
         })
         .collect();
 
@@ -41,7 +41,7 @@ pub enum DecisionTree<'a> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Test<'a> {
     IsCtor {
         tag_id: u8,
@@ -58,6 +58,8 @@ pub enum Test<'a> {
         tag_id: u8,
         num_alts: usize,
     },
+    // A pattern that always succeeds (like `_`) can still have a guard
+    Guarded(Option<Box<Test<'a>>>, Expr<'a>),
 }
 use std::hash::{Hash, Hasher};
 impl<'a> Hash for Test<'a> {
@@ -89,7 +91,14 @@ impl<'a> Hash for Test<'a> {
             IsByte { tag_id, num_alts } => {
                 state.write_u8(5);
                 tag_id.hash(state);
-                num_alts.hash(state)
+                num_alts.hash(state);
+            }
+            Guarded(None, _) => {
+                state.write_u8(6);
+            }
+            Guarded(Some(nested), _) => {
+                state.write_u8(7);
+                nested.hash(state);
             }
         }
     }
@@ -111,7 +120,7 @@ pub enum Path {
 #[derive(Clone, Debug, PartialEq)]
 struct Branch<'a> {
     goal: Label,
-    patterns: Vec<(Path, Pattern<'a>)>,
+    patterns: Vec<(Path, Option<Expr<'a>>, Pattern<'a>)>,
 }
 
 fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
@@ -163,6 +172,7 @@ fn is_complete(tests: &[Test]) -> bool {
             Test::IsInt(_) => false,
             Test::IsFloat(_) => false,
             Test::IsStr(_) => false,
+            Test::Guarded(_, _) => false,
         },
     }
 }
@@ -179,20 +189,28 @@ fn flatten_patterns(branch: Branch) -> Branch {
     }
 }
 
-fn flatten<'a>(path_pattern: (Path, Pattern<'a>), path_patterns: &mut Vec<(Path, Pattern<'a>)>) {
-    match &path_pattern.1 {
+fn flatten<'a>(
+    path_pattern: (Path, Option<Expr<'a>>, Pattern<'a>),
+    path_patterns: &mut Vec<(Path, Option<Expr<'a>>, Pattern<'a>)>,
+) {
+    match &path_pattern.2 {
         Pattern::AppliedTag {
             union,
             arguments,
             tag_id,
             ..
         } => {
+            // TODO do we need to check that guard.is_none() here?
             if union.alternatives.len() == 1 {
                 let path = path_pattern.0;
                 // Theory: unbox doesn't have any value for us, because one-element tag unions
                 // don't store the tag anyway.
                 if arguments.len() == 1 {
-                    path_patterns.push((Path::Unbox(Box::new(path)), path_pattern.1.clone()));
+                    path_patterns.push((
+                        Path::Unbox(Box::new(path)),
+                        path_pattern.1.clone(),
+                        path_pattern.2.clone(),
+                    ));
                 } else {
                     for (index, (arg_pattern, _)) in arguments.iter().enumerate() {
                         flatten(
@@ -202,6 +220,8 @@ fn flatten<'a>(path_pattern: (Path, Pattern<'a>), path_patterns: &mut Vec<(Path,
                                     tag_id: *tag_id,
                                     path: Box::new(path.clone()),
                                 },
+                                // same guard here?
+                                path_pattern.1.clone(),
                                 arg_pattern.clone(),
                             ),
                             path_patterns,
@@ -227,7 +247,11 @@ fn flatten<'a>(path_pattern: (Path, Pattern<'a>), path_patterns: &mut Vec<(Path,
 /// us something like ("x" => value.0.0)
 fn check_for_match(branches: &Vec<Branch>) -> Option<Label> {
     match branches.get(0) {
-        Some(Branch { goal, patterns }) if patterns.iter().all(|(_, p)| !needs_tests(p)) => {
+        Some(Branch { goal, patterns })
+            if patterns
+                .iter()
+                .all(|(_, guard, pattern)| guard.is_none() && !needs_tests(pattern)) =>
+        {
             Some(*goal)
         }
         _ => None,
@@ -268,18 +292,20 @@ fn gather_edges<'a>(
 fn tests_at_path<'a>(selected_path: &Path, branches: Vec<Branch<'a>>) -> Vec<Test<'a>> {
     // NOTE the ordering of the result is important!
 
-    let mut visited = MutSet::default();
-    let mut unique = Vec::new();
+    let mut all_tests = Vec::new();
 
-    let all_tests = branches
-        .into_iter()
-        .filter_map(|b| test_at_path(selected_path, b));
+    for branch in branches.into_iter() {
+        test_at_path(selected_path, branch, &mut all_tests);
+    }
 
     // The rust HashMap also uses equality, here we really want to use the custom hash function
     // defined on Test to determine whether a test is unique. So we have to do the hashing
     // explicitly
 
     use std::collections::hash_map::DefaultHasher;
+
+    let mut visited = MutSet::default();
+    let mut unique = Vec::new();
 
     for test in all_tests {
         let hash = {
@@ -297,66 +323,93 @@ fn tests_at_path<'a>(selected_path: &Path, branches: Vec<Branch<'a>>) -> Vec<Tes
     unique
 }
 
-fn test_at_path<'a>(selected_path: &Path, branch: Branch<'a>) -> Option<Test<'a>> {
+fn test_at_path<'a>(selected_path: &Path, branch: Branch<'a>, all_tests: &mut Vec<Test<'a>>) {
     use Pattern::*;
     use Test::*;
 
     match branch
         .patterns
         .iter()
-        .find(|(path, _)| path == selected_path)
+        .find(|(path, _, _)| path == selected_path)
     {
-        None => None,
-        Some((_, pattern)) => match pattern {
-            Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => None,
+        None => {}
+        Some((_, guard, pattern)) => {
+            let guarded = |test| {
+                if let Some(guard) = guard {
+                    Guarded(Some(Box::new(test)), guard.clone())
+                } else {
+                    test
+                }
+            };
 
-            RecordDestructure(destructs, _) => {
-                let union = Union {
-                    alternatives: vec![Ctor {
-                        name: TagName::Global("#Record".into()),
-                        arity: destructs.len(),
-                    }],
-                };
-
-                let mut arguments = std::vec::Vec::new();
-
-                for destruct in destructs {
-                    if let Some(guard) = &destruct.guard {
-                        arguments.push((guard.clone(), destruct.layout.clone()));
-                    } else {
-                        arguments.push((Pattern::Underscore, destruct.layout.clone()));
+            match pattern {
+                // TODO use guard!
+                Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => {
+                    if let Some(guard) = guard {
+                        all_tests.push(Guarded(None, guard.clone()));
                     }
                 }
 
-                Some(IsCtor {
-                    tag_id: 0,
-                    tag_name: TagName::Global("#Record".into()),
-                    union,
-                    arguments,
-                })
-            }
+                RecordDestructure(destructs, _) => {
+                    let union = Union {
+                        alternatives: vec![Ctor {
+                            name: TagName::Global("#Record".into()),
+                            arity: destructs.len(),
+                        }],
+                    };
 
-            AppliedTag {
-                tag_name,
-                tag_id,
-                arguments,
-                union,
-                ..
-            } => Some(IsCtor {
-                tag_id: *tag_id,
-                tag_name: tag_name.clone(),
-                union: union.clone(),
-                arguments: arguments.to_vec(),
-            }),
-            BitLiteral(v) => Some(IsBit(*v)),
-            EnumLiteral { tag_id, enum_size } => Some(IsByte {
-                tag_id: *tag_id,
-                num_alts: *enum_size as usize,
-            }),
-            IntLiteral(v) => Some(IsInt(*v)),
-            FloatLiteral(v) => Some(IsFloat(*v)),
-            StrLiteral(v) => Some(IsStr(v.clone())),
-        },
+                    let mut arguments = std::vec::Vec::new();
+
+                    for destruct in destructs {
+                        if let Some(guard) = &destruct.guard {
+                            arguments.push((guard.clone(), destruct.layout.clone()));
+                        } else {
+                            arguments.push((Pattern::Underscore, destruct.layout.clone()));
+                        }
+                    }
+
+                    all_tests.push(IsCtor {
+                        tag_id: 0,
+                        tag_name: TagName::Global("#Record".into()),
+                        union,
+                        arguments,
+                    });
+                }
+
+                AppliedTag {
+                    tag_name,
+                    tag_id,
+                    arguments,
+                    union,
+                    ..
+                } => {
+                    all_tests.push(IsCtor {
+                        tag_id: *tag_id,
+                        tag_name: tag_name.clone(),
+                        union: union.clone(),
+                        arguments: arguments.to_vec(),
+                    });
+                }
+                BitLiteral(v) => {
+                    all_tests.push(IsBit(*v));
+                }
+                EnumLiteral { tag_id, enum_size } => {
+                    all_tests.push(IsByte {
+                        tag_id: *tag_id,
+                        num_alts: *enum_size as usize,
+                    });
+                }
+                IntLiteral(v) => {
+                    all_tests.push(guarded(IsInt(*v)));
+                }
+                FloatLiteral(v) => {
+                    all_tests.push(IsFloat(*v));
+                }
+                StrLiteral(v) => {
+                    all_tests.push(IsStr(v.clone()));
+                }
+            };
+        }
     }
 }
 
@@ -367,180 +420,223 @@ fn edges_for<'a>(
     branches: Vec<Branch<'a>>,
     test: Test<'a>,
 ) -> (Test<'a>, Vec<Branch<'a>>) {
-    let new_branches = branches
-        .into_iter()
-        .filter_map(|b| to_relevant_branch(&test, path, b))
-        .collect();
+    let mut new_branches = Vec::new();
+
+    for branch in branches.into_iter() {
+        to_relevant_branch(&test, path, branch, &mut new_branches);
+    }
 
     (test, new_branches)
 }
 
-fn to_relevant_branch<'a>(test: &Test<'a>, path: &Path, branch: Branch<'a>) -> Option<Branch<'a>> {
+fn to_relevant_branch<'a>(
+    test: &Test<'a>,
+    path: &Path,
+    branch: Branch<'a>,
+    new_branches: &mut Vec<Branch<'a>>,
+) {
+    // TODO remove clone
+    match extract(path, branch.patterns.clone()) {
+        Extract::NotFound => {
+            new_branches.push(branch);
+        }
+        Extract::Found {
+            start,
+            found_pattern: (guard, pattern),
+            end,
+        } => match test {
+            Test::Guarded(None, _guard_expr) => {
+                // theory: Some(branch)
+                todo!();
+            }
+            Test::Guarded(Some(box_test), _guard_expr) => {
+                if let Some(new_branch) =
+                    to_relevant_branch_help(box_test, path, start, end, branch, guard, pattern)
+                {
+                    new_branches.push(new_branch);
+                }
+            }
+            _ => {
+                if let Some(new_branch) =
+                    to_relevant_branch_help(test, path, start, end, branch, guard, pattern)
+                {
+                    new_branches.push(new_branch);
+                }
+            }
+        },
+    }
+}
+
+fn to_relevant_branch_help<'a>(
+    test: &Test<'a>,
+    path: &Path,
+    mut start: Vec<(Path, Option<Expr<'a>>, Pattern<'a>)>,
+    end: Vec<(Path, Option<Expr<'a>>, Pattern<'a>)>,
+    branch: Branch<'a>,
+    guard: Option<Expr<'a>>,
+    pattern: Pattern<'a>,
+) -> Option<Branch<'a>> {
     use Pattern::*;
     use Test::*;
 
-    // TODO remove clone
-    match extract(path, branch.patterns.clone()) {
-        Extract::NotFound => Some(branch),
-        Extract::Found {
-            mut start,
-            found_pattern: pattern,
-            end,
+    match pattern {
+        Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => Some(branch),
+
+        RecordDestructure(destructs, _) => match test {
+            IsCtor {
+                tag_name: test_name,
+                tag_id,
+                ..
+            } => {
+                debug_assert!(test_name == &TagName::Global("#Record".into()));
+                let sub_positions = destructs.into_iter().enumerate().map(|(index, destruct)| {
+                    let pattern = if let Some(guard) = destruct.guard {
+                        guard.clone()
+                    } else {
+                        Pattern::Underscore
+                    };
+
+                    (
+                        Path::Index {
+                            index: index as u64,
+                            tag_id: *tag_id,
+                            path: Box::new(path.clone()),
+                        },
+                        guard.clone(),
+                        pattern,
+                    )
+                });
+                start.extend(sub_positions);
+                start.extend(end);
+
+                Some(Branch {
+                    goal: branch.goal,
+                    patterns: start,
+                })
+            }
+            _ => None,
+        },
+
+        AppliedTag {
+            tag_name,
+            arguments,
+            union,
+            ..
         } => {
-            match pattern {
-                Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => Some(branch),
-
-                RecordDestructure(destructs, _) => match test {
-                    IsCtor {
-                        tag_name: test_name,
-                        tag_id,
-                        ..
-                    } => {
-                        debug_assert!(test_name == &TagName::Global("#Record".into()));
+            match test {
+                IsCtor {
+                    tag_name: test_name,
+                    tag_id,
+                    ..
+                } if &tag_name == test_name => {
+                    // Theory: Unbox doesn't have any value for us
+                    if arguments.len() == 1 && union.alternatives.len() == 1 {
+                        let arg = arguments[0].clone();
+                        {
+                            start.push((Path::Unbox(Box::new(path.clone())), guard, arg.0));
+                            start.extend(end);
+                        }
+                    } else {
                         let sub_positions =
-                            destructs.into_iter().enumerate().map(|(index, destruct)| {
-                                let pattern = if let Some(guard) = destruct.guard {
-                                    guard.clone()
-                                } else {
-                                    Pattern::Underscore
-                                };
-
-                                (
-                                    Path::Index {
-                                        index: index as u64,
-                                        tag_id: *tag_id,
-                                        path: Box::new(path.clone()),
-                                    },
-                                    pattern,
-                                )
-                            });
+                            arguments
+                                .into_iter()
+                                .enumerate()
+                                .map(|(index, (pattern, _))| {
+                                    (
+                                        Path::Index {
+                                            index: index as u64,
+                                            tag_id: *tag_id,
+                                            path: Box::new(path.clone()),
+                                        },
+                                        guard.clone(),
+                                        pattern,
+                                    )
+                                });
                         start.extend(sub_positions);
                         start.extend(end);
-
-                        Some(Branch {
-                            goal: branch.goal,
-                            patterns: start,
-                        })
                     }
-                    _ => None,
-                },
 
-                AppliedTag {
-                    tag_name,
-                    arguments,
-                    union,
-                    ..
-                } => {
-                    match test {
-                        IsCtor {
-                            tag_name: test_name,
-                            tag_id,
-                            ..
-                        } if &tag_name == test_name => {
-                            // Theory: Unbox doesn't have any value for us
-                            if arguments.len() == 1 && union.alternatives.len() == 1 {
-                                let arg = arguments[0].clone();
-                                {
-                                    start.push((Path::Unbox(Box::new(path.clone())), arg.0));
-                                    start.extend(end);
-                                }
-                            } else {
-                                let sub_positions = arguments.into_iter().enumerate().map(
-                                    |(index, (pattern, _))| {
-                                        (
-                                            Path::Index {
-                                                index: index as u64,
-                                                tag_id: *tag_id,
-                                                path: Box::new(path.clone()),
-                                            },
-                                            pattern,
-                                        )
-                                    },
-                                );
-                                start.extend(sub_positions);
-                                start.extend(end);
-                            }
-
-                            Some(Branch {
-                                goal: branch.goal,
-                                patterns: start,
-                            })
-                        }
-                        _ => None,
-                    }
+                    Some(Branch {
+                        goal: branch.goal,
+                        patterns: start,
+                    })
                 }
-                StrLiteral(string) => match test {
-                    IsStr(test_str) if string == *test_str => {
-                        start.extend(end);
-                        Some(Branch {
-                            goal: branch.goal,
-                            patterns: start,
-                        })
-                    }
-                    _ => None,
-                },
-
-                IntLiteral(int) => match test {
-                    IsInt(is_int) if int == *is_int => {
-                        start.extend(end);
-                        Some(Branch {
-                            goal: branch.goal,
-                            patterns: start,
-                        })
-                    }
-                    _ => None,
-                },
-
-                FloatLiteral(float) => match test {
-                    IsFloat(test_float) if float == *test_float => {
-                        start.extend(end);
-                        Some(Branch {
-                            goal: branch.goal,
-                            patterns: start,
-                        })
-                    }
-                    _ => None,
-                },
-
-                BitLiteral(bit) => match test {
-                    IsBit(test_bit) if bit == *test_bit => {
-                        start.extend(end);
-                        Some(Branch {
-                            goal: branch.goal,
-                            patterns: start,
-                        })
-                    }
-                    _ => None,
-                },
-
-                EnumLiteral { tag_id, .. } => match test {
-                    IsByte {
-                        tag_id: test_id, ..
-                    } if tag_id == *test_id => {
-                        start.extend(end);
-                        Some(Branch {
-                            goal: branch.goal,
-                            patterns: start,
-                        })
-                    }
-
-                    _ => None,
-                },
+                _ => None,
             }
         }
+        StrLiteral(string) => match test {
+            IsStr(test_str) if string == *test_str => {
+                start.extend(end);
+                Some(Branch {
+                    goal: branch.goal,
+                    patterns: start,
+                })
+            }
+            _ => None,
+        },
+
+        IntLiteral(int) => match test {
+            IsInt(is_int) if int == *is_int => {
+                start.extend(end);
+                Some(Branch {
+                    goal: branch.goal,
+                    patterns: start,
+                })
+            }
+            _ => None,
+        },
+
+        FloatLiteral(float) => match test {
+            IsFloat(test_float) if float == *test_float => {
+                start.extend(end);
+                Some(Branch {
+                    goal: branch.goal,
+                    patterns: start,
+                })
+            }
+            _ => None,
+        },
+
+        BitLiteral(bit) => match test {
+            IsBit(test_bit) if bit == *test_bit => {
+                start.extend(end);
+                Some(Branch {
+                    goal: branch.goal,
+                    patterns: start,
+                })
+            }
+            _ => None,
+        },
+
+        EnumLiteral { tag_id, .. } => match test {
+            IsByte {
+                tag_id: test_id, ..
+            } if tag_id == *test_id => {
+                start.extend(end);
+                Some(Branch {
+                    goal: branch.goal,
+                    patterns: start,
+                })
+            }
+
+            _ => None,
+        },
     }
 }
 
 enum Extract<'a> {
     NotFound,
     Found {
-        start: Vec<(Path, Pattern<'a>)>,
-        found_pattern: Pattern<'a>,
-        end: Vec<(Path, Pattern<'a>)>,
+        start: Vec<(Path, Option<Expr<'a>>, Pattern<'a>)>,
+        found_pattern: (Option<Expr<'a>>, Pattern<'a>),
+        end: Vec<(Path, Option<Expr<'a>>, Pattern<'a>)>,
     },
 }
 
-fn extract<'a>(selected_path: &Path, path_patterns: Vec<(Path, Pattern<'a>)>) -> Extract<'a> {
+fn extract<'a>(
+    selected_path: &Path,
+    path_patterns: Vec<(Path, Option<Expr<'a>>, Pattern<'a>)>,
+) -> Extract<'a> {
     let mut start = Vec::new();
 
     // TODO remove this clone
@@ -551,7 +647,7 @@ fn extract<'a>(selected_path: &Path, path_patterns: Vec<(Path, Pattern<'a>)>) ->
         if &current.0 == selected_path {
             return Extract::Found {
                 start,
-                found_pattern: current.1,
+                found_pattern: (current.1, current.2),
                 end: {
                     copy.drain(0..=index);
                     copy
@@ -571,10 +667,10 @@ fn is_irrelevant_to<'a>(selected_path: &Path, branch: &Branch<'a>) -> bool {
     match branch
         .patterns
         .iter()
-        .find(|(path, _)| path == selected_path)
+        .find(|(path, _, _)| path == selected_path)
     {
         None => true,
-        Some((_, pattern)) => !needs_tests(pattern),
+        Some((_, guard, pattern)) => guard.is_none() && !needs_tests(pattern),
     }
 }
 
@@ -620,10 +716,10 @@ fn pick_path(branches: Vec<Branch>) -> Path {
     }
 }
 
-fn is_choice_path(path_and_pattern: (Path, Pattern<'_>)) -> Option<Path> {
-    let (path, pattern) = path_and_pattern;
+fn is_choice_path<'a>(path_and_pattern: (Path, Option<Expr<'a>>, Pattern<'a>)) -> Option<Path> {
+    let (path, guard, pattern) = path_and_pattern;
 
-    if needs_tests(&pattern) {
+    if guard.is_some() || needs_tests(&pattern) {
         Some(path)
     } else {
         None
@@ -737,12 +833,14 @@ pub fn optimize_when<'a>(
     cond_symbol: Symbol,
     cond_layout: Layout<'a>,
     ret_layout: Layout<'a>,
-    opt_branches: Vec<(Pattern<'a>, Expr<'a>)>,
+    opt_branches: Vec<(Pattern<'a>, Option<Expr<'a>>, Expr<'a>)>,
 ) -> Expr<'a> {
     let (patterns, _indexed_branches) = opt_branches
         .into_iter()
         .enumerate()
-        .map(|(index, (pattern, branch))| ((pattern, index as u64), (index as u64, branch)))
+        .map(|(index, (pattern, guard, branch))| {
+            ((guard, pattern, index as u64), (index as u64, branch))
+        })
         .unzip();
 
     let indexed_branches: Vec<(u64, Expr<'a>)> = _indexed_branches;
@@ -835,6 +933,98 @@ fn path_to_expr_help<'a>(
     }
 }
 
+fn test_to_equality<'a>(
+    env: &mut Env<'a, '_>,
+    cond_symbol: Symbol,
+    cond_layout: &Layout<'a>,
+    path: &Path,
+    test: Test<'a>,
+    tests: &mut Vec<(Expr<'a>, Expr<'a>, Layout<'a>)>,
+) {
+    match test {
+        Test::IsCtor {
+            tag_id,
+            union,
+            arguments,
+            ..
+        } => {
+            // the IsCtor check should never be generated for tag unions of size 1
+            // (e.g. record pattern guard matches)
+            debug_assert!(union.alternatives.len() > 1);
+
+            let lhs = Expr::Int(tag_id as i64);
+
+            let mut field_layouts =
+                bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
+
+            // add the tag discriminant
+            field_layouts.push(Layout::Builtin(Builtin::Int64));
+
+            for (_, layout) in arguments {
+                field_layouts.push(layout);
+            }
+
+            let rhs = Expr::AccessAtIndex {
+                index: 0,
+                field_layouts: field_layouts.into_bump_slice(),
+                expr: env.arena.alloc(Expr::Load(cond_symbol)),
+                is_unwrapped: union.alternatives.len() == 1,
+            };
+
+            tests.push((lhs, rhs, Layout::Builtin(Builtin::Int64)));
+        }
+        Test::IsInt(test_int) => {
+            let lhs = Expr::Int(test_int);
+            let rhs = path_to_expr(env, cond_symbol, &path, &cond_layout);
+
+            tests.push((lhs, rhs, Layout::Builtin(Builtin::Int64)));
+        }
+
+        Test::IsFloat(test_int) => {
+            // TODO maybe we can actually use i64 comparison here?
+            let test_float = f64::from_bits(test_int as u64);
+            let lhs = Expr::Float(test_float);
+            let rhs = path_to_expr(env, cond_symbol, &path, &cond_layout);
+
+            tests.push((lhs, rhs, Layout::Builtin(Builtin::Float64)));
+        }
+
+        Test::IsByte {
+            tag_id: test_byte, ..
+        } => {
+            let lhs = Expr::Byte(test_byte);
+            let rhs = path_to_expr(env, cond_symbol, &path, &cond_layout);
+
+            tests.push((lhs, rhs, Layout::Builtin(Builtin::Byte)));
+        }
+
+        Test::IsBit(test_bit) => {
+            let lhs = Expr::Bool(test_bit);
+            let rhs = path_to_expr(env, cond_symbol, &path, &cond_layout);
+
+            tests.push((lhs, rhs, Layout::Builtin(Builtin::Bool)));
+        }
+
+        Test::IsStr(test_str) => {
+            let lhs = Expr::Str(env.arena.alloc(test_str));
+            let rhs = path_to_expr(env, cond_symbol, &path, &cond_layout);
+
+            tests.push((lhs, rhs, Layout::Builtin(Builtin::Str)));
+        }
+
+        Test::Guarded(test, expr) => {
+            if let Some(nested) = test {
+                test_to_equality(env, cond_symbol, cond_layout, path, *nested, tests);
+            }
+
+            let lhs = Expr::Bool(true);
+            let rhs = expr;
+
+            tests.push((lhs, rhs, Layout::Builtin(Builtin::Bool)));
+        }
+    }
+}
+
 fn decide_to_branching<'a>(
     env: &mut Env<'a, '_>,
     cond_symbol: Symbol,
@@ -861,77 +1051,7 @@ fn decide_to_branching<'a>(
             let mut tests = Vec::with_capacity(test_chain.len());
 
             for (path, test) in test_chain {
-                match test {
-                    Test::IsCtor {
-                        tag_id,
-                        union,
-                        arguments,
-                        ..
-                    } => {
-                        // the IsCtor check should never be generated for tag unions of size 1
-                        // (e.g. record pattern guard matches)
-                        debug_assert!(union.alternatives.len() > 1);
-
-                        let lhs = Expr::Int(tag_id as i64);
-
-                        let mut field_layouts =
-                            bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
-
-                        // add the tag discriminant
-                        field_layouts.push(Layout::Builtin(Builtin::Int64));
-
-                        for (_, layout) in arguments {
-                            field_layouts.push(layout);
-                        }
-
-                        let rhs = Expr::AccessAtIndex {
-                            index: 0,
-                            field_layouts: field_layouts.into_bump_slice(),
-                            expr: env.arena.alloc(Expr::Load(cond_symbol)),
-                            is_unwrapped: union.alternatives.len() == 1,
-                        };
-
-                        tests.push((lhs, rhs, Layout::Builtin(Builtin::Int64)));
-                    }
-                    Test::IsInt(test_int) => {
-                        let lhs = Expr::Int(test_int);
-                        let rhs = path_to_expr(env, cond_symbol, &path, &cond_layout);
-
-                        tests.push((lhs, rhs, Layout::Builtin(Builtin::Int64)));
-                    }
-
-                    Test::IsFloat(test_int) => {
-                        // TODO maybe we can actually use i64 comparison here?
-                        let test_float = f64::from_bits(test_int as u64);
-                        let lhs = Expr::Float(test_float);
-                        let rhs = path_to_expr(env, cond_symbol, &path, &cond_layout);
-
-                        tests.push((lhs, rhs, Layout::Builtin(Builtin::Float64)));
-                    }
-
-                    Test::IsByte {
-                        tag_id: test_byte, ..
-                    } => {
-                        let lhs = Expr::Byte(test_byte);
-                        let rhs = path_to_expr(env, cond_symbol, &path, &cond_layout);
-
-                        tests.push((lhs, rhs, Layout::Builtin(Builtin::Byte)));
-                    }
-
-                    Test::IsBit(test_bit) => {
-                        let lhs = Expr::Bool(test_bit);
-                        let rhs = path_to_expr(env, cond_symbol, &path, &cond_layout);
-
-                        tests.push((lhs, rhs, Layout::Builtin(Builtin::Bool)));
-                    }
-
-                    Test::IsStr(test_str) => {
-                        let lhs = Expr::Str(env.arena.alloc(test_str));
-                        let rhs = path_to_expr(env, cond_symbol, &path, &cond_layout);
-
-                        tests.push((lhs, rhs, Layout::Builtin(Builtin::Str)));
-                    }
-                }
+                test_to_equality(env, cond_symbol, &cond_layout, &path, test, &mut tests);
             }
 
             let pass = env.arena.alloc(decide_to_branching(
