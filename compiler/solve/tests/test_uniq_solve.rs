@@ -2379,4 +2379,21 @@ mod test_uniq_solve {
             "Attr * (Attr * position -> Attr * (Model (Attr * Int)))",
         );
     }
+
+    #[test]
+    fn when_with_or_pattern_and_guard() {
+        infer_eq(
+            indoc!(
+                r#"
+                \x ->
+                    when x is
+                        2 | 3 -> 0
+                        a if a < 20 ->  1
+                        3 | 4 if -> 2
+                        _ -> 3
+                "#
+            ),
+            "Attr * (Attr * (Num (Attr * *)) -> Attr * (Num (Attr * *)))",
+        );
+    }
 }

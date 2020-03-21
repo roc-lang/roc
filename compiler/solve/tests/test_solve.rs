@@ -2413,4 +2413,21 @@ mod test_solve {
             "Model position -> Result position [ KeyNotFound ]*",
         );
     }
+
+    #[test]
+    fn when_with_or_pattern_and_guard() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                \x ->
+                    when x is
+                        2 | 3 -> 0
+                        a if a < 20 ->  1
+                        3 | 4 if -> 2
+                        _ -> 3
+                "#
+            ),
+            "Num * -> Num *",
+        );
+    }
 }

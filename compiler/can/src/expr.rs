@@ -30,6 +30,19 @@ pub struct Output {
     pub aliases: SendMap<Symbol, Alias>,
 }
 
+impl Output {
+    pub fn union(&mut self, other: Self) {
+        self.references.union_mut(other.references);
+
+        if let (None, Some(later)) = (self.tail_call, other.tail_call) {
+            self.tail_call = Some(later);
+        }
+
+        self.introduced_variables.union(&other.introduced_variables);
+        self.aliases.extend(other.aliases);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
@@ -55,7 +68,7 @@ pub enum Expr {
         cond_var: Variable,
         expr_var: Variable,
         loc_cond: Box<Located<Expr>>,
-        branches: Vec<(Located<Pattern>, Located<Expr>)>,
+        branches: Vec<WhenBranch>,
     },
     If {
         cond_var: Variable,
@@ -143,6 +156,13 @@ pub enum Recursive {
     Recursive,
     TailRecursive,
     NotRecursive,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WhenBranch {
+    pub patterns: Vec<Located<Pattern>>,
+    pub value: Located<Expr>,
+    pub guard: Option<Located<Expr>>,
 }
 
 pub fn canonicalize_expr<'a>(
@@ -453,19 +473,12 @@ pub fn canonicalize_expr<'a>(
             let mut can_branches = Vec::with_capacity(branches.len());
 
             for branch in branches {
-                let (can_when_pattern, loc_can_expr, branch_references) = canonicalize_when_branch(
-                    env,
-                    var_store,
-                    scope,
-                    region,
-                    branch.patterns.first().unwrap(),
-                    &branch.value,
-                    &mut output,
-                );
+                let (can_when_branch, branch_references) =
+                    canonicalize_when_branch(env, var_store, scope, region, *branch, &mut output);
 
                 output.references = output.references.union(branch_references);
 
-                can_branches.push((can_when_pattern, loc_can_expr));
+                can_branches.push(can_when_branch);
             }
 
             // A "when" with no branches is a runtime error, but it will mess things up
@@ -657,34 +670,45 @@ pub fn canonicalize_expr<'a>(
 fn canonicalize_when_branch<'a>(
     env: &mut Env<'a>,
     var_store: &VarStore,
-    scope: &Scope,
+    scope: &mut Scope,
     region: Region,
-    loc_pattern: &Located<ast::Pattern<'a>>,
-    loc_expr: &'a Located<ast::Expr<'a>>,
+    branch: &'a ast::WhenBranch<'a>,
     output: &mut Output,
-) -> (Located<Pattern>, Located<Expr>, References) {
-    // Each case branch gets a new scope for canonicalization.
-    // Shadow `scope` to make sure we don't accidentally use the original one for the
-    // rest of this block, but keep the original around for later diffing.
+) -> (WhenBranch, References) {
+    let mut patterns = Vec::with_capacity(branch.patterns.len());
+
     let original_scope = scope;
     let mut scope = original_scope.clone();
 
-    let loc_can_pattern = canonicalize_pattern(
+    // TODO report symbols not bound in all patterns
+    for loc_pattern in &branch.patterns {
+        patterns.push(canonicalize_pattern(
+            env,
+            var_store,
+            &mut scope,
+            WhenBranch,
+            &loc_pattern.value,
+            loc_pattern.region,
+        ));
+    }
+
+    let (value, mut branch_output) = canonicalize_expr(
         env,
         var_store,
         &mut scope,
-        WhenBranch,
-        &loc_pattern.value,
-        loc_pattern.region,
+        branch.value.region,
+        &branch.value.value,
     );
 
-    let (can_expr, branch_output) =
-        canonicalize_expr(env, var_store, &mut scope, region, &loc_expr.value);
+    let guard = match &branch.guard {
+        None => None,
+        Some(loc_expr) => {
+            let (can_guard, guard_branch_output) =
+                canonicalize_expr(env, var_store, &mut scope, region, &loc_expr.value);
 
-    // If we already recorded a tail call then keep it, else use this branch's tail call
-    match output.tail_call {
-        Some(_) => {}
-        None => output.tail_call = branch_output.tail_call,
+            branch_output.union(guard_branch_output);
+            Some(can_guard)
+        }
     };
 
     // Now that we've collected all the references for this branch, check to see if
@@ -700,7 +724,17 @@ fn canonicalize_when_branch<'a>(
         }
     }
 
-    (loc_can_pattern, can_expr, branch_output.references)
+    let references = branch_output.references.clone();
+    output.union(branch_output);
+
+    (
+        WhenBranch {
+            patterns,
+            value,
+            guard,
+        },
+        references,
+    )
 }
 
 pub fn local_successors<'a>(

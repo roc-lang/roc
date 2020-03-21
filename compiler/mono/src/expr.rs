@@ -338,6 +338,7 @@ fn pattern_to_when<'a>(
     body: Located<roc_can::expr::Expr>,
 ) -> (Symbol, Located<roc_can::expr::Expr>) {
     use roc_can::expr::Expr::*;
+    use roc_can::expr::WhenBranch;
     use roc_can::pattern::Pattern::*;
 
     match &pattern.value {
@@ -360,7 +361,7 @@ fn pattern_to_when<'a>(
                 cond_var: pattern_var,
                 expr_var: body_var,
                 loc_cond: Box::new(Located::at_zero(Var(symbol))),
-                branches: vec![(pattern, body)],
+                branches: vec![WhenBranch{ patterns: vec![pattern], value: body, guard: None }],
             };
 
             (symbol, Located::at_zero(wrapped_body))
@@ -890,10 +891,11 @@ fn store_pattern<'a>(
                     Underscore => {
                         // ignore
                     }
+                    IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral(_) => {}
                     _ => {
                         // store the field in a symbol, and continue matching on it
                         let symbol = env.fresh_symbol();
-                        stored.push((symbol, layout.clone(), load));
+                        stored.push((symbol, arg_layout.clone(), load));
 
                         store_pattern(env, argument, symbol, arg_layout.clone(), stored)?;
                     }
@@ -927,6 +929,7 @@ fn store_record_destruct<'a>(
     struct_layout: Layout<'a>,
     stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
 ) -> Result<(), String> {
+    use Pattern::*;
     let record = env.arena.alloc(Expr::Load(outer_symbol));
     let load = Expr::Access {
         label: destruct.label.clone(),
@@ -939,10 +942,10 @@ fn store_record_destruct<'a>(
             stored.push((destruct.symbol, destruct.layout.clone(), load));
         }
         Some(guard_pattern) => match &guard_pattern {
-            Pattern::Identifier(symbol) => {
+            Identifier(symbol) => {
                 stored.push((*symbol, destruct.layout.clone(), load));
             }
-            Pattern::Underscore => {
+            Underscore => {
                 // important that this is special-cased to do nothing: mono record patterns will extract all the
                 // fields, but those not bound in the source code are guarded with the underscore
                 // pattern. So given some record `{ x : a, y : b }`, a match
@@ -955,6 +958,7 @@ fn store_record_destruct<'a>(
                 //
                 // internally. But `y` is never used, so we must make sure it't not stored/loaded.
             }
+            IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral(_) => {}
             _ => {
                 let symbol = env.fresh_symbol();
                 stored.push((symbol, destruct.layout.clone(), load));
@@ -972,63 +976,62 @@ fn from_can_when<'a>(
     cond_var: Variable,
     expr_var: Variable,
     loc_cond: Located<roc_can::expr::Expr>,
-    branches: std::vec::Vec<(
-        Located<roc_can::pattern::Pattern>,
-        Located<roc_can::expr::Expr>,
-    )>,
+    mut branches: std::vec::Vec<roc_can::expr::WhenBranch>,
     procs: &mut Procs<'a>,
 ) -> Expr<'a> {
-    match branches.len() {
-        0 => {
-            // A when-expression with no branches is a runtime error.
-            // We can't know what to return!
-            panic!("TODO compile a 0-branch when-expression to a RuntimeError");
+    if branches.is_empty() {
+        // A when-expression with no branches is a runtime error.
+        // We can't know what to return!
+        panic!("TODO compile a 0-branch when-expression to a RuntimeError");
+    } else if branches.len() == 1 && branches[0].patterns.len() == 1 && branches[0].guard.is_none()
+    {
+        let first = branches.remove(0);
+        // A when-expression with exactly 1 branch is essentially a LetNonRec.
+        // As such, we can compile it direcly to a Store.
+        let arena = env.arena;
+        let mut stored = Vec::with_capacity_in(1, arena);
+
+        let loc_when_pattern = &first.patterns[0];
+
+        let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
+
+        // record pattern matches can have 1 branch and typecheck, but may still not be exhaustive
+        match crate::pattern::check(
+            Region::zero(),
+            &[Located::at(loc_when_pattern.region, mono_pattern.clone())],
+        ) {
+            Ok(_) => {}
+            Err(errors) => panic!("Errors in patterns: {:?}", errors),
         }
-        1 => {
-            // A when-expression with exactly 1 branch is essentially a LetNonRec.
-            // As such, we can compile it direcly to a Store.
-            let arena = env.arena;
-            let mut stored = Vec::with_capacity_in(1, arena);
-            let (loc_when_pattern, loc_branch) = branches.into_iter().next().unwrap();
 
-            let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
+        let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+            .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+        let cond_symbol = env.fresh_symbol();
+        let cond = from_can(env, loc_cond.value, procs, None);
+        stored.push((cond_symbol, cond_layout.clone(), cond));
 
-            // record pattern matches can have 1 branch and typecheck, but may still not be exhaustive
-            match crate::pattern::check(
-                Region::zero(),
-                &[Located::at(loc_when_pattern.region, mono_pattern.clone())],
-            ) {
-                Ok(_) => {}
-                Err(errors) => panic!("Errors in patterns: {:?}", errors),
-            }
+        // NOTE this will still store shadowed names. I think that is fine because the branch
+        // will throw an error anyway.
+        let ret = match store_pattern(env, &mono_pattern, cond_symbol, cond_layout, &mut stored) {
+            Ok(_) => from_can(env, first.value.value, procs, None),
+            Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
+        };
 
-            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
-                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
-            let cond_symbol = env.fresh_symbol();
-            let cond = from_can(env, loc_cond.value, procs, None);
-            stored.push((cond_symbol, cond_layout.clone(), cond));
+        Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
+    } else {
+        let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+            .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
 
-            // NOTE this will still store shadowed names. I think that is fine because the branch
-            // will throw an error anyway.
-            let ret = match store_pattern(env, &mono_pattern, cond_symbol, cond_layout, &mut stored)
-            {
-                Ok(_) => from_can(env, loc_branch.value, procs, None),
-                Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
-            };
+        let cond = from_can(env, loc_cond.value, procs, None);
+        let cond_symbol = env.fresh_symbol();
 
-            Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
-        }
-        _ => {
-            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
-                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+        let mut loc_branches = std::vec::Vec::new();
+        let mut opt_branches = std::vec::Vec::new();
 
-            let cond = from_can(env, loc_cond.value, procs, None);
-            let cond_symbol = env.fresh_symbol();
+        for when_branch in branches {
+            let mono_expr = from_can(env, when_branch.value.value, procs, None);
 
-            let mut loc_branches = std::vec::Vec::new();
-            let mut opt_branches = std::vec::Vec::new();
-
-            for (loc_pattern, loc_expr) in branches {
+            for loc_pattern in when_branch.patterns {
                 let mono_pattern = from_can_pattern(env, &loc_pattern.value);
 
                 loc_branches.push(Located::at(loc_pattern.region, mono_pattern.clone()));
@@ -1042,36 +1045,37 @@ fn from_can_when<'a>(
                     cond_layout.clone(),
                     &mut stores,
                 ) {
-                    Ok(_) => Expr::Store(
-                        stores.into_bump_slice(),
-                        env.arena.alloc(from_can(env, loc_expr.value, procs, None)),
-                    ),
+                    Ok(_) => {
+                        Expr::Store(stores.into_bump_slice(), env.arena.alloc(mono_expr.clone()))
+                    }
                     Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
                 };
 
                 opt_branches.push((mono_pattern, mono_expr));
             }
-
-            match crate::pattern::check(Region::zero(), &loc_branches) {
-                Ok(_) => {}
-                Err(errors) => panic!("Errors in patterns: {:?}", errors),
-            }
-
-            let ret_layout = Layout::from_var(env.arena, expr_var, env.subs, env.pointer_size)
-                .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
-
-            let branching = crate::decision_tree::optimize_when(
-                env,
-                cond_symbol,
-                cond_layout.clone(),
-                ret_layout,
-                opt_branches,
-            );
-
-            let stores = env.arena.alloc([(cond_symbol, cond_layout, cond)]);
-
-            Expr::Store(stores, env.arena.alloc(branching))
         }
+
+        match crate::pattern::check(Region::zero(), &loc_branches) {
+            Ok(_) => {}
+            Err(errors) => {
+                panic!("Errors in patterns: {:?}", errors);
+            }
+        }
+
+        let ret_layout = Layout::from_var(env.arena, expr_var, env.subs, env.pointer_size)
+            .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+
+        let branching = crate::decision_tree::optimize_when(
+            env,
+            cond_symbol,
+            cond_layout.clone(),
+            ret_layout,
+            opt_branches,
+        );
+
+        let stores = env.arena.alloc([(cond_symbol, cond_layout, cond)]);
+
+        Expr::Store(stores, env.arena.alloc(branching))
     }
 }
 
@@ -1246,6 +1250,13 @@ pub struct RecordDestruct<'a> {
     pub guard: Option<Pattern<'a>>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct WhenBranch<'a> {
+    pub patterns: Vec<'a, Pattern<'a>>,
+    pub value: Expr<'a>,
+    pub guard: Option<Expr<'a>>,
+}
+
 fn from_can_pattern<'a>(
     env: &mut Env<'a, '_>,
     can_pattern: &roc_can::pattern::Pattern,
@@ -1401,4 +1412,27 @@ fn from_can_record_destruct<'a>(
             Some((_, loc_pattern)) => Some(from_can_pattern(env, &loc_pattern.value)),
         },
     }
+}
+
+pub fn specialize_equality<'a>(
+    arena: &'a Bump,
+    lhs: Expr<'a>,
+    rhs: Expr<'a>,
+    layout: Layout<'a>,
+) -> Expr<'a> {
+    let symbol = match &layout {
+        Layout::Builtin(builtin) => match builtin {
+            Builtin::Int64 => Symbol::INT_EQ_I64,
+            Builtin::Float64 => Symbol::FLOAT_EQ,
+            Builtin::Byte => Symbol::INT_EQ_I8,
+            Builtin::Bool => Symbol::INT_EQ_I1,
+            other => todo!("Cannot yet compare for equality {:?}", other),
+        },
+        other => todo!("Cannot yet compare for equality {:?}", other),
+    };
+
+    Expr::CallByName(
+        symbol,
+        arena.alloc([(lhs, layout.clone()), (rhs, layout.clone())]),
+    )
 }

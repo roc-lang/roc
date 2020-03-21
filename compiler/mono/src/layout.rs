@@ -13,6 +13,7 @@ pub enum Layout<'a> {
     Union(&'a [&'a [Layout<'a>]]),
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
+    Pointer(&'a Layout<'a>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -93,6 +94,10 @@ impl<'a> Layout<'a> {
                 // Function pointers are immutable and can always be safely copied
                 true
             }
+            Pointer(_) => {
+                // We cannot memcpy pointers, because  then we would have the same pointer in multiple places!
+                false
+            }
         }
     }
 
@@ -121,6 +126,7 @@ impl<'a> Layout<'a> {
                 .max()
                 .unwrap_or_default(),
             FunctionPointer(_, _) => pointer_size,
+            Pointer(_) => pointer_size,
         }
     }
 }

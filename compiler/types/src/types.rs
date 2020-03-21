@@ -624,6 +624,7 @@ pub enum Reason {
     NumLiteral,
     InterpolatedStringVar,
     WhenBranch { index: usize },
+    WhenGuard,
     IfCondition,
     IfBranch { index: usize },
     ElemInList,
