@@ -6,10 +6,10 @@ use inkwell::module::{Linkage, Module};
 use inkwell::types::{BasicTypeEnum, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
-use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
+use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::llvm::convert::{
-    basic_type_from_layout, collection_wrapper, get_array_type, get_fn_type, ptr_int,
+    basic_type_from_layout, collection_wrapper, empty_collection, get_fn_type, ptr_int,
 };
 use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
@@ -243,21 +243,11 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let builder = env.builder;
 
             if elems.is_empty() {
-                let array_type = get_array_type(&elem_type, 0);
-                let ptr_type = array_type.ptr_type(AddressSpace::Generic);
-                let struct_type = collection_wrapper(ctx, ptr_type, env.ptr_bytes);
+                let struct_type = empty_collection(ctx, env.ptr_bytes);
 
-                // The first field in the struct should be the pointer.
-                let struct_val = builder
-                    .build_insert_value(
-                        struct_type.get_undef(),
-                        BasicValueEnum::PointerValue(ptr_type.const_null()),
-                        Builtin::WRAPPER_PTR,
-                        "insert_ptr",
-                    )
-                    .unwrap();
-
-                BasicValueEnum::StructValue(struct_val.into_struct_value())
+                // THe pointer should be null (aka zero) and the length should be zero,
+                // so the whole struct should be a const_zero
+                BasicValueEnum::StructValue(struct_type.const_zero())
             } else {
                 let len_u64 = elems.len() as u64;
                 let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;

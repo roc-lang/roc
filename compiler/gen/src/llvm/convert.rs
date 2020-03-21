@@ -5,7 +5,7 @@ use inkwell::types::BasicTypeEnum::{self, *};
 use inkwell::types::{ArrayType, BasicType, FunctionType, IntType, PointerType, StructType};
 use inkwell::AddressSpace;
 
-use roc_mono::layout::Layout;
+use roc_mono::layout::{Builtin, Layout};
 
 /// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
 pub fn get_fn_type<'ctx>(
@@ -123,18 +123,26 @@ pub fn basic_type_from_layout<'ctx>(
 
                 collection_wrapper(context, ptr_type, ptr_bytes).into()
             }
-            EmptyList => {
-                let array_type =
-                    get_array_type(&context.opaque_struct_type("empty_list_elem").into(), 0);
-                let ptr_type = array_type.ptr_type(AddressSpace::Generic);
-
-                collection_wrapper(context, ptr_type, ptr_bytes).into()
-            }
+            EmptyList => BasicTypeEnum::StructType(empty_collection(context, ptr_bytes)),
         },
     }
 }
 
-/// (pointer: usize, length: u32, capacity: u32)
+/// A length usize and a pointer to some elements.
+/// Could be a wrapper for a List or a Str.
+///
+/// The order of these doesn't matter, since they should be initialized
+/// to zero anyway for an empty collection; as such, we return a
+/// (usize, usize) struct layout no matter what.
+pub fn empty_collection<'ctx>(ctx: &'ctx Context, ptr_bytes: u32) -> StructType<'ctx> {
+    let usize_type = BasicTypeEnum::IntType(ptr_int(ctx, ptr_bytes));
+
+    ctx.struct_type(&[usize_type, usize_type], false)
+}
+
+/// A length usize and a pointer to some elements.
+///
+/// Could be a wrapper for a List or a Str.
 pub fn collection_wrapper<'ctx>(
     ctx: &'ctx Context,
     ptr_type: PointerType<'ctx>,

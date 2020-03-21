@@ -535,6 +535,11 @@ mod test_gen {
     //     fn int_list_is_empty() {
     //         assert_evals_to!("List.isEmpty [ 12, 9, 6, 3 ]", 0, u8, |x| x);
     //     }
+    //
+    #[test]
+    fn empty_list_literal() {
+        assert_llvm_evals_to!("[]", &[], &'static [i64], |x| x);
+    }
 
     #[test]
     fn head_int_list() {
