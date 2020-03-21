@@ -5,6 +5,7 @@ extern crate indoc;
 
 extern crate bumpalo;
 extern crate inkwell;
+extern crate libc;
 extern crate roc_gen;
 
 mod helpers;
@@ -539,6 +540,11 @@ mod test_gen {
     #[test]
     fn empty_list_literal() {
         assert_llvm_evals_to!("[]", &[], &'static [i64], |x| x);
+    }
+
+    #[test]
+    fn int_list_literal() {
+        assert_llvm_evals_to!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64], |x| x);
     }
 
     #[test]

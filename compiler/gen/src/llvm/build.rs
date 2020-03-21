@@ -208,20 +208,23 @@ pub fn build_expr<'a, 'ctx, 'env>(
             } else {
                 let ctx = env.context;
                 let builder = env.builder;
-                let bytes_len = str_literal.len() + 1/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
+                let str_len = str_literal.len() + 1/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
 
                 let byte_type = ctx.i8_type();
                 let nul_terminator = byte_type.const_zero();
-                let len = ctx.i32_type().const_int(bytes_len as u64, false);
+                let len_val = ctx.i32_type().const_int(str_len as u64, false);
                 let ptr = env
                     .builder
-                    .build_array_malloc(ctx.i8_type(), len, "str_ptr")
+                    .build_array_malloc(ctx.i8_type(), len_val, "str_ptr")
                     .unwrap();
+
+                // TODO check if malloc returned null; if so, runtime error for OOM!
 
                 // Copy the bytes from the string literal into the array
                 for (index, byte) in str_literal.bytes().enumerate() {
-                    let index = ctx.i32_type().const_int(index as u64, false);
-                    let elem_ptr = unsafe { builder.build_gep(ptr, &[index], "byte") };
+                    let index_val = ctx.i32_type().const_int(index as u64, false);
+                    let elem_ptr =
+                        unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "byte") };
 
                     builder.build_store(elem_ptr, byte_type.const_int(byte as u64, false));
                 }
@@ -229,8 +232,9 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 // Add a NUL terminator at the end.
                 // TODO: Instead of NUL-terminating, return a struct
                 // with the pointer and also the length and capacity.
-                let index = ctx.i32_type().const_int(bytes_len as u64 - 1, false);
-                let elem_ptr = unsafe { builder.build_gep(ptr, &[index], "nul_terminator") };
+                let index_val = ctx.i32_type().const_int(str_len as u64 - 1, false);
+                let elem_ptr =
+                    unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "nul_terminator") };
 
                 builder.build_store(elem_ptr, nul_terminator);
 
@@ -260,13 +264,15 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     env.builder
                         .build_array_malloc(elem_type, len, "create_list_ptr")
                         .unwrap()
+
+                    // TODO check if malloc returned null; if so, runtime error for OOM!
                 };
 
                 // Copy the elements from the list literal into the array
                 for (index, elem) in elems.iter().enumerate() {
-                    let offset = ctx.i32_type().const_int(elem_bytes * index as u64, false);
-                    let elem_ptr = unsafe { builder.build_gep(ptr, &[offset], "elem") };
-
+                    let index_val = ctx.i32_type().const_int(index as u64, false);
+                    let elem_ptr =
+                        unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
                     let val = build_expr(env, &scope, parent, &elem, procs);
 
                     builder.build_store(elem_ptr, val);
@@ -1065,18 +1071,13 @@ fn call_with_args<'a, 'ctx, 'env>(
             // TODO here, check to see if the requested index exceeds the length of the array.
 
             match list_layout {
-                Layout::Builtin(Builtin::List(elem_layout)) => {
+                Layout::Builtin(Builtin::List(_)) => {
                     // Load the pointer to the array data
                     let array_data_ptr = load_list_ptr(builder, wrapper_struct);
-                    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-                    let elem_size = env.ptr_int().const_int(elem_bytes, false);
-
-                    // Calculate the offset at runtime by multiplying the index by the size of an element.
-                    let offset_bytes = builder.build_int_mul(elem_index, elem_size, "mul_offset");
 
                     // We already checked the bounds earlier.
                     let elem_ptr = unsafe {
-                        builder.build_in_bounds_gep(array_data_ptr, &[offset_bytes], "elem")
+                        builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem")
                     };
 
                     builder.build_load(elem_ptr, "List.get")
@@ -1111,16 +1112,12 @@ fn call_with_args<'a, 'ctx, 'env>(
                 )
             };
 
-            let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-            let elem_size = env.ptr_int().const_int(elem_bytes, false);
-
             // Calculate the offset at runtime by multiplying the index by the size of an element.
             let elem_index = args[1].0.into_int_value();
-            let offset_bytes = builder.build_int_mul(elem_index, elem_size, "mul_offset");
 
             // We already checked the bounds earlier.
             let elem_ptr =
-                unsafe { builder.build_in_bounds_gep(array_data_ptr, &[offset_bytes], "elem") };
+                unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem") };
 
             // Mutate the array in-place.
             builder.build_store(elem_ptr, elem);
@@ -1135,7 +1132,7 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             let wrapper_struct = args[0].0.into_struct_value();
             let elem_index = args[1].0.into_int_value();
-            let (elem, elem_layout) = args[2];
+            let (elem, _elem_layout) = args[2];
 
             // Load the usize length
             let _list_len = load_list_len(builder, wrapper_struct);
@@ -1146,15 +1143,9 @@ fn call_with_args<'a, 'ctx, 'env>(
             // Load the pointer to the elements
             let array_data_ptr = load_list_ptr(builder, wrapper_struct);
 
-            let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-            let elem_size = env.context.i64_type().const_int(elem_bytes, false);
-
-            // Calculate the offset at runtime by multiplying the index by the size of an element.
-            let offset_bytes = builder.build_int_mul(elem_index, elem_size, "mul_offset");
-
             // We already checked the bounds earlier.
             let elem_ptr =
-                unsafe { builder.build_in_bounds_gep(array_data_ptr, &[offset_bytes], "elem") };
+                unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem") };
 
             // Mutate the array in-place.
             builder.build_store(elem_ptr, elem);
@@ -1228,6 +1219,8 @@ fn clone_list<'a, 'ctx, 'env>(
     let ptr_val = builder
         .build_array_malloc(elem_type, list_len, "list_ptr")
         .unwrap();
+
+    // TODO check if malloc returned null; if so, runtime error for OOM!
 
     // Either memcpy or deep clone the array elements
     if elem_layout.safe_to_memcpy() {

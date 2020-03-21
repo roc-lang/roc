@@ -151,7 +151,14 @@ pub fn collection_wrapper<'ctx>(
     let ptr_type_enum = BasicTypeEnum::PointerType(ptr_type);
     let len_type = BasicTypeEnum::IntType(ptr_int(ctx, ptr_bytes));
 
-    ctx.struct_type(&[ptr_type_enum, len_type], false)
+    // This conditional is based on a constant, so the branch should be optimized away.
+    // The reason for keeping the conditional here is so we can flip the order
+    // of the fields (by changing the constants) without breaking this code.
+    if Builtin::WRAPPER_PTR == 0 {
+        ctx.struct_type(&[ptr_type_enum, len_type], false)
+    } else {
+        ctx.struct_type(&[len_type, ptr_type_enum], false)
+    }
 }
 
 pub fn ptr_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {

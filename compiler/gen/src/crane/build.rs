@@ -351,6 +351,7 @@ pub fn build_expr<'a, B: Backend>(
                 let bytes_len = str_literal.len() + 1/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
                 let size = builder.ins().iconst(types::I64, bytes_len as i64);
                 let ptr = call_malloc(env, module, builder, size);
+                // TODO check if malloc returned null; if so, runtime error for OOM!
                 let mem_flags = MemFlags::new();
 
                 // Store the bytes from the string literal in the array
@@ -389,6 +390,8 @@ pub fn build_expr<'a, B: Backend>(
                 let bytes_len = elem_bytes as usize * elems.len();
                 let size = builder.ins().iconst(types::I64, bytes_len as i64);
                 let elems_ptr = call_malloc(env, module, builder, size);
+
+                // TODO check if malloc returned null; if so, runtime error for OOM!
                 let mem_flags = MemFlags::new();
 
                 // Copy the elements from the literal into the array
@@ -1043,6 +1046,8 @@ fn clone_list<B: Backend>(
 
     // Allocate space for the new array that we'll copy into.
     let new_elems_ptr = call_malloc(env, module, builder, size);
+
+    // TODO check if malloc returned null; if so, runtime error for OOM!
 
     // Either memcpy or deep clone the array elements
     if elem_layout.safe_to_memcpy() {
