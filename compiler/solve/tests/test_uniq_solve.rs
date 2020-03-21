@@ -2144,7 +2144,8 @@ mod test_uniq_solve {
 
     #[test]
     fn cheapest_open() {
-        infer_eq(
+        with_larger_debug_stack(|| {
+            infer_eq(
             indoc!(
                 r#"
                 Model position : { evaluated : Set position
@@ -2180,7 +2181,8 @@ mod test_uniq_solve {
                 "#
             ),
             "Attr * (Attr * (Attr Shared position -> Attr Shared Float), Attr * (Model (Attr Shared position)) -> Attr * (Result (Attr Shared position) (Attr * [ KeyNotFound ]*)))"
-        );
+        )
+        });
     }
 
     #[test]
@@ -2389,11 +2391,11 @@ mod test_uniq_solve {
                     when x is
                         2 | 3 -> 0
                         a if a < 20 ->  1
-                        3 | 4 if -> 2
+                        3 | 4 if False -> 2
                         _ -> 3
                 "#
             ),
-            "Attr * (Attr * (Num (Attr * *)) -> Attr * (Num (Attr * *)))",
+            "Attr * (Attr Shared (Num (Attr * *)) -> Attr * (Num (Attr * *)))",
         );
     }
 }

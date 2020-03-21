@@ -1470,13 +1470,13 @@ fn constrain_when_branch(
 
     if let Some(loc_guard) = &when_branch.guard {
         let guard_uniq_var = var_store.fresh();
-        state.vars.push(guard_uniq_var);
 
         let bool_type = attr_type(
             Bool::variable(guard_uniq_var),
             Type::Variable(Variable::BOOL),
         );
-        state.constraints.push(constrain_expr(
+
+        let guard_constraint = constrain_expr(
             env,
             var_store,
             var_usage,
@@ -1484,17 +1484,33 @@ fn constrain_when_branch(
             loc_guard.region,
             &loc_guard.value,
             Expected::ForReason(Reason::WhenGuard, bool_type, loc_guard.region),
-        ));
-    }
+        );
 
-    Constraint::Let(Box::new(LetConstraint {
-        rigid_vars: Vec::new(),
-        flex_vars: state.vars,
-        def_types: state.headers,
-        def_aliases: SendMap::default(),
-        defs_constraint: Constraint::And(state.constraints),
-        ret_constraint,
-    }))
+        Constraint::Let(Box::new(LetConstraint {
+            rigid_vars: Vec::new(),
+            flex_vars: state.vars,
+            def_types: state.headers,
+            def_aliases: SendMap::default(),
+            defs_constraint: Constraint::And(state.constraints),
+            ret_constraint: Constraint::Let(Box::new(LetConstraint {
+                rigid_vars: Vec::new(),
+                flex_vars: vec![guard_uniq_var],
+                def_types: SendMap::default(),
+                def_aliases: SendMap::default(),
+                defs_constraint: guard_constraint,
+                ret_constraint,
+            })),
+        }))
+    } else {
+        Constraint::Let(Box::new(LetConstraint {
+            rigid_vars: Vec::new(),
+            flex_vars: state.vars,
+            def_types: state.headers,
+            def_aliases: SendMap::default(),
+            defs_constraint: Constraint::And(state.constraints),
+            ret_constraint,
+        }))
+    }
 }
 
 fn constrain_def_pattern(

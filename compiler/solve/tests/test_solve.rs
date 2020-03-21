@@ -2423,7 +2423,7 @@ mod test_solve {
                     when x is
                         2 | 3 -> 0
                         a if a < 20 ->  1
-                        3 | 4 if -> 2
+                        3 | 4 if False -> 2
                         _ -> 3
                 "#
             ),
