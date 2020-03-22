@@ -573,6 +573,16 @@ mod test_gen {
     }
 
     #[test]
+    fn set_unique_list_oob() {
+        assert_llvm_evals_to!(
+            "List.set [ 3, 17, 4 ] 1337 42",
+            &[3, 17, 4],
+            &'static [i64],
+            |x| x
+        );
+    }
+
+    #[test]
     fn set_shared_int_list() {
         assert_llvm_evals_to!(
             indoc!(
