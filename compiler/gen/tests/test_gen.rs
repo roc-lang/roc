@@ -564,13 +564,13 @@ mod test_gen {
                     shared = [ 2, 4 ]
 
                     # This should not mutate the original
-                    x = List.set shared 1 77
+                    x = List.getUnsafe (List.set shared 1 77) 1
 
-                    List.getUnsafe shared 1
+                    { x, y: List.getUnsafe shared 1 }
                 "#
             ),
-            4,
-            i64
+            (4, 77),
+            (i64, i64)
         );
     }
 
