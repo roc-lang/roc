@@ -1431,7 +1431,8 @@ fn constrain_by_usage_record(
 
 // TODO trim down these arguments
 #[allow(clippy::too_many_arguments)]
-#[inline(always)]
+// NOTE enabling the inline pragma can blow the stack in debug mode
+// #[inline(always)]
 fn constrain_when_branch(
     var_store: &VarStore,
     var_usage: &VarUsage,
