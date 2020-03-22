@@ -574,7 +574,7 @@ mod test_gen {
 
     #[test]
     fn set_shared_int_list() {
-        assert_evals_to!(
+        assert_llvm_evals_to!(
             indoc!(
                 r#"
                     shared = [ 2, 4 ]
@@ -585,8 +585,9 @@ mod test_gen {
                     { x, y: List.getUnsafe shared 1 }
                 "#
             ),
-            (4, 77),
-            (i64, i64)
+            (77, 4),
+            (i64, i64),
+            |x| x
         );
     }
 

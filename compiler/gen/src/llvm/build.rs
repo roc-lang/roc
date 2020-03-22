@@ -1088,6 +1088,7 @@ fn call_with_args<'a, 'ctx, 'env>(
             }
         }
         Symbol::LIST_SET => {
+            // List.set : List elem, Int, elem -> List elem
             let builder = env.builder;
 
             debug_assert!(args.len() == 3);
