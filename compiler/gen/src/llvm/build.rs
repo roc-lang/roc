@@ -160,7 +160,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     arg_tuples.push((build_expr(env, scope, parent, arg, procs), layout));
                 }
 
-                call_with_args(*symbol, arg_tuples.into_bump_slice(), env)
+                call_with_args(*symbol, parent, arg_tuples.into_bump_slice(), env)
             }
         },
         FunctionPointer(symbol) => {
@@ -922,6 +922,7 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
 #[allow(clippy::cognitive_complexity)]
 fn call_with_args<'a, 'ctx, 'env>(
     symbol: Symbol,
+    parent: FunctionValue<'ctx>,
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
     env: &Env<'a, 'ctx, 'env>,
 ) -> BasicValueEnum<'ctx> {
@@ -1093,38 +1094,50 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             debug_assert!(args.len() == 3);
 
-            let (elem, elem_layout) = args[2];
-            let (wrapper_struct, array_data_ptr) = {
-                // This original wrapper_struct should only stay in scope long enough to clone it.
-                // From then on, we should only ever reference the clone!
-                let wrapper_struct = args[0].0.into_struct_value();
-
-                // Load the usize length
-                let list_len = load_list_len(builder, wrapper_struct);
-
-                // TODO here, check to see if the requested index exceeds the length of the array.
-                // If so, bail out and return the list unaltered.
-
-                clone_list(
-                    env,
-                    list_len,
-                    load_list_ptr(builder, wrapper_struct),
-                    elem_layout,
-                )
-            };
-
-            // Calculate the offset at runtime by multiplying the index by the size of an element.
+            let original_wrapper = args[0].0.into_struct_value();
             let elem_index = args[1].0.into_int_value();
 
-            // We already checked the bounds earlier.
-            let elem_ptr =
-                unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem") };
+            // Load the usize length from the wrapper. We need it for bounds checking.
+            let list_len = load_list_len(builder, original_wrapper);
 
-            // Mutate the array in-place.
-            builder.build_store(elem_ptr, elem);
+            // Bounds check: only proceed if index < length.
+            // Otherwise, return the list unaltered.
+            //
+            // Note: Check for index < length as the "true" condition,
+            // to avoid misprediction. (In practice this should usually pass,
+            // and CPUs generally default to predicting that a forward jump
+            // shouldn't be taken; that is, they predict "else" won't be taken.)
+            let comparison =
+                builder.build_int_compare(IntPredicate::ULT, elem_index, list_len, "bounds_check");
 
-            // Return the cloned wrapper
-            BasicValueEnum::StructValue(wrapper_struct)
+            // If the index is in bounds, clone and mutate in place.
+            let then_val: BasicValueEnum = {
+                let (elem, elem_layout) = args[2];
+                let (cloned_wrapper, array_data_ptr) = {
+                    clone_list(
+                        env,
+                        list_len,
+                        load_list_ptr(builder, original_wrapper),
+                        elem_layout,
+                    )
+                };
+
+                // If we got here, we passed the bounds check, so this is an in-bounds GEP
+                let elem_ptr = unsafe {
+                    builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "load_index")
+                };
+
+                // Mutate the new array in-place to change the element.
+                builder.build_store(elem_ptr, elem);
+
+                BasicValueEnum::StructValue(cloned_wrapper)
+            };
+
+            // If the index was out of bounds, return the original list unaltered.
+            let else_val = BasicValueEnum::StructValue(original_wrapper);
+            let ret_type = original_wrapper.get_type();
+
+            build_basic_phi2(env, parent, comparison, then_val, else_val, ret_type.into())
         }
         Symbol::LIST_SET_IN_PLACE => {
             let builder = env.builder;
