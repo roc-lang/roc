@@ -134,7 +134,7 @@ pub fn basic_type_from_layout<'ctx>(
 /// The order of these doesn't matter, since they should be initialized
 /// to zero anyway for an empty collection; as such, we return a
 /// (usize, usize) struct layout no matter what.
-pub fn empty_collection<'ctx>(ctx: &'ctx Context, ptr_bytes: u32) -> StructType<'ctx> {
+pub fn empty_collection(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
     let usize_type = BasicTypeEnum::IntType(ptr_int(ctx, ptr_bytes));
 
     ctx.struct_type(&[usize_type, usize_type], false)
