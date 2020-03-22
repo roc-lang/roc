@@ -1234,7 +1234,7 @@ fn clone_list<'a, 'ctx, 'env>(
 
     // Allocate space for the new array that we'll copy into.
     let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-    let ptr_val = builder
+    let clone_ptr = builder
         .build_array_malloc(elem_type, list_len, "list_ptr")
         .unwrap();
 
@@ -1247,7 +1247,7 @@ fn clone_list<'a, 'ctx, 'env>(
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
         builder
-            .build_memcpy(ptr_val, ptr_bytes, elems_ptr, ptr_bytes, size)
+            .build_memcpy(clone_ptr, ptr_bytes, elems_ptr, ptr_bytes, size)
             .unwrap_or_else(|err| {
                 panic!("Error while attempting LLVM memcpy: {:?}", err);
             });
@@ -1256,14 +1256,14 @@ fn clone_list<'a, 'ctx, 'env>(
     }
 
     // Create a fresh wrapper struct for the newly populated array
-    let struct_type = collection_wrapper(ctx, ptr_val.get_type(), env.ptr_bytes);
+    let struct_type = collection_wrapper(ctx, clone_ptr.get_type(), env.ptr_bytes);
     let mut struct_val;
 
     // Store the pointer
     struct_val = builder
         .build_insert_value(
             struct_type.get_undef(),
-            ptr_val,
+            clone_ptr,
             Builtin::WRAPPER_PTR,
             "insert_ptr",
         )
@@ -1274,7 +1274,7 @@ fn clone_list<'a, 'ctx, 'env>(
         .build_insert_value(struct_val, list_len, Builtin::WRAPPER_LEN, "insert_len")
         .unwrap();
 
-    (struct_val.into_struct_value(), ptr_val)
+    (struct_val.into_struct_value(), clone_ptr)
 }
 
 fn bounds_check_comparison<'ctx>(

@@ -276,7 +276,7 @@ mod test_opt {
                 shared = [ 2, 4 ]
 
                 # This should not mutate the original
-                x = List.set shared 1 77
+                x = List.set shared 1 0
 
                 { x, y: List.getUnsafe shared 1 }
             "#,

@@ -564,7 +564,7 @@ mod test_gen {
 
     #[test]
     fn set_unique_int_list() {
-        assert_llvm_evals_to!(
+        assert_opt_evals_to!(
             "List.set [ 12, 9, 7, 1, 5 ] 2 33",
             &[12, 9, 33, 1, 5],
             &'static [i64],
@@ -574,42 +574,42 @@ mod test_gen {
 
     #[test]
     fn set_unique_list_oob() {
-        assert_llvm_evals_to!(
-            "List.set [ 3, 17, 4 ] 1337 42",
-            &[3, 17, 4],
-            &'static [i64],
+        assert_opt_evals_to!(
+            "List.set [ 3, 17, 4.1 ] 1337 9.25",
+            &[3.0, 17.0, 4.1],
+            &'static [f64],
             |x| x
         );
     }
 
     #[test]
     fn set_shared_int_list() {
-        assert_llvm_evals_to!(
+        assert_opt_evals_to!(
             indoc!(
                 r#"
-                    shared = [ 2, 4 ]
+                    shared = [ 2.1, 4.3 ]
 
                     # This should not mutate the original
-                    x = List.getUnsafe (List.set shared 1 77) 1
+                    x = List.getUnsafe (List.set shared 1 7.7) 1
 
                     { x, y: List.getUnsafe shared 1 }
                 "#
             ),
-            (77, 4),
-            (i64, i64),
+            (7.7, 4.3),
+            (f64, f64),
             |x| x
         );
     }
 
     #[test]
     fn set_shared_list_oob() {
-        assert_llvm_evals_to!(
+        assert_opt_evals_to!(
             indoc!(
                 r#"
                     shared = [ 2, 4 ]
 
                     # This should not mutate the original
-                    x = List.getUnsafe (List.set shared 9000 77) 1
+                    x = List.set shared 1 0
 
                     { x, y: List.getUnsafe shared 1 }
                 "#
