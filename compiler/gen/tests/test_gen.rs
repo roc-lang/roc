@@ -602,6 +602,25 @@ mod test_gen {
     }
 
     #[test]
+    fn set_shared_list_oob() {
+        assert_llvm_evals_to!(
+            indoc!(
+                r#"
+                    shared = [ 2, 4 ]
+
+                    # This should not mutate the original
+                    x = List.getUnsafe (List.set shared 9000 77) 1
+
+                    { x, y: List.getUnsafe shared 1 }
+                "#
+            ),
+            (4, 4),
+            (i64, i64),
+            |x| x
+        );
+    }
+
+    #[test]
     fn get_unique_int_list() {
         assert_evals_to!(
             indoc!(
