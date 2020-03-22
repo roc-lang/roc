@@ -72,9 +72,6 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             build_branch2(env, scope, parent, conditional, procs)
         }
-        Branches { .. } => {
-            panic!("TODO build_branches(env, scope, parent, cond_lhs, branches, procs)");
-        }
         Switch {
             cond,
             branches,
@@ -475,27 +472,6 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .build_insert_value(wrapper_val, result, 0, "insert_field")
                 .unwrap();
             wrapper_val.into_struct_value().into()
-        }
-        Access {
-            label,
-            struct_layout: Layout::Struct(sorted_fields),
-            record,
-            ..
-        } => {
-            let builder = env.builder;
-
-            // Get index
-            let index = sorted_fields
-                .iter()
-                .position(|(local_label, _)| local_label == label)
-                .unwrap() as u32; // TODO
-
-            // Get Struct val
-            let struct_val = build_expr(env, &scope, parent, record, procs).into_struct_value();
-
-            builder
-                .build_extract_value(struct_val, index, "field_access")
-                .unwrap()
         }
         AccessAtIndex {
             index,

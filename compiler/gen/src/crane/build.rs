@@ -281,36 +281,6 @@ pub fn build_expr<'a, B: Backend>(
                 .ins()
                 .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
         }
-
-        Access {
-            label,
-            field_layout,
-            struct_layout: Layout::Struct(sorted_fields),
-            record,
-        } => {
-            let cfg = env.cfg;
-
-            // Find the offset we are trying to access
-            let mut offset = 0;
-            for (local_label, local_field_layout) in sorted_fields.iter() {
-                if local_label == label {
-                    break;
-                }
-
-                offset += local_field_layout.stack_size(ptr_bytes);
-            }
-
-            let offset = i32::try_from(offset)
-                .expect("TODO gracefully handle usize -> i32 conversion in struct access");
-
-            let mem_flags = MemFlags::new();
-            let record = build_expr(env, scope, module, builder, record, procs);
-            let field_type = type_from_layout(cfg, field_layout);
-
-            builder
-                .ins()
-                .load(field_type, mem_flags, record, Offset32::new(offset))
-        }
         AccessAtIndex {
             index,
             field_layouts,

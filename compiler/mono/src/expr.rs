@@ -159,16 +159,6 @@ pub enum Expr<'a> {
         fail: &'a Expr<'a>,
         ret_layout: Layout<'a>,
     },
-    /// More than two conditional branches, e.g. a 3-way when-expression
-    Branches {
-        /// The left-hand side of the conditional. We compile this to LLVM once,
-        /// then reuse it to test against each different compiled cond_rhs value.
-        cond: &'a Expr<'a>,
-        /// ( cond_rhs, pass, fail )
-        branches: &'a [(Expr<'a>, Expr<'a>, Expr<'a>)],
-        default: &'a Expr<'a>,
-        ret_layout: Layout<'a>,
-    },
     /// Conditional branches for integers. These are more efficient.
     Switch {
         /// This *must* be an integer, because Switch potentially compiles to a jump table.
@@ -190,12 +180,6 @@ pub enum Expr<'a> {
         arguments: &'a [(Expr<'a>, Layout<'a>)],
     },
     Struct(&'a [(Expr<'a>, Layout<'a>)]),
-    Access {
-        label: Lowercase,
-        field_layout: Layout<'a>,
-        struct_layout: Layout<'a>,
-        record: &'a Expr<'a>,
-    },
     AccessAtIndex {
         index: u64,
         field_layouts: &'a [Layout<'a>],
@@ -772,14 +756,13 @@ fn from_can<'a>(
 
         Access {
             record_var,
-            field_var,
             field,
             loc_expr,
             ..
         } => {
             let arena = env.arena;
 
-            let struct_layout =
+            let record_layout =
                 match Layout::from_var(arena, record_var, env.subs, env.pointer_size) {
                     Ok(layout) => layout,
                     Err(()) => {
@@ -788,23 +771,9 @@ fn from_can<'a>(
                     }
                 };
 
-            let field_layout = match Layout::from_var(arena, field_var, env.subs, env.pointer_size)
-            {
-                Ok(layout) => layout,
-                Err(()) => {
-                    // Invalid field!
-                    panic!("TODO gracefully handle Access with invalid field_layout");
-                }
-            };
-
             let record = arena.alloc(from_can(env, loc_expr.value, procs, None));
 
-            Expr::Access {
-                label: field,
-                field_layout,
-                struct_layout,
-                record,
-            }
+            record_access_by_field(env, record_layout, record, field)
         }
 
         List {
@@ -838,6 +807,45 @@ fn from_can<'a>(
             }
         }
         other => panic!("TODO convert canonicalized {:?} to mono::Expr", other),
+    }
+}
+
+fn record_access_by_field<'a>(
+    env: &mut Env<'a, '_>,
+    record_layout: Layout<'a>,
+    record_expr: &'a Expr<'a>,
+    field: Lowercase,
+) -> Expr<'a> {
+    let (field_layouts, index) = match record_layout {
+        Layout::Struct(sorted_fields) => {
+            let index = sorted_fields
+                .iter()
+                .position(|(local_label, _)| local_label == &field)
+                .unwrap() as u64;
+
+            let mut only_fields = Vec::with_capacity_in(sorted_fields.len(), env.arena);
+
+            for (_, field) in sorted_fields.iter() {
+                only_fields.push(field.clone());
+            }
+
+            (only_fields.into_bump_slice(), index)
+        }
+
+        other => {
+            // Invalid field!
+            panic!(
+                "TODO gracefully handle Access with invalid struct_layout {:?}",
+                other
+            );
+        }
+    };
+
+    Expr::AccessAtIndex {
+        index,
+        field_layouts,
+        expr: record_expr,
+        is_unwrapped: true,
     }
 }
 
@@ -931,12 +939,7 @@ fn store_record_destruct<'a>(
 ) -> Result<(), String> {
     use Pattern::*;
     let record = env.arena.alloc(Expr::Load(outer_symbol));
-    let load = Expr::Access {
-        label: destruct.label.clone(),
-        field_layout: destruct.layout.clone(),
-        struct_layout,
-        record,
-    };
+    let load = record_access_by_field(env, struct_layout, record, destruct.label.clone());
     match &destruct.guard {
         None => {
             stored.push((destruct.symbol, destruct.layout.clone(), load));
