@@ -1555,6 +1555,33 @@ mod test_gen {
         );
     }
 
+    #[test]
+    fn if_guard_bind_variable() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when 10 is
+                    x if x == 5 -> 0
+                    _ -> 42
+                "#
+            ),
+            42,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when 10 is
+                    x if x == 10 -> 42
+                    _ -> 0
+                "#
+            ),
+            42,
+            i64
+        );
+    }
+
     //    #[test]
     //    fn linked_list_empty() {
     //        assert_evals_to!(

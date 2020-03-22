@@ -19,7 +19,7 @@ type Label = u64;
 /// some normal branches and gives out a decision tree that has "labels" at all
 /// the leafs and a dictionary that maps these "labels" to the code that should
 /// run.
-pub fn compile<'a>(raw_branches: Vec<(Option<Expr<'a>>, Pattern<'a>, u64)>) -> DecisionTree<'a> {
+pub fn compile<'a>(raw_branches: Vec<(Guard<'a>, Pattern<'a>, u64)>) -> DecisionTree<'a> {
     let formatted = raw_branches
         .into_iter()
         .map(|(guard, pattern, index)| Branch {
@@ -29,6 +29,21 @@ pub fn compile<'a>(raw_branches: Vec<(Option<Expr<'a>>, Pattern<'a>, u64)>) -> D
         .collect();
 
     to_decision_tree(formatted)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Guard<'a> {
+    NoGuard,
+    Guard {
+        stores: &'a [(Symbol, Layout<'a>, Expr<'a>)],
+        expr: Expr<'a>,
+    },
+}
+
+impl<'a> Guard<'a> {
+    fn is_none(&self) -> bool {
+        self == &Guard::NoGuard
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -59,7 +74,11 @@ pub enum Test<'a> {
         num_alts: usize,
     },
     // A pattern that always succeeds (like `_`) can still have a guard
-    Guarded(Option<Box<Test<'a>>>, Expr<'a>),
+    Guarded {
+        opt_test: Option<Box<Test<'a>>>,
+        stores: &'a [(Symbol, Layout<'a>, Expr<'a>)],
+        expr: Expr<'a>,
+    },
 }
 use std::hash::{Hash, Hasher};
 impl<'a> Hash for Test<'a> {
@@ -93,10 +112,13 @@ impl<'a> Hash for Test<'a> {
                 tag_id.hash(state);
                 num_alts.hash(state);
             }
-            Guarded(None, _) => {
+            Guarded { opt_test: None, .. } => {
                 state.write_u8(6);
             }
-            Guarded(Some(nested), _) => {
+            Guarded {
+                opt_test: Some(nested),
+                ..
+            } => {
                 state.write_u8(7);
                 nested.hash(state);
             }
@@ -120,7 +142,7 @@ pub enum Path {
 #[derive(Clone, Debug, PartialEq)]
 struct Branch<'a> {
     goal: Label,
-    patterns: Vec<(Path, Option<Expr<'a>>, Pattern<'a>)>,
+    patterns: Vec<(Path, Guard<'a>, Pattern<'a>)>,
 }
 
 fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
@@ -172,7 +194,7 @@ fn is_complete(tests: &[Test]) -> bool {
             Test::IsInt(_) => false,
             Test::IsFloat(_) => false,
             Test::IsStr(_) => false,
-            Test::Guarded(_, _) => false,
+            Test::Guarded { .. } => false,
         },
     }
 }
@@ -190,8 +212,8 @@ fn flatten_patterns(branch: Branch) -> Branch {
 }
 
 fn flatten<'a>(
-    path_pattern: (Path, Option<Expr<'a>>, Pattern<'a>),
-    path_patterns: &mut Vec<(Path, Option<Expr<'a>>, Pattern<'a>)>,
+    path_pattern: (Path, Guard<'a>, Pattern<'a>),
+    path_patterns: &mut Vec<(Path, Guard<'a>, Pattern<'a>)>,
 ) {
     match &path_pattern.2 {
         Pattern::AppliedTag {
@@ -245,7 +267,7 @@ fn flatten<'a>(
 /// path. If that is the case we give the resulting label and a mapping from free
 /// variables to "how to get their value". So a pattern like (Just (x,_)) will give
 /// us something like ("x" => value.0.0)
-fn check_for_match(branches: &Vec<Branch>) -> Option<Label> {
+fn check_for_match<'a>(branches: &Vec<Branch<'a>>) -> Option<Label> {
     match branches.get(0) {
         Some(Branch { goal, patterns })
             if patterns
@@ -335,8 +357,12 @@ fn test_at_path<'a>(selected_path: &Path, branch: Branch<'a>, all_tests: &mut Ve
         None => {}
         Some((_, guard, pattern)) => {
             let guarded = |test| {
-                if let Some(guard) = guard {
-                    Guarded(Some(Box::new(test)), guard.clone())
+                if let Guard::Guard { stores, expr } = guard {
+                    Guarded {
+                        opt_test: Some(Box::new(test)),
+                        stores,
+                        expr: expr.clone(),
+                    }
                 } else {
                     test
                 }
@@ -345,8 +371,12 @@ fn test_at_path<'a>(selected_path: &Path, branch: Branch<'a>, all_tests: &mut Ve
             match pattern {
                 // TODO use guard!
                 Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => {
-                    if let Some(guard) = guard {
-                        all_tests.push(Guarded(None, guard.clone()));
+                    if let Guard::Guard { stores, expr } = guard {
+                        all_tests.push(Guarded {
+                            opt_test: None,
+                            stores,
+                            expr: expr.clone(),
+                        });
                     }
                 }
 
@@ -446,7 +476,10 @@ fn to_relevant_branch<'a>(
             end,
         } => {
             let actual_test = match test {
-                Test::Guarded(Some(box_test), _guard_expr) => box_test,
+                Test::Guarded {
+                    opt_test: Some(box_test),
+                    ..
+                } => box_test,
                 _ => test,
             };
 
@@ -457,7 +490,7 @@ fn to_relevant_branch<'a>(
                 // branches, the guard is not relevant any more. Not setthing the guard to None
                 // leads to infinite recursion.
                 new_branch.patterns.iter_mut().for_each(|(_, guard, _)| {
-                    *guard = None;
+                    *guard = Guard::NoGuard;
                 });
 
                 new_branches.push(new_branch);
@@ -469,10 +502,10 @@ fn to_relevant_branch<'a>(
 fn to_relevant_branch_help<'a>(
     test: &Test<'a>,
     path: &Path,
-    mut start: Vec<(Path, Option<Expr<'a>>, Pattern<'a>)>,
-    end: Vec<(Path, Option<Expr<'a>>, Pattern<'a>)>,
+    mut start: Vec<(Path, Guard<'a>, Pattern<'a>)>,
+    end: Vec<(Path, Guard<'a>, Pattern<'a>)>,
     branch: Branch<'a>,
-    guard: Option<Expr<'a>>,
+    guard: Guard<'a>,
     pattern: Pattern<'a>,
 ) -> Option<Branch<'a>> {
     use Pattern::*;
@@ -501,7 +534,7 @@ fn to_relevant_branch_help<'a>(
                             tag_id: *tag_id,
                             path: Box::new(path.clone()),
                         },
-                        None,
+                        Guard::NoGuard,
                         pattern,
                     )
                 });
@@ -547,7 +580,7 @@ fn to_relevant_branch_help<'a>(
                                             tag_id: *tag_id,
                                             path: Box::new(path.clone()),
                                         },
-                                        None,
+                                        Guard::NoGuard,
                                         pattern,
                                     )
                                 });
@@ -626,15 +659,15 @@ fn to_relevant_branch_help<'a>(
 enum Extract<'a> {
     NotFound,
     Found {
-        start: Vec<(Path, Option<Expr<'a>>, Pattern<'a>)>,
-        found_pattern: (Option<Expr<'a>>, Pattern<'a>),
-        end: Vec<(Path, Option<Expr<'a>>, Pattern<'a>)>,
+        start: Vec<(Path, Guard<'a>, Pattern<'a>)>,
+        found_pattern: (Guard<'a>, Pattern<'a>),
+        end: Vec<(Path, Guard<'a>, Pattern<'a>)>,
     },
 }
 
 fn extract<'a>(
     selected_path: &Path,
-    path_patterns: Vec<(Path, Option<Expr<'a>>, Pattern<'a>)>,
+    path_patterns: Vec<(Path, Guard<'a>, Pattern<'a>)>,
 ) -> Extract<'a> {
     let mut start = Vec::new();
 
@@ -715,10 +748,10 @@ fn pick_path(branches: Vec<Branch>) -> Path {
     }
 }
 
-fn is_choice_path<'a>(path_and_pattern: (Path, Option<Expr<'a>>, Pattern<'a>)) -> Option<Path> {
+fn is_choice_path<'a>(path_and_pattern: (Path, Guard<'a>, Pattern<'a>)) -> Option<Path> {
     let (path, guard, pattern) = path_and_pattern;
 
-    if guard.is_some() || needs_tests(&pattern) {
+    if !guard.is_none() || needs_tests(&pattern) {
         Some(path)
     } else {
         None
@@ -832,7 +865,7 @@ pub fn optimize_when<'a>(
     cond_symbol: Symbol,
     cond_layout: Layout<'a>,
     ret_layout: Layout<'a>,
-    opt_branches: Vec<(Pattern<'a>, Option<Expr<'a>>, Expr<'a>)>,
+    opt_branches: Vec<(Pattern<'a>, Guard<'a>, Expr<'a>)>,
 ) -> Expr<'a> {
     let (patterns, _indexed_branches) = opt_branches
         .into_iter()
@@ -1011,13 +1044,17 @@ fn test_to_equality<'a>(
             tests.push((lhs, rhs, Layout::Builtin(Builtin::Str)));
         }
 
-        Test::Guarded(test, expr) => {
-            if let Some(nested) = test {
+        Test::Guarded {
+            opt_test,
+            stores,
+            expr,
+        } => {
+            if let Some(nested) = opt_test {
                 test_to_equality(env, cond_symbol, cond_layout, path, *nested, tests);
             }
 
             let lhs = Expr::Bool(true);
-            let rhs = expr;
+            let rhs = Expr::Store(stores, env.arena.alloc(expr));
 
             tests.push((lhs, rhs, Layout::Builtin(Builtin::Bool)));
         }
