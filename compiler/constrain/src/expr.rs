@@ -685,26 +685,43 @@ fn constrain_when_branch(
     }
 
     if let Some(loc_guard) = &when_branch.guard {
-        state.constraints.push(constrain_expr(
+        let guard_constraint = constrain_expr(
             env,
             region,
-            &when_branch.value.value,
+            &loc_guard.value,
             Expected::ForReason(
                 Reason::WhenGuard,
                 Type::Variable(Variable::BOOL),
                 loc_guard.region,
             ),
-        ));
-    };
+        );
 
-    Constraint::Let(Box::new(LetConstraint {
-        rigid_vars: Vec::new(),
-        flex_vars: state.vars,
-        def_types: state.headers,
-        def_aliases: SendMap::default(),
-        defs_constraint: Constraint::And(state.constraints),
-        ret_constraint,
-    }))
+        // must introduce the headers from the pattern before constraining the guard
+        Constraint::Let(Box::new(LetConstraint {
+            rigid_vars: Vec::new(),
+            flex_vars: state.vars,
+            def_types: state.headers,
+            def_aliases: SendMap::default(),
+            defs_constraint: Constraint::And(state.constraints),
+            ret_constraint: Constraint::Let(Box::new(LetConstraint {
+                rigid_vars: Vec::new(),
+                flex_vars: Vec::new(),
+                def_types: SendMap::default(),
+                def_aliases: SendMap::default(),
+                defs_constraint: guard_constraint,
+                ret_constraint,
+            })),
+        }))
+    } else {
+        Constraint::Let(Box::new(LetConstraint {
+            rigid_vars: Vec::new(),
+            flex_vars: state.vars,
+            def_types: state.headers,
+            def_aliases: SendMap::default(),
+            defs_constraint: Constraint::And(state.constraints),
+            ret_constraint,
+        }))
+    }
 }
 
 fn constrain_field(env: &Env, field_var: Variable, loc_expr: &Located<Expr>) -> (Type, Constraint) {

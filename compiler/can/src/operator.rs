@@ -179,13 +179,19 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                     })
                 }
 
+                let desugared_guard = if let Some(guard) = &branch.guard {
+                    Some(desugar_expr(arena, guard).clone())
+                } else {
+                    None
+                };
+
                 desugared_branches.push(&*arena.alloc(WhenBranch {
                     patterns: alternatives,
                     value: Located {
                         region: desugared.region,
                         value: Nested(&desugared.value),
                     },
-                    guard: None,
+                    guard: desugared_guard,
                 }));
             }
 

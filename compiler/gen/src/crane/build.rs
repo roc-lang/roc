@@ -771,12 +771,23 @@ fn call_by_name<'a, B: Backend>(
                 .ins()
                 .load(env.ptr_sized_int(), MemFlags::new(), list_ptr, offset)
         }
-        Symbol::INT_EQ_I64 | Symbol::INT_EQ_I8 | Symbol::INT_EQ_I1 => {
+        Symbol::INT_EQ_I64 | Symbol::INT_EQ_I8 => {
             debug_assert!(args.len() == 2);
             let a = build_arg(&args[0], env, scope, module, builder, procs);
             let b = build_arg(&args[1], env, scope, module, builder, procs);
 
             builder.ins().icmp(IntCC::Equal, a, b)
+        }
+        Symbol::INT_EQ_I1 => {
+            debug_assert!(args.len() == 2);
+            let a = build_arg(&args[0], env, scope, module, builder, procs);
+            let b = build_arg(&args[1], env, scope, module, builder, procs);
+
+            // integer comparisons don't work for booleans, and a custom xand gives errors.
+            let p = builder.ins().bint(types::I8, a);
+            let q = builder.ins().bint(types::I8, b);
+
+            builder.ins().icmp(IntCC::Equal, p, q)
         }
         Symbol::FLOAT_EQ => {
             debug_assert!(args.len() == 2);

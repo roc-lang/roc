@@ -1495,6 +1495,93 @@ mod test_gen {
         );
     }
 
+    #[test]
+    fn or_pattern() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when 2 is
+                    1 | 2 -> 42
+                    _ -> 1
+                "#
+            ),
+            42,
+            i64
+        );
+    }
+
+    #[test]
+    fn if_guard_pattern_false() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when 2 is
+                    2 if False -> 0
+                    _ -> 42
+                "#
+            ),
+            42,
+            i64
+        );
+    }
+
+    #[test]
+    fn if_guard_pattern_true() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when 2 is
+                    2 if True -> 42
+                    _ -> 0
+                "#
+            ),
+            42,
+            i64
+        );
+    }
+
+    #[test]
+    fn if_guard_exhaustiveness() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when 2 is
+                    _ if False -> 0
+                    _ -> 42
+                "#
+            ),
+            42,
+            i64
+        );
+    }
+
+    #[test]
+    fn if_guard_bind_variable() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when 10 is
+                    x if x == 5 -> 0
+                    _ -> 42
+                "#
+            ),
+            42,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when 10 is
+                    x if x == 10 -> 42
+                    _ -> 0
+                "#
+            ),
+            42,
+            i64
+        );
+    }
+
     //    #[test]
     //    fn linked_list_empty() {
     //        assert_evals_to!(

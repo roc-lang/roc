@@ -1,5 +1,5 @@
 use crate::layout::{Builtin, Layout};
-use crate::pattern::Ctor;
+use crate::pattern::{Ctor, Guard};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_can;
@@ -996,9 +996,18 @@ fn from_can_when<'a>(
         let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
 
         // record pattern matches can have 1 branch and typecheck, but may still not be exhaustive
+        let guard = if first.guard.is_some() {
+            Guard::HasGuard
+        } else {
+            Guard::NoGuard
+        };
+
         match crate::pattern::check(
             Region::zero(),
-            &[Located::at(loc_when_pattern.region, mono_pattern.clone())],
+            &[(
+                Located::at(loc_when_pattern.region, mono_pattern.clone()),
+                guard,
+            )],
         ) {
             Ok(_) => {}
             Err(errors) => panic!("Errors in patterns: {:?}", errors),
@@ -1031,14 +1040,23 @@ fn from_can_when<'a>(
         for when_branch in branches {
             let mono_expr = from_can(env, when_branch.value.value, procs, None);
 
+            let exhaustive_guard = if when_branch.guard.is_some() {
+                Guard::HasGuard
+            } else {
+                Guard::NoGuard
+            };
+
             for loc_pattern in when_branch.patterns {
                 let mono_pattern = from_can_pattern(env, &loc_pattern.value);
 
-                loc_branches.push(Located::at(loc_pattern.region, mono_pattern.clone()));
+                loc_branches.push((
+                    Located::at(loc_pattern.region, mono_pattern.clone()),
+                    exhaustive_guard.clone(),
+                ));
 
                 let mut stores = Vec::with_capacity_in(1, env.arena);
 
-                let mono_expr = match store_pattern(
+                let (mono_guard, expr_with_stores) = match store_pattern(
                     env,
                     &mono_pattern,
                     cond_symbol,
@@ -1046,12 +1064,52 @@ fn from_can_when<'a>(
                     &mut stores,
                 ) {
                     Ok(_) => {
-                        Expr::Store(stores.into_bump_slice(), env.arena.alloc(mono_expr.clone()))
+                        // if the branch is guarded, the guard can use variables bound in the
+                        // pattern. They must be available, so we give the stores to the
+                        // decision_tree. A branch with guard can only be entered with the guard
+                        // evaluated, so variables will also be loaded in the branch's body expr.
+                        //
+                        // otherwise, we modify the branch's expression to include the stores
+                        if let Some(loc_guard) = when_branch.guard.clone() {
+                            let expr = from_can(env, loc_guard.value, procs, None);
+                            (
+                                crate::decision_tree::Guard::Guard {
+                                    stores: stores.into_bump_slice(),
+                                    expr,
+                                },
+                                mono_expr.clone(),
+                            )
+                        } else {
+                            (
+                                crate::decision_tree::Guard::NoGuard,
+                                Expr::Store(
+                                    stores.into_bump_slice(),
+                                    env.arena.alloc(mono_expr.clone()),
+                                ),
+                            )
+                        }
                     }
-                    Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
+                    Err(message) => {
+                        // when the pattern is invalid, a guard must give a runtime error too
+                        if when_branch.guard.is_some() {
+                            (
+                                crate::decision_tree::Guard::Guard {
+                                    stores: &[],
+                                    expr: Expr::RuntimeError(env.arena.alloc(message)),
+                                },
+                                // we can never hit this
+                                Expr::RuntimeError(&"invalid pattern with guard: unreachable"),
+                            )
+                        } else {
+                            (
+                                crate::decision_tree::Guard::NoGuard,
+                                Expr::RuntimeError(env.arena.alloc(message)),
+                            )
+                        }
+                    }
                 };
 
-                opt_branches.push((mono_pattern, mono_expr));
+                opt_branches.push((mono_pattern, mono_guard, expr_with_stores));
             }
         }
 
