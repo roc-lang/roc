@@ -278,7 +278,7 @@ mod test_opt {
                 # This should not mutate the original
                 x = List.set shared 1 77
 
-                List.getUnsafe shared 1
+                { x, y: List.getUnsafe shared 1 }
             "#,
             vec![Symbol::LIST_SET, Symbol::LIST_GET_UNSAFE],
         );
