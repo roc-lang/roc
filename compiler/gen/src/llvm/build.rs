@@ -1105,7 +1105,7 @@ fn call_with_args<'a, 'ctx, 'env>(
             let comparison = bounds_check_comparison(builder, elem_index, list_len);
 
             // If the index is in bounds, clone and mutate in place.
-            let then_val: BasicValueEnum = {
+            let then_val = {
                 let (elem, elem_layout) = args[2];
                 let (cloned_wrapper, array_data_ptr) = {
                     clone_list(
@@ -1138,28 +1138,38 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             debug_assert!(args.len() == 3);
 
-            let wrapper_struct = args[0].0.into_struct_value();
+            let original_wrapper = args[0].0.into_struct_value();
             let elem_index = args[1].0.into_int_value();
             let (elem, _elem_layout) = args[2];
 
             // Load the usize length
-            let _list_len = load_list_len(builder, wrapper_struct);
+            let list_len = load_list_len(builder, original_wrapper);
 
-            // TODO here, check to see if the requested index exceeds the length of the array.
-            // If so, bail out and return the list unaltered.
+            // Bounds check: only proceed if index < length.
+            // Otherwise, return the list unaltered.
+            let comparison = bounds_check_comparison(builder, elem_index, list_len);
 
-            // Load the pointer to the elements
-            let array_data_ptr = load_list_ptr(builder, wrapper_struct);
+            // If the index is in bounds, clone and mutate in place.
+            let then_val = {
+                // Load the pointer to the elements
+                let array_data_ptr = load_list_ptr(builder, original_wrapper);
 
-            // We already checked the bounds earlier.
-            let elem_ptr =
-                unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem") };
+                // We already checked the bounds earlier.
+                let elem_ptr =
+                    unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem") };
 
-            // Mutate the array in-place.
-            builder.build_store(elem_ptr, elem);
+                // Mutate the array in-place.
+                builder.build_store(elem_ptr, elem);
 
-            // Return the wrapper unchanged, since pointer and length are unchanged
-            BasicValueEnum::StructValue(wrapper_struct)
+                // Return the wrapper unchanged, since pointer and length are unchanged
+                BasicValueEnum::StructValue(original_wrapper)
+            };
+
+            // If the index was out of bounds, return the original list unaltered.
+            let else_val = BasicValueEnum::StructValue(original_wrapper);
+            let ret_type = original_wrapper.get_type();
+
+            build_basic_phi2(env, parent, comparison, then_val, else_val, ret_type.into())
         }
         _ => {
             let fn_val = env
