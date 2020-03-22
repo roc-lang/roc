@@ -5,6 +5,7 @@ extern crate indoc;
 
 extern crate bumpalo;
 extern crate inkwell;
+extern crate libc;
 extern crate roc_gen;
 
 mod helpers;
@@ -535,6 +536,16 @@ mod test_gen {
     //     fn int_list_is_empty() {
     //         assert_evals_to!("List.isEmpty [ 12, 9, 6, 3 ]", 0, u8, |x| x);
     //     }
+    //
+    #[test]
+    fn empty_list_literal() {
+        assert_llvm_evals_to!("[]", &[], &'static [i64], |x| x);
+    }
+
+    #[test]
+    fn int_list_literal() {
+        assert_llvm_evals_to!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64], |x| x);
+    }
 
     #[test]
     fn head_int_list() {
@@ -543,29 +554,68 @@ mod test_gen {
 
     #[test]
     fn get_int_list() {
-        assert_evals_to!("List.getUnsafe [ 12, 9, 6, 3 ] 1", 9, i64);
+        assert_evals_to!("List.getUnsafe [ 12, 9, 6 ] 1", 9, i64);
     }
 
     #[test]
-    fn set_unique_int_list() {
+    fn get_set_unique_int_list() {
         assert_evals_to!("List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1", 42, i64);
     }
 
     #[test]
+    fn set_unique_int_list() {
+        assert_opt_evals_to!(
+            "List.set [ 12, 9, 7, 1, 5 ] 2 33",
+            &[12, 9, 33, 1, 5],
+            &'static [i64],
+            |x| x
+        );
+    }
+
+    #[test]
+    fn set_unique_list_oob() {
+        assert_opt_evals_to!(
+            "List.set [ 3, 17, 4.1 ] 1337 9.25",
+            &[3.0, 17.0, 4.1],
+            &'static [f64],
+            |x| x
+        );
+    }
+
+    #[test]
     fn set_shared_int_list() {
-        assert_crane_evals_to!(
+        assert_opt_evals_to!(
+            indoc!(
+                r#"
+                    shared = [ 2.1, 4.3 ]
+
+                    # This should not mutate the original
+                    x = List.getUnsafe (List.set shared 1 7.7) 1
+
+                    { x, y: List.getUnsafe shared 1 }
+                "#
+            ),
+            (7.7, 4.3),
+            (f64, f64),
+            |x| x
+        );
+    }
+
+    #[test]
+    fn set_shared_list_oob() {
+        assert_opt_evals_to!(
             indoc!(
                 r#"
                     shared = [ 2, 4 ]
 
-                    # This should not mutate the original
-                    x = List.set shared 1 77
+                    # This List.set is out of bounds, and should have no effect
+                    x = List.getUnsafe (List.set shared 422 0) 1
 
-                    List.getUnsafe shared 1
+                    { x, y: List.getUnsafe shared 1 }
                 "#
             ),
-            4,
-            i64,
+            (4, 4),
+            (i64, i64),
             |x| x
         );
     }
