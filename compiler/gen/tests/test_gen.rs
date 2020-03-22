@@ -608,8 +608,8 @@ mod test_gen {
                 r#"
                     shared = [ 2, 4 ]
 
-                    # This should not mutate the original
-                    x = List.set shared 1 0
+                    # This List.set is out of bounds, and should have no effect
+                    x = List.getUnsafe (List.set shared 422 0) 1
 
                     { x, y: List.getUnsafe shared 1 }
                 "#
