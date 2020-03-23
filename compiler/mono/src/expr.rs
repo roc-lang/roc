@@ -490,7 +490,8 @@ fn from_can<'a>(
                         &arg_symbols,
                         annotation,
                         body.value,
-                    );
+                    )
+                    .ok();
 
                     procs.insert_anonymous(symbol, opt_proc);
 
@@ -506,37 +507,46 @@ fn from_can<'a>(
 
             let (fn_var, loc_expr, ret_var) = *boxed;
 
-            // Optimization: have a cheap "is_builtin" check, that looks at the
-            // module ID to see if it's possibly a builting symbol
             let specialize_builtin_functions = {
-                |env: &mut Env<'a, '_>, symbol| match symbol {
-                    Symbol::NUM_ADD => match to_int_or_float(env.subs, ret_var) {
-                        FloatType => Symbol::FLOAT_ADD,
-                        IntType => Symbol::INT_ADD,
-                    },
-                    Symbol::NUM_SUB => match to_int_or_float(env.subs, ret_var) {
-                        FloatType => Symbol::FLOAT_SUB,
-                        IntType => Symbol::INT_SUB,
-                    },
-                    // TODO make this work for more than just int/float
-                    Symbol::BOOL_EQ => {
-                        match Layout::from_var(env.arena, loc_args[0].0, env.subs, env.pointer_size)
-                        {
-                            Ok(Layout::Builtin(builtin)) => match builtin {
-                                Builtin::Int64 => Symbol::INT_EQ_I64,
-                                Builtin::Float64 => Symbol::FLOAT_EQ,
-                                Builtin::Bool => Symbol::INT_EQ_I1,
-                                Builtin::Byte => Symbol::INT_EQ_I8,
-                                _ => panic!("Equality not implemented for {:?}", builtin),
+                |env: &mut Env<'a, '_>, symbol: Symbol| {
+                    if !symbol.module_id().is_builtin() {
+                        // return unchanged
+                        symbol
+                    } else {
+                        match symbol {
+                            Symbol::NUM_ADD => match to_int_or_float(env.subs, ret_var) {
+                                FloatType => Symbol::FLOAT_ADD,
+                                IntType => Symbol::INT_ADD,
                             },
-                            Ok(complex) => panic!(
-                                "TODO support equality on complex layouts like {:?}",
-                                complex
-                            ),
-                            Err(()) => panic!("Invalid layout"),
+                            Symbol::NUM_SUB => match to_int_or_float(env.subs, ret_var) {
+                                FloatType => Symbol::FLOAT_SUB,
+                                IntType => Symbol::INT_SUB,
+                            },
+                            // TODO make this work for more than just int/float
+                            Symbol::BOOL_EQ => {
+                                match Layout::from_var(
+                                    env.arena,
+                                    loc_args[0].0,
+                                    env.subs,
+                                    env.pointer_size,
+                                ) {
+                                    Ok(Layout::Builtin(builtin)) => match builtin {
+                                        Builtin::Int64 => Symbol::INT_EQ_I64,
+                                        Builtin::Float64 => Symbol::FLOAT_EQ,
+                                        Builtin::Bool => Symbol::INT_EQ_I1,
+                                        Builtin::Byte => Symbol::INT_EQ_I8,
+                                        _ => panic!("Equality not implemented for {:?}", builtin),
+                                    },
+                                    Ok(complex) => panic!(
+                                        "TODO support equality on complex layouts like {:?}",
+                                        complex
+                                    ),
+                                    Err(()) => panic!("Invalid layout"),
+                                }
+                            }
+                            _ => symbol,
                         }
                     }
-                    _ => symbol,
                 }
             };
 
@@ -693,7 +703,7 @@ fn from_can<'a>(
             );
 
             match variant {
-                Never => panic!("TODO cannot create a value of a type with no constructors"),
+                Never => unreachable!("The `[]` type has no constructors"),
                 Unit => Expr::Struct(&[]),
                 BoolUnion { ttrue, .. } => Expr::Bool(tag_name == ttrue),
                 ByteUnion(tag_names) => {
@@ -1014,8 +1024,8 @@ fn from_can_when<'a>(
         let cond = from_can(env, loc_cond.value, procs, None);
         stored.push((cond_symbol, cond_layout.clone(), cond));
 
-        // NOTE this will still store shadowed names. I think that is fine because the branch
-        // will throw an error anyway.
+        // NOTE this will still store shadowed names.
+        // that's fine: the branch throws a runtime error anyway
         let ret = match store_pattern(env, &mono_pattern, cond_symbol, cond_layout, &mut stored) {
             Ok(_) => from_can(env, first.value.value, procs, None),
             Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
@@ -1198,7 +1208,8 @@ fn call_by_name<'a>(
             &loc_patterns,
             annotation,
             body,
-        );
+        )
+        .ok();
 
         procs.insert_specialization(proc_name, content_hash, specialized_proc_name, proc);
     }
@@ -1227,7 +1238,7 @@ fn specialize_proc_body<'a>(
     pattern_symbols: &[Symbol],
     annotation: Variable,
     body: roc_can::expr::Expr,
-) -> Option<Proc<'a>> {
+) -> Result<Proc<'a>, ()> {
     // unify the called function with the specialized signature, then specialize the function body
     let snapshot = env.subs.snapshot();
     let unified = roc_unify::unify::unify(env.subs, annotation, fn_var);
@@ -1239,14 +1250,7 @@ fn specialize_proc_body<'a>(
     let mut proc_args = Vec::with_capacity_in(loc_args.len(), &env.arena);
 
     for (arg_var, arg_name) in loc_args.iter().zip(pattern_symbols.iter()) {
-        let layout = match Layout::from_var(&env.arena, *arg_var, env.subs, env.pointer_size) {
-            Ok(layout) => layout,
-            Err(()) => {
-                // Invalid closure!
-                return None;
-            }
-        };
-
+        let layout = Layout::from_var(&env.arena, *arg_var, env.subs, env.pointer_size)?;
         proc_args.push((layout, *arg_name));
     }
 
@@ -1261,7 +1265,7 @@ fn specialize_proc_body<'a>(
         ret_layout,
     };
 
-    Some(proc)
+    Ok(proc)
 }
 
 /// A pattern, including possible problems (e.g. shadowing) so that
