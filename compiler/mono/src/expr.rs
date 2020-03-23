@@ -122,6 +122,8 @@ impl<'a, 'i> Env<'a, 'i> {
     }
 }
 
+pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr<'a> {
     // Literals
@@ -152,11 +154,18 @@ pub enum Expr<'a> {
         // The left-hand side of the conditional comparison and the right-hand side.
         // These are stored separately because there are different machine instructions
         // for e.g. "compare float and jump" vs. "compare integer and jump"
-        cond: Symbol,
+
+        // symbol storing the original expression that we branch on, e.g. `Ok 42`
+        // required for RC logic
+        cond_symbol: Symbol,
+
+        // symbol storing the value that we branch on, e.g. `1` representing the `Ok` tag
+        branch_symbol: Symbol,
+
         cond_layout: Layout<'a>,
         // What to do if the condition either passes or fails
-        pass: &'a Expr<'a>,
-        fail: &'a Expr<'a>,
+        pass: (Stores<'a>, &'a Expr<'a>),
+        fail: (Stores<'a>, &'a Expr<'a>),
         ret_layout: Layout<'a>,
     },
     /// Conditional branches for integers. These are more efficient.
@@ -166,9 +175,9 @@ pub enum Expr<'a> {
         cond_layout: Layout<'a>,
         /// The u64 in the tuple will be compared directly to the condition Expr.
         /// If they are equal, this branch will be taken.
-        branches: &'a [(u64, Expr<'a>)],
+        branches: &'a [(u64, Stores<'a>, Expr<'a>)],
         /// If no other branches pass, this default branch will be taken.
-        default_branch: &'a Expr<'a>,
+        default_branch: (Stores<'a>, &'a Expr<'a>),
         /// Each branch must return a value of this type.
         ret_layout: Layout<'a>,
     },
@@ -647,19 +656,20 @@ fn from_can<'a>(
                 let cond = from_can(env, loc_cond.value, procs, None);
                 let then = from_can(env, loc_then.value, procs, None);
 
-                let cond_symbol = env.fresh_symbol();
+                let branch_symbol = env.fresh_symbol();
 
                 let cond_expr = Expr::Cond {
-                    cond: cond_symbol,
+                    cond_symbol: branch_symbol,
+                    branch_symbol,
                     cond_layout: cond_layout.clone(),
-                    pass: env.arena.alloc(then),
-                    fail: env.arena.alloc(expr),
+                    pass: (&[], env.arena.alloc(then)),
+                    fail: (&[], env.arena.alloc(expr)),
                     ret_layout: ret_layout.clone(),
                 };
 
                 expr = Expr::Store(
                     env.arena
-                        .alloc(vec![(cond_symbol, Layout::Builtin(Builtin::Bool), cond)]),
+                        .alloc(vec![(branch_symbol, Layout::Builtin(Builtin::Bool), cond)]),
                     env.arena.alloc(cond_expr),
                 );
             }
@@ -1070,7 +1080,7 @@ fn from_can_when<'a>(
 
                 let mut stores = Vec::with_capacity_in(1, env.arena);
 
-                let (mono_guard, expr_with_stores) = match store_pattern(
+                let (mono_guard, stores, expr) = match store_pattern(
                     env,
                     &mono_pattern,
                     cond_symbol,
@@ -1091,15 +1101,14 @@ fn from_can_when<'a>(
                                     stores: stores.into_bump_slice(),
                                     expr,
                                 },
+                                &[] as &[_],
                                 mono_expr.clone(),
                             )
                         } else {
                             (
                                 crate::decision_tree::Guard::NoGuard,
-                                Expr::Store(
-                                    stores.into_bump_slice(),
-                                    env.arena.alloc(mono_expr.clone()),
-                                ),
+                                stores.into_bump_slice(),
+                                mono_expr.clone(),
                             )
                         }
                     }
@@ -1111,19 +1120,21 @@ fn from_can_when<'a>(
                                     stores: &[],
                                     expr: Expr::RuntimeError(env.arena.alloc(message)),
                                 },
+                                &[] as &[_],
                                 // we can never hit this
                                 Expr::RuntimeError(&"invalid pattern with guard: unreachable"),
                             )
                         } else {
                             (
                                 crate::decision_tree::Guard::NoGuard,
+                                &[] as &[_],
                                 Expr::RuntimeError(env.arena.alloc(message)),
                             )
                         }
                     }
                 };
 
-                opt_branches.push((mono_pattern, mono_guard, expr_with_stores));
+                opt_branches.push((mono_pattern, mono_guard, stores, expr));
             }
         }
 

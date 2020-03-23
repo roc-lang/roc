@@ -171,10 +171,11 @@ mod test_mono {
                         Expr::Bool(true),
                     )],
                     &Cond {
-                        cond: gen_symbol_0,
+                        cond_symbol: gen_symbol_0,
+                        branch_symbol: gen_symbol_0,
                         cond_layout: Builtin(Bool),
-                        pass: &Expr::Str("bar"),
-                        fail: &Expr::Str("foo"),
+                        pass: (&[] as &[_], &Expr::Str("bar")),
+                        fail: (&[] as &[_], &Expr::Str("foo")),
                         ret_layout: Builtin(Str),
                     },
                 )
@@ -208,22 +209,27 @@ mod test_mono {
                         Expr::Bool(true),
                     )],
                     &Cond {
-                        cond: gen_symbol_0,
+                        cond_symbol: gen_symbol_0,
+                        branch_symbol: gen_symbol_0,
                         cond_layout: Builtin(Bool),
-                        pass: &Expr::Str("bar"),
-                        fail: &Store(
-                            &[(
-                                gen_symbol_1,
-                                Layout::Builtin(layout::Builtin::Bool),
-                                Expr::Bool(false),
-                            )],
-                            &Cond {
-                                cond: gen_symbol_1,
-                                cond_layout: Builtin(Bool),
-                                pass: &Expr::Str("foo"),
-                                fail: &Expr::Str("baz"),
-                                ret_layout: Builtin(Str),
-                            },
+                        pass: (&[] as &[_], &Expr::Str("bar")),
+                        fail: (
+                            &[] as &[_],
+                            &Store(
+                                &[(
+                                    gen_symbol_1,
+                                    Layout::Builtin(layout::Builtin::Bool),
+                                    Expr::Bool(false),
+                                )],
+                                &Cond {
+                                    cond_symbol: gen_symbol_1,
+                                    branch_symbol: gen_symbol_1,
+                                    cond_layout: Builtin(Bool),
+                                    pass: (&[] as &[_], &Expr::Str("foo")),
+                                    fail: (&[] as &[_], &Expr::Str("baz")),
+                                    ret_layout: Builtin(Str),
+                                },
+                            ),
                         ),
                         ret_layout: Builtin(Str),
                     },
@@ -261,10 +267,11 @@ mod test_mono {
                                 Expr::Bool(true),
                             )],
                             &Cond {
-                                cond: gen_symbol_0,
+                                cond_symbol: gen_symbol_0,
+                                branch_symbol: gen_symbol_0,
                                 cond_layout: Builtin(Bool),
-                                pass: &Expr::Str("bar"),
-                                fail: &Expr::Str("foo"),
+                                pass: (&[] as &[_], &Expr::Str("bar")),
+                                fail: (&[] as &[_], &Expr::Str("foo")),
                                 ret_layout: Builtin(Str),
                             },
                         ),

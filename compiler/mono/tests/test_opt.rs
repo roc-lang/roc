@@ -114,14 +114,15 @@ mod test_opt {
             }
 
             Cond {
-                cond: _,
+                cond_symbol: _,
+                branch_symbol: _,
                 cond_layout: _,
                 pass,
                 fail,
                 ret_layout: _,
             } => {
-                extract_named_calls_help(pass, calls, unexpected_calls);
-                extract_named_calls_help(fail, calls, unexpected_calls);
+                extract_named_calls_help(pass.1, calls, unexpected_calls);
+                extract_named_calls_help(fail.1, calls, unexpected_calls);
             }
             Switch {
                 cond,
@@ -131,9 +132,9 @@ mod test_opt {
                 ret_layout: _,
             } => {
                 extract_named_calls_help(cond, calls, unexpected_calls);
-                extract_named_calls_help(default_branch, calls, unexpected_calls);
+                extract_named_calls_help(default_branch.1, calls, unexpected_calls);
 
-                for (_, branch_expr) in branches.iter() {
+                for (_, _, branch_expr) in branches.iter() {
                     extract_named_calls_help(branch_expr, calls, unexpected_calls);
                 }
             }

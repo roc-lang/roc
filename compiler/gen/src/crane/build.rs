@@ -77,13 +77,17 @@ pub fn build_expr<'a, B: Backend>(
         Bool(val) => builder.ins().bconst(types::B1, *val),
         Byte(val) => builder.ins().iconst(types::I8, *val as i64),
         Cond {
-            cond,
-            pass,
-            fail,
+            branch_symbol,
+            pass: (pass_stores, pass_expr),
+            fail: (fail_stores, fail_expr),
             cond_layout,
             ret_layout,
+            ..
         } => {
-            let cond_value = load_symbol(env, scope, builder, *cond);
+            let cond_value = load_symbol(env, scope, builder, *branch_symbol);
+
+            let pass = env.arena.alloc(Expr::Store(pass_stores, pass_expr));
+            let fail = env.arena.alloc(Expr::Store(fail_stores, fail_expr));
 
             let branch = Branch2 {
                 cond: cond_value,
@@ -98,15 +102,24 @@ pub fn build_expr<'a, B: Backend>(
         Switch {
             cond,
             branches,
-            default_branch,
+            default_branch: (default_stores, default_expr),
             ret_layout,
             cond_layout,
         } => {
             let ret_type = type_from_layout(env.cfg, &ret_layout);
+
+            let default_branch = env.arena.alloc(Expr::Store(default_stores, default_expr));
+
+            let mut combined = Vec::with_capacity_in(branches.len(), env.arena);
+
+            for (int, stores, expr) in branches.iter() {
+                combined.push((*int, Expr::Store(stores, expr)));
+            }
+
             let switch_args = SwitchArgs {
                 cond_layout,
                 cond_expr: cond,
-                branches,
+                branches: combined.into_bump_slice(),
                 default_branch,
                 ret_type,
             };
