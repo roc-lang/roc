@@ -201,9 +201,6 @@ pub enum Expr<'a> {
         elems: &'a [Expr<'a>],
     },
 
-    Label(u64, &'a Expr<'a>),
-    Jump(u64),
-
     RuntimeError(&'a str),
 }
 

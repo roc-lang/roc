@@ -78,7 +78,7 @@ mod test_opt {
     ) {
         match expr {
             Int(_) | Float(_) | Str(_) | Bool(_) | Byte(_) | Load(_) | FunctionPointer(_)
-            | Jump(_) | RuntimeError(_) => (),
+            | RuntimeError(_) => (),
 
             Store(paths, sub_expr) => {
                 for (_, _, path_expr) in paths.iter() {
@@ -160,8 +160,7 @@ mod test_opt {
                 field_layouts: _,
                 expr: sub_expr,
                 is_unwrapped: _,
-            }
-            | Label(_, sub_expr) => {
+            } => {
                 extract_named_calls_help(sub_expr, calls, unexpected_calls);
             }
 

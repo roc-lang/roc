@@ -1075,10 +1075,15 @@ fn decide_to_branching<'a>(
     use Choice::*;
     use Decider::*;
 
-    let jump_count = *env.jump_counter;
-
     match decider {
-        Leaf(Jump(label)) => (&[], Expr::Jump(label + jump_count)),
+        Leaf(Jump(label)) => {
+            // we currently inline the jumps: does fewer jumps but produces a larger artifact
+            let (_, stores, expr) = jumps
+                .iter()
+                .find(|(l, _, _)| l == &label)
+                .expect("jump not in list of jumps");
+            (stores, expr.clone())
+        }
         Leaf(Inline(stores, expr)) => (stores, expr),
         Chain {
             test_chain,
