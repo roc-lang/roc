@@ -165,13 +165,25 @@ impl ReportText {
             }
             Type(content) => buf.push_str(content_to_string(content, subs, home, interns).as_str()),
             Region(region) => {
+                let max_line_number_length = region.end_line.to_string().len();
+
                 for i in region.start_line..=region.end_line {
-                    buf.push_str(i.to_string().as_str());
+                    let i_one_indexed = i + 1;
+
+                    let line_number_string = i_one_indexed.to_string();
+                    let line_number = line_number_string.as_str();
+                    let this_line_number_length = line_number.len();
+
+                    buf.push_str(
+                        " ".repeat(max_line_number_length - this_line_number_length)
+                            .as_str(),
+                    );
+                    buf.push_str(line_number);
                     buf.push_str(" ┆");
 
                     let line = src_lines[i as usize];
 
-                    if !line.is_empty() {
+                    if !line.trim().is_empty() {
                         buf.push_str("  ");
                         buf.push_str(src_lines[i as usize]);
                     }

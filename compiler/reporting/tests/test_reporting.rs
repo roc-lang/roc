@@ -244,7 +244,7 @@ mod test_report {
                 r#"
                 y is not used anywhere in your code.
 
-                1 ┆  y = 2
+                2 ┆  y = 2
 
                 If you didn't intend on using y then remove it so future readers of your code don't wonder why it is there."#
             )
@@ -276,9 +276,44 @@ mod test_report {
             })),
             indoc!(
                 r#"
-                    1 ┆  y = 2
-                    2 ┆  f = \a -> a + 4
-                    3 ┆"#
+                    2 ┆  y = 2
+                    3 ┆  f = \a -> a + 4
+                    4 ┆"#
+            ),
+        );
+    }
+
+    #[test]
+    fn report_region_different_line_number_lengths() {
+        report_renders_as_from_src(
+            indoc!(
+                r#"
+                    x = 1
+
+
+
+
+
+
+
+
+                    y = 2
+                    f = \a -> a + 4
+
+                    f x
+                "#
+            ),
+            to_simple_report(Region(roc_region::all::Region {
+                start_line: 8,
+                end_line: 10,
+                start_col: 0,
+                end_col: 0,
+            })),
+            indoc!(
+                r#"
+                     9 ┆
+                    10 ┆  y = 2
+                    11 ┆  f = \a -> a + 4"#
             ),
         );
     }
