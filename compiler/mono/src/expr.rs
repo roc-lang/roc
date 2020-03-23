@@ -1,4 +1,4 @@
-use crate::layout::{Builtin, Layout};
+use crate::layout::{Builtin, Layout, MAX_ENUM_SIZE};
 use crate::pattern::{Ctor, Guard};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -654,26 +654,22 @@ fn from_can<'a>(
             ..
         } => {
             let arena = env.arena;
-            let mut field_tuples = Vec::with_capacity_in(fields.len(), arena);
 
-            match Layout::from_var(arena, record_var, env.subs, env.pointer_size) {
-                Ok(Layout::Struct(field_layouts)) => {
-                    for (label, field_layout) in field_layouts.iter() {
-                        let loc_expr = fields.remove(label).unwrap().loc_expr;
-                        let expr = from_can(env, loc_expr.value, procs, None);
+            let btree = crate::layout::record_fields_btree(
+                env.arena,
+                record_var,
+                env.subs,
+                env.pointer_size,
+            );
 
-                        // TODO try to remove this clone
-                        field_tuples.push((expr, field_layout.clone()));
-                    }
-                }
-                Ok(_) => {
-                    unreachable!("Somehow a Record did not end up with a Struct layout");
-                }
-                Err(()) => {
-                    // Invalid field!
-                    panic!("TODO gracefully handle Record with invalid struct_layout");
-                }
-            };
+            let mut field_tuples = Vec::with_capacity_in(btree.len(), arena);
+
+            for (label, layout) in btree {
+                let field = fields.remove(&label).unwrap();
+                let expr = from_can(env, field.loc_expr.value, procs, None);
+
+                field_tuples.push((expr, layout));
+            }
 
             Expr::Struct(field_tuples.into_bump_slice())
         }
@@ -688,68 +684,75 @@ fn from_can<'a>(
         } => {
             let arena = env.arena;
 
-            let mut fields = std::vec::Vec::new();
+            let (is_enum_candidate, sorted_tag_layouts) = crate::layout::union_sorted_tags(
+                env.arena,
+                variant_var,
+                env.subs,
+                env.pointer_size,
+            );
 
-            match roc_types::pretty_print::chase_ext_tag_union(env.subs, variant_var, &mut fields) {
-                Ok(()) | Err((_, Content::FlexVar(_))) => {}
-                Err(content) => panic!("invalid content in ext_var: {:?}", content),
-            }
+            let union_size = sorted_tag_layouts.len() as u8;
 
-            fields.sort();
-            let tag_id = fields
+            let (tag_id, (_, argument_layouts)) = sorted_tag_layouts
                 .iter()
-                .position(|(key, _)| key == &tag_name)
+                .enumerate()
+                .find(|(_, (key, _))| key == &tag_name)
                 .expect("tag must be in its own type");
 
-            match Layout::from_var(arena, variant_var, &env.subs, env.pointer_size) {
-                Ok(Layout::Builtin(Builtin::Bool)) => Expr::Bool(tag_id != 0),
-                Ok(Layout::Builtin(Builtin::Byte)) => Expr::Byte(tag_id as u8),
-                Ok(layout) => {
+            match sorted_tag_layouts.len() {
+                2 if is_enum_candidate => Expr::Bool(tag_id != 0),
+                3..=MAX_ENUM_SIZE if is_enum_candidate => Expr::Byte(tag_id as u8),
+                len => {
                     let mut arguments = Vec::with_capacity_in(args.len(), arena);
 
-                    for (arg_var, arg) in args {
-                        let arg_layout =
-                            Layout::from_var(env.arena, arg_var, env.subs, env.pointer_size)
-                                .expect("invalid ret_layout");
+                    let is_unwrapped = len == 1;
 
-                        arguments.push((from_can(env, arg.value, procs, None), arg_layout));
-                    }
+                    // when the tag is not unwrapped, the layout will contain a slot for the tag
+                    // discriminant, but it's not yet part of the argument expressions. So we need
+                    // to conditionally insert it. We don't want to collect() into a data
+                    // structure, and thus must conditionally pick one of two iterators. that's a
+                    // bit tricky, as you can see below. Based on
+                    // https://stackoverflow.com/questions/29760668/conditionally-iterate-over-one-of-several-possible-iterators
+                    let argument_exprs = {
+                        let mut iter_1 = None;
+                        let mut iter_2 = None;
 
-                    let mut tags = std::vec::Vec::new();
-                    match roc_types::pretty_print::chase_ext_tag_union(
-                        env.subs,
-                        variant_var,
-                        &mut tags,
-                    ) {
-                        Ok(()) | Err((_, Content::FlexVar(_))) => {
-                            tags.sort();
+                        let shared = args
+                            .into_iter()
+                            .map(|(_, arg)| from_can(env, arg.value, procs, None));
+
+                        if is_unwrapped {
+                            iter_1 = Some(shared);
+                        } else {
+                            iter_2 = Some(std::iter::once(Expr::Int(tag_id as i64)).chain(shared));
                         }
-                        other => panic!("invalid value in ext_var {:?}", other),
+
+                        iter_1
+                            .into_iter()
+                            .flatten()
+                            .chain(iter_2.into_iter().flatten())
+                    };
+
+                    for (arg_layout, arg_expr) in argument_layouts.iter().zip(argument_exprs) {
+                        arguments.push((arg_expr, arg_layout.clone()));
                     }
 
-                    let mut opt_tag_id = None;
-                    for (index, (name, _)) in tags.iter().enumerate() {
-                        if name == &tag_name {
-                            opt_tag_id = Some(index as u8);
-                            break;
-                        }
+                    let mut layouts: Vec<&'a [Layout<'a>]> =
+                        Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
+
+                    for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
+                        layouts.push(arg_layouts);
                     }
 
-                    let union_size = tags.len() as u8;
-
-                    let tag_id = opt_tag_id.expect("Tag must be in its own type");
+                    let layout = Layout::Union(layouts.into_bump_slice());
 
                     Expr::Tag {
                         tag_layout: layout,
                         tag_name,
-                        tag_id,
+                        tag_id: tag_id as u8,
                         union_size,
                         arguments: arguments.into_bump_slice(),
                     }
-                }
-                Err(()) => {
-                    // Invalid field!
-                    panic!("TODO gracefully handle Access with invalid struct_layout");
                 }
             }
         }
@@ -762,18 +765,32 @@ fn from_can<'a>(
         } => {
             let arena = env.arena;
 
-            let record_layout =
-                match Layout::from_var(arena, record_var, env.subs, env.pointer_size) {
-                    Ok(layout) => layout,
-                    Err(()) => {
-                        // Invalid field!
-                        panic!("TODO gracefully handle Access with invalid struct_layout");
-                    }
-                };
+            let btree = crate::layout::record_fields_btree(
+                env.arena,
+                record_var,
+                env.subs,
+                env.pointer_size,
+            );
+
+            let mut index = None;
+            let mut field_layouts = Vec::with_capacity_in(btree.len(), env.arena);
+
+            for (current, (label, field_layout)) in btree.into_iter().enumerate() {
+                field_layouts.push(field_layout);
+
+                if label == field {
+                    index = Some(current);
+                }
+            }
 
             let record = arena.alloc(from_can(env, loc_expr.value, procs, None));
 
-            record_access_by_field(env, record_layout, record, field)
+            Expr::AccessAtIndex {
+                index: index.expect("field not in its own type") as u64,
+                field_layouts: field_layouts.into_bump_slice(),
+                expr: record,
+                is_unwrapped: true,
+            }
         }
 
         List {
@@ -807,45 +824,6 @@ fn from_can<'a>(
             }
         }
         other => panic!("TODO convert canonicalized {:?} to mono::Expr", other),
-    }
-}
-
-fn record_access_by_field<'a>(
-    env: &mut Env<'a, '_>,
-    record_layout: Layout<'a>,
-    record_expr: &'a Expr<'a>,
-    field: Lowercase,
-) -> Expr<'a> {
-    let (field_layouts, index) = match record_layout {
-        Layout::Struct(sorted_fields) => {
-            let index = sorted_fields
-                .iter()
-                .position(|(local_label, _)| local_label == &field)
-                .unwrap() as u64;
-
-            let mut only_fields = Vec::with_capacity_in(sorted_fields.len(), env.arena);
-
-            for (_, field) in sorted_fields.iter() {
-                only_fields.push(field.clone());
-            }
-
-            (only_fields.into_bump_slice(), index)
-        }
-
-        other => {
-            // Invalid field!
-            panic!(
-                "TODO gracefully handle Access with invalid struct_layout {:?}",
-                other
-            );
-        }
-    };
-
-    Expr::AccessAtIndex {
-        index,
-        field_layouts,
-        expr: record_expr,
-        is_unwrapped: true,
     }
 }
 
@@ -910,9 +888,16 @@ fn store_pattern<'a>(
                 }
             }
         }
-        RecordDestructure(destructs, layout) => {
-            for destruct in destructs {
-                store_record_destruct(env, destruct, outer_symbol, layout.clone(), stored)?;
+        RecordDestructure(destructs, Layout::Struct(sorted_fields)) => {
+            for (index, destruct) in destructs.iter().enumerate() {
+                store_record_destruct(
+                    env,
+                    destruct,
+                    index as u64,
+                    outer_symbol,
+                    sorted_fields,
+                    stored,
+                )?;
             }
         }
 
@@ -933,13 +918,21 @@ fn store_pattern<'a>(
 fn store_record_destruct<'a>(
     env: &mut Env<'a, '_>,
     destruct: &RecordDestruct<'a>,
+    index: u64,
     outer_symbol: Symbol,
-    struct_layout: Layout<'a>,
+    sorted_fields: &'a [Layout<'a>],
     stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
 ) -> Result<(), String> {
     use Pattern::*;
+
     let record = env.arena.alloc(Expr::Load(outer_symbol));
-    let load = record_access_by_field(env, struct_layout, record, destruct.label.clone());
+    let load = Expr::AccessAtIndex {
+        index,
+        field_layouts: sorted_fields,
+        expr: record,
+        is_unwrapped: true,
+    };
+
     match &destruct.guard {
         None => {
             stored.push((destruct.symbol, destruct.layout.clone(), load));
@@ -1411,36 +1404,33 @@ fn from_can_pattern<'a>(
             whole_var,
             destructs,
             ..
-        } => match Layout::from_var(env.arena, *whole_var, env.subs, env.pointer_size) {
-            Ok(Layout::Struct(field_layouts)) => {
-                let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
-                let mut destructs = destructs.clone();
-                destructs.sort_by(|a, b| a.value.label.cmp(&b.value.label));
+        } => {
+            let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
+            let mut destructs = destructs.clone();
+            destructs.sort_by(|a, b| a.value.label.cmp(&b.value.label));
 
-                let mut it = destructs.iter();
-                let mut opt_destruct = it.next();
+            let mut it = destructs.iter();
+            let mut opt_destruct = it.next();
 
-                // insert underscore patterns for unused fields. We need the record to be fully
-                // matched for pattern exhaustiveness checking
-                for (label, field_layout) in field_layouts.iter() {
-                    if let Some(destruct) = opt_destruct {
-                        if &destruct.value.label == label {
-                            opt_destruct = it.next();
+            let btree = crate::layout::record_fields_btree(
+                env.arena,
+                *whole_var,
+                env.subs,
+                env.pointer_size,
+            );
 
-                            mono_destructs.push(from_can_record_destruct(
-                                env,
-                                &destruct.value,
-                                field_layout.clone(),
-                            ));
-                        } else {
-                            // insert underscore pattern
-                            mono_destructs.push(RecordDestruct {
-                                label: label.clone(),
-                                symbol: env.fresh_symbol(),
-                                layout: field_layout.clone(),
-                                guard: Some(Pattern::Underscore),
-                            });
-                        }
+            let mut field_layouts = Vec::with_capacity_in(btree.len(), env.arena);
+
+            for (label, field_layout) in btree.into_iter() {
+                if let Some(destruct) = opt_destruct {
+                    if destruct.value.label == label {
+                        opt_destruct = it.next();
+
+                        mono_destructs.push(from_can_record_destruct(
+                            env,
+                            &destruct.value,
+                            field_layout.clone(),
+                        ));
                     } else {
                         // insert underscore pattern
                         mono_destructs.push(RecordDestruct {
@@ -1450,12 +1440,23 @@ fn from_can_pattern<'a>(
                             guard: Some(Pattern::Underscore),
                         });
                     }
+                } else {
+                    // insert underscore pattern
+                    mono_destructs.push(RecordDestruct {
+                        label: label.clone(),
+                        symbol: env.fresh_symbol(),
+                        layout: field_layout.clone(),
+                        guard: Some(Pattern::Underscore),
+                    });
                 }
-
-                Pattern::RecordDestructure(mono_destructs, Layout::Struct(field_layouts))
+                field_layouts.push(field_layout);
             }
-            Ok(_) | Err(()) => panic!("Invalid layout"),
-        },
+
+            Pattern::RecordDestructure(
+                mono_destructs,
+                Layout::Struct(field_layouts.into_bump_slice()),
+            )
+        }
     }
 }
 

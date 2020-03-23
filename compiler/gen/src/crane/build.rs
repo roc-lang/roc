@@ -238,7 +238,7 @@ pub fn build_expr<'a, B: Backend>(
                 .ins()
                 .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
         }
-        Tag { tag_layout, arguments , tag_id, union_size, .. } => {
+        Tag { tag_layout, arguments, .. } => {
             let cfg = env.cfg;
             let ptr_bytes = cfg.pointer_bytes() as u32;
 
@@ -256,14 +256,6 @@ pub fn build_expr<'a, B: Backend>(
             // Create instructions for storing each field's expression
             let mut offset = 0;
 
-            // still need to insert the tag discriminator for non-single unions
-            // when there are no arguments, e.g. `Nothing : Maybe a`
-            if *union_size > 1 {
-                let val = builder.ins().iconst(types::I64, *tag_id as i64);
-                builder.ins().stack_store(val, slot, Offset32::new(0));
-                offset += ptr_bytes;
-            }
-
             for (field_expr, field_layout) in arguments.iter() {
                 let val = build_expr(env, &scope, module, builder, field_expr, procs);
 
@@ -275,7 +267,6 @@ pub fn build_expr<'a, B: Backend>(
 
                 offset += field_size;
             }
-
 
             builder
                 .ins()

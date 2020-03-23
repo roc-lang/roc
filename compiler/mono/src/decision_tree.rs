@@ -942,10 +942,7 @@ fn path_to_expr_help<'a>(
 
             let (is_unwrapped, field_layouts) = match outer_layout {
                 Layout::Union(layouts) => (layouts.is_empty(), layouts[*tag_id as usize].to_vec()),
-                Layout::Struct(layouts) => (
-                    true,
-                    layouts.iter().map(|v| v.1.clone()).collect::<Vec<_>>(),
-                ),
+                Layout::Struct(layouts) => (true, layouts.to_vec()),
                 other => (true, vec![other]),
             };
 

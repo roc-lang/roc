@@ -370,8 +370,6 @@ pub fn build_expr<'a, 'ctx, 'env>(
         Tag {
             arguments,
             tag_layout,
-            union_size,
-            tag_id,
             ..
         } => {
             let ptr_size = env.ptr_bytes;
@@ -386,23 +384,6 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let num_fields = arguments.len() + 1;
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            // insert the discriminant value
-            if *union_size > 1 {
-                let val = env
-                    .context
-                    .i64_type()
-                    .const_int(*tag_id as u64, true)
-                    .into();
-
-                let field_type = env.context.i64_type().into();
-
-                field_types.push(field_type);
-                field_vals.push(val);
-
-                let field_size = ptr_size;
-                filler -= field_size;
-            }
 
             for (field_expr, field_layout) in arguments.iter() {
                 let val = build_expr(env, &scope, parent, field_expr, procs);

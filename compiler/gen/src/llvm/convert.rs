@@ -66,7 +66,7 @@ pub fn basic_type_from_layout<'ctx>(
             // Determine types
             let mut field_types = Vec::with_capacity_in(sorted_fields.len(), arena);
 
-            for (_, field_layout) in sorted_fields.iter() {
+            for field_layout in sorted_fields.iter() {
                 field_types.push(basic_type_from_layout(
                     arena,
                     context,

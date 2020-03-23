@@ -547,6 +547,11 @@ pub fn chase_ext_record(
 
         Structure(EmptyRecord) => Ok(()),
 
+        Content::Structure(Apply(Symbol::ATTR_ATTR, arguments)) => {
+            debug_assert!(arguments.len() == 2);
+            chase_ext_record(subs, arguments[1], fields)
+        }
+
         Alias(_, _, var) => chase_ext_record(subs, var, fields),
 
         content => Err((var, content)),

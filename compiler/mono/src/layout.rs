@@ -4,12 +4,15 @@ use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::{Content, FlatType, Subs, Variable};
+use std::collections::BTreeMap;
+
+pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
 
 /// Types for code gen must be monomorphic. No type variables allowed!
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Layout<'a> {
     Builtin(Builtin<'a>),
-    Struct(&'a [(Lowercase, Layout<'a>)]),
+    Struct(&'a [Layout<'a>]),
     Union(&'a [&'a [Layout<'a>]]),
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
@@ -86,7 +89,7 @@ impl<'a> Layout<'a> {
             Builtin(builtin) => builtin.safe_to_memcpy(),
             Struct(fields) => fields
                 .iter()
-                .all(|(_, field_layout)| field_layout.safe_to_memcpy()),
+                .all(|field_layout| field_layout.safe_to_memcpy()),
             Union(tags) => tags
                 .iter()
                 .all(|tag_layout| tag_layout.iter().all(|field| field.safe_to_memcpy())),
@@ -109,7 +112,7 @@ impl<'a> Layout<'a> {
             Struct(fields) => {
                 let mut sum = 0;
 
-                for (_, field_layout) in *fields {
+                for field_layout in *fields {
                     sum += field_layout.stack_size(pointer_size);
                 }
 
@@ -258,34 +261,14 @@ fn layout_from_flat_type<'a>(
         }
         Record(fields, ext_var) => {
             debug_assert!(ext_var_is_empty_record(subs, ext_var));
-            let ext_content = subs.get_without_compacting(ext_var).content;
-            let ext_layout = match Layout::from_content(arena, ext_content, subs, pointer_size) {
-                Ok(layout) => layout,
-                Err(()) => {
-                    // Invalid record!
-                    panic!("TODO gracefully handle record with invalid ext_var");
-                }
-            };
 
-            let mut field_layouts: Vec<'a, (Lowercase, Layout<'a>)>;
+            let btree = fields
+                .into_iter()
+                .collect::<BTreeMap<Lowercase, Variable>>();
 
-            match ext_layout {
-                Layout::Struct(more_fields) => {
-                    field_layouts = Vec::with_capacity_in(fields.len() + more_fields.len(), arena);
+            let mut layouts = Vec::with_capacity_in(btree.len(), arena);
 
-                    for (label, field) in more_fields {
-                        field_layouts.push((label.clone(), field.clone()));
-                    }
-                }
-                _ => {
-                    panic!(
-                        "TODO handle Layout for invalid record extension, specifically {:?}",
-                        ext_layout
-                    );
-                }
-            }
-
-            for (label, field_var) in fields {
+            for (_, field_var) in btree {
                 let field_content = subs.get_without_compacting(field_var).content;
                 let field_layout =
                     match Layout::from_content(arena, field_content, subs, pointer_size) {
@@ -296,13 +279,10 @@ fn layout_from_flat_type<'a>(
                         }
                     };
 
-                field_layouts.push((label.clone(), field_layout));
+                layouts.push(field_layout);
             }
 
-            // Sort fields by label
-            field_layouts.sort_by(|(a, _), (b, _)| a.cmp(b));
-
-            Ok(Layout::Struct(field_layouts.into_bump_slice()))
+            Ok(Layout::Struct(layouts.into_bump_slice()))
         }
         TagUnion(tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
@@ -320,6 +300,73 @@ fn layout_from_flat_type<'a>(
         }
         Erroneous(_) => Err(()),
         EmptyRecord => Ok(Layout::Struct(&[])),
+    }
+}
+
+pub fn record_fields_btree<'a>(
+    arena: &'a Bump,
+    var: Variable,
+    subs: &Subs,
+    pointer_size: u32,
+) -> BTreeMap<Lowercase, Layout<'a>> {
+    let mut fields_map = MutMap::default();
+    match roc_types::pretty_print::chase_ext_record(subs, var, &mut fields_map) {
+        Ok(()) | Err((_, Content::FlexVar(_))) => {
+            // collect into btreemap to sort
+            fields_map
+                .into_iter()
+                .map(|(label, var)| {
+                    (
+                        label,
+                        Layout::from_var(arena, var, subs, pointer_size)
+                            .expect("invalid layout from var"),
+                    )
+                })
+                .collect::<BTreeMap<Lowercase, Layout<'a>>>()
+        }
+        Err(other) => panic!("invalid content in record variable: {:?}", other),
+    }
+}
+
+pub fn union_sorted_tags<'a>(
+    arena: &'a Bump,
+    var: Variable,
+    subs: &Subs,
+    pointer_size: u32,
+) -> (bool, Vec<'a, (TagName, &'a [Layout<'a>])>) {
+    let mut tags_vec = std::vec::Vec::new();
+    match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
+        Ok(()) | Err((_, Content::FlexVar(_))) => {
+            // for this union be be an enum, none of the tags may have any arguments
+            let is_enum_candidate =
+                tags_vec.len() <= MAX_ENUM_SIZE && tags_vec.iter().all(|(_, args)| args.is_empty());
+
+            let is_unwrapped = tags_vec.len() == 1;
+            // collect into btreemap to sort
+            tags_vec.sort();
+
+            let mut result = Vec::with_capacity_in(tags_vec.len(), arena);
+            for (tag_name, arguments) in tags_vec {
+                let mut arg_layouts =
+                    Vec::with_capacity_in(arguments.len() + !is_unwrapped as usize, arena);
+
+                // if not unwrapped, add a slot for the tag discriminant
+                if !is_unwrapped && !is_enum_candidate {
+                    arg_layouts.push(Layout::Builtin(Builtin::Int64))
+                }
+
+                for var in arguments {
+                    let layout = Layout::from_var(arena, var, subs, pointer_size)
+                        .expect("invalid layout from var");
+                    arg_layouts.push(layout);
+                }
+
+                result.push((tag_name, arg_layouts.into_bump_slice()));
+            }
+
+            (is_enum_candidate, result)
+        }
+        Err(other) => panic!("invalid content in record variable: {:?}", other),
     }
 }
 
