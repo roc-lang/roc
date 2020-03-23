@@ -65,9 +65,7 @@ Str : [ @Str ]
 ##
 ## If you want to kep all the digits, passing #Int.highestSupported will accomplish this,
 ## but it's recommended to pass much smaller numbers instead.
-##
-## Passing a negative number for decimal places is equivalent to passing 0.
-decimal : Float *, ULen -> Str
+decimal : Float *, Len -> Str
 
 ## Convert an #Int to a string.
 int : Int * -> Str

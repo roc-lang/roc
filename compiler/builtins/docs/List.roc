@@ -28,10 +28,16 @@ interface List
 ## > for example on a 64-bit system, a list of 8 #Int values will be
 ## > stored as a flat array instead of as an RRBT.
 ##
-## One #List can store up to 2,147,483,648 elements (just over 2 billion). If you need to store more
-## elements than that, you can split them into smaller lists and operate
-## on those instead of on one large #List. This often runs faster in practice,
-## even for strings much smaller than 2 gigabytes.
+## The maximum size of a #List is limited by the amount of heap memory available
+## to the current process. If there is not enough memory available, attempting to
+## create the list could crash. (On Linux, where [overcommit](https://www.etalabs.net/overcommit.html)
+## is normally enabled, not having enough memory could result in the list appearing
+## to be created just fine, but then crashing later.)
+##
+## > The theoretical maximum length for a list created in Roc is
+## > #Int.highestLen divided by 2. Attempting to create a list bigger than that
+## > in Roc code will always fail, although in practice it is likely to fail
+## > at much smaller lengths due to insufficient memory being available.
 List elem : @List elem
 
 ## Initialize
@@ -188,13 +194,13 @@ drop : List elem, Int -> List elem
 
 ## Access
 
-#get : List elem, ULen -> Result elem [ OutOfBounds ]*
+#get : List elem, Len -> Result elem [ OutOfBounds ]*
 
 first : List elem -> [Ok elem, ListWasEmpty]*
 
 last : List elem -> [Ok elem, ListWasEmpty]*
 
-get : List elem, ULen -> [Ok elem, OutOfBounds]*
+get : List elem, Len -> [Ok elem, OutOfBounds]*
 
 max : List (Num a) -> [Ok (Num a), ListWasEmpty]*
 
@@ -202,7 +208,7 @@ min : List (Num a) -> [Ok (Num a), ListWasEmpty]*
 
 ## Modify
 
-set : List elem, ULen, elem -> List elem
+set : List elem, Len, elem -> List elem
 
 ## Deconstruct
 
@@ -219,7 +225,7 @@ walkBackwards : List elem, { start : state, step : (state, elem -> state) } -> s
 ## One #List can store up to 2,147,483,648 elements (just over 2 billion), which
 ## is exactly equal to the highest valid #I32 value. This means the #U32 this function
 ## returns can always be safely converted to an #I32 without losing any data.
-len : List * -> U32
+len : List * -> Len
 
 isEmpty : List * -> Bool
 

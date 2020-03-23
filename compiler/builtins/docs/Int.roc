@@ -52,7 +52,7 @@ interface Int
 ##
 ## * Start by deciding if this integer should allow negative numbers, and choose signed or unsigned accordingly.
 ## * Next, think about the range of numbers you expect this number to hold. Choose the smallest size you will never expect to overflow, no matter the inputs your program receives. (Validating inputs for size, and presenting the user with an error if they are too big, can help guard against overflow.)
-## * Finally, if a particular operation is too slow at runtime, and you know the native machine word size on which it will be running (most often either 64-bit or 32-bit), try switching to an integer of that size and see if it makes a meaningful difference. (The difference is typically extremely small.)
+## * Finally, if a particular numeric calculation is running too slowly, you can try experimenting with other number sizes. This rarely makes a meaningful difference, but some processors can operate on different number sizes at different speeds.
 Int size : Num (@Int size)
 
 ## A signed 8-bit integer, ranging from -128 to 127
@@ -66,8 +66,7 @@ I64 : Int @I64
 U64 : Int @U64
 I128 : Int @I128
 U128 : Int @U128
-ILen : Int @ILen
-ULen : Int @ULen
+Len : Int @Len
 
 ## A 64-bit signed integer. All number literals without decimal points are compatible with #Int values.
 ##
@@ -127,10 +126,11 @@ ULen : Int @ULen
 ## | ` (over 340 undecillion)                            0` | #U128 | 16 Bytes |
 ## | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 ##
-## There are also two variable-size integer types: #ILen and #ULen.
-## Their sizes are determined by the [machine word length](https://en.wikipedia.org/wiki/Word_(computer_architecture))
-## of the system you're compiling for. For example, when compiling for a 64-bit target,
-## #ILen is the same as #I64, and #ULen is the same as #U64.
+## There is also one variable-size integer type: #Len. It is always unsigned,
+## and its size is determined by the [machine word length](https://en.wikipedia.org/wiki/Word_(computer_architecture))
+## of the system you're compiling for. ("Len" is short for "length of a machine word.")
+## For example, when compiling for a 64-bit target, #Len is the same as #U64.
+## When compiling for a 32-bit target, #Len is the same as #U32.
 ##
 ## If any operation would result in an #Int that is either too big
 ## or too small to fit in that range (e.g. calling `Int.highest32 + 1`),
