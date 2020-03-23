@@ -144,12 +144,15 @@ mod test_report {
 
     #[test]
     fn report_emphasized_text() {
-        report_renders_as(to_simple_report(EmText(Box::from("y"))), "*y*");
+        report_renders_as(to_simple_report(em_text("y")), "*y*");
     }
 
     #[test]
     fn report_url() {
-        report_renders_as(to_simple_report(Url(Box::from("y"))), "<y>");
+        report_renders_as(
+            to_simple_report(url("package.roc.org")),
+            "<package.roc.org>",
+        );
     }
 
     #[test]
@@ -187,7 +190,7 @@ mod test_report {
 
     #[test]
     fn report_rigid_var() {
-        report_renders_as(to_simple_report(Type(RigidVar("a".into()))), "a");
+        report_renders_as(to_simple_report(Type(RigidVar("Str".into()))), "Str");
     }
 
     #[test]
@@ -201,7 +204,7 @@ mod test_report {
 
         report_texts.push(plain_text("Wait a second. "));
         report_texts.push(plain_text("There is a problem here. -> "));
-        report_texts.push(EmText(Box::from("y")));
+        report_texts.push(em_text("y"));
 
         report_renders_as(
             to_simple_report(Batch(report_texts)),
