@@ -114,13 +114,12 @@ mod test_opt {
             }
 
             Cond {
-                cond,
+                cond: _,
                 cond_layout: _,
                 pass,
                 fail,
                 ret_layout: _,
             } => {
-                extract_named_calls_help(cond, calls, unexpected_calls);
                 extract_named_calls_help(pass, calls, unexpected_calls);
                 extract_named_calls_help(fail, calls, unexpected_calls);
             }

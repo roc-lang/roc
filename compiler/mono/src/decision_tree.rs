@@ -1105,16 +1105,32 @@ fn decide_to_branching<'a>(
                 jumps,
             ));
 
-            let cond = boolean_all(env.arena, tests);
+            let condition = boolean_all(env.arena, tests);
 
             let cond_layout = Layout::Builtin(Builtin::Bool);
 
-            Expr::Cond {
-                cond: env.arena.alloc(cond),
-                cond_layout,
-                pass,
-                fail,
-                ret_layout,
+            if let Expr::Load(symbol) = condition {
+                Expr::Cond {
+                    cond: symbol,
+                    cond_layout,
+                    pass,
+                    fail,
+                    ret_layout,
+                }
+            } else {
+                let cond_symbol = env.fresh_symbol();
+                let stores = vec![(cond_symbol, cond_layout.clone(), condition)];
+
+                Expr::Store(
+                    env.arena.alloc(stores),
+                    env.arena.alloc(Expr::Cond {
+                        cond: cond_symbol,
+                        cond_layout,
+                        pass,
+                        fail,
+                        ret_layout,
+                    }),
+                )
             }
         }
         FanOut {

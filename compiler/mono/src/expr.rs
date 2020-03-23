@@ -152,7 +152,7 @@ pub enum Expr<'a> {
         // The left-hand side of the conditional comparison and the right-hand side.
         // These are stored separately because there are different machine instructions
         // for e.g. "compare float and jump" vs. "compare integer and jump"
-        cond: &'a Expr<'a>,
+        cond: Symbol,
         cond_layout: Layout<'a>,
         // What to do if the condition either passes or fails
         pass: &'a Expr<'a>,
@@ -646,13 +646,22 @@ fn from_can<'a>(
             for (loc_cond, loc_then) in branches.into_iter().rev() {
                 let cond = from_can(env, loc_cond.value, procs, None);
                 let then = from_can(env, loc_then.value, procs, None);
-                expr = Expr::Cond {
-                    cond: env.arena.alloc(cond),
+
+                let cond_symbol = env.fresh_symbol();
+
+                let cond_expr = Expr::Cond {
+                    cond: cond_symbol,
                     cond_layout: cond_layout.clone(),
                     pass: env.arena.alloc(then),
                     fail: env.arena.alloc(expr),
                     ret_layout: ret_layout.clone(),
                 };
+
+                expr = Expr::Store(
+                    env.arena
+                        .alloc(vec![(cond_symbol, Layout::Builtin(Builtin::Bool), cond)]),
+                    env.arena.alloc(cond_expr),
+                );
             }
 
             expr

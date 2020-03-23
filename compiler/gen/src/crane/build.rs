@@ -83,8 +83,10 @@ pub fn build_expr<'a, B: Backend>(
             cond_layout,
             ret_layout,
         } => {
+            let cond_value = load_symbol(env, scope, builder, *cond);
+
             let branch = Branch2 {
-                cond,
+                cond: cond_value,
                 pass,
                 fail,
                 cond_layout,
@@ -115,7 +117,7 @@ pub fn build_expr<'a, B: Backend>(
             let mut scope = im_rc::HashMap::clone(scope);
             let cfg = env.cfg;
 
-            let ptr_size = cfg.pointer_bytes()  as u32;
+            let ptr_size = cfg.pointer_bytes() as u32;
             for (name, layout, expr) in stores.iter() {
                 let stack_size = layout.stack_size(ptr_size);
 
@@ -127,10 +129,8 @@ pub fn build_expr<'a, B: Backend>(
                 let val = build_expr(env, &scope, module, builder, &expr, procs);
                 let expr_type = type_from_layout(cfg, &layout);
 
-                let slot = builder.create_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    stack_size,
-                ));
+                let slot = builder
+                    .create_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, stack_size));
 
                 builder.ins().stack_store(val, slot, Offset32::new(0));
 
@@ -175,37 +175,7 @@ pub fn build_expr<'a, B: Backend>(
 
             results[0]
         }
-        Load(name) => match scope.get(name) {
-            Some(ScopeEntry::Stack { expr_type, slot }) => {
-                builder
-                    .ins()
-                    .stack_load(*expr_type, *slot, Offset32::new(0))
-            }
-            Some(ScopeEntry::Arg { param, .. }) => *param,
-            Some(ScopeEntry::Heap { expr_type, ptr }) => {
-                builder
-                    .ins()
-                    .load(*expr_type, MemFlags::new(), *ptr, Offset32::new(0))
-            }
-            Some(ScopeEntry::Func { .. }) => {
-                panic!("TODO I don't yet know how to return fn pointers")
-            }
-            Some(ScopeEntry::ZeroSized) => {
-                // Create a slot
-                let slot = builder.create_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    0
-                ));
-
-                builder
-                    .ins()
-                    .stack_addr(env.cfg.pointer_type(), slot, Offset32::new(0))
-            }
-            None => panic!(
-                "Could not resolve lookup for {:?} because no ScopeEntry was found for {:?} in scope {:?}",
-                name, name, scope
-            ),
-        },
+        Load(name) => load_symbol(env, scope, builder, *name),
         Struct(sorted_fields) => {
             let cfg = env.cfg;
 
@@ -217,10 +187,8 @@ pub fn build_expr<'a, B: Backend>(
             }
 
             // Create a slot
-            let slot = builder.create_stack_slot(StackSlotData::new(
-                StackSlotKind::ExplicitSlot,
-                slot_size
-            ));
+            let slot = builder
+                .create_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, slot_size));
 
             // Create instructions for storing each field's expression
             // NOTE assumes that all fields have the same width!
@@ -238,7 +206,11 @@ pub fn build_expr<'a, B: Backend>(
                 .ins()
                 .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
         }
-        Tag { tag_layout, arguments, .. } => {
+        Tag {
+            tag_layout,
+            arguments,
+            ..
+        } => {
             let cfg = env.cfg;
             let ptr_bytes = cfg.pointer_bytes() as u32;
 
@@ -248,10 +220,8 @@ pub fn build_expr<'a, B: Backend>(
             let slot_size = tag_layout.stack_size(ptr_bytes);
 
             // Create a slot
-            let slot = builder.create_stack_slot(StackSlotData::new(
-                StackSlotKind::ExplicitSlot,
-                slot_size
-            ));
+            let slot = builder
+                .create_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, slot_size));
 
             // Create instructions for storing each field's expression
             let mut offset = 0;
@@ -260,10 +230,12 @@ pub fn build_expr<'a, B: Backend>(
                 let val = build_expr(env, &scope, module, builder, field_expr, procs);
 
                 let field_size = field_layout.stack_size(ptr_bytes);
-                let field_offset = i32::try_from(offset)
-                    .expect("TODO handle field size conversion to i32");
+                let field_offset =
+                    i32::try_from(offset).expect("TODO handle field size conversion to i32");
 
-                builder.ins().stack_store(val, slot, Offset32::new(field_offset));
+                builder
+                    .ins()
+                    .stack_store(val, slot, Offset32::new(field_offset));
 
                 offset += field_size;
             }
@@ -280,8 +252,6 @@ pub fn build_expr<'a, B: Backend>(
         } => {
             let cfg = env.cfg;
             let mut offset = 0;
-
-
 
             for (field_index, field_layout) in field_layouts.iter().enumerate() {
                 if *index == field_index as u64 {
@@ -301,8 +271,10 @@ pub fn build_expr<'a, B: Backend>(
                 offset += field_layout.stack_size(ptr_bytes);
             }
 
-            panic!("field access out of bounds: index {:?} in layouts {:?}", index, field_layouts)
-
+            panic!(
+                "field access out of bounds: index {:?} in layouts {:?}",
+                index, field_layouts
+            )
         }
 
         Str(str_literal) => {
@@ -375,14 +347,18 @@ pub fn build_expr<'a, B: Backend>(
 
             // Store the length
             {
-                let length = builder.ins().iconst(env.ptr_sized_int(), elems.len() as i64);
+                let length = builder
+                    .ins()
+                    .iconst(env.ptr_sized_int(), elems.len() as i64);
                 let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
 
                 builder.ins().stack_store(length, slot, offset);
             }
 
             // Return the pointer to the wrapper
-            builder.ins().stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
+            builder
+                .ins()
+                .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
         }
         _ => {
             panic!("I don't yet know how to crane build {:?}", expr);
@@ -390,8 +366,47 @@ pub fn build_expr<'a, B: Backend>(
     }
 }
 
+fn load_symbol<'a>(
+    env: &mut Env<'a>,
+    scope: &Scope,
+    builder: &mut FunctionBuilder,
+    name: Symbol,
+) -> Value {
+    match scope.get(&name) {
+            Some(ScopeEntry::Stack { expr_type, slot }) => {
+                builder
+                    .ins()
+                    .stack_load(*expr_type, *slot, Offset32::new(0))
+            }
+            Some(ScopeEntry::Arg { param, .. }) => *param,
+            Some(ScopeEntry::Heap { expr_type, ptr }) => {
+                builder
+                    .ins()
+                    .load(*expr_type, MemFlags::new(), *ptr, Offset32::new(0))
+            }
+            Some(ScopeEntry::Func { .. }) => {
+                panic!("TODO I don't yet know how to return fn pointers")
+            }
+            Some(ScopeEntry::ZeroSized) => {
+                // Create a slot
+                let slot = builder.create_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    0
+                ));
+
+                builder
+                    .ins()
+                    .stack_addr(env.cfg.pointer_type(), slot, Offset32::new(0))
+            }
+            None => panic!(
+                "Could not resolve lookup for {:?} because no ScopeEntry was found for {:?} in scope {:?}",
+                name, name, scope
+            ),
+        }
+}
+
 struct Branch2<'a> {
-    cond: &'a Expr<'a>,
+    cond: Value,
     cond_layout: &'a Layout<'a>,
     pass: &'a Expr<'a>,
     fail: &'a Expr<'a>,
@@ -417,7 +432,7 @@ fn build_branch2<'a, B: Backend>(
 
     builder.declare_var(ret, ret_type);
 
-    let cond = build_expr(env, scope, module, builder, branch.cond, procs);
+    let cond = branch.cond;
     let pass_block = builder.create_block();
     let fail_block = builder.create_block();
 
@@ -763,8 +778,10 @@ fn call_by_name<'a, B: Backend>(
         Symbol::BOOL_OR => {
             debug_assert!(args.len() == 2);
 
+            let cond = build_arg(&args[0], env, scope, module, builder, procs);
+
             let branch2 = Branch2 {
-                cond: &args[0].0,
+                cond,
                 cond_layout: &Layout::Builtin(Builtin::Bool),
                 pass: &Expr::Bool(true),
                 fail: &args[1].0,
@@ -775,8 +792,10 @@ fn call_by_name<'a, B: Backend>(
         Symbol::BOOL_AND => {
             debug_assert!(args.len() == 2);
 
+            let cond = build_arg(&args[0], env, scope, module, builder, procs);
+
             let branch2 = Branch2 {
-                cond: &args[0].0,
+                cond,
                 cond_layout: &Layout::Builtin(Builtin::Bool),
                 pass: &args[1].0,
                 fail: &Expr::Bool(false),

@@ -46,7 +46,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
-    expr: &Expr<'a>,
+    expr: &'a Expr<'a>,
     procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
     use roc_mono::expr::Expr::*;
@@ -193,12 +193,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .left()
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
         }
-        Load(symbol) => match scope.get(symbol) {
-            Some((_, ptr)) => env
-                .builder
-                .build_load(*ptr, symbol.ident_string(&env.interns)),
-            None => panic!("Could not find a var for {:?} in scope {:?}", symbol, scope),
-        },
+        Load(symbol) => load_symbol(env, scope, symbol),
         Str(str_literal) => {
             if str_literal.is_empty() {
                 panic!("TODO build an empty string in LLVM");
@@ -514,6 +509,19 @@ pub fn build_expr<'a, 'ctx, 'env>(
     }
 }
 
+fn load_symbol<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    symbol: &Symbol,
+) -> BasicValueEnum<'ctx> {
+    match scope.get(symbol) {
+        Some((_, ptr)) => env
+            .builder
+            .build_load(*ptr, symbol.ident_string(&env.interns)),
+        None => panic!("Could not find a var for {:?} in scope {:?}", symbol, scope),
+    }
+}
+
 /// Cast a struct to another struct of the same (or smaller?) size
 fn cast_struct_struct<'ctx>(
     builder: &Builder<'ctx>,
@@ -563,7 +571,7 @@ fn extract_tag_discriminant<'a, 'ctx, 'env>(
 }
 
 struct Branch2<'a> {
-    cond: &'a Expr<'a>,
+    cond: &'a Symbol,
     pass: &'a Expr<'a>,
     fail: &'a Expr<'a>,
     ret_layout: Layout<'a>,
@@ -579,7 +587,7 @@ fn build_branch2<'a, 'ctx, 'env>(
     let ret_layout = cond.ret_layout;
     let ret_type = basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
 
-    let cond_expr = build_expr(env, scope, parent, cond.cond, procs);
+    let cond_expr = load_symbol(env, scope, cond.cond);
 
     match cond_expr {
         IntValue(value) => {
