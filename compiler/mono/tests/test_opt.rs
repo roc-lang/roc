@@ -124,21 +124,6 @@ mod test_opt {
                 extract_named_calls_help(pass, calls, unexpected_calls);
                 extract_named_calls_help(fail, calls, unexpected_calls);
             }
-            Branches {
-                cond,
-                branches,
-                default,
-                ret_layout: _,
-            } => {
-                extract_named_calls_help(cond, calls, unexpected_calls);
-                extract_named_calls_help(default, calls, unexpected_calls);
-
-                for (a, b, c) in branches.iter() {
-                    extract_named_calls_help(a, calls, unexpected_calls);
-                    extract_named_calls_help(b, calls, unexpected_calls);
-                    extract_named_calls_help(c, calls, unexpected_calls);
-                }
-            }
             Switch {
                 cond,
                 cond_layout: _,
@@ -170,13 +155,7 @@ mod test_opt {
                     extract_named_calls_help(field, calls, unexpected_calls);
                 }
             }
-            Access {
-                label: _,
-                field_layout: _,
-                struct_layout: _,
-                record: sub_expr,
-            }
-            | AccessAtIndex {
+            AccessAtIndex {
                 index: _,
                 field_layouts: _,
                 expr: sub_expr,
