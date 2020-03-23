@@ -1,4 +1,4 @@
-use crate::layout::{Builtin, Layout, MAX_ENUM_SIZE};
+use crate::layout::{Builtin, Layout};
 use crate::pattern::{Ctor, Guard};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -682,58 +682,57 @@ fn from_can<'a>(
             arguments: args,
             ..
         } => {
+            use crate::layout::UnionVariant::*;
             let arena = env.arena;
 
-            let (is_enum_candidate, sorted_tag_layouts) = crate::layout::union_sorted_tags(
+            let variant = crate::layout::union_sorted_tags(
                 env.arena,
                 variant_var,
                 env.subs,
                 env.pointer_size,
             );
 
-            let union_size = sorted_tag_layouts.len() as u8;
+            match variant {
+                Never => panic!("TODO cannot create a value of a type with no constructors"),
+                Unit => Expr::Struct(&[]),
+                BoolUnion { ttrue, .. } => Expr::Bool(tag_name == ttrue),
+                ByteUnion(tag_names) => {
+                    let tag_id = tag_names
+                        .iter()
+                        .position(|key| key == &tag_name)
+                        .expect("tag must be in its own type");
 
-            let (tag_id, (_, argument_layouts)) = sorted_tag_layouts
-                .iter()
-                .enumerate()
-                .find(|(_, (key, _))| key == &tag_name)
-                .expect("tag must be in its own type");
+                    Expr::Byte(tag_id as u8)
+                }
+                Unwrapped(field_layouts) => {
+                    let field_exprs = args
+                        .into_iter()
+                        .map(|(_, arg)| from_can(env, arg.value, procs, None));
 
-            match sorted_tag_layouts.len() {
-                2 if is_enum_candidate => Expr::Bool(tag_id != 0),
-                3..=MAX_ENUM_SIZE if is_enum_candidate => Expr::Byte(tag_id as u8),
-                len => {
+                    let mut field_tuples = Vec::with_capacity_in(field_layouts.len(), arena);
+
+                    for tuple in field_exprs.zip(field_layouts.into_iter()) {
+                        field_tuples.push(tuple)
+                    }
+
+                    Expr::Struct(field_tuples.into_bump_slice())
+                }
+                Wrapped(sorted_tag_layouts) => {
+                    let union_size = sorted_tag_layouts.len() as u8;
+                    let (tag_id, (_, argument_layouts)) = sorted_tag_layouts
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (key, _))| key == &tag_name)
+                        .expect("tag must be in its own type");
+
                     let mut arguments = Vec::with_capacity_in(args.len(), arena);
 
-                    let is_unwrapped = len == 1;
+                    let it = std::iter::once(Expr::Int(tag_id as i64)).chain(
+                        args.into_iter()
+                            .map(|(_, arg)| from_can(env, arg.value, procs, None)),
+                    );
 
-                    // when the tag is not unwrapped, the layout will contain a slot for the tag
-                    // discriminant, but it's not yet part of the argument expressions. So we need
-                    // to conditionally insert it. We don't want to collect() into a data
-                    // structure, and thus must conditionally pick one of two iterators. that's a
-                    // bit tricky, as you can see below. Based on
-                    // https://stackoverflow.com/questions/29760668/conditionally-iterate-over-one-of-several-possible-iterators
-                    let argument_exprs = {
-                        let mut iter_1 = None;
-                        let mut iter_2 = None;
-
-                        let shared = args
-                            .into_iter()
-                            .map(|(_, arg)| from_can(env, arg.value, procs, None));
-
-                        if is_unwrapped {
-                            iter_1 = Some(shared);
-                        } else {
-                            iter_2 = Some(std::iter::once(Expr::Int(tag_id as i64)).chain(shared));
-                        }
-
-                        iter_1
-                            .into_iter()
-                            .flatten()
-                            .chain(iter_2.into_iter().flatten())
-                    };
-
-                    for (arg_layout, arg_expr) in argument_layouts.iter().zip(argument_exprs) {
+                    for (arg_layout, arg_expr) in argument_layouts.iter().zip(it) {
                         arguments.push((arg_expr, arg_layout.clone()));
                     }
 

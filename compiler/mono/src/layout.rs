@@ -328,32 +328,94 @@ pub fn record_fields_btree<'a>(
     }
 }
 
+pub enum UnionVariant<'a> {
+    Never,
+    Unit,
+    BoolUnion { ttrue: TagName, ffalse: TagName },
+    ByteUnion(Vec<'a, TagName>),
+    Unwrapped(Vec<'a, Layout<'a>>),
+    Wrapped(Vec<'a, (TagName, &'a [Layout<'a>])>),
+}
+
 pub fn union_sorted_tags<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
     pointer_size: u32,
-) -> (bool, Vec<'a, (TagName, &'a [Layout<'a>])>) {
+) -> UnionVariant<'a> {
     let mut tags_vec = std::vec::Vec::new();
     match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
         Ok(()) | Err((_, Content::FlexVar(_))) => {
-            // for this union be be an enum, none of the tags may have any arguments
-            let is_enum_candidate =
-                tags_vec.len() <= MAX_ENUM_SIZE && tags_vec.iter().all(|(_, args)| args.is_empty());
+            union_sorted_tags_help(arena, tags_vec, subs, pointer_size)
+        }
+        Err(other) => panic!("invalid content in record variable: {:?}", other),
+    }
+}
 
-            let is_unwrapped = tags_vec.len() == 1;
-            // collect into btreemap to sort
-            tags_vec.sort();
+fn union_sorted_tags_help<'a>(
+    arena: &'a Bump,
+    mut tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)>,
+    subs: &Subs,
+    pointer_size: u32,
+) -> UnionVariant<'a> {
+    // for this union be be an enum, none of the tags may have any arguments
+    let has_no_arguments = tags_vec.iter().all(|(_, args)| args.is_empty());
 
+    // sort up-front, make sure the ordering stays intact!
+    tags_vec.sort();
+
+    match tags_vec.len() {
+        0 => {
+            // trying to instantiate a type with no values
+            UnionVariant::Never
+        }
+        1 if has_no_arguments => {
+            // a unit type
+            UnionVariant::Unit
+        }
+        2 if has_no_arguments => {
+            // type can be stored in a boolean
+
+            // tags_vec is sorted,
+            let ttrue = tags_vec.remove(1).0;
+            let ffalse = tags_vec.remove(0).0;
+
+            UnionVariant::BoolUnion { ffalse, ttrue }
+        }
+        3..=MAX_ENUM_SIZE if has_no_arguments => {
+            // type can be stored in a byte
+            // needs the sorted tag names to determine the tag_id
+            let mut tag_names = Vec::with_capacity_in(tags_vec.len(), arena);
+
+            for (label, _) in tags_vec {
+                tag_names.push(label);
+            }
+
+            UnionVariant::ByteUnion(tag_names)
+        }
+        1 => {
+            // just one tag in the union (but with arguments) can be a struct
+            let mut layouts = Vec::with_capacity_in(tags_vec.len(), arena);
+
+            let arguments = tags_vec.remove(0).1;
+
+            for var in arguments.iter() {
+                let layout = Layout::from_var(arena, *var, subs, pointer_size)
+                    .expect("invalid layout from var");
+                layouts.push(layout);
+            }
+            UnionVariant::Unwrapped(layouts)
+        }
+        _ => {
+            // default path
             let mut result = Vec::with_capacity_in(tags_vec.len(), arena);
-            for (tag_name, arguments) in tags_vec {
-                let mut arg_layouts =
-                    Vec::with_capacity_in(arguments.len() + !is_unwrapped as usize, arena);
 
-                // if not unwrapped, add a slot for the tag discriminant
-                if !is_unwrapped && !is_enum_candidate {
-                    arg_layouts.push(Layout::Builtin(Builtin::Int64))
-                }
+            for (tag_name, arguments) in tags_vec {
+                // resverse space for the tag discriminant
+                let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
+
+                // add the tag discriminant
+                arg_layouts.push(Layout::Builtin(Builtin::Int64));
 
                 for var in arguments {
                     let layout = Layout::from_var(arena, var, subs, pointer_size)
@@ -363,10 +425,8 @@ pub fn union_sorted_tags<'a>(
 
                 result.push((tag_name, arg_layouts.into_bump_slice()));
             }
-
-            (is_enum_candidate, result)
+            UnionVariant::Wrapped(result)
         }
-        Err(other) => panic!("invalid content in record variable: {:?}", other),
     }
 }
 
