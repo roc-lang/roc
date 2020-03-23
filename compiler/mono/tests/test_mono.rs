@@ -281,7 +281,7 @@ mod test_mono {
                             CallByName(gen_symbol_4, &[(Int(4), Builtin(Int64))]),
                             Builtin(Int64),
                         )]),
-                        Layout::Struct(&[("x".into(), Builtin(Int64))]),
+                        Layout::Struct(&[Builtin(Int64)]),
                     )],
                 )
             },

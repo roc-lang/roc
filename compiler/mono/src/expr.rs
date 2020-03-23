@@ -842,7 +842,7 @@ fn store_pattern<'a>(
         }
         Underscore => {
             // Since _ is never read, it's safe to reassign it.
-            stored.push((Symbol::UNDERSCORE, layout, Expr::Load(outer_symbol)))
+            // stored.push((Symbol::UNDERSCORE, layout, Expr::Load(outer_symbol)))
         }
         IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral(_) => {}
         AppliedTag {
@@ -1335,57 +1335,87 @@ fn from_can_pattern<'a>(
             arguments,
             ..
         } => {
-            let mut fields = std::vec::Vec::new();
+            use crate::layout::UnionVariant::*;
 
-            match roc_types::pretty_print::chase_ext_tag_union(env.subs, *whole_var, &mut fields) {
-                Ok(()) | Err((_, Content::FlexVar(_))) => {}
-                Err(content) => panic!("invalid content in ext_var: {:?}", content),
-            }
+            let variant =
+                crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.pointer_size);
 
-            fields.sort();
-            let tag_id = fields
-                .iter()
-                .position(|(key, _)| key == tag_name)
-                .expect("tag must be in its own type");
-
-            let enum_size = fields.len();
-
-            let mut ctors = std::vec::Vec::with_capacity(fields.len());
-            for (tag_name, args) in &fields {
-                ctors.push(Ctor {
-                    name: tag_name.clone(),
-                    arity: args.len(),
-                })
-            }
-
-            let union = crate::pattern::Union {
-                alternatives: ctors,
-            };
-
-            let fields_map: MutMap<_, _> = fields.into_iter().collect();
-
-            match crate::layout::layout_from_tag_union(
-                env.arena,
-                &fields_map,
-                env.subs,
-                env.pointer_size,
-            ) {
-                Ok(Layout::Builtin(Builtin::Bool)) => Pattern::BitLiteral(tag_id != 0),
-                Ok(Layout::Builtin(Builtin::Byte)) => Pattern::EnumLiteral {
-                    tag_id: tag_id as u8,
-                    enum_size: enum_size as u8,
+            match variant {
+                Never => unreachable!("there is no pattern of type `[]`"),
+                Unit => Pattern::EnumLiteral {
+                    tag_id: 0,
+                    enum_size: 1,
                 },
-                Ok(layout) => {
-                    let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
-                    for (pat_var, loc_pat) in arguments {
-                        let layout =
-                            Layout::from_var(env.arena, *pat_var, env.subs, env.pointer_size)
-                                .unwrap_or_else(|err| {
-                                    panic!("TODO turn pat_var into a RuntimeError {:?}", err)
-                                });
+                BoolUnion { ttrue, .. } => Pattern::BitLiteral(tag_name == &ttrue),
+                ByteUnion(tag_names) => {
+                    let tag_id = tag_names
+                        .iter()
+                        .position(|key| key == tag_name)
+                        .expect("tag must be in its own type");
 
-                        mono_args.push((from_can_pattern(env, &loc_pat.value), layout));
+                    Pattern::EnumLiteral {
+                        tag_id: tag_id as u8,
+                        enum_size: tag_names.len() as u8,
                     }
+                }
+                Unwrapped(field_layouts) => {
+                    let union = crate::pattern::Union {
+                        alternatives: vec![Ctor {
+                            name: tag_name.clone(),
+                            arity: field_layouts.len(),
+                        }],
+                    };
+
+                    let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
+                    for ((_, loc_pat), layout) in arguments.iter().zip(field_layouts.iter()) {
+                        mono_args.push((from_can_pattern(env, &loc_pat.value), layout.clone()));
+                    }
+
+                    let layout = Layout::Struct(field_layouts.into_bump_slice());
+
+                    Pattern::AppliedTag {
+                        tag_name: tag_name.clone(),
+                        tag_id: 0,
+                        arguments: mono_args,
+                        union,
+                        layout,
+                    }
+                }
+                Wrapped(tags) => {
+                    let mut ctors = std::vec::Vec::with_capacity(tags.len());
+                    for (tag_name, args) in &tags {
+                        ctors.push(Ctor {
+                            name: tag_name.clone(),
+                            // don't include tag discriminant in arity
+                            arity: args.len() - 1,
+                        })
+                    }
+
+                    let union = crate::pattern::Union {
+                        alternatives: ctors,
+                    };
+
+                    let (tag_id, (_, argument_layouts)) = tags
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (key, _))| key == tag_name)
+                        .expect("tag must be in its own type");
+
+                    let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
+                    // disregard the tag discriminant layout
+                    let it = argument_layouts[1..].iter();
+                    for ((_, loc_pat), layout) in arguments.iter().zip(it) {
+                        mono_args.push((from_can_pattern(env, &loc_pat.value), layout.clone()));
+                    }
+
+                    let mut layouts: Vec<&'a [Layout<'a>]> =
+                        Vec::with_capacity_in(tags.len(), env.arena);
+
+                    for (_, arg_layouts) in tags.into_iter() {
+                        layouts.push(arg_layouts);
+                    }
+
+                    let layout = Layout::Union(layouts.into_bump_slice());
 
                     Pattern::AppliedTag {
                         tag_name: tag_name.clone(),
@@ -1395,7 +1425,6 @@ fn from_can_pattern<'a>(
                         layout,
                     }
                 }
-                Err(()) => panic!("Invalid layout"),
             }
         }
 
