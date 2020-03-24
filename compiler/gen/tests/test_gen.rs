@@ -288,6 +288,11 @@ mod test_gen {
                 panic!("Function {} failed LLVM verification.", main_fn_name);
             }
 
+            // Verify the module
+            if let Err(errors) = env.module.verify() {
+                panic!("Errors defining module: {:?}", errors);
+            }
+
             // Uncomment this to see the module's optimized LLVM instruction output:
             // env.module.print_to_stderr();
 
@@ -422,6 +427,11 @@ mod test_gen {
                 fpm.run_on(&main_fn);
             } else {
                 panic!("Function {} failed LLVM verification.", main_fn_name);
+            }
+
+            // Verify the module
+            if let Err(errors) = env.module.verify() {
+                panic!("Errors defining module: {:?}", errors);
             }
 
             // Uncomment this to see the module's optimized LLVM instruction output:
