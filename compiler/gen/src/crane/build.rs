@@ -74,7 +74,7 @@ pub fn build_expr<'a, B: Backend>(
     match expr {
         Int(num) => builder.ins().iconst(types::I64, *num),
         Float(num) => builder.ins().f64const(*num),
-        Bool(val) => builder.ins().bconst(types::B1, *val),
+        Bool(val) => builder.ins().iconst(types::I8, *val as i64),
         Byte(val) => builder.ins().iconst(types::I8, *val as i64),
         Cond {
             branch_symbol,
@@ -768,25 +768,30 @@ fn call_by_name<'a, B: Backend>(
             let a = build_arg(&args[0], env, scope, module, builder, procs);
             let b = build_arg(&args[1], env, scope, module, builder, procs);
 
-            builder.ins().icmp(IntCC::Equal, a, b)
+            let result = builder.ins().icmp(IntCC::Equal, a, b);
+
+            // convert to how we store bools (as I8)
+            builder.ins().bint(types::I8, result)
         }
         Symbol::INT_EQ_I1 => {
             debug_assert!(args.len() == 2);
             let a = build_arg(&args[0], env, scope, module, builder, procs);
             let b = build_arg(&args[1], env, scope, module, builder, procs);
 
-            // integer comparisons don't work for booleans, and a custom xand gives errors.
-            let p = builder.ins().bint(types::I8, a);
-            let q = builder.ins().bint(types::I8, b);
+            let result = builder.ins().icmp(IntCC::Equal, a, b);
 
-            builder.ins().icmp(IntCC::Equal, p, q)
+            // convert to how we store bools (as I8)
+            builder.ins().bint(types::I8, result)
         }
         Symbol::FLOAT_EQ => {
             debug_assert!(args.len() == 2);
             let a = build_arg(&args[0], env, scope, module, builder, procs);
             let b = build_arg(&args[1], env, scope, module, builder, procs);
 
-            builder.ins().fcmp(FloatCC::Equal, a, b)
+            let result = builder.ins().fcmp(FloatCC::Equal, a, b);
+
+            // convert to how we store bools (as I8)
+            builder.ins().bint(types::I8, result)
         }
         Symbol::BOOL_OR => {
             debug_assert!(args.len() == 2);

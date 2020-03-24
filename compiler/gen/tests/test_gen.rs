@@ -446,13 +446,13 @@ mod test_gen {
             // parsing the source, so that there's no chance their passing
             // or failing depends on leftover state from the previous one.
             {
-                // assert_crane_evals_to!($src, $expected, $ty, (|val| val));
+                assert_crane_evals_to!($src, $expected, $ty, (|val| val));
             }
             {
                 assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
             }
             {
-                // assert_opt_evals_to!($src, $expected, $ty, (|val| val));
+                assert_opt_evals_to!($src, $expected, $ty, (|val| val));
             }
         };
         ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
@@ -1939,6 +1939,21 @@ mod test_gen {
             ),
             19.3,
             f64
+        );
+    }
+    #[test]
+    fn bool_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : Bool
+                x = True
+
+                x
+                "#
+            ),
+            true,
+            bool
         );
     }
 }
