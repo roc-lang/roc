@@ -66,7 +66,8 @@ I64 : Int @I64
 U64 : Int @U64
 I128 : Int @I128
 U128 : Int @U128
-Len : Int @Len
+Ilen : Int @Ilen
+Ulen : Int @Ulen
 
 ## A 64-bit signed integer. All number literals without decimal points are compatible with #Int values.
 ##
@@ -90,7 +91,7 @@ Len : Int @Len
 ##
 ## * Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
 ## * Smaller integer sizes take up less memory. This savings rarely matters in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can be a performance bottleneck.
-## * CPUs typically work fastest on their native [word size](https://en.wikipedia.org/wiki/Word_(computer_architecture)). For example, 64-bit CPUs tend to work fastest on 64-bit integers. Especially if your performance profiling shows that you are CPU bound rather than memory bound, consider #ILen or #ULen.
+## * Certain CPUs work faster on some numeric sizes than others. If the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
 ##
 ## Here are the different fixed size integer types:
 ##
@@ -126,25 +127,19 @@ Len : Int @Len
 ## | ` (over 340 undecillion)                            0` | #U128 | 16 Bytes |
 ## | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 ##
-## There is also one variable-size integer type: #Len. It is always unsigned,
-## and its size is determined by the [machine word length](https://en.wikipedia.org/wiki/Word_(computer_architecture))
-## of the system you're compiling for. ("Len" is short for "length of a machine word.")
-## For example, when compiling for a 64-bit target, #Len is the same as #U64.
-## When compiling for a 32-bit target, #Len is the same as #U32.
+## There are also two variable-size integer types: #Ulen and #Ilen. Their sizes
+## are determined by the [machine word length](https://en.wikipedia.org/wiki/Word_(computer_architecture))
+## of the system you're compiling for. (The "len" in their names is short for "length of a machine word.")
+## For example, when compiling for a 64-bit target, #Ulen is the same as #U64,
+## and #Ilen is the same as #I64. When compiling for a 32-bit target, #Ulen is the same as #U32,
+## and #Ilen is the same as #I32. In practice, #Ulen sees much more use than #Ilen.
 ##
 ## If any operation would result in an #Int that is either too big
-## or too small to fit in that range (e.g. calling `Int.highest32 + 1`),
-## then the operation will *overflow* or *underflow*, respectively.
-##
-## When this happens:
-##
-## * In a development build, you'll get an assertion failure.
-## * In a release build, you'll get [wrapping overflow](https://en.wikipedia.org/wiki/Integer_overflow), which is almost always a mathematically incorrect outcome for the requested operation. (If you actually want wrapping, because you're writing something like a hash function, use functions like #Int.addWrapping.)
+## or too small to fit in that range (e.g. calling `Int.highestI32 + 1`),
+## then the operation will *overflow*. When an overflow occurs, the program will crash.
 ##
 ## As such, it's very important to design your code not to exceed these bounds!
-## If you need to do math outside these bounds, consider using
-## a different representation other than #Int. The reason #Int has these
-## bounds is for performance reasons.
+## If you need to do math outside these bounds, consider using a larger numeric size.
 # Int size : Num [ @Int size ]
 
 ## Arithmetic
