@@ -872,20 +872,20 @@ fn call_by_name<'a, B: Backend>(
         }
         Symbol::LIST_SET => {
             // set : List elem, Int, elem -> List elem
-            let wrapper_ptr = build_arg(&args[0], env, scope, module, builder, procs);
+            let original_wrapper = build_arg(&args[0], env, scope, module, builder, procs);
             let (_list_expr, list_layout) = &args[0];
 
             // Get the usize list length
             let ptr_bytes = env.cfg.pointer_bytes() as u32;
             let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
-            let _list_len =
-                builder
-                    .ins()
-                    .load(env.ptr_sized_int(), MemFlags::new(), wrapper_ptr, offset);
+            let list_len = load_list_len(env, builder, wrapper_ptr);
 
-            // TODO do array bounds checking, and early return the original List if out of bounds
+            // Bounds check: only proceed if index < length.
+            // Otherwise, return the list unaltered.
+            let comparison = bounds_check_comparison(builder, elem_index, list_len);
 
-            match list_layout {
+            // If the index is in bounds, clone and mutate in place.
+            let then_val = match list_layout {
                 Layout::Builtin(Builtin::List(elem_layout)) => {
                     let wrapper_ptr = clone_list(env, builder, module, wrapper_ptr, elem_layout);
 
@@ -899,7 +899,11 @@ fn call_by_name<'a, B: Backend>(
                 _ => {
                     unreachable!("Invalid List layout for List.set: {:?}", list_layout);
                 }
-            }
+            };
+
+            // If the index was out of bounds, return the original list unaltered.
+            let else_val = BasicValueEnum::StructValue(original_wrapper);
+            let ret_type = original_wrapper.get_type();
         }
         Symbol::LIST_SET_IN_PLACE => {
             // set : List elem, Int, elem -> List elem
@@ -1004,6 +1008,30 @@ fn list_set_in_place<'a>(
     wrapper_ptr
 }
 
+fn load_list_len(env: &Env<'_>, builder: &mut FunctionBuilder, src_wrapper_ptr: Value) -> Value {
+    let ptr_bytes = env.cfg.pointer_bytes() as u32;
+    let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
+
+    builder.ins().load(
+        env.ptr_sized_int(),
+        MemFlags::new(),
+        src_wrapper_ptr,
+        offset,
+    )
+}
+
+fn load_list_ptr(env: &Env<'_>, builder: &mut FunctionBuilder, src_wrapper_ptr: Value) -> Value {
+    let ptr_bytes = env.cfg.pointer_bytes() as u32;
+    let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
+
+    builder.ins().load(
+        env.ptr_sized_int(),
+        MemFlags::new(),
+        src_wrapper_ptr,
+        offset,
+    )
+}
+
 fn clone_list<B: Backend>(
     env: &Env<'_>,
     builder: &mut FunctionBuilder,
@@ -1012,28 +1040,12 @@ fn clone_list<B: Backend>(
     elem_layout: &Layout<'_>,
 ) -> Value {
     let cfg = env.cfg;
-    let ptr_bytes = env.cfg.pointer_bytes() as u32;
 
     // Load the pointer we got to the wrapper struct
-    let elems_ptr = {
-        let offset = Offset32::new((Builtin::WRAPPER_PTR * ptr_bytes) as i32);
-
-        builder
-            .ins()
-            .load(cfg.pointer_type(), MemFlags::new(), src_wrapper_ptr, offset)
-    };
+    let elems_ptr = load_list_len(env, builder, src_wrapper_ptr);
 
     // Get the usize list length
-    let list_len = {
-        let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
-
-        builder.ins().load(
-            env.ptr_sized_int(),
-            MemFlags::new(),
-            src_wrapper_ptr,
-            offset,
-        )
-    };
+    let list_len = load_list_ptr(env, builder, src_wrapper_ptr);
 
     // Calculate the number of bytes we'll need to allocate.
     let elem_bytes = builder.ins().iconst(
@@ -1078,4 +1090,12 @@ fn clone_list<B: Backend>(
     builder
         .ins()
         .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
+}
+
+fn bounds_check_comparison(builder: &mut FunctionBuilder, elem_index: Value, len: Value) -> Value {
+    // Note: Check for index < length as the "true" condition,
+    // to avoid misprediction. (In practice this should usually pass,
+    // and CPUs generally default to predicting that a forward jump
+    // shouldn't be taken; that is, they predict "else" won't be taken.)
+    builder.ins().icmp(IntCC::UnsignedLessThan, elem_index, len)
 }

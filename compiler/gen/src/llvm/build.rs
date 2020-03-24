@@ -1259,7 +1259,6 @@ fn bounds_check_comparison<'ctx>(
     elem_index: IntValue<'ctx>,
     len: IntValue<'ctx>,
 ) -> IntValue<'ctx> {
-    //
     // Note: Check for index < length as the "true" condition,
     // to avoid misprediction. (In practice this should usually pass,
     // and CPUs generally default to predicting that a forward jump
