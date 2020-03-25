@@ -451,13 +451,13 @@ fn build_branch2<'a, B: Backend>(
 
     match branch.cond_layout {
         Layout::Builtin(Builtin::Bool) => {
-            builder.ins().brnz(cond, pass_block, &[]);
+            builder.ins().brz(cond, fail_block, &[]);
         }
         other => panic!("I don't know how to build a conditional for {:?}", other),
     }
 
-    // Unconditionally jump to fail_block (if we didn't just jump to pass_block).
-    builder.ins().jump(fail_block, &[]);
+    // Unconditionally jump to pass_block (if we didn't just jump to pass_block).
+    builder.ins().jump(pass_block, &[]);
 
     let mut build_branch = |expr, block| {
         builder.switch_to_block(block);
@@ -827,7 +827,7 @@ fn call_by_name<'a, B: Backend>(
             let wrapper_ptr = build_arg(&args[0], env, scope, module, builder, procs);
             let elem_index = build_arg(&args[1], env, scope, module, builder, procs);
 
-            let (_list_expr, list_layout) = &args[0];
+            let (_, list_layout) = &args[0];
 
             // Get the usize list length
             let ptr_bytes = env.cfg.pointer_bytes() as u32;
@@ -870,69 +870,9 @@ fn call_by_name<'a, B: Backend>(
                 }
             }
         }
-        Symbol::LIST_SET => {
-            // set : List elem, Int, elem -> List elem
-            let original_wrapper = build_arg(&args[0], env, scope, module, builder, procs);
-            let (_list_expr, list_layout) = &args[0];
-
-            // Get the usize list length
-            let ptr_bytes = env.cfg.pointer_bytes() as u32;
-            let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
-            let list_len = load_list_len(env, builder, wrapper_ptr);
-
-            // Bounds check: only proceed if index < length.
-            // Otherwise, return the list unaltered.
-            let comparison = bounds_check_comparison(builder, elem_index, list_len);
-
-            // If the index is in bounds, clone and mutate in place.
-            let then_val = match list_layout {
-                Layout::Builtin(Builtin::List(elem_layout)) => {
-                    let wrapper_ptr = clone_list(env, builder, module, wrapper_ptr, elem_layout);
-
-                    let arg1 = build_arg(&args[1], env, scope, module, builder, procs);
-                    let arg2 = build_arg(&args[2], env, scope, module, builder, procs);
-
-                    list_set_in_place(env, wrapper_ptr, arg1, arg2, elem_layout, builder);
-
-                    wrapper_ptr
-                }
-                _ => {
-                    unreachable!("Invalid List layout for List.set: {:?}", list_layout);
-                }
-            };
-
-            // If the index was out of bounds, return the original list unaltered.
-            let else_val = BasicValueEnum::StructValue(original_wrapper);
-            let ret_type = original_wrapper.get_type();
-        }
+        Symbol::LIST_SET => list_set(env, args, scope, module, builder, procs, InPlace::Clone),
         Symbol::LIST_SET_IN_PLACE => {
-            // set : List elem, Int, elem -> List elem
-            debug_assert!(args.len() == 3);
-
-            // Get the usize list length
-            let wrapper_ptr = build_arg(&args[0], env, scope, module, builder, procs);
-            let ptr_bytes = env.cfg.pointer_bytes() as u32;
-            let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
-            let _list_len =
-                builder
-                    .ins()
-                    .load(env.ptr_sized_int(), MemFlags::new(), wrapper_ptr, offset);
-
-            // TODO do array bounds checking, and early return the original List if out of bounds
-
-            let (list_expr, list_layout) = &args[0];
-            let list_val = build_expr(env, scope, module, builder, list_expr, procs);
-
-            match list_layout {
-                Layout::Builtin(Builtin::List(elem_layout)) => {
-                    let arg1 = build_arg(&args[1], env, scope, module, builder, procs);
-                    let arg2 = build_arg(&args[2], env, scope, module, builder, procs);
-                    list_set_in_place(env, list_val, arg1, arg2, elem_layout, builder)
-                }
-                _ => {
-                    unreachable!("Invalid List layout for List.set: {:?}", list_layout);
-                }
-            }
+            list_set(env, args, scope, module, builder, procs, InPlace::InPlace)
         }
         _ => {
             let fn_id = match scope.get(&symbol) {
@@ -1098,4 +1038,111 @@ fn bounds_check_comparison(builder: &mut FunctionBuilder, elem_index: Value, len
     // and CPUs generally default to predicting that a forward jump
     // shouldn't be taken; that is, they predict "else" won't be taken.)
     builder.ins().icmp(IntCC::UnsignedLessThan, elem_index, len)
+}
+
+enum InPlace {
+    InPlace,
+    Clone,
+}
+
+fn list_set<'a, B: Backend>(
+    env: &mut Env<'a>,
+    args: &'a [(Expr<'a>, Layout<'a>)],
+    scope: &Scope,
+    module: &mut Module<B>,
+    builder: &mut FunctionBuilder,
+    procs: &'a Procs<'a>,
+    in_place: InPlace,
+) -> Value {
+    // set : List elem, Int, elem -> List elem
+    let original_wrapper = build_arg(&args[0], env, scope, module, builder, procs);
+    let (_, list_layout) = &args[0];
+
+    // Get the usize list length
+    let list_len = load_list_len(env, builder, original_wrapper);
+
+    // Get the element to set
+    let elem_index = build_arg(&args[1], env, scope, module, builder, procs);
+
+    // Bounds check: only proceed if index < length.
+    // Otherwise, return the list unaltered.
+    let comparison = bounds_check_comparison(builder, elem_index, list_len);
+
+    let ret_type = type_from_layout(env.cfg, &list_layout);
+    // Declare a variable which each branch will mutate to be the value of that branch.
+    // At the end of the expression, we will evaluate to this.
+    let ret = env.fresh_variable();
+
+    // The block we'll jump to once the switch has completed.
+    let ret_block = builder.create_block();
+
+    builder.declare_var(ret, ret_type);
+
+    let pass_block = builder.create_block();
+    let fail_block = builder.create_block();
+
+    builder.ins().brz(comparison, fail_block, &[]);
+
+    // Unconditionally jump to pass_block (if we didn't just jump to pass_block).
+    builder.ins().jump(pass_block, &[]);
+
+    // If the index is in bounds, clone and mutate in place.
+    {
+        builder.switch_to_block(pass_block);
+
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
+        // builder.seal_block(block);
+
+        let then_val = match list_layout {
+            Layout::Builtin(Builtin::List(elem_layout)) => {
+                let wrapper_ptr = match in_place {
+                    InPlace::InPlace => original_wrapper,
+                    InPlace::Clone => {
+                        clone_list(env, builder, module, original_wrapper, elem_layout)
+                    }
+                };
+                let elem = build_arg(&args[2], env, scope, module, builder, procs);
+
+                list_set_in_place(env, wrapper_ptr, elem_index, elem, elem_layout, builder);
+
+                wrapper_ptr
+            }
+            _ => {
+                unreachable!("Invalid List layout for List.set: {:?}", list_layout);
+            }
+        };
+
+        // Mutate the ret variable to be the outcome of this branch.
+        builder.def_var(ret, then_val);
+
+        // Unconditionally jump to ret_block, making the whole expression evaluate to ret.
+        builder.ins().jump(ret_block, &[]);
+    }
+
+    // If the index was out of bounds, return the original list unaltered.
+    {
+        builder.switch_to_block(fail_block);
+
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
+        // builder.seal_block(block);
+
+        // Mutate the ret variable to be the outcome of this branch.
+        builder.def_var(ret, original_wrapper);
+
+        // Unconditionally jump to ret_block, making the whole expression evaluate to ret.
+        builder.ins().jump(ret_block, &[]);
+    }
+
+    // Finally, build ret_block - which contains our terminator instruction.
+    {
+        builder.switch_to_block(ret_block);
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
+        // builder.seal_block(block);
+
+        // Now that ret has been mutated by the switch statement, evaluate to it.
+        builder.use_var(ret)
+    }
 }
