@@ -1173,18 +1173,6 @@ fn clone_list<'a, 'ctx, 'env>(
     (struct_val.into_struct_value(), clone_ptr)
 }
 
-fn bounds_check_comparison<'ctx>(
-    builder: &Builder<'ctx>,
-    elem_index: IntValue<'ctx>,
-    len: IntValue<'ctx>,
-) -> IntValue<'ctx> {
-    // Note: Check for index < length as the "true" condition,
-    // to avoid misprediction. (In practice this should usually pass,
-    // and CPUs generally default to predicting that a forward jump
-    // shouldn't be taken; that is, they predict "else" won't be taken.)
-    builder.build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
-}
-
 enum InPlace {
     InPlace,
     Clone,
@@ -1209,7 +1197,12 @@ fn list_set<'a, 'ctx, 'env>(
 
     // Bounds check: only proceed if index < length.
     // Otherwise, return the list unaltered.
-    let comparison = bounds_check_comparison(builder, elem_index, list_len);
+    let comparison =
+        // Note: Check for index < length as the "true" condition,
+        // to avoid misprediction. (In practice this should usually pass,
+        // and CPUs generally default to predicting that a forward jump
+        // shouldn't be taken; that is, they predict "else" won't be taken.)
+        builder.build_int_compare(IntPredicate::ULT, elem_index, list_len, "bounds_check");
 
     // If the index is in bounds, clone and mutate in place.
     let then_val = {
