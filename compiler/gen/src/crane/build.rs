@@ -54,7 +54,9 @@ impl<'a> Env<'a> {
     /// For nested conditionals, we need unique variables
     pub fn fresh_variable(&mut self) -> Variable {
         let result = cranelift::frontend::Variable::with_u32(*self.variable_counter);
+
         *self.variable_counter += 1;
+
         result
     }
 }
@@ -1081,7 +1083,7 @@ fn list_set<'a, B: Backend>(
         // to avoid misprediction. (In practice this should usually pass,
         // and CPUs generally default to predicting that a forward jump
         // shouldn't be taken; that is, they predict "else" won't be taken.)
-        builder.ins().icmp(IntCC::UnsignedLessThan, elem_index, list_len);
+        builder.ins().icmp(IntCC::UnsignedLessThan, list_len, elem_index);
 
     builder.ins().brz(comparison, fail_block, &[]);
 
@@ -1106,9 +1108,7 @@ fn list_set<'a, B: Backend>(
                 };
                 let elem = build_arg(&args[2], env, scope, module, builder, procs);
 
-                list_set_in_place(env, wrapper_ptr, elem_index, elem, elem_layout, builder);
-
-                wrapper_ptr
+                list_set_in_place(env, wrapper_ptr, elem_index, elem, elem_layout, builder)
             }
             _ => {
                 unreachable!("Invalid List layout for List.set: {:?}", list_layout);
@@ -1140,6 +1140,7 @@ fn list_set<'a, B: Backend>(
     // Finally, build ret_block - which contains our terminator instruction.
     {
         builder.switch_to_block(ret_block);
+
         // TODO re-enable this once Switch stops making unsealed blocks, e.g.
         // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
         // builder.seal_block(block);

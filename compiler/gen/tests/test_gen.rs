@@ -583,10 +583,11 @@ mod test_gen {
 
     #[test]
     fn set_unique_list_oob() {
-        assert_evals_to!(
+        assert_opt_evals_to!(
             "List.set [ 3, 17, 4.1 ] 1337 9.25",
             &[3.0, 17.0, 4.1],
-            &'static [f64]
+            &'static [f64],
+            |x| x
         );
     }
 
@@ -610,7 +611,7 @@ mod test_gen {
 
     #[test]
     fn set_shared_list_oob() {
-        assert_evals_to!(
+        assert_opt_evals_to!(
             indoc!(
                 r#"
                     shared = [ 2, 4 ]
@@ -622,7 +623,8 @@ mod test_gen {
                 "#
             ),
             (4, 4),
-            (i64, i64)
+            (i64, i64),
+            |x| x
         );
     }
 
