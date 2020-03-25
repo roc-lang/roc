@@ -962,7 +962,7 @@ fn load_list_len(env: &Env<'_>, builder: &mut FunctionBuilder, src_wrapper_ptr: 
 
 fn load_list_ptr(env: &Env<'_>, builder: &mut FunctionBuilder, src_wrapper_ptr: Value) -> Value {
     let ptr_bytes = env.cfg.pointer_bytes() as u32;
-    let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
+    let offset = Offset32::new((Builtin::WRAPPER_PTR * ptr_bytes) as i32);
 
     builder.ins().load(
         env.ptr_sized_int(),
