@@ -63,7 +63,6 @@ mod test_gen {
             // Compute main_fn_ret_type before moving subs to Env
             let layout = Layout::from_content(&arena, content, &subs, POINTER_SIZE)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert content to layout. Err was {:?} and Subs were {:?}", err, subs));
-            let main_ret_type = type_from_layout(cfg, &layout);
 
             // Compile and add all the Procs before adding main
             let mut procs = Procs::default();
@@ -126,12 +125,21 @@ mod test_gen {
             // If it is a struct, give it a special return type.
             // Otherwise, Cranelift will return a raw pointer to the struct
             // instead of using a proper struct return.
-            let ret_abi_param = match layout {
-                Layout::Struct(_) => AbiParam::special(main_ret_type, ArgumentPurpose::StructReturn),
-                _ => AbiParam::new(main_ret_type),
-            };
+            match layout {
+                Layout::Struct(fields) => {
+                    for (_, field_layout) in fields {
+                        let ret_type = type_from_layout(cfg, &field_layout);
+                        let abi_param = AbiParam::special(ret_type, ArgumentPurpose::StructReturn);
 
-            sig.returns.push(ret_abi_param);
+                        sig.returns.push(abi_param);
+                    }
+                },
+                _ => {
+                    let main_ret_type = type_from_layout(cfg, &layout);
+
+                    sig.returns.push(AbiParam::new(main_ret_type));
+                }
+            };
 
             let main_fn = module
                 .declare_function(main_fn_name, Linkage::Local, &sig)

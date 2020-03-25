@@ -1,5 +1,5 @@
 use cranelift::prelude::AbiParam;
-use cranelift_codegen::ir::{types, ArgumentPurpose, Signature, Type};
+use cranelift_codegen::ir::{types, Signature, Type};
 use cranelift_codegen::isa::TargetFrontendConfig;
 use cranelift_module::{Backend, Module};
 
@@ -33,16 +33,8 @@ pub fn sig_from_layout<B: Backend>(
             let ret_type = type_from_layout(cfg, &ret);
             let mut sig = module.make_signature();
 
-            // Add return type to the signature.
-            // If it is a struct, give it a special return type.
-            // Otherwise, Cranelift will return a raw pointer to the struct
-            // instead of using a proper struct return.
-            let ret_abi_param = match ret {
-                Layout::Struct(_) => AbiParam::special(ret_type, ArgumentPurpose::StructReturn),
-                _ => AbiParam::new(ret_type),
-            };
-
-            sig.returns.push(ret_abi_param);
+            // Add return type to the signature
+            sig.returns.push(AbiParam::new(ret_type));
 
             // Add params to the signature
             for layout in args.iter() {
