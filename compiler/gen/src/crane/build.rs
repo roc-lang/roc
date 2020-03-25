@@ -982,10 +982,10 @@ fn clone_list<B: Backend>(
     let cfg = env.cfg;
 
     // Load the pointer we got to the wrapper struct
-    let elems_ptr = load_list_len(env, builder, src_wrapper_ptr);
+    let elems_ptr = load_list_ptr(env, builder, src_wrapper_ptr);
 
     // Get the usize list length
-    let list_len = load_list_ptr(env, builder, src_wrapper_ptr);
+    let list_len = load_list_len(env, builder, src_wrapper_ptr);
 
     // Calculate the number of bytes we'll need to allocate.
     let elem_bytes = builder.ins().iconst(
