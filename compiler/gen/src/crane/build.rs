@@ -1017,16 +1017,21 @@ fn clone_list<B: Backend>(
         ptr_bytes * Builtin::LIST_WORDS,
     ));
 
-    // Store the new pointer in slot 0 of the wrapper
-    builder
-        .ins()
-        .stack_store(new_elems_ptr, slot, Offset32::new(0));
+    // Store the new pointer in the wrapper
+    builder.ins().stack_store(
+        new_elems_ptr,
+        slot,
+        Offset32::new((Builtin::WRAPPER_PTR * ptr_bytes) as i32),
+    );
 
-    // Store the length in slot 1 of the wrapper
-    builder
-        .ins()
-        .stack_store(list_len, slot, Offset32::new(ptr_bytes as i32));
+    // Store the length in slot the wrapper
+    builder.ins().stack_store(
+        list_len,
+        slot,
+        Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32),
+    );
 
+    // Return the wrapper struct
     builder
         .ins()
         .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
