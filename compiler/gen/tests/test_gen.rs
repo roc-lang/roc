@@ -559,12 +559,12 @@ mod test_gen {
     //
     #[test]
     fn empty_list_literal() {
-        assert_llvm_evals_to!("[]", &[], &'static [i64], |x| x);
+        assert_evals_to!("[]", &[], &'static [i64]);
     }
 
     #[test]
     fn int_list_literal() {
-        assert_llvm_evals_to!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64], |x| x);
+        assert_evals_to!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64]);
     }
 
     #[test]
@@ -1918,6 +1918,19 @@ mod test_gen {
             ),
             34,
             i64
+        );
+    }
+
+    #[test]
+    fn i64_record_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   { x: 3, y: 5 }
+                "#
+            ),
+            (3, 5),
+            (i64, i64)
         );
     }
 

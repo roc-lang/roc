@@ -1083,7 +1083,7 @@ fn list_set<'a, B: Backend>(
         // to avoid misprediction. (In practice this should usually pass,
         // and CPUs generally default to predicting that a forward jump
         // shouldn't be taken; that is, they predict "else" won't be taken.)
-        builder.ins().icmp(IntCC::UnsignedLessThan, list_len, elem_index);
+        builder.ins().icmp(IntCC::UnsignedLessThan, elem_index, list_len);
 
     builder.ins().brz(comparison, fail_block, &[]);
 
