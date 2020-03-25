@@ -137,29 +137,29 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 debug_assert!(args.len() == 2);
 
                 let comparison = build_expr(env, scope, parent, &args[0].0, procs).into_int_value();
-                let then_val: BasicValueEnum =
-                    env.context.bool_type().const_int(true as u64, false).into();
-                let else_val = build_expr(env, scope, parent, &args[1].0, procs);
+                let build_then = || env.context.bool_type().const_int(true as u64, false).into();
+                let build_else = || build_expr(env, scope, parent, &args[1].0, procs);
 
                 let ret_type = env.context.bool_type().into();
 
-                build_basic_phi2(env, parent, comparison, then_val, else_val, ret_type)
+                build_basic_phi2(env, parent, comparison, build_then, build_else, ret_type)
             }
             Symbol::BOOL_AND => {
                 // The (&&) operator
                 debug_assert!(args.len() == 2);
 
                 let comparison = build_expr(env, scope, parent, &args[0].0, procs).into_int_value();
-                let then_val = build_expr(env, scope, parent, &args[1].0, procs);
-                let else_val: BasicValueEnum = env
-                    .context
-                    .bool_type()
-                    .const_int(false as u64, false)
-                    .into();
+                let build_then = || build_expr(env, scope, parent, &args[1].0, procs);
+                let build_else = || {
+                    env.context
+                        .bool_type()
+                        .const_int(false as u64, false)
+                        .into()
+                };
 
                 let ret_type = env.context.bool_type().into();
 
-                build_basic_phi2(env, parent, comparison, then_val, else_val, ret_type)
+                build_basic_phi2(env, parent, comparison, build_then, build_else, ret_type)
             }
             _ => {
                 let mut arg_tuples: Vec<(BasicValueEnum, &'a Layout<'a>)> =
@@ -597,16 +597,18 @@ fn build_branch2<'a, 'ctx, 'env>(
     procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
     let ret_layout = cond.ret_layout;
+    let pass = cond.pass;
+    let fail = cond.fail;
     let ret_type = basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
 
     let cond_expr = load_symbol(env, scope, cond.cond);
 
     match cond_expr {
         IntValue(value) => {
-            let then_val = build_expr(env, scope, parent, cond.pass, procs);
-            let else_val = build_expr(env, scope, parent, cond.fail, procs);
+            let build_then = || build_expr(env, scope, parent, pass, procs);
+            let build_else = || build_expr(env, scope, parent, fail, procs);
 
-            build_basic_phi2(env, parent, value, then_val, else_val, ret_type)
+            build_basic_phi2(env, parent, value, build_then, build_else, ret_type)
         }
         _ => panic!(
             "Tried to make a branch out of an invalid condition: cond_expr = {:?}",
@@ -740,20 +742,28 @@ fn build_expr_phi2<'a, 'ctx, 'env>(
     ret_type: BasicTypeEnum<'ctx>,
     procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let then_val = build_expr(env, scope, parent, pass, procs);
-    let else_val = build_expr(env, scope, parent, fail, procs);
-
-    build_basic_phi2(env, parent, comparison, then_val, else_val, ret_type)
+    build_basic_phi2(
+        env,
+        parent,
+        comparison,
+        || build_expr(env, scope, parent, pass, procs),
+        || build_expr(env, scope, parent, fail, procs),
+        ret_type,
+    )
 }
 
-fn build_basic_phi2<'a, 'ctx, 'env>(
+fn build_basic_phi2<'a, 'ctx, 'env, PassFn, FailFn>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     comparison: IntValue<'ctx>,
-    pass: BasicValueEnum<'a>,
-    fail: BasicValueEnum<'a>,
+    build_pass: PassFn,
+    build_fail: FailFn,
     ret_type: BasicTypeEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
+) -> BasicValueEnum<'ctx>
+where
+    PassFn: Fn() -> BasicValueEnum<'ctx>,
+    FailFn: Fn() -> BasicValueEnum<'ctx>,
+{
     let builder = env.builder;
     let context = env.context;
 
@@ -766,14 +776,14 @@ fn build_basic_phi2<'a, 'ctx, 'env>(
 
     // build then block
     builder.position_at_end(then_block);
-    let then_val = pass;
+    let then_val = build_pass();
     builder.build_unconditional_branch(cont_block);
 
     let then_block = builder.get_insert_block().unwrap();
 
     // build else block
     builder.position_at_end(else_block);
-    let else_val = fail;
+    let else_val = build_fail();
     builder.build_unconditional_branch(cont_block);
 
     let else_block = builder.get_insert_block().unwrap();
@@ -1205,19 +1215,16 @@ fn list_set<'a, 'ctx, 'env>(
         builder.build_int_compare(IntPredicate::ULT, elem_index, list_len, "bounds_check");
 
     // If the index is in bounds, clone and mutate in place.
-    let then_val = {
+    let build_then = || {
         let (elem, elem_layout) = args[2];
-        let (cloned_wrapper, array_data_ptr) = match in_place {
-            InPlace::InPlace => clone_list(
+        let (new_wrapper, array_data_ptr) = match in_place {
+            InPlace::InPlace => (original_wrapper, load_list_ptr(builder, original_wrapper)),
+            InPlace::Clone => clone_list(
                 env,
                 list_len,
                 load_list_ptr(builder, original_wrapper),
                 elem_layout,
             ),
-            InPlace::Clone => {
-                // Load the pointer to the elements
-                (original_wrapper, load_list_ptr(builder, original_wrapper))
-            }
         };
 
         // If we got here, we passed the bounds check, so this is an in-bounds GEP
@@ -1227,12 +1234,19 @@ fn list_set<'a, 'ctx, 'env>(
         // Mutate the new array in-place to change the element.
         builder.build_store(elem_ptr, elem);
 
-        BasicValueEnum::StructValue(cloned_wrapper)
+        BasicValueEnum::StructValue(new_wrapper)
     };
 
     // If the index was out of bounds, return the original list unaltered.
-    let else_val = BasicValueEnum::StructValue(original_wrapper);
+    let build_else = || BasicValueEnum::StructValue(original_wrapper);
     let ret_type = original_wrapper.get_type();
 
-    build_basic_phi2(env, parent, comparison, then_val, else_val, ret_type.into())
+    build_basic_phi2(
+        env,
+        parent,
+        comparison,
+        build_then,
+        build_else,
+        ret_type.into(),
+    )
 }
