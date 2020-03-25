@@ -559,12 +559,12 @@ mod test_gen {
     //
     #[test]
     fn empty_list_literal() {
-        assert_evals_to!("[]", &[], &'static [i64]);
+        assert_opt_evals_to!("[]", &[], &'static [i64], |x| x);
     }
 
     #[test]
     fn int_list_literal() {
-        assert_evals_to!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64]);
+        assert_opt_evals_to!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64], |x| x);
     }
 
     #[test]
@@ -584,10 +584,11 @@ mod test_gen {
 
     #[test]
     fn set_unique_int_list() {
-        assert_evals_to!(
+        assert_opt_evals_to!(
             "List.set [ 12, 9, 7, 1, 5 ] 2 33",
             &[12, 9, 33, 1, 5],
-            &'static [i64]
+            &'static [i64],
+            |x| x
         );
     }
 
@@ -603,7 +604,7 @@ mod test_gen {
 
     #[test]
     fn set_shared_int_list() {
-        assert_evals_to!(
+        assert_opt_evals_to!(
             indoc!(
                 r#"
                     shared = [ 2.1, 4.3 ]
@@ -615,7 +616,8 @@ mod test_gen {
                 "#
             ),
             (7.7, 4.3),
-            (f64, f64)
+            (f64, f64),
+            |x| x
         );
     }
 
@@ -1923,14 +1925,15 @@ mod test_gen {
 
     #[test]
     fn i64_record_literal() {
-        assert_evals_to!(
+        assert_opt_evals_to!(
             indoc!(
                 r#"
                    { x: 3, y: 5 }
                 "#
             ),
             (3, 5),
-            (i64, i64)
+            (i64, i64),
+            |x| x
         );
     }
 
