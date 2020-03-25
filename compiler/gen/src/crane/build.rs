@@ -929,7 +929,7 @@ fn list_set_in_place<'a>(
         env.cfg.pointer_type(),
         MemFlags::new(),
         wrapper_ptr,
-        Offset32::new(0),
+        Offset32::new(Builtin::WRAPPER_PTR as i32),
     );
 
     let elem_bytes = elem_layout.stack_size(env.cfg.pointer_bytes() as u32);
@@ -1032,14 +1032,6 @@ fn clone_list<B: Backend>(
         .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
 }
 
-fn bounds_check_comparison(builder: &mut FunctionBuilder, elem_index: Value, len: Value) -> Value {
-    // Note: Check for index < length as the "true" condition,
-    // to avoid misprediction. (In practice this should usually pass,
-    // and CPUs generally default to predicting that a forward jump
-    // shouldn't be taken; that is, they predict "else" won't be taken.)
-    builder.ins().icmp(IntCC::UnsignedLessThan, elem_index, len)
-}
-
 enum InPlace {
     InPlace,
     Clone,
@@ -1064,9 +1056,8 @@ fn list_set<'a, B: Backend>(
     // Get the element to set
     let elem_index = build_arg(&args[1], env, scope, module, builder, procs);
 
-    // Bounds check: only proceed if index < length.
-    // Otherwise, return the list unaltered.
-    let comparison = bounds_check_comparison(builder, elem_index, list_len);
+    let pass_block = builder.create_block();
+    let fail_block = builder.create_block();
 
     let ret_type = type_from_layout(env.cfg, &list_layout);
     // Declare a variable which each branch will mutate to be the value of that branch.
@@ -1078,8 +1069,14 @@ fn list_set<'a, B: Backend>(
 
     builder.declare_var(ret, ret_type);
 
-    let pass_block = builder.create_block();
-    let fail_block = builder.create_block();
+    // Bounds check: only proceed if index < length.
+    // Otherwise, return the list unaltered.
+    let comparison =
+        // Note: Check for index < length as the "true" condition,
+        // to avoid misprediction. (In practice this should usually pass,
+        // and CPUs generally default to predicting that a forward jump
+        // shouldn't be taken; that is, they predict "else" won't be taken.)
+        builder.ins().icmp(IntCC::UnsignedLessThan, elem_index, list_len);
 
     builder.ins().brz(comparison, fail_block, &[]);
 
