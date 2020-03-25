@@ -1045,10 +1045,10 @@ fn call_with_args<'a, 'ctx, 'env>(
         Symbol::LIST_GET_UNSAFE => {
             let builder = env.builder;
 
-            // List.get : List elem, Int -> Result elem [ OutOfBounds ]*
+            // List.get : List elem, Int -> [ Ok elem, OutOfBounds ]*
             debug_assert!(args.len() == 2);
 
-            let (_list_expr, list_layout) = &args[0];
+            let (_, list_layout) = &args[0];
 
             let wrapper_struct = args[0].0.into_struct_value();
             let elem_index = args[1].0.into_int_value();
