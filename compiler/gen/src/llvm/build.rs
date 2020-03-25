@@ -46,7 +46,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
-    expr: &Expr<'a>,
+    expr: &'a Expr<'a>,
     procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
     use roc_mono::expr::Expr::*;
@@ -57,14 +57,17 @@ pub fn build_expr<'a, 'ctx, 'env>(
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Cond {
-            cond,
-            pass,
-            fail,
+            branch_symbol,
+            pass: (pass_stores, pass_expr),
+            fail: (fail_stores, fail_expr),
             ret_layout,
             ..
         } => {
+            let pass = env.arena.alloc(Expr::Store(pass_stores, pass_expr));
+            let fail = env.arena.alloc(Expr::Store(fail_stores, fail_expr));
+
             let conditional = Branch2 {
-                cond,
+                cond: branch_symbol,
                 pass,
                 fail,
                 ret_layout: ret_layout.clone(),
@@ -72,22 +75,28 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             build_branch2(env, scope, parent, conditional, procs)
         }
-        Branches { .. } => {
-            panic!("TODO build_branches(env, scope, parent, cond_lhs, branches, procs)");
-        }
         Switch {
             cond,
             branches,
-            default_branch,
+            default_branch: (default_stores, default_expr),
             ret_layout,
             cond_layout,
         } => {
             let ret_type =
                 basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
+
+            let default_branch = env.arena.alloc(Expr::Store(default_stores, default_expr));
+
+            let mut combined = Vec::with_capacity_in(branches.len(), env.arena);
+
+            for (int, stores, expr) in branches.iter() {
+                combined.push((*int, Expr::Store(stores, expr)));
+            }
+
             let switch_args = SwitchArgs {
                 cond_layout: cond_layout.clone(),
                 cond_expr: cond,
-                branches,
+                branches: combined.into_bump_slice(),
                 default_branch,
                 ret_type,
             };
@@ -196,12 +205,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .left()
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
         }
-        Load(symbol) => match scope.get(symbol) {
-            Some((_, ptr)) => env
-                .builder
-                .build_load(*ptr, symbol.ident_string(&env.interns)),
-            None => panic!("Could not find a var for {:?} in scope {:?}", symbol, scope),
-        },
+        Load(symbol) => load_symbol(env, scope, symbol),
         Str(str_literal) => {
             if str_literal.is_empty() {
                 panic!("TODO build an empty string in LLVM");
@@ -373,8 +377,6 @@ pub fn build_expr<'a, 'ctx, 'env>(
         Tag {
             arguments,
             tag_layout,
-            union_size,
-            tag_id,
             ..
         } => {
             let ptr_size = env.ptr_bytes;
@@ -389,23 +391,6 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let num_fields = arguments.len() + 1;
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            // insert the discriminant value
-            if *union_size > 1 {
-                let val = env
-                    .context
-                    .i64_type()
-                    .const_int(*tag_id as u64, true)
-                    .into();
-
-                let field_type = env.context.i64_type().into();
-
-                field_types.push(field_type);
-                field_vals.push(val);
-
-                let field_size = ptr_size;
-                filler -= field_size;
-            }
 
             for (field_expr, field_layout) in arguments.iter() {
                 let val = build_expr(env, &scope, parent, field_expr, procs);
@@ -476,27 +461,6 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .unwrap();
             wrapper_val.into_struct_value().into()
         }
-        Access {
-            label,
-            struct_layout: Layout::Struct(sorted_fields),
-            record,
-            ..
-        } => {
-            let builder = env.builder;
-
-            // Get index
-            let index = sorted_fields
-                .iter()
-                .position(|(local_label, _)| local_label == label)
-                .unwrap() as u32; // TODO
-
-            // Get Struct val
-            let struct_val = build_expr(env, &scope, parent, record, procs).into_struct_value();
-
-            builder
-                .build_extract_value(struct_val, index, "field_access")
-                .unwrap()
-        }
         AccessAtIndex {
             index,
             expr,
@@ -557,6 +521,19 @@ pub fn build_expr<'a, 'ctx, 'env>(
     }
 }
 
+fn load_symbol<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    symbol: &Symbol,
+) -> BasicValueEnum<'ctx> {
+    match scope.get(symbol) {
+        Some((_, ptr)) => env
+            .builder
+            .build_load(*ptr, symbol.ident_string(&env.interns)),
+        None => panic!("Could not find a var for {:?} in scope {:?}", symbol, scope),
+    }
+}
+
 /// Cast a struct to another struct of the same (or smaller?) size
 fn cast_struct_struct<'ctx>(
     builder: &Builder<'ctx>,
@@ -606,7 +583,7 @@ fn extract_tag_discriminant<'a, 'ctx, 'env>(
 }
 
 struct Branch2<'a> {
-    cond: &'a Expr<'a>,
+    cond: &'a Symbol,
     pass: &'a Expr<'a>,
     fail: &'a Expr<'a>,
     ret_layout: Layout<'a>,
@@ -622,7 +599,7 @@ fn build_branch2<'a, 'ctx, 'env>(
     let ret_layout = cond.ret_layout;
     let ret_type = basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
 
-    let cond_expr = build_expr(env, scope, parent, cond.cond, procs);
+    let cond_expr = load_symbol(env, scope, cond.cond);
 
     match cond_expr {
         IntValue(value) => {

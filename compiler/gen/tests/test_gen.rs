@@ -1532,7 +1532,7 @@ mod test_gen {
                 r#"
                 Maybe a : [ Nothing, Just a ]
 
-                x : Maybe (Maybe a)
+                x : Maybe (Maybe Int)
                 x = Just (Just 41)
 
                 when x is
@@ -1723,6 +1723,64 @@ mod test_gen {
     }
 
     #[test]
+    fn pattern_matching_unit() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Unit : [ Unit ]
+
+                f : Unit -> Int
+                f = \Unit -> 42
+
+                f Unit
+                "#
+            ),
+            42,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Unit : [ Unit ]
+
+                x : Unit
+                x = Unit
+
+                when x is
+                    Unit -> 42
+                "#
+            ),
+            42,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f : {} -> Int
+                f = \{} -> 42
+
+                f {}
+                "#
+            ),
+            42,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when {} is
+                    {} -> 42
+                "#
+            ),
+            42,
+            i64
+        );
+    }
+
+    #[test]
     fn basic_record() {
         assert_evals_to!(
             indoc!(
@@ -1881,6 +1939,21 @@ mod test_gen {
             ),
             19.3,
             f64
+        );
+    }
+    #[test]
+    fn bool_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : Bool
+                x = True
+
+                x
+                "#
+            ),
+            true,
+            bool
         );
     }
 }

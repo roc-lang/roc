@@ -16,6 +16,7 @@ mod test_mono {
     use roc_module::symbol::{Interns, Symbol};
     use roc_mono::expr::Expr::{self, *};
     use roc_mono::expr::Procs;
+    use roc_mono::layout;
     use roc_mono::layout::{Builtin, Layout};
     use roc_types::subs::Subs;
 
@@ -160,13 +161,24 @@ mod test_mono {
                 use self::Builtin::*;
                 use Layout::Builtin;
 
-                Cond {
-                    cond: &Expr::Bool(true),
-                    cond_layout: Builtin(Bool),
-                    pass: &Expr::Str("bar"),
-                    fail: &Expr::Str("foo"),
-                    ret_layout: Builtin(Str),
-                }
+                let home = test_home();
+                let gen_symbol_0 = Interns::from_index(home, 0);
+
+                Store(
+                    &[(
+                        gen_symbol_0,
+                        Layout::Builtin(layout::Builtin::Bool),
+                        Expr::Bool(true),
+                    )],
+                    &Cond {
+                        cond_symbol: gen_symbol_0,
+                        branch_symbol: gen_symbol_0,
+                        cond_layout: Builtin(Bool),
+                        pass: (&[] as &[_], &Expr::Str("bar")),
+                        fail: (&[] as &[_], &Expr::Str("foo")),
+                        ret_layout: Builtin(Str),
+                    },
+                )
             },
         )
     }
@@ -186,19 +198,42 @@ mod test_mono {
                 use self::Builtin::*;
                 use Layout::Builtin;
 
-                Cond {
-                    cond: &Expr::Bool(true),
-                    cond_layout: Builtin(Bool),
-                    pass: &Expr::Str("bar"),
-                    fail: &Cond {
-                        cond: &Expr::Bool(false),
+                let home = test_home();
+                let gen_symbol_0 = Interns::from_index(home, 1);
+                let gen_symbol_1 = Interns::from_index(home, 0);
+
+                Store(
+                    &[(
+                        gen_symbol_0,
+                        Layout::Builtin(layout::Builtin::Bool),
+                        Expr::Bool(true),
+                    )],
+                    &Cond {
+                        cond_symbol: gen_symbol_0,
+                        branch_symbol: gen_symbol_0,
                         cond_layout: Builtin(Bool),
-                        pass: &Expr::Str("foo"),
-                        fail: &Expr::Str("baz"),
+                        pass: (&[] as &[_], &Expr::Str("bar")),
+                        fail: (
+                            &[] as &[_],
+                            &Store(
+                                &[(
+                                    gen_symbol_1,
+                                    Layout::Builtin(layout::Builtin::Bool),
+                                    Expr::Bool(false),
+                                )],
+                                &Cond {
+                                    cond_symbol: gen_symbol_1,
+                                    branch_symbol: gen_symbol_1,
+                                    cond_layout: Builtin(Bool),
+                                    pass: (&[] as &[_], &Expr::Str("foo")),
+                                    fail: (&[] as &[_], &Expr::Str("baz")),
+                                    ret_layout: Builtin(Str),
+                                },
+                            ),
+                        ),
                         ret_layout: Builtin(Str),
                     },
-                    ret_layout: Builtin(Str),
-                }
+                )
             },
         )
     }
@@ -218,19 +253,28 @@ mod test_mono {
                 use Layout::Builtin;
 
                 let home = test_home();
+                let gen_symbol_0 = Interns::from_index(home, 1);
                 let symbol_x = Interns::from_index(home, 0);
 
                 Store(
                     &[(
                         symbol_x,
                         Builtin(Str),
-                        Cond {
-                            cond: &Expr::Bool(true),
-                            cond_layout: Builtin(Bool),
-                            pass: &Expr::Str("bar"),
-                            fail: &Expr::Str("foo"),
-                            ret_layout: Builtin(Str),
-                        },
+                        Store(
+                            &[(
+                                gen_symbol_0,
+                                Layout::Builtin(layout::Builtin::Bool),
+                                Expr::Bool(true),
+                            )],
+                            &Cond {
+                                cond_symbol: gen_symbol_0,
+                                branch_symbol: gen_symbol_0,
+                                cond_layout: Builtin(Bool),
+                                pass: (&[] as &[_], &Expr::Str("bar")),
+                                fail: (&[] as &[_], &Expr::Str("foo")),
+                                ret_layout: Builtin(Str),
+                            },
+                        ),
                     )],
                     &Load(symbol_x),
                 )
@@ -281,7 +325,7 @@ mod test_mono {
                             CallByName(gen_symbol_4, &[(Int(4), Builtin(Int64))]),
                             Builtin(Int64),
                         )]),
-                        Layout::Struct(&[("x".into(), Builtin(Int64))]),
+                        Layout::Struct(&[Builtin(Int64)]),
                     )],
                 )
             },

@@ -74,17 +74,23 @@ pub fn build_expr<'a, B: Backend>(
     match expr {
         Int(num) => builder.ins().iconst(types::I64, *num),
         Float(num) => builder.ins().f64const(*num),
-        Bool(val) => builder.ins().bconst(types::B1, *val),
+        Bool(val) => builder.ins().iconst(types::I8, *val as i64),
         Byte(val) => builder.ins().iconst(types::I8, *val as i64),
         Cond {
-            cond,
-            pass,
-            fail,
+            branch_symbol,
+            pass: (pass_stores, pass_expr),
+            fail: (fail_stores, fail_expr),
             cond_layout,
             ret_layout,
+            ..
         } => {
+            let cond_value = load_symbol(env, scope, builder, *branch_symbol);
+
+            let pass = env.arena.alloc(Expr::Store(pass_stores, pass_expr));
+            let fail = env.arena.alloc(Expr::Store(fail_stores, fail_expr));
+
             let branch = Branch2 {
-                cond,
+                cond: cond_value,
                 pass,
                 fail,
                 cond_layout,
@@ -96,15 +102,24 @@ pub fn build_expr<'a, B: Backend>(
         Switch {
             cond,
             branches,
-            default_branch,
+            default_branch: (default_stores, default_expr),
             ret_layout,
             cond_layout,
         } => {
             let ret_type = type_from_layout(env.cfg, &ret_layout);
+
+            let default_branch = env.arena.alloc(Expr::Store(default_stores, default_expr));
+
+            let mut combined = Vec::with_capacity_in(branches.len(), env.arena);
+
+            for (int, stores, expr) in branches.iter() {
+                combined.push((*int, Expr::Store(stores, expr)));
+            }
+
             let switch_args = SwitchArgs {
                 cond_layout,
                 cond_expr: cond,
-                branches,
+                branches: combined.into_bump_slice(),
                 default_branch,
                 ret_type,
             };
@@ -115,7 +130,7 @@ pub fn build_expr<'a, B: Backend>(
             let mut scope = im_rc::HashMap::clone(scope);
             let cfg = env.cfg;
 
-            let ptr_size = cfg.pointer_bytes()  as u32;
+            let ptr_size = cfg.pointer_bytes() as u32;
             for (name, layout, expr) in stores.iter() {
                 let stack_size = layout.stack_size(ptr_size);
 
@@ -127,10 +142,8 @@ pub fn build_expr<'a, B: Backend>(
                 let val = build_expr(env, &scope, module, builder, &expr, procs);
                 let expr_type = type_from_layout(cfg, &layout);
 
-                let slot = builder.create_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    stack_size,
-                ));
+                let slot = builder
+                    .create_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, stack_size));
 
                 builder.ins().stack_store(val, slot, Offset32::new(0));
 
@@ -175,37 +188,7 @@ pub fn build_expr<'a, B: Backend>(
 
             results[0]
         }
-        Load(name) => match scope.get(name) {
-            Some(ScopeEntry::Stack { expr_type, slot }) => {
-                builder
-                    .ins()
-                    .stack_load(*expr_type, *slot, Offset32::new(0))
-            }
-            Some(ScopeEntry::Arg { param, .. }) => *param,
-            Some(ScopeEntry::Heap { expr_type, ptr }) => {
-                builder
-                    .ins()
-                    .load(*expr_type, MemFlags::new(), *ptr, Offset32::new(0))
-            }
-            Some(ScopeEntry::Func { .. }) => {
-                panic!("TODO I don't yet know how to return fn pointers")
-            }
-            Some(ScopeEntry::ZeroSized) => {
-                // Create a slot
-                let slot = builder.create_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    0
-                ));
-
-                builder
-                    .ins()
-                    .stack_addr(env.cfg.pointer_type(), slot, Offset32::new(0))
-            }
-            None => panic!(
-                "Could not resolve lookup for {:?} because no ScopeEntry was found for {:?} in scope {:?}",
-                name, name, scope
-            ),
-        },
+        Load(name) => load_symbol(env, scope, builder, *name),
         Struct(sorted_fields) => {
             let cfg = env.cfg;
 
@@ -217,10 +200,8 @@ pub fn build_expr<'a, B: Backend>(
             }
 
             // Create a slot
-            let slot = builder.create_stack_slot(StackSlotData::new(
-                StackSlotKind::ExplicitSlot,
-                slot_size
-            ));
+            let slot = builder
+                .create_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, slot_size));
 
             // Create instructions for storing each field's expression
             // NOTE assumes that all fields have the same width!
@@ -238,7 +219,11 @@ pub fn build_expr<'a, B: Backend>(
                 .ins()
                 .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
         }
-        Tag { tag_layout, arguments , tag_id, union_size, .. } => {
+        Tag {
+            tag_layout,
+            arguments,
+            ..
+        } => {
             let cfg = env.cfg;
             let ptr_bytes = cfg.pointer_bytes() as u32;
 
@@ -248,68 +233,29 @@ pub fn build_expr<'a, B: Backend>(
             let slot_size = tag_layout.stack_size(ptr_bytes);
 
             // Create a slot
-            let slot = builder.create_stack_slot(StackSlotData::new(
-                StackSlotKind::ExplicitSlot,
-                slot_size
-            ));
+            let slot = builder
+                .create_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, slot_size));
 
             // Create instructions for storing each field's expression
             let mut offset = 0;
-
-            // still need to insert the tag discriminator for non-single unions
-            // when there are no arguments, e.g. `Nothing : Maybe a`
-            if *union_size > 1 {
-                let val = builder.ins().iconst(types::I64, *tag_id as i64);
-                builder.ins().stack_store(val, slot, Offset32::new(0));
-                offset += ptr_bytes;
-            }
 
             for (field_expr, field_layout) in arguments.iter() {
                 let val = build_expr(env, &scope, module, builder, field_expr, procs);
 
                 let field_size = field_layout.stack_size(ptr_bytes);
-                let field_offset = i32::try_from(offset)
-                    .expect("TODO handle field size conversion to i32");
+                let field_offset =
+                    i32::try_from(offset).expect("TODO handle field size conversion to i32");
 
-                builder.ins().stack_store(val, slot, Offset32::new(field_offset));
+                builder
+                    .ins()
+                    .stack_store(val, slot, Offset32::new(field_offset));
 
                 offset += field_size;
             }
 
-
             builder
                 .ins()
                 .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
-        }
-
-        Access {
-            label,
-            field_layout,
-            struct_layout: Layout::Struct(sorted_fields),
-            record,
-        } => {
-            let cfg = env.cfg;
-
-            // Find the offset we are trying to access
-            let mut offset = 0;
-            for (local_label, local_field_layout) in sorted_fields.iter() {
-                if local_label == label {
-                    break;
-                }
-
-                offset += local_field_layout.stack_size(ptr_bytes);
-            }
-
-            let offset = i32::try_from(offset)
-                .expect("TODO gracefully handle usize -> i32 conversion in struct access");
-
-            let mem_flags = MemFlags::new();
-            let record = build_expr(env, scope, module, builder, record, procs);
-            let field_type = type_from_layout(cfg, field_layout);
-
-            builder
-                .ins()
-                .load(field_type, mem_flags, record, Offset32::new(offset))
         }
         AccessAtIndex {
             index,
@@ -319,8 +265,6 @@ pub fn build_expr<'a, B: Backend>(
         } => {
             let cfg = env.cfg;
             let mut offset = 0;
-
-
 
             for (field_index, field_layout) in field_layouts.iter().enumerate() {
                 if *index == field_index as u64 {
@@ -340,8 +284,10 @@ pub fn build_expr<'a, B: Backend>(
                 offset += field_layout.stack_size(ptr_bytes);
             }
 
-            panic!("field access out of bounds: index {:?} in layouts {:?}", index, field_layouts)
-
+            panic!(
+                "field access out of bounds: index {:?} in layouts {:?}",
+                index, field_layouts
+            )
         }
 
         Str(str_literal) => {
@@ -414,14 +360,18 @@ pub fn build_expr<'a, B: Backend>(
 
             // Store the length
             {
-                let length = builder.ins().iconst(env.ptr_sized_int(), elems.len() as i64);
+                let length = builder
+                    .ins()
+                    .iconst(env.ptr_sized_int(), elems.len() as i64);
                 let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
 
                 builder.ins().stack_store(length, slot, offset);
             }
 
             // Return the pointer to the wrapper
-            builder.ins().stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
+            builder
+                .ins()
+                .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
         }
         _ => {
             panic!("I don't yet know how to crane build {:?}", expr);
@@ -429,8 +379,47 @@ pub fn build_expr<'a, B: Backend>(
     }
 }
 
+fn load_symbol<'a>(
+    env: &mut Env<'a>,
+    scope: &Scope,
+    builder: &mut FunctionBuilder,
+    name: Symbol,
+) -> Value {
+    match scope.get(&name) {
+            Some(ScopeEntry::Stack { expr_type, slot }) => {
+                builder
+                    .ins()
+                    .stack_load(*expr_type, *slot, Offset32::new(0))
+            }
+            Some(ScopeEntry::Arg { param, .. }) => *param,
+            Some(ScopeEntry::Heap { expr_type, ptr }) => {
+                builder
+                    .ins()
+                    .load(*expr_type, MemFlags::new(), *ptr, Offset32::new(0))
+            }
+            Some(ScopeEntry::Func { .. }) => {
+                panic!("TODO I don't yet know how to return fn pointers")
+            }
+            Some(ScopeEntry::ZeroSized) => {
+                // Create a slot
+                let slot = builder.create_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    0
+                ));
+
+                builder
+                    .ins()
+                    .stack_addr(env.cfg.pointer_type(), slot, Offset32::new(0))
+            }
+            None => panic!(
+                "Could not resolve lookup for {:?} because no ScopeEntry was found for {:?} in scope {:?}",
+                name, name, scope
+            ),
+        }
+}
+
 struct Branch2<'a> {
-    cond: &'a Expr<'a>,
+    cond: Value,
     cond_layout: &'a Layout<'a>,
     pass: &'a Expr<'a>,
     fail: &'a Expr<'a>,
@@ -456,7 +445,7 @@ fn build_branch2<'a, B: Backend>(
 
     builder.declare_var(ret, ret_type);
 
-    let cond = build_expr(env, scope, module, builder, branch.cond, procs);
+    let cond = branch.cond;
     let pass_block = builder.create_block();
     let fail_block = builder.create_block();
 
@@ -779,31 +768,38 @@ fn call_by_name<'a, B: Backend>(
             let a = build_arg(&args[0], env, scope, module, builder, procs);
             let b = build_arg(&args[1], env, scope, module, builder, procs);
 
-            builder.ins().icmp(IntCC::Equal, a, b)
+            let result = builder.ins().icmp(IntCC::Equal, a, b);
+
+            // convert to how we store bools (as I8)
+            builder.ins().bint(types::I8, result)
         }
         Symbol::INT_EQ_I1 => {
             debug_assert!(args.len() == 2);
             let a = build_arg(&args[0], env, scope, module, builder, procs);
             let b = build_arg(&args[1], env, scope, module, builder, procs);
 
-            // integer comparisons don't work for booleans, and a custom xand gives errors.
-            let p = builder.ins().bint(types::I8, a);
-            let q = builder.ins().bint(types::I8, b);
+            let result = builder.ins().icmp(IntCC::Equal, a, b);
 
-            builder.ins().icmp(IntCC::Equal, p, q)
+            // convert to how we store bools (as I8)
+            builder.ins().bint(types::I8, result)
         }
         Symbol::FLOAT_EQ => {
             debug_assert!(args.len() == 2);
             let a = build_arg(&args[0], env, scope, module, builder, procs);
             let b = build_arg(&args[1], env, scope, module, builder, procs);
 
-            builder.ins().fcmp(FloatCC::Equal, a, b)
+            let result = builder.ins().fcmp(FloatCC::Equal, a, b);
+
+            // convert to how we store bools (as I8)
+            builder.ins().bint(types::I8, result)
         }
         Symbol::BOOL_OR => {
             debug_assert!(args.len() == 2);
 
+            let cond = build_arg(&args[0], env, scope, module, builder, procs);
+
             let branch2 = Branch2 {
-                cond: &args[0].0,
+                cond,
                 cond_layout: &Layout::Builtin(Builtin::Bool),
                 pass: &Expr::Bool(true),
                 fail: &args[1].0,
@@ -814,8 +810,10 @@ fn call_by_name<'a, B: Backend>(
         Symbol::BOOL_AND => {
             debug_assert!(args.len() == 2);
 
+            let cond = build_arg(&args[0], env, scope, module, builder, procs);
+
             let branch2 = Branch2 {
-                cond: &args[0].0,
+                cond,
                 cond_layout: &Layout::Builtin(Builtin::Bool),
                 pass: &args[1].0,
                 fail: &Expr::Bool(false),

@@ -4,12 +4,15 @@ use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::{Content, FlatType, Subs, Variable};
+use std::collections::BTreeMap;
+
+pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
 
 /// Types for code gen must be monomorphic. No type variables allowed!
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Layout<'a> {
     Builtin(Builtin<'a>),
-    Struct(&'a [(Lowercase, Layout<'a>)]),
+    Struct(&'a [Layout<'a>]),
     Union(&'a [&'a [Layout<'a>]]),
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
@@ -86,7 +89,7 @@ impl<'a> Layout<'a> {
             Builtin(builtin) => builtin.safe_to_memcpy(),
             Struct(fields) => fields
                 .iter()
-                .all(|(_, field_layout)| field_layout.safe_to_memcpy()),
+                .all(|field_layout| field_layout.safe_to_memcpy()),
             Union(tags) => tags
                 .iter()
                 .all(|tag_layout| tag_layout.iter().all(|field| field.safe_to_memcpy())),
@@ -95,7 +98,7 @@ impl<'a> Layout<'a> {
                 true
             }
             Pointer(_) => {
-                // We cannot memcpy pointers, because  then we would have the same pointer in multiple places!
+                // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
             }
         }
@@ -109,7 +112,7 @@ impl<'a> Layout<'a> {
             Struct(fields) => {
                 let mut sum = 0;
 
-                for (_, field_layout) in *fields {
+                for field_layout in *fields {
                     sum += field_layout.stack_size(pointer_size);
                 }
 
@@ -258,34 +261,14 @@ fn layout_from_flat_type<'a>(
         }
         Record(fields, ext_var) => {
             debug_assert!(ext_var_is_empty_record(subs, ext_var));
-            let ext_content = subs.get_without_compacting(ext_var).content;
-            let ext_layout = match Layout::from_content(arena, ext_content, subs, pointer_size) {
-                Ok(layout) => layout,
-                Err(()) => {
-                    // Invalid record!
-                    panic!("TODO gracefully handle record with invalid ext_var");
-                }
-            };
 
-            let mut field_layouts: Vec<'a, (Lowercase, Layout<'a>)>;
+            let btree = fields
+                .into_iter()
+                .collect::<BTreeMap<Lowercase, Variable>>();
 
-            match ext_layout {
-                Layout::Struct(more_fields) => {
-                    field_layouts = Vec::with_capacity_in(fields.len() + more_fields.len(), arena);
+            let mut layouts = Vec::with_capacity_in(btree.len(), arena);
 
-                    for (label, field) in more_fields {
-                        field_layouts.push((label.clone(), field.clone()));
-                    }
-                }
-                _ => {
-                    panic!(
-                        "TODO handle Layout for invalid record extension, specifically {:?}",
-                        ext_layout
-                    );
-                }
-            }
-
-            for (label, field_var) in fields {
+            for (_, field_var) in btree {
                 let field_content = subs.get_without_compacting(field_var).content;
                 let field_layout =
                     match Layout::from_content(arena, field_content, subs, pointer_size) {
@@ -296,18 +279,15 @@ fn layout_from_flat_type<'a>(
                         }
                     };
 
-                field_layouts.push((label.clone(), field_layout));
+                layouts.push(field_layout);
             }
 
-            // Sort fields by label
-            field_layouts.sort_by(|(a, _), (b, _)| a.cmp(b));
-
-            Ok(Layout::Struct(field_layouts.into_bump_slice()))
+            Ok(Layout::Struct(layouts.into_bump_slice()))
         }
         TagUnion(tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
-            layout_from_tag_union(arena, &tags, subs, pointer_size)
+            Ok(layout_from_tag_union(arena, tags, subs, pointer_size))
         }
         RecursiveTagUnion(_, _, _) => {
             panic!("TODO make Layout for non-empty Tag Union");
@@ -323,96 +303,176 @@ fn layout_from_flat_type<'a>(
     }
 }
 
-pub fn layout_from_tag_union<'a>(
+pub fn record_fields_btree<'a>(
     arena: &'a Bump,
-    tags: &MutMap<TagName, std::vec::Vec<Variable>>,
+    var: Variable,
     subs: &Subs,
     pointer_size: u32,
-) -> Result<Layout<'a>, ()> {
-    match tags.len() {
-        0 => {
-            panic!("TODO gracefully handle trying to instantiate Never");
-        }
-        // We can only unwrap a wrapper if it never becomes part of a bigger union
-        // therefore, the ext_var must be the literal empty tag union
-        1 => {
-            // This is a wrapper. Unwrap it!
-            let (tag_name, arguments) = tags.iter().next().unwrap();
-
-            match &tag_name {
-                TagName::Private(Symbol::NUM_AT_NUM) => {
-                    debug_assert!(arguments.len() == 1);
-
-                    let var = arguments.iter().next().unwrap();
-
-                    unwrap_num_tag(subs, *var)
-                }
-                TagName::Private(_) | TagName::Global(_) => {
-                    let mut arg_layouts = Vec::with_capacity_in(arguments.len(), arena);
-
-                    for arg in arguments {
-                        arg_layouts.push(Layout::from_var(arena, *arg, subs, pointer_size)?);
-                    }
-
-                    let layouts = [arg_layouts.into_bump_slice()];
-
-                    Ok(Layout::Union(arena.alloc(layouts)))
-                }
-            }
-        }
-        _ => {
-            // Check if we can turn this tag union into an enum
-            // The arguments of all tags must have size 0.
-            // That is trivially the case when there are no arguments
-            //
-            //  [ Orange, Apple, Banana ]
-            //
-            //  But when one-tag tag unions are optimized away, we can also use an enum for
-            //
-            //  [ Foo [ Unit ], Bar [ Unit ] ]
-
-            let arguments_have_size_0 = || {
-                tags.iter().all(|(_, args)| {
-                    args.iter().all(|var| {
-                        Layout::from_var(arena, *var, subs, pointer_size)
-                            .map(|v| v.stack_size(pointer_size))
-                            == Ok(0)
-                    })
+) -> BTreeMap<Lowercase, Layout<'a>> {
+    let mut fields_map = MutMap::default();
+    match roc_types::pretty_print::chase_ext_record(subs, var, &mut fields_map) {
+        Ok(()) | Err((_, Content::FlexVar(_))) => {
+            // collect into btreemap to sort
+            fields_map
+                .into_iter()
+                .map(|(label, var)| {
+                    (
+                        label,
+                        Layout::from_var(arena, var, subs, pointer_size)
+                            .expect("invalid layout from var"),
+                    )
                 })
-            };
+                .collect::<BTreeMap<Lowercase, Layout<'a>>>()
+        }
+        Err(other) => panic!("invalid content in record variable: {:?}", other),
+    }
+}
 
-            // up to 256 enum keys can be stored in a byte
-            if tags.len() <= std::u8::MAX as usize + 1 && arguments_have_size_0() {
-                if tags.len() <= 2 {
-                    Ok(Layout::Builtin(Builtin::Bool))
-                } else {
-                    // up to 256 enum tags can be stored in a byte
-                    Ok(Layout::Builtin(Builtin::Byte))
-                }
-            } else {
-                let add_discriminant = tags.len() != 1;
-                let mut layouts = Vec::with_capacity_in(tags.len(), arena);
+pub enum UnionVariant<'a> {
+    Never,
+    Unit,
+    BoolUnion { ttrue: TagName, ffalse: TagName },
+    ByteUnion(Vec<'a, TagName>),
+    Unwrapped(Vec<'a, Layout<'a>>),
+    Wrapped(Vec<'a, (TagName, &'a [Layout<'a>])>),
+}
 
-                for arguments in tags.values() {
-                    // add a field for the discriminant if there is more than one tag in the union
-                    let mut arg_layouts = if add_discriminant {
-                        let discriminant = Layout::Builtin(Builtin::Int64);
-                        let mut result = Vec::with_capacity_in(arguments.len() + 1, arena);
-                        result.push(discriminant);
-                        result
-                    } else {
-                        Vec::with_capacity_in(arguments.len(), arena)
-                    };
+pub fn union_sorted_tags<'a>(
+    arena: &'a Bump,
+    var: Variable,
+    subs: &Subs,
+    pointer_size: u32,
+) -> UnionVariant<'a> {
+    let mut tags_vec = std::vec::Vec::new();
+    match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
+        Ok(()) | Err((_, Content::FlexVar(_))) => {
+            union_sorted_tags_help(arena, tags_vec, subs, pointer_size)
+        }
+        Err(other) => panic!("invalid content in record variable: {:?}", other),
+    }
+}
 
-                    for arg in arguments {
-                        arg_layouts.push(Layout::from_var(arena, *arg, subs, pointer_size)?);
-                    }
+fn union_sorted_tags_help<'a>(
+    arena: &'a Bump,
+    mut tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)>,
+    subs: &Subs,
+    pointer_size: u32,
+) -> UnionVariant<'a> {
+    // for this union be be an enum, none of the tags may have any arguments
+    let has_no_arguments = tags_vec.iter().all(|(_, args)| args.is_empty());
 
-                    layouts.push(arg_layouts.into_bump_slice());
-                }
+    // sort up-front, make sure the ordering stays intact!
+    tags_vec.sort();
 
-                Ok(Layout::Union(arena.alloc(layouts)))
+    match tags_vec.len() {
+        0 => {
+            // trying to instantiate a type with no values
+            UnionVariant::Never
+        }
+        1 if has_no_arguments => {
+            // a unit type
+            UnionVariant::Unit
+        }
+        2 if has_no_arguments => {
+            // type can be stored in a boolean
+
+            // tags_vec is sorted,
+            let ttrue = tags_vec.remove(1).0;
+            let ffalse = tags_vec.remove(0).0;
+
+            UnionVariant::BoolUnion { ffalse, ttrue }
+        }
+        3..=MAX_ENUM_SIZE if has_no_arguments => {
+            // type can be stored in a byte
+            // needs the sorted tag names to determine the tag_id
+            let mut tag_names = Vec::with_capacity_in(tags_vec.len(), arena);
+
+            for (label, _) in tags_vec {
+                tag_names.push(label);
             }
+
+            UnionVariant::ByteUnion(tag_names)
+        }
+        1 => {
+            // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
+            let (tag_name, arguments) = tags_vec.remove(0);
+
+            // just one tag in the union (but with arguments) can be a struct
+            let mut layouts = Vec::with_capacity_in(tags_vec.len(), arena);
+
+            match tag_name {
+                TagName::Private(Symbol::NUM_AT_NUM) => {
+                    layouts.push(unwrap_num_tag(subs, arguments[0]).expect("invalid num layout"));
+                }
+                _ => {
+                    for var in arguments.iter() {
+                        let layout = Layout::from_var(arena, *var, subs, pointer_size)
+                            .expect("invalid layout from var");
+                        layouts.push(layout);
+                    }
+                }
+            }
+            UnionVariant::Unwrapped(layouts)
+        }
+
+        _ => {
+            // default path
+            let mut result = Vec::with_capacity_in(tags_vec.len(), arena);
+
+            for (tag_name, arguments) in tags_vec {
+                // resverse space for the tag discriminant
+                let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
+
+                // add the tag discriminant
+                arg_layouts.push(Layout::Builtin(Builtin::Int64));
+
+                for var in arguments {
+                    let layout = Layout::from_var(arena, var, subs, pointer_size)
+                        .expect("invalid layout from var");
+                    arg_layouts.push(layout);
+                }
+
+                result.push((tag_name, arg_layouts.into_bump_slice()));
+            }
+            UnionVariant::Wrapped(result)
+        }
+    }
+}
+
+pub fn layout_from_tag_union<'a>(
+    arena: &'a Bump,
+    tags: MutMap<TagName, std::vec::Vec<Variable>>,
+    subs: &Subs,
+    pointer_size: u32,
+) -> Layout<'a> {
+    use UnionVariant::*;
+
+    let tags_vec: std::vec::Vec<_> = tags.into_iter().collect();
+    let first_tag = tags_vec[0].clone();
+    let variant = union_sorted_tags_help(arena, tags_vec, subs, pointer_size);
+
+    match variant {
+        Never => panic!("TODO gracefully handle trying to instantiate Never"),
+        Unit => Layout::Struct(&[]),
+        BoolUnion { .. } => Layout::Builtin(Builtin::Bool),
+        ByteUnion(_) => Layout::Builtin(Builtin::Byte),
+        Unwrapped(field_layouts) => match first_tag.0 {
+            TagName::Private(Symbol::NUM_AT_NUM) => {
+                let arguments = first_tag.1;
+                debug_assert!(arguments.len() == 1);
+                let var = arguments.iter().next().unwrap();
+
+                unwrap_num_tag(subs, *var).expect("invalid Num argument")
+            }
+            _ => Layout::Struct(field_layouts.into_bump_slice()),
+        },
+        Wrapped(tags) => {
+            let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
+
+            for (_, tag_layout) in tags {
+                tag_layouts.push(tag_layout);
+            }
+            Layout::Union(tag_layouts.into_bump_slice())
         }
     }
 }
