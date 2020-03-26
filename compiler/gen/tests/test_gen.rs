@@ -202,9 +202,13 @@ mod test_gen {
             let builder = context.create_builder();
             let fpm = PassManager::create(&module);
 
-            // Enable optimizations when running cargo test --release
+            // tail-call elimination is always on
+            // it needs a pass before it to work
+            fpm.add_instruction_combining_pass();
+            fpm.add_tail_call_elimination_pass();
+
+            // Enable more optimizations when running cargo test --release
             if !cfg!(debug_assertions) {
-                fpm.add_instruction_combining_pass();
                 fpm.add_reassociate_pass();
                 fpm.add_basic_alias_analysis_pass();
                 fpm.add_promote_memory_to_register_pass();
@@ -342,9 +346,12 @@ mod test_gen {
             let builder = context.create_builder();
             let fpm = PassManager::create(&module);
 
-            // Enable optimizations when running cargo test --release
+            // tail-call elimination is always on
+            fpm.add_instruction_combining_pass();
+            fpm.add_tail_call_elimination_pass();
+
+            // Enable more optimizations when running cargo test --release
             if !cfg!(debug_assertions) {
-                fpm.add_instruction_combining_pass();
                 fpm.add_reassociate_pass();
                 fpm.add_basic_alias_analysis_pass();
                 fpm.add_promote_memory_to_register_pass();
@@ -474,9 +481,6 @@ mod test_gen {
             // parsing the source, so that there's no chance their passing
             // or failing depends on leftover state from the previous one.
             {
-                assert_crane_evals_to!($src, $expected, $ty, (|val| val));
-            }
-            {
                 assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
             }
             {
@@ -485,9 +489,6 @@ mod test_gen {
         };
         ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
             // Same as above, except with an additional transformation argument.
-            {
-                assert_crane_evals_to!($src, $expected, $ty, $transform);
-            }
             {
                 assert_llvm_evals_to!($src, $expected, $ty, $transform);
             }
@@ -1996,6 +1997,24 @@ mod test_gen {
             ),
             true,
             bool
+        );
+    }
+
+    #[test]
+    fn tail_call_elimination() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                sum = \n, accum ->
+                    when n is
+                        0 -> accum
+                        _ -> sum (n - 1) (n + accum)
+
+                sum 1_000_000 0
+                "#
+            ),
+            500000500000,
+            i64
         );
     }
 }
