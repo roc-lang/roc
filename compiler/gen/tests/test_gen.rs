@@ -28,8 +28,8 @@ mod test_gen {
     use std::ffi::{CStr, CString};
     use std::os::raw::c_char;
 
-    // Pointer size on 64-bit platforms
-    const POINTER_SIZE: u32 = std::mem::size_of::<u64>() as u32;
+    // Pointer size on current system
+    const POINTER_SIZE: u32 = std::mem::size_of::<usize>() as u32;
 
     macro_rules! assert_llvm_evals_to {
         ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
