@@ -137,29 +137,29 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 debug_assert!(args.len() == 2);
 
                 let comparison = build_expr(env, scope, parent, &args[0].0, procs).into_int_value();
-                let then_val: BasicValueEnum =
-                    env.context.bool_type().const_int(true as u64, false).into();
-                let else_val = build_expr(env, scope, parent, &args[1].0, procs);
+                let build_then = || env.context.bool_type().const_int(true as u64, false).into();
+                let build_else = || build_expr(env, scope, parent, &args[1].0, procs);
 
                 let ret_type = env.context.bool_type().into();
 
-                build_basic_phi2(env, parent, comparison, then_val, else_val, ret_type)
+                build_basic_phi2(env, parent, comparison, build_then, build_else, ret_type)
             }
             Symbol::BOOL_AND => {
                 // The (&&) operator
                 debug_assert!(args.len() == 2);
 
                 let comparison = build_expr(env, scope, parent, &args[0].0, procs).into_int_value();
-                let then_val = build_expr(env, scope, parent, &args[1].0, procs);
-                let else_val: BasicValueEnum = env
-                    .context
-                    .bool_type()
-                    .const_int(false as u64, false)
-                    .into();
+                let build_then = || build_expr(env, scope, parent, &args[1].0, procs);
+                let build_else = || {
+                    env.context
+                        .bool_type()
+                        .const_int(false as u64, false)
+                        .into()
+                };
 
                 let ret_type = env.context.bool_type().into();
 
-                build_basic_phi2(env, parent, comparison, then_val, else_val, ret_type)
+                build_basic_phi2(env, parent, comparison, build_then, build_else, ret_type)
             }
             _ => {
                 let mut arg_tuples: Vec<(BasicValueEnum, &'a Layout<'a>)> =
@@ -597,16 +597,18 @@ fn build_branch2<'a, 'ctx, 'env>(
     procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
     let ret_layout = cond.ret_layout;
+    let pass = cond.pass;
+    let fail = cond.fail;
     let ret_type = basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
 
     let cond_expr = load_symbol(env, scope, cond.cond);
 
     match cond_expr {
         IntValue(value) => {
-            let then_val = build_expr(env, scope, parent, cond.pass, procs);
-            let else_val = build_expr(env, scope, parent, cond.fail, procs);
+            let build_then = || build_expr(env, scope, parent, pass, procs);
+            let build_else = || build_expr(env, scope, parent, fail, procs);
 
-            build_basic_phi2(env, parent, value, then_val, else_val, ret_type)
+            build_basic_phi2(env, parent, value, build_then, build_else, ret_type)
         }
         _ => panic!(
             "Tried to make a branch out of an invalid condition: cond_expr = {:?}",
@@ -740,20 +742,28 @@ fn build_expr_phi2<'a, 'ctx, 'env>(
     ret_type: BasicTypeEnum<'ctx>,
     procs: &Procs<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let then_val = build_expr(env, scope, parent, pass, procs);
-    let else_val = build_expr(env, scope, parent, fail, procs);
-
-    build_basic_phi2(env, parent, comparison, then_val, else_val, ret_type)
+    build_basic_phi2(
+        env,
+        parent,
+        comparison,
+        || build_expr(env, scope, parent, pass, procs),
+        || build_expr(env, scope, parent, fail, procs),
+        ret_type,
+    )
 }
 
-fn build_basic_phi2<'a, 'ctx, 'env>(
+fn build_basic_phi2<'a, 'ctx, 'env, PassFn, FailFn>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     comparison: IntValue<'ctx>,
-    pass: BasicValueEnum<'a>,
-    fail: BasicValueEnum<'a>,
+    build_pass: PassFn,
+    build_fail: FailFn,
     ret_type: BasicTypeEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
+) -> BasicValueEnum<'ctx>
+where
+    PassFn: Fn() -> BasicValueEnum<'ctx>,
+    FailFn: Fn() -> BasicValueEnum<'ctx>,
+{
     let builder = env.builder;
     let context = env.context;
 
@@ -766,14 +776,14 @@ fn build_basic_phi2<'a, 'ctx, 'env>(
 
     // build then block
     builder.position_at_end(then_block);
-    let then_val = pass;
+    let then_val = build_pass();
     builder.build_unconditional_branch(cont_block);
 
     let then_block = builder.get_insert_block().unwrap();
 
     // build else block
     builder.position_at_end(else_block);
-    let else_val = fail;
+    let else_val = build_fail();
     builder.build_unconditional_branch(cont_block);
 
     let else_block = builder.get_insert_block().unwrap();
@@ -1035,10 +1045,10 @@ fn call_with_args<'a, 'ctx, 'env>(
         Symbol::LIST_GET_UNSAFE => {
             let builder = env.builder;
 
-            // List.get : List elem, Int -> Result elem [ OutOfBounds ]*
+            // List.get : List elem, Int -> [ Ok elem, OutOfBounds ]*
             debug_assert!(args.len() == 2);
 
-            let (_list_expr, list_layout) = &args[0];
+            let (_, list_layout) = &args[0];
 
             let wrapper_struct = args[0].0.into_struct_value();
             let elem_index = args[1].0.into_int_value();
@@ -1065,89 +1075,8 @@ fn call_with_args<'a, 'ctx, 'env>(
                 }
             }
         }
-        Symbol::LIST_SET => {
-            // List.set : List elem, Int, elem -> List elem
-            let builder = env.builder;
-
-            debug_assert!(args.len() == 3);
-
-            let original_wrapper = args[0].0.into_struct_value();
-            let elem_index = args[1].0.into_int_value();
-
-            // Load the usize length from the wrapper. We need it for bounds checking.
-            let list_len = load_list_len(builder, original_wrapper);
-
-            // Bounds check: only proceed if index < length.
-            // Otherwise, return the list unaltered.
-            let comparison = bounds_check_comparison(builder, elem_index, list_len);
-
-            // If the index is in bounds, clone and mutate in place.
-            let then_val = {
-                let (elem, elem_layout) = args[2];
-                let (cloned_wrapper, array_data_ptr) = {
-                    clone_list(
-                        env,
-                        list_len,
-                        load_list_ptr(builder, original_wrapper),
-                        elem_layout,
-                    )
-                };
-
-                // If we got here, we passed the bounds check, so this is an in-bounds GEP
-                let elem_ptr = unsafe {
-                    builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "load_index")
-                };
-
-                // Mutate the new array in-place to change the element.
-                builder.build_store(elem_ptr, elem);
-
-                BasicValueEnum::StructValue(cloned_wrapper)
-            };
-
-            // If the index was out of bounds, return the original list unaltered.
-            let else_val = BasicValueEnum::StructValue(original_wrapper);
-            let ret_type = original_wrapper.get_type();
-
-            build_basic_phi2(env, parent, comparison, then_val, else_val, ret_type.into())
-        }
-        Symbol::LIST_SET_IN_PLACE => {
-            let builder = env.builder;
-
-            debug_assert!(args.len() == 3);
-
-            let original_wrapper = args[0].0.into_struct_value();
-            let elem_index = args[1].0.into_int_value();
-            let (elem, _elem_layout) = args[2];
-
-            // Load the usize length
-            let list_len = load_list_len(builder, original_wrapper);
-
-            // Bounds check: only proceed if index < length.
-            // Otherwise, return the list unaltered.
-            let comparison = bounds_check_comparison(builder, elem_index, list_len);
-
-            // If the index is in bounds, clone and mutate in place.
-            let then_val = {
-                // Load the pointer to the elements
-                let array_data_ptr = load_list_ptr(builder, original_wrapper);
-
-                // We already checked the bounds earlier.
-                let elem_ptr =
-                    unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem") };
-
-                // Mutate the array in-place.
-                builder.build_store(elem_ptr, elem);
-
-                // Return the wrapper unchanged, since pointer and length are unchanged
-                BasicValueEnum::StructValue(original_wrapper)
-            };
-
-            // If the index was out of bounds, return the original list unaltered.
-            let else_val = BasicValueEnum::StructValue(original_wrapper);
-            let ret_type = original_wrapper.get_type();
-
-            build_basic_phi2(env, parent, comparison, then_val, else_val, ret_type.into())
-        }
+        Symbol::LIST_SET => list_set(parent, args, env, InPlace::Clone),
+        Symbol::LIST_SET_IN_PLACE => list_set(parent, args, env, InPlace::InPlace),
         _ => {
             let fn_val = env
                 .module
@@ -1254,15 +1183,70 @@ fn clone_list<'a, 'ctx, 'env>(
     (struct_val.into_struct_value(), clone_ptr)
 }
 
-fn bounds_check_comparison<'ctx>(
-    builder: &Builder<'ctx>,
-    elem_index: IntValue<'ctx>,
-    len: IntValue<'ctx>,
-) -> IntValue<'ctx> {
-    //
-    // Note: Check for index < length as the "true" condition,
-    // to avoid misprediction. (In practice this should usually pass,
-    // and CPUs generally default to predicting that a forward jump
-    // shouldn't be taken; that is, they predict "else" won't be taken.)
-    builder.build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
+enum InPlace {
+    InPlace,
+    Clone,
+}
+
+fn list_set<'a, 'ctx, 'env>(
+    parent: FunctionValue<'ctx>,
+    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
+    env: &Env<'a, 'ctx, 'env>,
+    in_place: InPlace,
+) -> BasicValueEnum<'ctx> {
+    // List.set : List elem, Int, elem -> List elem
+    let builder = env.builder;
+
+    debug_assert!(args.len() == 3);
+
+    let original_wrapper = args[0].0.into_struct_value();
+    let elem_index = args[1].0.into_int_value();
+
+    // Load the usize length from the wrapper. We need it for bounds checking.
+    let list_len = load_list_len(builder, original_wrapper);
+
+    // Bounds check: only proceed if index < length.
+    // Otherwise, return the list unaltered.
+    let comparison =
+        // Note: Check for index < length as the "true" condition,
+        // to avoid misprediction. (In practice this should usually pass,
+        // and CPUs generally default to predicting that a forward jump
+        // shouldn't be taken; that is, they predict "else" won't be taken.)
+        builder.build_int_compare(IntPredicate::ULT, elem_index, list_len, "bounds_check");
+
+    // If the index is in bounds, clone and mutate in place.
+    let build_then = || {
+        let (elem, elem_layout) = args[2];
+        let (new_wrapper, array_data_ptr) = match in_place {
+            InPlace::InPlace => (original_wrapper, load_list_ptr(builder, original_wrapper)),
+            InPlace::Clone => clone_list(
+                env,
+                list_len,
+                load_list_ptr(builder, original_wrapper),
+                elem_layout,
+            ),
+        };
+
+        // If we got here, we passed the bounds check, so this is an in-bounds GEP
+        let elem_ptr =
+            unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "load_index") };
+
+        // Mutate the new array in-place to change the element.
+        builder.build_store(elem_ptr, elem);
+
+        BasicValueEnum::StructValue(new_wrapper)
+    };
+
+    // If the index was out of bounds, return the original list unaltered.
+    let build_else = || BasicValueEnum::StructValue(original_wrapper);
+    let ret_type = original_wrapper.get_type();
+
+    build_basic_phi2(
+        env,
+        parent,
+        comparison,
+        build_then,
+        build_else,
+        ret_type.into(),
+    )
 }

@@ -15,7 +15,7 @@ mod test_gen {
     use crate::helpers::{can_expr, infer_expr, uniq_expr, CanExprOut};
     use bumpalo::Bump;
     use cranelift::prelude::{AbiParam, ExternalName, FunctionBuilder, FunctionBuilderContext};
-    use cranelift_codegen::ir::InstBuilder;
+    use cranelift_codegen::ir::{ArgumentPurpose, InstBuilder};
     use cranelift_codegen::settings;
     use cranelift_codegen::verifier::verify_function;
     use cranelift_module::{default_libcall_names, Linkage, Module};
@@ -63,7 +63,6 @@ mod test_gen {
             // Compute main_fn_ret_type before moving subs to Env
             let layout = Layout::from_content(&arena, content, &subs, POINTER_SIZE)
         .unwrap_or_else(|err| panic!("Code gen error in test: could not convert content to layout. Err was {:?} and Subs were {:?}", err, subs));
-            let main_ret_type = type_from_layout(cfg, &layout);
 
             // Compile and add all the Procs before adding main
             let mut procs = Procs::default();
@@ -121,7 +120,26 @@ mod test_gen {
 
             // Add main itself
             let mut sig = module.make_signature();
-            sig.returns.push(AbiParam::new(main_ret_type));
+
+            // Add return type to the signature.
+            // If it is a struct, give it a special return type.
+            // Otherwise, Cranelift will return a raw pointer to the struct
+            // instead of using a proper struct return.
+            match layout {
+                Layout::Struct(fields) => {
+                    for field_layout in fields {
+                        let ret_type = type_from_layout(cfg, &field_layout);
+                        let abi_param = AbiParam::special(ret_type, ArgumentPurpose::StructReturn);
+
+                        sig.returns.push(abi_param);
+                    }
+                },
+                _ => {
+                    let main_ret_type = type_from_layout(cfg, &layout);
+
+                    sig.returns.push(AbiParam::new(main_ret_type));
+                }
+            };
 
             let main_fn = module
                 .declare_function(main_fn_name, Linkage::Local, &sig)
@@ -288,6 +306,11 @@ mod test_gen {
                 panic!("Function {} failed LLVM verification.", main_fn_name);
             }
 
+            // Verify the module
+            if let Err(errors) = env.module.verify() {
+                panic!("Errors defining module: {:?}", errors);
+            }
+
             // Uncomment this to see the module's optimized LLVM instruction output:
             // env.module.print_to_stderr();
 
@@ -424,6 +447,11 @@ mod test_gen {
                 panic!("Function {} failed LLVM verification.", main_fn_name);
             }
 
+            // Verify the module
+            if let Err(errors) = env.module.verify() {
+                panic!("Errors defining module: {:?}", errors);
+            }
+
             // Uncomment this to see the module's optimized LLVM instruction output:
             // env.module.print_to_stderr();
 
@@ -539,12 +567,12 @@ mod test_gen {
     //
     #[test]
     fn empty_list_literal() {
-        assert_llvm_evals_to!("[]", &[], &'static [i64], |x| x);
+        assert_opt_evals_to!("[]", &[], &'static [i64], |x| x);
     }
 
     #[test]
     fn int_list_literal() {
-        assert_llvm_evals_to!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64], |x| x);
+        assert_opt_evals_to!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64], |x| x);
     }
 
     #[test]
@@ -1900,6 +1928,20 @@ mod test_gen {
             ),
             34,
             i64
+        );
+    }
+
+    #[test]
+    fn i64_record_literal() {
+        assert_opt_evals_to!(
+            indoc!(
+                r#"
+                   { x: 3, y: 5 }
+                "#
+            ),
+            (3, 5),
+            (i64, i64),
+            |x| x
         );
     }
 

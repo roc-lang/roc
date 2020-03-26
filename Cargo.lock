@@ -47,9 +47,9 @@ dependencies = [
 
 [[package]]
 name = "bumpalo"
-version = "3.2.0"
+version = "3.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f359dc14ff8911330a51ef78022d376f25ed00248912803b58f00cb1c27f742"
+checksum = "12ae9db68ad7fac5fe51304d20f016c911539251075a214f8e663babefa35187"
 
 [[package]]
 name = "byteorder"
@@ -330,7 +330,7 @@ dependencies = [
  "proc-macro-hack",
  "proc-macro2 1.0.9",
  "quote 1.0.3",
- "syn 1.0.16",
+ "syn 1.0.17",
  "unindent",
 ]
 
@@ -486,14 +486,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro-hack"
-version = "0.5.12"
+version = "0.5.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f918f2b601f93baa836c1c2945faef682ba5b6d4828ecb45eeb7cc3c71b811b4"
-dependencies = [
- "proc-macro2 1.0.9",
- "quote 1.0.3",
- "syn 1.0.16",
-]
+checksum = "fcfdefadc3d57ca21cf17990a28ef4c0f7c61383a28cb7604cf4a18e6ede1420"
 
 [[package]]
 name = "proc-macro2"
@@ -703,9 +698,9 @@ checksum = "2439c63f3f6139d1b57529d16bc3b8bb855230c8efcc5d3a896c8bea7c3b1e84"
 
 [[package]]
 name = "regex"
-version = "1.3.5"
+version = "1.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8900ebc1363efa7ea1c399ccc32daed870b4002651e0bed86e72d501ebbe0048"
+checksum = "7f6946991529684867e47d86474e3a6d0c0ab9b82d5821e314b1ede31fa3a4b3"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -1113,9 +1108,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "1.0.16"
+version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "123bd9499cfb380418d509322d7a6d52e5315f064fe4b3ad18a53d6b92c07859"
+checksum = "0df0eb663f387145cab623dea85b09c2c5b4b0aef44e945d928e682fce71bb03"
 dependencies = [
  "proc-macro2 1.0.9",
  "quote 1.0.3",
@@ -1130,22 +1125,22 @@ checksum = "ab0e7238dcc7b40a7be719a25365910f6807bd864f4cce6b2e6b873658e2b19d"
 
 [[package]]
 name = "thiserror"
-version = "1.0.11"
+version = "1.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee14bf8e6767ab4c687c9e8bc003879e042a96fd67a3ba5934eadb6536bef4db"
+checksum = "e3711fd1c4e75b3eff12ba5c40dba762b6b65c5476e8174c1a664772060c49bf"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "1.0.11"
+version = "1.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7b51e1fbc44b5a0840be594fbc0f960be09050f2617e61e6aa43bef97cd3ef4"
+checksum = "ae2b85ba4c9aa32dd3343bd80eb8d22e9b54b7688c17ea3907f236885353b233"
 dependencies = [
  "proc-macro2 1.0.9",
  "quote 1.0.3",
- "syn 1.0.16",
+ "syn 1.0.17",
 ]
 
 [[package]]

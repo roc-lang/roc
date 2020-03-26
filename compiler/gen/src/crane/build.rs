@@ -54,7 +54,9 @@ impl<'a> Env<'a> {
     /// For nested conditionals, we need unique variables
     pub fn fresh_variable(&mut self) -> Variable {
         let result = cranelift::frontend::Variable::with_u32(*self.variable_counter);
+
         *self.variable_counter += 1;
+
         result
     }
 }
@@ -451,13 +453,13 @@ fn build_branch2<'a, B: Backend>(
 
     match branch.cond_layout {
         Layout::Builtin(Builtin::Bool) => {
-            builder.ins().brnz(cond, pass_block, &[]);
+            builder.ins().brz(cond, fail_block, &[]);
         }
         other => panic!("I don't know how to build a conditional for {:?}", other),
     }
 
-    // Unconditionally jump to fail_block (if we didn't just jump to pass_block).
-    builder.ins().jump(fail_block, &[]);
+    // Unconditionally jump to pass_block (if we didn't just jump to pass_block).
+    builder.ins().jump(pass_block, &[]);
 
     let mut build_branch = |expr, block| {
         builder.switch_to_block(block);
@@ -827,7 +829,7 @@ fn call_by_name<'a, B: Backend>(
             let wrapper_ptr = build_arg(&args[0], env, scope, module, builder, procs);
             let elem_index = build_arg(&args[1], env, scope, module, builder, procs);
 
-            let (_list_expr, list_layout) = &args[0];
+            let (_, list_layout) = &args[0];
 
             // Get the usize list length
             let ptr_bytes = env.cfg.pointer_bytes() as u32;
@@ -870,65 +872,9 @@ fn call_by_name<'a, B: Backend>(
                 }
             }
         }
-        Symbol::LIST_SET => {
-            // set : List elem, Int, elem -> List elem
-            let wrapper_ptr = build_arg(&args[0], env, scope, module, builder, procs);
-            let (_list_expr, list_layout) = &args[0];
-
-            // Get the usize list length
-            let ptr_bytes = env.cfg.pointer_bytes() as u32;
-            let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
-            let _list_len =
-                builder
-                    .ins()
-                    .load(env.ptr_sized_int(), MemFlags::new(), wrapper_ptr, offset);
-
-            // TODO do array bounds checking, and early return the original List if out of bounds
-
-            match list_layout {
-                Layout::Builtin(Builtin::List(elem_layout)) => {
-                    let wrapper_ptr = clone_list(env, builder, module, wrapper_ptr, elem_layout);
-
-                    let arg1 = build_arg(&args[1], env, scope, module, builder, procs);
-                    let arg2 = build_arg(&args[2], env, scope, module, builder, procs);
-
-                    list_set_in_place(env, wrapper_ptr, arg1, arg2, elem_layout, builder);
-
-                    wrapper_ptr
-                }
-                _ => {
-                    unreachable!("Invalid List layout for List.set: {:?}", list_layout);
-                }
-            }
-        }
+        Symbol::LIST_SET => list_set(env, args, scope, module, builder, procs, InPlace::Clone),
         Symbol::LIST_SET_IN_PLACE => {
-            // set : List elem, Int, elem -> List elem
-            debug_assert!(args.len() == 3);
-
-            // Get the usize list length
-            let wrapper_ptr = build_arg(&args[0], env, scope, module, builder, procs);
-            let ptr_bytes = env.cfg.pointer_bytes() as u32;
-            let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
-            let _list_len =
-                builder
-                    .ins()
-                    .load(env.ptr_sized_int(), MemFlags::new(), wrapper_ptr, offset);
-
-            // TODO do array bounds checking, and early return the original List if out of bounds
-
-            let (list_expr, list_layout) = &args[0];
-            let list_val = build_expr(env, scope, module, builder, list_expr, procs);
-
-            match list_layout {
-                Layout::Builtin(Builtin::List(elem_layout)) => {
-                    let arg1 = build_arg(&args[1], env, scope, module, builder, procs);
-                    let arg2 = build_arg(&args[2], env, scope, module, builder, procs);
-                    list_set_in_place(env, list_val, arg1, arg2, elem_layout, builder)
-                }
-                _ => {
-                    unreachable!("Invalid List layout for List.set: {:?}", list_layout);
-                }
-            }
+            list_set(env, args, scope, module, builder, procs, InPlace::InPlace)
         }
         _ => {
             let fn_id = match scope.get(&symbol) {
@@ -985,7 +931,7 @@ fn list_set_in_place<'a>(
         env.cfg.pointer_type(),
         MemFlags::new(),
         wrapper_ptr,
-        Offset32::new(0),
+        Offset32::new(Builtin::WRAPPER_PTR as i32),
     );
 
     let elem_bytes = elem_layout.stack_size(env.cfg.pointer_bytes() as u32);
@@ -1004,6 +950,30 @@ fn list_set_in_place<'a>(
     wrapper_ptr
 }
 
+fn load_list_len(env: &Env<'_>, builder: &mut FunctionBuilder, src_wrapper_ptr: Value) -> Value {
+    let ptr_bytes = env.cfg.pointer_bytes() as u32;
+    let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
+
+    builder.ins().load(
+        env.ptr_sized_int(),
+        MemFlags::new(),
+        src_wrapper_ptr,
+        offset,
+    )
+}
+
+fn load_list_ptr(env: &Env<'_>, builder: &mut FunctionBuilder, src_wrapper_ptr: Value) -> Value {
+    let ptr_bytes = env.cfg.pointer_bytes() as u32;
+    let offset = Offset32::new((Builtin::WRAPPER_PTR * ptr_bytes) as i32);
+
+    builder.ins().load(
+        env.ptr_sized_int(),
+        MemFlags::new(),
+        src_wrapper_ptr,
+        offset,
+    )
+}
+
 fn clone_list<B: Backend>(
     env: &Env<'_>,
     builder: &mut FunctionBuilder,
@@ -1012,28 +982,12 @@ fn clone_list<B: Backend>(
     elem_layout: &Layout<'_>,
 ) -> Value {
     let cfg = env.cfg;
-    let ptr_bytes = env.cfg.pointer_bytes() as u32;
 
     // Load the pointer we got to the wrapper struct
-    let elems_ptr = {
-        let offset = Offset32::new((Builtin::WRAPPER_PTR * ptr_bytes) as i32);
-
-        builder
-            .ins()
-            .load(cfg.pointer_type(), MemFlags::new(), src_wrapper_ptr, offset)
-    };
+    let elems_ptr = load_list_ptr(env, builder, src_wrapper_ptr);
 
     // Get the usize list length
-    let list_len = {
-        let offset = Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32);
-
-        builder.ins().load(
-            env.ptr_sized_int(),
-            MemFlags::new(),
-            src_wrapper_ptr,
-            offset,
-        )
-    };
+    let list_len = load_list_len(env, builder, src_wrapper_ptr);
 
     // Calculate the number of bytes we'll need to allocate.
     let elem_bytes = builder.ins().iconst(
@@ -1065,17 +1019,133 @@ fn clone_list<B: Backend>(
         ptr_bytes * Builtin::LIST_WORDS,
     ));
 
-    // Store the new pointer in slot 0 of the wrapper
-    builder
-        .ins()
-        .stack_store(new_elems_ptr, slot, Offset32::new(0));
+    // Store the new pointer in the wrapper
+    builder.ins().stack_store(
+        new_elems_ptr,
+        slot,
+        Offset32::new((Builtin::WRAPPER_PTR * ptr_bytes) as i32),
+    );
 
-    // Store the length in slot 1 of the wrapper
-    builder
-        .ins()
-        .stack_store(list_len, slot, Offset32::new(ptr_bytes as i32));
+    // Store the length in slot the wrapper
+    builder.ins().stack_store(
+        list_len,
+        slot,
+        Offset32::new((Builtin::WRAPPER_LEN * ptr_bytes) as i32),
+    );
 
+    // Return the wrapper struct
     builder
         .ins()
         .stack_addr(cfg.pointer_type(), slot, Offset32::new(0))
+}
+
+enum InPlace {
+    InPlace,
+    Clone,
+}
+
+fn list_set<'a, B: Backend>(
+    env: &mut Env<'a>,
+    args: &'a [(Expr<'a>, Layout<'a>)],
+    scope: &Scope,
+    module: &mut Module<B>,
+    builder: &mut FunctionBuilder,
+    procs: &'a Procs<'a>,
+    in_place: InPlace,
+) -> Value {
+    // set : List elem, Int, elem -> List elem
+    let original_wrapper = build_arg(&args[0], env, scope, module, builder, procs);
+    let (_, list_layout) = &args[0];
+
+    // Get the usize list length
+    let list_len = load_list_len(env, builder, original_wrapper);
+
+    // Get the element to set
+    let elem_index = build_arg(&args[1], env, scope, module, builder, procs);
+
+    let pass_block = builder.create_block();
+    let fail_block = builder.create_block();
+
+    let ret_type = type_from_layout(env.cfg, &list_layout);
+    // Declare a variable which each branch will mutate to be the value of that branch.
+    // At the end of the expression, we will evaluate to this.
+    let ret = env.fresh_variable();
+
+    // The block we'll jump to once the switch has completed.
+    let ret_block = builder.create_block();
+
+    builder.declare_var(ret, ret_type);
+
+    // Bounds check: only proceed if index < length.
+    // Otherwise, return the list unaltered.
+    let comparison =
+        // Note: Check for index < length as the "true" condition,
+        // to avoid misprediction. (In practice this should usually pass,
+        // and CPUs generally default to predicting that a forward jump
+        // shouldn't be taken; that is, they predict "else" won't be taken.)
+        builder.ins().icmp(IntCC::UnsignedLessThan, elem_index, list_len);
+
+    builder.ins().brz(comparison, fail_block, &[]);
+
+    // Unconditionally jump to pass_block (if we didn't just jump to pass_block).
+    builder.ins().jump(pass_block, &[]);
+
+    // If the index is in bounds, clone and mutate in place.
+    {
+        builder.switch_to_block(pass_block);
+
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
+        // builder.seal_block(block);
+
+        let then_val = match list_layout {
+            Layout::Builtin(Builtin::List(elem_layout)) => {
+                let wrapper_ptr = match in_place {
+                    InPlace::InPlace => original_wrapper,
+                    InPlace::Clone => {
+                        clone_list(env, builder, module, original_wrapper, elem_layout)
+                    }
+                };
+                let elem = build_arg(&args[2], env, scope, module, builder, procs);
+
+                list_set_in_place(env, wrapper_ptr, elem_index, elem, elem_layout, builder)
+            }
+            _ => {
+                unreachable!("Invalid List layout for List.set: {:?}", list_layout);
+            }
+        };
+
+        // Mutate the ret variable to be the outcome of this branch.
+        builder.def_var(ret, then_val);
+
+        // Unconditionally jump to ret_block, making the whole expression evaluate to ret.
+        builder.ins().jump(ret_block, &[]);
+    }
+
+    // If the index was out of bounds, return the original list unaltered.
+    {
+        builder.switch_to_block(fail_block);
+
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
+        // builder.seal_block(block);
+
+        // Mutate the ret variable to be the outcome of this branch.
+        builder.def_var(ret, original_wrapper);
+
+        // Unconditionally jump to ret_block, making the whole expression evaluate to ret.
+        builder.ins().jump(ret_block, &[]);
+    }
+
+    // Finally, build ret_block - which contains our terminator instruction.
+    {
+        builder.switch_to_block(ret_block);
+
+        // TODO re-enable this once Switch stops making unsealed blocks, e.g.
+        // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
+        // builder.seal_block(block);
+
+        // Now that ret has been mutated by the switch statement, evaluate to it.
+        builder.use_var(ret)
+    }
 }
