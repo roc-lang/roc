@@ -14,180 +14,22 @@ mod helpers;
 mod test_gen {
     use crate::helpers::{can_expr, infer_expr, uniq_expr, CanExprOut};
     use bumpalo::Bump;
-    use cranelift::prelude::{AbiParam, ExternalName, FunctionBuilder, FunctionBuilderContext};
-    use cranelift_codegen::ir::{ArgumentPurpose, InstBuilder};
-    use cranelift_codegen::settings;
-    use cranelift_codegen::verifier::verify_function;
-    use cranelift_module::{default_libcall_names, Linkage, Module};
-    use cranelift_simplejit::{SimpleJITBackend, SimpleJITBuilder};
     use inkwell::context::Context;
     use inkwell::execution_engine::JitFunction;
     use inkwell::passes::PassManager;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
     use roc_collections::all::ImMap;
-    use roc_gen::crane::build::{declare_proc, define_proc_body, ScopeEntry};
-    use roc_gen::crane::convert::type_from_layout;
-    use roc_gen::crane::imports::define_malloc;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
     use roc_gen::llvm::convert::basic_type_from_layout;
     use roc_mono::expr::{Expr, Procs};
     use roc_mono::layout::Layout;
     use roc_types::subs::Subs;
     use std::ffi::{CStr, CString};
-    use std::mem;
     use std::os::raw::c_char;
 
     // Pointer size on 64-bit platforms
     const POINTER_SIZE: u32 = std::mem::size_of::<u64>() as u32;
-
-    macro_rules! assert_crane_evals_to {
-        ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-            let arena = Bump::new();
-            let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
-            let subs = Subs::new(var_store.into());
-            let mut unify_problems = Vec::new();
-            let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
-            let shared_builder = settings::builder();
-            let shared_flags = settings::Flags::new(shared_builder);
-            let mut module: Module<SimpleJITBackend> =
-                Module::new(SimpleJITBuilder::new(default_libcall_names()));
-
-            let cfg = module.target_config();
-            let mut ctx = module.make_context();
-            let malloc = define_malloc(&mut module, &mut ctx);
-            let mut func_ctx = FunctionBuilderContext::new();
-
-            let main_fn_name = "$Test.main";
-
-            // Compute main_fn_ret_type before moving subs to Env
-            let layout = Layout::from_content(&arena, content, &subs, POINTER_SIZE)
-        .unwrap_or_else(|err| panic!("Code gen error in test: could not convert content to layout. Err was {:?} and Subs were {:?}", err, subs));
-
-            // Compile and add all the Procs before adding main
-            let mut procs = Procs::default();
-            let mut env = roc_gen::crane::build::Env {
-                arena: &arena,
-                interns,
-                cfg,
-                malloc,
-                variable_counter: &mut 0
-
-            };
-            let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
-
-            // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let mono_expr = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, POINTER_SIZE);
-
-            // Put this module's ident_ids back in the interns
-            env.interns.all_ident_ids.insert(home, ident_ids);
-
-            let mut scope = ImMap::default();
-            let mut declared = Vec::with_capacity(procs.len());
-
-            // Declare all the Procs, then insert them into scope so their bodies
-            // can look up their Funcs in scope later when calling each other by value.
-            for (name, opt_proc) in procs.as_map().into_iter() {
-                if let Some(proc) = opt_proc {
-                    let (func_id, sig) = declare_proc(&mut env, &mut module, name, &proc);
-
-                    declared.push((proc.clone(), sig.clone(), func_id));
-
-                    scope.insert(name.clone(), ScopeEntry::Func { func_id, sig });
-                }
-            }
-
-            for (proc, sig, fn_id) in declared {
-                define_proc_body(
-                    &mut env,
-                    &mut ctx,
-                    &mut module,
-                    fn_id,
-                    &scope,
-                    sig,
-                    arena.alloc(proc),
-                    &procs,
-                );
-
-                // Verify the function we just defined
-                if let Err(errors) = verify_function(&ctx.func, &shared_flags) {
-                    // NOTE: We don't include proc here because it's already
-                    // been moved. If you need to know which proc failed, go back
-                    // and add some logging.
-                    panic!("Errors defining proc: {}", errors);
-                }
-            }
-
-            // Add main itself
-            let mut sig = module.make_signature();
-
-            // Add return type to the signature.
-            // If it is a struct, give it a special return type.
-            // Otherwise, Cranelift will return a raw pointer to the struct
-            // instead of using a proper struct return.
-            match layout {
-                Layout::Struct(fields) => {
-                    for field_layout in fields {
-                        let ret_type = type_from_layout(cfg, &field_layout);
-                        let abi_param = AbiParam::special(ret_type, ArgumentPurpose::StructReturn);
-
-                        sig.returns.push(abi_param);
-                    }
-                },
-                _ => {
-                    let main_ret_type = type_from_layout(cfg, &layout);
-
-                    sig.returns.push(AbiParam::new(main_ret_type));
-                }
-            };
-
-            let main_fn = module
-                .declare_function(main_fn_name, Linkage::Local, &sig)
-                .unwrap();
-
-            ctx.func.signature = sig;
-            ctx.func.name = ExternalName::user(0, main_fn.as_u32());
-
-            {
-                let mut builder: FunctionBuilder =
-                    FunctionBuilder::new(&mut ctx.func, &mut func_ctx);
-                let block = builder.create_block();
-
-                builder.switch_to_block(block);
-                // TODO try deleting this line and seeing if everything still works.
-                builder.append_block_params_for_function_params(block);
-
-                let main_body =
-                    roc_gen::crane::build::build_expr(&mut env, &scope, &mut module, &mut builder, &mono_expr, &procs);
-
-                builder.ins().return_(&[main_body]);
-                // TODO re-enable this once Switch stops making unsealed blocks, e.g.
-                // https://docs.rs/cranelift-frontend/0.59.0/src/cranelift_frontend/switch.rs.html#152
-                // builder.seal_block(block);
-                builder.seal_all_blocks();
-                builder.finalize();
-            }
-
-            module.define_function(main_fn, &mut ctx).expect("crane declare main");
-            module.clear_context(&mut ctx);
-
-            // Perform linking
-            module.finalize_definitions();
-
-            // Verify the main function
-            if let Err(errors) = verify_function(&ctx.func, &shared_flags) {
-                panic!("Errors defining {} - {}", main_fn_name, errors);
-            }
-
-            let main_ptr = module.get_finalized_function(main_fn);
-
-            unsafe {
-                let run_main =  mem::transmute::<_, fn() -> $ty>(main_ptr) ;
-
-                assert_eq!($transform(run_main()), $expected);
-            }
-        };
-    }
 
     macro_rules! assert_llvm_evals_to {
         ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
@@ -476,7 +318,7 @@ mod test_gen {
 
     macro_rules! assert_evals_to {
         ($src:expr, $expected:expr, $ty:ty) => {
-            // Run Cranelift tests, then LLVM tests, in separate scopes.
+            // Run un-optimized tests, and then optimized tests, in separate scopes.
             // These each rebuild everything from scratch, starting with
             // parsing the source, so that there's no chance their passing
             // or failing depends on leftover state from the previous one.
@@ -568,12 +410,12 @@ mod test_gen {
     //
     #[test]
     fn empty_list_literal() {
-        assert_opt_evals_to!("[]", &[], &'static [i64], |x| x);
+        assert_evals_to!("[]", &[], &'static [i64], |x| x);
     }
 
     #[test]
     fn int_list_literal() {
-        assert_opt_evals_to!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64], |x| x);
+        assert_evals_to!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64], |x| x);
     }
 
     #[test]
@@ -593,7 +435,7 @@ mod test_gen {
 
     #[test]
     fn set_unique_int_list() {
-        assert_opt_evals_to!(
+        assert_evals_to!(
             "List.set [ 12, 9, 7, 1, 5 ] 2 33",
             &[12, 9, 33, 1, 5],
             &'static [i64],
@@ -603,7 +445,7 @@ mod test_gen {
 
     #[test]
     fn set_unique_list_oob() {
-        assert_opt_evals_to!(
+        assert_evals_to!(
             "List.set [ 3, 17, 4.1 ] 1337 9.25",
             &[3.0, 17.0, 4.1],
             &'static [f64],
@@ -613,7 +455,7 @@ mod test_gen {
 
     #[test]
     fn set_shared_int_list() {
-        assert_opt_evals_to!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     shared = [ 2.1, 4.3 ]
@@ -632,7 +474,7 @@ mod test_gen {
 
     #[test]
     fn set_shared_list_oob() {
-        assert_opt_evals_to!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     shared = [ 2, 4 ]
@@ -1934,7 +1776,7 @@ mod test_gen {
 
     #[test]
     fn i64_record_literal() {
-        assert_opt_evals_to!(
+        assert_evals_to!(
             indoc!(
                 r#"
                    { x: 3, y: 5 }
