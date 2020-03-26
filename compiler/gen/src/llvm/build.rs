@@ -161,6 +161,16 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 build_basic_phi2(env, parent, comparison, build_then, build_else, ret_type)
             }
+            Symbol::BOOL_NOT => {
+                // The (!) operator
+                debug_assert!(args.len() == 1);
+
+                let arg = build_expr(env, scope, parent, &args[0].0, procs);
+
+                let int_val = env.builder.build_not(arg.into_int_value(), "bool_not");
+
+                BasicValueEnum::IntValue(int_val)
+            }
             _ => {
                 let mut arg_tuples: Vec<(BasicValueEnum, &'a Layout<'a>)> =
                     Vec::with_capacity_in(args.len(), env.arena);
