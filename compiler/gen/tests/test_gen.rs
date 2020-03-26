@@ -127,7 +127,7 @@ mod test_gen {
             // instead of using a proper struct return.
             match layout {
                 Layout::Struct(fields) => {
-                    for (_, field_layout) in fields {
+                    for field_layout in fields {
                         let ret_type = type_from_layout(cfg, &field_layout);
                         let abi_param = AbiParam::special(ret_type, ArgumentPurpose::StructReturn);
 
