@@ -376,7 +376,6 @@ fn from_can<'a>(
     name: Option<Symbol>,
 ) -> Expr<'a> {
     use roc_can::expr::Expr::*;
-    use roc_can::pattern::Pattern::*;
 
     match can_expr {
         Num(var, num) => match to_int_or_float(env.subs, var) {
@@ -1002,7 +1001,11 @@ fn from_can_defs<'a>(
     // Extract Procs from the def body and the ret expression, and return the result!
     let ret = from_can(env, ret_expr.value, procs, None);
 
-    Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
+    if stored.is_empty() {
+        ret
+    } else {
+        Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
+    }
 }
 
 fn from_can_when<'a>(
