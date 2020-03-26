@@ -2017,4 +2017,29 @@ mod test_gen {
             i64
         );
     }
+
+    #[test]
+    fn even_odd() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                even = \n ->
+                    when n is
+                        0 -> True
+                        1 -> False
+                        _ -> odd (n - 1)
+
+                odd = \n ->
+                    when n is
+                        0 -> False
+                        1 -> True
+                        _ -> even (n - 1)
+
+                odd 5 && even 42
+                "#
+            ),
+            true,
+            bool
+        );
+    }
 }

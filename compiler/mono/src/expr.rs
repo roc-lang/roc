@@ -298,7 +298,10 @@ fn patterns_to_when<'a>(
     let mut arg_vars = Vec::with_capacity_in(patterns.len(), env.arena);
     let mut symbols = Vec::with_capacity_in(patterns.len(), env.arena);
 
-    for (pattern_var, pattern) in patterns.into_iter().rev() {
+    // patterns that are not yet in a when (e.g. in let or function arguments) must be irrefutable
+    // to pass type checking. So the order in which we add them to the body does not matter: there
+    // are only stores anyway, no branches.
+    for (pattern_var, pattern) in patterns.into_iter() {
         let (new_symbol, new_body) = pattern_to_when(env, pattern_var, pattern, body_var, body);
         body = new_body;
         symbols.push(new_symbol);
@@ -384,74 +387,8 @@ fn from_can<'a>(
         Float(_, num) => Expr::Float(num),
         Str(string) | BlockStr(string) => Expr::Str(env.arena.alloc(string)),
         Var(symbol) => Expr::Load(symbol),
-        LetNonRec(def, ret_expr, _, _) => {
-            let arena = env.arena;
-            let loc_pattern = def.loc_pattern;
-            let loc_expr = def.loc_expr;
-            let mut stored = Vec::with_capacity_in(1, arena);
-
-            // If we're defining a named closure, insert it into Procs and then
-            // remove the Let. When code gen later goes to look it up, it'll be in Procs!
-            //
-            // Before:
-            //
-            //     identity = \a -> a
-            //
-            //     identity 5
-            //
-            // After: (`identity` is now in Procs)
-            //
-            //     identity 5
-            //
-            if let Identifier(symbol) = &loc_pattern.value {
-                if let Closure(_, _, _, _, _) = &loc_expr.value {
-                    // Extract Procs, but discard the resulting Expr::Load.
-                    // That Load looks up the pointer, which we won't use here!
-                    from_can(env, loc_expr.value, procs, Some(*symbol));
-
-                    // Discard this LetNonRec by replacing it with its ret_expr.
-                    return from_can(env, ret_expr.value, procs, None);
-                }
-            }
-
-            // If it wasn't specifically an Identifier & Closure, proceed as normal.
-            let mono_pattern = from_can_pattern(env, &loc_pattern.value);
-
-            let layout = Layout::from_var(env.arena, def.expr_var, env.subs, env.pointer_size)
-                .expect("invalid layout");
-
-            match &mono_pattern {
-                Pattern::Identifier(symbol) => {
-                    stored.push((
-                        *symbol,
-                        layout.clone(),
-                        from_can(env, loc_expr.value, procs, None),
-                    ));
-                }
-                _ => {
-                    let symbol = env.fresh_symbol();
-                    stored.push((
-                        symbol,
-                        layout.clone(),
-                        from_can(env, loc_expr.value, procs, None),
-                    ));
-
-                    match store_pattern(env, &mono_pattern, symbol, layout, &mut stored) {
-                        Ok(()) => {}
-                        Err(message) => todo!(
-                            "generate runtime error, the pattern was invalid: {:?}",
-                            message
-                        ),
-                    }
-                }
-            }
-
-            // At this point, it's safe to assume we aren't assigning a Closure to a def.
-            // Extract Procs from the def body and the ret expression, and return the result!
-            let ret = from_can(env, ret_expr.value, procs, None);
-
-            Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
-        }
+        LetRec(defs, ret_expr, _, _) => from_can_defs(env, defs, *ret_expr, procs),
+        LetNonRec(def, ret_expr, _, _) => from_can_defs(env, vec![*def], *ret_expr, procs),
 
         Closure(annotation, _, _, loc_args, boxed_body) => {
             let (loc_body, ret_var) = *boxed_body;
@@ -990,6 +927,82 @@ fn store_record_destruct<'a>(
     }
 
     Ok(())
+}
+
+fn from_can_defs<'a>(
+    env: &mut Env<'a, '_>,
+    defs: std::vec::Vec<roc_can::def::Def>,
+    ret_expr: Located<roc_can::expr::Expr>,
+    procs: &mut Procs<'a>,
+) -> Expr<'a> {
+    use roc_can::expr::Expr::*;
+    use roc_can::pattern::Pattern::*;
+
+    let arena = env.arena;
+    let mut stored = Vec::with_capacity_in(defs.len(), arena);
+    for def in defs {
+        let loc_pattern = def.loc_pattern;
+        let loc_expr = def.loc_expr;
+        // If we're defining a named closure, insert it into Procs and then
+        // remove the Let. When code gen later goes to look it up, it'll be in Procs!
+        //
+        // Before:
+        //
+        //     identity = \a -> a
+        //
+        //     identity 5
+        //
+        // After: (`identity` is now in Procs)
+        //
+        //     identity 5
+        //
+        if let Identifier(symbol) = &loc_pattern.value {
+            if let Closure(_, _, _, _, _) = &loc_expr.value {
+                // Extract Procs, but discard the resulting Expr::Load.
+                // That Load looks up the pointer, which we won't use here!
+                from_can(env, loc_expr.value, procs, Some(*symbol));
+
+                continue;
+            }
+        }
+
+        // If it wasn't specifically an Identifier & Closure, proceed as normal.
+        let mono_pattern = from_can_pattern(env, &loc_pattern.value);
+
+        let layout = Layout::from_var(env.arena, def.expr_var, env.subs, env.pointer_size)
+            .expect("invalid layout");
+
+        match &mono_pattern {
+            Pattern::Identifier(symbol) => {
+                stored.push((
+                    *symbol,
+                    layout.clone(),
+                    from_can(env, loc_expr.value, procs, None),
+                ));
+            }
+            _ => {
+                let symbol = env.fresh_symbol();
+                stored.push((
+                    symbol,
+                    layout.clone(),
+                    from_can(env, loc_expr.value, procs, None),
+                ));
+
+                match store_pattern(env, &mono_pattern, symbol, layout, &mut stored) {
+                    Ok(()) => {}
+                    Err(message) => todo!(
+                        "generate runtime error, the pattern was invalid: {:?}",
+                        message
+                    ),
+                }
+            }
+        }
+    }
+    // At this point, it's safe to assume we aren't assigning a Closure to a def.
+    // Extract Procs from the def body and the ret expression, and return the result!
+    let ret = from_can(env, ret_expr.value, procs, None);
+
+    Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
 }
 
 fn from_can_when<'a>(
