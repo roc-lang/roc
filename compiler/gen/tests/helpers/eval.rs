@@ -144,7 +144,7 @@ macro_rules! assert_llvm_evals_to {
         }
 
         // Uncomment this to see the module's optimized LLVM instruction output:
-        env.module.print_to_stderr();
+        // env.module.print_to_stderr();
 
         unsafe {
             let main: JitFunction<unsafe extern "C" fn() -> $ty> = execution_engine
