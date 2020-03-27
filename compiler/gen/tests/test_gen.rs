@@ -44,9 +44,13 @@ mod test_gen {
             let builder = context.create_builder();
             let fpm = PassManager::create(&module);
 
-            // Enable optimizations when running cargo test --release
+            // tail-call elimination is always on
+            // it needs a pass before it to work
+            fpm.add_instruction_combining_pass();
+            fpm.add_tail_call_elimination_pass();
+
+            // Enable more optimizations when running cargo test --release
             if !cfg!(debug_assertions) {
-                fpm.add_instruction_combining_pass();
                 fpm.add_reassociate_pass();
                 fpm.add_basic_alias_analysis_pass();
                 fpm.add_promote_memory_to_register_pass();
@@ -184,9 +188,12 @@ mod test_gen {
             let builder = context.create_builder();
             let fpm = PassManager::create(&module);
 
-            // Enable optimizations when running cargo test --release
+            // tail-call elimination is always on
+            fpm.add_instruction_combining_pass();
+            fpm.add_tail_call_elimination_pass();
+
+            // Enable more optimizations when running cargo test --release
             if !cfg!(debug_assertions) {
-                fpm.add_instruction_combining_pass();
                 fpm.add_reassociate_pass();
                 fpm.add_basic_alias_analysis_pass();
                 fpm.add_promote_memory_to_register_pass();
@@ -1828,6 +1835,49 @@ mod test_gen {
                 x = True
 
                 x
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn tail_call_elimination() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                sum = \n, accum ->
+                    when n is
+                        0 -> accum
+                        _ -> sum (n - 1) (n + accum)
+
+                sum 1_000_000 0
+                "#
+            ),
+            500000500000,
+            i64
+        );
+    }
+
+    #[test]
+    fn even_odd() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                even = \n ->
+                    when n is
+                        0 -> True
+                        1 -> False
+                        _ -> odd (n - 1)
+
+                odd = \n ->
+                    when n is
+                        0 -> False
+                        1 -> True
+                        _ -> even (n - 1)
+
+                odd 5 && even 42
                 "#
             ),
             true,
