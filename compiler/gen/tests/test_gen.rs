@@ -1790,10 +1790,109 @@ mod test_gen {
                 "#
             ),
             (3, 5),
-            (i64, i64),
-            |x| x
+            (i64, i64)
         );
     }
+
+    #[test]
+    fn true_is_true() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   bool : [True, False]
+                   bool = True
+
+                   bool
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn false_is_false() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   bool : [True, False]
+                   bool = False
+
+                   bool
+                "#
+            ),
+            false,
+            bool
+        );
+    }
+
+    // #[test]
+    // fn bool_record4_literal() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                record : { a : Bool, b : Bool, c : Bool, d : Bool }
+    //                record = { a: True, b: True, c : True, d : Bool }
+
+    //                record
+    //             "#
+    //         ),
+    //         (true, false, false, true),
+    //         (bool, bool, bool, bool)
+    //     );
+    // }
+
+    #[test]
+    fn i64_record1_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   { a: 3 }
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    // #[test]
+    // fn i64_record9_literal() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                { a: 3, b: 5, c: 17, d: 1, e: 9, f: 12, g: 13, h: 14, i: 15 }
+    //             "#
+    //         ),
+    //         (3, 5, 17, 1, 9, 12, 13, 14, 15),
+    //         (i64, i64, i64, i64, i64, i64, i64, i64, i64)
+    //     );
+    // }
+
+    #[test]
+    fn f64_record2_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   { x: 3.1, y: 5.1 }
+                "#
+            ),
+            (3.1, 5.1),
+            (f64, f64)
+        );
+    }
+
+    // #[test]
+    // fn f64_record3_literal() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                { x: 3.1, y: 5.1, z: 17.1 }
+    //             "#
+    //         ),
+    //         (3.1, 5.1, 17.1),
+    //         (f64, f64, f64)
+    //     );
+    // }
 
     #[test]
     fn f64_record() {
