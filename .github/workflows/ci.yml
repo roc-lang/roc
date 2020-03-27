@@ -12,6 +12,9 @@ jobs:
       - name: Install LLVM
         run: sudo ./ci/install-llvm.sh 8
 
+      - name: Enable LLD
+        run: sudo ./ci/enable-lld.sh
+
       - uses: actions-rs/toolchain@v1
         name: Install Rust Toolchain
         with:
