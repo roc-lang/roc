@@ -3,7 +3,7 @@ use bumpalo::Bump;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
-use inkwell::types::{BasicTypeEnum, IntType};
+use inkwell::types::{BasicTypeEnum, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{FloatPredicate, IntPredicate};
@@ -449,20 +449,33 @@ pub fn build_expr<'a, 'ctx, 'env>(
             // different types/sizes)
             //
             // In llvm, we must be explicit about the type of value we're creating: we can't just
-            // make a unspecified block of memory. So what we do is create a struct containing one
-            // field - an integer whose size is the desired size for the entire struct.
-            // Then when we know which tag we have (which is here, in this function),
-            // we cast the giant-integer struct to the more specific struct with the actual fields.
-            // with one field, and have that field be as big as necessary.
+            // make a unspecified block of memory. So what we do is create a byte array of the
+            // desired size. Then when we know which tag we have (which is here, in this function),
+            // we need to cast that down to the array of bytes that llvm expects
             //
-            // This technique comes from:
+            // There is the bitcast instruction, but it doesn't work for arrays. So we need to jump
+            // through some hoops using store and load to get this to work: the array is put into a
+            // one-element struct, which can be cast to the desired type.
             //
-            // https://stackoverflow.com/questions/19549942/extracting-a-value-from-an-union
-            let whole_bits = whole_size * 8;
-            let generic_struct_size = BasicTypeEnum::IntType(ctx.custom_width_int_type(whole_bits));
-            let generic_struct_type = ctx.struct_type(&[generic_struct_size], false);
+            // This tricks comes from
+            // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
 
-            builder.build_bitcast(struct_val, generic_struct_type, "generic_struct")
+            let array_type = ctx.i8_type().array_type(whole_size);
+
+            let result = cast_basic_basic(
+                builder,
+                struct_val.into_struct_value().into(),
+                array_type.into(),
+            );
+
+            // For unclear reasons, we can't cast an array to a struct on the other side.
+            // the solution is to wrap the array in a struct (yea...)
+            let wrapper_type = ctx.struct_type(&[array_type.into()], false);
+            let mut wrapper_val = wrapper_type.const_zero().into();
+            wrapper_val = builder
+                .build_insert_value(wrapper_val, result, 0, "insert_field")
+                .unwrap();
+            wrapper_val.into_struct_value().into()
         }
         AccessAtIndex {
             index,
@@ -512,9 +525,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             // cast the argument bytes into the desired shape for this tag
             let argument = build_expr(env, &scope, parent, expr, procs).into_struct_value();
 
-            let struct_value = builder
-                .build_bitcast(argument, struct_type, "generic_struct")
-                .into_struct_value();
+            let struct_value = cast_struct_struct(builder, argument, struct_type);
 
             builder
                 .build_extract_value(struct_value, *index as u32, "")
@@ -539,6 +550,38 @@ fn load_symbol<'a, 'ctx, 'env>(
     }
 }
 
+/// Cast a struct to another struct of the same (or smaller?) size
+fn cast_struct_struct<'ctx>(
+    builder: &Builder<'ctx>,
+    from_value: StructValue<'ctx>,
+    to_type: StructType<'ctx>,
+) -> StructValue<'ctx> {
+    cast_basic_basic(builder, from_value.into(), to_type.into()).into_struct_value()
+}
+
+/// Cast a value to another value of the same (or smaller?) size
+fn cast_basic_basic<'ctx>(
+    builder: &Builder<'ctx>,
+    from_value: BasicValueEnum<'ctx>,
+    to_type: BasicTypeEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    use inkwell::types::BasicType;
+    // store the value in memory
+    let argument_pointer = builder.build_alloca(from_value.get_type(), "");
+    builder.build_store(argument_pointer, from_value);
+
+    // then read it back as a different type
+    let to_type_pointer = builder
+        .build_bitcast(
+            argument_pointer,
+            to_type.ptr_type(inkwell::AddressSpace::Generic),
+            "",
+        )
+        .into_pointer_value();
+
+    builder.build_load(to_type_pointer, "")
+}
+
 fn extract_tag_discriminant<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     from_value: StructValue<'ctx>,
@@ -547,10 +590,7 @@ fn extract_tag_discriminant<'a, 'ctx, 'env>(
         .context
         .struct_type(&[env.context.i64_type().into()], false);
 
-    let struct_value = env
-        .builder
-        .build_bitcast(from_value, struct_type, "generic_struct")
-        .into_struct_value();
+    let struct_value = cast_struct_struct(env.builder, from_value, struct_type);
 
     env.builder
         .build_extract_value(struct_value, 0, "")
