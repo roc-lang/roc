@@ -38,11 +38,6 @@ inlinable_string = "0.1.0"
 # change the tag value in this Cargo.toml to point to that tag, and `cargo update`.
 # This way, GitHub Actions works and nobody's builds get broken.
 inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm8-0.release2" }
-target-lexicon = "0.10" # NOTE: we must use the same version of target-lexicon as cranelift!
-cranelift           = "0.59" # All cranelift crates should have the same version!
-cranelift-simplejit = "0.59" # All cranelift crates should have the same version!
-cranelift-module    = "0.59" # All cranelift crates should have the same version!
-cranelift-codegen   = "0.59" # All cranelift crates should have the same version!
 
 [dev-dependencies]
 roc_can = { path = "../can" }
