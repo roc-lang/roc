@@ -1208,6 +1208,18 @@ enum InPlace {
     Clone,
 }
 
+fn bounds_check_comparison<'ctx>(
+    builder: &Builder<'ctx>,
+    elem_index: IntValue<'ctx>,
+    len: IntValue<'ctx>,
+) -> IntValue<'ctx> {
+    // Note: Check for index < length as the "true" condition,
+    // to avoid misprediction. (In practice this should usually pass,
+    // and CPUs generally default to predicting that a forward jump
+    // shouldn't be taken; that is, they predict "else" won't be taken.)
+    builder.build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
+}
+
 fn list_set<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
@@ -1227,12 +1239,7 @@ fn list_set<'a, 'ctx, 'env>(
 
     // Bounds check: only proceed if index < length.
     // Otherwise, return the list unaltered.
-    let comparison =
-        // Note: Check for index < length as the "true" condition,
-        // to avoid misprediction. (In practice this should usually pass,
-        // and CPUs generally default to predicting that a forward jump
-        // shouldn't be taken; that is, they predict "else" won't be taken.)
-        builder.build_int_compare(IntPredicate::ULT, elem_index, list_len, "bounds_check");
+    let comparison = bounds_check_comparison(builder, elem_index, list_len);
 
     // If the index is in bounds, clone and mutate in place.
     let build_then = || {
