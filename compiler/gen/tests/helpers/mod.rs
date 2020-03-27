@@ -1,5 +1,8 @@
 extern crate bumpalo;
 
+#[macro_use]
+pub mod eval;
+
 use self::bumpalo::Bump;
 use roc_builtins::unique::uniq_stdlib;
 use roc_can::constraint::Constraint;

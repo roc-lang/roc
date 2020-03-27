@@ -24,6 +24,10 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
 #[cfg(not(debug_assertions))]
 const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 
+// 0 is the C calling convention - see https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
+// TODO: experiment with different internal calling conventions, e.g. "fast"
+const DEFAULT_CALLING_CONVENTION: u32 = 0;
+
 type Scope<'a, 'ctx> = ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>;
 
 pub struct Env<'a, 'ctx, 'env> {
@@ -210,6 +214,8 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     );
                 }
             };
+
+            call.set_call_convention(DEFAULT_CALLING_CONVENTION);
 
             call.try_as_basic_value()
                 .left()
@@ -865,6 +871,8 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
         Some(Linkage::Private),
     );
 
+    fn_val.set_call_conventions(DEFAULT_CALLING_CONVENTION);
+
     (fn_val, arg_basic_types)
 }
 
@@ -1103,6 +1111,8 @@ fn call_with_args<'a, 'ctx, 'env>(
                 .builder
                 .build_call(fn_val, arg_vals.into_bump_slice(), "call");
 
+            call.set_call_convention(DEFAULT_CALLING_CONVENTION);
+
             call.try_as_basic_value()
                 .left()
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
@@ -1198,6 +1208,18 @@ enum InPlace {
     Clone,
 }
 
+fn bounds_check_comparison<'ctx>(
+    builder: &Builder<'ctx>,
+    elem_index: IntValue<'ctx>,
+    len: IntValue<'ctx>,
+) -> IntValue<'ctx> {
+    // Note: Check for index < length as the "true" condition,
+    // to avoid misprediction. (In practice this should usually pass,
+    // and CPUs generally default to predicting that a forward jump
+    // shouldn't be taken; that is, they predict "else" won't be taken.)
+    builder.build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
+}
+
 fn list_set<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
@@ -1217,12 +1239,7 @@ fn list_set<'a, 'ctx, 'env>(
 
     // Bounds check: only proceed if index < length.
     // Otherwise, return the list unaltered.
-    let comparison =
-        // Note: Check for index < length as the "true" condition,
-        // to avoid misprediction. (In practice this should usually pass,
-        // and CPUs generally default to predicting that a forward jump
-        // shouldn't be taken; that is, they predict "else" won't be taken.)
-        builder.build_int_compare(IntPredicate::ULT, elem_index, list_len, "bounds_check");
+    let comparison = bounds_check_comparison(builder, elem_index, list_len);
 
     // If the index is in bounds, clone and mutate in place.
     let build_then = || {
