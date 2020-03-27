@@ -24,6 +24,10 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
 #[cfg(not(debug_assertions))]
 const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 
+// 0 is the C calling convention - see https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
+// TODO: experiment with different internal calling conventions, e.g. "fast"
+const DEFAULT_CALLING_CONVENTION: u32 = 0;
+
 type Scope<'a, 'ctx> = ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>;
 
 pub struct Env<'a, 'ctx, 'env> {
@@ -210,6 +214,8 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     );
                 }
             };
+
+            call.set_call_convention(DEFAULT_CALLING_CONVENTION);
 
             call.try_as_basic_value()
                 .left()
@@ -865,6 +871,8 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
         Some(Linkage::Private),
     );
 
+    fn_val.set_call_conventions(DEFAULT_CALLING_CONVENTION);
+
     (fn_val, arg_basic_types)
 }
 
@@ -1102,6 +1110,8 @@ fn call_with_args<'a, 'ctx, 'env>(
             let call = env
                 .builder
                 .build_call(fn_val, arg_vals.into_bump_slice(), "call");
+
+            call.set_call_convention(DEFAULT_CALLING_CONVENTION);
 
             call.try_as_basic_value()
                 .left()

@@ -31,6 +31,9 @@ mod test_gen {
     // Pointer size on current system
     const POINTER_SIZE: u32 = std::mem::size_of::<usize>() as u32;
 
+    // 0 is the C calling convention - see https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
+    const MAIN_CALLING_CONVENTION: u32 = 0;
+
     macro_rules! assert_llvm_evals_to {
         ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
             let arena = Bump::new();
@@ -127,6 +130,8 @@ mod test_gen {
 
             // Add main to the module.
             let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
+
+            main_fn.set_call_conventions(MAIN_CALLING_CONVENTION);
 
             // Add main's body
             let basic_block = context.append_basic_block(main_fn, "entry");
@@ -271,6 +276,8 @@ mod test_gen {
 
             // Add main to the module.
             let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
+
+            main_fn.set_call_conventions(MAIN_CALLING_CONVENTION);
 
             // Add main's body
             let basic_block = context.append_basic_block(main_fn, "entry");
