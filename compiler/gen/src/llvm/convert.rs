@@ -94,16 +94,11 @@ pub fn basic_type_from_layout<'ctx>(
                 .as_basic_type_enum()
         }
         Union(_) => {
-            // TODO make this dynamic
-            let ptr_size = std::mem::size_of::<i64>();
-            let union_size = layout.stack_size(ptr_size as u32);
-
-            let array_type = context
-                .i8_type()
-                .array_type(union_size)
-                .as_basic_type_enum();
-
-            context.struct_type(&[array_type], false).into()
+            let union_size = layout.stack_size(ptr_bytes);
+            let union_bits = union_size * 8;
+            let generic_struct_size =
+                BasicTypeEnum::IntType(context.custom_width_int_type(union_bits));
+            context.struct_type(&[generic_struct_size], false).into()
         }
 
         Builtin(builtin) => match builtin {
