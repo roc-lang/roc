@@ -109,8 +109,7 @@ pub fn basic_type_from_layout<'ctx>(
         Builtin(builtin) => match builtin {
             Int64 => context.i64_type().as_basic_type_enum(),
             Float64 => context.f64_type().as_basic_type_enum(),
-            Bool => context.bool_type().as_basic_type_enum(),
-            Byte => context.i8_type().as_basic_type_enum(),
+            Bool | Byte => context.i8_type().as_basic_type_enum(),
             Str | EmptyStr => context
                 .i8_type()
                 .ptr_type(AddressSpace::Generic)

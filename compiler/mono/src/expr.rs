@@ -475,8 +475,7 @@ fn from_can<'a>(
                                     Ok(Layout::Builtin(builtin)) => match builtin {
                                         Builtin::Int64 => Symbol::INT_EQ_I64,
                                         Builtin::Float64 => Symbol::FLOAT_EQ,
-                                        Builtin::Bool => Symbol::INT_EQ_I1,
-                                        Builtin::Byte => Symbol::INT_EQ_I8,
+                                        Builtin::Bool | Builtin::Byte => Symbol::INT_EQ_I8,
                                         _ => panic!("Equality not implemented for {:?}", builtin),
                                     },
                                     Ok(complex) => panic!(
@@ -1552,7 +1551,6 @@ pub fn specialize_equality<'a>(
             Builtin::Int64 => Symbol::INT_EQ_I64,
             Builtin::Float64 => Symbol::FLOAT_EQ,
             Builtin::Byte => Symbol::INT_EQ_I8,
-            Builtin::Bool => Symbol::INT_EQ_I1,
             other => todo!("Cannot yet compare for equality {:?}", other),
         },
         other => todo!("Cannot yet compare for equality {:?}", other),
