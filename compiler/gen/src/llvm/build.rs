@@ -58,7 +58,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
     match expr {
         Int(num) => env.context.i64_type().const_int(*num as u64, true).into(),
         Float(num) => env.context.f64_type().const_float(*num).into(),
-        Bool(b) => env.context.i8_type().const_int(*b as u64, false).into(),
+        Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Cond {
             branch_symbol,
@@ -141,10 +141,10 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 debug_assert!(args.len() == 2);
 
                 let comparison = build_expr(env, scope, parent, &args[0].0, procs).into_int_value();
-                let build_then = || env.context.i8_type().const_int(true as u64, false).into();
+                let build_then = || env.context.bool_type().const_int(true as u64, false).into();
                 let build_else = || build_expr(env, scope, parent, &args[1].0, procs);
 
-                let ret_type = env.context.i8_type().into();
+                let ret_type = env.context.bool_type().into();
 
                 build_basic_phi2(env, parent, comparison, build_then, build_else, ret_type)
             }
@@ -154,9 +154,14 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 let comparison = build_expr(env, scope, parent, &args[0].0, procs).into_int_value();
                 let build_then = || build_expr(env, scope, parent, &args[1].0, procs);
-                let build_else = || env.context.i8_type().const_int(false as u64, false).into();
+                let build_else = || {
+                    env.context
+                        .bool_type()
+                        .const_int(false as u64, false)
+                        .into()
+                };
 
-                let ret_type = env.context.i8_type().into();
+                let ret_type = env.context.bool_type().into();
 
                 build_basic_phi2(env, parent, comparison, build_then, build_else, ret_type)
             }
@@ -696,7 +701,7 @@ fn build_switch<'a, 'ctx, 'env>(
         // they either need to all be i8, or i64
         let int_val = match cond_layout {
             Layout::Builtin(Builtin::Int64) => context.i64_type().const_int(*int as u64, false),
-            Layout::Builtin(Builtin::Bool) => context.i8_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Bool) => context.bool_type().const_int(*int as u64, false),
             Layout::Builtin(Builtin::Byte) => context.i8_type().const_int(*int as u64, false),
             _ => panic!("Can't cast to cond_layout = {:?}", cond_layout),
         };
@@ -1015,6 +1020,18 @@ fn call_with_args<'a, 'ctx, 'env>(
                 args[0].0.into_int_value(),
                 args[1].0.into_int_value(),
                 "cmp_i64",
+            );
+
+            BasicValueEnum::IntValue(int_val)
+        }
+        Symbol::INT_EQ_I1 => {
+            debug_assert!(args.len() == 2);
+
+            let int_val = env.builder.build_int_compare(
+                IntPredicate::EQ,
+                args[0].0.into_int_value(),
+                args[1].0.into_int_value(),
+                "cmp_i1",
             );
 
             BasicValueEnum::IntValue(int_val)
