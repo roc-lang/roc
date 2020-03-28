@@ -398,9 +398,7 @@ mod gen_records {
             indoc!(
                 r#"
                     rec = { y: 17, x: 15, z: 19 }
-                    rec = { rec & x: 5 }
-
-                    rec.x
+                    { rec & x: 5 }.x
                 "#
             ),
             5,
