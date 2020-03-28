@@ -784,6 +784,41 @@ fn from_can<'a>(
                 elems: elems.into_bump_slice(),
             }
         }
+
+        Update {
+            record_var,
+            ext_var,
+            symbol,
+            updates,
+        } => {
+            dbg!(&record_var);
+            dbg!(&ext_var);
+            dbg!(&symbol);
+            dbg!(&updates);
+            // let arena = env.arena;
+
+            // let btree = crate::layout::record_fields_btree(
+            //     env.arena,
+            //     record_var,
+            //     env.subs,
+            //     env.pointer_size,
+            // );
+
+            //let mut index = None;
+            //let mut field_layouts = Vec::with_capacity_in(btree.len(), env.arena);
+
+            // for (current, (label, field_layout)) in btree.into_iter().enumerate() {
+            //     field_layouts.push(field_layout);
+
+            //     if label == field {
+            //         index = Some(current);
+            //     }
+            // }
+
+            // let record = arena.alloc(from_can(env, loc_expr.value, procs, None));
+            panic!("TODO convert canonicalized update to mono::Expr");
+        }
+
         other => panic!("TODO convert canonicalized {:?} to mono::Expr", other),
     }
 }
