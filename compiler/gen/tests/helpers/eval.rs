@@ -5,36 +5,6 @@ pub const POINTER_SIZE: u32 = std::mem::size_of::<usize>() as u32;
 pub const MAIN_CALLING_CONVENTION: u32 = 0;
 
 #[macro_export]
-macro_rules! get_fpm {
-    ($module:expr) => {{
-        let fpm = PassManager::create(&$module);
-
-        // tail-call elimination is always on
-        fpm.add_instruction_combining_pass();
-        fpm.add_tail_call_elimination_pass();
-
-        // Enable more optimizations when running cargo test --release
-        if !cfg!(debug_assertions) {
-            fpm.add_reassociate_pass();
-            fpm.add_basic_alias_analysis_pass();
-            fpm.add_promote_memory_to_register_pass();
-            fpm.add_cfg_simplification_pass();
-            fpm.add_gvn_pass();
-            // TODO figure out why enabling any of these (even alone) causes LLVM to segfault
-            // fpm.add_strip_dead_prototypes_pass();
-            // fpm.add_dead_arg_elimination_pass();
-            // fpm.add_function_inlining_pass();
-        }
-
-        fpm.initialize();
-
-        // TODO when should we call initialize, and then finalize?
-
-        fpm
-    }};
-}
-
-#[macro_export]
 macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         let arena = Bump::new();
@@ -46,7 +16,11 @@ macro_rules! assert_llvm_evals_to {
         let context = Context::create();
         let module = context.create_module("app");
         let builder = context.create_builder();
-        let fpm = { get_fpm!(module) };
+        let fpm = inkwell::passes::PassManager::create(&module);
+
+        roc_gen::llvm::build::add_passes(&fpm);
+
+        fpm.initialize();
 
         // Compute main_fn_type before moving subs to Env
         let layout = Layout::from_content(&arena, content, &subs, $crate::helpers::eval::POINTER_SIZE)
@@ -173,7 +147,11 @@ macro_rules! assert_opt_evals_to {
         let context = Context::create();
         let module = context.create_module("app");
         let builder = context.create_builder();
-        let fpm = { get_fpm!(module) };
+        let fpm = PassManager::create(&module);
+
+        roc_gen::llvm::build::add_passes(&fpm);
+
+        fpm.initialize();
 
         // Compute main_fn_type before moving subs to Env
         let layout = Layout::from_content(&arena, content, &subs, $crate::helpers::eval::POINTER_SIZE)
