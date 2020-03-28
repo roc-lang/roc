@@ -196,6 +196,12 @@ pub enum Expr<'a> {
         is_unwrapped: bool,
     },
 
+    Update {
+        field_layouts: &'a [Layout<'a>],
+        expr: &'a Expr<'a>,
+        updates: &'a [(Expr<'a>, Layout<'a>)],
+    },
+
     Array {
         elem_layout: Layout<'a>,
         elems: &'a [Expr<'a>],
@@ -795,28 +801,28 @@ fn from_can<'a>(
             dbg!(&ext_var);
             dbg!(&symbol);
             dbg!(&updates);
-            // let arena = env.arena;
+            let arena = env.arena;
 
-            // let btree = crate::layout::record_fields_btree(
-            //     env.arena,
-            //     record_var,
-            //     env.subs,
-            //     env.pointer_size,
-            // );
+            let btree = crate::layout::record_fields_btree(
+                env.arena,
+                record_var,
+                env.subs,
+                env.pointer_size,
+            );
 
-            //let mut index = None;
-            //let mut field_layouts = Vec::with_capacity_in(btree.len(), env.arena);
+            let mut field_layouts = Vec::with_capacity_in(btree.len(), env.arena);
 
-            // for (current, (label, field_layout)) in btree.into_iter().enumerate() {
-            //     field_layouts.push(field_layout);
+            for (current, (label, field_layout)) in btree.into_iter().enumerate() {
+                field_layouts.push(field_layout);
+            }
 
-            //     if label == field {
-            //         index = Some(current);
-            //     }
+            panic!("TODO convert canonicalized update to mono::Expr")
+
+            // Expr::Update {
+            //     field_layouts,
+            //     expr,
+            //     updates,
             // }
-
-            // let record = arena.alloc(from_can(env, loc_expr.value, procs, None));
-            panic!("TODO convert canonicalized update to mono::Expr");
         }
 
         other => panic!("TODO convert canonicalized {:?} to mono::Expr", other),
