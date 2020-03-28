@@ -462,15 +462,15 @@ Quantity units data : [ Quantity units data ]
 
 km : Num n -> Quantity [ Km ] (Num n)
 km = \num ->
-    Quantity num Km
+    Quantity Km num
 
 cm : Num n -> Quantity [ Cm ] (Num n)
 cm = \num ->
-    Quantity num Cm
+    Quantity Cm num
 
 mm : Num n -> Quantity [ Mm ] (Num n)
 mm = \num ->
-    Quantity num Mm
+    Quantity Mm num
 
 add : Quantity u (Num n), Quantity u (Num n) -> Quantity u (Num n)
 add = \Quantity units a, Quantity _ b ->
