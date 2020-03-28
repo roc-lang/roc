@@ -391,4 +391,20 @@ mod gen_records {
             bool
         );
     }
+
+    #[test]
+    fn update_record_field_with_i64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    rec = { y: 17, x: 15, z: 19 }
+                    rec = { rec & x: 5 }
+
+                    rec.x
+                "#
+            ),
+            5,
+            i64
+        );
+    }
 }
