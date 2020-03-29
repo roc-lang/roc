@@ -337,6 +337,36 @@ mod test_report {
     }
 
     #[test]
+    fn report_module_color() {
+        let src: &str = indoc!(
+            r#"
+                x = 1
+                y = 2
+
+                x
+            "#
+        );
+
+        let (_type_problems, _can_problems, mut subs, home, interns) = infer_expr_help(src);
+
+        let mut buf = String::new();
+        let src_lines: Vec<&str> = src.split('\n').collect();
+
+        to_simple_report(Module(module(&"Util.Int".into())))
+            .text
+            .render_color_terminal(
+                &mut buf,
+                &mut subs,
+                home,
+                &src_lines,
+                &interns,
+                &TEST_PALETTE,
+            );
+
+        assert_eq!(human_readable(&buf), "<green>Util.Int<reset>");
+    }
+
+    #[test]
     fn report_wildcard_in_color() {
         report_renders_in_color(to_simple_report(Type(FlexVar(None))), "<yellow>*<reset>");
     }
