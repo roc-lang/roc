@@ -1,6 +1,7 @@
 extern crate bumpalo;
 
 use self::bumpalo::Bump;
+use inlinable_string::InlinableString;
 use roc_builtins::unique::uniq_stdlib;
 use roc_can::constraint::Constraint;
 use roc_can::env::Env;
@@ -25,7 +26,11 @@ use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
 pub fn test_home() -> ModuleId {
-    ModuleIds::default().get_or_insert(&"Test".into())
+    module(&"Test".into())
+}
+
+pub fn module(name: &InlinableString) -> ModuleId {
+    ModuleIds::default().get_or_insert(name)
 }
 
 #[allow(dead_code)]

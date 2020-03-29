@@ -1,4 +1,4 @@
-use crate::report::ReportText::{Batch, Region, Value};
+use crate::report::ReportText::{Batch, Module, Region, Value};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::Problem;
 use roc_types::pretty_print::content_to_string;
@@ -22,6 +22,7 @@ pub struct Palette {
     pub error: Color,
     pub line_number: Color,
     pub gutter_bar: Color,
+    pub module_name: Color,
 }
 
 #[derive(Copy, Clone)]
@@ -46,6 +47,7 @@ pub const TEST_PALETTE: Palette = Palette {
     error: Color::Red,
     line_number: Color::Cyan,
     gutter_bar: Color::Magenta,
+    module_name: Color::Green,
 };
 
 impl Color {
@@ -97,6 +99,9 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
 pub enum ReportText {
     /// A value. Render it qualified unless it was defined in the current module.
     Value(Symbol),
+
+    /// A module,
+    Module(ModuleId),
 
     /// A type. Render it using roc_types::pretty_print for now, but maybe
     /// do something fancier later.
@@ -237,6 +242,9 @@ impl ReportText {
                     buf.push_str(symbol.ident_string(interns));
                 }
             }
+            Module(module_id) => {
+                buf.push_str(&module_id.name());
+            }
             Type(content) => buf.push_str(content_to_string(content, subs, home, interns).as_str()),
             Region(region) => {
                 let max_line_number_length = region.end_line.to_string().len();
@@ -314,6 +322,9 @@ impl ReportText {
 
                     buf.push_str(&palette.variable.render(&module_str));
                 }
+            }
+            Module(module_id) => {
+                buf.push_str(&palette.module_name.render(&module_id.name()));
             }
             Type(content) => match content {
                 Content::FlexVar(flex_var) => buf.push_str(&palette.flex_var.render(

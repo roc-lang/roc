@@ -9,7 +9,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_report {
-    use crate::helpers::test_home;
+    use crate::helpers::{module, test_home};
     use roc_module::symbol::{Interns, ModuleId};
     use roc_reporting::report::{
         can_problem, em_text, plain_text, url, Report, ReportText, BLUE_CODE, BOLD_CODE, CYAN_CODE,
@@ -22,7 +22,7 @@ mod test_report {
     use std::path::PathBuf;
     // use roc_region::all;
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
-    use roc_reporting::report::ReportText::{Batch, Region, Type, Value};
+    use roc_reporting::report::ReportText::{Batch, Module, Region, Type, Value};
     use roc_types::subs::Content::{FlexVar, RigidVar, Structure};
     use roc_types::subs::FlatType::EmptyRecord;
 
@@ -186,6 +186,29 @@ mod test_report {
             .render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
 
         assert_eq!(buf, "x");
+    }
+
+    #[test]
+    fn report_module() {
+        let src: &str = indoc!(
+            r#"
+                x = 1
+                y = 2
+
+                x
+            "#
+        );
+
+        let (_type_problems, _can_problems, mut subs, home, interns) = infer_expr_help(src);
+
+        let mut buf = String::new();
+        let src_lines: Vec<&str> = src.split('\n').collect();
+
+        to_simple_report(Module(module(&"Main".into())))
+            .text
+            .render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
+
+        assert_eq!(buf, "Main");
     }
 
     #[test]

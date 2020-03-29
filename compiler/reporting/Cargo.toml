@@ -12,6 +12,8 @@ roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
 roc_load = { path = "../load" }
 roc_can = { path = "../can" }
+inlinable_string = "0.1.0"
+
 
 [dev-dependencies]
 roc_constrain = { path = "../constrain" }
