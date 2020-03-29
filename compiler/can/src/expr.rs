@@ -431,20 +431,19 @@ pub fn canonicalize_expr<'a>(
                 loc_body_expr.region,
                 &loc_body_expr.value,
             );
-
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
-            for (symbol, region) in scope.symbols() {
-                if !original_scope.contains_symbol(*symbol) {
-                    if !output.references.has_lookup(*symbol) {
+            for (sub_symbol, region) in scope.symbols() {
+                if !original_scope.contains_symbol(*sub_symbol) {
+                    if !output.references.has_lookup(*sub_symbol) {
                         // The body never referenced this argument we declared. It's an unused argument!
-                        env.problem(Problem::UnusedArgument(*symbol, *region));
+                        env.problem(Problem::UnusedArgument(symbol, *sub_symbol, *region));
                     }
 
                     // We shouldn't ultimately count arguments as referenced locals. Otherwise,
                     // we end up with weird conclusions like the expression (\x -> x + 1)
                     // references the (nonexistant) local variable x!
-                    output.references.lookups.remove(symbol);
+                    output.references.lookups.remove(sub_symbol);
                 }
             }
 

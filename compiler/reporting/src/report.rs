@@ -84,6 +84,41 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
                 " then remove it so future readers of your code don't wonder why it is there.",
             ));
         }
+        Problem::UnusedImport(module_id, region) => {
+            texts.push(plain_text("Nothing from "));
+            texts.push(Module(module_id));
+            texts.push(plain_text(" is used in this module."));
+            texts.push(newline());
+            texts.push(newline());
+            texts.push(Region(region));
+            texts.push(newline());
+            texts.push(newline());
+            texts.push(plain_text("Since "));
+            texts.push(Module(module_id));
+            texts.push(plain_text(" isn't used, you don't need to import it."));
+        }
+        Problem::UnusedArgument(closure_symbol, argument_symbol, region) => {
+            texts.push(Value(closure_symbol));
+            texts.push(plain_text(" doesn't use "));
+            texts.push(Value(argument_symbol));
+            texts.push(plain_text("."));
+            texts.push(newline());
+            texts.push(newline());
+            texts.push(Region(region));
+            texts.push(newline());
+            texts.push(newline());
+            texts.push(plain_text("If you don't need "));
+            texts.push(Value(argument_symbol));
+            texts.push(plain_text(
+                ", then you can just remove it. However, if you really do need ",
+            ));
+            texts.push(Value(argument_symbol));
+            texts.push(plain_text(" as an argument of "));
+            texts.push(Value(closure_symbol));
+            texts.push(plain_text(", prefix it with an underscore, like this: \"_"));
+            texts.push(Value(argument_symbol));
+            texts.push(plain_text("\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used."));
+        }
         _ => {
             panic!("TODO implement others");
         }

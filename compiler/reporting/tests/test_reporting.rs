@@ -288,6 +288,105 @@ mod test_report {
     }
 
     #[test]
+    fn report_unused_argument() {
+        let src: &str = indoc!(
+            r#"
+                y = 9
+
+                box = \class, htmlChildren ->
+                    div [ class ] []
+
+                div = 4
+
+                box "wizard" []
+            "#
+        );
+
+        let (_type_problems, can_problems, mut subs, home, interns) = infer_expr_help(src);
+
+        let mut buf: String = String::new();
+        let src_lines: Vec<&str> = src.split('\n').collect();
+
+        match can_problems.first() {
+            None => {}
+            Some(problem) => {
+                let report = can_problem(
+                    filename_from_string(r"\code\proj\Main.roc"),
+                    problem.clone(),
+                );
+                report
+                    .text
+                    .render_ci(&mut buf, &mut subs, home, &src_lines, &interns)
+            }
+        }
+
+        assert_eq!(
+            buf,
+            indoc!(
+                r#"
+                box doesn't use htmlChildren.
+
+                3 ┆  box = \class, htmlChildren ->
+
+                If you don't need htmlChildren, then you can just remove it. However, if you really do need htmlChildren as an argument of box, prefix it with an underscore, like this: "_htmlChildren". Adding an underscore at the start of a variable name is a way of saying that the variable is not used."#
+            )
+        );
+    }
+
+    #[test]
+    fn report_unused_import() {
+        let src: &str = indoc!(
+            r#"
+                interface Report
+                    exposes [
+                        plainText,
+                        emText
+                    ]
+                    imports [
+                        Symbol.{ Interns }
+                    ]
+
+                plainText = \str -> PlainText str
+
+                emText = \str -> EmText str
+            "#
+        );
+
+        let (_type_problems, can_problems, mut subs, home, interns) = infer_expr_help(src);
+
+        let mut buf: String = String::new();
+        let src_lines: Vec<&str> = src.split('\n').collect();
+
+        match can_problems.first() {
+            None => {}
+            Some(problem) => {
+                let report = can_problem(
+                    filename_from_string(r"\code\proj\Main.roc"),
+                    problem.clone(),
+                );
+                report
+                    .text
+                    .render_ci(&mut buf, &mut subs, home, &src_lines, &interns)
+            }
+        }
+
+        assert_eq!(
+            buf,
+            indoc!(
+                r#"
+                Nothing from Symbol is used in this module.
+
+                6 ┆  imports [
+                7 ┆      Symbol.{ Interns }
+                         ^^^^^^
+                8 ┆  ]
+
+                Since Symbol isn't used, you don't need to import it."#
+            )
+        );
+    }
+
+    #[test]
     fn report_plain_text_color() {
         report_renders_in_color(to_simple_report(plain_text("y")), "<white>y<reset>");
     }
