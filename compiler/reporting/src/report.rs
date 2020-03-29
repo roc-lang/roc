@@ -122,6 +122,7 @@ pub enum ReportText {
     /// The documentation for this symbol.
     Docs(Symbol),
 
+    /// Many ReportText that should be concatenated together.
     Batch(Vec<ReportText>),
 }
 

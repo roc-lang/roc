@@ -417,7 +417,7 @@ mod test_report {
                     isDisabled = \user -> user.isAdmin
 
                     theAdmin
-                        |> isDabled
+                        |> isDisabled
                 "#
             ),
             to_simple_report(Region(roc_region::all::Region {
@@ -431,7 +431,7 @@ mod test_report {
                     <cyan>1<reset><magenta> ┆<reset>  <white>isDisabled = \user -> user.isAdmin<reset>
                     <cyan>2<reset><magenta> ┆<reset>
                     <cyan>3<reset><magenta> ┆<reset>  <white>theAdmin<reset>
-                    <cyan>4<reset><magenta> ┆<reset>  <white>    |> isDabled<reset>"#
+                    <cyan>4<reset><magenta> ┆<reset>  <white>    |> isDisabled<reset>"#
             ),
         );
     }

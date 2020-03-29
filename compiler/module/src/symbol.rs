@@ -230,9 +230,9 @@ impl ModuleId {
     #[cfg(debug_assertions)]
     pub fn name(self) -> Box<str> {
         let names =
-        DEBUG_MODULE_ID_NAMES
-            .lock()
-            .expect("Failed to acquire lock for Debug reading from DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
+            DEBUG_MODULE_ID_NAMES
+                .lock()
+                .expect("Failed to acquire lock for Debug reading from DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
         match names.get(&self.0) {
             Some(str_ref) => str_ref.clone(),
