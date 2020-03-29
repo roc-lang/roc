@@ -134,12 +134,13 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
             original_region,
             shadow,
         } => {
+            // v-- just to satisfy clippy
             let _a = original_region;
             let _b = shadow;
-            panic!("TODO implement shadow report")
+            panic!("TODO implement shadow report");
         }
-        _ => {
-            panic!("TODO implement others");
+        Problem::RuntimeError(_runtime_error) => {
+            panic!("TODO implement run time error report");
         }
     };
 
