@@ -329,7 +329,7 @@ mod test_report {
     //             r#"
     //             x = 1
     //             y =
-    //                 if 1 == 2 == 3 then
+    //                 if selecteId == thisId == adminsId then
     //                     4
     //
     //                 else
@@ -343,9 +343,9 @@ mod test_report {
     //             Which expression should I evaluate first? "selectedId == thisId" or "thisId == adminsId"?
     //
     //             3 ┆  if selecteId == thisId == adminsId then
-    //                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    //               ┆     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     //
-    //             Please clarify this for me by adding some parentheses. Either "(selectedId == thisId) == adminsId" or "selectedId == (thisId == adminsId)""#
+    //             Please clarify this for me by adding some parentheses. Either "(selectedId == thisId) == adminsId" or "selectedId == (thisId == adminsId)" would work."#
     //         ),
     //     )
     // }
