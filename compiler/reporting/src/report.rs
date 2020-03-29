@@ -1,5 +1,6 @@
 use crate::report::ReportText::{Batch, Module, Region, Value};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::Problem;
 use roc_types::pretty_print::content_to_string;
 use roc_types::subs::{Content, Subs};
@@ -118,6 +119,24 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
             texts.push(plain_text(", prefix it with an underscore, like this: \"_"));
             texts.push(Value(argument_symbol));
             texts.push(plain_text("\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used."));
+        }
+        Problem::PrecedenceProblem(BothNonAssociative(
+            _left_symbol,
+            _left_bin_op,
+            _middle_symbol,
+            _right_bin_op,
+            _right_symbol,
+        )) => panic!("TODO implement precedence problem report"),
+        Problem::UnsupportedPattern(_pattern_type, _region) => {
+            panic!("TODO implement unsupported pattern report")
+        }
+        Problem::ShadowingInAnnotation {
+            original_region,
+            shadow,
+        } => {
+            let _a = original_region;
+            let _b = shadow;
+            panic!("TODO implement shadow report")
         }
         _ => {
             panic!("TODO implement others");

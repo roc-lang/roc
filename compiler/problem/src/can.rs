@@ -25,7 +25,7 @@ pub enum Problem {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PrecedenceProblem {
-    BothNonAssociative(Located<BinOp>, Located<BinOp>),
+    BothNonAssociative(Symbol, Located<BinOp>, Symbol, Located<BinOp>, Symbol),
 }
 
 #[derive(Clone, Debug, PartialEq)]
