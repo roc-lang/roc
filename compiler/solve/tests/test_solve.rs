@@ -2430,4 +2430,100 @@ mod test_solve {
             "Num * -> Num *",
         );
     }
+
+    #[test]
+    fn sorting() {
+        // based on https://github.com/elm/compiler/issues/2057
+        // Roc seems to do this correctly, tracking to make sure it stays that way
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                sort : ConsList cm -> ConsList cm
+                sort =
+                    \xs ->
+                        f : cm, cm -> Order
+                        f = \_, _ -> LT
+
+                        sortWith f xs
+
+                sortBy : (x -> cmpl), ConsList x -> ConsList x
+                sortBy =
+                    \_, list ->
+                        cmp : x, x -> Order
+                        cmp = \_, _ -> LT
+
+                        sortWith cmp list
+
+                always = \x, _ -> x
+
+                sortWith : (foobar, foobar -> Order), ConsList foobar -> ConsList foobar
+                sortWith =
+                    \_, list ->
+                        f = \arg ->
+                            g arg
+
+                        g = \bs ->
+                            when bs is
+                                bx -> f bx
+                                _ -> Nil
+
+                        always Nil (f list)
+
+                Order : [ LT, GT, EQ ]
+                ConsList a : [ Nil, Cons a (ConsList a) ]
+
+                { x: sortWith, y: sort, z: sortBy }
+                "#
+            ),
+            "{ x : (foobar, foobar -> Order), ConsList foobar -> ConsList foobar, y : ConsList cm -> ConsList cm, z : (x -> cmpl), ConsList x -> ConsList x }"
+        );
+    }
+
+    #[test]
+    fn wrapper() {
+        // based on https://github.com/elm/compiler/issues/1964
+        // Roc seems to do this correctly, tracking to make sure it stays that way
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Type a : [ TypeCtor (Type (Wrapper a)) ]
+
+                Wrapper a : [ Wrapper a ]
+
+                Opaque : [ Opaque ]
+
+                encodeType1 : Type a -> Opaque
+                encodeType1 = \thing ->
+                    when thing is
+                        TypeCtor v0 ->
+                            encodeType1 v0
+
+                encodeType1
+                "#
+            ),
+            "Type a -> Opaque",
+        );
+    }
+
+    #[test]
+    fn rigids() {
+        // I was sligtly surprised this works
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : List a -> List a
+                f = \input ->
+                    x : List b
+                    x = []
+
+                    v = List.getUnsafe input 0
+
+                    List.push x v
+
+                f
+                "#
+            ),
+            "List a -> List a",
+        );
+    }
 }
