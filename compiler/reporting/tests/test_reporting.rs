@@ -289,6 +289,7 @@ mod test_report {
         )
     }
 
+    // hits a TODO in reporting
     //    #[test]
     //    fn report_shadow() {
     //        report_problem_as(
@@ -322,33 +323,33 @@ mod test_report {
     //     )
     // }
 
-    // #[test]
-    // fn report_precedence_problem() {
-    //     report_problem_as(
-    //         indoc!(
-    //             r#"
-    //             x = 1
-    //             y =
-    //                 if selecteId == thisId == adminsId then
-    //                     4
-    //
-    //                 else
-    //                     5
-    //
-    //             x
-    //         "#
-    //         ),
-    //         indoc!(
-    //             r#"
-    //             Which expression should I evaluate first? "selectedId == thisId" or "thisId == adminsId"?
-    //
-    //             3 ┆  if selecteId == thisId == adminsId then
-    //               ┆     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    //
-    //             Please clarify this for me by adding some parentheses. Either "(selectedId == thisId) == adminsId" or "selectedId == (thisId == adminsId)" would work."#
-    //         ),
-    //     )
-    // }
+    #[test]
+    fn report_precedence_problem() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x = 1
+                y =
+                    if selecteId == thisId == adminsId then
+                        4
+
+                    else
+                        5
+
+                { x, y }
+            "#
+            ),
+            indoc!(
+                r#"
+                Which expression should I evaluate first? "selectedId == thisId" or "thisId == adminsId"?
+
+                3 ┆  if selecteId == thisId == adminsId then
+                  ┆     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Please clarify this for me by adding some parentheses. Either "(selectedId == thisId) == adminsId" or "selectedId == (thisId == adminsId)" would work."#
+            ),
+        )
+    }
 
     // #[test]
     // fn report_unused_argument() {

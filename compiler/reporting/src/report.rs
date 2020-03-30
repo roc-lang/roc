@@ -120,13 +120,9 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
             texts.push(Value(argument_symbol));
             texts.push(plain_text("\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used."));
         }
-        Problem::PrecedenceProblem(BothNonAssociative(
-            _left_symbol,
-            _left_bin_op,
-            _middle_symbol,
-            _right_bin_op,
-            _right_symbol,
-        )) => panic!("TODO implement precedence problem report"),
+        Problem::PrecedenceProblem(BothNonAssociative(_left_bin_op, _right_bin_op)) => {
+            panic!("TODO implement precedence problem report")
+        }
         Problem::UnsupportedPattern(_pattern_type, _region) => {
             panic!("TODO implement unsupported pattern report")
         }

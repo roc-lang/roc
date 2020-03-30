@@ -25,7 +25,7 @@ pub enum Problem {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PrecedenceProblem {
-    BothNonAssociative(Symbol, Located<BinOp>, Symbol, Located<BinOp>, Symbol),
+    BothNonAssociative(Located<BinOp>, Located<BinOp>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +47,8 @@ pub enum RuntimeError {
         region: Region,
     },
     InvalidPrecedence(PrecedenceProblem, Region),
+    MalformedIdentifier(Box<str>, Region),
+    MalformedClosure(Region),
     FloatOutsideRange(Box<str>),
     IntOutsideRange(Box<str>),
     InvalidHex(std::num::ParseIntError, Box<str>),

@@ -14,7 +14,7 @@ use roc_module::symbol::Symbol;
 use roc_parse::ast;
 use roc_parse::operator::CalledVia;
 use roc_parse::pattern::PatternType::*;
-use roc_problem::can::{Problem, RuntimeError};
+use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;
@@ -582,14 +582,26 @@ pub fn canonicalize_expr<'a>(
             )
         }
 
-        ast::Expr::MalformedIdent(_)
-        | ast::Expr::MalformedClosure
-        | ast::Expr::PrecedenceConflict(_, _, _) => {
-            panic!(
-                "TODO restore the rest of canonicalize()'s branches {:?} {:?}",
-                &expr,
-                local_successors(&References::new(), &env.closures)
-            );
+        ast::Expr::PrecedenceConflict(binop1, binop2, _expr) => {
+            use roc_problem::can::RuntimeError::*;
+            (
+                RuntimeError(InvalidPrecedence(
+                    PrecedenceProblem::BothNonAssociative(binop1.clone(), binop2.clone()),
+                    region,
+                )),
+                Output::default(),
+            )
+        }
+        ast::Expr::MalformedClosure => {
+            use roc_problem::can::RuntimeError::*;
+            (RuntimeError(MalformedClosure(region)), Output::default())
+        }
+        ast::Expr::MalformedIdent(name) => {
+            use roc_problem::can::RuntimeError::*;
+            (
+                RuntimeError(MalformedIdentifier((*name).into(), region)),
+                Output::default(),
+            )
         }
         ast::Expr::Nested(sub_expr) => {
             let (answer, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
