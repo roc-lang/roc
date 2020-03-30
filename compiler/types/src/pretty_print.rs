@@ -436,7 +436,7 @@ fn write_flat_type(
 
             buf.push_str(" ]");
 
-            if let Some(content) = ext_content {
+            if let Err((_, content)) = ext_content {
                 // This is an open tag union, so print the variable
                 // right after the ']'
                 //
@@ -483,7 +483,7 @@ fn write_flat_type(
 
             buf.push_str(" ]");
 
-            if let Some(content) = ext_content {
+            if let Err((_, content)) = ext_content {
                 // This is an open tag union, so print the variable
                 // right after the ']'
                 //
@@ -504,14 +504,14 @@ fn write_flat_type(
     }
 }
 
-fn chase_ext_tag_union(
-    subs: &mut Subs,
+pub fn chase_ext_tag_union(
+    subs: &Subs,
     var: Variable,
     fields: &mut Vec<(TagName, Vec<Variable>)>,
-) -> Option<Content> {
+) -> Result<(), (Variable, Content)> {
     use FlatType::*;
-    match subs.get(var).content {
-        Content::Structure(EmptyTagUnion) => None,
+    match subs.get_without_compacting(var).content {
+        Content::Structure(EmptyTagUnion) => Ok(()),
         Content::Structure(TagUnion(tags, ext_var))
         | Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
             for (label, vars) in tags {
@@ -520,8 +520,41 @@ fn chase_ext_tag_union(
 
             chase_ext_tag_union(subs, ext_var, fields)
         }
+        Content::Structure(Apply(Symbol::ATTR_ATTR, arguments)) => {
+            debug_assert!(arguments.len() == 2);
+            chase_ext_tag_union(subs, arguments[1], fields)
+        }
+        Content::Alias(_, _, var) => chase_ext_tag_union(subs, var, fields),
 
-        content => Some(content),
+        content => Err((var, content)),
+    }
+}
+
+pub fn chase_ext_record(
+    subs: &Subs,
+    var: Variable,
+    fields: &mut MutMap<Lowercase, Variable>,
+) -> Result<(), (Variable, Content)> {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    match subs.get_without_compacting(var).content {
+        Structure(Record(sub_fields, sub_ext)) => {
+            fields.extend(sub_fields.into_iter());
+
+            chase_ext_record(subs, sub_ext, fields)
+        }
+
+        Structure(EmptyRecord) => Ok(()),
+
+        Content::Structure(Apply(Symbol::ATTR_ATTR, arguments)) => {
+            debug_assert!(arguments.len() == 2);
+            chase_ext_record(subs, arguments[1], fields)
+        }
+
+        Alias(_, _, var) => chase_ext_record(subs, var, fields),
+
+        content => Err((var, content)),
     }
 }
 

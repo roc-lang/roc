@@ -553,7 +553,8 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
             annotate_usage(&loc_cond.value, usage);
 
             let mut branches_usage = VarUsage::default();
-            for (_, loc_branch) in branches {
+            for branch in branches {
+                let loc_branch = &branch.value;
                 let mut current_usage = VarUsage::default();
 
                 annotate_usage(&loc_branch.value, &mut current_usage);
@@ -632,7 +633,7 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
                 annotate_usage(&loc_expr.value, usage);
             }
         }
-        Record(_, fields) => {
+        Record { fields, .. } => {
             for (_, field) in fields {
                 annotate_usage(&field.loc_expr.value, usage);
             }
@@ -735,7 +736,7 @@ fn special_case_builtins(
             annotate_usage(&loc_value.value, usage);
         }
 
-        Symbol::LIST_ISEMPTY => {
+        Symbol::LIST_IS_EMPTY | Symbol::LIST_LEN => {
             debug_assert!(loc_args.len() == 1);
 
             let loc_list = &loc_args[0].1;

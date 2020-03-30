@@ -1,4 +1,4 @@
-api Num provides Num, DivByZero..., negate, abs, add, sub, mul, isOdd, isEven, isPositive, isNegative, isZero
+api Num provides Num, DivByZero..., neg, abs, add, sub, mul, isOdd, isEven, isPositive, isNegative, isZero
 
 ## Types
 
@@ -25,17 +25,21 @@ Num range : @Num range
 
 ## Return a negative number when given a positive one, and vice versa.
 ##
-## Some languages have a unary `-` operator (for example, `-(a + b)`), but Roc does not. If you want to negate a number, calling this function is the way to do it!
+## >>> Num.neg 5
 ##
-## > Num.neg 5
+## >>> Num.neg -2.5
 ##
-## > Num.neg -2.5
+## >>> Num.neg 0
 ##
-## > Num.neg 0
+## >>> Num.neg 0.0
 ##
-## > Num.neg 0.0
+## This is safe to use with any #Float, but it can cause overflow when used with certain #Int values.
 ##
-## This will crash when given #Int.lowestValue, because doing so will result in a number higher than #Int.highestValue.
+## For example, calling #Num.neg on the lowest value of a signed integer (such as #Int.lowestI64 or #Int.lowestI32) will cause overflow.
+## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
+## the highest value it can represent. (For this reason, calling #Num.abs on the lowest signed value will also cause overflow.)
+##
+## Additionally, calling #Num.neg on any unsigned integer (such as any #U64 or #U32 value) other than 0 will cause overflow.
 ##
 ## (It will never crash when given a #Float, however, because of how floating point numbers represent positive and negative numbers.)
 neg : Num range -> Num range
@@ -44,14 +48,23 @@ neg : Num range -> Num range
 ##
 ## * For a positive number, returns the same number.
 ## * For a negative number, returns the same number except positive.
+## * For zero, returns zero.
 ##
-## > Num.abs 4
+## >>> Num.abs 4
 ##
-## > Num.abs -2.5
+## >>> Num.abs -2.5
 ##
-## > Num.abs 0
+## >>> Num.abs 0
 ##
-## > Num.abs 0.0
+## >>> Num.abs 0.0
+##
+## This is safe to use with any #Float, but it can cause overflow when used with certain #Int values.
+##
+## For example, calling #Num.abs on the lowest value of a signed integer (such as #Int.lowestI64 or #Int.lowestI32) will cause overflow.
+## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
+## the highest value it can represent. (For this reason, calling #Num.neg on the lowest signed value will also cause overflow.)
+##
+## Calling this on an unsigned integer (like #U32 or #U64) never does anything.
 abs : Num range -> Num range
 
 ## Check

@@ -94,34 +94,44 @@ impl Bool {
             Atom::Zero => Err(Atom::Zero),
             Atom::One => Err(Atom::One),
             Atom::Variable(var) => {
-                let mut result = Vec::new();
-                result.push(var);
+                // The var may still point to Zero or One!
+                match subs.get_without_compacting(var).content {
+                    Content::Structure(FlatType::Boolean(nested)) => nested.simplify(subs),
+                    _ => {
+                        let mut result = Vec::new();
+                        result.push(var);
 
-                for atom in &self.1 {
-                    match atom {
-                        Atom::Zero => {}
-                        Atom::One => return Err(Atom::One),
-                        Atom::Variable(v) => match subs.get_without_compacting(*v).content {
-                            Content::Structure(FlatType::Boolean(nested)) => {
-                                match nested.simplify(subs) {
-                                    Ok(variables) => {
-                                        for var in variables {
-                                            result.push(var);
+                        for atom in &self.1 {
+                            match atom {
+                                Atom::Zero => {}
+                                Atom::One => return Err(Atom::One),
+                                Atom::Variable(v) => {
+                                    match subs.get_without_compacting(*v).content {
+                                        Content::Structure(FlatType::Boolean(nested)) => {
+                                            match nested.simplify(subs) {
+                                                Ok(variables) => {
+                                                    for var in variables {
+                                                        result.push(var);
+                                                    }
+                                                }
+                                                Err(Atom::Zero) => {}
+                                                Err(Atom::One) => return Err(Atom::One),
+                                                Err(Atom::Variable(_)) => {
+                                                    panic!("TODO nested variable")
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            result.push(*v);
                                         }
                                     }
-                                    Err(Atom::Zero) => {}
-                                    Err(Atom::One) => return Err(Atom::One),
-                                    Err(Atom::Variable(_)) => panic!("TODO nested variable"),
                                 }
                             }
-                            _ => {
-                                result.push(*v);
-                            }
-                        },
+                        }
+
+                        Ok(result)
                     }
                 }
-
-                Ok(result)
             }
         }
     }

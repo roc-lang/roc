@@ -47,6 +47,9 @@ Rather than a `type alias` keyword, in Roc you define type aliases with `:` like
 Username : Str
 ```
 
+You can also define type aliases anywhere, not just at the top level.
+Their scoping rules work as normal.
+
 Separately, Roc also allows standalone type annotations with no corresponding implementation.
 So I can write this as an annotation with no implementation:
 
@@ -919,7 +922,6 @@ Roc's standard library has these modules:
 * `Bytes`
 * `Str`
 * `Result`
-* `Sort`
 
 Some differences to note:
 
@@ -932,7 +934,6 @@ Some differences to note:
 * No `Process`, `Platform`, `Cmd`, or `Sub` - similarly to `Task`, these are things platform authors would include, or not.
 * No `Maybe`. This is by design. If a function returns a potential error, use `Result` with an error type that uses a zero-arg tag to describe what went wrong. (For example, `List.first : List a -> Result a [ ListWasEmpty ]*` instead of `List.first : List a -> Maybe a`.) If you want to have a record field be optional, use an Optional Record Field directly (see earlier). If you want to describe something that's neither an operation that can fail nor an optional field, use a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, make a self-documenting API like `nullable : Decoder a -> Decoder [ Null, NonNull a ]*`.
 * `List` refers to something more like Elm's `Array`, as noted earlier.
-* `Sort` works [like this](https://package.elm-lang.org/packages/rtfeldman/elm-sorter-experiment/2.1.1/Sort). It's only for `List`, but it's important enough to be one of the standard modules - not only so that lists can be sortable without needing to install a separate package, but also because it demonstrates the "decoder pattern" of API design using opaque types.
 
 ## Operator Desugaring Table
 

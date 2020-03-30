@@ -9,6 +9,14 @@ use std::{fmt, u32};
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Symbol(u64);
 
+// When this is `true` (which it normally should be), Symbol's Debug::fmt implementation
+// attempts to pretty print debug symbols using interns recorded using
+// register_debug_idents calls (which should be made in debug mode).
+// Set it to false if you want to see the raw ModuleId and IdentId ints,
+// but please set it back to true before checking in the result!
+#[cfg(debug_assertions)]
+const PRETTY_PRINT_DEBUG_SYMBOLS: bool = true;
+
 /// In Debug builds only, Symbol has a name() method that lets
 /// you look up its name in a global intern table. This table is
 /// behind a mutex, so it is neither populated nor available in release builds.
@@ -101,26 +109,30 @@ impl Symbol {
 impl fmt::Debug for Symbol {
     #[cfg(debug_assertions)]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let module_id = self.module_id();
-        let ident_id = self.ident_id();
+        if PRETTY_PRINT_DEBUG_SYMBOLS {
+            let module_id = self.module_id();
+            let ident_id = self.ident_id();
 
-        match DEBUG_IDENT_IDS_BY_MODULE_ID.lock() {
-            Ok(names) => match &names.get(&module_id.0) {
-                Some(ident_ids) => match ident_ids.get_name(ident_id) {
-                    Some(ident_str) => write!(f, "`{:?}.{}`", module_id, ident_str),
+            match DEBUG_IDENT_IDS_BY_MODULE_ID.lock() {
+                Ok(names) => match &names.get(&module_id.0) {
+                    Some(ident_ids) => match ident_ids.get_name(ident_id) {
+                        Some(ident_str) => write!(f, "`{:?}.{}`", module_id, ident_str),
+                        None => fallback_debug_fmt(*self, f),
+                    },
                     None => fallback_debug_fmt(*self, f),
                 },
-                None => fallback_debug_fmt(*self, f),
-            },
-            Err(err) => {
-                // Print and return Err rather than panicking, because this
-                // might be used in a panic error message, and if we panick
-                // while we're already panicking it'll kill the process
-                // without printing any of the errors!
-                println!("DEBUG INFO: Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked: {:?}", err);
+                Err(err) => {
+                    // Print and return Err rather than panicking, because this
+                    // might be used in a panic error message, and if we panick
+                    // while we're already panicking it'll kill the process
+                    // without printing any of the errors!
+                    println!("DEBUG INFO: Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked: {:?}", err);
 
-                fallback_debug_fmt(*self, f)
+                    fallback_debug_fmt(*self, f)
+                }
             }
+        } else {
+            fallback_debug_fmt(*self, f)
         }
     }
 
@@ -547,11 +559,13 @@ macro_rules! define_builtins {
     };
 }
 
+// NOTE: Some of these builtins have a # at the beginning of their names.
+// This is because they are for compiler use only, and should not cause
+// namespace conflicts with userspace!
 define_builtins! {
-    0 ATTR: "Attr" => {
+    0 ATTR: "#Attr" => {
         0 UNDERSCORE: "_" // the _ used in pattern matches. This is Symbol 0.
-        1 ATTR_ATTR: "Attr" // the Attr.Attr type alias, used in uniqueness types
-        2 ATTR_AT_ATTR: "@Attr" // the Attr.@Attr private tag
+        1 ATTR_ATTR: "Attr" // the #Attr.Attr type alias, used in uniqueness types.
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -575,6 +589,11 @@ define_builtins! {
         4 INT_MOD: "mod"
         5 INT_HIGHEST: "highest"
         6 INT_LOWEST: "lowest"
+        7 INT_ADD: "#add"
+        8 INT_SUB: "#sub"
+        9 INT_EQ_I64: "#eqi64" // Equality on 64-bit integers, the standard in Roc
+        10 INT_EQ_I1: "#eqi1" // Equality on boolean (theoretically i1) values
+        11 INT_EQ_I8: "#eqi8" // Equality on byte (theoretically i8) values
     }
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" imported // the Float.Float type alias
@@ -585,6 +604,9 @@ define_builtins! {
         5 FLOAT_SQRT: "sqrt"
         6 FLOAT_HIGHEST: "highest"
         7 FLOAT_LOWEST: "lowest"
+        8 FLOAT_ADD: "#add"
+        9 FLOAT_SUB: "#sub"
+        10 FLOAT_EQ: "#eq"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -603,13 +625,13 @@ define_builtins! {
     6 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
         1 LIST_AT_LIST: "@List" // the List.@List private tag
-        2 LIST_ISEMPTY: "isEmpty"
+        2 LIST_IS_EMPTY: "isEmpty"
         3 LIST_GET: "get"
         4 LIST_SET: "set"
-        5 LIST_SET_IN_PLACE: "set_in_place"
+        5 LIST_SET_IN_PLACE: "#setInPlace"
         6 LIST_PUSH: "push"
         7 LIST_MAP: "map"
-        8 LIST_LENGTH: "length"
+        8 LIST_LEN: "len"
         9 LIST_FOLDL: "foldl"
         10 LIST_FOLDR: "foldr"
         11 LIST_GET_UNSAFE: "getUnsafe" // TODO remove once we can code gen Result
