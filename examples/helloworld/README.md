@@ -1,8 +1,8 @@
 # Hello, World!
 
 Right now, there is only one way to build Roc programs: the Rube Goldberg Build Process.
-(In the future, it will be nicer. However, at the moment, that future nicer
-build system exists only in our imaginations...so for now, Rube Goldberg it is!)
+(In the future, it will be nicer. At the moment, the nicer build system exists only 
+in our imaginations...so Rube Goldberg it is!)
 
 ## Ingredients
 
@@ -12,10 +12,18 @@ build system exists only in our imaginations...so for now, Rube Goldberg it is!)
 
 ## Steps
 
-1. Compile the Roc source code into a `hello.o` file. The snippet at the end of this README will do that.
-2. Run `gcc -shared hello.o -o libhello_from_roc.so` to generate `libhello_from_roc.so`. (This filename must begin with `lib` and end in `.so` or else `host.rs` won't be able to find it!)
-3. Run `rustc host.rs -L .` to generate the `hello` executable. (The `-L .` flag lets it look for `libhello_from_roc.so` in the current directory.)
-4. Run `./hello` to see the greeting!
+1. `cd` into `examples/helloworld/`
+2. Run `cargo run hello.roc` to compile the Roc source code into a `hello.o` file.
+3. Run `gcc -shared hello.o -o libhello_from_roc.so` to generate `libhello_from_roc.so`. (This filename must begin with `lib` and end in `.so` or else `host.rs` won't be able to find it!)
+4. Move `libhello_from_roc.so` onto the system library path, e.g. with `sudo mv libhello_from_roc.so /usr/lib/` 
+5. Run `rustc host.rs -o hello` to generate the `hello` executable.
+6. Run `./hello` to see the greeting!
+
+To run in release mode instead, do:
+
+```bash
+cargo run --release hello.roc
+```
 
 ## Design Notes
 
@@ -54,7 +62,8 @@ would be to have the host precompiled into an object file (eliminating the
 need for Roc authors to run `rustc` in this example) and for the Roc compiler
 to not only generate the object file for the Roc file, but also to link it with
 the host object file to produce an executable (eliminating the need for `gcc`)
-such that Roc application authors can concern themselves exclusively with Roc code.
+such that Roc application authors can concern themselves exclusively with Roc code
+and need only the Roc compiler to build and to execute it.
 
 Of course, none of those niceties exist yet. But we'll get there!
 

@@ -16,6 +16,7 @@ use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
 use roc_mono::layout::{Builtin, Layout};
+use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -1296,4 +1297,18 @@ fn list_set<'a, 'ctx, 'env>(
         build_else,
         ret_type.into(),
     )
+}
+
+/// Translates a target_lexicon::Triple to a LLVM calling convention u32
+/// as described in https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
+pub fn get_call_conventions(cc: CallingConvention) -> u32 {
+    use CallingConvention::*;
+
+    // For now, we're returning 0 for the C calling convention on all of these.
+    // Not sure if we should be picking something more specific!
+    match cc {
+        SystemV => 0,
+        WasmBasicCAbi => 0,
+        WindowsFastcall => 0,
+    }
 }
