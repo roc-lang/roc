@@ -289,22 +289,22 @@ mod test_report {
         )
     }
 
-    // #[test]
-    // fn report_shadow() {
-    //     report_problem_as(
-    //         indoc!(
-    //             r#"
-    //             i = 1
+    //    #[test]
+    //    fn report_shadow() {
+    //        report_problem_as(
+    //            indoc!(
+    //                r#"
+    //                i = 1
     //
-    //             s = \i ->
-    //                 i + 1
+    //                s = \i ->
+    //                    i + 1
     //
-    //             s i
-    //         "#
-    //         ),
-    //         indoc!(r#"     "#),
-    //     )
-    // }
+    //                s i
+    //            "#
+    //            ),
+    //            indoc!(r#"     "#),
+    //        )
+    //    }
 
     // #[test]
     // fn report_unsupported_top_level_def() {
