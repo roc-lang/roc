@@ -180,6 +180,15 @@ pub struct Interns {
 }
 
 impl Interns {
+    pub fn module_name(&self, module_id: ModuleId) -> &InlinableString {
+        self.module_ids.get_name(module_id).unwrap_or_else(|| {
+            panic!(
+                "Unable to find interns entry for module_id {:?} in Interns {:?}",
+                module_id, self
+            )
+        })
+    }
+
     pub fn symbol(&self, module_id: ModuleId, ident: InlinableString) -> Symbol {
         match self.all_ident_ids.get(&module_id) {
             Some(ident_ids) => match ident_ids.get_id(&ident) {

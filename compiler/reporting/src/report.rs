@@ -299,7 +299,7 @@ impl ReportText {
                 }
             }
             Module(module_id) => {
-                buf.push_str(&module_id.name());
+                buf.push_str(&interns.module_name(module_id));
             }
             Type(content) => buf.push_str(content_to_string(content, subs, home, interns).as_str()),
             Region(region) => {
@@ -380,7 +380,7 @@ impl ReportText {
                 }
             }
             Module(module_id) => {
-                buf.push_str(&palette.module_name.render(&module_id.name()));
+                buf.push_str(&palette.module_name.render(&interns.module_name(module_id)));
             }
             Type(content) => match content {
                 Content::FlexVar(flex_var) => buf.push_str(&palette.flex_var.render(
