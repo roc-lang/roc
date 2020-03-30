@@ -32,9 +32,9 @@ checksum = "cf1de2fe8c75bc145a2f577add951f8134889b4795d47466a54a5c846d691693"
 
 [[package]]
 name = "bitmaps"
-version = "2.0.0"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81e039a80914325b37fde728ef7693c212f0ac913d5599607d7b95a9484aae0b"
+checksum = "031043d04099746d8db04daf1fa424b2bc8bd69d92b25962dcde24da39ab64a2"
 dependencies = [
  "typenum",
 ]
@@ -145,9 +145,9 @@ dependencies = [
 
 [[package]]
 name = "indoc"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f9553c1e16c114b8b77ebeb329e5f2876eed62a8d51178c8bc6bff0d65f98f8"
+checksum = "79255cf29f5711995ddf9ec261b4057b1deb34e66c90656c201e41376872c544"
 dependencies = [
  "indoc-impl",
  "proc-macro-hack",
@@ -155,9 +155,9 @@ dependencies = [
 
 [[package]]
 name = "indoc-impl"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b714fc08d0961716390977cdff1536234415ac37b509e34e5a983def8340fb75"
+checksum = "54554010aa3d17754e484005ea0022f1c93839aabc627c2c55f3d7b47206134c"
 dependencies = [
  "proc-macro-hack",
  "proc-macro2 1.0.9",
