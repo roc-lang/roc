@@ -228,31 +228,10 @@ lazy_static! {
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ModuleId(u32);
 
-/// In Debug builds only, ModuleId has a name() method that lets
-/// you look up its name in a global intern table. This table is
-/// behind a mutex, so it is neither populated nor available in release builds.
 impl ModuleId {
     // NOTE: the define_builtins! macro adds a bunch of constants to this impl,
     //
     // e.g. pub const NUM: ModuleId = …
-
-    #[cfg(debug_assertions)]
-    pub fn name(self) -> Box<str> {
-        let names =
-            DEBUG_MODULE_ID_NAMES
-                .lock()
-                .expect("Failed to acquire lock for Debug reading from DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
-
-        match names.get(&self.0) {
-            Some(str_ref) => str_ref.clone(),
-            None => {
-                panic!(
-                    "Could not find a Debug name for module ID {} in {:?}",
-                    self.0, names,
-                );
-            }
-        }
-    }
 
     #[cfg(debug_assertions)]
     pub fn register_debug_idents(self, ident_ids: &IdentIds) {
@@ -285,7 +264,20 @@ impl fmt::Debug for ModuleId {
         // Originally, this printed both name and numeric ID, but the numeric ID
         // didn't seem to add anything useful. Feel free to temporarily re-add it
         // if it's helpful in debugging!
-        write!(f, "{}", self.name())
+        let names =
+            DEBUG_MODULE_ID_NAMES
+                .lock()
+                .expect("Failed to acquire lock for Debug reading from DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
+
+        match names.get(&self.0) {
+            Some(str_ref) => write!(f, "{}", str_ref.clone()),
+            None => {
+                panic!(
+                    "Could not find a Debug name for module ID {} in {:?}",
+                    self.0, names,
+                );
+            }
+        }
     }
 
     /// In relese builds, all we have access to is the number, so only display that.
