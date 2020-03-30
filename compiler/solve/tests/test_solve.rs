@@ -2472,10 +2472,10 @@ mod test_solve {
                 Order : [ LT, GT, EQ ]
                 ConsList a : [ Nil, Cons a (ConsList a) ]
 
-                sortWith
+                { x: sortWith, y: sort, z: sortBy }
                 "#
             ),
-            "(foobar, foobar -> Order), ConsList foobar -> ConsList foobar",
+            "{ x : (foobar, foobar -> Order), ConsList foobar -> ConsList foobar, y : ConsList cm -> ConsList cm, z : (x -> cmpl), ConsList x -> ConsList x }"
         );
     }
 
@@ -2502,6 +2502,28 @@ mod test_solve {
                 "#
             ),
             "Type a -> Opaque",
+        );
+    }
+
+    #[test]
+    fn rigids() {
+        // I was sligtly surprised this works
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : List a -> List a
+                f = \input ->
+                    x : List b
+                    x = []
+
+                    v = List.getUnsafe input 0
+
+                    List.push x v
+
+                f
+                "#
+            ),
+            "List a -> List a",
         );
     }
 }
