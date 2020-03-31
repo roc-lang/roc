@@ -165,7 +165,7 @@ pub enum Expr<'a> {
     MalformedClosure,
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
-    PrecedenceConflict(Loc<BinOp>, Loc<BinOp>, &'a Loc<Expr<'a>>),
+    PrecedenceConflict(Region, Loc<BinOp>, Loc<BinOp>, &'a Loc<Expr<'a>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

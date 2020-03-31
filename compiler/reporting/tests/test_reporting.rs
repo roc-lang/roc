@@ -12,9 +12,9 @@ mod test_reporting {
     use crate::helpers::test_home;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_reporting::report::{
-        can_problem, em_text, plain_text, url, Report, ReportText, BLUE_CODE, BOLD_CODE, CYAN_CODE,
-        GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, TEST_PALETTE, UNDERLINE_CODE, WHITE_CODE,
-        YELLOW_CODE,
+        can_problem, em_text, plain_text, region_slice, url, Report, ReportText, BLUE_CODE,
+        BOLD_CODE, CYAN_CODE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, TEST_PALETTE,
+        UNDERLINE_CODE, WHITE_CODE, YELLOW_CODE,
     };
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
@@ -97,6 +97,7 @@ mod test_reporting {
             Some(problem) => {
                 let report = can_problem(
                     filename_from_string(r"\code\proj\Main.roc"),
+                    src,
                     problem.clone(),
                 );
                 report
@@ -325,29 +326,57 @@ mod test_reporting {
     // }
 
     #[test]
-    fn report_precedence_problem() {
+    fn report_precedence_problem_single_line() {
         report_problem_as(
             indoc!(
-                r#"
-                x = 1
+                r#"x = 1
                 y =
-                    if selecteId == thisId == adminsId then
+                    if selectedId != thisId == adminsId then
                         4
 
                     else
                         5
 
                 { x, y }
-            "#
+                "#
             ),
             indoc!(
                 r#"
-                Which expression should I evaluate first? "selectedId == thisId" or "thisId == adminsId"?
+                You cannot mix (!=) and (==) without parentheses
 
-                3 ┆  if selecteId == thisId == adminsId then
-                  ┆     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                3 ┆      if selectedId != thisId == adminsId then
 
-                Please clarify this for me by adding some parentheses. Either "(selectedId == thisId) == adminsId" or "selectedId == (thisId == adminsId)" would work."#
+                "#
+            ),
+        )
+        // ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    }
+
+    #[test]
+    fn report_precedence_problem_multiline() {
+        report_problem_as(
+            indoc!(
+                r#"
+                if
+                    1
+                        != 2
+                        == 3
+                then
+                    2
+
+                else
+                    3
+                "#
+            ),
+            indoc!(
+                r#"
+                You cannot mix (!=) and (==) without parentheses
+
+                2 ┆      1
+                3 ┆          != 2
+                4 ┆          == 3
+
+                "#
             ),
         )
     }
@@ -549,10 +578,14 @@ mod test_reporting {
             })),
             indoc!(
                 r#"
+
+
                     <cyan>1<reset><magenta> ┆<reset>  <white>isDisabled = \user -> user.isAdmin<reset>
                     <cyan>2<reset><magenta> ┆<reset>
                     <cyan>3<reset><magenta> ┆<reset>  <white>theAdmin<reset>
-                    <cyan>4<reset><magenta> ┆<reset>  <white>    |> isDisabled<reset>"#
+                    <cyan>4<reset><magenta> ┆<reset>  <white>    |> isDisabled<reset>
+
+                "#
             ),
         );
     }
@@ -577,9 +610,13 @@ mod test_reporting {
             })),
             indoc!(
                 r#"
-                    2 ┆  y = 2
-                    3 ┆  f = \a -> a + 4
-                    4 ┆"#
+
+
+                2 ┆  y = 2
+                3 ┆  f = \a -> a + 4
+                4 ┆
+
+                "#
             ),
         );
     }
@@ -612,10 +649,129 @@ mod test_reporting {
             })),
             indoc!(
                 r#"
+
+
                      9 ┆
                     10 ┆  y = 2
-                    11 ┆  f = \a -> a + 4"#
+                    11 ┆  f = \a -> a + 4
+
+                    "#
             ),
+        );
+    }
+
+    #[test]
+    fn region_slice_test() {
+        use roc_region::all::Region;
+
+        assert_eq!(
+            {
+                let region = Region {
+                    start_line: 0,
+                    end_line: 0,
+                    start_col: 0,
+                    end_col: 0,
+                };
+
+                region_slice(region, "The quick brown fox jumps over the lazy dog")
+            },
+            ""
+        );
+
+        assert_eq!(
+            {
+                let region = Region {
+                    start_line: 0,
+                    end_line: 0,
+                    start_col: 4,
+                    end_col: 9,
+                };
+
+                region_slice(region, "The quick brown fox jumps over the lazy dog")
+            },
+            "quick"
+        );
+
+        assert_eq!(
+            {
+                let region = Region {
+                    start_line: 0,
+                    end_line: 0,
+                    start_col: 4,
+                    end_col: 9,
+                };
+
+                region_slice(region, "The\nquick brown fox jumps over the lazy dog")
+            },
+            "quick"
+        );
+
+        assert_eq!(
+            {
+                let region = Region {
+                    start_line: 1,
+                    end_line: 1,
+                    start_col: 0,
+                    end_col: 5,
+                };
+
+                region_slice(
+                    region,
+                    indoc!(
+                        r#"
+                        The
+                        quick brown fox jumps over the lazy dog
+                        "#
+                    ),
+                )
+            },
+            "quick"
+        );
+
+        assert_eq!(
+            {
+                let region = Region {
+                    start_line: 2,
+                    end_line: 2,
+                    start_col: 0,
+                    end_col: 5,
+                };
+
+                region_slice(
+                    region,
+                    indoc!(
+                        r#"
+                        The
+
+                        quick brown fox jumps over the lazy dog
+                        "#
+                    ),
+                )
+            },
+            "quick"
+        );
+
+        assert_eq!(
+            {
+                let region = Region {
+                    start_line: 2,
+                    end_line: 2,
+                    start_col: 0,
+                    end_col: 5,
+                };
+
+                region_slice(
+                    region,
+                    indoc!(
+                        r#"
+                        The
+
+                        quick brown fox jumps over the lazy dog
+                        "#
+                    ),
+                )
+            },
+            "quick"
         );
     }
 }

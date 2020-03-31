@@ -67,18 +67,14 @@ impl Color {
     }
 }
 
-pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
+pub fn can_problem(filename: PathBuf, file_content: &str, problem: Problem) -> Report {
     let mut texts = Vec::new();
 
     match problem {
         Problem::UnusedDef(symbol, region) => {
             texts.push(Value(symbol));
             texts.push(plain_text(" is not used anywhere in your code."));
-            texts.push(newline());
-            texts.push(newline());
             texts.push(Region(region));
-            texts.push(newline());
-            texts.push(newline());
             texts.push(plain_text("If you didn't intend on using "));
             texts.push(Value(symbol));
             texts.push(plain_text(
@@ -89,11 +85,7 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
             texts.push(plain_text("Nothing from "));
             texts.push(Module(module_id));
             texts.push(plain_text(" is used in this module."));
-            texts.push(newline());
-            texts.push(newline());
             texts.push(Region(region));
-            texts.push(newline());
-            texts.push(newline());
             texts.push(plain_text("Since "));
             texts.push(Module(module_id));
             texts.push(plain_text(" isn't used, you don't need to import it."));
@@ -103,11 +95,7 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
             texts.push(plain_text(" doesn't use "));
             texts.push(Value(argument_symbol));
             texts.push(plain_text("."));
-            texts.push(newline());
-            texts.push(newline());
             texts.push(Region(region));
-            texts.push(newline());
-            texts.push(newline());
             texts.push(plain_text("If you don't need "));
             texts.push(Value(argument_symbol));
             texts.push(plain_text(
@@ -120,8 +108,12 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
             texts.push(Value(argument_symbol));
             texts.push(plain_text("\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used."));
         }
-        Problem::PrecedenceProblem(BothNonAssociative(_left_bin_op, _right_bin_op)) => {
-            panic!("TODO implement precedence problem report")
+        Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => {
+            texts.push(plain_text(&*format!(
+                "You cannot mix {} and {} without parentheses",
+                left_bin_op.value, right_bin_op.value
+            )));
+            texts.push(Region(region));
         }
         Problem::UnsupportedPattern(_pattern_type, _region) => {
             panic!("TODO implement unsupported pattern report")
@@ -299,6 +291,8 @@ impl ReportText {
             }
             Type(content) => buf.push_str(content_to_string(content, subs, home, interns).as_str()),
             Region(region) => {
+                buf.push('\n');
+                buf.push('\n');
                 let max_line_number_length = region.end_line.to_string().len();
 
                 for i in region.start_line..=region.end_line {
@@ -326,6 +320,9 @@ impl ReportText {
                         buf.push('\n');
                     }
                 }
+
+                buf.push('\n');
+                buf.push('\n');
             }
             Docs(_) => {
                 panic!("TODO implment docs");
@@ -398,6 +395,9 @@ impl ReportText {
                 Content::Error => {}
             },
             Region(region) => {
+                // newline before snippet
+                buf.push('\n');
+                buf.push('\n');
                 let max_line_number_length = region.end_line.to_string().len();
 
                 for i in region.start_line..=region.end_line {
@@ -425,6 +425,10 @@ impl ReportText {
                         buf.push('\n');
                     }
                 }
+
+                // newline before next line of text
+                buf.push('\n');
+                buf.push('\n');
             }
             Batch(report_texts) => {
                 for report_text in report_texts {
@@ -434,4 +438,29 @@ impl ReportText {
             _ => panic!("TODO implement more ReportTexts in render color terminal"),
         }
     }
+}
+
+pub fn region_slice<'a>(region: roc_region::all::Region, buffer: &'a str) -> &'a str {
+    let mut start = 0;
+    let mut end = 0;
+
+    let it = (0..).zip(buffer.lines());
+    for (index, line) in it {
+        if index < region.start_line as usize {
+            let size = line.len() + 1;
+            start += size;
+        } else if index < region.end_line as usize {
+            let size = line.len() + 1;
+            end += size;
+        } else {
+            break;
+        }
+    }
+
+    end += start;
+
+    start += region.start_col as usize;
+    end += region.end_col as usize;
+
+    &buffer[start..end]
 }
