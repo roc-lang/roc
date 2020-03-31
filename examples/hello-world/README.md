@@ -12,7 +12,7 @@ in our imaginations...so Rube Goldberg it is!)
 
 ## Steps
 
-1. `cd` into `examples/helloworld/`
+1. `cd` into `examples/hello-world/`
 2. Run `cargo run hello.roc` to compile the Roc source code into a `hello.o` file.
 3. Run `gcc -shared hello.o -o libhello_from_roc.so` to generate `libhello_from_roc.so`. (This filename must begin with `lib` and end in `.so` or else `host.rs` won't be able to find it!)
 4. Move `libhello_from_roc.so` onto the system library path, e.g. with `sudo mv libhello_from_roc.so /usr/local/lib/`
