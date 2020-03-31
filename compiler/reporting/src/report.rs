@@ -67,7 +67,7 @@ impl Color {
     }
 }
 
-pub fn can_problem(filename: PathBuf, file_content: &str, problem: Problem) -> Report {
+pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
     let mut texts = Vec::new();
 
     match problem {
@@ -187,6 +187,7 @@ pub fn url(str: &str) -> ReportText {
     Url(Box::from(str))
 }
 
+#[allow(dead_code)]
 fn newline() -> ReportText {
     plain_text("\n")
 }
@@ -507,29 +508,4 @@ impl ReportText {
             _ => panic!("TODO implement more ReportTexts in render color terminal"),
         }
     }
-}
-
-pub fn region_slice<'a>(region: roc_region::all::Region, buffer: &'a str) -> &'a str {
-    let mut start = 0;
-    let mut end = 0;
-
-    let it = (0..).zip(buffer.lines());
-    for (index, line) in it {
-        if index < region.start_line as usize {
-            let size = line.len() + 1;
-            start += size;
-        } else if index < region.end_line as usize {
-            let size = line.len() + 1;
-            end += size;
-        } else {
-            break;
-        }
-    }
-
-    end += start;
-
-    start += region.start_col as usize;
-    end += region.end_col as usize;
-
-    &buffer[start..end]
 }

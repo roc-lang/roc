@@ -12,9 +12,9 @@ mod test_reporting {
     use crate::helpers::test_home;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_reporting::report::{
-        can_problem, em_text, plain_text, region_slice, url, Report, ReportText, BLUE_CODE,
-        BOLD_CODE, CYAN_CODE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, TEST_PALETTE,
-        UNDERLINE_CODE, WHITE_CODE, YELLOW_CODE,
+        can_problem, em_text, plain_text, url, Report, ReportText, BLUE_CODE, BOLD_CODE, CYAN_CODE,
+        GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, TEST_PALETTE, UNDERLINE_CODE, WHITE_CODE,
+        YELLOW_CODE,
     };
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
@@ -97,7 +97,6 @@ mod test_reporting {
             Some(problem) => {
                 let report = can_problem(
                     filename_from_string(r"\code\proj\Main.roc"),
-                    src,
                     problem.clone(),
                 );
                 report
@@ -658,121 +657,6 @@ mod test_reporting {
 
                     "#
             ),
-        );
-    }
-
-    #[test]
-    fn region_slice_test() {
-        use roc_region::all::Region;
-
-        assert_eq!(
-            {
-                let region = Region {
-                    start_line: 0,
-                    end_line: 0,
-                    start_col: 0,
-                    end_col: 0,
-                };
-
-                region_slice(region, "The quick brown fox jumps over the lazy dog")
-            },
-            ""
-        );
-
-        assert_eq!(
-            {
-                let region = Region {
-                    start_line: 0,
-                    end_line: 0,
-                    start_col: 4,
-                    end_col: 9,
-                };
-
-                region_slice(region, "The quick brown fox jumps over the lazy dog")
-            },
-            "quick"
-        );
-
-        assert_eq!(
-            {
-                let region = Region {
-                    start_line: 0,
-                    end_line: 0,
-                    start_col: 4,
-                    end_col: 9,
-                };
-
-                region_slice(region, "The\nquick brown fox jumps over the lazy dog")
-            },
-            "quick"
-        );
-
-        assert_eq!(
-            {
-                let region = Region {
-                    start_line: 1,
-                    end_line: 1,
-                    start_col: 0,
-                    end_col: 5,
-                };
-
-                region_slice(
-                    region,
-                    indoc!(
-                        r#"
-                        The
-                        quick brown fox jumps over the lazy dog
-                        "#
-                    ),
-                )
-            },
-            "quick"
-        );
-
-        assert_eq!(
-            {
-                let region = Region {
-                    start_line: 2,
-                    end_line: 2,
-                    start_col: 0,
-                    end_col: 5,
-                };
-
-                region_slice(
-                    region,
-                    indoc!(
-                        r#"
-                        The
-
-                        quick brown fox jumps over the lazy dog
-                        "#
-                    ),
-                )
-            },
-            "quick"
-        );
-
-        assert_eq!(
-            {
-                let region = Region {
-                    start_line: 2,
-                    end_line: 2,
-                    start_col: 0,
-                    end_col: 5,
-                };
-
-                region_slice(
-                    region,
-                    indoc!(
-                        r#"
-                        The
-
-                        quick brown fox jumps over the lazy dog
-                        "#
-                    ),
-                )
-            },
-            "quick"
         );
     }
 }
