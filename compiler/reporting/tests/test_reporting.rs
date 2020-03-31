@@ -285,6 +285,7 @@ mod test_reporting {
                 y is not used anywhere in your code.
 
                 2 ┆  y = 2
+                  ┆  ^
 
                 If you didn't intend on using y then remove it so future readers of your code don't wonder why it is there."#
             ),
@@ -345,11 +346,11 @@ mod test_reporting {
                 You cannot mix (!=) and (==) without parentheses
 
                 3 ┆      if selectedId != thisId == adminsId then
+                  ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 "#
             ),
         )
-        // ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     }
 
     #[test]

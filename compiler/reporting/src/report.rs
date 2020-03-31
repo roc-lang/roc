@@ -295,10 +295,10 @@ impl ReportText {
                 buf.push('\n');
                 let max_line_number_length = region.end_line.to_string().len();
 
-                for i in region.start_line..=region.end_line {
-                    let i_one_indexed = i + 1;
+                if region.start_line == region.end_line {
+                    let i = region.start_line;
 
-                    let line_number_string = i_one_indexed.to_string();
+                    let line_number_string = (i + 1).to_string();
                     let line_number = line_number_string.as_str();
                     let this_line_number_length = line_number.len();
 
@@ -316,8 +316,41 @@ impl ReportText {
                         buf.push_str(src_lines[i as usize]);
                     }
 
-                    if i != region.end_line {
-                        buf.push('\n');
+                    buf.push('\n');
+                    buf.push_str(" ".repeat(max_line_number_length).as_str());
+                    buf.push_str(" ┆");
+
+                    let spaces = std::iter::repeat(" ").take(region.start_col as usize + 2);
+                    let carets =
+                        std::iter::repeat("^").take((region.end_col - region.start_col) as usize);
+
+                    let line = spaces.chain(carets).collect::<String>();
+                    buf.push_str(&*line);
+                } else {
+                    for i in region.start_line..=region.end_line {
+                        let i_one_indexed = i + 1;
+
+                        let line_number_string = i_one_indexed.to_string();
+                        let line_number = line_number_string.as_str();
+                        let this_line_number_length = line_number.len();
+
+                        buf.push_str(
+                            " ".repeat(max_line_number_length - this_line_number_length)
+                                .as_str(),
+                        );
+                        buf.push_str(line_number);
+                        buf.push_str(" ┆");
+
+                        let line = src_lines[i as usize];
+
+                        if !line.trim().is_empty() {
+                            buf.push_str("  ");
+                            buf.push_str(src_lines[i as usize]);
+                        }
+
+                        if i != region.end_line {
+                            buf.push('\n');
+                        }
                     }
                 }
 
