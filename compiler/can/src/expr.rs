@@ -584,11 +584,13 @@ pub fn canonicalize_expr<'a>(
 
         ast::Expr::PrecedenceConflict(binop1, binop2, _expr) => {
             use roc_problem::can::RuntimeError::*;
+
+            let problem = PrecedenceProblem::BothNonAssociative(binop1.clone(), binop2.clone());
+
+            env.problem(Problem::PrecedenceProblem(problem.clone()));
+
             (
-                RuntimeError(InvalidPrecedence(
-                    PrecedenceProblem::BothNonAssociative(binop1.clone(), binop2.clone()),
-                    region,
-                )),
+                RuntimeError(InvalidPrecedence(problem, region)),
                 Output::default(),
             )
         }
