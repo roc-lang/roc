@@ -622,6 +622,43 @@ mod test_reporting {
     }
 
     #[test]
+    fn report_region_line_number_length_edge_case() {
+        // the highest line number is 9, but it's rendered as 10.
+        // Make sure that we render the line number as 2-wide
+        report_renders_as_from_src(
+            indoc!(
+                r#"
+
+
+
+
+                    x = 1
+                    y = 2
+                    f = \a -> a + 4
+
+                    f x
+                "#
+            ),
+            to_simple_report(Region(roc_region::all::Region {
+                start_line: 7,
+                end_line: 9,
+                start_col: 0,
+                end_col: 0,
+            })),
+            indoc!(
+                r#"
+
+
+                 8 ┆>
+                 9 ┆>  f x
+                10 ┆>
+
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn report_region_different_line_number_lengths() {
         report_renders_as_from_src(
             indoc!(

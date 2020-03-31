@@ -294,7 +294,9 @@ impl ReportText {
             Region(region) => {
                 buf.push('\n');
                 buf.push('\n');
-                let max_line_number_length = region.end_line.to_string().len();
+
+                // widest displayed line number
+                let max_line_number_length = (region.end_line + 1).to_string().len();
 
                 if region.start_line == region.end_line {
                     let i = region.start_line;
