@@ -527,6 +527,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7fe5bd57d1d7414c6b5ed48563a2c855d995ff777729dcd91c369ec7fea395ae"
 
 [[package]]
+name = "roc-cli"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "im",
+ "im-rc",
+ "inkwell",
+ "inlinable_string",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_constrain",
+ "roc_gen",
+ "roc_module",
+ "roc_mono",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_solve",
+ "roc_types",
+ "roc_unify",
+ "roc_uniq",
+ "target-lexicon",
+]
+
+[[package]]
 name = "roc_builtins"
 version = "0.1.0"
 dependencies = [
@@ -642,6 +668,7 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "roc_uniq",
+ "target-lexicon",
  "tokio",
 ]
 
@@ -902,6 +929,12 @@ dependencies = [
  "quote 1.0.3",
  "unicode-xid 0.2.0",
 ]
+
+[[package]]
+name = "target-lexicon"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab0e7238dcc7b40a7be719a25365910f6807bd864f4cce6b2e6b873658e2b19d"
 
 [[package]]
 name = "thread_local"
