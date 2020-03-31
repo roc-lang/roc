@@ -320,12 +320,11 @@ impl ReportText {
                     buf.push_str(" ".repeat(max_line_number_length).as_str());
                     buf.push_str(" ┆");
 
-                    let spaces = std::iter::repeat(" ").take(region.start_col as usize + 2);
-                    let carets =
-                        std::iter::repeat("^").take((region.end_col - region.start_col) as usize);
-
-                    let line = spaces.chain(carets).collect::<String>();
-                    buf.push_str(&*line);
+                    buf.push_str(" ".repeat(region.start_col as usize + 2).as_str());
+                    buf.push_str(
+                        "^".repeat((region.end_col - region.start_col) as usize)
+                            .as_str(),
+                    );
                 } else {
                     for i in region.start_line..=region.end_line {
                         let i_one_indexed = i + 1;
@@ -339,7 +338,7 @@ impl ReportText {
                                 .as_str(),
                         );
                         buf.push_str(line_number);
-                        buf.push_str(" ┆");
+                        buf.push_str(" ┆>");
 
                         let line = src_lines[i as usize];
 
@@ -431,9 +430,13 @@ impl ReportText {
                 // newline before snippet
                 buf.push('\n');
                 buf.push('\n');
-                let max_line_number_length = region.end_line.to_string().len();
 
-                for i in region.start_line..=region.end_line {
+                // the widest line number that is rendered
+                let max_line_number_length = (region.end_line + 1).to_string().len();
+
+                if region.start_line == region.end_line {
+                    // single line
+                    let i = region.start_line;
                     let i_one_indexed = i + 1;
 
                     let line_number_string = i_one_indexed.to_string();
@@ -454,8 +457,41 @@ impl ReportText {
                         buf.push_str(&palette.code_block.render(src_lines[i as usize]));
                     }
 
-                    if i != region.end_line {
-                        buf.push('\n');
+                    buf.push('\n');
+                    buf.push_str(" ".repeat(max_line_number_length).as_str());
+                    buf.push_str(&palette.gutter_bar.render(" ┆"));
+
+                    buf.push_str(" ".repeat(region.start_col as usize + 2).as_str());
+                    let carets = "^".repeat((region.end_col - region.start_col) as usize);
+                    buf.push_str(&palette.error.render(carets.as_str()));
+                } else {
+                    // multiline
+
+                    for i in region.start_line..=region.end_line {
+                        let i_one_indexed = i + 1;
+
+                        let line_number_string = i_one_indexed.to_string();
+                        let line_number = line_number_string.as_str();
+                        let this_line_number_length = line_number.len();
+
+                        buf.push_str(
+                            " ".repeat(max_line_number_length - this_line_number_length)
+                                .as_str(),
+                        );
+                        buf.push_str(&palette.line_number.render(line_number));
+                        buf.push_str(&palette.gutter_bar.render(" ┆"));
+                        buf.push_str(&palette.error.render(">"));
+
+                        let line = src_lines[i as usize];
+
+                        if !line.trim().is_empty() {
+                            buf.push_str("  ");
+                            buf.push_str(&palette.code_block.render(src_lines[i as usize]));
+                        }
+
+                        if i != region.end_line {
+                            buf.push('\n');
+                        }
                     }
                 }
 

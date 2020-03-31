@@ -373,9 +373,9 @@ mod test_reporting {
                 r#"
                 You cannot mix (!=) and (==) without parentheses
 
-                2 ┆      1
-                3 ┆          != 2
-                4 ┆          == 3
+                2 ┆>      1
+                3 ┆>          != 2
+                4 ┆>          == 3
 
                 "#
             ),
@@ -581,10 +581,10 @@ mod test_reporting {
                 r#"
 
 
-                    <cyan>1<reset><magenta> ┆<reset>  <white>isDisabled = \user -> user.isAdmin<reset>
-                    <cyan>2<reset><magenta> ┆<reset>
-                    <cyan>3<reset><magenta> ┆<reset>  <white>theAdmin<reset>
-                    <cyan>4<reset><magenta> ┆<reset>  <white>    |> isDisabled<reset>
+                    <cyan>1<reset><magenta> ┆<reset><red>><reset>  <white>isDisabled = \user -> user.isAdmin<reset>
+                    <cyan>2<reset><magenta> ┆<reset><red>><reset>
+                    <cyan>3<reset><magenta> ┆<reset><red>><reset>  <white>theAdmin<reset>
+                    <cyan>4<reset><magenta> ┆<reset><red>><reset>  <white>    |> isDisabled<reset>
 
                 "#
             ),
@@ -613,9 +613,9 @@ mod test_reporting {
                 r#"
 
 
-                2 ┆  y = 2
-                3 ┆  f = \a -> a + 4
-                4 ┆
+                2 ┆>  y = 2
+                3 ┆>  f = \a -> a + 4
+                4 ┆>
 
                 "#
             ),
@@ -652,9 +652,9 @@ mod test_reporting {
                 r#"
 
 
-                     9 ┆
-                    10 ┆  y = 2
-                    11 ┆  f = \a -> a + 4
+                     9 ┆>
+                    10 ┆>  y = 2
+                    11 ┆>  f = \a -> a + 4
 
                     "#
             ),
