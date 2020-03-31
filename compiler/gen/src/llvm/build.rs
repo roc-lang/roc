@@ -3,6 +3,7 @@ use bumpalo::Bump;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
+use inkwell::passes::PassManager;
 use inkwell::types::{BasicTypeEnum, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
@@ -15,6 +16,7 @@ use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
 use roc_mono::layout::{Builtin, Layout};
+use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -42,6 +44,25 @@ pub struct Env<'a, 'ctx, 'env> {
 impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     pub fn ptr_int(&self) -> IntType<'ctx> {
         ptr_int(self.context, self.ptr_bytes)
+    }
+}
+
+pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>) {
+    // tail-call elimination is always on
+    fpm.add_instruction_combining_pass();
+    fpm.add_tail_call_elimination_pass();
+
+    // Enable more optimizations when running cargo test --release
+    if !cfg!(debug_assertions) {
+        fpm.add_reassociate_pass();
+        fpm.add_basic_alias_analysis_pass();
+        fpm.add_promote_memory_to_register_pass();
+        fpm.add_cfg_simplification_pass();
+        fpm.add_gvn_pass();
+        // TODO figure out why enabling any of these (even alone) causes LLVM to segfault
+        // fpm.add_strip_dead_prototypes_pass();
+        // fpm.add_dead_arg_elimination_pass();
+        // fpm.add_function_inlining_pass();
     }
 }
 
@@ -1276,4 +1297,18 @@ fn list_set<'a, 'ctx, 'env>(
         build_else,
         ret_type.into(),
     )
+}
+
+/// Translates a target_lexicon::Triple to a LLVM calling convention u32
+/// as described in https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
+pub fn get_call_conventions(cc: CallingConvention) -> u32 {
+    use CallingConvention::*;
+
+    // For now, we're returning 0 for the C calling convention on all of these.
+    // Not sure if we should be picking something more specific!
+    match cc {
+        SystemV => 0,
+        WasmBasicCAbi => 0,
+        WindowsFastcall => 0,
+    }
 }

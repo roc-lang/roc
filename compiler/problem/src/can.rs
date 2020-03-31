@@ -34,6 +34,8 @@ pub enum RuntimeError {
         original_region: Region,
         shadow: Located<Ident>,
     },
+    // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
+    UnsupportedPattern(Region),
     UnrecognizedFunctionName(Located<InlinableString>),
     LookupNotInScope(Located<InlinableString>),
     ValueNotExposed {

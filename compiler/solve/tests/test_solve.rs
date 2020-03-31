@@ -2526,4 +2526,27 @@ mod test_solve {
             "List a -> List a",
         );
     }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic]
+    fn rigid_record_quantification() {
+        // the ext here is qualified on the outside (because we have rank 1 types, not rank 2).
+        // That means e.g. `f : { bar : String, foo : Int } -> Bool }` is a valid argument. but
+        // that function could not be applied to the `{ foo : Int }` list. Therefore, this function
+        // is not allowed.
+        //
+        // should hit a debug_assert! in debug mode, and produce a type error in release mode
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                test : ({ foo : Int }ext -> Bool), { foo : Int } -> Bool
+                test = \fn, a -> fn a
+
+                test
+                "#
+            ),
+            "should fail",
+        );
+    }
 }

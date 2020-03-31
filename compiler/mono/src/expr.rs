@@ -340,31 +340,43 @@ fn pattern_to_when<'a>(
             // for underscore we generate a dummy Symbol
             (env.fresh_symbol(), body)
         }
-
-        Shadowed(_, _) | UnsupportedPattern(_) => {
-            // create the runtime error here, instead of delegating to When.
-            // UnsupportedPattern should then never occcur in When
-            panic!("TODO generate runtime error here");
+        Shadowed(region, loc_ident) => {
+            let error = roc_problem::can::RuntimeError::Shadowing {
+                original_region: *region,
+                shadow: loc_ident.clone(),
+            };
+            (env.fresh_symbol(), Located::at_zero(RuntimeError(error)))
         }
 
-        AppliedTag {..} | RecordDestructure {..} => {
+        UnsupportedPattern(region) => {
+            // create the runtime error here, instead of delegating to When.
+            // UnsupportedPattern should then never occcur in When
+            let error = roc_problem::can::RuntimeError::UnsupportedPattern(*region);
+            (env.fresh_symbol(), Located::at_zero(RuntimeError(error)))
+        }
+
+        AppliedTag { .. } | RecordDestructure { .. } => {
             let symbol = env.fresh_symbol();
 
             let wrapped_body = When {
                 cond_var: pattern_var,
                 expr_var: body_var,
                 loc_cond: Box::new(Located::at_zero(Var(symbol))),
-                branches: vec![WhenBranch{ patterns: vec![pattern], value: body, guard: None }],
+                branches: vec![WhenBranch {
+                    patterns: vec![pattern],
+                    value: body,
+                    guard: None,
+                }],
             };
 
             (symbol, Located::at_zero(wrapped_body))
         }
 
-        // These patters are refutable, and thus should never occur outside a `when` expression
-        IntLiteral(_) | NumLiteral(_,_) | FloatLiteral(_) | StrLiteral(_) => {
+        IntLiteral(_) | NumLiteral(_, _) | FloatLiteral(_) | StrLiteral(_) => {
+            // These patters are refutable, and thus should never occur outside a `when` expression
+            // They should have been replaced with `UnsupportedPattern` during canonicalization
             unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
         }
-
     }
 }
 
@@ -1019,7 +1031,7 @@ fn from_can_when<'a>(
     if branches.is_empty() {
         // A when-expression with no branches is a runtime error.
         // We can't know what to return!
-        panic!("TODO compile a 0-branch when-expression to a RuntimeError");
+        Expr::RuntimeError("Hit a 0-branch when expression")
     } else if branches.len() == 1 && branches[0].patterns.len() == 1 && branches[0].guard.is_none()
     {
         let first = branches.remove(0);
