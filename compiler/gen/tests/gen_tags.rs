@@ -17,7 +17,6 @@ mod gen_tags {
     use bumpalo::Bump;
     use inkwell::context::Context;
     use inkwell::execution_engine::JitFunction;
-    use inkwell::module::Linkage;
     use inkwell::passes::PassManager;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
@@ -27,11 +26,6 @@ mod gen_tags {
     use roc_mono::expr::{Expr, Procs};
     use roc_mono::layout::Layout;
     use roc_types::subs::Subs;
-
-    use inkwell::targets::{
-        CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
-    };
-    use std::path::Path;
 
     #[test]
     fn applied_tag_nothing() {

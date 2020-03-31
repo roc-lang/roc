@@ -1,6 +1,8 @@
 #[macro_export]
 macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+        let target = target_lexicon::Triple::host();
+        let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
         let arena = Bump::new();
         let CanExprOut { loc_expr, var_store, var, constraint, home, interns, .. } = can_expr($src);
         let subs = Subs::new(var_store.into());
@@ -17,14 +19,12 @@ macro_rules! assert_llvm_evals_to {
         fpm.initialize();
 
         // Compute main_fn_type before moving subs to Env
-        let layout = Layout::from_content(&arena, content, &subs, $crate::helpers::eval::POINTER_SIZE)
+        let layout = Layout::from_content(&arena, content, &subs, ptr_bytes)
     .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
         let execution_engine =
             module
             .create_jit_execution_engine(OptimizationLevel::None)
             .expect("Error creating JIT execution engine for test");
-
-        let ptr_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
 
         let main_fn_type = basic_type_from_layout(&arena, &context, &layout, ptr_bytes)
             .fn_type(&[], false);
@@ -43,7 +43,7 @@ macro_rules! assert_llvm_evals_to {
         let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
         // Populate Procs and get the low-level Expr from the canonical Expr
-        let main_body = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, $crate::helpers::eval::POINTER_SIZE);
+        let main_body = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, ptr_bytes);
 
         // Put this module's ident_ids back in the interns, so we can use them in Env.
         env.interns.all_ident_ids.insert(home, ident_ids);
@@ -79,8 +79,9 @@ macro_rules! assert_llvm_evals_to {
 
         // Add main to the module.
         let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
+        let cc = roc_gen::llvm::build::get_call_conventions(target.default_calling_convention().unwrap());
 
-        main_fn.set_call_conventions($crate::helpers::eval::MAIN_CALLING_CONVENTION);
+        main_fn.set_call_conventions(cc);
 
         // Add main's body
         let basic_block = context.append_basic_block(main_fn, "entry");
@@ -133,6 +134,8 @@ macro_rules! assert_llvm_evals_to {
 macro_rules! assert_opt_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         let arena = Bump::new();
+        let target = target_lexicon::Triple::host();
+        let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
         let (loc_expr, _output, _problems, subs, var, constraint, home, interns) = uniq_expr($src);
 
         let mut unify_problems = Vec::new();
@@ -148,7 +151,7 @@ macro_rules! assert_opt_evals_to {
         fpm.initialize();
 
         // Compute main_fn_type before moving subs to Env
-        let layout = Layout::from_content(&arena, content, &subs, $crate::helpers::eval::POINTER_SIZE)
+        let layout = Layout::from_content(&arena, content, &subs, ptr_bytes)
     .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
 
         let execution_engine =
@@ -156,7 +159,6 @@ macro_rules! assert_opt_evals_to {
             .create_jit_execution_engine(OptimizationLevel::None)
             .expect("Error creating JIT execution engine for test");
 
-        let ptr_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
         let main_fn_type = basic_type_from_layout(&arena, &context, &layout, ptr_bytes)
             .fn_type(&[], false);
         let main_fn_name = "$Test.main";
@@ -174,7 +176,7 @@ macro_rules! assert_opt_evals_to {
         let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
         // Populate Procs and get the low-level Expr from the canonical Expr
-        let main_body = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, $crate::helpers::eval::POINTER_SIZE);
+        let main_body = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, ptr_bytes);
 
         // Put this module's ident_ids back in the interns, so we can use them in Env.
         env.interns.all_ident_ids.insert(home, ident_ids);
@@ -210,8 +212,9 @@ macro_rules! assert_opt_evals_to {
 
         // Add main to the module.
         let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
+        let cc = roc_gen::llvm::build::get_call_conventions(target.default_calling_convention().unwrap());
 
-        main_fn.set_call_conventions($crate::helpers::eval::MAIN_CALLING_CONVENTION);
+        main_fn.set_call_conventions(cc);
 
         // Add main's body
         let basic_block = context.append_basic_block(main_fn, "entry");
@@ -276,7 +279,7 @@ macro_rules! emit_expr {
         fpm.initialize();
 
         // Compute main_fn_type before moving subs to Env
-        let layout = Layout::from_content(&arena, content, &subs, $crate::helpers::eval::POINTER_SIZE)
+        let layout = Layout::from_content(&arena, content, &subs, ptr_bytes)
     .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
 
         let execution_engine =
@@ -284,7 +287,6 @@ macro_rules! emit_expr {
             .create_jit_execution_engine(OptimizationLevel::None)
             .expect("Error creating JIT execution engine for test");
 
-        let ptr_bytes = execution_engine.get_target_data().get_pointer_byte_size(None);
         let main_fn_type = basic_type_from_layout(&arena, &context, &layout, ptr_bytes)
             .fn_type(&[], false);
         let main_fn_name = "$Test.main";
