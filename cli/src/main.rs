@@ -27,7 +27,7 @@ pub mod helpers;
 
 fn main() -> io::Result<()> {
     let now = SystemTime::now();
-    let argv = std::env::args().into_iter().collect::<Vec<String>>();
+    let argv = std::env::args().collect::<Vec<String>>();
 
     match argv.get(1) {
         Some(filename) => {
@@ -163,7 +163,7 @@ fn gen(src: &str, target: Triple, dest_filename: &Path) {
         &ImMap::default(),
         main_fn,
         &main_body,
-        &mut Procs::default(),
+        &Procs::default(),
     );
 
     builder.build_return(Some(&ret));

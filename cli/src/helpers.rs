@@ -20,13 +20,11 @@ use roc_solve::solve;
 use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
 use std::hash::Hash;
-use std::path::{Path, PathBuf};
 
 pub fn test_home() -> ModuleId {
     ModuleIds::default().get_or_insert(&"Test".into())
 }
 
-#[allow(dead_code)]
 pub fn infer_expr(
     subs: Subs,
     problems: &mut Vec<roc_types::types::Problem>,
@@ -44,52 +42,10 @@ pub fn infer_expr(
     (content, solved.into_inner())
 }
 
-/// Used in the with_larger_debug_stack() function, for tests that otherwise
-/// run out of stack space in debug builds (but don't in --release builds)
-#[allow(dead_code)]
-const EXPANDED_STACK_SIZE: usize = 4 * 1024 * 1024;
-
-/// Without this, some tests pass in `cargo test --release` but fail without
-/// the --release flag because they run out of stack space. This increases
-/// stack size for debug builds only, while leaving the stack space at the default
-/// amount for release builds.
-#[allow(dead_code)]
-#[cfg(debug_assertions)]
-pub fn with_larger_debug_stack<F>(run_test: F)
-where
-    F: FnOnce() -> (),
-    F: Send,
-    F: 'static,
-{
-    std::thread::Builder::new()
-        .stack_size(EXPANDED_STACK_SIZE)
-        .spawn(run_test)
-        .expect("Error while spawning expanded dev stack size thread")
-        .join()
-        .expect("Error while joining expanded dev stack size thread")
-}
-
-/// In --release builds, don't increase the stack size. Run the test normally.
-/// This way, we find out if any of our tests are blowing the stack even after
-/// optimizations in release builds.
-#[allow(dead_code)]
-#[cfg(not(debug_assertions))]
-#[inline(always)]
-pub fn with_larger_debug_stack<F>(run_test: F)
-where
-    F: FnOnce() -> (),
-    F: Send,
-    F: 'static,
-{
-    run_test()
-}
-
-#[allow(dead_code)]
 pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, Fail> {
     parse_loc_with(arena, input).map(|loc_expr| loc_expr.value)
 }
 
-#[allow(dead_code)]
 pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast::Expr<'a>>, Fail> {
     let state = State::new(&input, Attempting::Module);
     let parser = space0_before(loc(roc_parse::expr::expr(0)), 0);
@@ -100,12 +56,10 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
         .map_err(|(fail, _)| fail)
 }
 
-#[allow(dead_code)]
 pub fn can_expr(expr_str: &str) -> CanExprOut {
     can_expr_with(&Bump::new(), test_home(), expr_str)
 }
 
-#[allow(dead_code)]
 pub fn uniq_expr(
     expr_str: &str,
 ) -> (
@@ -123,7 +77,6 @@ pub fn uniq_expr(
     uniq_expr_with(&Bump::new(), expr_str, declared_idents)
 }
 
-#[allow(dead_code)]
 pub fn uniq_expr_with(
     arena: &Bump,
     expr_str: &str,
@@ -169,7 +122,7 @@ pub fn uniq_expr_with(
         .iter()
         .map(|(symbol, (solved_type, region))| Import {
             loc_symbol: Located::at(*region, *symbol),
-            solved_type: solved_type,
+            solved_type,
         })
         .collect();
 
@@ -202,7 +155,6 @@ pub struct CanExprOut {
     pub constraint: Constraint,
 }
 
-#[allow(dead_code)]
 pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut {
     let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|e| {
         panic!(
@@ -252,7 +204,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         .iter()
         .map(|(symbol, (solved_type, region))| Import {
             loc_symbol: Located::at(*region, *symbol),
-            solved_type: solved_type,
+            solved_type,
         })
         .collect();
 
@@ -298,7 +250,6 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     }
 }
 
-#[allow(dead_code)]
 pub fn mut_map_from_pairs<K, V, I>(pairs: I) -> MutMap<K, V>
 where
     I: IntoIterator<Item = (K, V)>,
@@ -313,7 +264,6 @@ where
     answer
 }
 
-#[allow(dead_code)]
 pub fn im_map_from_pairs<K, V, I>(pairs: I) -> ImMap<K, V>
 where
     I: IntoIterator<Item = (K, V)>,
@@ -329,7 +279,6 @@ where
     answer
 }
 
-#[allow(dead_code)]
 pub fn send_set_from<V, I>(elems: I) -> SendSet<V>
 where
     I: IntoIterator<Item = V>,
@@ -344,16 +293,6 @@ where
     answer
 }
 
-#[allow(dead_code)]
-pub fn fixtures_dir<'a>() -> PathBuf {
-    Path::new("tests").join("fixtures").join("build")
-}
-
-#[allow(dead_code)]
-pub fn builtins_dir<'a>() -> PathBuf {
-    PathBuf::new().join("builtins")
-}
-
 // Check constraints
 //
 // Keep track of the used (in types or expectations) variables, and the declared variables (in
@@ -362,13 +301,12 @@ pub fn builtins_dir<'a>() -> PathBuf {
 //
 // There is one exception: the initial variable (that stores the type of the whole expression) is
 // never declared, but is used.
-#[allow(dead_code)]
 pub fn assert_correct_variable_usage(constraint: &Constraint) {
     // variables declared in constraint (flex_vars or rigid_vars)
     // and variables actually used in constraints
     let (declared, used) = variable_usage(constraint);
 
-    let used: ImSet<Variable> = used.clone().into();
+    let used: ImSet<Variable> = used.into();
     let mut decl: ImSet<Variable> = declared.rigid_vars.clone().into();
 
     for var in declared.flex_vars.clone() {
