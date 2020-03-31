@@ -22,3 +22,21 @@ Caused by:
 ```
 
 This seems to be caused by cargo being out of date (even if it's freshly installed), and can be fixed with `cargo update`. 
+
+## Use LLD for the linker
+
+Using [`lld` for Rust's linker](https://github.com/rust-lang/rust/issues/39915#issuecomment-538049306)
+makes build times a lot faster, and I highly recommend it.
+
+Create `~/.config/cargo` and add this to it:
+
+```
+[build]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+```
+
+Then install `lld` version 9 (e.g. with `$ sudo apt-get install lld-9`)
+and add make sure there's a `ld.lld` executable on your `PATH` which
+is symlinked to `lld-9`.
+
+That's it! Enjoy the faster builds.

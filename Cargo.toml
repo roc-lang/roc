@@ -19,5 +19,7 @@ members = [
     "compiler/load",
     "compiler/gen",
     "vendor/ena",
-    "vendor/pathfinding"
+    "vendor/pathfinding",
+    "cli"
 ]
+
