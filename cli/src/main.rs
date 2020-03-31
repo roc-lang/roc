@@ -21,7 +21,7 @@ use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::path::Path;
-use target_lexicon::Triple;
+use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
 
 pub mod helpers;
 
@@ -185,18 +185,73 @@ fn gen(src: &str, target: Triple, dest_filename: &Path) {
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    // Emit
-    Target::initialize_x86(&InitializationConfig::default());
+    // Emit the .o file
+
+    // NOTE: arch_str is *not* the same as the beginning of the magic target triple
+    // string! For example, if it's "x86-64" here, the magic target triple string
+    // will begin with "x86_64" (with an underscore) instead.
+    let arch_str = match target.architecture {
+        Architecture::X86_64 => {
+            Target::initialize_x86(&InitializationConfig::default());
+
+            "x86-64"
+        }
+        Architecture::Arm(_) => {
+            Target::initialize_arm(&InitializationConfig::default());
+
+            "arm"
+        }
+        Architecture::Wasm32 => {
+            Target::initialize_webassembly(&InitializationConfig::default());
+
+            "wasm32"
+        }
+        _ => panic!(
+            "TODO gracefully handle unsupported target architecture: {:?}",
+            target.architecture
+        ),
+    };
 
     let opt = OptimizationLevel::Default;
     let reloc = RelocMode::Default;
     let model = CodeModel::Default;
-    let target = Target::from_name("x86-64").unwrap();
-    let target_machine = target
+
+    // Best guide I've found on how to determine these magic strings:
+    //
+    // https://stackoverflow.com/questions/15036909/clang-how-to-list-supported-target-architectures
+    let target_triple_str = match target {
+        Triple {
+            architecture: Architecture::X86_64,
+            vendor: Vendor::Unknown,
+            operating_system: OperatingSystem::Linux,
+            ..
+        } => "x86_64-unknown-linux-gnu",
+        Triple {
+            architecture: Architecture::X86_64,
+            vendor: Vendor::Pc,
+            operating_system: OperatingSystem::Linux,
+            ..
+        } => "x86_64-pc-linux-gnu",
+        Triple {
+            architecture: Architecture::X86_64,
+            vendor: Vendor::Unknown,
+            operating_system: OperatingSystem::Darwin,
+            ..
+        } => "x86_64-unknown-darwin10",
+        Triple {
+            architecture: Architecture::X86_64,
+            vendor: Vendor::Apple,
+            operating_system: OperatingSystem::Darwin,
+            ..
+        } => "x86_64-apple-darwin10",
+        _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
+    };
+    let target_machine = Target::from_name(arch_str)
+        .unwrap()
         .create_target_machine(
-            &TargetTriple::create("x86_64-pc-linux-gnu"),
-            "x86-64",
-            "+avx2",
+            &TargetTriple::create(target_triple_str),
+            arch_str,
+            "+avx2", // TODO this string was used uncritically from an example, and should be reexamined
             opt,
             reloc,
             model,
