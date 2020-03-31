@@ -180,6 +180,10 @@ pub struct Interns {
 }
 
 impl Interns {
+    pub fn module_id(&mut self, name: &InlinableString) -> ModuleId {
+        self.module_ids.get_or_insert(name)
+    }
+
     pub fn module_name(&self, module_id: ModuleId) -> &InlinableString {
         self.module_ids.get_name(module_id).unwrap_or_else(|| {
             panic!(

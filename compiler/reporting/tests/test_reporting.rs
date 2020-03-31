@@ -8,8 +8,8 @@ extern crate roc_reporting;
 mod helpers;
 
 #[cfg(test)]
-mod test_report {
-    use crate::helpers::{module, test_home};
+mod test_reporting {
+    use crate::helpers::test_home;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_reporting::report::{
         can_problem, em_text, plain_text, url, Report, ReportText, BLUE_CODE, BOLD_CODE, CYAN_CODE,
@@ -221,12 +221,13 @@ mod test_report {
             "#
         );
 
-        let (_type_problems, _can_problems, mut subs, home, interns) = infer_expr_help(src);
+        let (_type_problems, _can_problems, mut subs, home, mut interns) = infer_expr_help(src);
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
+        let module_id = interns.module_id(&"Main".into());
 
-        to_simple_report(Module(module(&"Main".into())))
+        to_simple_report(Module(module_id))
             .text
             .render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
 
@@ -466,12 +467,13 @@ mod test_report {
             "#
         );
 
-        let (_type_problems, _can_problems, mut subs, home, interns) = infer_expr_help(src);
+        let (_type_problems, _can_problems, mut subs, home, mut interns) = infer_expr_help(src);
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
+        let module_id = interns.module_id(&"Util.Int".into());
 
-        to_simple_report(Module(module(&"Util.Int".into())))
+        to_simple_report(Module(module_id))
             .text
             .render_color_terminal(
                 &mut buf,
