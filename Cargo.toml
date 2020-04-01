@@ -10,6 +10,7 @@ members = [
     "compiler/types",
     "compiler/uniq",
     "compiler/builtins",
+    "compiler/builtins/bitcode",
     "compiler/constrain",
     "compiler/unify",
     "compiler/solve",
