@@ -636,7 +636,6 @@ pub enum Reason {
 pub enum PatternCategory {
     Record,
     EmptyRecord,
-    List,
     Set,
     Map,
     Ctor(TagName),

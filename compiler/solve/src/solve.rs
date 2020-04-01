@@ -1,18 +1,33 @@
 use roc_can::constraint::Constraint::{self, *};
+use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{ImMap, MutMap, SendMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
-use roc_region::all::Located;
+use roc_region::all::{Located, Region};
 use roc_types::boolean_algebra::{self, Atom};
 use roc_types::solved_types::{Solved, SolvedType};
 use roc_types::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use roc_types::types::Type::{self, *};
-use roc_types::types::{Alias, Problem};
-use roc_unify::unify::{unify, Unified};
+use roc_types::types::{Alias, ErrorType, PatternCategory};
+use roc_unify::unify::unify;
+use roc_unify::unify::Unified::*;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler
 // Thank you, Evan!
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum TypeError {
+    BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
+    BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
+    CircularType(Region, Symbol, ErrorType),
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum Category {
+    Lookup(Symbol),
+    If,
+}
 
 pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
 
@@ -85,7 +100,7 @@ struct State {
 
 pub fn run(
     env: &Env,
-    problems: &mut Vec<Problem>,
+    problems: &mut Vec<TypeError>,
     mut subs: Subs,
     constraint: &Constraint,
 ) -> (Solved<Subs>, Env) {
@@ -115,7 +130,7 @@ fn solve(
     state: State,
     rank: Rank,
     pools: &mut Pools,
-    problems: &mut Vec<Problem>,
+    problems: &mut Vec<TypeError>,
     cached_aliases: &mut MutMap<Symbol, Variable>,
     subs: &mut Subs,
     constraint: &Constraint,
@@ -129,28 +144,43 @@ fn solve(
 
             copy
         }
-        Eq(typ, expected_type, _region) => {
+        Eq(typ, expectation, region) => {
             let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
             let expected = type_to_var(
                 subs,
                 rank,
                 pools,
                 cached_aliases,
-                expected_type.get_type_ref(),
+                expectation.get_type_ref(),
             );
-            let Unified { vars, mismatches } = unify(subs, actual, expected);
 
-            // TODO use region when reporting a problem
-            problems.extend(mismatches);
+            match unify(subs, actual, expected) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
 
-            introduce(subs, rank, pools, &vars);
+                    state
+                }
+                Failure(vars, actual_type, expected_type) => {
+                    introduce(subs, rank, pools, &vars);
 
-            state
+                    let category = Category::If;
+                    let problem = TypeError::BadExpr(
+                        *region,
+                        category,
+                        actual_type,
+                        expectation.clone().replace(expected_type),
+                    );
+
+                    problems.push(problem);
+
+                    state
+                }
+            }
         }
         Lookup(symbol, expected_type, _region) => {
             let var = *env.vars_by_symbol.get(&symbol).unwrap_or_else(|| {
                 // TODO Instead of panicking, solve this as True and record
-                // a Problem ("module Foo does not expose `bar`") for later.
+                // a TypeError ("module Foo does not expose `bar`") for later.
                 panic!(
                     "Could not find symbol {:?} in vars_by_symbol {:?}",
                     symbol, env.vars_by_symbol
@@ -186,14 +216,14 @@ fn solve(
                 cached_aliases,
                 expected_type.get_type_ref(),
             );
-            let Unified { vars, mismatches } = unify(subs, actual, expected);
+            match unify(subs, actual, expected) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
 
-            // TODO use region when reporting a problem
-            problems.extend(mismatches);
-
-            introduce(subs, rank, pools, &vars);
-
-            state
+                    state
+                }
+                _ => todo!(),
+            }
         }
         And(sub_constraints) => {
             let mut state = state;
@@ -216,14 +246,15 @@ fn solve(
         Pattern(_region, _category, typ, expected) => {
             let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
             let expected = type_to_var(subs, rank, pools, cached_aliases, expected.get_type_ref());
-            let Unified { vars, mismatches } = unify(subs, actual, expected);
 
-            // TODO use region when reporting a problem
-            problems.extend(mismatches);
+            match unify(subs, actual, expected) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
 
-            introduce(subs, rank, pools, &vars);
-
-            state
+                    state
+                }
+                _ => todo!(),
+            }
         }
         Let(let_con) => {
             match &let_con.ret_constraint {
@@ -632,7 +663,7 @@ fn type_to_variable(
 
 fn check_for_infinite_type(
     subs: &mut Subs,
-    problems: &mut Vec<Problem>,
+    problems: &mut Vec<TypeError>,
     symbol: Symbol,
     loc_var: Located<Variable>,
 ) {
@@ -767,13 +798,13 @@ fn correct_recursive_attr(
 
 fn circular_error(
     subs: &mut Subs,
-    problems: &mut Vec<Problem>,
+    problems: &mut Vec<TypeError>,
     symbol: Symbol,
     loc_var: &Located<Variable>,
 ) {
     let var = loc_var.value;
     let error_type = subs.var_to_error_type(var);
-    let problem = Problem::CircularType(symbol, error_type, loc_var.region);
+    let problem = TypeError::CircularType(loc_var.region, symbol, error_type);
 
     subs.set_content(var, Content::Error);
 

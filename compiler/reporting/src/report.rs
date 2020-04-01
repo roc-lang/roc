@@ -2,6 +2,7 @@ use crate::report::ReportText::{Batch, Module, Region, Value};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::Problem;
+use roc_solve::solve;
 use roc_types::pretty_print::content_to_string;
 use roc_types::subs::{Content, Subs};
 use std::path::PathBuf;
@@ -64,6 +65,33 @@ impl Color {
             Cyan => cyan(str),
             Magenta => magenta(str),
         }
+    }
+}
+
+pub fn type_problem(filename: PathBuf, problem: solve::TypeError) -> Report {
+    use solve::TypeError::*;
+    let mut texts = Vec::new();
+
+    //        Problem::UnusedDef(symbol, region) => {
+    //            texts.push(Value(symbol));
+    //            texts.push(plain_text(" is not used anywhere in your code."));
+    //            texts.push(Region(region));
+    //            texts.push(plain_text("If you didn't intend on using "));
+    //            texts.push(Value(symbol));
+    //            texts.push(plain_text(
+    //                " then remove it so future readers of your code don't wonder why it is there.",
+    //            ));
+    //        }
+
+    match problem {
+        BadExpr(region, category, found, expected) => todo!(),
+        BadPattern(region, category, found, expected) => todo!(),
+        CircularType(region, symbol, circ_type) => todo!(),
+    }
+
+    Report {
+        filename,
+        text: Batch(texts),
     }
 }
 

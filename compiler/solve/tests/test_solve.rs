@@ -18,7 +18,7 @@ mod test_solve {
     fn infer_eq_help(
         src: &str,
     ) -> (
-        Vec<roc_types::types::Problem>,
+        Vec<roc_solve::solve::TypeError>,
         Vec<roc_problem::can::Problem>,
         String,
     ) {

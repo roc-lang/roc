@@ -12,17 +12,17 @@ mod test_reporting {
     use crate::helpers::test_home;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_reporting::report::{
-        can_problem, em_text, plain_text, url, Report, ReportText, BLUE_CODE, BOLD_CODE, CYAN_CODE,
-        GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, TEST_PALETTE, UNDERLINE_CODE, WHITE_CODE,
-        YELLOW_CODE,
+        can_problem, em_text, plain_text, type_problem, url, Report, ReportText, BLUE_CODE,
+        BOLD_CODE, CYAN_CODE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, TEST_PALETTE,
+        UNDERLINE_CODE, WHITE_CODE, YELLOW_CODE,
     };
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
-    use roc_types::types;
     use std::path::PathBuf;
     // use roc_region::all;
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
     use roc_reporting::report::ReportText::{Batch, Module, Region, Type, Value};
+    use roc_solve::solve;
     use roc_types::subs::Content::{FlexVar, RigidVar, Structure};
     use roc_types::subs::FlatType::EmptyRecord;
 
@@ -44,7 +44,7 @@ mod test_reporting {
     fn infer_expr_help(
         expr_src: &str,
     ) -> (
-        Vec<types::Problem>,
+        Vec<solve::TypeError>,
         Vec<roc_problem::can::Problem>,
         Subs,
         ModuleId,
@@ -87,7 +87,7 @@ mod test_reporting {
     }
 
     fn report_problem_as(src: &str, expected_rendering: &str) {
-        let (_type_problems, can_problems, mut subs, home, interns) = infer_expr_help(src);
+        let (type_problems, can_problems, mut subs, home, interns) = infer_expr_help(src);
 
         let mut buf: String = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -96,6 +96,19 @@ mod test_reporting {
             None => {}
             Some(problem) => {
                 let report = can_problem(
+                    filename_from_string(r"\code\proj\Main.roc"),
+                    problem.clone(),
+                );
+                report
+                    .text
+                    .render_ci(&mut buf, &mut subs, home, &src_lines, &interns)
+            }
+        }
+
+        match type_problems.first() {
+            None => {}
+            Some(problem) => {
+                let report = type_problem(
                     filename_from_string(r"\code\proj\Main.roc"),
                     problem.clone(),
                 );
@@ -695,5 +708,71 @@ mod test_reporting {
                     "#
             ),
         );
+    }
+
+    //    #[test]
+    //    fn shadowing_type_alias() {
+    //        report_problem_as(
+    //            indoc!(
+    //                r#"
+    //                foo : Int as Int
+    //                foo = 42
+    //
+    //                foo
+    //                "#
+    //            ),
+    //            indoc!(
+    //                r#"
+    //                You cannot mix (!=) and (==) without parentheses
+    //
+    //                3 ┆      if selectedId != thisId == adminsId then
+    //                  ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    //
+    //                "#
+    //            ),
+    //        )
+    //    }
+
+    //    #[test]
+    //    fn invalid_as_type_alias() {
+    //        report_problem_as(
+    //            indoc!(
+    //                r#"
+    //                foo : Int as a
+    //                foo = 42
+    //
+    //                foo
+    //                "#
+    //            ),
+    //            indoc!(
+    //                r#"
+    //                You cannot mix (!=) and (==) without parentheses
+    //
+    //                3 ┆      if selectedId != thisId == adminsId then
+    //                  ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    //
+    //                "#
+    //            ),
+    //        )
+    //    }
+
+    #[test]
+    fn if_condition_not_bool() {
+        report_problem_as(
+            indoc!(
+                r#"
+                if 1 then 2 else 3
+                "#
+            ),
+            indoc!(
+                r#"
+                You cannot mix (!=) and (==) without parentheses
+
+                3 ┆      if selectedId != thisId == adminsId then
+                  ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                "#
+            ),
+        )
     }
 }
