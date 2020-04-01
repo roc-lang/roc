@@ -51,10 +51,9 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 
 pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
     let memory_buffer = MemoryBuffer::create_from_memory_range(BUILTINS_BITCODE, module_name);
-    let module = Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
-        .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err));
 
-    module
+    Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
+        .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err))
 }
 
 pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>) {

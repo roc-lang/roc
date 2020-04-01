@@ -7,7 +7,7 @@ if ($num_args != 1) {
 }
 
 my $filename = $ARGV[0];
-my $before_bitcode = "// GENERATED FILE - NEVER EDIT BY HAND!\n//\n// See compiler/builtins/bitcode/README.md for how to generate.\n\npub const BUILTINS_BITCODE: &'static [u8] = &[\n    ";
+my $before_bitcode = "// GENERATED FILE - NEVER EDIT BY HAND!\n//\n// See compiler/builtins/bitcode/README.md for how to generate.\n\npub const BUILTINS_BITCODE: &[u8] = &[\n    ";
 my $after_bitcode = "\n];";
 
 # Get a filehandle to the raw binary data in the file
