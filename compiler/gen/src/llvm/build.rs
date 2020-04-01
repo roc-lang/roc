@@ -1079,6 +1079,31 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(int_val)
         }
+        Symbol::NUM_TO_FLOAT => {
+            // TODO specialize this to be not just for i64!
+            let builtin_fn_name = "i64_to_f64_";
+
+            let fn_val = env
+                .module
+                .get_function(builtin_fn_name)
+                .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", builtin_fn_name));
+
+            let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
+
+            for (arg, _layout) in args.iter() {
+                arg_vals.push(*arg);
+            }
+
+            let call = env
+                .builder
+                .build_call(fn_val, arg_vals.into_bump_slice(), "call_builtin");
+
+            call.set_call_convention(DEFAULT_CALLING_CONVENTION);
+
+            call.try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| panic!("LLVM error: Invalid call for builtin {:?}", symbol))
+        }
         Symbol::FLOAT_EQ => {
             debug_assert!(args.len() == 2);
 

@@ -344,4 +344,17 @@ mod gen_builtins {
             i64
         );
     }
+
+    #[test]
+    fn int_to_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Num.toFloat 0x9
+                "#
+            ),
+            9.0,
+            f64
+        );
+    }
 }
