@@ -355,16 +355,19 @@ pub fn constrain_expr(
             branches,
             final_else,
         } => {
-            let bool_type = Type::Variable(Variable::BOOL);
-            let expect_bool = Expected::ForReason(Reason::IfCondition, bool_type, region);
+            let expect_bool = |region| {
+                let bool_type = Type::Variable(Variable::BOOL);
+                Expected::ForReason(Reason::IfCondition, bool_type, region)
+            };
             let mut branch_cons = Vec::with_capacity(2 * branches.len() + 3);
 
             // TODO why does this cond var exist? is it for error messages?
+            let first_cond_region = branches[0].0.region;
             let cond_var_is_bool_con = Eq(
                 Type::Variable(*cond_var),
-                expect_bool.clone(),
+                expect_bool(first_cond_region),
                 Category::If,
-                Region::zero(),
+                first_cond_region,
             );
 
             branch_cons.push(cond_var_is_bool_con);
@@ -376,7 +379,7 @@ pub fn constrain_expr(
                             env,
                             loc_cond.region,
                             &loc_cond.value,
-                            expect_bool.clone(),
+                            expect_bool(loc_cond.region),
                         );
 
                         let then_con = constrain_expr(
@@ -424,7 +427,7 @@ pub fn constrain_expr(
                             env,
                             loc_cond.region,
                             &loc_cond.value,
-                            expect_bool.clone(),
+                            expect_bool(loc_cond.region),
                         );
 
                         let then_con = constrain_expr(

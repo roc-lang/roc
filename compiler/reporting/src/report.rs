@@ -1,10 +1,12 @@
 use crate::report::ReportText::{Batch, Module, Region, Value};
+use roc_can::expected::{Expected, PExpected};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::Problem;
 use roc_solve::solve;
 use roc_types::pretty_print::content_to_string;
-use roc_types::subs::{Content, Subs};
+use roc_types::subs::{Content, Subs, Variable};
+use roc_types::types::{write_error_type, Category, ErrorType, PReason, PatternCategory, Reason};
 use std::path::PathBuf;
 
 /// A textual report.
@@ -85,8 +87,7 @@ pub fn type_problem(filename: PathBuf, problem: solve::TypeError) -> Report {
 
     match problem {
         BadExpr(region, category, found, expected) => {
-            dbg!(region, category, found, expected);
-            todo!()
+            return to_expr_report(filename, region, category, found, expected);
         }
         BadPattern(region, category, found, expected) => todo!(),
         CircularType(region, symbol, circ_type) => todo!(),
@@ -96,6 +97,67 @@ pub fn type_problem(filename: PathBuf, problem: solve::TypeError) -> Report {
         filename,
         text: Batch(texts),
     }
+}
+
+fn to_expr_report(
+    filename: PathBuf,
+    expr_region: roc_region::all::Region,
+    category: Category,
+    found: ErrorType,
+    expected: Expected<ErrorType>,
+) -> Report {
+    use ReportText::*;
+
+    match expected {
+        Expected::NoExpectation(expected_type) => todo!(),
+        Expected::FromAnnotation(name, arity, sub_context, expected_type) => todo!(),
+        Expected::ForReason(reason, expected_type, region) => {
+            let bad_type = |op_highlight, problem, this_is, further_details| {
+                let mut lines = vec![
+                    plain_text(problem),
+                    Region(region),
+                    add_category(this_is, category),
+                    newline(),
+                    newline(),
+                    plain_text("    "),
+                    ErrorType(found),
+                    newline(),
+                    newline(),
+                    further_details,
+                ];
+
+                Report {
+                    filename,
+                    text: Batch(lines),
+                }
+            };
+            match reason {
+                Reason::IfCondition => bad_type(
+                    Some(expr_region),
+                    "This `if` condition does not evaluate to a boolean value, True or False.",
+                    "It is",
+                    Batch(vec![
+                        plain_text("But I need this `if` condition to be a "),
+                        ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
+                        plain_text(" value."),
+                        newline(),
+                    ]),
+                ),
+                _ => todo!(),
+            }
+        }
+    }
+}
+
+fn add_category(this_is: &str, category: Category) -> ReportText {
+    use Category::*;
+
+    let result = match category {
+        Str => format!("{} a string of type:", this_is),
+        _ => todo!(),
+    };
+
+    plain_text(&*result)
 }
 
 pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
@@ -180,6 +242,7 @@ pub enum ReportText {
     /// A type. Render it using roc_types::pretty_print for now, but maybe
     /// do something fancier later.
     Type(Content),
+    ErrorType(ErrorType),
 
     /// Plain text
     Plain(Box<str>),
@@ -322,10 +385,12 @@ impl ReportText {
                 buf.push_str(&interns.module_name(module_id));
             }
             Type(content) => buf.push_str(content_to_string(content, subs, home, interns).as_str()),
+            ErrorType(error_type) => buf.push_str(&write_error_type(home, interns, error_type)),
             Region(region) => {
                 buf.push('\n');
                 buf.push('\n');
 
+                dbg!(region);
                 // widest displayed line number
                 let max_line_number_length = (region.end_line + 1).to_string().len();
 
@@ -460,6 +525,7 @@ impl ReportText {
                 ),
                 Content::Error => {}
             },
+            ErrorType(error_type) => buf.push_str(&write_error_type(home, interns, error_type)),
             Region(region) => {
                 // newline before snippet
                 buf.push('\n');

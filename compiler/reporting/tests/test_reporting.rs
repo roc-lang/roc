@@ -761,16 +761,21 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                if 1 then 2 else 3
+                if "foo" then 2 else 3
                 "#
             ),
             indoc!(
                 r#"
-                You cannot mix (!=) and (==) without parentheses
+                This `if` condition does not evaluate to a boolean value, True or False.
 
-                3 ┆      if selectedId != thisId == adminsId then
-                  ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                1 ┆  if "foo" then 2 else 3
+                  ┆     ^^^^^
 
+                It is a string of type:
+
+                    Str
+
+                But I need this `if` condition to be a Bool value.
                 "#
             ),
         )

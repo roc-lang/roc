@@ -1,9 +1,10 @@
 use crate::boolean_algebra;
+use crate::pretty_print::Parens;
 use crate::subs::{Subs, VarStore, Variable};
 use inlinable_string::InlinableString;
 use roc_collections::all::{union, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_parse::operator::{ArgSide, BinOp};
 use roc_region::all::{Located, Region};
 use std::fmt;
@@ -721,6 +722,40 @@ impl ErrorType {
             ErrorType::Alias(_, _, real) => real.unwrap_alias(),
             real => real,
         }
+    }
+}
+
+pub fn write_error_type(home: ModuleId, interns: &Interns, error_type: ErrorType) -> String {
+    let mut buf = String::new();
+    write_error_type_help(home, interns, error_type, &mut buf, Parens::Unnecessary);
+
+    buf
+}
+
+fn write_error_type_help(
+    home: ModuleId,
+    interns: &Interns,
+    error_type: ErrorType,
+    buf: &mut String,
+    parens: Parens,
+) {
+    use ErrorType::*;
+
+    match error_type {
+        Infinite => buf.push_str("∞"),
+        Error => buf.push_str("?"),
+        FlexVar(name) => buf.push_str(name.as_str()),
+        RigidVar(name) => buf.push_str(name.as_str()),
+        Type(symbol, arguments) => {
+            buf.push_str(symbol.ident_string(interns));
+
+            for arg in arguments {
+                buf.push(' ');
+
+                write_error_type_help(home, interns, arg, buf, Parens::InTypeParam);
+            }
+        }
+        _ => todo!(),
     }
 }
 
