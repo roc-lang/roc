@@ -5,6 +5,7 @@ use roc_collections::all::SendMap;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::subs::Variable;
+use roc_types::types::Category;
 use roc_types::types::Reason;
 use roc_types::types::Type::{self, *};
 
@@ -17,8 +18,8 @@ pub fn int_literal(num_var: Variable, expected: Expected<Type>, region: Region) 
     exists(
         vec![num_var],
         And(vec![
-            Eq(num_type.clone(), expected_literal, region),
-            Eq(num_type, expected, region),
+            Eq(num_type.clone(), expected_literal, Category::Int, region),
+            Eq(num_type, expected, Category::Int, region),
         ]),
     )
 }
@@ -32,8 +33,8 @@ pub fn float_literal(num_var: Variable, expected: Expected<Type>, region: Region
     exists(
         vec![num_var],
         And(vec![
-            Eq(num_type.clone(), expected_literal, region),
-            Eq(num_type, expected, region),
+            Eq(num_type.clone(), expected_literal, Category::Float, region),
+            Eq(num_type, expected, Category::Float, region),
         ]),
     )
 }

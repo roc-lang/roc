@@ -419,7 +419,7 @@ fn variable_usage_help(con: &Constraint, declared: &mut SeenVariables, used: &mu
 
     match con {
         True | SaveTheEnvironment => (),
-        Eq(tipe, expectation, _) => {
+        Eq(tipe, expectation, _, _) => {
             for v in tipe.variables() {
                 used.insert(v);
             }

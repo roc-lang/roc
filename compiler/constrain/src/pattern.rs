@@ -8,7 +8,7 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
-use roc_types::types::{PatternCategory, Type};
+use roc_types::types::{Category, PatternCategory, Type};
 
 pub struct PatternState {
     pub headers: SendMap<Symbol, Located<Type>>,
@@ -203,10 +203,11 @@ pub fn constrain_pattern(
                 field_types.insert(label.clone(), pat_type.clone());
 
                 if let Some((guard_var, loc_guard)) = guard {
-                    state.constraints.push(Constraint::Eq(
-                        Type::Variable(*guard_var),
-                        Expected::NoExpectation(pat_type.clone()),
+                    state.constraints.push(Constraint::Pattern(
                         region,
+                        PatternCategory::PatternGuard,
+                        Type::Variable(*guard_var),
+                        PExpected::NoExpectation(pat_type.clone()),
                     ));
                     state.vars.push(*guard_var);
 
@@ -221,6 +222,7 @@ pub fn constrain_pattern(
             let whole_con = Constraint::Eq(
                 Type::Variable(*whole_var),
                 Expected::NoExpectation(record_type),
+                Category::Storage,
                 region,
             );
 
@@ -257,6 +259,7 @@ pub fn constrain_pattern(
                     vec![(tag_name.clone(), argument_types)],
                     Box::new(Type::Variable(*ext_var)),
                 )),
+                Category::Storage,
                 region,
             );
 

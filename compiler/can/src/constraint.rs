@@ -3,11 +3,11 @@ use roc_collections::all::{ImMap, ImSet, SendMap};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, PatternCategory, Type};
+use roc_types::types::{Alias, Category, PatternCategory, Type};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constraint {
-    Eq(Type, Expected<Type>, Region),
+    Eq(Type, Expected<Type>, Category, Region),
     Lookup(Symbol, Expected<Type>, Region),
     Pattern(Region, PatternCategory, Type, PExpected<Type>),
     True, // Used for things that always unify, e.g. blanks and runtime errors
@@ -32,7 +32,7 @@ impl Constraint {
         match self {
             True | SaveTheEnvironment => {}
 
-            Eq(typ, expected, _) => {
+            Eq(typ, expected, _, _) => {
                 expected
                     .get_type_mut_ref()
                     .instantiate_aliases(aliases, var_store, introduced);

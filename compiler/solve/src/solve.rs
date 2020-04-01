@@ -8,7 +8,7 @@ use roc_types::boolean_algebra::{self, Atom};
 use roc_types::solved_types::{Solved, SolvedType};
 use roc_types::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use roc_types::types::Type::{self, *};
-use roc_types::types::{Alias, ErrorType, PatternCategory};
+use roc_types::types::{Alias, Category, ErrorType, PatternCategory};
 use roc_unify::unify::unify;
 use roc_unify::unify::Unified::*;
 
@@ -21,12 +21,6 @@ pub enum TypeError {
     BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
     CircularType(Region, Symbol, ErrorType),
-}
-
-#[derive(PartialEq, Debug, Clone)]
-pub enum Category {
-    Lookup(Symbol),
-    If,
 }
 
 pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
@@ -144,7 +138,7 @@ fn solve(
 
             copy
         }
-        Eq(typ, expectation, region) => {
+        Eq(typ, expectation, category, region) => {
             let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
             let expected = type_to_var(
                 subs,
@@ -163,10 +157,9 @@ fn solve(
                 Failure(vars, actual_type, expected_type) => {
                     introduce(subs, rank, pools, &vars);
 
-                    let category = Category::If;
                     let problem = TypeError::BadExpr(
                         *region,
-                        category,
+                        category.clone(),
                         actual_type,
                         expectation.clone().replace(expected_type),
                     );
@@ -177,7 +170,7 @@ fn solve(
                 }
             }
         }
-        Lookup(symbol, expected_type, _region) => {
+        Lookup(symbol, expectation, region) => {
             let var = *env.vars_by_symbol.get(&symbol).unwrap_or_else(|| {
                 // TODO Instead of panicking, solve this as True and record
                 // a TypeError ("module Foo does not expose `bar`") for later.
@@ -214,7 +207,7 @@ fn solve(
                 rank,
                 pools,
                 cached_aliases,
-                expected_type.get_type_ref(),
+                expectation.get_type_ref(),
             );
             match unify(subs, actual, expected) {
                 Success(vars) => {
@@ -222,7 +215,19 @@ fn solve(
 
                     state
                 }
-                _ => todo!(),
+
+                Failure(vars, actual_type, expected_type) => {
+                    let problem = TypeError::BadExpr(
+                        *region,
+                        Category::Lookup(*symbol),
+                        actual_type,
+                        expectation.clone().replace(expected_type),
+                    );
+
+                    problems.push(problem);
+
+                    state
+                }
             }
         }
         And(sub_constraints) => {

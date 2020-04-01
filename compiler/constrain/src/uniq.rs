@@ -14,7 +14,7 @@ use roc_types::boolean_algebra::{Atom, Bool};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
-use roc_types::types::{Alias, PReason, Reason};
+use roc_types::types::{Alias, Category, PReason, PatternCategory, Reason};
 use roc_uniq::builtins::{attr_type, empty_list_type, list_type, str_type};
 use roc_uniq::sharing::{self, Container, FieldAccess, Mark, Usage, VarUsage};
 
@@ -232,10 +232,11 @@ fn constrain_pattern(
                 field_types.insert(label.clone(), pat_type.clone());
 
                 if let Some((guard_var, loc_guard)) = guard {
-                    state.constraints.push(Eq(
-                        Type::Variable(*guard_var),
-                        Expected::NoExpectation(pat_type.clone()),
+                    state.constraints.push(Constraint::Pattern(
                         pattern.region,
+                        PatternCategory::PatternGuard,
+                        Type::Variable(*guard_var),
+                        PExpected::NoExpectation(pat_type.clone()),
                     ));
                     state.vars.push(*guard_var);
                     constrain_pattern(var_store, state, loc_guard, expected);
@@ -262,6 +263,7 @@ fn constrain_pattern(
             let whole_con = Constraint::Eq(
                 Type::Variable(*whole_var),
                 Expected::NoExpectation(record_type),
+                Category::Storage,
                 region,
             );
 
@@ -320,6 +322,7 @@ fn constrain_pattern(
             let whole_con = Constraint::Eq(
                 Type::Variable(*whole_var),
                 Expected::NoExpectation(union_type),
+                Category::Storage,
                 region,
             );
 
@@ -403,9 +406,10 @@ pub fn constrain_expr(
                     Eq(
                         Type::Variable(var),
                         Expected::ForReason(Reason::NumLiteral, num_type, region),
+                        Category::Num,
                         region,
                     ),
-                    Eq(Type::Variable(var), expected, region),
+                    Eq(Type::Variable(var), expected, Category::Num, region),
                 ]),
             )
         }
@@ -418,9 +422,10 @@ pub fn constrain_expr(
                     Eq(
                         Type::Variable(*var),
                         Expected::ForReason(Reason::IntLiteral, num_type, region),
+                        Category::Int,
                         region,
                     ),
-                    Eq(Type::Variable(*var), expected, region),
+                    Eq(Type::Variable(*var), expected, Category::Int, region),
                 ]),
             )
         }
@@ -433,9 +438,10 @@ pub fn constrain_expr(
                     Eq(
                         Type::Variable(*var),
                         Expected::ForReason(Reason::FloatLiteral, num_type, region),
+                        Category::Float,
                         region,
                     ),
-                    Eq(Type::Variable(*var), expected, region),
+                    Eq(Type::Variable(*var), expected, Category::Float, region),
                 ]),
             )
         }
@@ -443,7 +449,10 @@ pub fn constrain_expr(
             let uniq_type = var_store.fresh();
             let inferred = str_type(Bool::variable(uniq_type));
 
-            exists(vec![uniq_type], Eq(inferred, expected, region))
+            exists(
+                vec![uniq_type],
+                Eq(inferred, expected, Category::Str, region),
+            )
         }
         EmptyRecord => {
             let uniq_type = var_store.fresh();
@@ -453,6 +462,7 @@ pub fn constrain_expr(
                 Eq(
                     attr_type(Bool::variable(uniq_type), EmptyRec),
                     expected,
+                    Category::Record,
                     region,
                 ),
             )
@@ -500,8 +510,13 @@ pub fn constrain_expr(
                     Box::new(Type::EmptyRec),
                 ),
             );
-            let record_con = Eq(record_type, expected.clone(), region);
-            let ext_con = Eq(Type::Variable(*record_var), expected, region);
+            let record_con = Eq(record_type, expected.clone(), Category::Record, region);
+            let ext_con = Eq(
+                Type::Variable(*record_var),
+                expected,
+                Category::Record,
+                region,
+            );
 
             constraints.push(record_con);
             constraints.push(ext_con);
@@ -544,8 +559,13 @@ pub fn constrain_expr(
                 ),
             );
 
-            let union_con = Eq(union_type, expected.clone(), region);
-            let ast_con = Eq(Type::Variable(*variant_var), expected, region);
+            let union_con = Eq(union_type, expected.clone(), Category::TagUnion, region);
+            let ast_con = Eq(
+                Type::Variable(*variant_var),
+                expected,
+                Category::TagUnion,
+                region,
+            );
 
             vars.push(uniq_var);
             vars.push(*variant_var);
@@ -562,7 +582,10 @@ pub fn constrain_expr(
             let uniq_var = var_store.fresh();
             if loc_elems.is_empty() {
                 let inferred = empty_list_type(Bool::variable(uniq_var), *elem_var);
-                exists(vec![*elem_var, uniq_var], Eq(inferred, expected, region))
+                exists(
+                    vec![*elem_var, uniq_var],
+                    Eq(inferred, expected, Category::List, region),
+                )
             } else {
                 // constrain `expected ~ List a` and that all elements `~ a`.
                 let entry_type = Type::Variable(*elem_var);
@@ -585,7 +608,7 @@ pub fn constrain_expr(
                 }
 
                 let inferred = list_type(Bool::variable(uniq_var), entry_type);
-                constraints.push(Eq(inferred, expected, region));
+                constraints.push(Eq(inferred, expected, Category::List, region));
 
                 exists(vec![*elem_var, uniq_var], And(constraints))
             }
@@ -669,11 +692,12 @@ pub fn constrain_expr(
                         ret_constraint,
                     })),
                     // "the closure's type is equal to expected type"
-                    Eq(fn_type.clone(), expected, region),
+                    Eq(fn_type.clone(), expected, Category::Lambda, region),
                     // "fn_var is equal to the closure's type" - fn_var is used in code gen
                     Eq(
                         Type::Variable(*fn_var),
                         Expected::NoExpectation(fn_type),
+                        Category::Lambda,
                         region,
                     ),
                 ]),
@@ -686,6 +710,12 @@ pub fn constrain_expr(
             let ret_type = Variable(*ret_var);
             let fn_expected = Expected::NoExpectation(fn_type.clone());
             let fn_region = fn_expr.region;
+
+            let opt_symbol = if let Var(symbol) = fn_expr.value {
+                Some(symbol)
+            } else {
+                None
+            };
 
             let mut vars = Vec::with_capacity(2 + loc_args.len());
 
@@ -750,9 +780,14 @@ pub fn constrain_expr(
                 vars,
                 And(vec![
                     fn_con,
-                    Eq(fn_type, expected_fn_type, fn_region),
+                    Eq(
+                        fn_type,
+                        expected_fn_type,
+                        Category::CallResult(opt_symbol),
+                        fn_region,
+                    ),
                     And(arg_cons),
-                    Eq(ret_type, expected, region),
+                    Eq(ret_type, expected, Category::CallResult(opt_symbol), region),
                 ]),
             )
         }
@@ -786,7 +821,12 @@ pub fn constrain_expr(
                     ),
                     // Record the type of tne entire def-expression in the variable.
                     // Code gen will need that later!
-                    Eq(Type::Variable(*var), expected, loc_ret.region),
+                    Eq(
+                        Type::Variable(*var),
+                        expected,
+                        Category::Storage,
+                        loc_ret.region,
+                    ),
                 ]),
             )
         }
@@ -820,7 +860,12 @@ pub fn constrain_expr(
                     ),
                     // Record the type of tne entire def-expression in the variable.
                     // Code gen will need that later!
-                    Eq(Type::Variable(*var), expected, loc_ret.region),
+                    Eq(
+                        Type::Variable(*var),
+                        expected,
+                        Category::Storage,
+                        loc_ret.region,
+                    ),
                 ]),
             )
         }
@@ -845,6 +890,7 @@ pub fn constrain_expr(
                     attr_type(Bool::variable(cond_uniq_var), bool_type.clone()),
                     region,
                 ),
+                Category::If,
                 Region::zero(),
             );
 
@@ -907,6 +953,7 @@ pub fn constrain_expr(
                     let ast_con = Eq(
                         Type::Variable(*branch_var),
                         Expected::NoExpectation(tipe),
+                        Category::Storage,
                         region,
                     );
 
@@ -971,7 +1018,12 @@ pub fn constrain_expr(
                         ),
                     );
 
-                    branch_cons.push(Eq(Type::Variable(*branch_var), expected, region));
+                    branch_cons.push(Eq(
+                        Type::Variable(*branch_var),
+                        expected,
+                        Category::If,
+                        region,
+                    ));
                     branch_cons.push(else_con);
 
                     cond_uniq_vars.push(*cond_var);
@@ -1004,7 +1056,12 @@ pub fn constrain_expr(
 
             match &expected {
                 Expected::FromAnnotation(name, arity, _, typ) => {
-                    constraints.push(Eq(Type::Variable(*expr_var), expected.clone(), region));
+                    constraints.push(Eq(
+                        Type::Variable(*expr_var),
+                        expected.clone(),
+                        Category::When,
+                        region,
+                    ));
 
                     for (index, when_branch) in branches.iter().enumerate() {
                         let branch_con = constrain_when_branch(
@@ -1068,7 +1125,7 @@ pub fn constrain_expr(
                         And(branch_cons),
                         // The return type of each branch must equal
                         // the return type of the entire case-expression.
-                        Eq(branch_type, expected, region),
+                        Eq(branch_type, expected, Category::When, region),
                     ]))
                 }
             }
@@ -1114,9 +1171,10 @@ pub fn constrain_expr(
             let fields_con = Eq(
                 record_type.clone(),
                 Expected::NoExpectation(fields_type),
+                Category::Record,
                 region,
             );
-            let record_con = Eq(record_type.clone(), expected, region);
+            let record_con = Eq(record_type.clone(), expected, Category::Record, region);
 
             vars.push(*record_var);
             vars.push(*ext_var);
@@ -1161,8 +1219,15 @@ pub fn constrain_expr(
                 Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
             );
 
+            let category = Category::Access(field.clone());
+
             let record_expected = Expected::NoExpectation(record_type);
-            let record_con = Eq(Type::Variable(*record_var), record_expected.clone(), region);
+            let record_con = Eq(
+                Type::Variable(*record_var),
+                record_expected.clone(),
+                category.clone(),
+                region,
+            );
 
             let inner_constraint = constrain_expr(
                 env,
@@ -1183,7 +1248,7 @@ pub fn constrain_expr(
                     record_uniq_var,
                 ],
                 And(vec![
-                    Eq(field_type, expected, region),
+                    Eq(field_type, expected, category, region),
                     inner_constraint,
                     record_con,
                 ]),
@@ -1212,8 +1277,15 @@ pub fn constrain_expr(
                 Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
             );
 
+            let category = Category::Accessor(field.clone());
+
             let record_expected = Expected::NoExpectation(record_type.clone());
-            let record_con = Eq(Type::Variable(*record_var), record_expected, region);
+            let record_con = Eq(
+                Type::Variable(*record_var),
+                record_expected,
+                category.clone(),
+                region,
+            );
 
             let fn_uniq_var = var_store.fresh();
             let fn_type = attr_type(
@@ -1230,7 +1302,7 @@ pub fn constrain_expr(
                     field_uniq_var,
                     record_uniq_var,
                 ],
-                And(vec![Eq(fn_type, expected, region), record_con]),
+                And(vec![Eq(fn_type, expected, category, region), record_con]),
             )
         }
         RuntimeError(_) => True,
@@ -1263,10 +1335,11 @@ fn constrain_var(
                 vec![val_var, uniq_var],
                 And(vec![
                     Lookup(symbol_for_lookup, expected.clone(), region),
-                    Eq(attr_type, expected, region),
+                    Eq(attr_type, expected, Category::Uniqueness, region),
                     Eq(
                         Type::Boolean(uniq_type),
                         Expected::NoExpectation(Type::Boolean(Bool::shared())),
+                        Category::Uniqueness,
                         region,
                     ),
                 ]),
@@ -1291,7 +1364,7 @@ fn constrain_var(
                 variables,
                 And(vec![
                     Lookup(symbol_for_lookup, new_expected, region),
-                    Eq(record_type, expected, region),
+                    Eq(record_type, expected, Category::Uniqueness, region),
                 ]),
             )
         }
@@ -1809,6 +1882,7 @@ fn constrain_def(
             pattern_state.constraints.push(Eq(
                 expr_type,
                 annotation_expected.clone(),
+                Category::Storage,
                 Region::zero(),
             ));
 
@@ -2043,6 +2117,7 @@ pub fn rec_defs_help(
                 rigid_info.constraints.push(Eq(
                     expr_type,
                     annotation_expected.clone(),
+                    Category::Storage,
                     def.loc_expr.region,
                 ));
 

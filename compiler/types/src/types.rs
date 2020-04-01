@@ -632,10 +632,39 @@ pub enum Reason {
     RecordUpdateKeys(Symbol, SendMap<Lowercase, Type>),
 }
 
+#[derive(PartialEq, Debug, Clone)]
+pub enum Category {
+    Lookup(Symbol),
+    CallResult(Option<Symbol>),
+    Lambda,
+    Uniqueness,
+
+    // storing variables in the ast
+    Storage,
+
+    // control flow
+    If,
+    When,
+
+    // types
+    Float,
+    Int,
+    Num,
+    TagUnion,
+    List,
+    Str,
+
+    // records
+    Record,
+    Accessor(Lowercase),
+    Access(Lowercase),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatternCategory {
     Record,
     EmptyRecord,
+    PatternGuard,
     Set,
     Map,
     Ctor(TagName),

@@ -84,7 +84,10 @@ pub fn type_problem(filename: PathBuf, problem: solve::TypeError) -> Report {
     //        }
 
     match problem {
-        BadExpr(region, category, found, expected) => todo!(),
+        BadExpr(region, category, found, expected) => {
+            dbg!(region, category, found, expected);
+            todo!()
+        }
         BadPattern(region, category, found, expected) => todo!(),
         CircularType(region, symbol, circ_type) => todo!(),
     }
