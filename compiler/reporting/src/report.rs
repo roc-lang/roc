@@ -74,11 +74,7 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
         Problem::UnusedDef(symbol, region) => {
             texts.push(Value(symbol));
             texts.push(plain_text(" is not used anywhere in your code."));
-            texts.push(newline());
-            texts.push(newline());
             texts.push(Region(region));
-            texts.push(newline());
-            texts.push(newline());
             texts.push(plain_text("If you didn't intend on using "));
             texts.push(Value(symbol));
             texts.push(plain_text(
@@ -89,11 +85,7 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
             texts.push(plain_text("Nothing from "));
             texts.push(Module(module_id));
             texts.push(plain_text(" is used in this module."));
-            texts.push(newline());
-            texts.push(newline());
             texts.push(Region(region));
-            texts.push(newline());
-            texts.push(newline());
             texts.push(plain_text("Since "));
             texts.push(Module(module_id));
             texts.push(plain_text(" isn't used, you don't need to import it."));
@@ -103,11 +95,7 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
             texts.push(plain_text(" doesn't use "));
             texts.push(Value(argument_symbol));
             texts.push(plain_text("."));
-            texts.push(newline());
-            texts.push(newline());
             texts.push(Region(region));
-            texts.push(newline());
-            texts.push(newline());
             texts.push(plain_text("If you don't need "));
             texts.push(Value(argument_symbol));
             texts.push(plain_text(
@@ -120,8 +108,12 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
             texts.push(Value(argument_symbol));
             texts.push(plain_text("\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used."));
         }
-        Problem::PrecedenceProblem(BothNonAssociative(_left_bin_op, _right_bin_op)) => {
-            panic!("TODO implement precedence problem report")
+        Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => {
+            texts.push(plain_text(&*format!(
+                "You cannot mix {} and {} without parentheses",
+                left_bin_op.value, right_bin_op.value
+            )));
+            texts.push(Region(region));
         }
         Problem::UnsupportedPattern(_pattern_type, _region) => {
             panic!("TODO implement unsupported pattern report")
@@ -195,6 +187,7 @@ pub fn url(str: &str) -> ReportText {
     Url(Box::from(str))
 }
 
+#[allow(dead_code)]
 fn newline() -> ReportText {
     plain_text("\n")
 }
@@ -299,12 +292,16 @@ impl ReportText {
             }
             Type(content) => buf.push_str(content_to_string(content, subs, home, interns).as_str()),
             Region(region) => {
-                let max_line_number_length = region.end_line.to_string().len();
+                buf.push('\n');
+                buf.push('\n');
 
-                for i in region.start_line..=region.end_line {
-                    let i_one_indexed = i + 1;
+                // widest displayed line number
+                let max_line_number_length = (region.end_line + 1).to_string().len();
 
-                    let line_number_string = i_one_indexed.to_string();
+                if region.start_line == region.end_line {
+                    let i = region.start_line;
+
+                    let line_number_string = (i + 1).to_string();
                     let line_number = line_number_string.as_str();
                     let this_line_number_length = line_number.len();
 
@@ -322,10 +319,45 @@ impl ReportText {
                         buf.push_str(src_lines[i as usize]);
                     }
 
-                    if i != region.end_line {
-                        buf.push('\n');
+                    buf.push('\n');
+                    buf.push_str(" ".repeat(max_line_number_length).as_str());
+                    buf.push_str(" ┆");
+
+                    buf.push_str(" ".repeat(region.start_col as usize + 2).as_str());
+                    buf.push_str(
+                        "^".repeat((region.end_col - region.start_col) as usize)
+                            .as_str(),
+                    );
+                } else {
+                    for i in region.start_line..=region.end_line {
+                        let i_one_indexed = i + 1;
+
+                        let line_number_string = i_one_indexed.to_string();
+                        let line_number = line_number_string.as_str();
+                        let this_line_number_length = line_number.len();
+
+                        buf.push_str(
+                            " ".repeat(max_line_number_length - this_line_number_length)
+                                .as_str(),
+                        );
+                        buf.push_str(line_number);
+                        buf.push_str(" ┆>");
+
+                        let line = src_lines[i as usize];
+
+                        if !line.trim().is_empty() {
+                            buf.push_str("  ");
+                            buf.push_str(src_lines[i as usize]);
+                        }
+
+                        if i != region.end_line {
+                            buf.push('\n');
+                        }
                     }
                 }
+
+                buf.push('\n');
+                buf.push('\n');
             }
             Docs(_) => {
                 panic!("TODO implment docs");
@@ -398,9 +430,16 @@ impl ReportText {
                 Content::Error => {}
             },
             Region(region) => {
-                let max_line_number_length = region.end_line.to_string().len();
+                // newline before snippet
+                buf.push('\n');
+                buf.push('\n');
 
-                for i in region.start_line..=region.end_line {
+                // the widest line number that is rendered
+                let max_line_number_length = (region.end_line + 1).to_string().len();
+
+                if region.start_line == region.end_line {
+                    // single line
+                    let i = region.start_line;
                     let i_one_indexed = i + 1;
 
                     let line_number_string = i_one_indexed.to_string();
@@ -421,10 +460,47 @@ impl ReportText {
                         buf.push_str(&palette.code_block.render(src_lines[i as usize]));
                     }
 
-                    if i != region.end_line {
-                        buf.push('\n');
+                    buf.push('\n');
+                    buf.push_str(" ".repeat(max_line_number_length).as_str());
+                    buf.push_str(&palette.gutter_bar.render(" ┆"));
+
+                    buf.push_str(" ".repeat(region.start_col as usize + 2).as_str());
+                    let carets = "^".repeat((region.end_col - region.start_col) as usize);
+                    buf.push_str(&palette.error.render(carets.as_str()));
+                } else {
+                    // multiline
+
+                    for i in region.start_line..=region.end_line {
+                        let i_one_indexed = i + 1;
+
+                        let line_number_string = i_one_indexed.to_string();
+                        let line_number = line_number_string.as_str();
+                        let this_line_number_length = line_number.len();
+
+                        buf.push_str(
+                            " ".repeat(max_line_number_length - this_line_number_length)
+                                .as_str(),
+                        );
+                        buf.push_str(&palette.line_number.render(line_number));
+                        buf.push_str(&palette.gutter_bar.render(" ┆"));
+                        buf.push_str(&palette.error.render(">"));
+
+                        let line = src_lines[i as usize];
+
+                        if !line.trim().is_empty() {
+                            buf.push_str("  ");
+                            buf.push_str(&palette.code_block.render(src_lines[i as usize]));
+                        }
+
+                        if i != region.end_line {
+                            buf.push('\n');
+                        }
                     }
                 }
+
+                // newline before next line of text
+                buf.push('\n');
+                buf.push('\n');
             }
             Batch(report_texts) => {
                 for report_text in report_texts {

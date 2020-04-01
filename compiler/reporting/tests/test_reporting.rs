@@ -284,6 +284,7 @@ mod test_reporting {
                 y is not used anywhere in your code.
 
                 2 ┆  y = 2
+                  ┆  ^
 
                 If you didn't intend on using y then remove it so future readers of your code don't wonder why it is there."#
             ),
@@ -325,29 +326,57 @@ mod test_reporting {
     // }
 
     #[test]
-    fn report_precedence_problem() {
+    fn report_precedence_problem_single_line() {
         report_problem_as(
             indoc!(
-                r#"
-                x = 1
+                r#"x = 1
                 y =
-                    if selecteId == thisId == adminsId then
+                    if selectedId != thisId == adminsId then
                         4
 
                     else
                         5
 
                 { x, y }
-            "#
+                "#
             ),
             indoc!(
                 r#"
-                Which expression should I evaluate first? "selectedId == thisId" or "thisId == adminsId"?
+                You cannot mix (!=) and (==) without parentheses
 
-                3 ┆  if selecteId == thisId == adminsId then
-                  ┆     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                3 ┆      if selectedId != thisId == adminsId then
+                  ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Please clarify this for me by adding some parentheses. Either "(selectedId == thisId) == adminsId" or "selectedId == (thisId == adminsId)" would work."#
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn report_precedence_problem_multiline() {
+        report_problem_as(
+            indoc!(
+                r#"
+                if
+                    1
+                        != 2
+                        == 3
+                then
+                    2
+
+                else
+                    3
+                "#
+            ),
+            indoc!(
+                r#"
+                You cannot mix (!=) and (==) without parentheses
+
+                2 ┆>      1
+                3 ┆>          != 2
+                4 ┆>          == 3
+
+                "#
             ),
         )
     }
@@ -549,10 +578,14 @@ mod test_reporting {
             })),
             indoc!(
                 r#"
-                    <cyan>1<reset><magenta> ┆<reset>  <white>isDisabled = \user -> user.isAdmin<reset>
-                    <cyan>2<reset><magenta> ┆<reset>
-                    <cyan>3<reset><magenta> ┆<reset>  <white>theAdmin<reset>
-                    <cyan>4<reset><magenta> ┆<reset>  <white>    |> isDisabled<reset>"#
+
+
+                    <cyan>1<reset><magenta> ┆<reset><red>><reset>  <white>isDisabled = \user -> user.isAdmin<reset>
+                    <cyan>2<reset><magenta> ┆<reset><red>><reset>
+                    <cyan>3<reset><magenta> ┆<reset><red>><reset>  <white>theAdmin<reset>
+                    <cyan>4<reset><magenta> ┆<reset><red>><reset>  <white>    |> isDisabled<reset>
+
+                "#
             ),
         );
     }
@@ -577,9 +610,50 @@ mod test_reporting {
             })),
             indoc!(
                 r#"
-                    2 ┆  y = 2
-                    3 ┆  f = \a -> a + 4
-                    4 ┆"#
+
+
+                2 ┆>  y = 2
+                3 ┆>  f = \a -> a + 4
+                4 ┆>
+
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn report_region_line_number_length_edge_case() {
+        // the highest line number is 9, but it's rendered as 10.
+        // Make sure that we render the line number as 2-wide
+        report_renders_as_from_src(
+            indoc!(
+                r#"
+
+
+
+
+                    x = 1
+                    y = 2
+                    f = \a -> a + 4
+
+                    f x
+                "#
+            ),
+            to_simple_report(Region(roc_region::all::Region {
+                start_line: 7,
+                end_line: 9,
+                start_col: 0,
+                end_col: 0,
+            })),
+            indoc!(
+                r#"
+
+
+                 8 ┆>
+                 9 ┆>  f x
+                10 ┆>
+
+                "#
             ),
         );
     }
@@ -612,9 +686,13 @@ mod test_reporting {
             })),
             indoc!(
                 r#"
-                     9 ┆
-                    10 ┆  y = 2
-                    11 ┆  f = \a -> a + 4"#
+
+
+                     9 ┆>
+                    10 ┆>  y = 2
+                    11 ┆>  f = \a -> a + 4
+
+                    "#
             ),
         );
     }
