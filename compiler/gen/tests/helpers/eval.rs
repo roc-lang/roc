@@ -10,7 +10,7 @@ macro_rules! assert_llvm_evals_to {
         let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
         let context = Context::create();
-        let module = context.create_module("app");
+        let module = roc_gen::llvm::build::module_from_builtins(&context, "app");
         let builder = context.create_builder();
         let fpm = inkwell::passes::PassManager::create(&module);
 
@@ -142,7 +142,7 @@ macro_rules! assert_opt_evals_to {
         let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
         let context = Context::create();
-        let module = context.create_module("app");
+        let module = roc_gen::llvm::build::module_from_builtins(&context, "app");
         let builder = context.create_builder();
         let fpm = PassManager::create(&module);
 

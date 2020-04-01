@@ -8,7 +8,9 @@ use inkwell::passes::PassManager;
 use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_collections::all::ImMap;
-use roc_gen::llvm::build::{build_proc, build_proc_header, get_call_conventions};
+use roc_gen::llvm::build::{
+    build_proc, build_proc_header, get_call_conventions, module_from_builtins,
+};
 use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_mono::expr::{Expr, Procs};
 use roc_mono::layout::Layout;
@@ -65,7 +67,7 @@ fn gen(src: &str, target: Triple, dest_filename: &Path) {
     let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
     let context = Context::create();
-    let module = context.create_module("app");
+    let module = module_from_builtins(&context, "app");
     let builder = context.create_builder();
     let fpm = PassManager::create(&module);
 

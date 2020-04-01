@@ -2,6 +2,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
+use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
 use inkwell::passes::PassManager;
 use inkwell::types::{BasicTypeEnum, IntType, StructType};
@@ -9,6 +10,7 @@ use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
+use crate::llvm::builtins::BUILTINS_BITCODE;
 use crate::llvm::convert::{
     basic_type_from_layout, collection_wrapper, empty_collection, get_fn_type, ptr_int,
 };
@@ -45,6 +47,14 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     pub fn ptr_int(&self) -> IntType<'ctx> {
         ptr_int(self.context, self.ptr_bytes)
     }
+}
+
+pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
+    let memory_buffer = MemoryBuffer::create_from_memory_range(BUILTINS_BITCODE, module_name);
+    let module = Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
+        .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err));
+
+    module
 }
 
 pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>) {
