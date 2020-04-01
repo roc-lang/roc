@@ -1,3 +1,6 @@
+#![crate_type = "lib"]
+#![no_std]
+
 // TODO replace this with a normal Inkwell build_cast call - this was just
 // used as a proof of concept for getting bitcode importing working!
 
