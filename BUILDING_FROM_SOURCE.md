@@ -32,7 +32,9 @@ Create `~/.config/cargo` and add this to it:
 
 ```
 [build]
-rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+# Link with lld, per https://github.com/rust-lang/rust/issues/39915#issuecomment-538049306
+# Use target-cpu=native, per https://deterministic.space/high-performance-rust.html
+rustflags = ["-C", "link-arg=-fuse-ld=lld", "-C", "target-cpu=native"]
 ```
 
 Then install `lld` version 9 (e.g. with `$ sudo apt-get install lld-9`)
