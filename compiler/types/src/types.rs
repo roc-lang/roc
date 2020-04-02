@@ -792,7 +792,7 @@ fn write_error_type_help(
             }
         }
         Function(arguments, result) => {
-            let use_parens = parens != Parens::Unnecessary;
+            let write_parens = parens != Parens::Unnecessary;
 
             if write_parens {
                 buf.push(')');
@@ -815,10 +815,10 @@ fn write_error_type_help(
                 buf.push(')');
             }
         }
-        Record(fields, ext) { 
-                buf.push('{');
-                buf.push('}');
-                write_ext(ext, buf);
+        Record(fields, ext) => {
+            buf.push('{');
+            buf.push('}');
+            write_type_ext(ext, buf);
         }
 
         Infinite => {
@@ -834,6 +834,16 @@ pub enum TypeExt {
     Closed,
     FlexOpen(Lowercase),
     RigidOpen(Lowercase),
+}
+
+fn write_type_ext(ext: TypeExt, buf: &mut String) {
+    use TypeExt::*;
+    match ext {
+        Closed => {}
+        FlexOpen(lowercase) | RigidOpen(lowercase) => {
+            buf.push_str(lowercase.as_str());
+        }
+    }
 }
 
 static THE_LETTER_A: u32 = 'a' as u32;

@@ -1,4 +1,4 @@
-use crate::report::ReportText::{Batch, Module, Region, Value};
+use crate::report::ReportText::{Batch, BinOp, Module, Region, Value};
 use roc_can::expected::{Expected, PExpected};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
@@ -27,6 +27,7 @@ pub struct Palette {
     pub line_number: Color,
     pub gutter_bar: Color,
     pub module_name: Color,
+    pub binop: Color,
 }
 
 #[derive(Copy, Clone)]
@@ -52,6 +53,7 @@ pub const TEST_PALETTE: Palette = Palette {
     line_number: Color::Cyan,
     gutter_bar: Color::Magenta,
     module_name: Color::Green,
+    binop: Color::Green,
 };
 
 impl Color {
@@ -314,10 +316,21 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
             texts.push(plain_text("\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used."));
         }
         Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => {
-            texts.push(plain_text(&*format!(
-                "You cannot mix {} and {} without parentheses",
-                left_bin_op.value, right_bin_op.value
-            )));
+            if left_bin_op.value == right_bin_op.value {
+                texts.push(plain_text("Using more than one "));
+                texts.push(BinOp(left_bin_op.value));
+                texts.push(plain_text(
+                    " like this requires parentheses, to clarify how things should be grouped.",
+                ))
+            } else {
+                texts.push(plain_text("Using "));
+                texts.push(BinOp(left_bin_op.value));
+                texts.push(plain_text(" and "));
+                texts.push(BinOp(right_bin_op.value));
+                texts.push(plain_text(
+                    " together requires parentheses, to clarify how they should be grouped.",
+                ))
+            }
             texts.push(Region(region));
         }
         Problem::UnsupportedPattern(_pattern_type, _region) => {
@@ -370,6 +383,8 @@ pub enum ReportText {
 
     /// The documentation for this symbol.
     Docs(Symbol),
+
+    BinOp(roc_parse::operator::BinOp),
 
     /// Many ReportText that should be concatenated together.
     Batch(Vec<ReportText>),
@@ -575,6 +590,9 @@ impl ReportText {
                     report_text.render_ci(buf, subs, home, src_lines, interns);
                 }
             }
+            BinOp(bin_op) => {
+                buf.push_str(bin_op.to_string().as_str());
+            }
         }
     }
 
@@ -715,6 +733,9 @@ impl ReportText {
                 for report_text in report_texts {
                     report_text.render_color_terminal(buf, subs, home, src_lines, interns, palette);
                 }
+            }
+            BinOp(bin_op) => {
+                buf.push_str(&palette.binop.render(bin_op.to_string().as_str()));
             }
             _ => panic!("TODO implement more ReportTexts in render color terminal"),
         }
