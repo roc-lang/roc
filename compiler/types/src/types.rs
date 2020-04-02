@@ -747,6 +747,11 @@ fn write_error_type_help(
         FlexVar(name) => buf.push_str(name.as_str()),
         RigidVar(name) => buf.push_str(name.as_str()),
         Type(symbol, arguments) => {
+            let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
+
+            if write_parens {
+                buf.push('(');
+            }
             buf.push_str(symbol.ident_string(interns));
 
             for arg in arguments {
@@ -754,8 +759,73 @@ fn write_error_type_help(
 
                 write_error_type_help(home, interns, arg, buf, Parens::InTypeParam);
             }
+
+            if write_parens {
+                buf.push(')');
+            }
         }
-        _ => todo!(),
+        Alias(Symbol::NUM_NUM, mut arguments, _actual) => {
+            debug_assert!(arguments.len() == 1);
+
+            let argument = arguments.remove(0).1;
+
+            match argument {
+                Type(Symbol::INT_INTEGER, _) => {
+                    buf.push_str("Int");
+                }
+                Type(Symbol::FLOAT_FLOATINGPOINT, _) => {
+                    buf.push_str("Float");
+                }
+                other => {
+                    let write_parens = parens == Parens::InTypeParam;
+
+                    if write_parens {
+                        buf.push('(');
+                    }
+                    buf.push_str("Num ");
+                    write_error_type_help(home, interns, other, buf, Parens::InTypeParam);
+
+                    if write_parens {
+                        buf.push(')');
+                    }
+                }
+            }
+        }
+        Function(arguments, result) => {
+            let use_parens = parens != Parens::Unnecessary;
+
+            if write_parens {
+                buf.push(')');
+            }
+
+            let mut it = arguments.into_iter().peekable();
+
+            while let Some(arg) = it.next() {
+                write_error_type_help(home, interns, arg, buf, Parens::InFn);
+                if it.peek().is_some() {
+                    buf.push_str(", ");
+                }
+            }
+
+            buf.push_str(" -> ");
+
+            write_error_type_help(home, interns, *result, buf, Parens::InFn);
+
+            if write_parens {
+                buf.push(')');
+            }
+        }
+        Record(fields, ext) { 
+                buf.push('{');
+                buf.push('}');
+                write_ext(ext, buf);
+        }
+
+        Infinite => {
+            buf.push_str("∞");
+        }
+
+        other => todo!("cannot format {:?} yet", other),
     }
 }
 

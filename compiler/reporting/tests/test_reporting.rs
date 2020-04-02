@@ -780,4 +780,84 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn if_branch_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                if True then 2 else "foo"
+                "#
+            ),
+            indoc!(
+                r#"
+                The 2nd branch of this `if` does not match all the previous branches:
+
+                1 ┆  if True then 2 else "foo"
+                  ┆                      ^^^^^
+
+                The 2nd branch is a string of type:
+
+                    Str
+
+                But all the previous branches result in
+
+                    Num a
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn circular_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f = \g -> g g
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                I'm inferring a weird self-referential type for g:
+
+                1 ┆  f = \g -> g g
+                  ┆       ^
+
+                Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.
+
+                    ∞ -> a
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_recursion() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f = \x -> f [x] 
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                I'm inferring a weird self-referential type for f:
+
+                1 ┆  f = \x -> f [x] 
+                  ┆  ^
+
+                Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.
+
+                    List ∞ -> a
+
+                "#
+            ),
+        )
+    }
 }

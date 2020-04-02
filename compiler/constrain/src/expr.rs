@@ -437,7 +437,7 @@ pub fn constrain_expr(
                             ForReason(
                                 Reason::IfBranch { index: index + 1 },
                                 Type::Variable(*branch_var),
-                                region,
+                                loc_body.region,
                             ),
                         );
 
@@ -453,7 +453,7 @@ pub fn constrain_expr(
                                 index: branches.len() + 1,
                             },
                             Type::Variable(*branch_var),
-                            region,
+                            final_else.region,
                         ),
                     );
 

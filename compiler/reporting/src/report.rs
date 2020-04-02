@@ -72,30 +72,103 @@ impl Color {
 
 pub fn type_problem(filename: PathBuf, problem: solve::TypeError) -> Report {
     use solve::TypeError::*;
-    let mut texts = Vec::new();
-
-    //        Problem::UnusedDef(symbol, region) => {
-    //            texts.push(Value(symbol));
-    //            texts.push(plain_text(" is not used anywhere in your code."));
-    //            texts.push(Region(region));
-    //            texts.push(plain_text("If you didn't intend on using "));
-    //            texts.push(Value(symbol));
-    //            texts.push(plain_text(
-    //                " then remove it so future readers of your code don't wonder why it is there.",
-    //            ));
-    //        }
 
     match problem {
         BadExpr(region, category, found, expected) => {
-            return to_expr_report(filename, region, category, found, expected);
+            to_expr_report(filename, region, category, found, expected)
         }
-        BadPattern(region, category, found, expected) => todo!(),
-        CircularType(region, symbol, circ_type) => todo!(),
+        BadPattern(region, category, found, expected) => {
+            to_pattern_report(filename, region, category, found, expected)
+        }
+        CircularType(region, symbol, overall_type) => {
+            to_circular_report(filename, region, symbol, overall_type)
+        }
     }
+}
+
+fn type_in_focus(typ: ErrorType) -> ReportText {
+    ReportText::Batch(vec![
+        newline(),
+        newline(),
+        plain_text("    "),
+        ReportText::ErrorType(typ),
+        newline(),
+        newline(),
+    ])
+}
+
+fn int_to_ordinal(number: usize) -> String {
+    // NOTE: one-based
+    let remainder10 = number % 10;
+    let remainder100 = number % 100;
+
+    let ending = match remainder100 {
+        11..=13 => "th",
+        _ => match remainder10 {
+            1 => "st",
+            2 => "nd",
+            3 => "rd",
+            _ => "th",
+        },
+    };
+
+    format!("{}{}", number, ending)
+}
+
+#[allow(too_many_arguments)]
+fn report_mismatch(
+    filename: PathBuf,
+    category: &Category,
+    found: ErrorType,
+    expected_type: ErrorType,
+    region: roc_region::all::Region,
+    opt_highlight: Option<roc_region::all::Region>,
+    problem: &str,
+    this_is: &str,
+    instead_of: &str,
+    further_details: ReportText,
+) -> Report {
+    use ReportText::*;
+    let lines = vec![
+        plain_text(problem),
+        Region(region),
+        add_category(this_is, category),
+        type_in_focus(found),
+        plain_text(instead_of),
+        type_in_focus(expected_type),
+        further_details,
+    ];
 
     Report {
         filename,
-        text: Batch(texts),
+        text: Batch(lines),
+    }
+}
+
+#[allow(too_many_arguments)]
+fn report_bad_type(
+    filename: PathBuf,
+    category: &Category,
+    found: ErrorType,
+    expected_type: ErrorType,
+    region: roc_region::all::Region,
+    opt_highlight: Option<roc_region::all::Region>,
+    problem: &str,
+    this_is: &str,
+    further_details: ReportText,
+) -> Report {
+    use ReportText::*;
+    let lines = vec![
+        plain_text(problem),
+        Region(region),
+        add_category(this_is, &category),
+        type_in_focus(found),
+        further_details,
+    ];
+
+    Report {
+        filename,
+        text: Batch(lines),
     }
 }
 
@@ -112,27 +185,13 @@ fn to_expr_report(
         Expected::NoExpectation(expected_type) => todo!(),
         Expected::FromAnnotation(name, arity, sub_context, expected_type) => todo!(),
         Expected::ForReason(reason, expected_type, region) => {
-            let bad_type = |op_highlight, problem, this_is, further_details| {
-                let mut lines = vec![
-                    plain_text(problem),
-                    Region(region),
-                    add_category(this_is, category),
-                    newline(),
-                    newline(),
-                    plain_text("    "),
-                    ErrorType(found),
-                    newline(),
-                    newline(),
-                    further_details,
-                ];
-
-                Report {
-                    filename,
-                    text: Batch(lines),
-                }
-            };
             match reason {
-                Reason::IfCondition => bad_type(
+                Reason::IfCondition => report_bad_type(
+                    filename,
+                    &category,
+                    found,
+                    expected_type,
+                    region,
                     Some(expr_region),
                     "This `if` condition does not evaluate to a boolean value, True or False.",
                     "It is",
@@ -143,13 +202,31 @@ fn to_expr_report(
                         newline(),
                     ]),
                 ),
+                Reason::IfBranch { index } => {
+                    let ith = int_to_ordinal(index);
+                    report_mismatch(
+                        filename,
+                        &category,
+                        found,
+                        expected_type,
+                        region,
+                        Some(expr_region),
+                        &format!(
+                            "The {} branch of this `if` does not match all the previous branches:",
+                            ith
+                        ),
+                        &format!("The {} branch is", ith),
+                        "But all the previous branches result in",
+                        Batch(vec![ /* TODO add hint */ ]),
+                    )
+                }
                 _ => todo!(),
             }
         }
     }
 }
 
-fn add_category(this_is: &str, category: Category) -> ReportText {
+fn add_category(this_is: &str, category: &Category) -> ReportText {
     use Category::*;
 
     let result = match category {
@@ -158,6 +235,41 @@ fn add_category(this_is: &str, category: Category) -> ReportText {
     };
 
     plain_text(&*result)
+}
+
+fn to_pattern_report(
+    filename: PathBuf,
+    expr_region: roc_region::all::Region,
+    category: PatternCategory,
+    found: ErrorType,
+    expected: PExpected<ErrorType>,
+) -> Report {
+    use ReportText::*;
+    todo!()
+}
+
+fn to_circular_report(
+    filename: PathBuf,
+    region: roc_region::all::Region,
+    symbol: Symbol,
+    overall_type: ErrorType,
+) -> Report {
+    use ReportText::*;
+
+    let lines = vec![
+        plain_text("I'm inferring a weird self-referential type for "),
+        Value(symbol),
+        plain_text(":"),
+        Region(region),
+        plain_text("Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely."),
+        type_in_focus(overall_type),
+        /* TODO hint */
+    ];
+
+    Report {
+        filename,
+        text: Batch(lines),
+    }
 }
 
 pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
