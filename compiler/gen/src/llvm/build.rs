@@ -10,7 +10,6 @@ use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
-use crate::llvm::builtins::BUILTINS_BITCODE;
 use crate::llvm::convert::{
     basic_type_from_layout, collection_wrapper, empty_collection, get_fn_type, ptr_int,
 };
@@ -50,7 +49,8 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 }
 
 pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
-    let memory_buffer = MemoryBuffer::create_from_memory_range(BUILTINS_BITCODE, module_name);
+    let memory_buffer =
+        MemoryBuffer::create_from_memory_range(include_bytes!("builtins.bc"), module_name);
 
     Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
         .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err))
