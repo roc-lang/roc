@@ -497,7 +497,7 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
                 || next_is_multiline_bin_op
         }
 
-        UnaryOp(loc_subexpr, _) | PrecedenceConflict(_, _, loc_subexpr) => {
+        UnaryOp(loc_subexpr, _) | PrecedenceConflict(_, _, _, loc_subexpr) => {
             is_multiline_expr(&loc_subexpr.value)
         }
 

@@ -779,6 +779,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "indoc",
+ "inlinable_string",
  "maplit",
  "pretty_assertions",
  "quickcheck",

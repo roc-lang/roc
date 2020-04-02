@@ -78,8 +78,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
         | Nested(MalformedIdent(_))
         | MalformedClosure
         | Nested(MalformedClosure)
-        | PrecedenceConflict(_, _, _)
-        | Nested(PrecedenceConflict(_, _, _))
+        | PrecedenceConflict(_, _, _, _)
+        | Nested(PrecedenceConflict(_, _, _, _))
         | GlobalTag(_)
         | Nested(GlobalTag(_))
         | PrivateTag(_)
@@ -418,8 +418,9 @@ fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a L
                                         );
                                         let region = broken_expr.region;
                                         let value = Expr::PrecedenceConflict(
-                                            bad_op,
+                                            loc_expr.region,
                                             stack_op,
+                                            bad_op,
                                             arena.alloc(broken_expr),
                                         );
 

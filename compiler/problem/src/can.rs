@@ -10,7 +10,9 @@ use roc_region::all::{Located, Region};
 pub enum Problem {
     UnusedDef(Symbol, Region),
     UnusedImport(ModuleId, Region),
-    UnusedArgument(Symbol, Region),
+    /// First symbol is the name of the closure with that argument
+    /// Second symbol is the name of the argument that is unused
+    UnusedArgument(Symbol, Symbol, Region),
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(PatternType, Region),
@@ -23,7 +25,7 @@ pub enum Problem {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PrecedenceProblem {
-    BothNonAssociative(Located<BinOp>, Located<BinOp>),
+    BothNonAssociative(Region, Located<BinOp>, Located<BinOp>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +49,8 @@ pub enum RuntimeError {
         region: Region,
     },
     InvalidPrecedence(PrecedenceProblem, Region),
+    MalformedIdentifier(Box<str>, Region),
+    MalformedClosure(Region),
     FloatOutsideRange(Box<str>),
     IntOutsideRange(Box<str>),
     InvalidHex(std::num::ParseIntError, Box<str>),

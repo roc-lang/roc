@@ -117,9 +117,10 @@ pub fn constrain_pattern(
     state: &mut PatternState,
 ) {
     match pattern {
-        Underscore | UnsupportedPattern(_) => {
+        Underscore | UnsupportedPattern(_) | Shadowed(_, _) => {
             // Neither the _ pattern nor erroneous ones add any constraints.
         }
+
         Identifier(symbol) => {
             state.headers.insert(
                 symbol.clone(),
@@ -270,9 +271,6 @@ pub fn constrain_pattern(
             state.vars.push(*ext_var);
             state.constraints.push(whole_con);
             state.constraints.push(tag_con);
-        }
-        Shadowed(_, _) => {
-            panic!("TODO constrain Shadowed pattern");
         }
     }
 }

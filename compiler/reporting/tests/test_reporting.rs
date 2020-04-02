@@ -8,7 +8,7 @@ extern crate roc_reporting;
 mod helpers;
 
 #[cfg(test)]
-mod test_report {
+mod test_reporting {
     use crate::helpers::test_home;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_reporting::report::{
@@ -22,7 +22,7 @@ mod test_report {
     use std::path::PathBuf;
     // use roc_region::all;
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
-    use roc_reporting::report::ReportText::{Batch, Region, Type, Value};
+    use roc_reporting::report::ReportText::{Batch, Module, Region, Type, Value};
     use roc_types::subs::Content::{FlexVar, RigidVar, Structure};
     use roc_types::subs::FlatType::EmptyRecord;
 
@@ -82,6 +82,28 @@ mod test_report {
         report
             .text
             .render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
+
+        assert_eq!(buf, expected_rendering);
+    }
+
+    fn report_problem_as(src: &str, expected_rendering: &str) {
+        let (_type_problems, can_problems, mut subs, home, interns) = infer_expr_help(src);
+
+        let mut buf: String = String::new();
+        let src_lines: Vec<&str> = src.split('\n').collect();
+
+        match can_problems.first() {
+            None => {}
+            Some(problem) => {
+                let report = can_problem(
+                    filename_from_string(r"\code\proj\Main.roc"),
+                    problem.clone(),
+                );
+                report
+                    .text
+                    .render_ci(&mut buf, &mut subs, home, &src_lines, &interns)
+            }
+        }
 
         assert_eq!(buf, expected_rendering);
     }
@@ -189,6 +211,30 @@ mod test_report {
     }
 
     #[test]
+    fn report_module() {
+        let src: &str = indoc!(
+            r#"
+                x = 1
+                y = 2
+
+                x
+            "#
+        );
+
+        let (_type_problems, _can_problems, mut subs, home, mut interns) = infer_expr_help(src);
+
+        let mut buf = String::new();
+        let src_lines: Vec<&str> = src.split('\n').collect();
+        let module_id = interns.module_id(&"Main".into());
+
+        to_simple_report(Module(module_id))
+            .text
+            .render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
+
+        assert_eq!(buf, "Main");
+    }
+
+    #[test]
     fn report_wildcard() {
         report_renders_as(to_simple_report(Type(FlexVar(None))), "*");
     }
@@ -224,45 +270,170 @@ mod test_report {
 
     #[test]
     fn report_unused_def() {
-        let src: &str = indoc!(
-            r#"
+        report_problem_as(
+            indoc!(
+                r#"
                 x = 1
                 y = 2
 
                 x
             "#
-        );
-
-        let (_type_problems, can_problems, mut subs, home, interns) = infer_expr_help(src);
-
-        let mut buf: String = String::new();
-        let src_lines: Vec<&str> = src.split('\n').collect();
-
-        match can_problems.first() {
-            None => {}
-            Some(problem) => {
-                let report = can_problem(
-                    filename_from_string(r"\code\proj\Main.roc"),
-                    problem.clone(),
-                );
-                report
-                    .text
-                    .render_ci(&mut buf, &mut subs, home, &src_lines, &interns)
-            }
-        }
-
-        assert_eq!(
-            buf,
+            ),
             indoc!(
                 r#"
                 y is not used anywhere in your code.
 
                 2 ┆  y = 2
+                  ┆  ^
 
                 If you didn't intend on using y then remove it so future readers of your code don't wonder why it is there."#
-            )
-        );
+            ),
+        )
     }
+
+    // #[test]
+    // fn report_shadow() {
+    //     report_problem_as(
+    //         indoc!(
+    //             r#"
+    //            i = 1
+    //
+    //            s = \i ->
+    //                i + 1
+    //
+    //            s i
+    //        "#
+    //         ),
+    //         indoc!(r#"     "#),
+    //     )
+    // }
+
+    // #[test]
+    // fn report_unsupported_top_level_def() {
+    //     report_problem_as(
+    //         indoc!(
+    //             r#"
+    //             x = 1
+    //
+    //             5 = 2 + 1
+    //
+    //             x
+    //         "#
+    //         ),
+    //         indoc!(r#"     "#),
+    //     )
+    // }
+
+    #[test]
+    fn report_precedence_problem_single_line() {
+        report_problem_as(
+            indoc!(
+                r#"x = 1
+                y =
+                    if selectedId != thisId == adminsId then
+                        4
+
+                    else
+                        5
+
+                { x, y }
+                "#
+            ),
+            indoc!(
+                r#"
+                Using != and == together requires parentheses, to clarify how they should be grouped.
+
+                3 ┆      if selectedId != thisId == adminsId then
+                  ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn report_precedence_problem_multiline() {
+        report_problem_as(
+            indoc!(
+                r#"
+                if
+                    1
+                        == 2
+                        == 3
+                then
+                    2
+
+                else
+                    3
+                "#
+            ),
+            indoc!(
+                r#"
+                Using more than one == like this requires parentheses, to clarify how things should be grouped.
+
+                2 ┆>      1
+                3 ┆>          == 2
+                4 ┆>          == 3
+
+                "#
+            ),
+        )
+    }
+
+    // #[test]
+    // fn report_unused_argument() {
+    //     report_problem_as(
+    //         indoc!(r#"
+    //             y = 9
+    //
+    //             box = \class, htmlChildren ->
+    //                 div [ class ] []
+    //
+    //             div = 4
+    //
+    //             box "wizard" []
+    //         "#),
+    //         indoc!(
+    //             r#"
+    //             box doesn't use htmlChildren.
+    //
+    //             3 ┆  box = \class, htmlChildren ->
+    //
+    //             If you don't need htmlChildren, then you can just remove it. However, if you really do need htmlChildren as an argument of box, prefix it with an underscore, like this: "_htmlChildren". Adding an underscore at the start of a variable name is a way of saying that the variable is not used."#
+    //         ),
+    //     );
+    // }
+
+    // #[test]
+    // fn report_unused_import() {
+    //     report_problem_as(
+    //         indoc!(r#"
+    //             interface Report
+    //                 exposes [
+    //                     plainText,
+    //                     emText
+    //                 ]
+    //                 imports [
+    //                     Symbol.{ Interns }
+    //                 ]
+    //
+    //             plainText = \str -> PlainText str
+    //
+    //             emText = \str -> EmText str
+    //         "#),
+    //         indoc!(
+    //             r#"
+    //             Nothing from Symbol is used in this module.
+    //
+    //             6 ┆  imports [
+    //             7 ┆      Symbol.{ Interns }
+    //               ┆      ^^^^^^
+    //             8 ┆  ]
+    //
+    //             Since Symbol isn't used, you don't need to import it."#
+    //         ),
+    //     );
+    // }
 
     #[test]
     fn report_plain_text_color() {
@@ -311,6 +482,37 @@ mod test_report {
         );
 
         assert_eq!(human_readable(&buf), "<blue>activityIndicatorLarge<reset>");
+    }
+
+    #[test]
+    fn report_module_color() {
+        let src: &str = indoc!(
+            r#"
+                x = 1
+                y = 2
+
+                x
+            "#
+        );
+
+        let (_type_problems, _can_problems, mut subs, home, mut interns) = infer_expr_help(src);
+
+        let mut buf = String::new();
+        let src_lines: Vec<&str> = src.split('\n').collect();
+        let module_id = interns.module_id(&"Util.Int".into());
+
+        to_simple_report(Module(module_id))
+            .text
+            .render_color_terminal(
+                &mut buf,
+                &mut subs,
+                home,
+                &src_lines,
+                &interns,
+                &TEST_PALETTE,
+            );
+
+        assert_eq!(human_readable(&buf), "<green>Util.Int<reset>");
     }
 
     #[test]
@@ -364,7 +566,7 @@ mod test_report {
                     isDisabled = \user -> user.isAdmin
 
                     theAdmin
-                        |> isDabled
+                        |> isDisabled
                 "#
             ),
             to_simple_report(Region(roc_region::all::Region {
@@ -375,10 +577,14 @@ mod test_report {
             })),
             indoc!(
                 r#"
-                    <cyan>1<reset><magenta> ┆<reset>  <white>isDisabled = \user -> user.isAdmin<reset>
-                    <cyan>2<reset><magenta> ┆<reset>
-                    <cyan>3<reset><magenta> ┆<reset>  <white>theAdmin<reset>
-                    <cyan>4<reset><magenta> ┆<reset>  <white>    |> isDabled<reset>"#
+
+
+                    <cyan>1<reset><magenta> ┆<reset><red>><reset>  <white>isDisabled = \user -> user.isAdmin<reset>
+                    <cyan>2<reset><magenta> ┆<reset><red>><reset>
+                    <cyan>3<reset><magenta> ┆<reset><red>><reset>  <white>theAdmin<reset>
+                    <cyan>4<reset><magenta> ┆<reset><red>><reset>  <white>    |> isDisabled<reset>
+
+                "#
             ),
         );
     }
@@ -403,9 +609,50 @@ mod test_report {
             })),
             indoc!(
                 r#"
-                    2 ┆  y = 2
-                    3 ┆  f = \a -> a + 4
-                    4 ┆"#
+
+
+                2 ┆>  y = 2
+                3 ┆>  f = \a -> a + 4
+                4 ┆>
+
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn report_region_line_number_length_edge_case() {
+        // the highest line number is 9, but it's rendered as 10.
+        // Make sure that we render the line number as 2-wide
+        report_renders_as_from_src(
+            indoc!(
+                r#"
+
+
+
+
+                    x = 1
+                    y = 2
+                    f = \a -> a + 4
+
+                    f x
+                "#
+            ),
+            to_simple_report(Region(roc_region::all::Region {
+                start_line: 7,
+                end_line: 9,
+                start_col: 0,
+                end_col: 0,
+            })),
+            indoc!(
+                r#"
+
+
+                 8 ┆>
+                 9 ┆>  f x
+                10 ┆>
+
+                "#
             ),
         );
     }
@@ -438,9 +685,13 @@ mod test_report {
             })),
             indoc!(
                 r#"
-                     9 ┆
-                    10 ┆  y = 2
-                    11 ┆  f = \a -> a + 4"#
+
+
+                     9 ┆>
+                    10 ┆>  y = 2
+                    11 ┆>  f = \a -> a + 4
+
+                    "#
             ),
         );
     }

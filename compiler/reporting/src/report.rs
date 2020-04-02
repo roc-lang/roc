@@ -1,5 +1,6 @@
-use crate::report::ReportText::{Batch, Region, Value};
+use crate::report::ReportText::{Batch, BinOp, Module, Region, Value};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::Problem;
 use roc_types::pretty_print::content_to_string;
 use roc_types::subs::{Content, Subs};
@@ -22,6 +23,8 @@ pub struct Palette {
     pub error: Color,
     pub line_number: Color,
     pub gutter_bar: Color,
+    pub module_name: Color,
+    pub binop: Color,
 }
 
 #[derive(Copy, Clone)]
@@ -46,6 +49,8 @@ pub const TEST_PALETTE: Palette = Palette {
     error: Color::Red,
     line_number: Color::Cyan,
     gutter_bar: Color::Magenta,
+    module_name: Color::Green,
+    binop: Color::Green,
 };
 
 impl Color {
@@ -71,19 +76,72 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
         Problem::UnusedDef(symbol, region) => {
             texts.push(Value(symbol));
             texts.push(plain_text(" is not used anywhere in your code."));
-            texts.push(newline());
-            texts.push(newline());
             texts.push(Region(region));
-            texts.push(newline());
-            texts.push(newline());
             texts.push(plain_text("If you didn't intend on using "));
             texts.push(Value(symbol));
             texts.push(plain_text(
                 " then remove it so future readers of your code don't wonder why it is there.",
             ));
         }
-        _ => {
-            panic!("TODO implement others");
+        Problem::UnusedImport(module_id, region) => {
+            texts.push(plain_text("Nothing from "));
+            texts.push(Module(module_id));
+            texts.push(plain_text(" is used in this module."));
+            texts.push(Region(region));
+            texts.push(plain_text("Since "));
+            texts.push(Module(module_id));
+            texts.push(plain_text(" isn't used, you don't need to import it."));
+        }
+        Problem::UnusedArgument(closure_symbol, argument_symbol, region) => {
+            texts.push(Value(closure_symbol));
+            texts.push(plain_text(" doesn't use "));
+            texts.push(Value(argument_symbol));
+            texts.push(plain_text("."));
+            texts.push(Region(region));
+            texts.push(plain_text("If you don't need "));
+            texts.push(Value(argument_symbol));
+            texts.push(plain_text(
+                ", then you can just remove it. However, if you really do need ",
+            ));
+            texts.push(Value(argument_symbol));
+            texts.push(plain_text(" as an argument of "));
+            texts.push(Value(closure_symbol));
+            texts.push(plain_text(", prefix it with an underscore, like this: \"_"));
+            texts.push(Value(argument_symbol));
+            texts.push(plain_text("\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used."));
+        }
+        Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => {
+            if left_bin_op.value == right_bin_op.value {
+                texts.push(plain_text("Using more than one "));
+                texts.push(BinOp(left_bin_op.value));
+                texts.push(plain_text(
+                    " like this requires parentheses, to clarify how things should be grouped.",
+                ))
+            } else {
+                texts.push(plain_text("Using "));
+                texts.push(BinOp(left_bin_op.value));
+                texts.push(plain_text(" and "));
+                texts.push(BinOp(right_bin_op.value));
+                texts.push(plain_text(
+                    " together requires parentheses, to clarify how they should be grouped.",
+                ))
+            }
+            texts.push(Region(region));
+        }
+        Problem::UnsupportedPattern(_pattern_type, _region) => {
+            panic!("TODO implement unsupported pattern report")
+        }
+        Problem::ShadowingInAnnotation {
+            original_region,
+            shadow,
+        } => {
+            // v-- just to satisfy clippy
+            let _a = original_region;
+            let _b = shadow;
+            panic!("TODO implement shadow report");
+        }
+        Problem::RuntimeError(_runtime_error) => {
+            panic!("TODO implement run time error report");
         }
     };
 
@@ -97,6 +155,9 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
 pub enum ReportText {
     /// A value. Render it qualified unless it was defined in the current module.
     Value(Symbol),
+
+    /// A module,
+    Module(ModuleId),
 
     /// A type. Render it using roc_types::pretty_print for now, but maybe
     /// do something fancier later.
@@ -117,6 +178,9 @@ pub enum ReportText {
     /// The documentation for this symbol.
     Docs(Symbol),
 
+    BinOp(roc_parse::operator::BinOp),
+
+    /// Many ReportText that should be concatenated together.
     Batch(Vec<ReportText>),
 }
 
@@ -138,6 +202,7 @@ pub fn url(str: &str) -> ReportText {
     Url(Box::from(str))
 }
 
+#[allow(dead_code)]
 fn newline() -> ReportText {
     plain_text("\n")
 }
@@ -237,14 +302,21 @@ impl ReportText {
                     buf.push_str(symbol.ident_string(interns));
                 }
             }
+            Module(module_id) => {
+                buf.push_str(&interns.module_name(module_id));
+            }
             Type(content) => buf.push_str(content_to_string(content, subs, home, interns).as_str()),
             Region(region) => {
-                let max_line_number_length = region.end_line.to_string().len();
+                buf.push('\n');
+                buf.push('\n');
 
-                for i in region.start_line..=region.end_line {
-                    let i_one_indexed = i + 1;
+                // widest displayed line number
+                let max_line_number_length = (region.end_line + 1).to_string().len();
 
-                    let line_number_string = i_one_indexed.to_string();
+                if region.start_line == region.end_line {
+                    let i = region.start_line;
+
+                    let line_number_string = (i + 1).to_string();
                     let line_number = line_number_string.as_str();
                     let this_line_number_length = line_number.len();
 
@@ -262,10 +334,45 @@ impl ReportText {
                         buf.push_str(src_lines[i as usize]);
                     }
 
-                    if i != region.end_line {
-                        buf.push('\n');
+                    buf.push('\n');
+                    buf.push_str(" ".repeat(max_line_number_length).as_str());
+                    buf.push_str(" ┆");
+
+                    buf.push_str(" ".repeat(region.start_col as usize + 2).as_str());
+                    buf.push_str(
+                        "^".repeat((region.end_col - region.start_col) as usize)
+                            .as_str(),
+                    );
+                } else {
+                    for i in region.start_line..=region.end_line {
+                        let i_one_indexed = i + 1;
+
+                        let line_number_string = i_one_indexed.to_string();
+                        let line_number = line_number_string.as_str();
+                        let this_line_number_length = line_number.len();
+
+                        buf.push_str(
+                            " ".repeat(max_line_number_length - this_line_number_length)
+                                .as_str(),
+                        );
+                        buf.push_str(line_number);
+                        buf.push_str(" ┆>");
+
+                        let line = src_lines[i as usize];
+
+                        if !line.trim().is_empty() {
+                            buf.push_str("  ");
+                            buf.push_str(src_lines[i as usize]);
+                        }
+
+                        if i != region.end_line {
+                            buf.push('\n');
+                        }
                     }
                 }
+
+                buf.push('\n');
+                buf.push('\n');
             }
             Docs(_) => {
                 panic!("TODO implment docs");
@@ -274,6 +381,9 @@ impl ReportText {
                 for report_text in report_texts {
                     report_text.render_ci(buf, subs, home, src_lines, interns);
                 }
+            }
+            BinOp(bin_op) => {
+                buf.push_str(bin_op.to_string().as_str());
             }
         }
     }
@@ -315,6 +425,9 @@ impl ReportText {
                     buf.push_str(&palette.variable.render(&module_str));
                 }
             }
+            Module(module_id) => {
+                buf.push_str(&palette.module_name.render(&interns.module_name(module_id)));
+            }
             Type(content) => match content {
                 Content::FlexVar(flex_var) => buf.push_str(&palette.flex_var.render(
                     content_to_string(Content::FlexVar(flex_var), subs, home, interns).as_str(),
@@ -335,9 +448,16 @@ impl ReportText {
                 Content::Error => {}
             },
             Region(region) => {
-                let max_line_number_length = region.end_line.to_string().len();
+                // newline before snippet
+                buf.push('\n');
+                buf.push('\n');
 
-                for i in region.start_line..=region.end_line {
+                // the widest line number that is rendered
+                let max_line_number_length = (region.end_line + 1).to_string().len();
+
+                if region.start_line == region.end_line {
+                    // single line
+                    let i = region.start_line;
                     let i_one_indexed = i + 1;
 
                     let line_number_string = i_one_indexed.to_string();
@@ -358,15 +478,55 @@ impl ReportText {
                         buf.push_str(&palette.code_block.render(src_lines[i as usize]));
                     }
 
-                    if i != region.end_line {
-                        buf.push('\n');
+                    buf.push('\n');
+                    buf.push_str(" ".repeat(max_line_number_length).as_str());
+                    buf.push_str(&palette.gutter_bar.render(" ┆"));
+
+                    buf.push_str(" ".repeat(region.start_col as usize + 2).as_str());
+                    let carets = "^".repeat((region.end_col - region.start_col) as usize);
+                    buf.push_str(&palette.error.render(carets.as_str()));
+                } else {
+                    // multiline
+
+                    for i in region.start_line..=region.end_line {
+                        let i_one_indexed = i + 1;
+
+                        let line_number_string = i_one_indexed.to_string();
+                        let line_number = line_number_string.as_str();
+                        let this_line_number_length = line_number.len();
+
+                        buf.push_str(
+                            " ".repeat(max_line_number_length - this_line_number_length)
+                                .as_str(),
+                        );
+                        buf.push_str(&palette.line_number.render(line_number));
+                        buf.push_str(&palette.gutter_bar.render(" ┆"));
+                        buf.push_str(&palette.error.render(">"));
+
+                        let line = src_lines[i as usize];
+
+                        if !line.trim().is_empty() {
+                            buf.push_str("  ");
+                            buf.push_str(&palette.code_block.render(src_lines[i as usize]));
+                        }
+
+                        if i != region.end_line {
+                            buf.push('\n');
+                        }
                     }
                 }
+
+                // newline before next line of text
+                buf.push('\n');
+                buf.push('\n');
             }
             Batch(report_texts) => {
                 for report_text in report_texts {
                     report_text.render_color_terminal(buf, subs, home, src_lines, interns, palette);
                 }
+            }
+            BinOp(bin_op) => {
+                buf.push_str(&palette.binop.render(bin_op.to_string().as_str()));
             }
             _ => panic!("TODO implement more ReportTexts in render color terminal"),
         }
