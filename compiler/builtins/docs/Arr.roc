@@ -4,9 +4,9 @@ interface List
 
 ## Types
 
-## A list of values.
+## A sequential list of values.
 ##
-## >>> [ 1, 2, 3 ] # a list of ints
+## >>> [ 1, 2, 3 ] # a list of numbers
 ##
 ## >>> [ "a", "b", "c" ] # a list of strings
 ##
@@ -34,12 +34,12 @@ interface List
 ## ## Performance notes
 ##
 ## Under the hood, a list is a record containing a `len : Ulen` field as well
-## as a pointer to a flat array of bytes.
+## as a pointer to a flat list of bytes.
 ##
 ## This is not a [persistent data structure](https://en.wikipedia.org/wiki/Persistent_data_structure),
 ## so copying it is not cheap! The reason #List is designed this way is because:
 ##
-## * Copying small arrays is typically slightly faster than copying small persistent data structures. This is because, at small sizes, persistent data structures are usually thin wrappers around flat arrays anyway. They don't start conferring copying advantages until crossing a certain minimum size threshold.
+## * Copying small lists is typically slightly faster than copying small persistent data structures. This is because, at small sizes, persistent data structures are usually thin wrappers around flat lists anyway. They don't start conferring copying advantages until crossing a certain minimum size threshold.
 ## Many list operations are no faster with persistent data structures. For example, even if it were a persistent data structure, #List.map, #List.fold, and #List.keepIf would all need to traverse every element in the list and build up the result from scratch.
 ## * Roc's compiler optimizes many list operations into in-place mutations behind the scenes, depending on how the list is being used. For example, #List.map, #List.keepIf, and #List.set can all be optimized to perform in-place mutations.
 ## * If possible, it is usually best for performance to use large lists in a way where the optimizer can turn them into in-place mutations. If this is not possible, a persistent data structure might be faster - but this is a rare enough scenario that it would not be good for the average Roc program's performance if this were the way #List worked by default. Instead, you can look outside Roc's standard modules for an implementation of a persistent data structure - likely built using #List under the hood!
@@ -55,6 +55,8 @@ repeat : elem, Ulen -> List elem
 
 range : Int a, Int a -> List (Int a)
 
+## TODO I don't think we should have this after all. *Maybe* have an Ok.toList instead?
+##
 ## When given an #Err, returns #[], and when given #Ok, returns a list containing
 ## only that value.
 ##
@@ -221,8 +223,6 @@ take : List elem, Int -> List elem
 drop : List elem, Int -> List elem
 
 ## Access
-
-#get : List elem, Ulen -> Result elem [ OutOfBounds ]*
 
 first : List elem -> [Ok elem, ListWasEmpty]*
 
