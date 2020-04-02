@@ -133,6 +133,6 @@ impl std::fmt::Display for BinOp {
             Pizza => "|>",
         };
 
-        write!(f, "({})", as_str)
+        write!(f, "{}", as_str)
     }
 }

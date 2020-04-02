@@ -8,12 +8,12 @@ edition = "2018"
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
+roc_parse = { path = "../parse" }
 roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
 roc_load = { path = "../load" }
 roc_can = { path = "../can" }
 inlinable_string = "0.1.0"
-
 
 [dev-dependencies]
 roc_constrain = { path = "../constrain" }

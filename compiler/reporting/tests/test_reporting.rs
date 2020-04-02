@@ -291,23 +291,22 @@ mod test_reporting {
         )
     }
 
-    // hits a TODO in reporting
-    //    #[test]
-    //    fn report_shadow() {
-    //        report_problem_as(
-    //            indoc!(
-    //                r#"
-    //                i = 1
+    // #[test]
+    // fn report_shadow() {
+    //     report_problem_as(
+    //         indoc!(
+    //             r#"
+    //            i = 1
     //
-    //                s = \i ->
-    //                    i + 1
+    //            s = \i ->
+    //                i + 1
     //
-    //                s i
-    //            "#
-    //            ),
-    //            indoc!(r#"     "#),
-    //        )
-    //    }
+    //            s i
+    //        "#
+    //         ),
+    //         indoc!(r#"     "#),
+    //     )
+    // }
 
     // #[test]
     // fn report_unsupported_top_level_def() {
@@ -342,7 +341,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                You cannot mix (!=) and (==) without parentheses
+                Using != and == together requires parentheses, to clarify how they should be grouped.
 
                 3 ┆      if selectedId != thisId == adminsId then
                   ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -359,7 +358,7 @@ mod test_reporting {
                 r#"
                 if
                     1
-                        != 2
+                        == 2
                         == 3
                 then
                     2
@@ -370,10 +369,10 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                You cannot mix (!=) and (==) without parentheses
+                Using more than one == like this requires parentheses, to clarify how things should be grouped.
 
                 2 ┆>      1
-                3 ┆>          != 2
+                3 ┆>          == 2
                 4 ┆>          == 3
 
                 "#
