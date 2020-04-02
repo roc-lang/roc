@@ -76,17 +76,14 @@ fn gen(src: &str, target: Triple, dest_filename: &Path) {
     fpm.initialize();
 
     // Compute main_fn_type before moving subs to Env
-    let pointer_bytes = target.pointer_width().unwrap().bytes() as u32;
-    let layout = Layout::from_content(&arena, content, &subs, pointer_bytes)
-    .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
+    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+    let layout = Layout::from_content(&arena, content, &subs, ptr_bytes).unwrap_or_else(|err| {
+        panic!(
+            "Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}",
+            err, subs
+        )
+    });
 
-    let execution_engine = module
-        .create_jit_execution_engine(OptimizationLevel::None)
-        .expect("Error creating JIT execution engine for test");
-
-    let ptr_bytes = execution_engine
-        .get_target_data()
-        .get_pointer_byte_size(None);
     let main_fn_type =
         basic_type_from_layout(&arena, &context, &layout, ptr_bytes).fn_type(&[], false);
     let main_fn_name = "$Test.main";
@@ -111,7 +108,7 @@ fn gen(src: &str, target: Triple, dest_filename: &Path) {
         &mut procs,
         home,
         &mut ident_ids,
-        pointer_bytes,
+        ptr_bytes,
     );
 
     // Put this module's ident_ids back in the interns, so we can use them in env.

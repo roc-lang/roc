@@ -24,3 +24,7 @@ members = [
     "cli"
 ]
 
+# Optimizations based on https://deterministic.space/high-performance-rust.html
+[profile.release]
+lto = "fat"
+codegen-units = 1
