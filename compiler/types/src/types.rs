@@ -817,12 +817,15 @@ fn write_error_type_help(
         }
         Record(fields, ext) => {
             buf.push('{');
+
+            for (label, content) in fields {
+                buf.push_str(label.as_str());
+                buf.push_str(": ");
+                write_error_type_help(home, interns, content, buf, Parens::Unnecessary);
+            }
+
             buf.push('}');
             write_type_ext(ext, buf);
-        }
-
-        Infinite => {
-            buf.push_str("∞");
         }
 
         other => todo!("cannot format {:?} yet", other),

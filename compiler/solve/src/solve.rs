@@ -217,6 +217,8 @@ fn solve(
                 }
 
                 Failure(vars, actual_type, expected_type) => {
+                    introduce(subs, rank, pools, &vars);
+
                     let problem = TypeError::BadExpr(
                         *region,
                         Category::Lookup(*symbol),

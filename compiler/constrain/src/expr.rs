@@ -16,7 +16,7 @@ use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
 use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
-use roc_types::types::{Alias, Category, PReason, PatternCategory, Reason};
+use roc_types::types::{Alias, Category, PReason, Reason};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]

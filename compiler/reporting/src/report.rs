@@ -1,12 +1,10 @@
-use crate::report::ReportText::{Batch, BinOp, Module, Region, Value};
-use roc_can::expected::{Expected, PExpected};
+use crate::report::ReportText::{BinOp, Concat, Module, Region, Value};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::Problem;
-use roc_solve::solve;
 use roc_types::pretty_print::content_to_string;
-use roc_types::subs::{Content, Subs, Variable};
-use roc_types::types::{write_error_type, Category, ErrorType, PReason, PatternCategory, Reason};
+use roc_types::subs::{Content, Subs};
+use roc_types::types::{write_error_type, ErrorType};
 use std::path::PathBuf;
 
 /// A textual report.
@@ -69,208 +67,6 @@ impl Color {
             Cyan => cyan(str),
             Magenta => magenta(str),
         }
-    }
-}
-
-pub fn type_problem(filename: PathBuf, problem: solve::TypeError) -> Report {
-    use solve::TypeError::*;
-
-    match problem {
-        BadExpr(region, category, found, expected) => {
-            to_expr_report(filename, region, category, found, expected)
-        }
-        BadPattern(region, category, found, expected) => {
-            to_pattern_report(filename, region, category, found, expected)
-        }
-        CircularType(region, symbol, overall_type) => {
-            to_circular_report(filename, region, symbol, overall_type)
-        }
-    }
-}
-
-fn type_in_focus(typ: ErrorType) -> ReportText {
-    ReportText::Batch(vec![
-        newline(),
-        newline(),
-        plain_text("    "),
-        ReportText::ErrorType(typ),
-        newline(),
-        newline(),
-    ])
-}
-
-fn int_to_ordinal(number: usize) -> String {
-    // NOTE: one-based
-    let remainder10 = number % 10;
-    let remainder100 = number % 100;
-
-    let ending = match remainder100 {
-        11..=13 => "th",
-        _ => match remainder10 {
-            1 => "st",
-            2 => "nd",
-            3 => "rd",
-            _ => "th",
-        },
-    };
-
-    format!("{}{}", number, ending)
-}
-
-#[allow(too_many_arguments)]
-fn report_mismatch(
-    filename: PathBuf,
-    category: &Category,
-    found: ErrorType,
-    expected_type: ErrorType,
-    region: roc_region::all::Region,
-    opt_highlight: Option<roc_region::all::Region>,
-    problem: &str,
-    this_is: &str,
-    instead_of: &str,
-    further_details: ReportText,
-) -> Report {
-    use ReportText::*;
-    let lines = vec![
-        plain_text(problem),
-        Region(region),
-        add_category(this_is, category),
-        type_in_focus(found),
-        plain_text(instead_of),
-        type_in_focus(expected_type),
-        further_details,
-    ];
-
-    Report {
-        filename,
-        text: Batch(lines),
-    }
-}
-
-#[allow(too_many_arguments)]
-fn report_bad_type(
-    filename: PathBuf,
-    category: &Category,
-    found: ErrorType,
-    expected_type: ErrorType,
-    region: roc_region::all::Region,
-    opt_highlight: Option<roc_region::all::Region>,
-    problem: &str,
-    this_is: &str,
-    further_details: ReportText,
-) -> Report {
-    use ReportText::*;
-    let lines = vec![
-        plain_text(problem),
-        Region(region),
-        add_category(this_is, &category),
-        type_in_focus(found),
-        further_details,
-    ];
-
-    Report {
-        filename,
-        text: Batch(lines),
-    }
-}
-
-fn to_expr_report(
-    filename: PathBuf,
-    expr_region: roc_region::all::Region,
-    category: Category,
-    found: ErrorType,
-    expected: Expected<ErrorType>,
-) -> Report {
-    use ReportText::*;
-
-    match expected {
-        Expected::NoExpectation(expected_type) => todo!(),
-        Expected::FromAnnotation(name, arity, sub_context, expected_type) => todo!(),
-        Expected::ForReason(reason, expected_type, region) => {
-            match reason {
-                Reason::IfCondition => report_bad_type(
-                    filename,
-                    &category,
-                    found,
-                    expected_type,
-                    region,
-                    Some(expr_region),
-                    "This `if` condition does not evaluate to a boolean value, True or False.",
-                    "It is",
-                    Batch(vec![
-                        plain_text("But I need this `if` condition to be a "),
-                        ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
-                        plain_text(" value."),
-                        newline(),
-                    ]),
-                ),
-                Reason::IfBranch { index } => {
-                    let ith = int_to_ordinal(index);
-                    report_mismatch(
-                        filename,
-                        &category,
-                        found,
-                        expected_type,
-                        region,
-                        Some(expr_region),
-                        &format!(
-                            "The {} branch of this `if` does not match all the previous branches:",
-                            ith
-                        ),
-                        &format!("The {} branch is", ith),
-                        "But all the previous branches result in",
-                        Batch(vec![ /* TODO add hint */ ]),
-                    )
-                }
-                _ => todo!(),
-            }
-        }
-    }
-}
-
-fn add_category(this_is: &str, category: &Category) -> ReportText {
-    use Category::*;
-
-    let result = match category {
-        Str => format!("{} a string of type:", this_is),
-        _ => todo!(),
-    };
-
-    plain_text(&*result)
-}
-
-fn to_pattern_report(
-    filename: PathBuf,
-    expr_region: roc_region::all::Region,
-    category: PatternCategory,
-    found: ErrorType,
-    expected: PExpected<ErrorType>,
-) -> Report {
-    use ReportText::*;
-    todo!()
-}
-
-fn to_circular_report(
-    filename: PathBuf,
-    region: roc_region::all::Region,
-    symbol: Symbol,
-    overall_type: ErrorType,
-) -> Report {
-    use ReportText::*;
-
-    let lines = vec![
-        plain_text("I'm inferring a weird self-referential type for "),
-        Value(symbol),
-        plain_text(":"),
-        Region(region),
-        plain_text("Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely."),
-        type_in_focus(overall_type),
-        /* TODO hint */
-    ];
-
-    Report {
-        filename,
-        text: Batch(lines),
     }
 }
 
@@ -352,7 +148,7 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
 
     Report {
         filename,
-        text: Batch(texts),
+        text: Concat(texts),
     }
 }
 
@@ -387,7 +183,12 @@ pub enum ReportText {
     BinOp(roc_parse::operator::BinOp),
 
     /// Many ReportText that should be concatenated together.
-    Batch(Vec<ReportText>),
+    Concat(Vec<ReportText>),
+
+    /// Many ReportText that each get separate lines
+    Stack(Vec<ReportText>),
+
+    Indent(usize, Box<ReportText>),
 }
 
 pub fn plain_text(str: &str) -> ReportText {
@@ -408,9 +209,8 @@ pub fn url(str: &str) -> ReportText {
     Url(Box::from(str))
 }
 
-#[allow(dead_code)]
-fn newline() -> ReportText {
-    plain_text("\n")
+pub fn with_indent(n: usize, report_text: ReportText) -> ReportText {
+    ReportText::Indent(n, Box::new(report_text))
 }
 
 pub const RED_CODE: &str = "\u{001b}[31m";
@@ -473,6 +273,12 @@ fn white(str: &str) -> String {
 
 pub const RESET_CODE: &str = "\u{001b}[0m";
 
+struct CiEnv<'a> {
+    home: ModuleId,
+    src_lines: &'a [&'a str],
+    interns: &'a Interns,
+}
+
 impl ReportText {
     /// Render to CI console output, where no colors are available.
     pub fn render_ci(
@@ -483,6 +289,16 @@ impl ReportText {
         src_lines: &[&str],
         interns: &Interns,
     ) {
+        let env = CiEnv {
+            home,
+            src_lines,
+            interns,
+        };
+
+        self.render_ci_help(&env, buf, subs, 0);
+    }
+
+    fn render_ci_help(self, env: &CiEnv, buf: &mut String, subs: &mut Subs, indent: usize) {
         use ReportText::*;
 
         match self {
@@ -499,25 +315,31 @@ impl ReportText {
                 buf.push('>');
             }
             Value(symbol) => {
-                if symbol.module_id() == home {
+                if symbol.module_id() == env.home {
                     // Render it unqualified if it's in the current module.
-                    buf.push_str(symbol.ident_string(interns));
+                    buf.push_str(symbol.ident_string(env.interns));
                 } else {
-                    buf.push_str(symbol.module_string(interns));
+                    buf.push_str(symbol.module_string(env.interns));
                     buf.push('.');
-                    buf.push_str(symbol.ident_string(interns));
+                    buf.push_str(symbol.ident_string(env.interns));
                 }
             }
             Module(module_id) => {
-                buf.push_str(&interns.module_name(module_id));
+                buf.push_str(&env.interns.module_name(module_id));
             }
-            Type(content) => buf.push_str(content_to_string(content, subs, home, interns).as_str()),
-            ErrorType(error_type) => buf.push_str(&write_error_type(home, interns, error_type)),
+            Type(content) => {
+                buf.push_str(content_to_string(content, subs, env.home, env.interns).as_str())
+            }
+            ErrorType(error_type) => {
+                buf.push('\n');
+                buf.push_str(" ".repeat(indent).as_str());
+                buf.push_str(&write_error_type(env.home, env.interns, error_type));
+                buf.push('\n');
+            }
             Region(region) => {
                 buf.push('\n');
                 buf.push('\n');
 
-                dbg!(region);
                 // widest displayed line number
                 let max_line_number_length = (region.end_line + 1).to_string().len();
 
@@ -535,11 +357,11 @@ impl ReportText {
                     buf.push_str(line_number);
                     buf.push_str(" ┆");
 
-                    let line = src_lines[i as usize];
+                    let line = env.src_lines[i as usize];
 
                     if !line.trim().is_empty() {
                         buf.push_str("  ");
-                        buf.push_str(src_lines[i as usize]);
+                        buf.push_str(env.src_lines[i as usize]);
                     }
 
                     buf.push('\n');
@@ -566,11 +388,11 @@ impl ReportText {
                         buf.push_str(line_number);
                         buf.push_str(" ┆>");
 
-                        let line = src_lines[i as usize];
+                        let line = env.src_lines[i as usize];
 
                         if !line.trim().is_empty() {
                             buf.push_str("  ");
-                            buf.push_str(src_lines[i as usize]);
+                            buf.push_str(env.src_lines[i as usize]);
                         }
 
                         if i != region.end_line {
@@ -582,12 +404,27 @@ impl ReportText {
                 buf.push('\n');
                 buf.push('\n');
             }
+            Indent(n, nested) => {
+                nested.render_ci_help(env, buf, subs, indent + n);
+            }
             Docs(_) => {
                 panic!("TODO implment docs");
             }
-            Batch(report_texts) => {
+            Concat(report_texts) => {
                 for report_text in report_texts {
-                    report_text.render_ci(buf, subs, home, src_lines, interns);
+                    report_text.render_ci_help(env, buf, subs, indent);
+                }
+            }
+            Stack(report_texts) => {
+                let mut it = report_texts.into_iter().peekable();
+
+                while let Some(report_text) = it.next() {
+                    report_text.render_ci_help(env, buf, subs, indent);
+
+                    buf.push('\n');
+                    if it.peek().is_some() {
+                        buf.push_str(" ".repeat(indent).as_str());
+                    }
                 }
             }
             BinOp(bin_op) => {
@@ -729,7 +566,11 @@ impl ReportText {
                 buf.push('\n');
                 buf.push('\n');
             }
-            Batch(report_texts) => {
+            Indent(n, nested) => {
+                buf.push_str(" ".repeat(n).as_str());
+                nested.render_color_terminal(buf, subs, home, src_lines, interns, palette);
+            }
+            Concat(report_texts) => {
                 for report_text in report_texts {
                     report_text.render_color_terminal(buf, subs, home, src_lines, interns, palette);
                 }

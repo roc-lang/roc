@@ -12,16 +12,17 @@ mod test_reporting {
     use crate::helpers::test_home;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_reporting::report::{
-        can_problem, em_text, plain_text, type_problem, url, Report, ReportText, BLUE_CODE,
-        BOLD_CODE, CYAN_CODE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, TEST_PALETTE,
-        UNDERLINE_CODE, WHITE_CODE, YELLOW_CODE,
+        can_problem, em_text, plain_text, url, Report, ReportText, BLUE_CODE, BOLD_CODE, CYAN_CODE,
+        GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, TEST_PALETTE, UNDERLINE_CODE, WHITE_CODE,
+        YELLOW_CODE,
     };
+    use roc_reporting::type_error::type_problem;
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
     // use roc_region::all;
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
-    use roc_reporting::report::ReportText::{Batch, Module, Region, Type, Value};
+    use roc_reporting::report::ReportText::{Concat, Module, Region, Type, Value};
     use roc_solve::solve;
     use roc_types::subs::Content::{FlexVar, RigidVar, Structure};
     use roc_types::subs::FlatType::EmptyRecord;
@@ -276,7 +277,7 @@ mod test_reporting {
         report_texts.push(em_text("y"));
 
         report_renders_as(
-            to_simple_report(Batch(report_texts)),
+            to_simple_report(Concat(report_texts)),
             "Wait a second. There is a problem here. -> *y*",
         );
     }
@@ -566,7 +567,7 @@ mod test_reporting {
         report_texts.push(Type(Structure(EmptyRecord)));
 
         report_renders_in_color(
-            to_simple_report(Batch(report_texts)),
+            to_simple_report(Concat(report_texts)),
             "<yellow>List<reset><white> <reset><green>{}<reset>",
         );
     }
@@ -775,6 +776,7 @@ mod test_reporting {
                     Str
 
                 But I need this `if` condition to be a Bool value.
+
                 "#
             ),
         )
@@ -802,6 +804,8 @@ mod test_reporting {
                 But all the previous branches result in
 
                     Num a
+
+
 
                 "#
             ),
@@ -839,7 +843,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f = \x -> f [x] 
+                f = \x -> f [x]
 
                 f
                 "#
@@ -848,7 +852,7 @@ mod test_reporting {
                 r#"
                 I'm inferring a weird self-referential type for f:
 
-                1 ┆  f = \x -> f [x] 
+                1 ┆  f = \x -> f [x]
                   ┆  ^
 
                 Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.

@@ -14,7 +14,7 @@ use roc_types::boolean_algebra::{Atom, Bool};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
-use roc_types::types::{Alias, Category, PReason, PatternCategory, Reason};
+use roc_types::types::{Alias, Category, PReason, Reason};
 use roc_uniq::builtins::{attr_type, empty_list_type, list_type, str_type};
 use roc_uniq::sharing::{self, Container, FieldAccess, Mark, Usage, VarUsage};
 
