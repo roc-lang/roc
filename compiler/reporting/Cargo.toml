@@ -14,6 +14,7 @@ roc_types = { path = "../types" }
 roc_load = { path = "../load" }
 roc_can = { path = "../can" }
 roc_solve = { path = "../solve" }
+ven_pretty = { path = "../../vendor/pretty" }
 inlinable_string = "0.1.0"
 
 [dev-dependencies]

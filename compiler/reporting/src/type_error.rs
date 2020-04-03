@@ -253,9 +253,9 @@ fn type_comparison(
 
     ReportText::Stack(vec![
         i_am_seeing,
-        with_indent(4, comparison.actual),
+        comparison.actual,
         instead_of,
-        with_indent(4, comparison.expected),
+        comparison.expected,
         context_hints,
         problems_to_hint(comparison.problems),
     ])
@@ -271,7 +271,7 @@ fn lone_type(
 
     ReportText::Stack(vec![
         i_am_seeing,
-        with_indent(4, comparison.actual),
+        comparison.actual,
         further_details,
         problems_to_hint(comparison.problems),
     ])
@@ -372,7 +372,7 @@ fn to_circular_report(
         Region(region),
         Stack(vec![
             plain_text("Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely."),
-            with_indent(4, type_in_focus(overall_type)),
+            type_in_focus(overall_type),
             /* TODO hint */
         ]),
     ];

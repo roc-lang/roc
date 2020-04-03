@@ -7,68 +7,47 @@ use roc_types::subs::{Content, Subs};
 use roc_types::types::{write_error_type, ErrorType};
 use std::path::PathBuf;
 
+// use ven_pretty::termcolor::{Color, ColorChoice, ColorSpec, StandardStream};
+use std::fmt;
+use ven_pretty::{
+    BoxAllocator, BoxDoc, DocAllocator, DocBuilder, FmtWrite, Render, RenderAnnotated,
+};
+
+type Doc<'a> = DocBuilder<'a, BoxAllocator, Annotation>;
+
 /// A textual report.
 pub struct Report {
     pub filename: PathBuf,
     pub text: ReportText,
 }
 
-pub struct Palette {
-    pub primary: Color,
-    pub code_block: Color,
-    pub variable: Color,
-    pub flex_var: Color,
-    pub rigid_var: Color,
-    pub structure: Color,
-    pub alias: Color,
-    pub error: Color,
-    pub line_number: Color,
-    pub gutter_bar: Color,
-    pub module_name: Color,
-    pub binop: Color,
-}
-
-#[derive(Copy, Clone)]
-pub enum Color {
-    White,
-    Red,
-    Blue,
-    Yellow,
-    Green,
-    Cyan,
-    Magenta,
+pub struct Palette<'a> {
+    pub primary: &'a str,
+    pub code_block: &'a str,
+    pub variable: &'a str,
+    pub type_variable: &'a str,
+    pub structure: &'a str,
+    pub alias: &'a str,
+    pub error: &'a str,
+    pub line_number: &'a str,
+    pub gutter_bar: &'a str,
+    pub module_name: &'a str,
+    pub binop: &'a str,
 }
 
 pub const TEST_PALETTE: Palette = Palette {
-    primary: Color::White,
-    code_block: Color::White,
-    variable: Color::Blue,
-    flex_var: Color::Yellow,
-    rigid_var: Color::Yellow,
-    structure: Color::Green,
-    alias: Color::Yellow,
-    error: Color::Red,
-    line_number: Color::Cyan,
-    gutter_bar: Color::Magenta,
-    module_name: Color::Green,
-    binop: Color::Green,
+    primary: WHITE_CODE,
+    code_block: WHITE_CODE,
+    variable: BLUE_CODE,
+    type_variable: YELLOW_CODE,
+    structure: GREEN_CODE,
+    alias: YELLOW_CODE,
+    error: RED_CODE,
+    line_number: CYAN_CODE,
+    gutter_bar: MAGENTA_CODE,
+    module_name: GREEN_CODE,
+    binop: GREEN_CODE,
 };
-
-impl Color {
-    pub fn render(self, str: &str) -> String {
-        use Color::*;
-
-        match self {
-            Red => red(str),
-            White => white(str),
-            Blue => blue(str),
-            Yellow => yellow(str),
-            Green => green(str),
-            Cyan => cyan(str),
-            Magenta => magenta(str),
-        }
-    }
-}
 
 pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
     let mut texts = Vec::new();
@@ -247,58 +226,213 @@ pub const BOLD_CODE: &str = "\u{001b}[1m";
 
 pub const UNDERLINE_CODE: &str = "\u{001b}[4m";
 
-fn code(code_str: &str, str: &str) -> String {
-    let mut buf = String::new();
-
-    buf.push_str(code_str);
-    buf.push_str(str);
-    buf.push_str(RESET_CODE);
-
-    buf
-}
-
-pub fn underline(str: &str) -> String {
-    code(UNDERLINE_CODE, str)
-}
-
-pub fn bold(str: &str) -> String {
-    code(BOLD_CODE, str)
-}
-
-fn cyan(str: &str) -> String {
-    code(CYAN_CODE, str)
-}
-
-fn magenta(str: &str) -> String {
-    code(MAGENTA_CODE, str)
-}
-
-fn green(str: &str) -> String {
-    code(GREEN_CODE, str)
-}
-
-fn yellow(str: &str) -> String {
-    code(YELLOW_CODE, str)
-}
-
-fn blue(str: &str) -> String {
-    code(BLUE_CODE, str)
-}
-
-fn red(str: &str) -> String {
-    code(RED_CODE, str)
-}
-
-fn white(str: &str) -> String {
-    code(WHITE_CODE, str)
-}
-
 pub const RESET_CODE: &str = "\u{001b}[0m";
 
 struct CiEnv<'a> {
     home: ModuleId,
     src_lines: &'a [&'a str],
     interns: &'a Interns,
+}
+
+pub struct CiWrite<W> {
+    style_stack: Vec<Annotation>,
+    upstream: W,
+}
+
+impl<W> CiWrite<W> {
+    pub fn new(upstream: W) -> CiWrite<W> {
+        CiWrite {
+            style_stack: vec![],
+            upstream,
+        }
+    }
+}
+
+pub struct ColorWrite<'a, W> {
+    style_stack: Vec<Annotation>,
+    palette: &'a Palette<'a>,
+    upstream: W,
+}
+
+impl<'a, W> ColorWrite<'a, W> {
+    pub fn new(palette: &'a Palette, upstream: W) -> ColorWrite<'a, W> {
+        ColorWrite {
+            style_stack: vec![],
+            palette,
+            upstream,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub enum Annotation {
+    Emphasized,
+    Url,
+    Keyword,
+    GlobalTag,
+    PrivateTag,
+    RecordField,
+    TypeVariable,
+    Alias,
+    Structure,
+    Symbol,
+    BinOp,
+    Error,
+    GutterBar,
+    LineNumber,
+    PlainText,
+    CodeBlock,
+    Module,
+}
+
+impl<W> Render for CiWrite<W>
+where
+    W: fmt::Write,
+{
+    type Error = fmt::Error;
+
+    fn write_str(&mut self, s: &str) -> Result<usize, fmt::Error> {
+        self.write_str_all(s).map(|_| s.len())
+    }
+
+    fn write_str_all(&mut self, s: &str) -> fmt::Result {
+        self.upstream.write_str(s)
+    }
+}
+
+impl<W> RenderAnnotated<Annotation> for CiWrite<W>
+where
+    W: fmt::Write,
+{
+    fn push_annotation(&mut self, annotation: &Annotation) -> Result<(), Self::Error> {
+        use Annotation::*;
+        match annotation {
+            Emphasized => {
+                self.write_str("*")?;
+            }
+            Url => {
+                self.write_str("<")?;
+            }
+            GlobalTag | PrivateTag | RecordField | Keyword => {
+                self.write_str("`")?;
+            }
+            CodeBlock | PlainText | LineNumber | Error | GutterBar | TypeVariable | Alias
+            | Module | Structure | Symbol | BinOp => {}
+        }
+        self.style_stack.push(*annotation);
+        Ok(())
+    }
+
+    fn pop_annotation(&mut self) -> Result<(), Self::Error> {
+        use Annotation::*;
+
+        match self.style_stack.pop() {
+            None => {}
+            Some(annotation) => match annotation {
+                Emphasized => {
+                    self.write_str("*")?;
+                }
+                Url => {
+                    self.write_str(">")?;
+                }
+                GlobalTag | PrivateTag | RecordField | Keyword => {
+                    self.write_str("`")?;
+                }
+                CodeBlock | PlainText | LineNumber | Error | GutterBar | TypeVariable | Alias
+                | Module | Structure | Symbol | BinOp => {}
+            },
+        }
+        Ok(())
+    }
+}
+
+impl<'a, W> Render for ColorWrite<'a, W>
+where
+    W: fmt::Write,
+{
+    type Error = fmt::Error;
+
+    fn write_str(&mut self, s: &str) -> Result<usize, fmt::Error> {
+        self.write_str_all(s).map(|_| s.len())
+    }
+
+    fn write_str_all(&mut self, s: &str) -> fmt::Result {
+        self.upstream.write_str(s)
+    }
+}
+
+impl<'a, W> RenderAnnotated<Annotation> for ColorWrite<'a, W>
+where
+    W: fmt::Write,
+{
+    fn push_annotation(&mut self, annotation: &Annotation) -> Result<(), Self::Error> {
+        use Annotation::*;
+        match annotation {
+            Emphasized => {
+                self.write_str(BOLD_CODE)?;
+            }
+            Url => {
+                self.write_str(UNDERLINE_CODE)?;
+            }
+            PlainText => {
+                self.write_str(self.palette.primary)?;
+            }
+            CodeBlock => {
+                self.write_str(self.palette.code_block)?;
+            }
+            TypeVariable => {
+                self.write_str(self.palette.type_variable)?;
+            }
+            Alias => {
+                self.write_str(self.palette.alias)?;
+            }
+            BinOp => {
+                self.write_str(self.palette.alias)?;
+            }
+            Symbol => {
+                self.write_str(self.palette.variable)?;
+            }
+            GutterBar => {
+                self.write_str(self.palette.gutter_bar)?;
+            }
+            Error => {
+                self.write_str(self.palette.error)?;
+            }
+            LineNumber => {
+                self.write_str(self.palette.line_number)?;
+            }
+            Structure => {
+                self.write_str(self.palette.structure)?;
+            }
+            Module => {
+                self.write_str(self.palette.module_name)?;
+            }
+            GlobalTag | PrivateTag | RecordField | Keyword => {
+                self.write_str("`")?;
+            }
+        }
+        self.style_stack.push(*annotation);
+        Ok(())
+    }
+
+    fn pop_annotation(&mut self) -> Result<(), Self::Error> {
+        use Annotation::*;
+
+        match self.style_stack.pop() {
+            None => {}
+            Some(annotation) => match annotation {
+                Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | Error | GutterBar
+                | Structure | CodeBlock | PlainText | LineNumber | Module => {
+                    self.write_str(RESET_CODE)?;
+                }
+
+                GlobalTag | PrivateTag | RecordField | Keyword => {
+                    self.write_str("`")?;
+                }
+            },
+        }
+        Ok(())
+    }
 }
 
 impl ReportText {
@@ -311,161 +445,14 @@ impl ReportText {
         src_lines: &[&str],
         interns: &Interns,
     ) {
-        let env = CiEnv {
-            home,
-            src_lines,
-            interns,
-        };
+        let allocator = BoxAllocator;
 
-        self.render_ci_help(&env, buf, subs, 0);
-    }
+        let err_msg = "<buffer is not a utf-8 encoded string>";
 
-    fn render_ci_help(self, env: &CiEnv, buf: &mut String, subs: &mut Subs, indent: usize) {
-        use ReportText::*;
-
-        match self {
-            Plain(string) => buf.push_str(&string),
-            EmText(string) => {
-                // Since this is CI, the best we can do for emphasis are asterisks.
-                buf.push('*');
-                buf.push_str(&string);
-                buf.push('*');
-            }
-            GlobalTag(string) | Keyword(string) => {
-                // Since this is CI, the best we can do for code text is backticks.
-                buf.push('`');
-                buf.push_str(&string);
-                buf.push('`');
-            }
-            RecordField(string) => {
-                // Since this is CI, the best we can do for code text is backticks.
-                buf.push('`');
-                buf.push('.');
-                buf.push_str(&string);
-                buf.push('`');
-            }
-            Url(url) => {
-                buf.push('<');
-                buf.push_str(&url);
-                buf.push('>');
-            }
-            PrivateTag(symbol) | Value(symbol) => {
-                if symbol.module_id() == env.home {
-                    // Render it unqualified if it's in the current module.
-                    buf.push_str(symbol.ident_string(env.interns));
-                } else {
-                    buf.push_str(symbol.module_string(env.interns));
-                    buf.push('.');
-                    buf.push_str(symbol.ident_string(env.interns));
-                }
-            }
-            Module(module_id) => {
-                buf.push_str(&env.interns.module_name(module_id));
-            }
-            Type(content) => {
-                buf.push_str(content_to_string(content, subs, env.home, env.interns).as_str())
-            }
-            ErrorType(error_type) => {
-                buf.push('\n');
-                buf.push_str(" ".repeat(indent).as_str());
-                buf.push_str(&write_error_type(env.home, env.interns, error_type));
-                buf.push('\n');
-            }
-            Region(region) => {
-                buf.push('\n');
-                buf.push('\n');
-
-                // widest displayed line number
-                let max_line_number_length = (region.end_line + 1).to_string().len();
-
-                if region.start_line == region.end_line {
-                    let i = region.start_line;
-
-                    let line_number_string = (i + 1).to_string();
-                    let line_number = line_number_string.as_str();
-                    let this_line_number_length = line_number.len();
-
-                    buf.push_str(
-                        " ".repeat(max_line_number_length - this_line_number_length)
-                            .as_str(),
-                    );
-                    buf.push_str(line_number);
-                    buf.push_str(" ┆");
-
-                    let line = env.src_lines[i as usize];
-
-                    if !line.trim().is_empty() {
-                        buf.push_str("  ");
-                        buf.push_str(env.src_lines[i as usize]);
-                    }
-
-                    buf.push('\n');
-                    buf.push_str(" ".repeat(max_line_number_length).as_str());
-                    buf.push_str(" ┆");
-
-                    buf.push_str(" ".repeat(region.start_col as usize + 2).as_str());
-                    buf.push_str(
-                        "^".repeat((region.end_col - region.start_col) as usize)
-                            .as_str(),
-                    );
-                } else {
-                    for i in region.start_line..=region.end_line {
-                        let i_one_indexed = i + 1;
-
-                        let line_number_string = i_one_indexed.to_string();
-                        let line_number = line_number_string.as_str();
-                        let this_line_number_length = line_number.len();
-
-                        buf.push_str(
-                            " ".repeat(max_line_number_length - this_line_number_length)
-                                .as_str(),
-                        );
-                        buf.push_str(line_number);
-                        buf.push_str(" ┆>");
-
-                        let line = env.src_lines[i as usize];
-
-                        if !line.trim().is_empty() {
-                            buf.push_str("  ");
-                            buf.push_str(env.src_lines[i as usize]);
-                        }
-
-                        if i != region.end_line {
-                            buf.push('\n');
-                        }
-                    }
-                }
-
-                buf.push('\n');
-                buf.push('\n');
-            }
-            Indent(n, nested) => {
-                nested.render_ci_help(env, buf, subs, indent + n);
-            }
-            Docs(_) => {
-                panic!("TODO implment docs");
-            }
-            Concat(report_texts) => {
-                for report_text in report_texts {
-                    report_text.render_ci_help(env, buf, subs, indent);
-                }
-            }
-            Stack(report_texts) => {
-                let mut it = report_texts.into_iter().peekable();
-
-                while let Some(report_text) = it.next() {
-                    report_text.render_ci_help(env, buf, subs, indent);
-
-                    buf.push('\n');
-                    if it.peek().is_some() {
-                        buf.push_str(" ".repeat(indent).as_str());
-                    }
-                }
-            }
-            BinOp(bin_op) => {
-                buf.push_str(bin_op.to_string().as_str());
-            }
-        }
+        self.pretty::<_>(&allocator, subs, home, src_lines, interns)
+            .1
+            .render_raw(70, &mut CiWrite::new(buf))
+            .expect(err_msg);
     }
 
     /// Render to a color terminal using ANSI escape sequences
@@ -478,142 +465,219 @@ impl ReportText {
         interns: &Interns,
         palette: &Palette,
     ) {
+        let allocator = BoxAllocator;
+
+        let err_msg = "<buffer is not a utf-8 encoded string>";
+
+        self.pretty::<_>(&allocator, subs, home, src_lines, interns)
+            .1
+            .render_raw(70, &mut ColorWrite::new(palette, buf))
+            .expect(err_msg);
+    }
+
+    /// General idea: this function puts all the characters in. Any styling (emphasis, colors,
+    /// monospace font, etc) is done in the CiWrite and ColorWrite `RenderAnnotated` instances.
+    pub fn pretty<'b, D>(
+        self,
+        allocator: &'b D,
+        subs: &mut Subs,
+        home: ModuleId,
+        src_lines: &'b [&'b str],
+        interns: &Interns,
+    ) -> DocBuilder<'b, D, Annotation>
+    where
+        D: DocAllocator<'b, Annotation>,
+        D::Doc: Clone,
+    {
         use ReportText::*;
 
         match self {
-            Plain(string) => {
-                buf.push_str(&palette.primary.render(&string));
-            }
-
-            EmText(string) => {
-                buf.push_str(&bold(&string));
-            }
-            Url(url) => {
-                buf.push_str(&underline(&url));
+            Plain(string) => allocator
+                .text(format!("{}", string))
+                .annotate(Annotation::PlainText),
+            EmText(string) => allocator
+                .text(format!("{}", string))
+                .annotate(Annotation::Emphasized),
+            Url(url) => allocator.text(format!("{}", url)).annotate(Annotation::Url),
+            Keyword(string) => allocator
+                .text(format!("{}", string))
+                .annotate(Annotation::Keyword),
+            GlobalTag(string) => allocator
+                .text(format!("{}", string))
+                .annotate(Annotation::GlobalTag),
+            RecordField(string) => allocator
+                .text(format!(".{}", string))
+                .annotate(Annotation::RecordField),
+            PrivateTag(symbol) => {
+                if symbol.module_id() == home {
+                    // Render it unqualified if it's in the current module.
+                    allocator
+                        .text(format!("{}", symbol.ident_string(interns)))
+                        .annotate(Annotation::PrivateTag)
+                } else {
+                    allocator
+                        .text(format!(
+                            "{}.{}",
+                            symbol.module_string(interns),
+                            symbol.ident_string(interns),
+                        ))
+                        .annotate(Annotation::PrivateTag)
+                }
             }
             Value(symbol) => {
                 if symbol.module_id() == home {
                     // Render it unqualified if it's in the current module.
-                    buf.push_str(&palette.variable.render(symbol.ident_string(interns)));
+                    allocator
+                        .text(format!("{}", symbol.ident_string(interns)))
+                        .annotate(Annotation::Symbol)
                 } else {
-                    let mut module_str = String::new();
-
-                    module_str.push_str(symbol.module_string(interns));
-                    module_str.push('.');
-                    module_str.push_str(symbol.ident_string(interns));
-
-                    buf.push_str(&palette.variable.render(&module_str));
+                    allocator
+                        .text(format!(
+                            "{}.{}",
+                            symbol.module_string(interns),
+                            symbol.ident_string(interns),
+                        ))
+                        .annotate(Annotation::Symbol)
                 }
             }
-            Module(module_id) => {
-                buf.push_str(&palette.module_name.render(&interns.module_name(module_id)));
-            }
+
+            Module(module_id) => allocator
+                .text(format!("{}", interns.module_name(module_id)))
+                .annotate(Annotation::Module),
             Type(content) => match content {
-                Content::FlexVar(flex_var) => buf.push_str(&palette.flex_var.render(
-                    content_to_string(Content::FlexVar(flex_var), subs, home, interns).as_str(),
-                )),
-                Content::RigidVar(rigid_var) => buf.push_str(&palette.rigid_var.render(
-                    content_to_string(Content::RigidVar(rigid_var), subs, home, interns).as_str(),
-                )),
-                Content::Structure(structure) => buf.push_str(&palette.structure.render(
-                    // TODO give greater specificity to how structures are colored. Empty record colored differently than tags, etc.
-                    content_to_string(Content::Structure(structure), subs, home, interns).as_str(),
-                )),
-                Content::Alias(symbol, vars, var) => buf.push_str(
-                    &palette.alias.render(
-                        content_to_string(Content::Alias(symbol, vars, var), subs, home, interns)
-                            .as_str(),
-                    ),
-                ),
-                Content::Error => {}
+                Content::FlexVar(_) | Content::RigidVar(_) => allocator
+                    .text(content_to_string(content, subs, home, interns))
+                    .annotate(Annotation::TypeVariable),
+
+                Content::Structure(_) => allocator
+                    .text(content_to_string(content, subs, home, interns))
+                    .annotate(Annotation::Structure),
+
+                Content::Alias(_, _, _) => allocator
+                    .text(content_to_string(content, subs, home, interns))
+                    .annotate(Annotation::Alias),
+
+                Content::Error => allocator.text(content_to_string(content, subs, home, interns)),
             },
-            ErrorType(error_type) => buf.push_str(&write_error_type(home, interns, error_type)),
+            ErrorType(error_type) => allocator
+                .nil()
+                .append(allocator.hardline())
+                .append(
+                    allocator
+                        .text(write_error_type(home, interns, error_type))
+                        .indent(4),
+                )
+                .append(allocator.hardline()),
+
+            Indent(n, nested) => {
+                let rest = nested.pretty(allocator, subs, home, src_lines, interns);
+                allocator.nil().append(rest).indent(n)
+            }
+            Docs(_) => {
+                panic!("TODO implment docs");
+            }
+            Concat(report_texts) => allocator.concat(
+                report_texts
+                    .into_iter()
+                    .map(|rep| rep.pretty(allocator, subs, home, src_lines, interns)),
+            ),
+            Stack(report_texts) => allocator.intersperse(
+                report_texts
+                    .into_iter()
+                    .map(|rep| (rep.pretty(allocator, subs, home, src_lines, interns))),
+                allocator.hardline(),
+            ),
+            BinOp(bin_op) => allocator
+                .text(bin_op.to_string())
+                .annotate(Annotation::BinOp),
             Region(region) => {
-                // newline before snippet
-                buf.push('\n');
-                buf.push('\n');
-
-                // the widest line number that is rendered
                 let max_line_number_length = (region.end_line + 1).to_string().len();
+                let indent = 2;
 
-                if region.start_line == region.end_line {
-                    // single line
+                let body = if region.start_line == region.end_line {
                     let i = region.start_line;
-                    let i_one_indexed = i + 1;
 
-                    let line_number_string = i_one_indexed.to_string();
-                    let line_number = line_number_string.as_str();
+                    let line_number_string = (i + 1).to_string();
+                    let line_number = line_number_string;
                     let this_line_number_length = line_number.len();
 
-                    buf.push_str(
-                        " ".repeat(max_line_number_length - this_line_number_length)
-                            .as_str(),
-                    );
-                    buf.push_str(&palette.line_number.render(line_number));
-                    buf.push_str(&palette.gutter_bar.render(" ┆"));
-
                     let line = src_lines[i as usize];
+                    let rest_of_line = if line.trim().is_empty() {
+                        allocator.nil()
+                    } else {
+                        allocator
+                            .nil()
+                            .append(allocator.text(line).indent(2))
+                            .annotate(Annotation::CodeBlock)
+                    };
 
-                    if !line.trim().is_empty() {
-                        buf.push_str("  ");
-                        buf.push_str(&palette.code_block.render(src_lines[i as usize]));
-                    }
+                    let source_line = allocator
+                        .line()
+                        .append(
+                            allocator
+                                .text(" ".repeat(max_line_number_length - this_line_number_length)),
+                        )
+                        .append(allocator.text(line_number).annotate(Annotation::LineNumber))
+                        .append(allocator.text(" ┆").annotate(Annotation::GutterBar))
+                        .append(rest_of_line);
 
-                    buf.push('\n');
-                    buf.push_str(" ".repeat(max_line_number_length).as_str());
-                    buf.push_str(&palette.gutter_bar.render(" ┆"));
+                    let highlight_line = allocator
+                        .line()
+                        .append(allocator.text(" ".repeat(max_line_number_length)))
+                        .append(allocator.text(" ┆").annotate(Annotation::GutterBar))
+                        .append(
+                            allocator
+                                .text(" ".repeat(region.start_col as usize))
+                                .indent(indent),
+                        )
+                        .append(
+                            allocator
+                                .text("^".repeat((region.end_col - region.start_col) as usize))
+                                .annotate(Annotation::Error),
+                        );
 
-                    buf.push_str(" ".repeat(region.start_col as usize + 2).as_str());
-                    let carets = "^".repeat((region.end_col - region.start_col) as usize);
-                    buf.push_str(&palette.error.render(carets.as_str()));
+                    source_line.append(highlight_line)
                 } else {
-                    // multiline
-
+                    let mut result = allocator.nil();
                     for i in region.start_line..=region.end_line {
-                        let i_one_indexed = i + 1;
-
-                        let line_number_string = i_one_indexed.to_string();
-                        let line_number = line_number_string.as_str();
+                        let line_number_string = (i + 1).to_string();
+                        let line_number = line_number_string;
                         let this_line_number_length = line_number.len();
 
-                        buf.push_str(
-                            " ".repeat(max_line_number_length - this_line_number_length)
-                                .as_str(),
-                        );
-                        buf.push_str(&palette.line_number.render(line_number));
-                        buf.push_str(&palette.gutter_bar.render(" ┆"));
-                        buf.push_str(&palette.error.render(">"));
-
                         let line = src_lines[i as usize];
+                        let rest_of_line = if !line.trim().is_empty() {
+                            allocator
+                                .text(line)
+                                .annotate(Annotation::CodeBlock)
+                                .indent(indent)
+                        } else {
+                            allocator.nil()
+                        };
 
-                        if !line.trim().is_empty() {
-                            buf.push_str("  ");
-                            buf.push_str(&palette.code_block.render(src_lines[i as usize]));
-                        }
+                        let source_line = allocator
+                            .line()
+                            .append(
+                                allocator.text(
+                                    " ".repeat(max_line_number_length - this_line_number_length),
+                                ),
+                            )
+                            .append(allocator.text(line_number).annotate(Annotation::LineNumber))
+                            .append(allocator.text(" ┆").annotate(Annotation::GutterBar))
+                            .append(allocator.text(">").annotate(Annotation::Error))
+                            .append(rest_of_line);
 
-                        if i != region.end_line {
-                            buf.push('\n');
-                        }
+                        result = result.append(source_line);
                     }
-                }
 
-                // newline before next line of text
-                buf.push('\n');
-                buf.push('\n');
+                    result
+                };
+                allocator
+                    .nil()
+                    .append(allocator.line())
+                    .append(body)
+                    .append(allocator.line())
+                    .append(allocator.line())
             }
-            Indent(n, nested) => {
-                buf.push_str(" ".repeat(n).as_str());
-                nested.render_color_terminal(buf, subs, home, src_lines, interns, palette);
-            }
-            Concat(report_texts) => {
-                for report_text in report_texts {
-                    report_text.render_color_terminal(buf, subs, home, src_lines, interns, palette);
-                }
-            }
-            BinOp(bin_op) => {
-                buf.push_str(&palette.binop.render(bin_op.to_string().as_str()));
-            }
-            _ => panic!("TODO implement more ReportTexts in render color terminal"),
         }
     }
 }
