@@ -219,36 +219,6 @@ pub const UNDERLINE_CODE: &str = "\u{001b}[4m";
 
 pub const RESET_CODE: &str = "\u{001b}[0m";
 
-pub struct CiWrite<W> {
-    style_stack: Vec<Annotation>,
-    upstream: W,
-}
-
-impl<W> CiWrite<W> {
-    pub fn new(upstream: W) -> CiWrite<W> {
-        CiWrite {
-            style_stack: vec![],
-            upstream,
-        }
-    }
-}
-
-pub struct ColorWrite<'a, W> {
-    style_stack: Vec<Annotation>,
-    palette: &'a Palette<'a>,
-    upstream: W,
-}
-
-impl<'a, W> ColorWrite<'a, W> {
-    pub fn new(palette: &'a Palette, upstream: W) -> ColorWrite<'a, W> {
-        ColorWrite {
-            style_stack: vec![],
-            palette,
-            upstream,
-        }
-    }
-}
-
 #[derive(Copy, Clone)]
 pub enum Annotation {
     Emphasized,
@@ -268,6 +238,38 @@ pub enum Annotation {
     PlainText,
     CodeBlock,
     Module,
+}
+
+/// Render with minimal formatting
+pub struct CiWrite<W> {
+    style_stack: Vec<Annotation>,
+    upstream: W,
+}
+
+impl<W> CiWrite<W> {
+    pub fn new(upstream: W) -> CiWrite<W> {
+        CiWrite {
+            style_stack: vec![],
+            upstream,
+        }
+    }
+}
+
+/// Render with fancy formatting
+pub struct ColorWrite<'a, W> {
+    style_stack: Vec<Annotation>,
+    palette: &'a Palette<'a>,
+    upstream: W,
+}
+
+impl<'a, W> ColorWrite<'a, W> {
+    pub fn new(palette: &'a Palette, upstream: W) -> ColorWrite<'a, W> {
+        ColorWrite {
+            style_stack: vec![],
+            palette,
+            upstream,
+        }
+    }
 }
 
 impl<W> Render for CiWrite<W>
@@ -392,9 +394,7 @@ where
             Module => {
                 self.write_str(self.palette.module_name)?;
             }
-            GlobalTag | PrivateTag | RecordField | Keyword => {
-                self.write_str("`")?;
-            }
+            GlobalTag | PrivateTag | RecordField | Keyword => { /* nothing yet */ }
         }
         self.style_stack.push(*annotation);
         Ok(())
@@ -411,9 +411,7 @@ where
                     self.write_str(RESET_CODE)?;
                 }
 
-                GlobalTag | PrivateTag | RecordField | Keyword => {
-                    self.write_str("`")?;
-                }
+                GlobalTag | PrivateTag | RecordField | Keyword => { /* nothing yet */ }
             },
         }
         Ok(())
@@ -477,18 +475,18 @@ impl ReportText {
         use ReportText::*;
 
         match self {
+            Url(url) => alloc.text(url.into_string()).annotate(Annotation::Url),
             Plain(string) => alloc
-                .text(format!("{}", string))
+                .text(string.into_string())
                 .annotate(Annotation::PlainText),
             EmText(string) => alloc
-                .text(format!("{}", string))
+                .text(string.into_string())
                 .annotate(Annotation::Emphasized),
-            Url(url) => alloc.text(format!("{}", url)).annotate(Annotation::Url),
             Keyword(string) => alloc
-                .text(format!("{}", string))
+                .text(string.into_string())
                 .annotate(Annotation::Keyword),
             GlobalTag(string) => alloc
-                .text(format!("{}", string))
+                .text(string.into_string())
                 .annotate(Annotation::GlobalTag),
             RecordField(string) => alloc
                 .text(format!(".{}", string))
