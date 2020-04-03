@@ -1,4 +1,4 @@
-use crate::report::{plain_text, with_indent, Report, ReportText};
+use crate::report::{global_tag_text, keyword_text, plain_text, with_indent, Report, ReportText};
 use roc_can::expected::{Expected, PExpected};
 use roc_module::symbol::Symbol;
 use roc_solve::solve;
@@ -52,14 +52,14 @@ fn report_mismatch(
     expected_type: ErrorType,
     region: roc_region::all::Region,
     _opt_highlight: Option<roc_region::all::Region>,
-    problem: &str,
-    this_is: &str,
-    instead_of: &str,
+    problem: ReportText,
+    this_is: ReportText,
+    instead_of: ReportText,
     further_details: ReportText,
 ) -> Report {
     use ReportText::*;
     let lines = vec![
-        plain_text(problem),
+        problem,
         Region(region),
         type_comparison(
             found,
@@ -84,13 +84,13 @@ fn report_bad_type(
     expected_type: ErrorType,
     region: roc_region::all::Region,
     _opt_highlight: Option<roc_region::all::Region>,
-    problem: &str,
-    this_is: &str,
+    problem: ReportText,
+    this_is: ReportText,
     further_details: ReportText,
 ) -> Report {
     use ReportText::*;
     let lines = vec![
-        plain_text(problem),
+        problem,
         Region(region),
         lone_type(
             found,
@@ -118,25 +118,83 @@ fn to_expr_report(
     match expected {
         Expected::NoExpectation(_expected_type) => todo!(),
         Expected::FromAnnotation(_name, _arity, _sub_context, _expected_type) => todo!(),
-        Expected::ForReason(reason, expected_type, region) => {
-            match reason {
-                Reason::IfCondition => report_bad_type(
+        Expected::ForReason(reason, expected_type, region) => match reason {
+            Reason::IfCondition => {
+                let problem = Concat(vec![
+                    plain_text("This "),
+                    keyword_text("if"),
+                    plain_text(" condition needs to be a "),
+                    ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
+                    plain_text("."),
+                ]);
+
+                report_bad_type(
                     filename,
                     &category,
                     found,
                     expected_type,
                     region,
                     Some(expr_region),
-                    "This `if` condition does not evaluate to a boolean value, True or False.",
-                    "It is",
+                    problem,
+                    plain_text("Right now it’s"),
                     Concat(vec![
-                        plain_text("But I need this `if` condition to be a "),
+                        plain_text("but I need every "),
+                        keyword_text("if"),
+                        plain_text(" condition to evaluate to a "),
                         ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
-                        plain_text(" value."),
+                        plain_text("—either "),
+                        global_tag_text("True"),
+                        plain_text(" or "),
+                        global_tag_text("False"),
+                        plain_text("."),
+                    ]),
+                    // Note: Elm has a hint here about truthiness. I think that
+                    // makes sense for Elm, since most Elm users will come from
+                    // JS, where truthiness is a thing. I don't really know
+                    // what the background of Roc programmers will be, and I'd
+                    // rather not create a distraction by introducing a term
+                    // they don't know. ("Wait, what's truthiness?")
+                )
+            }
+            Reason::IfBranch {
+                index,
+                total_branches,
+            } => match total_branches {
+                2 => report_mismatch(
+                    filename,
+                    &category,
+                    found,
+                    expected_type,
+                    region,
+                    Some(expr_region),
+                    Concat(vec![
+                        plain_text("This "),
+                        keyword_text("if"),
+                        plain_text(" has an "),
+                        keyword_text("else"),
+                        plain_text(" branch with a different type from its "),
+                        keyword_text("then"),
+                        plain_text(" branch:"),
+                    ]),
+                    Concat(vec![
+                        plain_text("The "),
+                        keyword_text("else"),
+                        plain_text(" branch is"),
+                    ]),
+                    Concat(vec![
+                        plain_text("but the "),
+                        keyword_text("then"),
+                        plain_text(" branch has the type"),
+                    ]),
+                    Concat(vec![
+                        plain_text("instead. I need all branches in an "),
+                        keyword_text("if"),
+                        plain_text(" to have the same type!"),
                     ]),
                 ),
-                Reason::IfBranch { index } => {
+                _ => {
                     let ith = int_to_ordinal(index);
+
                     report_mismatch(
                         filename,
                         &category,
@@ -144,18 +202,18 @@ fn to_expr_report(
                         expected_type,
                         region,
                         Some(expr_region),
-                        &format!(
+                        plain_text(&format!(
                             "The {} branch of this `if` does not match all the previous branches:",
                             ith
-                        ),
-                        &format!("The {} branch is", ith),
-                        "But all the previous branches result in",
-                        Concat(vec![ /* TODO add hint */ ]),
+                        )),
+                        plain_text(&format!("The {} branch is", ith)),
+                        plain_text("but all the previous branches have the type"),
+                        plain_text("instead."),
                     )
                 }
-                _ => todo!(),
-            }
-        }
+            },
+            _ => todo!(),
+        },
     }
 }
 
@@ -185,7 +243,7 @@ fn type_comparison(
     actual: ErrorType,
     expected: ErrorType,
     i_am_seeing: ReportText,
-    instead_of: &str,
+    instead_of: ReportText,
     context_hints: ReportText,
 ) -> ReportText {
     let comparison = to_comparison(actual, expected);
@@ -193,7 +251,7 @@ fn type_comparison(
     ReportText::Stack(vec![
         i_am_seeing,
         with_indent(4, comparison.actual),
-        plain_text(instead_of),
+        instead_of,
         with_indent(4, comparison.expected),
         context_hints,
         problems_to_hint(comparison.problems),
@@ -216,15 +274,15 @@ fn lone_type(
     ])
 }
 
-fn add_category(this_is: &str, category: &Category) -> ReportText {
+fn add_category(this_is: ReportText, category: &Category) -> ReportText {
     use Category::*;
+    use ReportText::*;
 
-    let result = match category {
-        Str => format!("{} a string of type:", this_is),
-        _ => todo!(),
-    };
-
-    plain_text(&*result)
+    match category {
+        Str => Concat(vec![this_is, plain_text(" a string of type")]),
+        Storage => Concat(vec![this_is, plain_text(" a value of type")]),
+        other => todo!("add_category for {:?}", other),
+    }
 }
 
 fn to_pattern_report(

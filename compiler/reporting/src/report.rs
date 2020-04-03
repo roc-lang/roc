@@ -171,6 +171,12 @@ pub enum ReportText {
     /// Emphasized text (might be bold, italics, a different color, etc)
     EmText(Box<str>),
 
+    /// A global tag rendered as code (e.g. a monospace font, or with backticks around it).
+    GlobalTag(Box<str>),
+
+    /// A language keyword like `if`, rendered as code (e.g. a monospace font, or with backticks around it).
+    Keyword(Box<str>),
+
     /// A region in the original source
     Region(roc_region::all::Region),
 
@@ -192,21 +198,23 @@ pub enum ReportText {
 }
 
 pub fn plain_text(str: &str) -> ReportText {
-    use ReportText::*;
-
-    Plain(Box::from(str))
+    ReportText::Plain(Box::from(str))
 }
 
 pub fn em_text(str: &str) -> ReportText {
-    use ReportText::*;
+    ReportText::EmText(Box::from(str))
+}
 
-    EmText(Box::from(str))
+pub fn global_tag_text(str: &str) -> ReportText {
+    ReportText::GlobalTag(Box::from(str))
+}
+
+pub fn keyword_text(str: &str) -> ReportText {
+    ReportText::Keyword(Box::from(str))
 }
 
 pub fn url(str: &str) -> ReportText {
-    use ReportText::*;
-
-    Url(Box::from(str))
+    ReportText::Url(Box::from(str))
 }
 
 pub fn with_indent(n: usize, report_text: ReportText) -> ReportText {
@@ -308,6 +316,12 @@ impl ReportText {
                 buf.push('*');
                 buf.push_str(&string);
                 buf.push('*');
+            }
+            GlobalTag(string) | Keyword(string) => {
+                // Since this is CI, the best we can do for code text is backticks.
+                buf.push('`');
+                buf.push_str(&string);
+                buf.push('`');
             }
             Url(url) => {
                 buf.push('<');

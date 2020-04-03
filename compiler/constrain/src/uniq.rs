@@ -993,7 +993,10 @@ pub fn constrain_expr(
                             loc_body.region,
                             &loc_body.value,
                             Expected::ForReason(
-                                Reason::IfBranch { index: index + 1 },
+                                Reason::IfBranch {
+                                    index: index + 1,
+                                    total_branches: branches.len(),
+                                },
                                 Type::Variable(*branch_var),
                                 region,
                             ),
@@ -1012,6 +1015,7 @@ pub fn constrain_expr(
                         Expected::ForReason(
                             Reason::IfBranch {
                                 index: branches.len() + 1,
+                                total_branches: branches.len(),
                             },
                             Type::Variable(*branch_var),
                             region,

@@ -766,16 +766,16 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                This `if` condition does not evaluate to a boolean value, True or False.
+                This `if` condition needs to be a Bool.
 
                 1 ┆  if "foo" then 2 else 3
                   ┆     ^^^^^
 
-                It is a string of type:
+                Right now it’s a string of type
 
                     Str
 
-                But I need this `if` condition to be a Bool value.
+                but I need every `if` condition to evaluate to a Bool—either `True` or `False`.
 
                 "#
             ),
@@ -783,7 +783,7 @@ mod test_reporting {
     }
 
     #[test]
-    fn if_branch_mismatch() {
+    fn if_2_branch_mismatch() {
         report_problem_as(
             indoc!(
                 r#"
@@ -792,25 +792,55 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                The 2nd branch of this `if` does not match all the previous branches:
+                This `if` has an `else` branch with a different type from its `then` branch:
 
                 1 ┆  if True then 2 else "foo"
                   ┆                      ^^^^^
 
-                The 2nd branch is a string of type:
+                The `else` branch is a string of type
 
                     Str
 
-                But all the previous branches result in
+                but the `then` branch has the type
 
                     Num a
 
-
+                instead. I need all branches in an `if` to have the same type!
 
                 "#
             ),
         )
     }
+
+    // #[test]
+    // fn if_3_branch_mismatch() {
+    //     report_problem_as(
+    //         indoc!(
+    //             r#"
+    //             if True then 2 else if False then 2 else "foo"
+    //             "#
+    //         ),
+    //         indoc!(
+    //             r#"
+    //             The 2nd branch of this `if` does not match all the previous branches:
+
+    //             1 ┆  if True then 2 else "foo"
+    //               ┆                      ^^^^^
+
+    //             The 2nd branch is a string of type
+
+    //                 Str
+
+    //             but all the previous branches have the type
+
+    //                 Num a
+
+    //             instead.
+
+    //             "#
+    //         ),
+    //     )
+    // }
 
     #[test]
     fn circular_type() {
