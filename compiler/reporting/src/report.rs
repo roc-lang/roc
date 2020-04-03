@@ -195,21 +195,19 @@ pub enum ReportText {
 }
 
 pub fn plain_text(str: &str) -> ReportText {
-    use ReportText::*;
-
-    Plain(Box::from(str))
+    ReportText::Plain(Box::from(str))
 }
 
 pub fn em_text(str: &str) -> ReportText {
-    use ReportText::*;
+    ReportText::EmText(Box::from(str))
+}
 
-    EmText(Box::from(str))
+pub fn code_text(str: &str) -> ReportText {
+    ReportText::Code(Box::from(str))
 }
 
 pub fn url(str: &str) -> ReportText {
-    use ReportText::*;
-
-    Url(Box::from(str))
+    ReportText::Url(Box::from(str))
 }
 
 pub fn with_indent(n: usize, report_text: ReportText) -> ReportText {
