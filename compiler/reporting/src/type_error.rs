@@ -1,4 +1,4 @@
-use crate::report::{plain_text, with_indent, Report, ReportText};
+use crate::report::{code_text, plain_text, with_indent, Report, ReportText};
 use roc_can::expected::{Expected, PExpected};
 use roc_module::symbol::Symbol;
 use roc_solve::solve;
@@ -84,13 +84,13 @@ fn report_bad_type(
     expected_type: ErrorType,
     region: roc_region::all::Region,
     _opt_highlight: Option<roc_region::all::Region>,
-    problem: &str,
+    problem: ReportText,
     this_is: &str,
     further_details: ReportText,
 ) -> Report {
     use ReportText::*;
     let lines = vec![
-        plain_text(problem),
+        problem,
         Region(region),
         lone_type(
             found,
@@ -120,21 +120,40 @@ fn to_expr_report(
         Expected::FromAnnotation(_name, _arity, _sub_context, _expected_type) => todo!(),
         Expected::ForReason(reason, expected_type, region) => {
             match reason {
-                Reason::IfCondition => report_bad_type(
-                    filename,
-                    &category,
-                    found,
-                    expected_type,
-                    region,
-                    Some(expr_region),
-                    "This `if` condition does not evaluate to a boolean value, True or False.",
-                    "It is",
-                    Concat(vec![
-                        plain_text("But I need this `if` condition to be a "),
+                Reason::IfCondition => {
+                    let problem = Concat(vec![
+                        plain_text("This "),
+                        code_text("if"),
+                        plain_text(" condition should be a "),
                         ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
-                        plain_text(" value."),
-                    ]),
-                ),
+                        plain_text(", but it isn’t."),
+                    ]);
+
+                    report_bad_type(
+                        filename,
+                        &category,
+                        found,
+                        expected_type,
+                        region,
+                        Some(expr_region),
+                        problem,
+                        "Instead it’s",
+                        Concat(vec![
+                            code_text("if"),
+                            plain_text(" conditions must evaluate to a "),
+                            ReportText::Type(Content::Alias(
+                                Symbol::BOOL_BOOL,
+                                vec![],
+                                Variable::BOOL,
+                            )),
+                            plain_text("—either "),
+                            code_text("True"),
+                            plain_text(" or "),
+                            code_text("False"),
+                            plain_text("."),
+                        ]),
+                    )
+                }
                 Reason::IfBranch { index } => {
                     let ith = int_to_ordinal(index);
                     report_mismatch(
