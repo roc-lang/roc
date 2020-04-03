@@ -310,6 +310,12 @@ impl ReportText {
                 buf.push_str(&string);
                 buf.push('*');
             }
+            Code(string) => {
+                // Since this is CI, the best we can do for code text is backticks.
+                buf.push('`');
+                buf.push_str(&string);
+                buf.push('`');
+            }
             Url(url) => {
                 buf.push('<');
                 buf.push_str(&url);
