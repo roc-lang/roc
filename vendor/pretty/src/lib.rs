@@ -1,142 +1,3 @@
-//! This crate defines a
-//! [Wadler-style](http://homepages.inf.ed.ac.uk/wadler/papers/prettier/prettier.pdf)
-//! pretty-printing API.
-//!
-//! Start with with the static functions of [Doc](enum.Doc.html).
-//!
-//! ## Quick start
-//!
-//! Let's pretty-print simple sexps!  We want to pretty print sexps like
-//!
-//! ```lisp
-//! (1 2 3)
-//! ```
-//! or, if the line would be too long, like
-//!
-//! ```lisp
-//! ((1)
-//!  (2 3)
-//!  (4 5 6))
-//! ```
-//!
-//! A _simple symbolic expression_ consists of a numeric _atom_ or a nested ordered _list_ of
-//! symbolic expression children.
-//!
-//! ```rust
-//! # use pretty::*;
-//! enum SExp {
-//!     Atom(u32),
-//!     List(Vec<SExp>),
-//! }
-//! use SExp::*;
-//! # fn main() { }
-//! ```
-//!
-//! We define a simple conversion to a [Doc](enum.Doc.html).  Atoms are rendered as strings; lists
-//! are recursively rendered, with spaces between children where appropriate.  Children are
-//! [nested]() and [grouped](), allowing them to be laid out in a single line as appropriate.
-//!
-//! ```rust
-//! # use pretty::*;
-//! # enum SExp {
-//! #     Atom(u32),
-//! #     List(Vec<SExp>),
-//! # }
-//! # use SExp::*;
-//! impl SExp {
-//!     /// Return a pretty printed format of self.
-//!     pub fn to_doc(&self) -> RcDoc<()> {
-//!         match *self {
-//!             Atom(ref x) => RcDoc::as_string(x),
-//!             List(ref xs) =>
-//!                 RcDoc::text("(")
-//!                     .append(RcDoc::intersperse(xs.into_iter().map(|x| x.to_doc()), Doc::line()).nest(1).group())
-//!                     .append(RcDoc::text(")"))
-//!         }
-//!     }
-//! }
-//! # fn main() { }
-//! ```
-//!
-//! Next, we convert the [Doc](enum.Doc.html) to a plain old string.
-//!
-//! ```rust
-//! # use pretty::*;
-//! # enum SExp {
-//! #     Atom(u32),
-//! #     List(Vec<SExp>),
-//! # }
-//! # use SExp::*;
-//! # impl SExp {
-//! #     /// Return a pretty printed format of self.
-//! #     pub fn to_doc(&self) -> BoxDoc<()> {
-//! #         match *self {
-//! #             Atom(ref x) => BoxDoc::as_string(x),
-//! #             List(ref xs) =>
-//! #                 BoxDoc::text("(")
-//! #                     .append(BoxDoc::intersperse(xs.into_iter().map(|x| x.to_doc()), Doc::line()).nest(1).group())
-//! #                     .append(BoxDoc::text(")"))
-//! #         }
-//! #     }
-//! # }
-//! impl SExp {
-//!     pub fn to_pretty(&self, width: usize) -> String {
-//!         let mut w = Vec::new();
-//!         self.to_doc().render(width, &mut w).unwrap();
-//!         String::from_utf8(w).unwrap()
-//!     }
-//! }
-//! # fn main() { }
-//! ```
-//!
-//! And finally we can test that the nesting and grouping behaves as we expected.
-//!
-//! ```rust
-//! # use pretty::*;
-//! # enum SExp {
-//! #     Atom(u32),
-//! #     List(Vec<SExp>),
-//! # }
-//! # use SExp::*;
-//! # impl SExp {
-//! #     /// Return a pretty printed format of self.
-//! #     pub fn to_doc(&self) -> BoxDoc<()> {
-//! #         match *self {
-//! #             Atom(ref x) => BoxDoc::as_string(x),
-//! #             List(ref xs) =>
-//! #                 BoxDoc::text("(")
-//! #                     .append(BoxDoc::intersperse(xs.into_iter().map(|x| x.to_doc()), Doc::line()).nest(1).group())
-//! #                     .append(BoxDoc::text(")"))
-//! #         }
-//! #     }
-//! # }
-//! # impl SExp {
-//! #     pub fn to_pretty(&self, width: usize) -> String {
-//! #         let mut w = Vec::new();
-//! #         self.to_doc().render(width, &mut w).unwrap();
-//! #         String::from_utf8(w).unwrap()
-//! #     }
-//! # }
-//! # fn main() {
-//! let atom = SExp::Atom(5);
-//! assert_eq!("5", atom.to_pretty(10));
-//! let list = SExp::List(vec![SExp::Atom(1), SExp::Atom(2), SExp::Atom(3)]);
-//! assert_eq!("(1 2 3)", list.to_pretty(10));
-//! assert_eq!("\
-//! (1
-//!  2
-//!  3)", list.to_pretty(5));
-//! # }
-//! ```
-//!
-//! ## Advanced usage
-//!
-//! There's a more efficient pattern that uses the [DocAllocator](trait.DocAllocator.html) trait, as
-//! implemented by [BoxAllocator](struct.BoxAllocator.html), to allocate
-//! [DocBuilder](struct.DocBuilder.html) instances.  See
-//! [examples/trees.rs](https://github.com/freebroccolo/pretty.rs/blob/master/examples/trees.rs#L39)
-//! for this approach.
-
 #[cfg(feature = "termcolor")]
 pub extern crate termcolor;
 
@@ -547,13 +408,6 @@ where
 
     /// Returns a value which implements `std::fmt::Display`
     ///
-    /// ```
-    /// use pretty::{Doc, BoxDoc};
-    /// let doc = BoxDoc::<()>::group(
-    ///     BoxDoc::text("hello").append(Doc::line()).append(Doc::text("world"))
-    /// );
-    /// assert_eq!(format!("{}", doc.pretty(80)), "hello world");
-    /// ```
     #[inline]
     pub fn pretty<'d>(&'d self, width: usize) -> Pretty<'a, 'd, T, A> {
         Pretty { doc: self, width }
@@ -664,24 +518,6 @@ where
 
     /// Acts like `line` but behaves like `nil` if grouped on a single line
     ///
-    /// ```
-    /// use pretty::{Doc, RcDoc};
-    ///
-    /// let doc = RcDoc::<()>::group(
-    ///     RcDoc::text("(")
-    ///         .append(
-    ///             RcDoc::line_()
-    ///                 .append(Doc::text("test"))
-    ///                 .append(Doc::line())
-    ///                 .append(Doc::text("test"))
-    ///                 .nest(2),
-    ///         )
-    ///         .append(Doc::line_())
-    ///         .append(Doc::text(")")),
-    /// );
-    /// assert_eq!(doc.pretty(5).to_string(), "(\n  test\n  test\n)");
-    /// assert_eq!(doc.pretty(100).to_string(), "(test test)");
-    /// ```
     #[inline]
     fn line_(&'a self) -> DocBuilder<'a, Self, A> {
         self.hardline().flat_alt(self.nil())
@@ -756,16 +592,6 @@ where
 
     /// Allocate a document that acts differently based on the position and page layout
     ///
-    /// ```rust
-    /// use pretty::DocAllocator;
-    ///
-    /// let arena = pretty::Arena::<()>::new();
-    /// let doc = arena.text("prefix ")
-    ///     .append(arena.column(|l| {
-    ///         arena.text("| <- column ").append(arena.as_string(l)).into_doc()
-    ///     }));
-    /// assert_eq!(doc.1.pretty(80).to_string(), "prefix | <- column 7");
-    /// ```
     #[inline]
     fn column(&'a self, f: impl Fn(usize) -> Self::Doc + 'a) -> DocBuilder<'a, Self, A> {
         DocBuilder(self, Doc::Column(self.alloc_column_fn(f)).into())
@@ -773,16 +599,6 @@ where
 
     /// Allocate a document that acts differently based on the current nesting level
     ///
-    /// ```rust
-    /// use pretty::DocAllocator;
-    ///
-    /// let arena = pretty::Arena::<()>::new();
-    /// let doc = arena.text("prefix ")
-    ///     .append(arena.nesting(|l| {
-    ///         arena.text("[Nested: ").append(arena.as_string(l)).append("]").into_doc()
-    ///     }).nest(4));
-    /// assert_eq!(doc.1.pretty(80).to_string(), "prefix [Nested: 4]");
-    /// ```
     #[inline]
     fn nesting(&'a self, f: impl Fn(usize) -> Self::Doc + 'a) -> DocBuilder<'a, Self, A> {
         DocBuilder(self, Doc::Nesting(self.alloc_column_fn(f)).into())
@@ -882,28 +698,6 @@ where
 
     /// Acts as `self` when laid out on multiple lines and acts as `that` when laid out on a single line.
     ///
-    /// ```
-    /// use pretty::{Arena, DocAllocator};
-    ///
-    /// let arena = Arena::<()>::new();
-    /// let body = arena.line().append("x");
-    /// let doc = arena.text("let")
-    ///     .append(arena.line())
-    ///     .append("x")
-    ///     .group()
-    ///     .append(
-    ///         body.clone()
-    ///             .flat_alt(
-    ///                 arena.line()
-    ///                     .append("in")
-    ///                     .append(body)
-    ///             )
-    ///     )
-    ///     .group();
-    ///
-    /// assert_eq!(doc.1.pretty(100).to_string(), "let x in x");
-    /// assert_eq!(doc.1.pretty(8).to_string(), "let x\nx");
-    /// ```
     #[inline]
     pub fn flat_alt<E>(self, that: E) -> DocBuilder<'a, D, A>
     where
@@ -970,14 +764,6 @@ where
     /// NOTE: The doc pointer type, `D` may need to be cloned. Consider using cheaply cloneable ptr
     /// like `RefDoc` or `RcDoc`
     ///
-    /// ```rust
-    /// use pretty::DocAllocator;
-    ///
-    /// let arena = pretty::Arena::<()>::new();
-    /// let doc = arena.text("lorem").append(arena.text(" "))
-    ///     .append(arena.intersperse(["ipsum", "dolor"].iter().cloned(), arena.line_()).align());
-    /// assert_eq!(doc.1.pretty(80).to_string(), "lorem ipsum\n      dolor");
-    /// ```
     #[inline]
     pub fn align(self) -> DocBuilder<'a, D, A>
     where
@@ -997,17 +783,6 @@ where
     /// NOTE: The doc pointer type, `D` may need to be cloned. Consider using cheaply cloneable ptr
     /// like `RefDoc` or `RcDoc`
     ///
-    /// ```rust
-    /// use pretty::DocAllocator;
-    ///
-    /// let arena = pretty::Arena::<()>::new();
-    /// let doc = arena.text("prefix").append(arena.text(" "))
-    ///     .append(arena.reflow("Indenting these words with nest").hang(4));
-    /// assert_eq!(
-    ///     doc.1.pretty(24).to_string(),
-    ///     "prefix Indenting these\n           words with\n           nest",
-    /// );
-    /// ```
     #[inline]
     pub fn hang(self, adjust: isize) -> DocBuilder<'a, D, A>
     where
@@ -1021,21 +796,6 @@ where
     /// NOTE: The doc pointer type, `D` may need to be cloned. Consider using cheaply cloneable ptr
     /// like `RefDoc` or `RcDoc`
     ///
-    /// ```rust
-    /// use pretty::DocAllocator;
-    ///
-    /// let arena = pretty::Arena::<()>::new();
-    /// let doc = arena.text("prefix").append(arena.text(" "))
-    ///     .append(arena.reflow("The indent function indents these words!").indent(4));
-    /// assert_eq!(
-    ///     doc.1.pretty(24).to_string(),
-    /// "
-    /// prefix     The indent
-    ///            function
-    ///            indents these
-    ///            words!".trim_start(),
-    /// );
-    /// ```
     #[inline]
     pub fn indent(self, adjust: usize) -> DocBuilder<'a, D, A>
     where
@@ -1061,16 +821,6 @@ where
     /// NOTE: The doc pointer type, `D` may need to be cloned. Consider using cheaply cloneable ptr
     /// like `RefDoc` or `RcDoc`
     ///
-    /// ```rust
-    /// use pretty::DocAllocator;
-    ///
-    /// let arena = pretty::Arena::<()>::new();
-    /// let doc = arena.text("prefix ")
-    ///     .append(arena.column(|l| {
-    ///         arena.text("| <- column ").append(arena.as_string(l)).into_doc()
-    ///     }));
-    /// assert_eq!(doc.1.pretty(80).to_string(), "prefix | <- column 7");
-    /// ```
     #[inline]
     pub fn width(self, f: impl Fn(isize) -> D::Doc + 'a) -> DocBuilder<'a, D, A>
     where
@@ -1269,255 +1019,5 @@ impl<'a, A> DocAllocator<'a, A> for Arena<'a, A> {
         f: impl Fn(isize) -> Self::Doc + 'a,
     ) -> <Self::Doc as DocPtr<'a, A>>::WidthFn {
         self.alloc_any(f)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use difference;
-
-    use super::*;
-
-    #[cfg(target_pointer_width = "64")]
-    #[test]
-    fn doc_size() {
-        // Safeguard against accidentally growing Doc
-        assert_eq!(8 * 3, std::mem::size_of::<Doc<RefDoc>>());
-    }
-
-    macro_rules! test {
-        ($size:expr, $actual:expr, $expected:expr) => {
-            let mut s = String::new();
-            $actual.render_fmt($size, &mut s).unwrap();
-            difference::assert_diff!(&s, $expected, "\n", 0);
-        };
-        ($actual:expr, $expected:expr) => {
-            test!(70, $actual, $expected)
-        };
-    }
-
-    #[test]
-    fn box_doc_inference() {
-        let doc: BoxDoc<()> = BoxDoc::group(
-            BoxDoc::text("test")
-                .append(BoxDoc::line())
-                .append(BoxDoc::text("test")),
-        );
-
-        test!(doc, "test test");
-    }
-
-    #[test]
-    fn newline_in_text() {
-        let doc: BoxDoc<()> = BoxDoc::group(
-            BoxDoc::text("test").append(
-                BoxDoc::line()
-                    .append(BoxDoc::text("\"test\n     test\""))
-                    .nest(4),
-            ),
-        );
-
-        test!(5, doc, "test\n    \"test\n     test\"");
-    }
-
-    #[test]
-    fn forced_newline() {
-        let doc: BoxDoc<()> = BoxDoc::group(
-            BoxDoc::text("test")
-                .append(BoxDoc::hardline())
-                .append(BoxDoc::text("test")),
-        );
-
-        test!(doc, "test\ntest");
-    }
-
-    #[test]
-    fn space_do_not_reset_pos() {
-        let doc: BoxDoc<()> = BoxDoc::group(BoxDoc::text("test").append(BoxDoc::line()))
-            .append(BoxDoc::text("test"))
-            .append(BoxDoc::group(BoxDoc::line()).append(BoxDoc::text("test")));
-
-        test!(9, doc, "test test\ntest");
-    }
-
-    // Tests that the `BoxDoc::hardline()` does not cause the rest of document to think that it fits on
-    // a single line but instead breaks on the `BoxDoc::line()` to fit with 6 columns
-    #[test]
-    fn newline_does_not_cause_next_line_to_be_to_long() {
-        let doc: RcDoc<()> = RcDoc::group(
-            RcDoc::text("test").append(RcDoc::hardline()).append(
-                RcDoc::text("test")
-                    .append(RcDoc::line())
-                    .append(RcDoc::text("test")),
-            ),
-        );
-
-        test!(6, doc, "test\ntest\ntest");
-    }
-
-    #[test]
-    fn newline_after_group_does_not_affect_it() {
-        let arena = Arena::<()>::new();
-        let doc = arena.text("x").append(arena.line()).append("y").group();
-
-        test!(100, doc.append(arena.hardline()).1, "x y\n");
-    }
-
-    #[test]
-    fn block() {
-        let doc: RcDoc<()> = RcDoc::group(
-            RcDoc::text("{")
-                .append(
-                    RcDoc::line()
-                        .append(RcDoc::text("test"))
-                        .append(RcDoc::line())
-                        .append(RcDoc::text("test"))
-                        .nest(2),
-                )
-                .append(RcDoc::line())
-                .append(RcDoc::text("}")),
-        );
-
-        test!(5, doc, "{\n  test\n  test\n}");
-    }
-
-    #[test]
-    fn line_comment() {
-        let doc: BoxDoc<()> = BoxDoc::group(
-            BoxDoc::text("{")
-                .append(
-                    BoxDoc::line()
-                        .append(BoxDoc::text("test"))
-                        .append(BoxDoc::line())
-                        .append(BoxDoc::text("// a").append(BoxDoc::hardline()))
-                        .append(BoxDoc::text("test"))
-                        .nest(2),
-                )
-                .append(BoxDoc::line())
-                .append(BoxDoc::text("}")),
-        );
-
-        test!(14, doc, "{\n  test\n  // a\n  test\n}");
-    }
-
-    #[test]
-    fn annotation_no_panic() {
-        let doc: BoxDoc<()> = BoxDoc::group(
-            BoxDoc::text("test")
-                .annotate(())
-                .append(BoxDoc::hardline())
-                .annotate(())
-                .append(BoxDoc::text("test")),
-        );
-
-        test!(doc, "test\ntest");
-    }
-
-    #[test]
-    fn union() {
-        let arg: BoxDoc<()> = BoxDoc::text("(");
-        let tuple = |line: BoxDoc<'static, ()>| {
-            line.append(BoxDoc::text("x").append(",").group())
-                .append(BoxDoc::line())
-                .append(BoxDoc::text("1234567890").append(",").group())
-                .nest(2)
-                .append(BoxDoc::line_())
-                .append(")")
-        };
-
-        let from = BoxDoc::text("let")
-            .append(BoxDoc::line())
-            .append(BoxDoc::text("x"))
-            .append(BoxDoc::line())
-            .append(BoxDoc::text("="))
-            .group();
-
-        let single = from
-            .clone()
-            .append(BoxDoc::line())
-            .append(arg.clone())
-            .group()
-            .append(tuple(BoxDoc::line_()))
-            .group();
-
-        let hang = from
-            .clone()
-            .append(BoxDoc::line())
-            .append(arg.clone())
-            .group()
-            .append(tuple(BoxDoc::hardline()))
-            .group();
-
-        let break_all = from
-            .append(BoxDoc::line())
-            .append(arg.clone())
-            .append(tuple(BoxDoc::line()))
-            .group()
-            .nest(2);
-
-        let doc = BoxDoc::group(single.union(hang.union(break_all)));
-
-        test!(doc, "let x = (x, 1234567890,)");
-        test!(8, doc, "let x =\n  (\n    x,\n    1234567890,\n  )");
-        test!(14, doc, "let x = (\n  x,\n  1234567890,\n)");
-    }
-
-    #[test]
-    fn usize_max_value() {
-        let doc: BoxDoc<()> = BoxDoc::group(
-            BoxDoc::text("test")
-                .append(BoxDoc::line())
-                .append(BoxDoc::text("test")),
-        );
-
-        test!(usize::max_value(), doc, "test test");
-    }
-
-    pub struct TestWriter<W> {
-        upstream: W,
-    }
-
-    impl<W> TestWriter<W> {
-        pub fn new(upstream: W) -> Self {
-            Self { upstream }
-        }
-    }
-
-    impl<W> Render for TestWriter<W>
-    where
-        W: Render,
-    {
-        type Error = W::Error;
-
-        fn write_str(&mut self, s: &str) -> Result<usize, W::Error> {
-            self.upstream.write_str(s)
-        }
-
-        fn write_str_all(&mut self, s: &str) -> Result<(), W::Error> {
-            self.upstream.write_str_all(s)
-        }
-    }
-
-    impl<W> RenderAnnotated<()> for TestWriter<W>
-    where
-        W: Render,
-    {
-        fn push_annotation(&mut self, _: &()) -> Result<(), Self::Error> {
-            self.upstream.write_str_all("[")
-        }
-
-        fn pop_annotation(&mut self) -> Result<(), Self::Error> {
-            self.upstream.write_str_all("]")
-        }
-    }
-
-    #[test]
-    fn annotations() {
-        let actual = BoxDoc::text("abc").annotate(()).annotate(());
-        let mut s = String::new();
-        actual
-            .render_raw(70, &mut TestWriter::new(FmtWrite::new(&mut s)))
-            .unwrap();
-        difference::assert_diff!(&s, "[[abc]]", "\n", 0);
     }
 }

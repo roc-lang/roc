@@ -7,13 +7,8 @@ use roc_types::subs::{Content, Subs};
 use roc_types::types::{write_error_type, ErrorType};
 use std::path::PathBuf;
 
-// use ven_pretty::termcolor::{Color, ColorChoice, ColorSpec, StandardStream};
 use std::fmt;
-use ven_pretty::{
-    BoxAllocator, BoxDoc, DocAllocator, DocBuilder, FmtWrite, Render, RenderAnnotated,
-};
-
-type Doc<'a> = DocBuilder<'a, BoxAllocator, Annotation>;
+use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
 
 /// A textual report.
 pub struct Report {
@@ -210,10 +205,6 @@ pub fn url(str: &str) -> ReportText {
     ReportText::Url(Box::from(str))
 }
 
-pub fn with_indent(n: usize, report_text: ReportText) -> ReportText {
-    ReportText::Indent(n, Box::new(report_text))
-}
-
 pub const RED_CODE: &str = "\u{001b}[31m";
 pub const WHITE_CODE: &str = "\u{001b}[37m";
 pub const BLUE_CODE: &str = "\u{001b}[34m";
@@ -227,12 +218,6 @@ pub const BOLD_CODE: &str = "\u{001b}[1m";
 pub const UNDERLINE_CODE: &str = "\u{001b}[4m";
 
 pub const RESET_CODE: &str = "\u{001b}[0m";
-
-struct CiEnv<'a> {
-    home: ModuleId,
-    src_lines: &'a [&'a str],
-    interns: &'a Interns,
-}
 
 pub struct CiWrite<W> {
     style_stack: Vec<Annotation>,
@@ -445,11 +430,11 @@ impl ReportText {
         src_lines: &[&str],
         interns: &Interns,
     ) {
-        let allocator = BoxAllocator;
+        let alloc = BoxAllocator;
 
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
-        self.pretty::<_>(&allocator, subs, home, src_lines, interns)
+        self.pretty::<_>(&alloc, subs, home, src_lines, interns)
             .1
             .render_raw(70, &mut CiWrite::new(buf))
             .expect(err_msg);
@@ -465,11 +450,11 @@ impl ReportText {
         interns: &Interns,
         palette: &Palette,
     ) {
-        let allocator = BoxAllocator;
+        let alloc = BoxAllocator;
 
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
-        self.pretty::<_>(&allocator, subs, home, src_lines, interns)
+        self.pretty::<_>(&alloc, subs, home, src_lines, interns)
             .1
             .render_raw(70, &mut ColorWrite::new(palette, buf))
             .expect(err_msg);
@@ -479,7 +464,7 @@ impl ReportText {
     /// monospace font, etc) is done in the CiWrite and ColorWrite `RenderAnnotated` instances.
     pub fn pretty<'b, D>(
         self,
-        allocator: &'b D,
+        alloc: &'b D,
         subs: &mut Subs,
         home: ModuleId,
         src_lines: &'b [&'b str],
@@ -492,30 +477,30 @@ impl ReportText {
         use ReportText::*;
 
         match self {
-            Plain(string) => allocator
+            Plain(string) => alloc
                 .text(format!("{}", string))
                 .annotate(Annotation::PlainText),
-            EmText(string) => allocator
+            EmText(string) => alloc
                 .text(format!("{}", string))
                 .annotate(Annotation::Emphasized),
-            Url(url) => allocator.text(format!("{}", url)).annotate(Annotation::Url),
-            Keyword(string) => allocator
+            Url(url) => alloc.text(format!("{}", url)).annotate(Annotation::Url),
+            Keyword(string) => alloc
                 .text(format!("{}", string))
                 .annotate(Annotation::Keyword),
-            GlobalTag(string) => allocator
+            GlobalTag(string) => alloc
                 .text(format!("{}", string))
                 .annotate(Annotation::GlobalTag),
-            RecordField(string) => allocator
+            RecordField(string) => alloc
                 .text(format!(".{}", string))
                 .annotate(Annotation::RecordField),
             PrivateTag(symbol) => {
                 if symbol.module_id() == home {
                     // Render it unqualified if it's in the current module.
-                    allocator
+                    alloc
                         .text(format!("{}", symbol.ident_string(interns)))
                         .annotate(Annotation::PrivateTag)
                 } else {
-                    allocator
+                    alloc
                         .text(format!(
                             "{}.{}",
                             symbol.module_string(interns),
@@ -527,11 +512,11 @@ impl ReportText {
             Value(symbol) => {
                 if symbol.module_id() == home {
                     // Render it unqualified if it's in the current module.
-                    allocator
+                    alloc
                         .text(format!("{}", symbol.ident_string(interns)))
                         .annotate(Annotation::Symbol)
                 } else {
-                    allocator
+                    alloc
                         .text(format!(
                             "{}.{}",
                             symbol.module_string(interns),
@@ -541,55 +526,53 @@ impl ReportText {
                 }
             }
 
-            Module(module_id) => allocator
+            Module(module_id) => alloc
                 .text(format!("{}", interns.module_name(module_id)))
                 .annotate(Annotation::Module),
             Type(content) => match content {
-                Content::FlexVar(_) | Content::RigidVar(_) => allocator
+                Content::FlexVar(_) | Content::RigidVar(_) => alloc
                     .text(content_to_string(content, subs, home, interns))
                     .annotate(Annotation::TypeVariable),
 
-                Content::Structure(_) => allocator
+                Content::Structure(_) => alloc
                     .text(content_to_string(content, subs, home, interns))
                     .annotate(Annotation::Structure),
 
-                Content::Alias(_, _, _) => allocator
+                Content::Alias(_, _, _) => alloc
                     .text(content_to_string(content, subs, home, interns))
                     .annotate(Annotation::Alias),
 
-                Content::Error => allocator.text(content_to_string(content, subs, home, interns)),
+                Content::Error => alloc.text(content_to_string(content, subs, home, interns)),
             },
-            ErrorType(error_type) => allocator
+            ErrorType(error_type) => alloc
                 .nil()
-                .append(allocator.hardline())
+                .append(alloc.hardline())
                 .append(
-                    allocator
+                    alloc
                         .text(write_error_type(home, interns, error_type))
                         .indent(4),
                 )
-                .append(allocator.hardline()),
+                .append(alloc.hardline()),
 
             Indent(n, nested) => {
-                let rest = nested.pretty(allocator, subs, home, src_lines, interns);
-                allocator.nil().append(rest).indent(n)
+                let rest = nested.pretty(alloc, subs, home, src_lines, interns);
+                alloc.nil().append(rest).indent(n)
             }
             Docs(_) => {
                 panic!("TODO implment docs");
             }
-            Concat(report_texts) => allocator.concat(
+            Concat(report_texts) => alloc.concat(
                 report_texts
                     .into_iter()
-                    .map(|rep| rep.pretty(allocator, subs, home, src_lines, interns)),
+                    .map(|rep| rep.pretty(alloc, subs, home, src_lines, interns)),
             ),
-            Stack(report_texts) => allocator.intersperse(
+            Stack(report_texts) => alloc.intersperse(
                 report_texts
                     .into_iter()
-                    .map(|rep| (rep.pretty(allocator, subs, home, src_lines, interns))),
-                allocator.hardline(),
+                    .map(|rep| (rep.pretty(alloc, subs, home, src_lines, interns))),
+                alloc.hardline(),
             ),
-            BinOp(bin_op) => allocator
-                .text(bin_op.to_string())
-                .annotate(Annotation::BinOp),
+            BinOp(bin_op) => alloc.text(bin_op.to_string()).annotate(Annotation::BinOp),
             Region(region) => {
                 let max_line_number_length = (region.end_line + 1).to_string().len();
                 let indent = 2;
@@ -603,42 +586,42 @@ impl ReportText {
 
                     let line = src_lines[i as usize];
                     let rest_of_line = if line.trim().is_empty() {
-                        allocator.nil()
+                        alloc.nil()
                     } else {
-                        allocator
+                        alloc
                             .nil()
-                            .append(allocator.text(line).indent(2))
+                            .append(alloc.text(line).indent(2))
                             .annotate(Annotation::CodeBlock)
                     };
 
-                    let source_line = allocator
+                    let source_line = alloc
                         .line()
                         .append(
-                            allocator
+                            alloc
                                 .text(" ".repeat(max_line_number_length - this_line_number_length)),
                         )
-                        .append(allocator.text(line_number).annotate(Annotation::LineNumber))
-                        .append(allocator.text(" ┆").annotate(Annotation::GutterBar))
+                        .append(alloc.text(line_number).annotate(Annotation::LineNumber))
+                        .append(alloc.text(" ┆").annotate(Annotation::GutterBar))
                         .append(rest_of_line);
 
-                    let highlight_line = allocator
+                    let highlight_line = alloc
                         .line()
-                        .append(allocator.text(" ".repeat(max_line_number_length)))
-                        .append(allocator.text(" ┆").annotate(Annotation::GutterBar))
+                        .append(alloc.text(" ".repeat(max_line_number_length)))
+                        .append(alloc.text(" ┆").annotate(Annotation::GutterBar))
                         .append(
-                            allocator
+                            alloc
                                 .text(" ".repeat(region.start_col as usize))
                                 .indent(indent),
                         )
                         .append(
-                            allocator
+                            alloc
                                 .text("^".repeat((region.end_col - region.start_col) as usize))
                                 .annotate(Annotation::Error),
                         );
 
                     source_line.append(highlight_line)
                 } else {
-                    let mut result = allocator.nil();
+                    let mut result = alloc.nil();
                     for i in region.start_line..=region.end_line {
                         let line_number_string = (i + 1).to_string();
                         let line_number = line_number_string;
@@ -646,37 +629,36 @@ impl ReportText {
 
                         let line = src_lines[i as usize];
                         let rest_of_line = if !line.trim().is_empty() {
-                            allocator
+                            alloc
                                 .text(line)
                                 .annotate(Annotation::CodeBlock)
                                 .indent(indent)
                         } else {
-                            allocator.nil()
+                            alloc.nil()
                         };
 
-                        let source_line = allocator
-                            .line()
-                            .append(
-                                allocator.text(
+                        let source_line =
+                            alloc
+                                .line()
+                                .append(alloc.text(
                                     " ".repeat(max_line_number_length - this_line_number_length),
-                                ),
-                            )
-                            .append(allocator.text(line_number).annotate(Annotation::LineNumber))
-                            .append(allocator.text(" ┆").annotate(Annotation::GutterBar))
-                            .append(allocator.text(">").annotate(Annotation::Error))
-                            .append(rest_of_line);
+                                ))
+                                .append(alloc.text(line_number).annotate(Annotation::LineNumber))
+                                .append(alloc.text(" ┆").annotate(Annotation::GutterBar))
+                                .append(alloc.text(">").annotate(Annotation::Error))
+                                .append(rest_of_line);
 
                         result = result.append(source_line);
                     }
 
                     result
                 };
-                allocator
+                alloc
                     .nil()
-                    .append(allocator.line())
+                    .append(alloc.line())
                     .append(body)
-                    .append(allocator.line())
-                    .append(allocator.line())
+                    .append(alloc.line())
+                    .append(alloc.line())
             }
         }
     }

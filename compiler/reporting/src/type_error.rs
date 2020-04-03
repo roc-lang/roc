@@ -1,6 +1,6 @@
 use crate::report::{
-    global_tag_text, keyword_text, plain_text, private_tag_text, record_field_text, with_indent,
-    Report, ReportText,
+    global_tag_text, keyword_text, plain_text, private_tag_text, record_field_text, Report,
+    ReportText,
 };
 use roc_can::expected::{Expected, PExpected};
 use roc_module::symbol::Symbol;
