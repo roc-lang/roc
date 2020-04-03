@@ -124,9 +124,9 @@ fn to_expr_report(
                     let problem = Concat(vec![
                         plain_text("This "),
                         code_text("if"),
-                        plain_text(" condition should be a "),
+                        plain_text(" condition needs to be a "),
                         ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
-                        plain_text(", but it isn’t."),
+                        plain_text("."),
                     ]);
 
                     report_bad_type(
@@ -137,10 +137,11 @@ fn to_expr_report(
                         region,
                         Some(expr_region),
                         problem,
-                        "Instead it’s",
+                        "Right now it’s",
                         Concat(vec![
+                            plain_text("I need every "),
                             code_text("if"),
-                            plain_text(" conditions must evaluate to a "),
+                            plain_text(" condition to evaluate to a "),
                             ReportText::Type(Content::Alias(
                                 Symbol::BOOL_BOOL,
                                 vec![],

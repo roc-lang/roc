@@ -766,16 +766,16 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                This `if` condition should be a Bool, but it isn’t.
+                This `if` condition needs to be a Bool.
 
                 1 ┆  if "foo" then 2 else 3
                   ┆     ^^^^^
 
-                Instead it’s a string of type:
+                Right now it’s a string of type:
 
                     Str
 
-                `if` conditions must evaluate to a Bool—either `True` or `False`.
+                I need every `if` condition to evaluate to a Bool—either `True` or `False`.
 
                 "#
             ),
