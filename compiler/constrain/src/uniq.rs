@@ -559,11 +559,16 @@ pub fn constrain_expr(
                 ),
             );
 
-            let union_con = Eq(union_type, expected.clone(), Category::TagUnion, region);
+            let union_con = Eq(
+                union_type,
+                expected.clone(),
+                Category::TagApply(name.clone()),
+                region,
+            );
             let ast_con = Eq(
                 Type::Variable(*variant_var),
                 expected,
-                Category::TagUnion,
+                Category::TagApply(name.clone()),
                 region,
             );
 

@@ -1,4 +1,7 @@
-use crate::report::{global_tag_text, keyword_text, plain_text, with_indent, Report, ReportText};
+use crate::report::{
+    global_tag_text, keyword_text, plain_text, private_tag_text, record_field_text, with_indent,
+    Report, ReportText,
+};
 use roc_can::expected::{Expected, PExpected};
 use roc_module::symbol::Symbol;
 use roc_solve::solve;
@@ -275,13 +278,72 @@ fn lone_type(
 }
 
 fn add_category(this_is: ReportText, category: &Category) -> ReportText {
+    use roc_module::ident::TagName;
     use Category::*;
     use ReportText::*;
 
     match category {
+        Lookup(name) => Concat(vec![
+            plain_text("This "),
+            Value(*name),
+            plain_text(" value is a"),
+        ]),
+
+        If => Concat(vec![
+            plain_text("This "),
+            keyword_text("if"),
+            plain_text("expression produces"),
+        ]),
+        When => Concat(vec![
+            plain_text("This "),
+            keyword_text("when"),
+            plain_text("expression produces"),
+        ]),
+
+        List => Concat(vec![this_is, plain_text("a list of type")]),
+        Num => Concat(vec![this_is, plain_text("a number of type")]),
+        Int => Concat(vec![this_is, plain_text("an integer of type")]),
+        Float => Concat(vec![this_is, plain_text("a float of type")]),
         Str => Concat(vec![this_is, plain_text(" a string of type")]),
+
+        Lambda => Concat(vec![this_is, plain_text("an anonymous function of type")]),
+
+        TagApply(TagName::Global(name)) => Concat(vec![
+            plain_text("This "),
+            global_tag_text(name.as_str()),
+            plain_text(" global tag application produces"),
+        ]),
+        TagApply(TagName::Private(name)) => Concat(vec![
+            plain_text("This "),
+            private_tag_text(*name),
+            plain_text(" private tag application produces"),
+        ]),
+
+        Record => Concat(vec![this_is, plain_text("a record of type")]),
+
+        Accessor(field) => Concat(vec![
+            plain_text("This "),
+            record_field_text(field.as_str()),
+            plain_text(" value is a"),
+        ]),
+        Access(field) => Concat(vec![
+            plain_text("The value at "),
+            record_field_text(field.as_str()),
+            plain_text(" is a"),
+        ]),
+
+        CallResult(Some(symbol)) => Concat(vec![
+            plain_text("This "),
+            Value(*symbol),
+            plain_text(" call produces"),
+        ]),
+        CallResult(None) => Concat(vec![this_is]),
+
+        Uniqueness => Concat(vec![
+            this_is,
+            plain_text(" an uniqueness attribute of type"),
+        ]),
         Storage => Concat(vec![this_is, plain_text(" a value of type")]),
-        other => todo!("add_category for {:?}", other),
     }
 }
 

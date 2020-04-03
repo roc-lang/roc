@@ -174,6 +174,12 @@ pub enum ReportText {
     /// A global tag rendered as code (e.g. a monospace font, or with backticks around it).
     GlobalTag(Box<str>),
 
+    /// A private tag rendered as code (e.g. a monospace font, or with backticks around it).
+    PrivateTag(Symbol),
+
+    /// A record field name rendered as code (e.g. a monospace font, or with backticks around it).
+    RecordField(Box<str>),
+
     /// A language keyword like `if`, rendered as code (e.g. a monospace font, or with backticks around it).
     Keyword(Box<str>),
 
@@ -205,8 +211,16 @@ pub fn em_text(str: &str) -> ReportText {
     ReportText::EmText(Box::from(str))
 }
 
+pub fn private_tag_text(symbol: Symbol) -> ReportText {
+    ReportText::PrivateTag(symbol)
+}
+
 pub fn global_tag_text(str: &str) -> ReportText {
     ReportText::GlobalTag(Box::from(str))
+}
+
+pub fn record_field_text(str: &str) -> ReportText {
+    ReportText::RecordField(Box::from(str))
 }
 
 pub fn keyword_text(str: &str) -> ReportText {
@@ -323,12 +337,19 @@ impl ReportText {
                 buf.push_str(&string);
                 buf.push('`');
             }
+            RecordField(string) => {
+                // Since this is CI, the best we can do for code text is backticks.
+                buf.push('`');
+                buf.push('.');
+                buf.push_str(&string);
+                buf.push('`');
+            }
             Url(url) => {
                 buf.push('<');
                 buf.push_str(&url);
                 buf.push('>');
             }
-            Value(symbol) => {
+            PrivateTag(symbol) | Value(symbol) => {
                 if symbol.module_id() == env.home {
                     // Render it unqualified if it's in the current module.
                     buf.push_str(symbol.ident_string(env.interns));
