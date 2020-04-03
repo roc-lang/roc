@@ -171,6 +171,9 @@ pub enum ReportText {
     /// Emphasized text (might be bold, italics, a different color, etc)
     EmText(Box<str>),
 
+    /// Text rendered as code (e.g. a monospace font, or with backticks around it).
+    Code(Box<str>),
+
     /// A region in the original source
     Region(roc_region::all::Region),
 
