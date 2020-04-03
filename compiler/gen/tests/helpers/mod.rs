@@ -34,7 +34,7 @@ pub fn test_home() -> ModuleId {
 #[allow(dead_code)]
 pub fn infer_expr(
     subs: Subs,
-    problems: &mut Vec<roc_types::types::Problem>,
+    problems: &mut Vec<roc_solve::solve::TypeError>,
     constraint: &Constraint,
     expr_var: Variable,
 ) -> (Content, Subs) {
@@ -424,7 +424,7 @@ fn variable_usage_help(con: &Constraint, declared: &mut SeenVariables, used: &mu
 
     match con {
         True | SaveTheEnvironment => (),
-        Eq(tipe, expectation, _) => {
+        Eq(tipe, expectation, _, _) => {
             for v in tipe.variables() {
                 used.insert(v);
             }

@@ -4,7 +4,7 @@ use roc_module::symbol::Symbol;
 use roc_types::boolean_algebra::{Atom, Bool};
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
-use roc_types::types::{gather_fields, Mismatch, Problem, RecordStructure};
+use roc_types::types::{gather_fields, ErrorType, Mismatch, RecordStructure};
 use std::hash::Hash;
 
 macro_rules! mismatch {
@@ -69,9 +69,9 @@ struct Context {
     second_desc: Descriptor,
 }
 
-pub struct Unified {
-    pub vars: Pool,
-    pub mismatches: Vec<Problem>,
+pub enum Unified {
+    Success(Pool),
+    Failure(Pool, ErrorType, ErrorType),
 }
 
 #[derive(Debug)]
@@ -85,19 +85,17 @@ type Outcome = Vec<Mismatch>;
 #[inline(always)]
 pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable) -> Unified {
     let mut vars = Vec::new();
-    let mismatches = unify_pool(subs, &mut vars, var1, var2)
-        .into_iter()
-        .map(|problem| {
-            let type1 = subs.var_to_error_type(var1);
-            let type2 = subs.var_to_error_type(var2);
+    let mismatches = unify_pool(subs, &mut vars, var1, var2);
 
-            subs.union(var1, var2, Content::Error.into());
+    if mismatches.is_empty() {
+        Unified::Success(vars)
+    } else {
+        let type1 = subs.var_to_error_type(var1);
+        let type2 = subs.var_to_error_type(var2);
 
-            Problem::Mismatch(problem, type1, type2)
-        })
-        .collect();
-
-    Unified { vars, mismatches }
+        subs.union(var1, var2, Content::Error.into());
+        Unified::Failure(vars, type1, type2)
+    }
 }
 
 #[inline(always)]

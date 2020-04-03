@@ -1,9 +1,10 @@
-use crate::report::ReportText::{Batch, BinOp, Module, Region, Value};
+use crate::report::ReportText::{BinOp, Concat, Module, Region, Value};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::Problem;
 use roc_types::pretty_print::content_to_string;
 use roc_types::subs::{Content, Subs};
+use roc_types::types::{write_error_type, ErrorType};
 use std::path::PathBuf;
 
 /// A textual report.
@@ -147,7 +148,7 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
 
     Report {
         filename,
-        text: Batch(texts),
+        text: Concat(texts),
     }
 }
 
@@ -162,6 +163,7 @@ pub enum ReportText {
     /// A type. Render it using roc_types::pretty_print for now, but maybe
     /// do something fancier later.
     Type(Content),
+    ErrorType(ErrorType),
 
     /// Plain text
     Plain(Box<str>),
@@ -181,7 +183,12 @@ pub enum ReportText {
     BinOp(roc_parse::operator::BinOp),
 
     /// Many ReportText that should be concatenated together.
-    Batch(Vec<ReportText>),
+    Concat(Vec<ReportText>),
+
+    /// Many ReportText that each get separate lines
+    Stack(Vec<ReportText>),
+
+    Indent(usize, Box<ReportText>),
 }
 
 pub fn plain_text(str: &str) -> ReportText {
@@ -202,9 +209,8 @@ pub fn url(str: &str) -> ReportText {
     Url(Box::from(str))
 }
 
-#[allow(dead_code)]
-fn newline() -> ReportText {
-    plain_text("\n")
+pub fn with_indent(n: usize, report_text: ReportText) -> ReportText {
+    ReportText::Indent(n, Box::new(report_text))
 }
 
 pub const RED_CODE: &str = "\u{001b}[31m";
@@ -267,6 +273,12 @@ fn white(str: &str) -> String {
 
 pub const RESET_CODE: &str = "\u{001b}[0m";
 
+struct CiEnv<'a> {
+    home: ModuleId,
+    src_lines: &'a [&'a str],
+    interns: &'a Interns,
+}
+
 impl ReportText {
     /// Render to CI console output, where no colors are available.
     pub fn render_ci(
@@ -277,6 +289,16 @@ impl ReportText {
         src_lines: &[&str],
         interns: &Interns,
     ) {
+        let env = CiEnv {
+            home,
+            src_lines,
+            interns,
+        };
+
+        self.render_ci_help(&env, buf, subs, 0);
+    }
+
+    fn render_ci_help(self, env: &CiEnv, buf: &mut String, subs: &mut Subs, indent: usize) {
         use ReportText::*;
 
         match self {
@@ -293,19 +315,27 @@ impl ReportText {
                 buf.push('>');
             }
             Value(symbol) => {
-                if symbol.module_id() == home {
+                if symbol.module_id() == env.home {
                     // Render it unqualified if it's in the current module.
-                    buf.push_str(symbol.ident_string(interns));
+                    buf.push_str(symbol.ident_string(env.interns));
                 } else {
-                    buf.push_str(symbol.module_string(interns));
+                    buf.push_str(symbol.module_string(env.interns));
                     buf.push('.');
-                    buf.push_str(symbol.ident_string(interns));
+                    buf.push_str(symbol.ident_string(env.interns));
                 }
             }
             Module(module_id) => {
-                buf.push_str(&interns.module_name(module_id));
+                buf.push_str(&env.interns.module_name(module_id));
             }
-            Type(content) => buf.push_str(content_to_string(content, subs, home, interns).as_str()),
+            Type(content) => {
+                buf.push_str(content_to_string(content, subs, env.home, env.interns).as_str())
+            }
+            ErrorType(error_type) => {
+                buf.push('\n');
+                buf.push_str(" ".repeat(indent).as_str());
+                buf.push_str(&write_error_type(env.home, env.interns, error_type));
+                buf.push('\n');
+            }
             Region(region) => {
                 buf.push('\n');
                 buf.push('\n');
@@ -327,11 +357,11 @@ impl ReportText {
                     buf.push_str(line_number);
                     buf.push_str(" ┆");
 
-                    let line = src_lines[i as usize];
+                    let line = env.src_lines[i as usize];
 
                     if !line.trim().is_empty() {
                         buf.push_str("  ");
-                        buf.push_str(src_lines[i as usize]);
+                        buf.push_str(env.src_lines[i as usize]);
                     }
 
                     buf.push('\n');
@@ -358,11 +388,11 @@ impl ReportText {
                         buf.push_str(line_number);
                         buf.push_str(" ┆>");
 
-                        let line = src_lines[i as usize];
+                        let line = env.src_lines[i as usize];
 
                         if !line.trim().is_empty() {
                             buf.push_str("  ");
-                            buf.push_str(src_lines[i as usize]);
+                            buf.push_str(env.src_lines[i as usize]);
                         }
 
                         if i != region.end_line {
@@ -374,12 +404,27 @@ impl ReportText {
                 buf.push('\n');
                 buf.push('\n');
             }
+            Indent(n, nested) => {
+                nested.render_ci_help(env, buf, subs, indent + n);
+            }
             Docs(_) => {
                 panic!("TODO implment docs");
             }
-            Batch(report_texts) => {
+            Concat(report_texts) => {
                 for report_text in report_texts {
-                    report_text.render_ci(buf, subs, home, src_lines, interns);
+                    report_text.render_ci_help(env, buf, subs, indent);
+                }
+            }
+            Stack(report_texts) => {
+                let mut it = report_texts.into_iter().peekable();
+
+                while let Some(report_text) = it.next() {
+                    report_text.render_ci_help(env, buf, subs, indent);
+
+                    buf.push('\n');
+                    if it.peek().is_some() {
+                        buf.push_str(" ".repeat(indent).as_str());
+                    }
                 }
             }
             BinOp(bin_op) => {
@@ -447,6 +492,7 @@ impl ReportText {
                 ),
                 Content::Error => {}
             },
+            ErrorType(error_type) => buf.push_str(&write_error_type(home, interns, error_type)),
             Region(region) => {
                 // newline before snippet
                 buf.push('\n');
@@ -520,7 +566,11 @@ impl ReportText {
                 buf.push('\n');
                 buf.push('\n');
             }
-            Batch(report_texts) => {
+            Indent(n, nested) => {
+                buf.push_str(" ".repeat(n).as_str());
+                nested.render_color_terminal(buf, subs, home, src_lines, interns, palette);
+            }
+            Concat(report_texts) => {
                 for report_text in report_texts {
                     report_text.render_color_terminal(buf, subs, home, src_lines, interns, palette);
                 }

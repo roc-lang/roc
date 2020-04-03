@@ -16,13 +16,14 @@ mod test_reporting {
         GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, TEST_PALETTE, UNDERLINE_CODE, WHITE_CODE,
         YELLOW_CODE,
     };
+    use roc_reporting::type_error::type_problem;
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
-    use roc_types::types;
     use std::path::PathBuf;
     // use roc_region::all;
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
-    use roc_reporting::report::ReportText::{Batch, Module, Region, Type, Value};
+    use roc_reporting::report::ReportText::{Concat, Module, Region, Type, Value};
+    use roc_solve::solve;
     use roc_types::subs::Content::{FlexVar, RigidVar, Structure};
     use roc_types::subs::FlatType::EmptyRecord;
 
@@ -44,7 +45,7 @@ mod test_reporting {
     fn infer_expr_help(
         expr_src: &str,
     ) -> (
-        Vec<types::Problem>,
+        Vec<solve::TypeError>,
         Vec<roc_problem::can::Problem>,
         Subs,
         ModuleId,
@@ -87,7 +88,7 @@ mod test_reporting {
     }
 
     fn report_problem_as(src: &str, expected_rendering: &str) {
-        let (_type_problems, can_problems, mut subs, home, interns) = infer_expr_help(src);
+        let (type_problems, can_problems, mut subs, home, interns) = infer_expr_help(src);
 
         let mut buf: String = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -96,6 +97,19 @@ mod test_reporting {
             None => {}
             Some(problem) => {
                 let report = can_problem(
+                    filename_from_string(r"\code\proj\Main.roc"),
+                    problem.clone(),
+                );
+                report
+                    .text
+                    .render_ci(&mut buf, &mut subs, home, &src_lines, &interns)
+            }
+        }
+
+        match type_problems.first() {
+            None => {}
+            Some(problem) => {
+                let report = type_problem(
                     filename_from_string(r"\code\proj\Main.roc"),
                     problem.clone(),
                 );
@@ -263,7 +277,7 @@ mod test_reporting {
         report_texts.push(em_text("y"));
 
         report_renders_as(
-            to_simple_report(Batch(report_texts)),
+            to_simple_report(Concat(report_texts)),
             "Wait a second. There is a problem here. -> *y*",
         );
     }
@@ -553,7 +567,7 @@ mod test_reporting {
         report_texts.push(Type(Structure(EmptyRecord)));
 
         report_renders_in_color(
-            to_simple_report(Batch(report_texts)),
+            to_simple_report(Concat(report_texts)),
             "<yellow>List<reset><white> <reset><green>{}<reset>",
         );
     }
@@ -694,5 +708,159 @@ mod test_reporting {
                     "#
             ),
         );
+    }
+
+    //    #[test]
+    //    fn shadowing_type_alias() {
+    //        report_problem_as(
+    //            indoc!(
+    //                r#"
+    //                foo : Int as Int
+    //                foo = 42
+    //
+    //                foo
+    //                "#
+    //            ),
+    //            indoc!(
+    //                r#"
+    //                You cannot mix (!=) and (==) without parentheses
+    //
+    //                3 ┆      if selectedId != thisId == adminsId then
+    //                  ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    //
+    //                "#
+    //            ),
+    //        )
+    //    }
+
+    //    #[test]
+    //    fn invalid_as_type_alias() {
+    //        report_problem_as(
+    //            indoc!(
+    //                r#"
+    //                foo : Int as a
+    //                foo = 42
+    //
+    //                foo
+    //                "#
+    //            ),
+    //            indoc!(
+    //                r#"
+    //                You cannot mix (!=) and (==) without parentheses
+    //
+    //                3 ┆      if selectedId != thisId == adminsId then
+    //                  ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    //
+    //                "#
+    //            ),
+    //        )
+    //    }
+
+    #[test]
+    fn if_condition_not_bool() {
+        report_problem_as(
+            indoc!(
+                r#"
+                if "foo" then 2 else 3
+                "#
+            ),
+            indoc!(
+                r#"
+                This `if` condition does not evaluate to a boolean value, True or False.
+
+                1 ┆  if "foo" then 2 else 3
+                  ┆     ^^^^^
+
+                It is a string of type:
+
+                    Str
+
+                But I need this `if` condition to be a Bool value.
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn if_branch_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                if True then 2 else "foo"
+                "#
+            ),
+            indoc!(
+                r#"
+                The 2nd branch of this `if` does not match all the previous branches:
+
+                1 ┆  if True then 2 else "foo"
+                  ┆                      ^^^^^
+
+                The 2nd branch is a string of type:
+
+                    Str
+
+                But all the previous branches result in
+
+                    Num a
+
+
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn circular_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f = \g -> g g
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                I'm inferring a weird self-referential type for g:
+
+                1 ┆  f = \g -> g g
+                  ┆       ^
+
+                Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.
+
+                    ∞ -> a
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_recursion() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                I'm inferring a weird self-referential type for f:
+
+                1 ┆  f = \x -> f [x]
+                  ┆  ^
+
+                Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.
+
+                    List ∞ -> a
+
+                "#
+            ),
+        )
     }
 }

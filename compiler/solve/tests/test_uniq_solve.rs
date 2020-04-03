@@ -16,7 +16,7 @@ mod test_uniq_solve {
 
     // HELPERS
 
-    fn infer_eq_help(src: &str) -> (Vec<roc_types::types::Problem>, String) {
+    fn infer_eq_help(src: &str) -> (Vec<roc_solve::solve::TypeError>, String) {
         let (_loc_expr, output, _problems, mut subs, variable, constraint, home, interns) =
             uniq_expr(src);
 

@@ -24,7 +24,7 @@ static EMPTY_TAG_UNION: &str = "[]";
 ///
 /// Otherwise, parens are unnecessary.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Parens {
+pub enum Parens {
     InFn,
     InTypeParam,
     Unnecessary,

@@ -9,7 +9,9 @@ mod helpers;
 
 #[cfg(test)]
 mod test_solve {
-    use crate::helpers::{assert_correct_variable_usage, can_expr, infer_expr, CanExprOut};
+    use crate::helpers::{
+        assert_correct_variable_usage, can_expr, infer_expr, with_larger_debug_stack, CanExprOut,
+    };
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
     use roc_types::subs::Subs;
 
@@ -18,7 +20,7 @@ mod test_solve {
     fn infer_eq_help(
         src: &str,
     ) -> (
-        Vec<roc_types::types::Problem>,
+        Vec<roc_solve::solve::TypeError>,
         Vec<roc_problem::can::Problem>,
         String,
     ) {
@@ -2220,9 +2222,10 @@ mod test_solve {
 
     #[test]
     fn quicksort_partition() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            infer_eq_without_problem(
+                indoc!(
+                    r#"
                 swap : Int, Int, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
@@ -2261,9 +2264,10 @@ mod test_solve {
 
                 partition
             "#
-            ),
-            "Int, Int, List Int -> [ Pair Int (List Int) ]",
-        );
+                ),
+                "Int, Int, List Int -> [ Pair Int (List Int) ]",
+            );
+        });
     }
 
     #[test]

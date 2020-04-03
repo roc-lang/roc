@@ -1287,7 +1287,7 @@ fn specialize_proc_body<'a>(
     // unify the called function with the specialized signature, then specialize the function body
     let snapshot = env.subs.snapshot();
     let unified = roc_unify::unify::unify(env.subs, annotation, fn_var);
-    debug_assert!(unified.mismatches.is_empty());
+    debug_assert!(matches!(unified, roc_unify::unify::Unified::Success(_)));
     let specialized_body = from_can(env, body, procs, None);
     // reset subs, so we don't get type errors when specializing for a different signature
     env.subs.rollback_to(snapshot);

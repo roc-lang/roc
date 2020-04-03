@@ -52,7 +52,7 @@ pub struct LoadedModule {
     pub interns: Interns,
     pub solved: Solved<Subs>,
     pub can_problems: Vec<roc_problem::can::Problem>,
-    pub type_problems: Vec<types::Problem>,
+    pub type_problems: Vec<solve::TypeError>,
     pub declarations: Vec<Declaration>,
 }
 
@@ -93,7 +93,7 @@ enum Msg {
         solved_types: MutMap<Symbol, SolvedType>,
         aliases: MutMap<Symbol, Alias>,
         subs: Arc<Solved<Subs>>,
-        problems: Vec<types::Problem>,
+        problems: Vec<solve::TypeError>,
     },
 }
 
