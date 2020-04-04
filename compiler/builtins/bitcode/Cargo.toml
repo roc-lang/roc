@@ -7,7 +7,3 @@ readme = "README.md"
 edition = "2018"
 description = "Generate LLVM bitcode for Roc builtins"
 license = "Apache-2.0"
-
-
-[build]
-target-dir="~/code/roc/copmiler/builtins/bitcode/"
