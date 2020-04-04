@@ -354,7 +354,6 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
         Struct(sorted_fields) => {
             let ctx = env.context;
-            let builder = env.builder;
 
             // Determine types
             let num_fields = sorted_fields.len();
@@ -370,18 +369,11 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 field_vals.push(val);
             }
 
-            // Create the struct_type
+            // Create the struct value
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let mut struct_val = struct_type.const_zero().into();
+            let struct_val = struct_type.const_named_struct(field_vals.into_bump_slice());
 
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                struct_val = builder
-                    .build_insert_value(struct_val, field_val, index as u32, "insert_field")
-                    .unwrap();
-            }
-
-            BasicValueEnum::StructValue(struct_val.into_struct_value())
+            BasicValueEnum::StructValue(struct_val)
         }
         Tag {
             union_size,
