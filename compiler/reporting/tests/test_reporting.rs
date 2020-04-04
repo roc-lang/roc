@@ -783,6 +783,33 @@ mod test_reporting {
     }
 
     #[test]
+    fn when_if_guard() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 1 is
+                    2 if 1 -> 0x0
+                    _ -> 0x1
+                "#
+            ),
+            indoc!(
+                r#"
+                This `if` guard condition needs to be a Bool.
+
+                2 ┆      2 if 1 -> 0x0
+                  ┆           ^
+
+                Right now it’s a number of type
+
+                    Num a
+
+                but I need every `if` guard condition to evaluate to a Bool—either `True` or `False`.
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn if_2_branch_mismatch() {
         report_problem_as(
             indoc!(
@@ -811,32 +838,6 @@ mod test_reporting {
         )
     }
 
-    #[test]
-    fn when_if_guard() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when 1 is
-                    2 if 1 -> 0x0
-                    _ -> 0x1
-                "#
-            ),
-            indoc!(
-                r#"
-                This `if` guard condition needs to be a Bool.
-
-                2 ┆      2 if 1 -> 0x0
-                  ┆           ^
-
-                Right now it’s a number of type
-
-                    Num a
-
-                but I need every `if` guard condition to evaluate to a Bool—either `True` or `False`.
-                "#
-            ),
-        )
-    }
     // #[test]
     // fn if_3_branch_mismatch() {
     //     report_problem_as(
@@ -866,6 +867,37 @@ mod test_reporting {
     //         ),
     //     )
     // }
+
+    #[test]
+    fn when_branch_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 1 is
+                    2 -> "foo"
+                    3 -> {}
+                "#
+            ),
+            indoc!(
+                r#"
+                The 2nd branch of this `when` does not match all the previous branches
+
+                3 ┆      3 -> {}
+                  ┆           ^^
+
+                The 2nd branch is a record of type
+
+                    {}
+
+                but all the previous branches have type
+
+                    Str
+
+                instead. I need all branches of a `when` to have the same type!
+                "#
+            ),
+        )
+    }
 
     #[test]
     fn circular_type() {

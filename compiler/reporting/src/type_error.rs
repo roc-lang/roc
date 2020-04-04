@@ -243,10 +243,40 @@ fn to_expr_report(
                         )),
                         plain_text(&format!("The {} branch is", ith)),
                         plain_text("but all the previous branches have the type"),
-                        plain_text("instead."),
+                        Concat(vec![
+                            plain_text("instead. I need all branches in an "),
+                            keyword_text("if"),
+                            plain_text(" to have the same type!"),
+                        ]),
                     )
                 }
             },
+            Reason::WhenBranch { index } => {
+                // NOTE: is 0-based
+
+                let ith = int_to_ordinal(index + 1);
+
+                report_mismatch(
+                    filename,
+                    &category,
+                    found,
+                    expected_type,
+                    region,
+                    Some(expr_region),
+                    Concat(vec![
+                        plain_text(&format!("The {} branch of this ", ith)),
+                        keyword_text("when"),
+                        plain_text(" does not match all the previous branches"),
+                    ]),
+                    plain_text(&format!("The {} branch is ", ith)),
+                    plain_text("but all the previous branches have type"),
+                    Concat(vec![
+                        plain_text("instead. I need all branches of a "),
+                        keyword_text("when"),
+                        plain_text(" to have the same type!"),
+                    ]),
+                )
+            }
             other => {
                 //    AnonymousFnArg { arg_index: u8 },
                 //    NamedFnArg(String /* function name */, u8 /* arg index */),
@@ -258,8 +288,6 @@ fn to_expr_report(
                 //    IntLiteral,
                 //    NumLiteral,
                 //    InterpolatedStringVar,
-                //    WhenBranch { index: usize },
-                //    WhenGuard,
                 //    ElemInList,
                 //    RecordUpdateValue(Lowercase),
                 //    RecordUpdateKeys(Symbol, SendMap<Lowercase, Type>),

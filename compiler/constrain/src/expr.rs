@@ -539,7 +539,11 @@ pub fn constrain_expr(
                                 cond_type.clone(),
                                 region,
                             ),
-                            ForReason(Reason::WhenBranch { index }, branch_type.clone(), region),
+                            ForReason(
+                                Reason::WhenBranch { index },
+                                branch_type.clone(),
+                                when_branch.value.region,
+                            ),
                         );
 
                         branch_cons.push(branch_con);
