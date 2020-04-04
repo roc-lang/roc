@@ -466,6 +466,8 @@ impl ReportText {
     }
 
     /// Render to a color terminal using ANSI escape sequences
+    // TODO trim these down by introducing an env
+    #[allow(clippy::too_many_arguments)]
     fn render_color_terminal_help(
         self,
         buf: &mut String,
