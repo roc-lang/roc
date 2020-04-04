@@ -1,3 +1,4 @@
+#![allow(clippy::all)]
 #[cfg(feature = "termcolor")]
 pub extern crate termcolor;
 
