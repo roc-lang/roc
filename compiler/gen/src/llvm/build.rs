@@ -299,7 +299,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             if elems.is_empty() {
                 let struct_type = empty_collection(ctx, env.ptr_bytes);
 
-                // THe pointer should be null (aka zero) and the length should be zero,
+                // The pointer should be null (aka zero) and the length should be zero,
                 // so the whole struct should be a const_zero
                 BasicValueEnum::StructValue(struct_type.const_zero())
             } else {
