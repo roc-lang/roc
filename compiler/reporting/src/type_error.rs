@@ -122,7 +122,7 @@ fn to_expr_report(
 
     match expected {
         Expected::NoExpectation(expected_type) => todo!("hit no expectation with type {:?}", expected_type),
-        Expected::FromAnnotation(_name, _arity, _sub_context, _expected_type) => todo!(),
+        Expected::FromAnnotation(_name, _arity, _sub_context, _expected_type) => todo!("hit from annotation {:?} {:?}",_sub_context, _expected_type ),
         Expected::ForReason(reason, expected_type, region) => match reason {
             Reason::IfCondition => {
                 let problem = Concat(vec![

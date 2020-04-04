@@ -960,6 +960,68 @@ mod test_reporting {
         )
     }
 
+    // needs a bit more infrastructure re. diffing records
+    //    #[test]
+    //    fn record_update_keys() {
+    //        report_problem_as(
+    //            indoc!(
+    //                r#"
+    //                x : { foo : {} }
+    //                x = { foo: {} }
+    //
+    //                { x & baz: "bar" }
+    //                "#
+    //            ),
+    //            indoc!(
+    //                r#"
+    //                The `x` record does not have a `baz` field
+    //
+    //                4 ┆  { x & baz: "bar" }
+    //                  ┆        ^^^
+    //
+    //                This is usually a typo. Here are the `x` fields that are most similar
+    //
+    //                    { foo : {}
+    //                    }
+    //
+    //                So maybe `baz` should be `foo`?
+    //                "#
+    //            ),
+    //        )
+    //    }
+
+    //    #[test]
+    //    fn num_literal() {
+    //        report_problem_as(
+    //            indoc!(
+    //                r#"
+    //                x : Str
+    //                x = 4
+    //
+    //                x
+    //                "#
+    //            ),
+    //            indoc!(
+    //                r#"
+    //                Something is off with the body of the `x` definition
+    //
+    //                4 ┆  x = 4
+    //                  ┆      ^
+    //
+    //                The body is a number of type
+    //
+    //                    Num a
+    //
+    //                But the type annotation on `x` says that it should be
+    //
+    //                    Str
+    //
+    //                instead.
+    //                "#
+    //            ),
+    //        )
+    //    }
+
     #[test]
     fn circular_type() {
         report_problem_as(
