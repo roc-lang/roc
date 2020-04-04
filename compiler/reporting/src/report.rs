@@ -30,7 +30,7 @@ pub struct Palette<'a> {
     pub binop: &'a str,
 }
 
-pub const TEST_PALETTE: Palette = Palette {
+pub const DEFAULT_PALETTE: Palette = Palette {
     primary: WHITE_CODE,
     code_block: WHITE_CODE,
     variable: BLUE_CODE,

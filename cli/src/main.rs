@@ -1,4 +1,5 @@
 extern crate roc_gen;
+extern crate roc_reporting;
 
 use crate::helpers::{infer_expr, uniq_expr_with};
 use bumpalo::Bump;
@@ -22,7 +23,7 @@ use inkwell::targets::{
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
 
 pub mod helpers;
@@ -40,7 +41,12 @@ fn main() -> io::Result<()> {
 
             let dest_filename = Path::new(filename).with_extension("o");
 
-            gen(contents.as_str(), Triple::host(), &dest_filename);
+            gen(
+                Path::new(filename).to_path_buf(),
+                contents.as_str(),
+                Triple::host(),
+                &dest_filename,
+            );
 
             let end_time = now.elapsed().unwrap();
 
@@ -56,15 +62,46 @@ fn main() -> io::Result<()> {
     }
 }
 
-fn gen(src: &str, target: Triple, dest_filename: &Path) {
+fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
+    use roc_reporting::report::{can_problem, DEFAULT_PALETTE};
+    use roc_reporting::type_error::type_problem;
+
     // Build the expr
     let arena = Bump::new();
 
-    let (loc_expr, _output, _problems, subs, var, constraint, home, interns) =
+    let (loc_expr, _output, can_problems, subs, var, constraint, home, interns) =
         uniq_expr_with(&arena, src, &ImMap::default());
 
-    let mut unify_problems = Vec::new();
-    let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+    let mut type_problems = Vec::new();
+    let (content, mut subs) = infer_expr(subs, &mut type_problems, &constraint, var);
+
+    let src_lines: Vec<&str> = src.split('\n').collect();
+    let palette = DEFAULT_PALETTE;
+
+    // Report parsing and canonicalization problems
+    for problem in can_problems.into_iter() {
+        let report = can_problem(filename.clone(), problem);
+        let mut buf = String::new();
+
+        report
+            .text
+            .render_color_terminal(&mut buf, &mut subs, home, &src_lines, &interns, &palette);
+
+        println!("\n{}\n", buf);
+    }
+
+    for problem in type_problems.into_iter() {
+        let report = type_problem(filename.clone(), problem);
+        let mut buf = String::new();
+
+        report
+            .text
+            .render_color_terminal(&mut buf, &mut subs, home, &src_lines, &interns, &palette);
+
+        println!("\n{}\n", buf);
+    }
+
+    // Generate the binary
 
     let context = Context::create();
     let module = module_from_builtins(&context, "app");
@@ -178,7 +215,7 @@ fn gen(src: &str, target: Triple, dest_filename: &Path) {
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
-        panic!("Errors defining module: {:?}", errors);
+        panic!("😱 LLVM errors when defining module: {:?}", errors);
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
