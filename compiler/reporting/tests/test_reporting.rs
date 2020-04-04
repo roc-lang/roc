@@ -37,6 +37,7 @@ mod test_reporting {
     // use roc_problem::can;
     fn to_simple_report(text: ReportText) -> Report {
         Report {
+            title: "SYNTAX PROBLEM".to_string(),
             text: text,
             filename: filename_from_string(r"\code\proj\Main.roc"),
         }
@@ -810,6 +811,32 @@ mod test_reporting {
         )
     }
 
+    #[test]
+    fn when_if_guard() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 1 is
+                    2 if 1 -> 0x0
+                    _ -> 0x1
+                "#
+            ),
+            indoc!(
+                r#"
+                This `if` guard condition needs to be a Bool.
+
+                2 ┆      2 if 1 -> 0x0
+                  ┆           ^
+
+                Right now it’s a number of type
+
+                    Num a
+
+                but I need every `if` guard condition to evaluate to a Bool—either `True` or `False`.
+                "#
+            ),
+        )
+    }
     // #[test]
     // fn if_3_branch_mismatch() {
     //     report_problem_as(

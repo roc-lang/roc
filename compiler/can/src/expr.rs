@@ -688,7 +688,7 @@ fn canonicalize_when_branch<'a>(
     env: &mut Env<'a>,
     var_store: &VarStore,
     scope: &mut Scope,
-    region: Region,
+    _region: Region,
     branch: &'a ast::WhenBranch<'a>,
     output: &mut Output,
 ) -> (WhenBranch, References) {
@@ -721,7 +721,7 @@ fn canonicalize_when_branch<'a>(
         None => None,
         Some(loc_expr) => {
             let (can_guard, guard_branch_output) =
-                canonicalize_expr(env, var_store, &mut scope, region, &loc_expr.value);
+                canonicalize_expr(env, var_store, &mut scope, loc_expr.region, &loc_expr.value);
 
             branch_output.union(guard_branch_output);
             Some(can_guard)

@@ -12,6 +12,7 @@ use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated
 
 /// A textual report.
 pub struct Report {
+    pub title: String,
     pub filename: PathBuf,
     pub text: ReportText,
 }
@@ -121,6 +122,7 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
     };
 
     Report {
+        title: "SYNTAX PROBLEM".to_string(),
         filename,
         text: Concat(texts),
     }

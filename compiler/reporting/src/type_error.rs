@@ -74,6 +74,7 @@ fn report_mismatch(
     ];
 
     Report {
+        title: "TYPE MISMATCH".to_string(),
         filename,
         text: Concat(lines),
     }
@@ -104,6 +105,7 @@ fn report_bad_type(
     ];
 
     Report {
+        title: "TYPE MISMATCH".to_string(),
         filename,
         text: Concat(lines),
     }
@@ -139,7 +141,7 @@ fn to_expr_report(
                     region,
                     Some(expr_region),
                     problem,
-                    plain_text("Right now it’s"),
+                    plain_text("Right now it’s "),
                     Concat(vec![
                         plain_text("but I need every "),
                         keyword_text("if"),
@@ -157,6 +159,36 @@ fn to_expr_report(
                     // what the background of Roc programmers will be, and I'd
                     // rather not create a distraction by introducing a term
                     // they don't know. ("Wait, what's truthiness?")
+                )
+            }
+            Reason::WhenGuard => {
+                let problem = Concat(vec![
+                    plain_text("This "),
+                    keyword_text("if"),
+                    plain_text(" guard condition needs to be a "),
+                    ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
+                    plain_text("."),
+                ]);
+                report_bad_type(
+                    filename,
+                    &category,
+                    found,
+                    expected_type,
+                    region,
+                    Some(expr_region),
+                    problem,
+                    plain_text("Right now it’s "),
+                    Concat(vec![
+                        plain_text("but I need every "),
+                        keyword_text("if"),
+                        plain_text(" guard condition to evaluate to a "),
+                        ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
+                        plain_text("—either "),
+                        global_tag_text("True"),
+                        plain_text(" or "),
+                        global_tag_text("False"),
+                        plain_text("."),
+                    ]),
                 )
             }
             Reason::IfBranch {
@@ -182,7 +214,7 @@ fn to_expr_report(
                     Concat(vec![
                         plain_text("The "),
                         keyword_text("else"),
-                        plain_text(" branch is"),
+                        plain_text(" branch is "),
                     ]),
                     Concat(vec![
                         plain_text("but the "),
@@ -215,7 +247,24 @@ fn to_expr_report(
                     )
                 }
             },
-            _ => todo!(),
+            other => {
+                //    AnonymousFnArg { arg_index: u8 },
+                //    NamedFnArg(String /* function name */, u8 /* arg index */),
+                //    AnonymousFnCall { arity: u8 },
+                //    NamedFnCall(String /* function name */, u8 /* arity */),
+                //    BinOpArg(BinOp, ArgSide),
+                //    BinOpRet(BinOp),
+                //    FloatLiteral,
+                //    IntLiteral,
+                //    NumLiteral,
+                //    InterpolatedStringVar,
+                //    WhenBranch { index: usize },
+                //    WhenGuard,
+                //    ElemInList,
+                //    RecordUpdateValue(Lowercase),
+                //    RecordUpdateKeys(Symbol, SendMap<Lowercase, Type>),
+                todo!("I don't have a message yet for reason {:?}", other)
+            }
         },
     }
 }
@@ -304,7 +353,7 @@ fn add_category(this_is: ReportText, category: &Category) -> ReportText {
         Num => Concat(vec![this_is, plain_text("a number of type")]),
         Int => Concat(vec![this_is, plain_text("an integer of type")]),
         Float => Concat(vec![this_is, plain_text("a float of type")]),
-        Str => Concat(vec![this_is, plain_text(" a string of type")]),
+        Str => Concat(vec![this_is, plain_text("a string of type")]),
 
         Lambda => Concat(vec![this_is, plain_text("an anonymous function of type")]),
 
@@ -378,6 +427,7 @@ fn to_circular_report(
     ];
 
     Report {
+        title: "TYPE MISMATCH".to_string(),
         filename,
         text: Concat(lines),
     }
