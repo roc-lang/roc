@@ -13,8 +13,8 @@ mod test_reporting {
     use roc_module::symbol::{Interns, ModuleId};
     use roc_reporting::report::{
         can_problem, em_text, plain_text, url, Report, ReportText, BLUE_CODE, BOLD_CODE, CYAN_CODE,
-        GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, TEST_PALETTE, UNDERLINE_CODE, WHITE_CODE,
-        YELLOW_CODE,
+        DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE,
+        WHITE_CODE, YELLOW_CODE,
     };
     use roc_reporting::type_error::type_problem;
     use roc_types::pretty_print::name_all_type_vars;
@@ -77,7 +77,7 @@ mod test_reporting {
 
     fn report_renders_as_from_src(src: &str, report: Report, expected_rendering: &str) {
         let (_type_problems, _can_problems, mut subs, home, interns) = infer_expr_help(src);
-        let mut buf: String = String::new();
+        let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
 
         report
@@ -147,7 +147,7 @@ mod test_reporting {
             home,
             &src_lines,
             &interns,
-            &TEST_PALETTE,
+            &DEFAULT_PALETTE,
         );
 
         assert_eq!(human_readable(&buf), expected_rendering);
@@ -492,7 +492,7 @@ mod test_reporting {
             home,
             &src_lines,
             &interns,
-            &TEST_PALETTE,
+            &DEFAULT_PALETTE,
         );
 
         assert_eq!(human_readable(&buf), "<blue>activityIndicatorLarge<reset>");
@@ -523,7 +523,7 @@ mod test_reporting {
                 home,
                 &src_lines,
                 &interns,
-                &TEST_PALETTE,
+                &DEFAULT_PALETTE,
             );
 
         assert_eq!(human_readable(&buf), "<green>Util.Int<reset>");
@@ -531,14 +531,14 @@ mod test_reporting {
 
     #[test]
     fn report_wildcard_in_color() {
-        report_renders_in_color(to_simple_report(Type(FlexVar(None))), "<yellow>*<reset>");
+        report_renders_in_color(to_simple_report(Type(FlexVar(None))), "<magenta>*<reset>");
     }
 
     #[test]
     fn report_flex_var_in_color() {
         report_renders_in_color(
             to_simple_report(Type(FlexVar(Some("msg".into())))),
-            "<yellow>msg<reset>",
+            "<magenta>msg<reset>",
         );
     }
 
@@ -546,7 +546,7 @@ mod test_reporting {
     fn report_rigid_var_in_color() {
         report_renders_in_color(
             to_simple_report(Type(RigidVar("Str".into()))),
-            "<yellow>Str<reset>",
+            "<magenta>Str<reset>",
         );
     }
 
@@ -568,7 +568,7 @@ mod test_reporting {
 
         report_renders_in_color(
             to_simple_report(Concat(report_texts)),
-            "<yellow>List<reset><white> <reset><green>{}<reset>",
+            "<magenta>List<reset><white> <reset><green>{}<reset>",
         );
     }
 
@@ -593,10 +593,10 @@ mod test_reporting {
                 r#"
 
 
-                    <cyan>1<reset><magenta> ┆<reset><red>><reset>  <white>isDisabled = \user -> user.isAdmin<reset>
-                    <cyan>2<reset><magenta> ┆<reset><red>><reset>
-                    <cyan>3<reset><magenta> ┆<reset><red>><reset>  <white>theAdmin<reset>
-                    <cyan>4<reset><magenta> ┆<reset><red>><reset>  <white>    |> isDisabled<reset>
+                    <cyan>1<reset><cyan> ┆<reset><red>><reset>  <white>isDisabled = \user -> user.isAdmin<reset>
+                    <cyan>2<reset><cyan> ┆<reset><red>><reset>
+                    <cyan>3<reset><cyan> ┆<reset><red>><reset>  <white>theAdmin<reset>
+                    <cyan>4<reset><cyan> ┆<reset><red>><reset>  <white>    |> isDisabled<reset>
 
                 "#
             ),

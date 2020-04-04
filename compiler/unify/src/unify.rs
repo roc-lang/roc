@@ -609,7 +609,7 @@ fn unify_flat_type(
             }
         }
         (other1, other2) => mismatch!(
-            "Trying to two flat types that are incompatible: {:?} ~ {:?}",
+            "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
             other1,
             other2
         ),

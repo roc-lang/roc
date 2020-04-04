@@ -26,6 +26,8 @@ pub struct Palette {
     pub gutter_bar: Color,
     pub module_name: Color,
     pub binop: Color,
+    pub keyword: Color,
+    pub global_tag: Color,
 }
 
 #[derive(Copy, Clone)]
@@ -39,19 +41,21 @@ pub enum Color {
     Magenta,
 }
 
-pub const TEST_PALETTE: Palette = Palette {
+pub const DEFAULT_PALETTE: Palette = Palette {
     primary: Color::White,
     code_block: Color::White,
     variable: Color::Blue,
-    flex_var: Color::Yellow,
-    rigid_var: Color::Yellow,
+    flex_var: Color::Magenta,
+    rigid_var: Color::Magenta,
     structure: Color::Green,
-    alias: Color::Yellow,
+    alias: Color::Magenta,
     error: Color::Red,
     line_number: Color::Cyan,
-    gutter_bar: Color::Magenta,
+    gutter_bar: Color::Cyan,
     module_name: Color::Green,
     binop: Color::Green,
+    keyword: Color::Magenta,
+    global_tag: Color::Green,
 };
 
 impl Color {
@@ -225,9 +229,10 @@ pub const RED_CODE: &str = "\u{001b}[31m";
 pub const WHITE_CODE: &str = "\u{001b}[37m";
 pub const BLUE_CODE: &str = "\u{001b}[34m";
 pub const YELLOW_CODE: &str = "\u{001b}[33m";
-pub const GREEN_CODE: &str = "\u{001b}[42m";
+pub const GREEN_CODE: &str = "\u{001b}[32m";
 pub const CYAN_CODE: &str = "\u{001b}[36m";
 pub const MAGENTA_CODE: &str = "\u{001b}[35m";
+pub const GRAY_CODE: &str = "\u{00aa}[35m";
 
 pub const BOLD_CODE: &str = "\u{001b}[1m";
 
@@ -457,6 +462,20 @@ impl ReportText {
         interns: &Interns,
         palette: &Palette,
     ) {
+        self.render_color_terminal_help(buf, subs, home, src_lines, interns, palette, 0)
+    }
+
+    /// Render to a color terminal using ANSI escape sequences
+    fn render_color_terminal_help(
+        self,
+        buf: &mut String,
+        subs: &mut Subs,
+        home: ModuleId,
+        src_lines: &[&str],
+        interns: &Interns,
+        palette: &Palette,
+        indent: usize,
+    ) {
         use ReportText::*;
 
         match self {
@@ -506,7 +525,12 @@ impl ReportText {
                 ),
                 Content::Error => {}
             },
-            ErrorType(error_type) => buf.push_str(&write_error_type(home, interns, error_type)),
+            ErrorType(error_type) => {
+                buf.push('\n');
+                buf.push_str(" ".repeat(indent).as_str());
+                buf.push_str(&write_error_type(home, interns, error_type));
+                buf.push('\n');
+            }
             Region(region) => {
                 // newline before snippet
                 buf.push('\n');
@@ -581,18 +605,49 @@ impl ReportText {
                 buf.push('\n');
             }
             Indent(n, nested) => {
-                buf.push_str(" ".repeat(n).as_str());
-                nested.render_color_terminal(buf, subs, home, src_lines, interns, palette);
+                nested.render_color_terminal_help(
+                    buf,
+                    subs,
+                    home,
+                    src_lines,
+                    interns,
+                    palette,
+                    indent + n,
+                );
             }
             Concat(report_texts) => {
                 for report_text in report_texts {
-                    report_text.render_color_terminal(buf, subs, home, src_lines, interns, palette);
+                    report_text.render_color_terminal_help(
+                        buf, subs, home, src_lines, interns, palette, indent,
+                    );
+                }
+            }
+            Docs(_) => {
+                panic!("TODO implment docs");
+            }
+            Stack(report_texts) => {
+                let mut it = report_texts.into_iter().peekable();
+
+                while let Some(report_text) = it.next() {
+                    report_text.render_color_terminal_help(
+                        buf, subs, home, src_lines, interns, palette, indent,
+                    );
+
+                    buf.push('\n');
+                    if it.peek().is_some() {
+                        buf.push_str(" ".repeat(indent).as_str());
+                    }
                 }
             }
             BinOp(bin_op) => {
                 buf.push_str(&palette.binop.render(bin_op.to_string().as_str()));
             }
-            _ => panic!("TODO implement more ReportTexts in render color terminal"),
+            GlobalTag(string) => {
+                buf.push_str(&palette.global_tag.render(&string));
+            }
+            Keyword(string) => {
+                buf.push_str(&palette.keyword.render(&string));
+            }
         }
     }
 }
