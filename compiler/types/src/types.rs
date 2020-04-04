@@ -637,6 +637,7 @@ pub enum Reason {
 pub enum Category {
     Lookup(Symbol),
     CallResult(Option<Symbol>),
+    TagApply(TagName),
     Lambda,
     Uniqueness,
 
@@ -651,7 +652,6 @@ pub enum Category {
     Float,
     Int,
     Num,
-    TagUnion,
     List,
     Str,
 

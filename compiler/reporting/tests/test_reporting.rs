@@ -776,7 +776,6 @@ mod test_reporting {
                     Str
 
                 but I need every `if` condition to evaluate to a Bool—either `True` or `False`.
-
                 "#
             ),
         )
@@ -806,7 +805,6 @@ mod test_reporting {
                     Num a
 
                 instead. I need all branches in an `if` to have the same type!
-
                 "#
             ),
         )
@@ -862,7 +860,6 @@ mod test_reporting {
                 Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.
 
                     ∞ -> a
-
                 "#
             ),
         )
@@ -888,7 +885,6 @@ mod test_reporting {
                 Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.
 
                     List ∞ -> a
-
                 "#
             ),
         )

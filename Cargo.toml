@@ -21,6 +21,7 @@ members = [
     "compiler/gen",
     "vendor/ena",
     "vendor/pathfinding",
+    "vendor/pretty",
     "cli"
 ]
 
