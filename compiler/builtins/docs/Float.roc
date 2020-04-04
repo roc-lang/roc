@@ -71,10 +71,44 @@ interface Float
 ## These are very error-prone values, so if you see an assertion fail in
 ## developent because of one of them, take it seriously - and try to fix
 ## the code so that it can't come up in a release!
-#FloatingPoint := FloatingPoint
-
-## Returned in an #Err by #Float.sqrt when given a negative number.
-#InvalidSqrt := InvalidSqrt
+##
+## ## Loud versus Quiet errors
+##
+## Besides precision problems, another reason floats are error-prone
+## is that they have quiet error handling built in. For example, in
+## a 64-bit floating point number, there are certain patterns of those
+## 64 bits which do not represent valid floats; instead, they represent
+## erroneous results of previous operations.
+##
+## Whenever any arithmetic operation is performed on an erroneous float,
+## the result is also erroneous. This is called *error propagation*, and
+## it is notoriously error-prone. In Roc, using equality operations like
+## `==` and `!=` on an erroneous float causes a crash. (See #Float.isErroneous
+## for other ways to check what erroneous value you have.)
+##
+## Beause erroneous floats are so error-prone, Roc discourages using them.
+## Instead, by default it treats them the same way as overflow: by
+## crashing whenever any #Float function would otherwise return one.
+## You can also use functions like #Float.tryAdd to get an `Ok` or an error
+## back so you can gracefully recover from erroneous values.
+##
+## Quiet errors can be useful sometimes. For example, you might want to
+## do three floating point calculations in a row, and then gracefully handle
+## the situation where any one of the three was erroneous. In that situation,
+## quiet errors can be more efficient than using three `try` functions, because
+## it can have one condition at the end instead of three along the way.
+##
+## ## Performance Notes
+##
+## Currently, loud errors are implemented using an extra conditional. Although
+## this conditional will always be correctly branh-predicted unless an error
+## occurs, there is a small effect on the instruction cache, which means
+## quiet errors are very slightly more efficient.
+##
+## Long-term, it's possible that the Roc compiler may be able to implement
+## loud errors using *signalling errors* in some situations, which could
+## eliminate the performance difference between loud and quiet errors in
+## the situation where no error occurs.
 
 ## Conversions
 
@@ -167,7 +201,7 @@ tryRecip : Float a -> Result (Float a) [ DivByZero ]*
 
 ## Return an approximation of the absolute value of the square root of the #Float.
 ##
-## Return #InvalidSqrt if given a negative number. The square root of a negative number is an irrational number, and #Float only supports rational numbers.
+## Return #InvalidSqrt if given a negative number or an erroneous #Float. The square root of a negative number is an irrational number, and #Float only supports rational numbers.
 ##
 ## >>> Float.sqrt 4.0
 ##
@@ -176,7 +210,22 @@ tryRecip : Float a -> Result (Float a) [ DivByZero ]*
 ## >>> Float.sqrt 0.0
 ##
 ## >>> Float.sqrt -4.0
-sqrt : Float a -> Result (Float a) [ InvalidSqrt ]
+sqrt : Float a -> [Ok (Float a), InvalidSqrt]*
+
+## Like #Float.sqrt, but returning a *quiet NaN* if given a negative number.
+##
+## Quiet NaNs are notoriously more error-prone than explicit #Ok unions,
+## so if you're using this instead of #Float.sqrt, be very careful not to let
+## potential error cases go unhandled.
+##
+## ## Performance Notes
+##
+## This runs faster than #Float.sqrt, but is more error-prone because it makes
+## it easier to forget to handle potential error cases. You may not forget
+## when you just got done reading this paragraph, but the next person who
+## comes along to modify the code may not have read it at all, and might not
+## realize the need for seurity checks beause the requirement is implicit.
+sqrtQuiet : Float a -> Float a
 
 ## Constants
 
@@ -198,17 +247,28 @@ asc : Float a, Float a -> [ Eq, Lt, Gt ]
 ##
 desc : Float a, Float a -> [ Eq, Lt, Gt ]
 
+## Returns `True` when given #NaN, #Infiniy, or #Infinity,
+## and `False` otherwise.
+##
+## >>> Float.isErroneous (Float.sqrtQuiet -2)
+##
+## >>> Float.isErroneous (Float.sqrtQuiet 2)
+##
+## To check more specifically which erroneneous value you have, see
+## #Float.isNaN, #Float.isInfinite, #Float.isInfinity, and #Float.isNegativeInfinity
+isErroneous : Float * -> Bool
+
 ## Limits
 
 ## The highest supported #Float value you can have, which is approximately 1.8 × 10^308.
 ##
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
-highest : Float *
+maxF64 : Float *
 
 ## The lowest supported #Float value you can have, which is approximately -1.8 × 10^308.
 ##
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
-lowest : Float *
+minF64 : Float *
 
 ## The highest integer that can be represented as a #Float without # losing precision.
 ## It is equal to 2^53, which is approximately 9 × 10^15.
@@ -220,7 +280,7 @@ lowest : Float *
 ## >>> Float.highestInt + 100 # Increasing may lose precision
 ##
 ## >>> Float.highestInt - 100 # Decreasing is fine - but watch out for lowestLosslessInt!
-highestInt : Float *
+maxPreciseInt : Float *
 
 ## The lowest integer that can be represented as a #Float without losing precision.
 ## It is equal to -2^53, which is approximately -9 × 10^15.
@@ -232,4 +292,4 @@ highestInt : Float *
 ## >>> Float.lowestIntVal - 100 # Decreasing may lose precision
 ##
 ## >>> Float.lowestIntVal + 100 # Increasing is fine - but watch out for highestInt!
-lowestInt : Float *
+maxPreciseInt : Float *

@@ -212,6 +212,11 @@ desc : Int a, Int a -> [ Eq, Lt, Gt ]
 
 ## TODO should we offer hash32 etc even if someday it has to do a hash64 and truncate?
 ##
+## This function can crash under these circumstances:
+##
+## * It receives a function, or any type that contains a function (for example a record, tag, or #List containing a function)
+## * It receives an erroneous #Float (`NaN`, `Infinity`, or `-Infinity` - these values can only originate from hosts)
+##
 ## CAUTION: This function may give different answers in future releases of Roc,
 ## so be aware that if you rely on the exact answer this gives today, your
 ## code may break in a future Roc release.
@@ -224,11 +229,11 @@ hash64 : a -> U64
 ##
 ## Note that this is smaller than the positive version of #Int.lowestI32
 ## which means if you call #Num.abs on #Int.lowestI32, it will overflow and crash!
-highestI32 : I32
+maxI32 : I32
 
 ## The lowest number that can be stored in an #I32 without overflowing its
 ## available memory and crashing.
 ##
 ## Note that the positive version of this number is this is larger than
 ## #Int.highestI32, which means if you call #Num.abs on #Int.lowestI32, it will overflow and crash!
-lowest : I32
+minI32 : I32
