@@ -121,7 +121,7 @@ fn to_expr_report(
     use ReportText::*;
 
     match expected {
-        Expected::NoExpectation(_expected_type) => todo!(),
+        Expected::NoExpectation(expected_type) => todo!("hit no expectation with type {:?}", expected_type),
         Expected::FromAnnotation(_name, _arity, _sub_context, _expected_type) => todo!(),
         Expected::ForReason(reason, expected_type, region) => match reason {
             Reason::IfCondition => {
@@ -141,7 +141,7 @@ fn to_expr_report(
                     region,
                     Some(expr_region),
                     problem,
-                    plain_text("Right now it’s "),
+                    plain_text("Right now it’s"),
                     Concat(vec![
                         plain_text("but I need every "),
                         keyword_text("if"),
@@ -177,7 +177,7 @@ fn to_expr_report(
                     region,
                     Some(expr_region),
                     problem,
-                    plain_text("Right now it’s "),
+                    plain_text("Right now it’s"),
                     Concat(vec![
                         plain_text("but I need every "),
                         keyword_text("if"),
@@ -214,7 +214,7 @@ fn to_expr_report(
                     Concat(vec![
                         plain_text("The "),
                         keyword_text("else"),
-                        plain_text(" branch is "),
+                        plain_text(" branch is"),
                     ]),
                     Concat(vec![
                         plain_text("but the "),
@@ -268,7 +268,7 @@ fn to_expr_report(
                         keyword_text("when"),
                         plain_text(" does not match all the previous branches"),
                     ]),
-                    plain_text(&format!("The {} branch is ", ith)),
+                    plain_text(&format!("The {} branch is", ith)),
                     plain_text("but all the previous branches have type"),
                     Concat(vec![
                         plain_text("instead. I need all branches of a "),
@@ -293,11 +293,31 @@ fn to_expr_report(
                         "The {} element of this list does not match all the previous elements",
                         ith
                     )),
-                    plain_text(&format!("The {} element is ", ith)),
+                    plain_text(&format!("The {} element is", ith)),
                     plain_text("but all the previous elements in the list have type"),
                     plain_text("instead. I need all elements of a list to have the same type!"),
                 )
             }
+            Reason::RecordUpdateValue(field) => report_mismatch(
+                filename,
+                &category,
+                found,
+                expected_type,
+                region,
+                Some(expr_region),
+                Concat(vec![
+                    plain_text("I cannot update the "),
+                    record_field_text(field.as_str()),
+                    plain_text(" field like this"),
+                ]),
+                Concat(vec![
+                    plain_text("You are trying to update "),
+                    record_field_text(field.as_str()),
+                    plain_text(" to be"),
+                ]),
+                plain_text("But it should be"),
+                plain_text("instead. Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax."),
+            ),
             other => {
                 //    AnonymousFnArg { arg_index: u8 },
                 //    NamedFnArg(String /* function name */, u8 /* arg index */),
@@ -397,11 +417,11 @@ fn add_category(this_is: ReportText, category: &Category) -> ReportText {
             plain_text("expression produces"),
         ]),
 
-        List => Concat(vec![this_is, plain_text("a list of type")]),
-        Num => Concat(vec![this_is, plain_text("a number of type")]),
-        Int => Concat(vec![this_is, plain_text("an integer of type")]),
-        Float => Concat(vec![this_is, plain_text("a float of type")]),
-        Str => Concat(vec![this_is, plain_text("a string of type")]),
+        List => Concat(vec![this_is, plain_text(" a list of type")]),
+        Num => Concat(vec![this_is, plain_text(" a number of type")]),
+        Int => Concat(vec![this_is, plain_text(" an integer of type")]),
+        Float => Concat(vec![this_is, plain_text(" a float of type")]),
+        Str => Concat(vec![this_is, plain_text(" a string of type")]),
 
         Lambda => Concat(vec![this_is, plain_text("an anonymous function of type")]),
 
@@ -416,7 +436,7 @@ fn add_category(this_is: ReportText, category: &Category) -> ReportText {
             plain_text(" private tag application produces"),
         ]),
 
-        Record => Concat(vec![this_is, plain_text("a record of type")]),
+        Record => Concat(vec![this_is, plain_text(" a record of type")]),
 
         Accessor(field) => Concat(vec![
             plain_text("This "),

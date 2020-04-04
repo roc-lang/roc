@@ -181,9 +181,10 @@ pub fn constrain_expr(
                 region,
             );
 
-            cons.push(con);
-            cons.push(fields_con);
-            cons.push(record_con);
+            // ensure constraints are solved in this order, gives better errors
+            cons.insert(0, fields_con);
+            cons.insert(1, con);
+            cons.insert(2, record_con);
 
             exists(vars, And(cons))
         }

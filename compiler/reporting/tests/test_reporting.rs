@@ -929,6 +929,38 @@ mod test_reporting {
     }
 
     #[test]
+    fn record_update_value() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : { foo : {} }
+                x = { foo: {} }
+
+                { x & foo: "bar" }
+                "#
+            ),
+            indoc!(
+                r#"
+                I cannot update the .foo field like this
+
+                4 ┆  { x & foo: "bar" }
+                  ┆  ^^^^^^^^^^^^^^^^^^
+
+                You are trying to update .foo to be a string of type
+
+                    Str
+
+                But it should be
+
+                    {}
+
+                instead. Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax.
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn circular_type() {
         report_problem_as(
             indoc!(
