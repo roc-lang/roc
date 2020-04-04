@@ -13,8 +13,8 @@ mod test_reporting {
     use roc_module::symbol::{Interns, ModuleId};
     use roc_reporting::report::{
         can_problem, em_text, plain_text, url, Report, ReportText, BLUE_CODE, BOLD_CODE, CYAN_CODE,
-        GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, TEST_PALETTE, UNDERLINE_CODE, WHITE_CODE,
-        YELLOW_CODE,
+        DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE,
+        WHITE_CODE, YELLOW_CODE,
     };
     use roc_reporting::type_error::type_problem;
     use roc_types::pretty_print::name_all_type_vars;
@@ -147,7 +147,7 @@ mod test_reporting {
             home,
             &src_lines,
             &interns,
-            &TEST_PALETTE,
+            &DEFAULT_PALETTE,
         );
 
         assert_eq!(human_readable(&buf), expected_rendering);
@@ -492,7 +492,7 @@ mod test_reporting {
             home,
             &src_lines,
             &interns,
-            &TEST_PALETTE,
+            &DEFAULT_PALETTE,
         );
 
         assert_eq!(human_readable(&buf), "<blue>activityIndicatorLarge<reset>");
@@ -523,7 +523,7 @@ mod test_reporting {
                 home,
                 &src_lines,
                 &interns,
-                &TEST_PALETTE,
+                &DEFAULT_PALETTE,
             );
 
         assert_eq!(human_readable(&buf), "<green>Util.Int<reset>");
