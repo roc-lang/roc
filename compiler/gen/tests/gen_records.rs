@@ -308,18 +308,18 @@ mod gen_records {
         );
     }
 
-    // #[test]
-    // fn f64_record3_literal() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                { x: 3.1, y: 5.1, z: 17.1 }
-    //             "#
-    //         ),
-    //         (3.1, 5.1, 17.1),
-    //         (f64, f64, f64)
-    //     );
-    // }
+    #[test]
+    fn f64_record3_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   { x: 3.1, y: 5.1, z: 17.1 }
+                "#
+            ),
+            (3.1, 5.1, 17.1),
+            (f64, f64, f64)
+        );
+    }
 
     // #[test]
     // fn bool_record4_literal() {

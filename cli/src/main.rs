@@ -7,24 +7,22 @@ use inkwell::context::Context;
 use inkwell::module::Linkage;
 use inkwell::passes::PassManager;
 use inkwell::types::BasicType;
-use inkwell::OptimizationLevel;
 use roc_collections::all::ImMap;
 use roc_gen::llvm::build::{
     build_proc, build_proc_header, get_call_conventions, module_from_builtins,
 };
 use roc_gen::llvm::convert::basic_type_from_layout;
+use roc_gen::llvm::target::init_target_machine;
 use roc_mono::expr::{Expr, Procs};
 use roc_mono::layout::Layout;
 use std::time::SystemTime;
 
-use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
-};
+use inkwell::targets::FileType;
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
-use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
+use target_lexicon::Triple;
 
 pub mod helpers;
 
@@ -222,79 +220,8 @@ fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
     // env.module.print_to_stderr();
 
     // Emit the .o file
-
-    // NOTE: arch_str is *not* the same as the beginning of the magic target triple
-    // string! For example, if it's "x86-64" here, the magic target triple string
-    // will begin with "x86_64" (with an underscore) instead.
-    let arch_str = match target.architecture {
-        Architecture::X86_64 => {
-            Target::initialize_x86(&InitializationConfig::default());
-
-            "x86-64"
-        }
-        Architecture::Arm(_) => {
-            Target::initialize_arm(&InitializationConfig::default());
-
-            "arm"
-        }
-        Architecture::Wasm32 => {
-            Target::initialize_webassembly(&InitializationConfig::default());
-
-            "wasm32"
-        }
-        _ => panic!(
-            "TODO gracefully handle unsupported target architecture: {:?}",
-            target.architecture
-        ),
-    };
-
-    let opt = OptimizationLevel::Default;
-    let reloc = RelocMode::Default;
-    let model = CodeModel::Default;
-
-    // Best guide I've found on how to determine these magic strings:
-    //
-    // https://stackoverflow.com/questions/15036909/clang-how-to-list-supported-target-architectures
-    let target_triple_str = match target {
-        Triple {
-            architecture: Architecture::X86_64,
-            vendor: Vendor::Unknown,
-            operating_system: OperatingSystem::Linux,
-            ..
-        } => "x86_64-unknown-linux-gnu",
-        Triple {
-            architecture: Architecture::X86_64,
-            vendor: Vendor::Pc,
-            operating_system: OperatingSystem::Linux,
-            ..
-        } => "x86_64-pc-linux-gnu",
-        Triple {
-            architecture: Architecture::X86_64,
-            vendor: Vendor::Unknown,
-            operating_system: OperatingSystem::Darwin,
-            ..
-        } => "x86_64-unknown-darwin10",
-        Triple {
-            architecture: Architecture::X86_64,
-            vendor: Vendor::Apple,
-            operating_system: OperatingSystem::Darwin,
-            ..
-        } => "x86_64-apple-darwin10",
-        _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
-    };
-    let target_machine = Target::from_name(arch_str)
+    init_target_machine(target)
         .unwrap()
-        .create_target_machine(
-            &TargetTriple::create(target_triple_str),
-            arch_str,
-            "+avx2", // TODO this string was used uncritically from an example, and should be reexamined
-            opt,
-            reloc,
-            model,
-        )
-        .unwrap();
-
-    target_machine
         .write_to_file(&env.module, FileType::Object, &dest_filename)
         .expect("Writing .o file failed");
 
