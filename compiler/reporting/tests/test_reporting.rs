@@ -900,6 +900,35 @@ mod test_reporting {
     }
 
     #[test]
+    fn elem_in_list() {
+        report_problem_as(
+            indoc!(
+                r#"
+                [ 1, 3, "foo" ]
+                "#
+            ),
+            indoc!(
+                r#"
+                The 3rd element of this list does not match all the previous elements
+
+                1 ┆  [ 1, 3, "foo" ]
+                  ┆          ^^^^^
+
+                The 3rd element is a string of type
+
+                    Str
+
+                but all the previous elements in the list have type
+
+                    Num a
+
+                instead. I need all elements of a list to have the same type!
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn circular_type() {
         report_problem_as(
             indoc!(

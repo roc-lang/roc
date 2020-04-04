@@ -202,9 +202,12 @@ pub fn constrain_expr(
                 let list_elem_type = Type::Variable(*elem_var);
                 let mut constraints = Vec::with_capacity(1 + loc_elems.len());
 
-                for loc_elem in loc_elems {
-                    let elem_expected =
-                        ForReason(Reason::ElemInList, list_elem_type.clone(), region);
+                for (index, loc_elem) in loc_elems.iter().enumerate() {
+                    let elem_expected = ForReason(
+                        Reason::ElemInList { index },
+                        list_elem_type.clone(),
+                        loc_elem.region,
+                    );
                     let constraint =
                         constrain_expr(env, loc_elem.region, &loc_elem.value, elem_expected);
 

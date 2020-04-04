@@ -277,6 +277,27 @@ fn to_expr_report(
                     ]),
                 )
             }
+            Reason::ElemInList { index } => {
+                // NOTE: is 0-based
+
+                let ith = int_to_ordinal(index + 1);
+
+                report_mismatch(
+                    filename,
+                    &category,
+                    found,
+                    expected_type,
+                    region,
+                    Some(expr_region),
+                    plain_text(&format!(
+                        "The {} element of this list does not match all the previous elements",
+                        ith
+                    )),
+                    plain_text(&format!("The {} element is ", ith)),
+                    plain_text("but all the previous elements in the list have type"),
+                    plain_text("instead. I need all elements of a list to have the same type!"),
+                )
+            }
             other => {
                 //    AnonymousFnArg { arg_index: u8 },
                 //    NamedFnArg(String /* function name */, u8 /* arg index */),
@@ -288,7 +309,6 @@ fn to_expr_report(
                 //    IntLiteral,
                 //    NumLiteral,
                 //    InterpolatedStringVar,
-                //    ElemInList,
                 //    RecordUpdateValue(Lowercase),
                 //    RecordUpdateKeys(Symbol, SendMap<Lowercase, Type>),
                 todo!("I don't have a message yet for reason {:?}", other)
