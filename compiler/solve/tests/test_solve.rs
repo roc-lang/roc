@@ -619,9 +619,9 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-                always = \a, b -> a
+                always2 = \a, _ -> a
 
-                1 |> always "foo"
+                1 |> always2 "foo"
                 "#
             ),
             "Num *",
@@ -999,13 +999,15 @@ mod test_solve {
                 r#"
                     # technically, an empty record can be destructured
                     {} = {}
-                    bar = \{} -> 42
+                    thunk = \{} -> 42
 
-                    when foo is
+                    xEmpty = if thunk {} == 42 then { x: {} } else { x: {} }
+
+                    when xEmpty is
                         { x: {} } -> x
                 "#
             ),
-            "{}*",
+            "{}",
         );
     }
 
@@ -1135,7 +1137,7 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-                    when foo is
+                    when { x: 5 } is
                         { x: 4 } -> x
                 "#
             ),

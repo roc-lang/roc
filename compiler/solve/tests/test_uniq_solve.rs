@@ -618,9 +618,9 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                    always = \a, b -> a
+                    always2 = \a, _ -> a
 
-                    1 |> always "foo"
+                    1 |> always2 "foo"
                 "#
             ),
             "Attr * (Num (Attr * *))",
@@ -903,13 +903,15 @@ mod test_uniq_solve {
                 r#"
                     # technically, an empty record can be destructured
                     {} = {}
-                    bar = \{} -> 42
+                    thunk = \{} -> 42
 
-                    when foo is
+                    xEmpty = if thunk {} == 42 then { x: {} } else { x: {} }
+
+                    when xEmpty is
                         { x: {} } -> x
             "#
             ),
-            "Attr * {}*",
+            "Attr * {}",
         );
     }
 
@@ -1043,7 +1045,7 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                    when foo is
+                    when { x: 5 } is
                         { x: 4 } -> x
                 "#
             ),
