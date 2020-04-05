@@ -329,11 +329,11 @@ where
             Url => {
                 self.write_str("<")?;
             }
-            GlobalTag | PrivateTag | Keyword => {
+            GlobalTag | PrivateTag | Keyword | RecordField | Symbol => {
                 self.write_str("`")?;
             }
             CodeBlock | PlainText | LineNumber | Error | GutterBar | TypeVariable | Alias
-            | RecordField | Module | Structure | Symbol | BinOp => {}
+            | Module | Structure | BinOp => {}
         }
         self.style_stack.push(*annotation);
         Ok(())
@@ -351,11 +351,11 @@ where
                 Url => {
                     self.write_str(">")?;
                 }
-                GlobalTag | PrivateTag | Keyword => {
+                GlobalTag | PrivateTag | Keyword | RecordField | Symbol => {
                     self.write_str("`")?;
                 }
                 CodeBlock | PlainText | LineNumber | Error | GutterBar | TypeVariable | Alias
-                | RecordField | Module | Structure | Symbol | BinOp => {}
+                | Module | Structure | BinOp => {}
             },
         }
         Ok(())

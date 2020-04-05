@@ -130,7 +130,7 @@ fn to_expr_report(
                     keyword_text("if"),
                     plain_text(" condition needs to be a "),
                     ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
-                    plain_text("."),
+                    plain_text(":"),
                 ]);
 
                 report_bad_type(
@@ -143,7 +143,7 @@ fn to_expr_report(
                     problem,
                     plain_text("Right now it’s"),
                     Concat(vec![
-                        plain_text("but I need every "),
+                        plain_text("But I need every "),
                         keyword_text("if"),
                         plain_text(" condition to evaluate to a "),
                         ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
@@ -167,7 +167,7 @@ fn to_expr_report(
                     keyword_text("if"),
                     plain_text(" guard condition needs to be a "),
                     ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
-                    plain_text("."),
+                    plain_text(":"),
                 ]);
                 report_bad_type(
                     filename,
@@ -179,7 +179,7 @@ fn to_expr_report(
                     problem,
                     plain_text("Right now it’s"),
                     Concat(vec![
-                        plain_text("but I need every "),
+                        plain_text("But I need every "),
                         keyword_text("if"),
                         plain_text(" guard condition to evaluate to a "),
                         ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
@@ -219,10 +219,10 @@ fn to_expr_report(
                     Concat(vec![
                         plain_text("but the "),
                         keyword_text("then"),
-                        plain_text(" branch has the type"),
+                        plain_text(" branch has the type:"),
                     ]),
                     Concat(vec![
-                        plain_text("instead. I need all branches in an "),
+                        plain_text("I need all branches in an "),
                         keyword_text("if"),
                         plain_text(" to have the same type!"),
                     ]),
@@ -242,9 +242,9 @@ fn to_expr_report(
                             ith
                         )),
                         plain_text(&format!("The {} branch is", ith)),
-                        plain_text("but all the previous branches have the type"),
+                        plain_text("But all the previous branches have type:"),
                         Concat(vec![
-                            plain_text("instead. I need all branches in an "),
+                            plain_text("I need all branches in an "),
                             keyword_text("if"),
                             plain_text(" to have the same type!"),
                         ]),
@@ -266,12 +266,12 @@ fn to_expr_report(
                     Concat(vec![
                         plain_text(&format!("The {} branch of this ", ith)),
                         keyword_text("when"),
-                        plain_text(" does not match all the previous branches"),
+                        plain_text(" does not match all the previous branches:"),
                     ]),
                     plain_text(&format!("The {} branch is", ith)),
-                    plain_text("but all the previous branches have type"),
+                    plain_text("But all the previous branches have type:"),
                     Concat(vec![
-                        plain_text("instead. I need all branches of a "),
+                        plain_text("I need all branches of a "),
                         keyword_text("when"),
                         plain_text(" to have the same type!"),
                     ]),
@@ -290,12 +290,12 @@ fn to_expr_report(
                     region,
                     Some(expr_region),
                     plain_text(&format!(
-                        "The {} element of this list does not match all the previous elements",
+                        "The {} element of this list does not match all the previous elements:",
                         ith
                     )),
                     plain_text(&format!("The {} element is", ith)),
-                    plain_text("but all the previous elements in the list have type"),
-                    plain_text("instead. I need all elements of a list to have the same type!"),
+                    plain_text("But all the previous elements in the list have type:"),
+                    plain_text("I need all elements of a list to have the same type!"),
                 )
             }
             Reason::RecordUpdateValue(field) => report_mismatch(
@@ -308,15 +308,15 @@ fn to_expr_report(
                 Concat(vec![
                     plain_text("I cannot update the "),
                     record_field_text(field.as_str()),
-                    plain_text(" field like this"),
+                    plain_text(" field like this:"),
                 ]),
                 Concat(vec![
                     plain_text("You are trying to update "),
                     record_field_text(field.as_str()),
                     plain_text(" to be"),
                 ]),
-                plain_text("But it should be"),
-                plain_text("instead. Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax."),
+                plain_text("But it should be:"),
+                plain_text("Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax."),
             ),
             other => {
                 //    AnonymousFnArg { arg_index: u8 },
@@ -403,64 +403,64 @@ fn add_category(this_is: ReportText, category: &Category) -> ReportText {
         Lookup(name) => Concat(vec![
             plain_text("This "),
             Value(*name),
-            plain_text(" value is a"),
+            plain_text(" value is a:"),
         ]),
 
         If => Concat(vec![
             plain_text("This "),
             keyword_text("if"),
-            plain_text("expression produces"),
+            plain_text("expression produces:"),
         ]),
         When => Concat(vec![
             plain_text("This "),
             keyword_text("when"),
-            plain_text("expression produces"),
+            plain_text("expression produces:"),
         ]),
 
-        List => Concat(vec![this_is, plain_text(" a list of type")]),
-        Num => Concat(vec![this_is, plain_text(" a number of type")]),
-        Int => Concat(vec![this_is, plain_text(" an integer of type")]),
-        Float => Concat(vec![this_is, plain_text(" a float of type")]),
-        Str => Concat(vec![this_is, plain_text(" a string of type")]),
+        List => Concat(vec![this_is, plain_text(" a list of type:")]),
+        Num => Concat(vec![this_is, plain_text(" a number of type:")]),
+        Int => Concat(vec![this_is, plain_text(" an integer of type:")]),
+        Float => Concat(vec![this_is, plain_text(" a float of type:")]),
+        Str => Concat(vec![this_is, plain_text(" a string of type:")]),
 
-        Lambda => Concat(vec![this_is, plain_text("an anonymous function of type")]),
+        Lambda => Concat(vec![this_is, plain_text("an anonymous function of type:")]),
 
         TagApply(TagName::Global(name)) => Concat(vec![
             plain_text("This "),
             global_tag_text(name.as_str()),
-            plain_text(" global tag application produces"),
+            plain_text(" global tag application produces:"),
         ]),
         TagApply(TagName::Private(name)) => Concat(vec![
             plain_text("This "),
             private_tag_text(*name),
-            plain_text(" private tag application produces"),
+            plain_text(" private tag application produces:"),
         ]),
 
-        Record => Concat(vec![this_is, plain_text(" a record of type")]),
+        Record => Concat(vec![this_is, plain_text(" a record of type:")]),
 
         Accessor(field) => Concat(vec![
             plain_text("This "),
             record_field_text(field.as_str()),
-            plain_text(" value is a"),
+            plain_text(" value is a:"),
         ]),
         Access(field) => Concat(vec![
             plain_text("The value at "),
             record_field_text(field.as_str()),
-            plain_text(" is a"),
+            plain_text(" is a:"),
         ]),
 
         CallResult(Some(symbol)) => Concat(vec![
             plain_text("This "),
             Value(*symbol),
-            plain_text(" call produces"),
+            plain_text(" call produces:"),
         ]),
-        CallResult(None) => Concat(vec![this_is]),
+        CallResult(None) => Concat(vec![this_is, plain_text(":")]),
 
         Uniqueness => Concat(vec![
             this_is,
-            plain_text(" an uniqueness attribute of type"),
+            plain_text(" an uniqueness attribute of type:"),
         ]),
-        Storage => Concat(vec![this_is, plain_text(" a value of type")]),
+        Storage => Concat(vec![this_is, plain_text(" a value of type:")]),
     }
 }
 
