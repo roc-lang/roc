@@ -1,7 +1,7 @@
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
-#[link(name = "hello_from_roc")]
+#[link(name = "app_main")]
 extern "C" {
     #[link_name = "$Test.main"]
     fn str_from_roc() -> *const c_char;

@@ -628,7 +628,7 @@ pub enum Reason {
     WhenGuard,
     IfCondition,
     IfBranch { index: usize, total_branches: usize },
-    ElemInList,
+    ElemInList { index: usize },
     RecordUpdateValue(Lowercase),
     RecordUpdateKeys(Symbol, SendMap<Lowercase, Type>),
 }
