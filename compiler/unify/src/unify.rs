@@ -69,6 +69,7 @@ struct Context {
     second_desc: Descriptor,
 }
 
+#[derive(Debug)]
 pub enum Unified {
     Success(Pool),
     Failure(Pool, ErrorType, ErrorType),
