@@ -1326,7 +1326,14 @@ fn to_pending_def<'a>(
                     }
                 }
 
-                Err(err) => panic!("TODO gracefully handle shadowing of type alias {:?}", err),
+                Err((original_region, shadow)) => {
+                    env.problem(Problem::ShadowingInAnnotation {
+                        original_region,
+                        shadow,
+                    });
+
+                    panic!("TODO gracefully handle shadowing of type alias {:?}", err)
+                }
             }
         }
 

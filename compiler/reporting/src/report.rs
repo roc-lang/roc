@@ -1,12 +1,14 @@
 use crate::report::ReportText::{BinOp, Concat, Module, Region, Value};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
-use roc_problem::can::Problem;
+use roc_problem::can::{Problem, RuntimeError};
 use roc_types::pretty_print::content_to_string;
 use roc_types::subs::{Content, Subs};
 use roc_types::types::{write_error_type, ErrorType};
 use std::path::PathBuf;
 
+use roc_module::ident::Ident;
+use roc_region::all::Located;
 use std::fmt;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
 
@@ -110,14 +112,21 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
             original_region,
             shadow,
         } => {
-            // v-- just to satisfy clippy
-            let _a = original_region;
-            let _b = shadow;
-            panic!("TODO implement shadow report");
+            shadowing_report(&mut texts, original_region, shadow);
         }
-        Problem::RuntimeError(_runtime_error) => {
-            panic!("TODO implement run time error report");
-        }
+        Problem::RuntimeError(runtime_error) => match runtime_error {
+            RuntimeError::Shadowing {
+                original_region,
+                shadow,
+            } => {
+                shadowing_report(&mut texts, original_region, shadow);
+            }
+
+            _ => {
+                dbg!(runtime_error);
+                panic!("TODO implement run time error reporting");
+            }
+        },
     };
 
     Report {
@@ -126,10 +135,26 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
     }
 }
 
+fn shadowing_report(
+    texts: &mut Vec<ReportText>,
+    original_region: roc_region::all::Region,
+    shadow: Located<Ident>,
+) {
+    texts.push(name(shadow.value));
+    texts.push(plain_text(" is first defined here:"));
+    texts.push(Region(original_region));
+    texts.push(plain_text("But then it's defined a second time here:"));
+    texts.push(Region(shadow.region));
+    texts.push(plain_text("Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."));
+}
+
 #[derive(Debug, Clone)]
 pub enum ReportText {
     /// A value. Render it qualified unless it was defined in the current module.
     Value(Symbol),
+
+    /// An identifier, should probably be rendered the same way as a symbol.
+    Name(Ident),
 
     /// A module,
     Module(ModuleId),
@@ -179,6 +204,10 @@ pub enum ReportText {
 
 pub fn plain_text(str: &str) -> ReportText {
     ReportText::Plain(Box::from(str))
+}
+
+pub fn name(ident: Ident) -> ReportText {
+    ReportText::Name(ident)
 }
 
 pub fn em_text(str: &str) -> ReportText {
@@ -658,6 +687,9 @@ impl ReportText {
                     .append(alloc.line())
                     .append(alloc.line())
             }
+            Name(ident) => alloc
+                .text(format!("{}", ident.as_inline_str()))
+                .annotate(Annotation::Symbol),
         }
     }
 }
