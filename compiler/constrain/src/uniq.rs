@@ -596,9 +596,12 @@ pub fn constrain_expr(
                 let entry_type = Type::Variable(*elem_var);
                 let mut constraints = Vec::with_capacity(1 + loc_elems.len());
 
-                for loc_elem in loc_elems.iter() {
-                    let elem_expected =
-                        Expected::ForReason(Reason::ElemInList, entry_type.clone(), region);
+                for (index, loc_elem) in loc_elems.iter().enumerate() {
+                    let elem_expected = Expected::ForReason(
+                        Reason::ElemInList { index },
+                        entry_type.clone(),
+                        region,
+                    );
                     let constraint = constrain_expr(
                         env,
                         var_store,

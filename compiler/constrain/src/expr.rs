@@ -181,9 +181,10 @@ pub fn constrain_expr(
                 region,
             );
 
-            cons.push(con);
-            cons.push(fields_con);
-            cons.push(record_con);
+            // ensure constraints are solved in this order, gives better errors
+            cons.insert(0, fields_con);
+            cons.insert(1, con);
+            cons.insert(2, record_con);
 
             exists(vars, And(cons))
         }
@@ -202,9 +203,12 @@ pub fn constrain_expr(
                 let list_elem_type = Type::Variable(*elem_var);
                 let mut constraints = Vec::with_capacity(1 + loc_elems.len());
 
-                for loc_elem in loc_elems {
-                    let elem_expected =
-                        ForReason(Reason::ElemInList, list_elem_type.clone(), region);
+                for (index, loc_elem) in loc_elems.iter().enumerate() {
+                    let elem_expected = ForReason(
+                        Reason::ElemInList { index },
+                        list_elem_type.clone(),
+                        loc_elem.region,
+                    );
                     let constraint =
                         constrain_expr(env, loc_elem.region, &loc_elem.value, elem_expected);
 
@@ -539,7 +543,11 @@ pub fn constrain_expr(
                                 cond_type.clone(),
                                 region,
                             ),
-                            ForReason(Reason::WhenBranch { index }, branch_type.clone(), region),
+                            ForReason(
+                                Reason::WhenBranch { index },
+                                branch_type.clone(),
+                                when_branch.value.region,
+                            ),
                         );
 
                         branch_cons.push(branch_con);
