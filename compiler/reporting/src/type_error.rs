@@ -74,6 +74,7 @@ fn report_mismatch(
     ];
 
     Report {
+        title: "TYPE MISMATCH".to_string(),
         filename,
         text: Concat(lines),
     }
@@ -104,6 +105,7 @@ fn report_bad_type(
     ];
 
     Report {
+        title: "TYPE MISMATCH".to_string(),
         filename,
         text: Concat(lines),
     }
@@ -119,8 +121,8 @@ fn to_expr_report(
     use ReportText::*;
 
     match expected {
-        Expected::NoExpectation(_expected_type) => todo!(),
-        Expected::FromAnnotation(_name, _arity, _sub_context, _expected_type) => todo!(),
+        Expected::NoExpectation(expected_type) => todo!("hit no expectation with type {:?}", expected_type),
+        Expected::FromAnnotation(_name, _arity, _sub_context, _expected_type) => todo!("hit from annotation {:?} {:?}",_sub_context, _expected_type ),
         Expected::ForReason(reason, expected_type, region) => match reason {
             Reason::IfCondition => {
                 let problem = Concat(vec![
@@ -157,6 +159,36 @@ fn to_expr_report(
                     // what the background of Roc programmers will be, and I'd
                     // rather not create a distraction by introducing a term
                     // they don't know. ("Wait, what's truthiness?")
+                )
+            }
+            Reason::WhenGuard => {
+                let problem = Concat(vec![
+                    plain_text("This "),
+                    keyword_text("if"),
+                    plain_text(" guard condition needs to be a "),
+                    ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
+                    plain_text("."),
+                ]);
+                report_bad_type(
+                    filename,
+                    &category,
+                    found,
+                    expected_type,
+                    region,
+                    Some(expr_region),
+                    problem,
+                    plain_text("Right now it’s"),
+                    Concat(vec![
+                        plain_text("but I need every "),
+                        keyword_text("if"),
+                        plain_text(" guard condition to evaluate to a "),
+                        ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
+                        plain_text("—either "),
+                        global_tag_text("True"),
+                        plain_text(" or "),
+                        global_tag_text("False"),
+                        plain_text("."),
+                    ]),
                 )
             }
             Reason::IfBranch {
@@ -211,11 +243,96 @@ fn to_expr_report(
                         )),
                         plain_text(&format!("The {} branch is", ith)),
                         plain_text("but all the previous branches have the type"),
-                        plain_text("instead."),
+                        Concat(vec![
+                            plain_text("instead. I need all branches in an "),
+                            keyword_text("if"),
+                            plain_text(" to have the same type!"),
+                        ]),
                     )
                 }
             },
-            _ => todo!(),
+            Reason::WhenBranch { index } => {
+                // NOTE: is 0-based
+
+                let ith = int_to_ordinal(index + 1);
+
+                report_mismatch(
+                    filename,
+                    &category,
+                    found,
+                    expected_type,
+                    region,
+                    Some(expr_region),
+                    Concat(vec![
+                        plain_text(&format!("The {} branch of this ", ith)),
+                        keyword_text("when"),
+                        plain_text(" does not match all the previous branches"),
+                    ]),
+                    plain_text(&format!("The {} branch is", ith)),
+                    plain_text("but all the previous branches have type"),
+                    Concat(vec![
+                        plain_text("instead. I need all branches of a "),
+                        keyword_text("when"),
+                        plain_text(" to have the same type!"),
+                    ]),
+                )
+            }
+            Reason::ElemInList { index } => {
+                // NOTE: is 0-based
+
+                let ith = int_to_ordinal(index + 1);
+
+                report_mismatch(
+                    filename,
+                    &category,
+                    found,
+                    expected_type,
+                    region,
+                    Some(expr_region),
+                    plain_text(&format!(
+                        "The {} element of this list does not match all the previous elements",
+                        ith
+                    )),
+                    plain_text(&format!("The {} element is", ith)),
+                    plain_text("but all the previous elements in the list have type"),
+                    plain_text("instead. I need all elements of a list to have the same type!"),
+                )
+            }
+            Reason::RecordUpdateValue(field) => report_mismatch(
+                filename,
+                &category,
+                found,
+                expected_type,
+                region,
+                Some(expr_region),
+                Concat(vec![
+                    plain_text("I cannot update the "),
+                    record_field_text(field.as_str()),
+                    plain_text(" field like this"),
+                ]),
+                Concat(vec![
+                    plain_text("You are trying to update "),
+                    record_field_text(field.as_str()),
+                    plain_text(" to be"),
+                ]),
+                plain_text("But it should be"),
+                plain_text("instead. Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax."),
+            ),
+            other => {
+                //    AnonymousFnArg { arg_index: u8 },
+                //    NamedFnArg(String /* function name */, u8 /* arg index */),
+                //    AnonymousFnCall { arity: u8 },
+                //    NamedFnCall(String /* function name */, u8 /* arity */),
+                //    BinOpArg(BinOp, ArgSide),
+                //    BinOpRet(BinOp),
+                //    FloatLiteral,
+                //    IntLiteral,
+                //    NumLiteral,
+                //    InterpolatedStringVar,
+                //    RecordUpdateValue(Lowercase),
+                //    RecordUpdateKeys(Symbol, SendMap<Lowercase, Type>),
+                todo!("I don't have a message yet for reason {:?}", other)
+            }
         },
     }
 }
@@ -300,10 +417,10 @@ fn add_category(this_is: ReportText, category: &Category) -> ReportText {
             plain_text("expression produces"),
         ]),
 
-        List => Concat(vec![this_is, plain_text("a list of type")]),
-        Num => Concat(vec![this_is, plain_text("a number of type")]),
-        Int => Concat(vec![this_is, plain_text("an integer of type")]),
-        Float => Concat(vec![this_is, plain_text("a float of type")]),
+        List => Concat(vec![this_is, plain_text(" a list of type")]),
+        Num => Concat(vec![this_is, plain_text(" a number of type")]),
+        Int => Concat(vec![this_is, plain_text(" an integer of type")]),
+        Float => Concat(vec![this_is, plain_text(" a float of type")]),
         Str => Concat(vec![this_is, plain_text(" a string of type")]),
 
         Lambda => Concat(vec![this_is, plain_text("an anonymous function of type")]),
@@ -319,7 +436,7 @@ fn add_category(this_is: ReportText, category: &Category) -> ReportText {
             plain_text(" private tag application produces"),
         ]),
 
-        Record => Concat(vec![this_is, plain_text("a record of type")]),
+        Record => Concat(vec![this_is, plain_text(" a record of type")]),
 
         Accessor(field) => Concat(vec![
             plain_text("This "),
@@ -378,6 +495,7 @@ fn to_circular_report(
     ];
 
     Report {
+        title: "TYPE MISMATCH".to_string(),
         filename,
         text: Concat(lines),
     }

@@ -37,6 +37,7 @@ mod test_reporting {
     // use roc_problem::can;
     fn to_simple_report(text: ReportText) -> Report {
         Report {
+            title: "SYNTAX PROBLEM".to_string(),
             text: text,
             filename: filename_from_string(r"\code\proj\Main.roc"),
         }
@@ -827,6 +828,33 @@ mod test_reporting {
     }
 
     #[test]
+    fn when_if_guard() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 1 is
+                    2 if 1 -> 0x0
+                    _ -> 0x1
+                "#
+            ),
+            indoc!(
+                r#"
+                This `if` guard condition needs to be a Bool.
+
+                2 ┆      2 if 1 -> 0x0
+                  ┆           ^
+
+                Right now it’s a number of type
+
+                    Num a
+
+                but I need every `if` guard condition to evaluate to a Bool—either `True` or `False`.
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn if_2_branch_mismatch() {
         report_problem_as(
             indoc!(
@@ -884,6 +912,160 @@ mod test_reporting {
     //         ),
     //     )
     // }
+
+    #[test]
+    fn when_branch_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 1 is
+                    2 -> "foo"
+                    3 -> {}
+                "#
+            ),
+            indoc!(
+                r#"
+                The 2nd branch of this `when` does not match all the previous branches
+
+                3 ┆      3 -> {}
+                  ┆           ^^
+
+                The 2nd branch is a record of type
+
+                    {}
+
+                but all the previous branches have type
+
+                    Str
+
+                instead. I need all branches of a `when` to have the same type!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn elem_in_list() {
+        report_problem_as(
+            indoc!(
+                r#"
+                [ 1, 3, "foo" ]
+                "#
+            ),
+            indoc!(
+                r#"
+                The 3rd element of this list does not match all the previous elements
+
+                1 ┆  [ 1, 3, "foo" ]
+                  ┆          ^^^^^
+
+                The 3rd element is a string of type
+
+                    Str
+
+                but all the previous elements in the list have type
+
+                    Num a
+
+                instead. I need all elements of a list to have the same type!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_update_value() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : { foo : {} }
+                x = { foo: {} }
+
+                { x & foo: "bar" }
+                "#
+            ),
+            indoc!(
+                r#"
+                I cannot update the .foo field like this
+
+                4 ┆  { x & foo: "bar" }
+                  ┆  ^^^^^^^^^^^^^^^^^^
+
+                You are trying to update .foo to be a string of type
+
+                    Str
+
+                But it should be
+
+                    {}
+
+                instead. Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax.
+                "#
+            ),
+        )
+    }
+
+    // needs a bit more infrastructure re. diffing records
+    //    #[test]
+    //    fn record_update_keys() {
+    //        report_problem_as(
+    //            indoc!(
+    //                r#"
+    //                x : { foo : {} }
+    //                x = { foo: {} }
+    //
+    //                { x & baz: "bar" }
+    //                "#
+    //            ),
+    //            indoc!(
+    //                r#"
+    //                The `x` record does not have a `baz` field
+    //
+    //                4 ┆  { x & baz: "bar" }
+    //                  ┆        ^^^
+    //
+    //                This is usually a typo. Here are the `x` fields that are most similar
+    //
+    //                    { foo : {}
+    //                    }
+    //
+    //                So maybe `baz` should be `foo`?
+    //                "#
+    //            ),
+    //        )
+    //    }
+
+    //    #[test]
+    //    fn num_literal() {
+    //        report_problem_as(
+    //            indoc!(
+    //                r#"
+    //                x : Str
+    //                x = 4
+    //
+    //                x
+    //                "#
+    //            ),
+    //            indoc!(
+    //                r#"
+    //                Something is off with the body of the `x` definition
+    //
+    //                4 ┆  x = 4
+    //                  ┆      ^
+    //
+    //                The body is a number of type
+    //
+    //                    Num a
+    //
+    //                But the type annotation on `x` says that it should be
+    //
+    //                    Str
+    //
+    //                instead.
+    //                "#
+    //            ),
+    //        )
+    //    }
 
     #[test]
     fn circular_type() {
