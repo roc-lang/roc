@@ -321,6 +321,32 @@ mod gen_records {
         );
     }
 
+    #[test]
+    fn f64_record4_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   { a: 3.1, b: 5.1, c: 17.1, d: 19.4 }
+                "#
+            ),
+            (3.1, 5.1, 17.1, 19.4),
+            (f64, f64, f64, f64)
+        );
+    }
+
+    #[test]
+    fn f64_record5_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   { a: 3.1, b: 5.1, c: 17.1, d: 19.4, e: 20.5 }
+                "#
+            ),
+            (3.1, 5.1, 17.1, 19.4, 20.5),
+            (f64, f64, f64, f64, f64)
+        );
+    }
+
     // #[test]
     // fn bool_record4_literal() {
     //     assert_evals_to!(

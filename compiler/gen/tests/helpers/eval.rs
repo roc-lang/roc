@@ -82,6 +82,7 @@ macro_rules! assert_llvm_evals_to {
         let cc = roc_gen::llvm::build::get_call_conventions(target.default_calling_convention().unwrap());
 
         main_fn.set_call_conventions(cc);
+        main_fn.set_linkage(inkwell::module::Linkage::External);
 
         // Add main's body
         let basic_block = context.append_basic_block(main_fn, "entry");
@@ -99,7 +100,7 @@ macro_rules! assert_llvm_evals_to {
         builder.build_return(Some(&ret));
 
         // Uncomment this to see the module's un-optimized LLVM instruction output:
-        // env.module.print_to_stderr();
+        env.module.print_to_stderr();
 
         if main_fn.verify(true) {
             fpm.run_on(&main_fn);
@@ -114,6 +115,21 @@ macro_rules! assert_llvm_evals_to {
 
         // Uncomment this to see the module's optimized LLVM instruction output:
         // env.module.print_to_stderr();
+
+        // Uncomment this block to see the raw assembly output - but BEWARE!
+        // This is not thread-safe, so only use it on one test at a time!
+        {
+            let asmfile = "out.asm";
+
+            roc_gen::llvm::target::init_target_machine(target_lexicon::Triple::host())
+                .unwrap()
+                .write_to_file(&env.module, inkwell::targets::FileType::Assembly, std::path::Path::new(asmfile))
+                .expect("Writing .asm file failed");
+
+            println!("\n\n{}\n\n", std::fs::read_to_string(asmfile).unwrap());
+
+            std::fs::remove_file(asmfile).unwrap();
+        }
 
         unsafe {
             let main: JitFunction<unsafe extern "C" fn() -> $ty> = execution_engine
@@ -232,7 +248,7 @@ macro_rules! assert_opt_evals_to {
         builder.build_return(Some(&ret));
 
         // Uncomment this to see the module's un-optimized LLVM instruction output:
-        // env.module.print_to_stderr();
+        env.module.print_to_stderr();
 
         if main_fn.verify(true) {
             fpm.run_on(&main_fn);
@@ -342,6 +358,7 @@ macro_rules! emit_expr {
         let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
 
         main_fn.set_call_conventions($crate::helpers::eval::MAIN_CALLING_CONVENTION);
+        main_fn.set_linkage(inkwell::module::Linkage::External);
 
         // Add main's body
         let basic_block = context.append_basic_block(main_fn, "entry");
