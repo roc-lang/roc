@@ -118,7 +118,7 @@ pub fn canonicalize_defs<'a>(
     // This way, whenever any expr is doing lookups, it knows everything that's in scope -
     // even defs that appear after it in the source.
     //
-    // This naturally handles recursion too, because a given exper which refers
+    // This naturally handles recursion too, because a given expr which refers
     // to itself won't be processed until after its def has been added to scope.
 
     use roc_parse::ast::Def::*;

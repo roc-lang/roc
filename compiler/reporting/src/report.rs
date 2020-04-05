@@ -48,7 +48,6 @@ pub const DEFAULT_PALETTE: Palette = Palette {
 
 pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
     let mut texts = Vec::new();
-
     match problem {
         Problem::UnusedDef(symbol, region) => {
             texts.push(Value(symbol));
@@ -123,7 +122,6 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
             }
 
             _ => {
-                dbg!(runtime_error);
                 panic!("TODO implement run time error reporting");
             }
         },
