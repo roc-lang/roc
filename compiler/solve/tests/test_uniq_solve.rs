@@ -17,8 +17,10 @@ mod test_uniq_solve {
     // HELPERS
 
     fn infer_eq_help(src: &str) -> (Vec<roc_solve::solve::TypeError>, String) {
-        let (_loc_expr, output, _problems, mut subs, variable, constraint, home, interns) =
+        let (_loc_expr, output, can_problems, mut subs, variable, constraint, home, interns) =
             uniq_expr(src);
+
+        assert_eq!(can_problems, Vec::new(), "Canonicalization problems");
 
         assert_correct_variable_usage(&constraint);
 
@@ -47,6 +49,7 @@ mod test_uniq_solve {
         if !problems.is_empty() {
             panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
         }
+
         assert_eq!(actual, expected.to_string());
     }
 
