@@ -1,4 +1,5 @@
 #!/bin/bash
+set -Eeuo pipefail
 
 cargo run qs.roc
 gcc -shared qs.o -o libroc_qs_main.so
