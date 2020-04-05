@@ -8,5 +8,5 @@ extern "C" {
 pub fn main() {
     let list = unsafe { list_from_roc() };
 
-    println!("Roc says: {:?}", list);
+    println!("Roc quicksort says: {:?}", list);
 }
