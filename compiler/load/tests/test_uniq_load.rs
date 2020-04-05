@@ -13,7 +13,7 @@ mod helpers;
 
 #[cfg(test)]
 mod test_uniq_load {
-    use crate::helpers::fixtures_dir;
+    use crate::helpers::{fixtures_dir, test_async};
     use inlinable_string::InlinableString;
     use roc_builtins::unique;
     use roc_can::def::Declaration::*;
@@ -27,16 +27,6 @@ mod test_uniq_load {
     use std::collections::HashMap;
 
     // HELPERS
-
-    fn test_async<F: std::future::Future>(future: F) -> F::Output {
-        use tokio::runtime::Runtime;
-
-        // Create the runtime
-        let mut rt = Runtime::new().expect("Error initializing Tokio runtime.");
-
-        // Spawn the root task
-        rt.block_on(future)
-    }
 
     async fn load_fixture(
         dir_name: &str,
