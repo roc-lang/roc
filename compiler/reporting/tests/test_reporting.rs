@@ -356,12 +356,12 @@ mod test_reporting {
                 Booly is first defined here:
 
                 1 ┆  Booly : [ Yes, No ]
-                  ┆  ^^^^^
+                  ┆  ^^^^^^^^^^^^^^^^^^^
 
                 But then it's defined a second time here:
 
-                3 ┆ Booly : [ Yes, No, Maybe ]
-                  ┆ ^^^^^
+                3 ┆  Booly : [ Yes, No, Maybe ]
+                  ┆  ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#
             ),
