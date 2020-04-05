@@ -71,6 +71,8 @@ enum PendingDef<'a> {
         vars: Vec<Located<Lowercase>>,
         ann: &'a Located<ast::TypeAnnotation<'a>>,
     },
+
+    ShadowedAlias,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -853,6 +855,11 @@ fn canonicalize_pending_def<'a>(
                 .introduced_variables
                 .union(&can_ann.introduced_variables);
         }
+
+        ShadowedAlias => {
+            // Since this alias was shadowed, it gets ignored and has no
+            // effect on the output.
+        }
         TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
             let ann =
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
@@ -1290,6 +1297,7 @@ fn to_pending_def<'a>(
 
         Alias { name, vars, ann } => {
             let region = Region::span_across(&name.region, &ann.region);
+
             match scope.introduce(
                 name.value.into(),
                 &env.exposed_ident_ids,
@@ -1326,16 +1334,13 @@ fn to_pending_def<'a>(
                     }
                 }
 
-                Err((original_region, shadow)) => {
-                    // env.problem(Problem::ShadowingInAnnotation {
-                    //     original_region,
-                    //     shadow,
-                    // });
+                Err((original_region, loc_shadowed_symbol)) => {
+                    env.problem(Problem::ShadowingInAnnotation {
+                        original_region,
+                        shadow: loc_shadowed_symbol,
+                    });
 
-                    panic!(
-                        "TODO gracefully handle shadowing of type alias {:?}",
-                        (original_region, shadow)
-                    )
+                    PendingDef::ShadowedAlias
                 }
             }
         }
