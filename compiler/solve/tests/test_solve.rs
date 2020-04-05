@@ -53,13 +53,17 @@ mod test_solve {
     }
 
     fn infer_eq(src: &str, expected: &str) {
-        let (_, _can_problems, actual) = infer_eq_help(src);
+        let (_, can_problems, actual) = infer_eq_help(src);
+
+        assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
 
         assert_eq!(actual, expected.to_string());
     }
 
     fn infer_eq_without_problem(src: &str, expected: &str) {
-        let (type_problems, _, actual) = infer_eq_help(src);
+        let (type_problems, can_problems, actual) = infer_eq_help(src);
+
+        assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
 
         if !type_problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
