@@ -566,6 +566,31 @@ mod test_canonicalize {
         }
     }
 
+    #[test]
+    fn unused_def_regression() {
+        let src = indoc!(
+            r#"
+                Booly : [ Yes, No, Maybe ]
+
+                y : Booly
+                y = No
+
+                # There was a bug where annotating a def meant that its
+                # references no longer got reported.
+                #
+                # https://github.com/rtfeldman/roc/issues/298
+                x : List Booly
+                x = [ y ]
+
+                x
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
     //#[test]
     //fn closing_over_locals() {
     //    // "local" should be used, because the closure used it.
