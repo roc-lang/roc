@@ -11,7 +11,7 @@ extern crate roc_region;
 mod helpers;
 
 #[cfg(test)]
-mod test_canonicalize {
+mod test_can {
     use crate::helpers::{can_expr_with, test_home, CanExprOut};
     use bumpalo::Bump;
     use roc_can::expr::Expr::{self, *};
