@@ -1190,6 +1190,39 @@ mod test_reporting {
 
                     { foo : Int }
 
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn tag_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : [ Red, Green ] -> Bool
+                f = \_ -> True
+
+                f Blue
+                "#
+            ),
+            indoc!(
+                r#"
+                The 1st argument to `f` is not what I expect:
+
+                4 ┆  f Blue
+                  ┆    ^^^^
+
+                This `Blue` global tag application produces:
+
+                    [ Blue, Green, Red ]
+
+                But `f` needs the 1st argument to be:
+
+                    [ Green, Red ]
+
+
                 "#
             ),
         )

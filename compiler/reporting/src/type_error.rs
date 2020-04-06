@@ -1025,7 +1025,7 @@ mod report_text {
         } else {
             let entry_to_text = |(tag_name, arguments)| concat(vec![tag_name, separate(arguments)]);
 
-            let starts = std::iter::once(plain_text("[")).chain(std::iter::repeat(plain_text(",")));
+            let starts = std::iter::once(plain_text("[ ")).chain(std::iter::repeat(plain_text(", ")));
 
             let mut lines: Vec<_> = entries
                 .into_iter()
@@ -1033,7 +1033,7 @@ mod report_text {
                 .map(|(entry, start)| concat(vec![start, entry_to_text(entry)]))
                 .collect();
 
-            lines.push(plain_text("]"));
+            lines.push(plain_text(" ]"));
             lines.push(ext_text);
 
             concat(lines)
@@ -1056,7 +1056,7 @@ mod report_text {
         } else {
             let entry_to_text = |(tag_name, arguments)| concat(vec![tag_name, separate(arguments)]);
 
-            let starts = std::iter::once(plain_text("[")).chain(std::iter::repeat(plain_text(",")));
+            let starts = std::iter::once(plain_text("[ ")).chain(std::iter::repeat(plain_text(", ")));
 
             let mut lines: Vec<_> = entries
                 .into_iter()
@@ -1064,7 +1064,7 @@ mod report_text {
                 .map(|(entry, start)| concat(vec![start, entry_to_text(entry)]))
                 .collect();
 
-            lines.push(plain_text("]"));
+            lines.push(plain_text(" ]"));
             lines.push(ext_text);
 
             lines.push(plain_text(" as "));

@@ -116,7 +116,7 @@ pub fn unify_pool(subs: &mut Subs, pool: &mut Pool, var1: Variable, var2: Variab
 }
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
-    // println!( "{:?} {:?} ~ {:?} {:?}", ctx.first, ctx.first_desc.content, ctx.second, ctx.second_desc.content);
+    // println!( "{:?} {:?} ~ {:?} {:?}", ctx.first, ctx.first_desc.content, ctx.second, ctx.second_desc.content,);
     match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(subs, pool, &ctx, opt_name, &ctx.second_desc.content),
         RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
@@ -245,6 +245,11 @@ fn unify_record(
     if unique_fields1.is_empty() {
         if unique_fields2.is_empty() {
             let ext_problems = unify_pool(subs, pool, rec1.ext, rec2.ext);
+
+            if !ext_problems.is_empty() {
+                return ext_problems;
+            }
+
             let other_fields = MutMap::default();
             let mut field_problems =
                 unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, rec1.ext);
@@ -256,6 +261,11 @@ fn unify_record(
             let flat_type = FlatType::Record(unique_fields2, rec2.ext);
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
             let ext_problems = unify_pool(subs, pool, rec1.ext, sub_record);
+
+            if !ext_problems.is_empty() {
+                return ext_problems;
+            }
+
             let other_fields = MutMap::default();
             let mut field_problems =
                 unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, sub_record);
@@ -268,6 +278,11 @@ fn unify_record(
         let flat_type = FlatType::Record(unique_fields1, rec1.ext);
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
         let ext_problems = unify_pool(subs, pool, sub_record, rec2.ext);
+
+        if !ext_problems.is_empty() {
+            return ext_problems;
+        }
+
         let other_fields = MutMap::default();
         let mut field_problems =
             unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, sub_record);
@@ -286,7 +301,14 @@ fn unify_record(
         let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
 
         let rec1_problems = unify_pool(subs, pool, rec1.ext, sub2);
+        if !rec1_problems.is_empty() {
+            return rec1_problems;
+        }
+
         let rec2_problems = unify_pool(subs, pool, sub1, rec2.ext);
+        if !rec2_problems.is_empty() {
+            return rec2_problems;
+        }
 
         let mut field_problems =
             unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, ext);
@@ -362,6 +384,11 @@ fn unify_tag_union(
     if unique_tags1.is_empty() {
         if unique_tags2.is_empty() {
             let ext_problems = unify_pool(subs, pool, rec1.ext, rec2.ext);
+
+            if !ext_problems.is_empty() {
+                return ext_problems;
+            }
+
             let mut tag_problems = unify_shared_tags(
                 subs,
                 pool,
@@ -379,6 +406,11 @@ fn unify_tag_union(
             let flat_type = FlatType::TagUnion(unique_tags2, rec2.ext);
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
             let ext_problems = unify_pool(subs, pool, rec1.ext, sub_record);
+
+            if !ext_problems.is_empty() {
+                return ext_problems;
+            }
+
             let mut tag_problems = unify_shared_tags(
                 subs,
                 pool,
@@ -397,6 +429,11 @@ fn unify_tag_union(
         let flat_type = FlatType::TagUnion(unique_tags1, rec1.ext);
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
         let ext_problems = unify_pool(subs, pool, sub_record, rec2.ext);
+
+        if !ext_problems.is_empty() {
+            return ext_problems;
+        }
+
         let mut tag_problems = unify_shared_tags(
             subs,
             pool,
@@ -420,15 +457,22 @@ fn unify_tag_union(
         let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
         let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
 
-        let rec1_problems = unify_pool(subs, pool, rec1.ext, sub2);
-        let rec2_problems = unify_pool(subs, pool, sub1, rec2.ext);
+        let ext1_problems = unify_pool(subs, pool, rec1.ext, sub2);
+        if !ext1_problems.is_empty() {
+            return ext1_problems;
+        }
+
+        let ext2_problems = unify_pool(subs, pool, sub1, rec2.ext);
+        if !ext2_problems.is_empty() {
+            return ext2_problems;
+        }
 
         let mut tag_problems =
             unify_shared_tags(subs, pool, ctx, shared_tags, other_tags, ext, recursion_var);
 
-        tag_problems.reserve(rec1_problems.len() + rec2_problems.len());
-        tag_problems.extend(rec1_problems);
-        tag_problems.extend(rec2_problems);
+        tag_problems.reserve(ext1_problems.len() + ext2_problems.len());
+        tag_problems.extend(ext1_problems);
+        tag_problems.extend(ext2_problems);
 
         tag_problems
     }
@@ -610,7 +654,7 @@ fn unify_flat_type(
             }
         }
         (other1, other2) => mismatch!(
-            "Trying to two flat types that are incompatible: {:?} ~ {:?}",
+            "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
             other1,
             other2
         ),
