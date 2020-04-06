@@ -1,4 +1,5 @@
 use crate::report::ReportText::{BinOp, Concat, Module, Region, Value};
+use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{Problem, RuntimeError};
@@ -162,7 +163,9 @@ pub enum ReportText {
     /// A type. Render it using roc_types::pretty_print for now, but maybe
     /// do something fancier later.
     Type(Content),
-    ErrorType(ErrorType),
+
+    ErrorTypeInline(ErrorType),
+    ErrorTypeBlock(Box<ReportText>),
 
     /// Plain text
     Plain(Box<str>),
@@ -199,6 +202,11 @@ pub enum ReportText {
     /// Many ReportText that each get separate lines
     Stack(Vec<ReportText>),
 
+    Intersperse {
+        separator: Box<ReportText>,
+        items: Vec<ReportText>,
+    },
+
     Indent(usize, Box<ReportText>),
 }
 
@@ -212,6 +220,13 @@ pub fn name(ident: Ident) -> ReportText {
 
 pub fn em_text(str: &str) -> ReportText {
     ReportText::EmText(Box::from(str))
+}
+
+pub fn tag_name_text(tag_name: TagName) -> ReportText {
+    match tag_name {
+        TagName::Private(symbol) => ReportText::PrivateTag(symbol),
+        TagName::Global(uppercase) => global_tag_text(uppercase.as_str()),
+    }
 }
 
 pub fn private_tag_text(symbol: Symbol) -> ReportText {
@@ -230,8 +245,32 @@ pub fn keyword_text(str: &str) -> ReportText {
     ReportText::Keyword(Box::from(str))
 }
 
+pub fn error_type_inline(err: ErrorType) -> ReportText {
+    ReportText::ErrorTypeInline(err)
+}
+
+pub fn error_type_block(err: ReportText) -> ReportText {
+    ReportText::ErrorTypeBlock(Box::new(err))
+}
+
 pub fn url(str: &str) -> ReportText {
     ReportText::Url(Box::from(str))
+}
+
+pub fn concat(values: Vec<ReportText>) -> ReportText {
+    ReportText::Concat(values)
+}
+
+pub fn separate(values: Vec<ReportText>) -> ReportText {
+    // TODO I think this should be a possibly-breaking space
+    intersperse(plain_text(" "), values)
+}
+
+pub fn intersperse(separator: ReportText, items: Vec<ReportText>) -> ReportText {
+    ReportText::Intersperse {
+        separator: Box::new(separator),
+        items,
+    }
 }
 
 pub const RED_CODE: &str = "\u{001b}[31m";
@@ -266,12 +305,14 @@ pub enum Annotation {
     LineNumber,
     PlainText,
     CodeBlock,
+    TypeBlock,
     Module,
 }
 
 /// Render with minimal formatting
 pub struct CiWrite<W> {
     style_stack: Vec<Annotation>,
+    in_type_block: bool,
     upstream: W,
 }
 
@@ -279,6 +320,7 @@ impl<W> CiWrite<W> {
     pub fn new(upstream: W) -> CiWrite<W> {
         CiWrite {
             style_stack: vec![],
+            in_type_block: false,
             upstream,
         }
     }
@@ -323,17 +365,20 @@ where
     fn push_annotation(&mut self, annotation: &Annotation) -> Result<(), Self::Error> {
         use Annotation::*;
         match annotation {
+            TypeBlock => {
+                self.in_type_block = true;
+            }
             Emphasized => {
                 self.write_str("*")?;
             }
             Url => {
                 self.write_str("<")?;
             }
-            GlobalTag | PrivateTag | Keyword | RecordField | Symbol => {
+            GlobalTag | PrivateTag | Keyword | RecordField | Symbol if !self.in_type_block => {
                 self.write_str("`")?;
             }
-            CodeBlock | PlainText | LineNumber | Error | GutterBar | TypeVariable | Alias
-            | Module | Structure | BinOp => {}
+
+            _ => {}
         }
         self.style_stack.push(*annotation);
         Ok(())
@@ -345,17 +390,20 @@ where
         match self.style_stack.pop() {
             None => {}
             Some(annotation) => match annotation {
+                TypeBlock => {
+                    self.in_type_block = false;
+                }
                 Emphasized => {
                     self.write_str("*")?;
                 }
                 Url => {
                     self.write_str(">")?;
                 }
-                GlobalTag | PrivateTag | Keyword | RecordField | Symbol => {
+                GlobalTag | PrivateTag | Keyword | RecordField | Symbol if !self.in_type_block => {
                     self.write_str("`")?;
                 }
-                CodeBlock | PlainText | LineNumber | Error | GutterBar | TypeVariable | Alias
-                | Module | Structure | BinOp => {}
+
+                _ => {}
             },
         }
         Ok(())
@@ -423,7 +471,7 @@ where
             Module => {
                 self.write_str(self.palette.module_name)?;
             }
-            GlobalTag | PrivateTag | RecordField | Keyword => { /* nothing yet */ }
+            TypeBlock | GlobalTag | PrivateTag | RecordField | Keyword => { /* nothing yet */ }
         }
         self.style_stack.push(*annotation);
         Ok(())
@@ -440,7 +488,7 @@ where
                     self.write_str(RESET_CODE)?;
                 }
 
-                GlobalTag | PrivateTag | RecordField | Keyword => { /* nothing yet */ }
+                TypeBlock | GlobalTag | PrivateTag | RecordField | Keyword => { /* nothing yet */ }
             },
         }
         Ok(())
@@ -537,8 +585,8 @@ impl ReportText {
                 }
             }
             Value(symbol) => {
-                if symbol.module_id() == home {
-                    // Render it unqualified if it's in the current module.
+                if symbol.module_id() == home || symbol.module_id().is_builtin() {
+                    // Render it unqualified if it's in the current module or a builtin
                     alloc
                         .text(format!("{}", symbol.ident_string(interns)))
                         .annotate(Annotation::Symbol)
@@ -571,13 +619,24 @@ impl ReportText {
 
                 Content::Error => alloc.text(content_to_string(content, subs, home, interns)),
             },
-            ErrorType(error_type) => alloc
+            ErrorTypeInline(error_type) => alloc
                 .nil()
                 .append(alloc.hardline())
                 .append(
                     alloc
                         .text(write_error_type(home, interns, error_type))
                         .indent(4),
+                )
+                .append(alloc.hardline()),
+
+            ErrorTypeBlock(error_type) => alloc
+                .nil()
+                .append(alloc.hardline())
+                .append(
+                    error_type
+                        .pretty(alloc, subs, home, src_lines, interns)
+                        .indent(4)
+                        .annotate(Annotation::TypeBlock),
                 )
                 .append(alloc.hardline()),
 
@@ -598,6 +657,13 @@ impl ReportText {
                     .into_iter()
                     .map(|rep| (rep.pretty(alloc, subs, home, src_lines, interns))),
                 alloc.hardline(),
+            ),
+            Intersperse { separator, items } => alloc.intersperse(
+                items
+                    .into_iter()
+                    .map(|rep| (rep.pretty(alloc, subs, home, src_lines, interns)))
+                    .collect::<Vec<_>>(),
+                separator.pretty(alloc, subs, home, src_lines, interns),
             ),
             BinOp(bin_op) => alloc.text(bin_op.to_string()).annotate(Annotation::BinOp),
             Region(region) => {

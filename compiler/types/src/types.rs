@@ -709,7 +709,7 @@ pub enum ErrorType {
     RigidVar(Lowercase),
     Record(SendMap<Lowercase, ErrorType>, TypeExt),
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
-    RecursiveTagUnion(Variable, SendMap<TagName, Vec<ErrorType>>, TypeExt),
+    RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
     Alias(Symbol, Vec<(Lowercase, ErrorType)>, Box<ErrorType>),
     Boolean(boolean_algebra::Bool),
