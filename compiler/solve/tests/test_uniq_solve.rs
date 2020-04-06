@@ -2311,7 +2311,7 @@ mod test_uniq_solve {
 
                         distanceTo =
                             reconstructPath newCameFrom neighbour
-                                |> List.length
+                                |> List.len
                                 |> Num.toFloat
 
                         newModel = { model & costs : newCosts , cameFrom : newCameFrom }
