@@ -1104,6 +1104,8 @@ name = "roc_reporting"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "im",
+ "im-rc",
  "indoc",
  "inlinable_string",
  "maplit",

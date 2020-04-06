@@ -1,8 +1,9 @@
 use crate::report::{
-    error_type_block, error_type_inline, global_tag_text, keyword_text, plain_text,
-    private_tag_text, record_field_text, tag_name_text, Report, ReportText,
+    error_type_block, global_tag_text, keyword_text, plain_text, private_tag_text,
+    record_field_text, tag_name_text, Report, ReportText,
 };
 use roc_can::expected::{Expected, PExpected};
+use roc_collections::all::SendMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_solve::solve;
@@ -482,6 +483,8 @@ pub enum Problem {
     IntFloat,
     ArityMismatch(usize, usize),
     FieldTypo(Vec<Lowercase>),
+    FieldsMissing(Vec<Lowercase>),
+    BadRigidVar(Lowercase, ErrorType),
 }
 
 fn problems_to_hint(_problems: Vec<Problem>) -> ReportText {
@@ -719,9 +722,9 @@ fn to_diff(parens: Parens, type1: &ErrorType, type2: &ErrorType) -> Diff<ReportT
             }
         }
 
+        (Record(fields1, ext1), Record(fields2, ext2)) => diff_record(fields1, ext1, fields2, ext2),
         _ => {
             // TODO actually diff
-            // (Record(fields1, ext1), Record(fields2, ext2)) => {
 
             let left = to_doc(Parens::Unnecessary, type1);
             let right = to_doc(Parens::Unnecessary, type2);
@@ -757,6 +760,160 @@ where
         left,
         right,
         status,
+    }
+}
+
+fn ext_has_fixed_fields(ext: &TypeExt) -> bool {
+    match ext {
+        TypeExt::Closed => true,
+        TypeExt::FlexOpen(_) => false,
+        TypeExt::RigidOpen(_) => true,
+    }
+}
+
+fn diff_record(
+    fields1: &SendMap<Lowercase, ErrorType>,
+    ext1: &TypeExt,
+    fields2: &SendMap<Lowercase, ErrorType>,
+    ext2: &TypeExt,
+) -> Diff<ReportText> {
+    let to_overlap_docs = |(field, (t1, t2)): &(Lowercase, (ErrorType, ErrorType))| {
+        let diff = to_diff(Parens::Unnecessary, t1, t2);
+
+        Diff {
+            left: (plain_text(field.as_str()), diff.left),
+            right: (plain_text(field.as_str()), diff.right),
+            status: diff.status,
+        }
+    };
+    let to_unknown_docs = |(field, tipe): &(Lowercase, ErrorType)| {
+        (
+            field.clone(),
+            plain_text(field.as_str()),
+            to_doc(Parens::Unnecessary, tipe),
+        )
+    };
+    let shared_keys = fields1
+        .clone()
+        .intersection_with(fields2.clone(), |v1, v2| (v1, v2));
+    let left_keys = fields1.clone().relative_complement(fields2.clone());
+    let right_keys = fields2.clone().relative_complement(fields1.clone());
+
+    let both = shared_keys.iter().map(to_overlap_docs);
+    let mut left = left_keys.iter().map(to_unknown_docs).peekable();
+    let mut right = right_keys.iter().map(to_unknown_docs).peekable();
+
+    let all_fields_shared = left.peek().is_none() && right.peek().is_none();
+
+    let status = match (ext_has_fixed_fields(&ext1), ext_has_fixed_fields(&ext2)) {
+        (true, true) => match left.peek() {
+            Some((_, _f, _)) => {
+                Status::Different(vec![Problem::FieldTypo(fields2.keys().cloned().collect())])
+            }
+            None => {
+                if right.peek().is_none() {
+                    Status::Similar
+                } else {
+                    let result = Status::Different(vec![Problem::FieldsMissing(
+                        right.map(|v| v.0).collect(),
+                    )]);
+                    // we just used the values in `right`.  in
+                    right = right_keys.iter().map(to_unknown_docs).peekable();
+                    result
+                }
+            }
+        },
+        (false, true) => match left.peek() {
+            Some((_, _f, _)) => {
+                Status::Different(vec![Problem::FieldTypo(fields2.keys().cloned().collect())])
+            }
+            None => Status::Similar,
+        },
+        (true, false) => match right.peek() {
+            Some((_, _f, _)) => {
+                Status::Different(vec![Problem::FieldTypo(fields1.keys().cloned().collect())])
+            }
+            None => Status::Similar,
+        },
+        (false, false) => Status::Similar,
+    };
+
+    let ext_diff = ext_to_diff(ext1, ext2);
+
+    let mut fields_diff: Diff<Vec<(ReportText, ReportText)>> = Diff {
+        left: vec![],
+        right: vec![],
+        status: Status::Similar,
+    };
+
+    for diff in both {
+        fields_diff.left.push(diff.left);
+        fields_diff.right.push(diff.right);
+        fields_diff.status.merge(diff.status);
+    }
+
+    if !all_fields_shared {
+        fields_diff.left.extend(left.map(|(_, x, y)| (x, y)));
+        fields_diff.right.extend(right.map(|(_, x, y)| (x, y)));
+        fields_diff.status.merge(Status::Different(vec![]));
+    }
+
+    let doc1 = report_text::record(fields_diff.left, ext_diff.left);
+    let doc2 = report_text::record(fields_diff.right, ext_diff.right);
+
+    fields_diff.status.merge(status);
+
+    Diff {
+        left: doc1,
+        right: doc2,
+        status: fields_diff.status,
+    }
+}
+
+fn ext_to_diff(ext1: &TypeExt, ext2: &TypeExt) -> Diff<Option<ReportText>> {
+    let status = ext_to_status(ext1, ext2);
+    let ext_doc_1 = ext_to_doc(ext1);
+    let ext_doc_2 = ext_to_doc(ext2);
+
+    match &status {
+        Status::Similar => Diff {
+            left: ext_doc_1,
+            right: ext_doc_2,
+            status,
+        },
+        Status::Different(_) => Diff {
+            // NOTE elm colors these differently at this point
+            left: ext_doc_1,
+            right: ext_doc_2,
+            status,
+        },
+    }
+}
+
+fn ext_to_status(ext1: &TypeExt, ext2: &TypeExt) -> Status {
+    use TypeExt::*;
+    match ext1 {
+        Closed => match ext2 {
+            Closed => Status::Similar,
+            FlexOpen(_) => Status::Similar,
+            RigidOpen(_) => Status::Different(vec![]),
+        },
+        FlexOpen(_) => Status::Similar,
+
+        RigidOpen(x) => match ext2 {
+            Closed => Status::Different(vec![]),
+            FlexOpen(_) => Status::Similar,
+            RigidOpen(y) => {
+                if x == y {
+                    Status::Similar
+                } else {
+                    Status::Different(vec![Problem::BadRigidVar(
+                        x.clone(),
+                        ErrorType::RigidVar(y.clone()),
+                    )])
+                }
+            }
+        },
     }
 }
 

@@ -16,6 +16,8 @@ roc_can = { path = "../can" }
 roc_solve = { path = "../solve" }
 ven_pretty = { path = "../../vendor/pretty" }
 inlinable_string = "0.1.0"
+im    = "14" # im and im-rc should always have the same version!
+im-rc = "14" # im and im-rc should always have the same version!
 
 [dev-dependencies]
 roc_constrain = { path = "../constrain" }
