@@ -31,7 +31,7 @@ mod test_solve {
             constraint,
             home,
             interns,
-            problems: can_problems,
+            problems: mut can_problems,
             ..
         } = can_expr(src);
         let mut subs = Subs::new(var_store.into());
@@ -48,6 +48,13 @@ mod test_solve {
         name_all_type_vars(var, &mut subs);
 
         let actual_str = content_to_string(content, &mut subs, home, &interns);
+
+        // Disregard UnusedDef problems, because those are unavoidable when
+        // returning a function from the test expression.
+        can_problems.retain(|prob| match prob {
+            roc_problem::can::Problem::UnusedDef(_, _) => false,
+            _ => true,
+        });
 
         (unify_problems, can_problems, actual_str)
     }

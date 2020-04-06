@@ -17,8 +17,15 @@ mod test_uniq_solve {
     // HELPERS
 
     fn infer_eq_help(src: &str) -> (Vec<roc_solve::solve::TypeError>, String) {
-        let (_loc_expr, output, can_problems, mut subs, variable, constraint, home, interns) =
+        let (_loc_expr, output, mut can_problems, mut subs, variable, constraint, home, interns) =
             uniq_expr(src);
+
+        // Disregard UnusedDef problems, because those are unavoidable when
+        // returning a function from the test expression.
+        can_problems.retain(|prob| match prob {
+            roc_problem::can::Problem::UnusedDef(_, _) => false,
+            _ => true,
+        });
 
         assert_eq!(can_problems, Vec::new(), "Canonicalization problems");
 
