@@ -408,6 +408,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // concat : List elem, List elem -> List elem
+    add_type(
+        Symbol::LIST_CONCAT,
+        SolvedType::Func(
+            vec![list_type(flex(TVAR1)), list_type(flex(TVAR1))],
+            Box::new(list_type(flex(TVAR1))),
+        ),
+    );
+
     // map : List before, (before -> after) -> List after
     add_type(
         Symbol::LIST_MAP,

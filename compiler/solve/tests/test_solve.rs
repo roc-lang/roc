@@ -31,7 +31,7 @@ mod test_solve {
             constraint,
             home,
             interns,
-            problems: can_problems,
+            problems: mut can_problems,
             ..
         } = can_expr(src);
         let mut subs = Subs::new(var_store.into());
@@ -49,17 +49,28 @@ mod test_solve {
 
         let actual_str = content_to_string(content, &mut subs, home, &interns);
 
+        // Disregard UnusedDef problems, because those are unavoidable when
+        // returning a function from the test expression.
+        can_problems.retain(|prob| match prob {
+            roc_problem::can::Problem::UnusedDef(_, _) => false,
+            _ => true,
+        });
+
         (unify_problems, can_problems, actual_str)
     }
 
     fn infer_eq(src: &str, expected: &str) {
-        let (_, _can_problems, actual) = infer_eq_help(src);
+        let (_, can_problems, actual) = infer_eq_help(src);
+
+        assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
 
         assert_eq!(actual, expected.to_string());
     }
 
     fn infer_eq_without_problem(src: &str, expected: &str) {
-        let (type_problems, _, actual) = infer_eq_help(src);
+        let (type_problems, can_problems, actual) = infer_eq_help(src);
+
+        assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
 
         if !type_problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
@@ -608,9 +619,9 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-                always = \a, b -> a
+                always2 = \a, _ -> a
 
-                1 |> always "foo"
+                1 |> always2 "foo"
                 "#
             ),
             "Num *",
@@ -988,13 +999,15 @@ mod test_solve {
                 r#"
                     # technically, an empty record can be destructured
                     {} = {}
-                    bar = \{} -> 42
+                    thunk = \{} -> 42
 
-                    when foo is
+                    xEmpty = if thunk {} == 42 then { x: {} } else { x: {} }
+
+                    when xEmpty is
                         { x: {} } -> x
                 "#
             ),
-            "{}*",
+            "{}",
         );
     }
 
@@ -1124,7 +1137,7 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-                    when foo is
+                    when { x: 5 } is
                         { x: 4 } -> x
                 "#
             ),
@@ -1910,24 +1923,6 @@ mod test_solve {
     //         "<Type Mismatch: _____________>",
     //     );
     // }
-
-    #[test]
-    fn manual_attr() {
-        infer_eq(
-            indoc!(
-                r#"
-                    r = Attr unknown "bar"
-
-                    s = Attr unknown2 { left : Attr Shared "foo" }
-
-                    when True is
-                        _ -> { x : ((\Attr _ val -> val) s).left, y : r }
-                        _ -> { x : ((\Attr _ val -> val) s).left, y : ((\Attr _ val -> val) s).left }
-                "#
-            ),
-            "{ x : [ Attr [ Shared ]* Str ]*, y : [ Attr [ Shared ]* Str ]* }",
-        );
-    }
 
     #[test]
     fn peano_map_alias() {

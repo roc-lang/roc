@@ -892,6 +892,8 @@ fn canonicalize_pending_def<'a>(
             let (mut loc_can_expr, can_output) =
                 canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
 
+            output.references = output.references.union(can_output.references.clone());
+
             // reset the tailcallable_symbol
             env.tailcallable_symbol = outer_identifier;
 

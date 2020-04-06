@@ -17,8 +17,17 @@ mod test_uniq_solve {
     // HELPERS
 
     fn infer_eq_help(src: &str) -> (Vec<roc_solve::solve::TypeError>, String) {
-        let (_loc_expr, output, _problems, mut subs, variable, constraint, home, interns) =
+        let (_loc_expr, output, mut can_problems, mut subs, variable, constraint, home, interns) =
             uniq_expr(src);
+
+        // Disregard UnusedDef problems, because those are unavoidable when
+        // returning a function from the test expression.
+        can_problems.retain(|prob| match prob {
+            roc_problem::can::Problem::UnusedDef(_, _) => false,
+            _ => true,
+        });
+
+        assert_eq!(can_problems, Vec::new(), "Canonicalization problems");
 
         assert_correct_variable_usage(&constraint);
 
@@ -47,6 +56,7 @@ mod test_uniq_solve {
         if !problems.is_empty() {
             panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
         }
+
         assert_eq!(actual, expected.to_string());
     }
 
@@ -608,9 +618,9 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                    always = \a, b -> a
+                    always2 = \a, _ -> a
 
-                    1 |> always "foo"
+                    1 |> always2 "foo"
                 "#
             ),
             "Attr * (Num (Attr * *))",
@@ -893,13 +903,15 @@ mod test_uniq_solve {
                 r#"
                     # technically, an empty record can be destructured
                     {} = {}
-                    bar = \{} -> 42
+                    thunk = \{} -> 42
 
-                    when foo is
+                    xEmpty = if thunk {} == 42 then { x: {} } else { x: {} }
+
+                    when xEmpty is
                         { x: {} } -> x
             "#
             ),
-            "Attr * {}*",
+            "Attr * {}",
         );
     }
 
@@ -1033,7 +1045,7 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                    when foo is
+                    when { x: 5 } is
                         { x: 4 } -> x
                 "#
             ),
@@ -2299,7 +2311,7 @@ mod test_uniq_solve {
 
                         distanceTo =
                             reconstructPath newCameFrom neighbour
-                                |> List.length
+                                |> List.len
                                 |> Num.toFloat
 
                         newModel = { model & costs : newCosts , cameFrom : newCameFrom }

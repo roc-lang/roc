@@ -260,7 +260,10 @@ fn solve(
 
                     state
                 }
-                _ => todo!(),
+                other => todo!(
+                    "the case where unify for Pattern was unsuccessful with {:?}",
+                    other
+                ),
             }
         }
         Let(let_con) => {
