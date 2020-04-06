@@ -1925,24 +1925,6 @@ mod test_solve {
     // }
 
     #[test]
-    fn manual_attr() {
-        infer_eq(
-            indoc!(
-                r#"
-                    r = Attr unknown "bar"
-
-                    s = Attr unknown2 { left : Attr Shared "foo" }
-
-                    when True is
-                        _ -> { x : ((\Attr _ val -> val) s).left, y : r }
-                        _ -> { x : ((\Attr _ val -> val) s).left, y : ((\Attr _ val -> val) s).left }
-                "#
-            ),
-            "{ x : [ Attr [ Shared ]* Str ]*, y : [ Attr [ Shared ]* Str ]* }",
-        );
-    }
-
-    #[test]
     fn peano_map_alias() {
         infer_eq(
             indoc!(
