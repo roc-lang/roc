@@ -1161,4 +1161,37 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn record_field_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                bar = { bar : 0x3 }
+
+                f : { foo : Int } -> Bool
+                f = \_ -> True
+
+                f bar
+                "#
+            ),
+            indoc!(
+                r#"
+                The 1st argument to `f` is not what I expect:
+
+                6 ┆  f bar
+                  ┆    ^^^
+
+                This `bar` value is a:
+
+                    { bar : Int }
+
+                But `f` needs the 1st argument to be:
+
+                    { foo : Int }
+
+                "#
+            ),
+        )
+    }
 }

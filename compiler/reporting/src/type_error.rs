@@ -252,7 +252,6 @@ fn to_expr_report(
             },
             Reason::WhenBranch { index } => {
                 // NOTE: is 0-based
-
                 let ith = int_to_ordinal(index + 1);
 
                 report_mismatch(
@@ -297,7 +296,7 @@ fn to_expr_report(
                     plain_text("I need all elements of a list to have the same type!"),
                 )
             }
-            Reason::RecordUpdateValue(field) => report_mismatch(
+            Reason::RecordUpdateValue(field) => { report_mismatch(
                 filename,
                 &category,
                 found,
@@ -316,9 +315,31 @@ fn to_expr_report(
                 ]),
                 plain_text("But it should be:"),
                 plain_text("Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax."),
-            ),
+            )}
+            Reason::FnArg { name , arg_index } => { 
+                let ith = int_to_ordinal(arg_index as usize + 1);
+
+                let this_function = match name { 
+                    None => plain_text("this function"),
+                    Some(symbol) => ReportText::Value(symbol),
+                };
+
+                report_mismatch(
+                    filename,
+                    &category,
+                    found,
+                    expected_type,
+                    region,
+                    Some(expr_region),
+                    Concat(vec![ plain_text(&format!("The {} argument to ", ith))
+                        , this_function.clone(), plain_text(" is not what I expect:" )]),
+                    plain_text("This argument is"),
+                    Concat(vec![ plain_text("But "), this_function, plain_text(&format!(" needs the {} argument to be:", ith))]),
+                    plain_text(""),
+                )
+                
+            }
             other => {
-                //    AnonymousFnArg { arg_index: u8 },
                 //    NamedFnArg(String /* function name */, u8 /* arg index */),
                 //    AnonymousFnCall { arity: u8 },
                 //    NamedFnCall(String /* function name */, u8 /* arity */),
@@ -974,7 +995,7 @@ mod report_text {
                 separate(vec![concat(vec![field_name, plain_text(" :")]), field_type])
             };
 
-            let starts = std::iter::once(plain_text("{")).chain(std::iter::repeat(plain_text(",")));
+            let starts = std::iter::once(plain_text("{ ")).chain(std::iter::repeat(plain_text(", ")));
 
             let mut lines: Vec<_> = entries
                 .into_iter()
@@ -982,7 +1003,7 @@ mod report_text {
                 .map(|(entry, start)| concat(vec![start, entry_to_text(entry)]))
                 .collect();
 
-            lines.push(plain_text("}"));
+            lines.push(plain_text(" }"));
             lines.push(ext_text);
 
             concat(lines)
