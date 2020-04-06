@@ -321,7 +321,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                i is first defined here:
+                `i` is first defined here:
 
                 1 ┆  i = 1
                   ┆  ^
@@ -353,7 +353,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                Booly is first defined here:
+                `Booly` is first defined here:
 
                 1 ┆  Booly : [ Yes, No ]
                   ┆  ^^^^^^^^^^^^^^^^^^^
@@ -1253,6 +1253,104 @@ mod test_reporting {
                 But `f` needs the 1st argument to be:
 
                     [ Green Bool, Red Int ]
+
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn from_annotation_if() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : Int
+                x = if True then 3.14 else 4
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                Something is off with the 1st branch of this `if` expression:
+
+                2 ┆  x = if True then 3.14 else 4
+                  ┆                   ^^^^
+
+                The 1st branch is a float of type:
+
+                    Float
+
+                But the type annotation on `x` says it should be:
+
+                    Int
+
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn from_annotation_when() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : Int
+                x = 
+                    when True is
+                        _ -> 3.14
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                Something is off with the 1st branch of this `when` expression:
+
+                4 ┆          _ -> 3.14
+                  ┆               ^^^^
+
+                The 1st branch is a float of type:
+
+                    Float
+
+                But the type annotation on `x` says it should be:
+
+                    Int
+
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn from_annotation_function() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : Int -> Int
+                x = \_ -> 3.14
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                Something is off with the body of the `x` definition:
+
+                2 ┆  x = \_ -> 3.14
+                  ┆      ^^^^^^^^^^
+
+                The body is an anonymous function of type:
+
+                    Int -> Float
+
+                But the type annotation on `x` says it should be:
+
+                    Int -> Int
 
 
                 "#

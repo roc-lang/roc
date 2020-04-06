@@ -512,7 +512,7 @@ pub fn constrain_expr(
                     for (index, when_branch) in branches.iter().enumerate() {
                         let branch_con = constrain_when_branch(
                             env,
-                            region,
+                            when_branch.value.region,
                             when_branch,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
@@ -522,7 +522,7 @@ pub fn constrain_expr(
                             FromAnnotation(
                                 name.clone(),
                                 *arity,
-                                TypedWhenBranch(index),
+                                TypedWhenBranch(index + 1),
                                 typ.clone(),
                             ),
                         );

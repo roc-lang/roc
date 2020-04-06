@@ -110,6 +110,15 @@ fn report_bad_type(
     }
 }
 
+fn pattern_to_doc(pattern: &roc_can::pattern::Pattern) -> ReportText {
+    use roc_can::pattern::Pattern::*;
+    match pattern {
+        Identifier(symbol) => ReportText::Value(*symbol),
+        Underscore => plain_text("_"),
+        _ => todo!(),
+    }
+}
+
 fn to_expr_report(
     filename: PathBuf,
     expr_region: roc_region::all::Region,
@@ -121,7 +130,39 @@ fn to_expr_report(
 
     match expected {
         Expected::NoExpectation(expected_type) => todo!("hit no expectation with type {:?}", expected_type),
-        Expected::FromAnnotation(_name, _arity, _sub_context, _expected_type) => todo!("hit from annotation {:?} {:?}",_sub_context, _expected_type ),
+        Expected::FromAnnotation(name, _arity, annotation_source, expected_type) => {
+            use roc_types::types::AnnotationSource::*;
+
+            let name_text = pattern_to_doc(&name.value);
+
+            // TODO special-case 2-branch if
+            let thing = match annotation_source {
+                TypedIfBranch ( index ) => Concat(vec![ plain_text(&format!("{} branch of this ", int_to_ordinal(index))), keyword_text("if"), plain_text(" expression:") ]),
+                TypedWhenBranch ( index ) => Concat(vec![ plain_text(&format!("{} branch of this ", int_to_ordinal(index))), keyword_text("when"), plain_text(" expression:") ]),
+                TypedBody => Concat(vec![ plain_text("body of the "), name_text.clone(), plain_text(" definition:") ]),
+            };
+
+            let it_is = match annotation_source {
+                TypedIfBranch ( index ) => format!("The {} branch is", int_to_ordinal(index)),
+                TypedWhenBranch ( index ) => format!("The {} branch is", int_to_ordinal(index)),
+                TypedBody => "The body is".into(),
+            };
+
+            let comparison =
+                type_comparison(
+                    found,
+                    expected_type,
+                    add_category(plain_text(&it_is), &category),
+                    Concat(vec![ plain_text("But the type annotation on "), name_text, plain_text(" says it should be:")]),
+                    Concat(vec![]),
+                );
+
+            Report {
+                title: "TYPE MISMATCH".to_string(),
+                filename,
+                text: Concat(vec![ plain_text("Something is off with the "), thing , Region(expr_region),  comparison ]),
+            }
+        }
         Expected::ForReason(reason, expected_type, region) => match reason {
             Reason::IfCondition => {
                 let problem = Concat(vec![
@@ -420,7 +461,7 @@ fn add_category(this_is: ReportText, category: &Category) -> ReportText {
         Float => Concat(vec![this_is, plain_text(" a float of type:")]),
         Str => Concat(vec![this_is, plain_text(" a string of type:")]),
 
-        Lambda => Concat(vec![this_is, plain_text("an anonymous function of type:")]),
+        Lambda => Concat(vec![this_is, plain_text(" an anonymous function of type:")]),
 
         TagApply(TagName::Global(name)) => Concat(vec![
             plain_text("This "),
@@ -749,9 +790,21 @@ fn to_diff(parens: Parens, type1: &ErrorType, type2: &ErrorType) -> Diff<ReportT
         (Record(fields1, ext1), Record(fields2, ext2)) => diff_record(fields1, ext1, fields2, ext2),
 
         (TagUnion(tags1, ext1), TagUnion(tags2, ext2)) => diff_tag_union(tags1, ext1, tags2, ext2),
-        _ => {
-            // TODO actually diff
 
+        (RecursiveTagUnion(_rec1, _tags1, _ext1), RecursiveTagUnion(_rec2, _tags2, _ext2)) => {
+            // TODO do a better job here
+            let left = to_doc(Parens::Unnecessary, type1);
+            let right = to_doc(Parens::Unnecessary, type2);
+
+            Diff {
+                left,
+                right,
+                status: Status::Similar,
+            }
+        }
+
+        _ => {
+            // We hit none of the specific cases where we give more detailed information
             let left = to_doc(Parens::Unnecessary, type1);
             let right = to_doc(Parens::Unnecessary, type2);
 
