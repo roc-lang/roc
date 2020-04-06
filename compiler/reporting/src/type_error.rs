@@ -4,7 +4,7 @@ use crate::report::{
 };
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::SendMap;
-use roc_module::ident::Lowercase;
+use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_solve::solve;
 use roc_types::pretty_print::Parens;
@@ -316,10 +316,10 @@ fn to_expr_report(
                 plain_text("But it should be:"),
                 plain_text("Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax."),
             )}
-            Reason::FnArg { name , arg_index } => { 
+            Reason::FnArg { name , arg_index } => {
                 let ith = int_to_ordinal(arg_index as usize + 1);
 
-                let this_function = match name { 
+                let this_function = match name {
                     None => plain_text("this function"),
                     Some(symbol) => ReportText::Value(symbol),
                 };
@@ -337,7 +337,7 @@ fn to_expr_report(
                     Concat(vec![ plain_text("But "), this_function, plain_text(&format!(" needs the {} argument to be:", ith))]),
                     plain_text(""),
                 )
-                
+
             }
             other => {
                 //    NamedFnArg(String /* function name */, u8 /* arg index */),
@@ -393,7 +393,6 @@ fn lone_type(
 }
 
 fn add_category(this_is: ReportText, category: &Category) -> ReportText {
-    use roc_module::ident::TagName;
     use Category::*;
     use ReportText::*;
 
@@ -426,12 +425,12 @@ fn add_category(this_is: ReportText, category: &Category) -> ReportText {
         TagApply(TagName::Global(name)) => Concat(vec![
             plain_text("This "),
             global_tag_text(name.as_str()),
-            plain_text(" global tag application produces:"),
+            plain_text(" global tag application has the type:"),
         ]),
         TagApply(TagName::Private(name)) => Concat(vec![
             plain_text("This "),
             private_tag_text(*name),
-            plain_text(" private tag application produces:"),
+            plain_text(" private tag application has the type:"),
         ]),
 
         Record => Concat(vec![this_is, plain_text(" a record of type:")]),
@@ -503,8 +502,12 @@ fn to_circular_report(
 pub enum Problem {
     IntFloat,
     ArityMismatch(usize, usize),
-    FieldTypo(Vec<Lowercase>),
+    FieldTypo(Lowercase, Vec<Lowercase>),
     FieldsMissing(Vec<Lowercase>),
+
+    // TODO maybe these should include the arguments too?
+    TagTypo(TagName, Vec<TagName>),
+    TagsMissing(Vec<TagName>),
     BadRigidVar(Lowercase, ErrorType),
 }
 
@@ -744,6 +747,8 @@ fn to_diff(parens: Parens, type1: &ErrorType, type2: &ErrorType) -> Diff<ReportT
         }
 
         (Record(fields1, ext1), Record(fields2, ext2)) => diff_record(fields1, ext1, fields2, ext2),
+
+        (TagUnion(tags1, ext1), TagUnion(tags2, ext2)) => diff_tag_union(tags1, ext1, tags2, ext2),
         _ => {
             // TODO actually diff
 
@@ -828,9 +833,10 @@ fn diff_record(
 
     let status = match (ext_has_fixed_fields(&ext1), ext_has_fixed_fields(&ext2)) {
         (true, true) => match left.peek() {
-            Some((_, _f, _)) => {
-                Status::Different(vec![Problem::FieldTypo(fields2.keys().cloned().collect())])
-            }
+            Some((f, _, _)) => Status::Different(vec![Problem::FieldTypo(
+                f.clone(),
+                fields2.keys().cloned().collect(),
+            )]),
             None => {
                 if right.peek().is_none() {
                     Status::Similar
@@ -845,15 +851,17 @@ fn diff_record(
             }
         },
         (false, true) => match left.peek() {
-            Some((_, _f, _)) => {
-                Status::Different(vec![Problem::FieldTypo(fields2.keys().cloned().collect())])
-            }
+            Some((f, _, _)) => Status::Different(vec![Problem::FieldTypo(
+                f.clone(),
+                fields2.keys().cloned().collect(),
+            )]),
             None => Status::Similar,
         },
         (true, false) => match right.peek() {
-            Some((_, _f, _)) => {
-                Status::Different(vec![Problem::FieldTypo(fields1.keys().cloned().collect())])
-            }
+            Some((f, _, _)) => Status::Different(vec![Problem::FieldTypo(
+                f.clone(),
+                fields1.keys().cloned().collect(),
+            )]),
             None => Status::Similar,
         },
         (false, false) => Status::Similar,
@@ -881,6 +889,125 @@ fn diff_record(
 
     let doc1 = report_text::record(fields_diff.left, ext_diff.left);
     let doc2 = report_text::record(fields_diff.right, ext_diff.right);
+
+    fields_diff.status.merge(status);
+
+    Diff {
+        left: doc1,
+        right: doc2,
+        status: fields_diff.status,
+    }
+}
+
+fn diff_tag_union(
+    fields1: &SendMap<TagName, Vec<ErrorType>>,
+    ext1: &TypeExt,
+    fields2: &SendMap<TagName, Vec<ErrorType>>,
+    ext2: &TypeExt,
+) -> Diff<ReportText> {
+    let to_overlap_docs = |(field, (t1, t2)): &(TagName, (Vec<ErrorType>, Vec<ErrorType>))| {
+        let diff = traverse(Parens::Unnecessary, t1, t2);
+
+        Diff {
+            left: (field.clone(), tag_name_text(field.clone()), diff.left),
+            right: (field.clone(), tag_name_text(field.clone()), diff.right),
+            status: diff.status,
+        }
+    };
+    let to_unknown_docs = |(field, args): &(TagName, Vec<ErrorType>)| {
+        (
+            field.clone(),
+            tag_name_text(field.clone()),
+            // TODO add spaces between args
+            args.iter()
+                .map(|arg| to_doc(Parens::Unnecessary, arg))
+                .collect(),
+        )
+    };
+    let shared_keys = fields1
+        .clone()
+        .intersection_with(fields2.clone(), |v1, v2| (v1, v2));
+
+    let left_keys = fields1.clone().relative_complement(fields2.clone());
+    let right_keys = fields2.clone().relative_complement(fields1.clone());
+
+    let both = shared_keys.iter().map(to_overlap_docs);
+    let mut left = left_keys.iter().map(to_unknown_docs).peekable();
+    let mut right = right_keys.iter().map(to_unknown_docs).peekable();
+
+    let all_fields_shared = left.peek().is_none() && right.peek().is_none();
+
+    let status = match (ext_has_fixed_fields(&ext1), ext_has_fixed_fields(&ext2)) {
+        (true, true) => match left.peek() {
+            Some((f, _, _)) => Status::Different(vec![Problem::TagTypo(
+                f.clone(),
+                fields2.keys().cloned().collect(),
+            )]),
+            None => {
+                if right.peek().is_none() {
+                    Status::Similar
+                } else {
+                    let result =
+                        Status::Different(vec![Problem::TagsMissing(right.map(|v| v.0).collect())]);
+                    // we just used the values in `right`.  in
+                    right = right_keys.iter().map(to_unknown_docs).peekable();
+                    result
+                }
+            }
+        },
+        (false, true) => match left.peek() {
+            Some((f, _, _)) => Status::Different(vec![Problem::TagTypo(
+                f.clone(),
+                fields2.keys().cloned().collect(),
+            )]),
+            None => Status::Similar,
+        },
+        (true, false) => match right.peek() {
+            Some((f, _, _)) => Status::Different(vec![Problem::TagTypo(
+                f.clone(),
+                fields1.keys().cloned().collect(),
+            )]),
+            None => Status::Similar,
+        },
+        (false, false) => Status::Similar,
+    };
+
+    let ext_diff = ext_to_diff(ext1, ext2);
+
+    let mut fields_diff: Diff<Vec<(TagName, ReportText, Vec<ReportText>)>> = Diff {
+        left: vec![],
+        right: vec![],
+        status: Status::Similar,
+    };
+
+    for diff in both {
+        fields_diff.left.push(diff.left);
+        fields_diff.right.push(diff.right);
+        fields_diff.status.merge(diff.status);
+    }
+
+    if !all_fields_shared {
+        fields_diff.left.extend(left);
+        fields_diff.right.extend(right);
+        fields_diff.status.merge(Status::Different(vec![]));
+    }
+
+    fields_diff.left.sort_by(|a, b| a.0.cmp(&b.0));
+    fields_diff.right.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let lefts = fields_diff
+        .left
+        .into_iter()
+        .map(|(_, a, b)| (a, b))
+        .collect();
+    let rights = fields_diff
+        .right
+        .into_iter()
+        .map(|(_, a, b)| (a, b))
+        .collect();
+
+    let doc1 = report_text::tag_union(lefts, ext_diff.left);
+    let doc2 = report_text::tag_union(rights, ext_diff.right);
 
     fields_diff.status.merge(status);
 
@@ -995,7 +1122,8 @@ mod report_text {
                 separate(vec![concat(vec![field_name, plain_text(" :")]), field_type])
             };
 
-            let starts = std::iter::once(plain_text("{ ")).chain(std::iter::repeat(plain_text(", ")));
+            let starts =
+                std::iter::once(plain_text("{ ")).chain(std::iter::repeat(plain_text(", ")));
 
             let mut lines: Vec<_> = entries
                 .into_iter()
@@ -1023,9 +1151,16 @@ mod report_text {
         if entries.is_empty() {
             concat(vec![plain_text("[]"), ext_text])
         } else {
-            let entry_to_text = |(tag_name, arguments)| concat(vec![tag_name, separate(arguments)]);
+            let entry_to_text = |(tag_name, arguments): (ReportText, Vec<_>)| {
+                if arguments.is_empty() {
+                    tag_name
+                } else {
+                    separate(vec![tag_name, separate(arguments)])
+                }
+            };
 
-            let starts = std::iter::once(plain_text("[ ")).chain(std::iter::repeat(plain_text(", ")));
+            let starts =
+                std::iter::once(plain_text("[ ")).chain(std::iter::repeat(plain_text(", ")));
 
             let mut lines: Vec<_> = entries
                 .into_iter()
@@ -1054,9 +1189,16 @@ mod report_text {
         if entries.is_empty() {
             concat(vec![plain_text("[]"), ext_text])
         } else {
-            let entry_to_text = |(tag_name, arguments)| concat(vec![tag_name, separate(arguments)]);
+            let entry_to_text = |(tag_name, arguments): (ReportText, Vec<_>)| {
+                if arguments.is_empty() {
+                    tag_name
+                } else {
+                    separate(vec![tag_name, separate(arguments)])
+                }
+            };
 
-            let starts = std::iter::once(plain_text("[ ")).chain(std::iter::repeat(plain_text(", ")));
+            let starts =
+                std::iter::once(plain_text("[ ")).chain(std::iter::repeat(plain_text(",")));
 
             let mut lines: Vec<_> = entries
                 .into_iter()

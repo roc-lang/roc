@@ -1214,13 +1214,45 @@ mod test_reporting {
                 4 ┆  f Blue
                   ┆    ^^^^
 
-                This `Blue` global tag application produces:
+                This `Blue` global tag application has the type:
 
-                    [ Blue, Green, Red ]
+                    [ Blue ]a
 
                 But `f` needs the 1st argument to be:
 
                     [ Green, Red ]
+
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn tag_with_arguments_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : [ Red Int, Green Bool ] -> Bool
+                f = \_ -> True
+
+                f (Blue 3.14)
+                "#
+            ),
+            indoc!(
+                r#"
+                The 1st argument to `f` is not what I expect:
+
+                4 ┆  f (Blue 3.14)
+                  ┆     ^^^^^^^^^
+
+                This `Blue` global tag application has the type:
+
+                    [ Blue Float ]a
+
+                But `f` needs the 1st argument to be:
+
+                    [ Green Bool, Red Int ]
 
 
                 "#

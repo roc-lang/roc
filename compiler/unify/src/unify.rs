@@ -457,15 +457,35 @@ fn unify_tag_union(
         let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
         let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
 
+        // NOTE: for clearer error messages, we rollback unification of the ext vars when either fails
+        //
+        // This is inspired by
+        //
+        //
+        //      f : [ Red, Green ] -> Bool
+        //      f = \_ -> True
+        //
+        //      f Blue
+        //
+        //  In this case, we want the mismatch to be between `[ Blue ]a` and `[ Red, Green ]`, but
+        //  without rolling back, the mismatch is between `[ Blue, Red, Green ]a` and `[ Red, Green ]`.
+        //  TODO is this also required for the other cases?
+
+        let snapshot = subs.snapshot();
+
         let ext1_problems = unify_pool(subs, pool, rec1.ext, sub2);
         if !ext1_problems.is_empty() {
+            subs.rollback_to(snapshot);
             return ext1_problems;
         }
 
         let ext2_problems = unify_pool(subs, pool, sub1, rec2.ext);
         if !ext2_problems.is_empty() {
+            subs.rollback_to(snapshot);
             return ext2_problems;
         }
+
+        subs.commit_snapshot(snapshot);
 
         let mut tag_problems =
             unify_shared_tags(subs, pool, ctx, shared_tags, other_tags, ext, recursion_var);

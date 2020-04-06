@@ -410,6 +410,10 @@ impl Subs {
     pub fn rollback_to(&mut self, snapshot: Snapshot<InPlace<Variable>>) {
         self.utable.rollback_to(snapshot)
     }
+
+    pub fn commit_snapshot(&mut self, snapshot: Snapshot<InPlace<Variable>>) {
+        self.utable.commit(snapshot)
+    }
 }
 
 #[inline(always)]
