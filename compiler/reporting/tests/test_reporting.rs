@@ -369,6 +369,54 @@ mod test_reporting {
     }
 
     // #[test]
+    // fn report_multi_line_shadowing_in_annotation() {
+    //     report_problem_as(
+    //         indoc!(
+    //             r#"
+    //             Booly :
+    //                 [
+    //                     Yes,
+    //                     No
+    //                 ]
+    //
+    //             Booly :
+    //                 [
+    //                     Yes,
+    //                     No,
+    //                     Maybe
+    //                 ]
+    //
+    //             x =
+    //                 No
+    //
+    //             x
+    //        "#
+    //         ),
+    //         indoc!(
+    //             r#"
+    //             Booly is first defined here:
+    //
+    //             1 ┆> Booly :
+    //             2 ┆>    [
+    //             3 ┆>        Yes,
+    //             4 ┆>        No
+    //             5 ┆>    ]
+    //
+    //             But then it's defined a second time here:
+    //
+    //             7  ┆> Booly :
+    //             8  ┆>    [
+    //             9  ┆>        Yes,
+    //             10 ┆>        No,
+    //             11 ┆>        Maybe
+    //             12 ┆>    ]
+    //
+    //             Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#
+    //         ),
+    //     )
+    // }
+
+    // #[test]
     // fn report_unsupported_top_level_def() {
     //     report_problem_as(
     //         indoc!(
