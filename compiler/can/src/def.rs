@@ -71,6 +71,8 @@ enum PendingDef<'a> {
         vars: Vec<Located<Lowercase>>,
         ann: &'a Located<ast::TypeAnnotation<'a>>,
     },
+
+    ShadowedAlias,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -118,7 +120,7 @@ pub fn canonicalize_defs<'a>(
     // This way, whenever any expr is doing lookups, it knows everything that's in scope -
     // even defs that appear after it in the source.
     //
-    // This naturally handles recursion too, because a given exper which refers
+    // This naturally handles recursion too, because a given expr which refers
     // to itself won't be processed until after its def has been added to scope.
 
     use roc_parse::ast::Def::*;
@@ -853,6 +855,11 @@ fn canonicalize_pending_def<'a>(
                 .introduced_variables
                 .union(&can_ann.introduced_variables);
         }
+
+        ShadowedAlias => {
+            // Since this alias was shadowed, it gets ignored and has no
+            // effect on the output.
+        }
         TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
             let ann =
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
@@ -1290,6 +1297,7 @@ fn to_pending_def<'a>(
 
         Alias { name, vars, ann } => {
             let region = Region::span_across(&name.region, &ann.region);
+
             match scope.introduce(
                 name.value.into(),
                 &env.exposed_ident_ids,
@@ -1326,7 +1334,14 @@ fn to_pending_def<'a>(
                     }
                 }
 
-                Err(err) => panic!("TODO gracefully handle shadowing of type alias {:?}", err),
+                Err((original_region, loc_shadowed_symbol)) => {
+                    env.problem(Problem::ShadowingInAnnotation {
+                        original_region,
+                        shadow: loc_shadowed_symbol,
+                    });
+
+                    PendingDef::ShadowedAlias
+                }
             }
         }
 

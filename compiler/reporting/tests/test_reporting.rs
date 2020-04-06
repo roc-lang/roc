@@ -306,20 +306,113 @@ mod test_reporting {
         )
     }
 
+    #[test]
+    fn report_shadowing() {
+        report_problem_as(
+            indoc!(
+                r#"
+               i = 1
+
+               s = \i ->
+                   i + 1
+
+               s i
+           "#
+            ),
+            indoc!(
+                r#"
+                i is first defined here:
+
+                1 ┆  i = 1
+                  ┆  ^
+
+                But then it's defined a second time here:
+
+                3 ┆  s = \i ->
+                  ┆       ^
+
+                Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#
+            ),
+        )
+    }
+
+    #[test]
+    fn report_shadowing_in_annotation() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Booly : [ Yes, No ]
+
+                Booly : [ Yes, No, Maybe ]
+
+                x =
+                    No
+
+                x
+           "#
+            ),
+            indoc!(
+                r#"
+                Booly is first defined here:
+
+                1 ┆  Booly : [ Yes, No ]
+                  ┆  ^^^^^^^^^^^^^^^^^^^
+
+                But then it's defined a second time here:
+
+                3 ┆  Booly : [ Yes, No, Maybe ]
+                  ┆  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#
+            ),
+        )
+    }
+
     // #[test]
-    // fn report_shadow() {
+    // fn report_multi_line_shadowing_in_annotation() {
     //     report_problem_as(
     //         indoc!(
     //             r#"
-    //            i = 1
+    //             Booly :
+    //                 [
+    //                     Yes,
+    //                     No
+    //                 ]
     //
-    //            s = \i ->
-    //                i + 1
+    //             Booly :
+    //                 [
+    //                     Yes,
+    //                     No,
+    //                     Maybe
+    //                 ]
     //
-    //            s i
+    //             x =
+    //                 No
+    //
+    //             x
     //        "#
     //         ),
-    //         indoc!(r#"     "#),
+    //         indoc!(
+    //             r#"
+    //             Booly is first defined here:
+    //
+    //             1 ┆> Booly :
+    //             2 ┆>    [
+    //             3 ┆>        Yes,
+    //             4 ┆>        No
+    //             5 ┆>    ]
+    //
+    //             But then it's defined a second time here:
+    //
+    //             7  ┆> Booly :
+    //             8  ┆>    [
+    //             9  ┆>        Yes,
+    //             10 ┆>        No,
+    //             11 ┆>        Maybe
+    //             12 ┆>    ]
+    //
+    //             Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#
+    //         ),
     //     )
     // }
 
