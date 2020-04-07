@@ -82,7 +82,7 @@ Ulen : Int @Ulen
 ##
 ## Integers come in two flavors: *signed* and *unsigned*.
 ##
-## * *Unsigned* integers can never be negative. The min value they can hold is zero.
+## * *Unsigned* integers can never be negative. The lowest value they can hold is zero.
 ## * *Signed* integers can be negative.
 ##
 ## Integers also come in different sizes. Choosing a size depends on your performance
@@ -198,13 +198,13 @@ Ulen : Int @Ulen
 
 #bitwiseNot : Int -> Int
 
-## Sort ascending - that is, with the min first, and the max last.
+## Sort ascending - that is, with the lowest first, and the highest last.
 ##
 ##     List.sort Int.asc [ 3, 6, 0 ]
 ##
 asc : Int a, Int a -> [ Eq, Lt, Gt ]
 
-## Sort descending - that is, with the max first, and the min last.
+## Sort descending - that is, with the highest first, and the lowest last.
 ##
 ##     List.sort Int.desc [ 3, 6, 0 ]
 ##
@@ -224,7 +224,7 @@ hash64 : a -> U64
 
 ## Limits
 
-## The max number that can be stored in an #I32 without overflowing its
+## The highest number that can be stored in an #I32 without overflowing its
 ## available memory and crashing.
 ##
 ## Note that this is smaller than the positive version of #Int.minI32
