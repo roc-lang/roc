@@ -1132,6 +1132,7 @@ mod test_reporting {
                 Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.
 
                     ∞ -> a
+
                 "#
             ),
         )
@@ -1157,6 +1158,7 @@ mod test_reporting {
                 Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.
 
                     List ∞ -> a
+
                 "#
             ),
         )
@@ -1298,7 +1300,7 @@ mod test_reporting {
             indoc!(
                 r#"
                 x : Int
-                x = 
+                x =
                     when True is
                         _ -> 3.14
 
@@ -1423,6 +1425,65 @@ mod test_reporting {
                   ┆  ^
 
                 Roc does not allow functions to be partially applied. Use a closure to make partial application explicit."#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_when_condition() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 1 is
+                    {} -> 42
+                "#
+            ),
+            indoc!(
+                r#"
+                The 1st pattern in this `when` is causing a mismatch:
+
+                2 ┆      {} -> 42
+                  ┆      ^^
+
+                The first pattern is trying to match record values of type:
+
+                    {}a
+
+                But the expression between `when` and `is` has the type:
+
+                    Num a
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_when_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 1 is
+                    2 -> 3
+                    {} -> 42
+                "#
+            ),
+            indoc!(
+                r#"
+                The 2nd pattern in this `when` does not match the previous ones:
+
+                3 ┆      {} -> 42
+                  ┆      ^^
+
+                The 2nd pattern is trying to match record values of type:
+
+                    {}a
+
+                But all the previous branches match:
+
+                    Num a
+
+                "#
             ),
         )
     }

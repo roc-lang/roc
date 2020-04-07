@@ -250,9 +250,15 @@ fn solve(
 
             state
         }
-        Pattern(_region, _category, typ, expected) => {
+        Pattern(region, category, typ, expectation) => {
             let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
-            let expected = type_to_var(subs, rank, pools, cached_aliases, expected.get_type_ref());
+            let expected = type_to_var(
+                subs,
+                rank,
+                pools,
+                cached_aliases,
+                expectation.get_type_ref(),
+            );
 
             match unify(subs, actual, expected) {
                 Success(vars) => {
@@ -260,10 +266,20 @@ fn solve(
 
                     state
                 }
-                other => todo!(
-                    "the case where unify for Pattern was unsuccessful with {:?}",
-                    other
-                ),
+                Failure(vars, actual_type, expected_type) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    let problem = TypeError::BadPattern(
+                        *region,
+                        category.clone(),
+                        actual_type,
+                        expectation.clone().replace(expected_type),
+                    );
+
+                    problems.push(problem);
+
+                    state
+                }
             }
         }
         Let(let_con) => {

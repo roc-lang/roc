@@ -652,12 +652,14 @@ impl ReportText {
                     .into_iter()
                     .map(|rep| rep.pretty(alloc, subs, home, src_lines, interns)),
             ),
-            Stack(report_texts) => alloc.intersperse(
-                report_texts
-                    .into_iter()
-                    .map(|rep| (rep.pretty(alloc, subs, home, src_lines, interns))),
-                alloc.hardline(),
-            ),
+            Stack(report_texts) => alloc
+                .intersperse(
+                    report_texts
+                        .into_iter()
+                        .map(|rep| (rep.pretty(alloc, subs, home, src_lines, interns))),
+                    alloc.hardline(),
+                )
+                .append(alloc.hardline()),
             Intersperse { separator, items } => alloc.intersperse(
                 items
                     .into_iter()

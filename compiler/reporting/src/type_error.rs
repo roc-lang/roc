@@ -558,14 +558,17 @@ fn type_comparison(
 ) -> ReportText {
     let comparison = to_comparison(actual, expected);
 
-    ReportText::Stack(vec![
+    let mut lines = vec![
         i_am_seeing,
         comparison.actual,
         instead_of,
         comparison.expected,
         context_hints,
-        problems_to_hint(comparison.problems),
-    ])
+    ];
+
+    lines.extend(problems_to_hint(comparison.problems));
+
+    ReportText::Stack(lines)
 }
 
 fn lone_type(
@@ -576,12 +579,11 @@ fn lone_type(
 ) -> ReportText {
     let comparison = to_comparison(actual, expected);
 
-    ReportText::Stack(vec![
-        i_am_seeing,
-        comparison.actual,
-        further_details,
-        problems_to_hint(comparison.problems),
-    ])
+    let mut lines = vec![i_am_seeing, comparison.actual, further_details];
+
+    lines.extend(problems_to_hint(comparison.problems));
+
+    ReportText::Stack(lines)
 }
 
 fn add_category(this_is: ReportText, category: &Category) -> ReportText {
@@ -654,13 +656,155 @@ fn add_category(this_is: ReportText, category: &Category) -> ReportText {
 }
 
 fn to_pattern_report(
-    _filename: PathBuf,
-    _expr_region: roc_region::all::Region,
-    _category: PatternCategory,
-    _found: ErrorType,
-    _expected: PExpected<ErrorType>,
+    filename: PathBuf,
+    expr_region: roc_region::all::Region,
+    category: PatternCategory,
+    found: ErrorType,
+    expected: PExpected<ErrorType>,
 ) -> Report {
-    todo!()
+    use roc_types::types::PReason;
+    use ReportText::*;
+
+    match expected {
+        PExpected::NoExpectation(expected_type) => {
+            let text = Concat(vec![
+                plain_text("This pattern is being used in an unexpected way:"),
+                Region(expr_region),
+                pattern_type_comparision(
+                    found,
+                    expected_type,
+                    add_pattern_category(plain_text("It is"), &category),
+                    plain_text("But it needs to match:"),
+                    vec![],
+                ),
+            ]);
+
+            Report {
+                filename,
+                title: "TYPE MISMATCH".to_string(),
+                text,
+            }
+        }
+
+        PExpected::ForReason(reason, expected_type, region) => match reason {
+            PReason::WhenMatch { index } => {
+                if index == 0 {
+                    let text = Concat(vec![
+                        plain_text("The 1st pattern in this "),
+                        keyword_text("when"),
+                        plain_text(" is causing a mismatch:"),
+                        Region(region),
+                        pattern_type_comparision(
+                            found,
+                            expected_type,
+                            add_pattern_category(
+                                plain_text("The first pattern is trying to match"),
+                                &category,
+                            ),
+                            Concat(vec![
+                                plain_text("But the expression between "),
+                                keyword_text("when"),
+                                plain_text(" and "),
+                                keyword_text("is"),
+                                plain_text(" has the type:"),
+                            ]),
+                            vec![],
+                        ),
+                    ]);
+
+                    Report {
+                        filename,
+                        title: "TYPE MISMATCH".to_string(),
+                        text,
+                    }
+                } else {
+                    let text = Concat(vec![
+                        plain_text(&format!(
+                            "The {} pattern in this ",
+                            int_to_ordinal(index + 1)
+                        )),
+                        keyword_text("when"),
+                        plain_text(" does not match the previous ones:"),
+                        Region(region),
+                        pattern_type_comparision(
+                            found,
+                            expected_type,
+                            add_pattern_category(
+                                plain_text(&format!(
+                                    "The {} pattern is trying to match",
+                                    int_to_ordinal(index + 1)
+                                )),
+                                &category,
+                            ),
+                            plain_text("But all the previous branches match:"),
+                            vec![],
+                        ),
+                    ]);
+
+                    Report {
+                        filename,
+                        title: "TYPE MISMATCH".to_string(),
+                        text,
+                    }
+                }
+            }
+            _ => {
+                //    TypedArg { name: Box<str>, index: usize },
+                //    WhenMatch { index: usize },
+                //    CtorArg { name: Box<str>, index: usize },
+                //    ListEntry { index: usize },
+                //    Tail,
+                todo!()
+            }
+        },
+    }
+}
+
+fn pattern_type_comparision(
+    actual: ErrorType,
+    expected: ErrorType,
+    i_am_seeing: ReportText,
+    instead_of: ReportText,
+    reason_hints: Vec<ReportText>,
+) -> ReportText {
+    let comparison = to_comparison(actual, expected);
+
+    let mut lines = vec![
+        i_am_seeing,
+        comparison.actual,
+        instead_of,
+        comparison.expected,
+    ];
+
+    lines.extend(problems_to_hint(comparison.problems));
+    lines.extend(reason_hints);
+
+    ReportText::Stack(lines)
+}
+
+fn add_pattern_category(
+    i_am_trying_to_match: ReportText,
+    category: &PatternCategory,
+) -> ReportText {
+    use PatternCategory::*;
+
+    let rest = match category {
+        Record => plain_text(" record values of type:"),
+        EmptyRecord => plain_text(" an empty record:"),
+        PatternGuard => plain_text(" a pattern guard of type:"),
+        Set => plain_text(" sets of type:"),
+        Map => plain_text(" maps of type:"),
+        Ctor(tag_name) => ReportText::Concat(vec![
+            tag_name_text(tag_name.clone()),
+            plain_text(" values of type:"),
+        ]),
+        Str => plain_text(" strings:"),
+        Num => plain_text(" numbers:"),
+        Int => plain_text(" integers:"),
+        Float => plain_text(" floats"),
+    };
+
+    ReportText::Concat(vec![i_am_trying_to_match, rest])
 }
 
 fn to_circular_report(
@@ -703,9 +847,9 @@ pub enum Problem {
     BadRigidVar(Lowercase, ErrorType),
 }
 
-fn problems_to_hint(_problems: Vec<Problem>) -> ReportText {
+fn problems_to_hint(_problems: Vec<Problem>) -> Vec<ReportText> {
     // TODO
-    ReportText::Concat(vec![])
+    vec![]
 }
 
 pub struct Comparison {

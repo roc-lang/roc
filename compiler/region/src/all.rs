@@ -38,6 +38,25 @@ impl Region {
             end_col: end.end_col,
         }
     }
+
+    pub fn across_all<'a, I>(regions: I) -> Self
+    where
+        I: IntoIterator<Item = &'a Region>,
+    {
+        let mut it = regions.into_iter();
+
+        if let Some(first) = it.next() {
+            let mut result = *first;
+
+            for r in it {
+                result = Self::span_across(&result, r);
+            }
+
+            result
+        } else {
+            Self::zero()
+        }
+    }
 }
 
 #[test]

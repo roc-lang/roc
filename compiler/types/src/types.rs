@@ -598,11 +598,10 @@ pub struct RecordStructure {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PReason {
-    TypedArg { name: Box<str>, index: usize },
+    TypedArg { name: Symbol, index: usize },
     WhenMatch { index: usize },
-    CtorArg { name: Box<str>, index: usize },
+    CtorArg { name: Symbol, index: usize },
     ListEntry { index: usize },
-    Tail,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -517,7 +517,7 @@ pub fn constrain_expr(
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
                                 cond_type.clone(),
-                                region,
+                                Region::across_all(when_branch.patterns.iter().map(|v| &v.region)),
                             ),
                             FromAnnotation(
                                 name.clone(),
@@ -543,7 +543,7 @@ pub fn constrain_expr(
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
                                 cond_type.clone(),
-                                region,
+                                Region::across_all(when_branch.patterns.iter().map(|v| &v.region)),
                             ),
                             ForReason(
                                 Reason::WhenBranch { index },
