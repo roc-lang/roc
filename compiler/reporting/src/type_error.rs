@@ -748,13 +748,11 @@ fn to_pattern_report(
                     }
                 }
             }
-            _ => {
-                //    TypedArg { name: Box<str>, index: usize },
-                //    WhenMatch { index: usize },
-                //    CtorArg { name: Box<str>, index: usize },
-                //    ListEntry { index: usize },
-                //    Tail,
-                todo!()
+            PReason::TagArg { .. } => {
+                panic!("I didn't think this could trigger. Please tell Folkert about it!")
+            }
+            PReason::PatternGuard => {
+                todo!("Blocked on https://github.com/rtfeldman/roc/issues/304")
             }
         },
     }
