@@ -1,3 +1,4 @@
 hello
 *.o
 *.so
+*.a

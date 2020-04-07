@@ -1,4 +1,4 @@
-#[link(name = "roc_qs_main")]
+#[link(name = "roc_qs_main", kind = "static")]
 extern "C" {
     #[allow(improper_ctypes)]
     #[link_name = "$Test.main"]
