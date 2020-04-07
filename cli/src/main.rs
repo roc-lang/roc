@@ -24,6 +24,7 @@ use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
 
 pub mod helpers;
@@ -34,12 +35,19 @@ fn main() -> io::Result<()> {
 
     match argv.get(1) {
         Some(filename) => {
-            let mut file = File::open(filename)?;
+            let mut path = Path::new(filename).canonicalize().unwrap();
+
+            if !path.is_absolute() {
+                path = std::env::current_dir()?.join(path).canonicalize().unwrap();
+            }
+
+            // Step 1: build the .o file for the app
+            let mut file = File::open(path.clone())?;
             let mut contents = String::new();
 
             file.read_to_string(&mut contents)?;
 
-            let dest_filename = Path::new(filename).with_extension("o");
+            let dest_filename = path.with_extension("o");
 
             gen(
                 Path::new(filename).to_path_buf(),
@@ -50,7 +58,35 @@ fn main() -> io::Result<()> {
 
             let end_time = now.elapsed().unwrap();
 
-            println!("Finished in {} ms\n", end_time.as_millis());
+            println!(
+                "Finished compilation and code gen in {} ms\n",
+                end_time.as_millis()
+            );
+
+            let cwd = dest_filename.parent().unwrap();
+            let lib_path = dest_filename.with_file_name("libroc_app.a");
+
+            // Step 2: turn the .o file into a .a static library
+            Command::new("ar") // TODO on Windows, use `link`
+                .args(&[
+                    "rcs",
+                    lib_path.to_str().unwrap(),
+                    dest_filename.to_str().unwrap(),
+                ])
+                .spawn()
+                .expect("`ar` failed to run");
+
+            // Step 3: have rustc compile the host and link in the .a file
+            Command::new("rustc")
+                .args(&["-L", ".", "host.rs", "-o", "app"])
+                .current_dir(cwd)
+                .spawn()
+                .expect("rustc failed to run");
+
+            // Step 4: Run the compiled app
+            Command::new(cwd.join("app"))
+                .spawn()
+                .expect("./app failed to run");
 
             Ok(())
         }
