@@ -741,8 +741,8 @@ pub fn constrain_expr(
                 fn_expected,
             );
 
-            // TODO look up the name and use NamedFnArg if possible.
-            let fn_reason = Reason::AnonymousFnCall {
+            let fn_reason = Reason::FnCall {
+                name: opt_symbol,
                 arity: loc_args.len() as u8,
             };
 
@@ -753,7 +753,8 @@ pub fn constrain_expr(
                 let region = loc_arg.region;
                 let arg_type = Variable(*arg_var);
 
-                let reason = Reason::AnonymousFnArg {
+                let reason = Reason::FnArg {
+                    name: opt_symbol,
                     arg_index: index as u8,
                 };
 

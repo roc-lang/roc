@@ -614,10 +614,8 @@ pub enum AnnotationSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reason {
-    AnonymousFnArg { arg_index: u8 },
-    NamedFnArg(String /* function name */, u8 /* arg index */),
-    AnonymousFnCall { arity: u8 },
-    NamedFnCall(String /* function name */, u8 /* arity */),
+    FnArg { name: Option<Symbol>, arg_index: u8 },
+    FnCall { name: Option<Symbol>, arity: u8 },
     BinOpArg(BinOp, ArgSide),
     BinOpRet(BinOp),
     FloatLiteral,
@@ -709,7 +707,7 @@ pub enum ErrorType {
     RigidVar(Lowercase),
     Record(SendMap<Lowercase, ErrorType>, TypeExt),
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
-    RecursiveTagUnion(Variable, SendMap<TagName, Vec<ErrorType>>, TypeExt),
+    RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
     Alias(Symbol, Vec<(Lowercase, ErrorType)>, Box<ErrorType>),
     Boolean(boolean_algebra::Bool),

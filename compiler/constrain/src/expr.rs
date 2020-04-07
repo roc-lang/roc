@@ -238,8 +238,9 @@ pub fn constrain_expr(
             let fn_type = Variable(*fn_var);
             let fn_region = loc_fn.region;
             let fn_expected = NoExpectation(fn_type.clone());
-            // TODO look up the name and use NamedFnArg if possible.
-            let fn_reason = Reason::AnonymousFnCall {
+
+            let fn_reason = Reason::FnCall {
+                name: opt_symbol,
                 arity: loc_args.len() as u8,
             };
 
@@ -260,8 +261,9 @@ pub fn constrain_expr(
             for (index, (arg_var, loc_arg)) in loc_args.iter().enumerate() {
                 let region = loc_arg.region;
                 let arg_type = Variable(*arg_var);
-                // TODO look up the name and use NamedFnArg if possible.
-                let reason = Reason::AnonymousFnArg {
+
+                let reason = Reason::FnArg {
+                    name: opt_symbol,
                     arg_index: index as u8,
                 };
                 let expected_arg = ForReason(reason, arg_type.clone(), region);
@@ -510,7 +512,7 @@ pub fn constrain_expr(
                     for (index, when_branch) in branches.iter().enumerate() {
                         let branch_con = constrain_when_branch(
                             env,
-                            region,
+                            when_branch.value.region,
                             when_branch,
                             PExpected::ForReason(
                                 PReason::WhenMatch { index },
@@ -520,7 +522,7 @@ pub fn constrain_expr(
                             FromAnnotation(
                                 name.clone(),
                                 *arity,
-                                TypedWhenBranch(index),
+                                TypedWhenBranch(index + 1),
                                 typ.clone(),
                             ),
                         );

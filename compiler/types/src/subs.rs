@@ -410,6 +410,10 @@ impl Subs {
     pub fn rollback_to(&mut self, snapshot: Snapshot<InPlace<Variable>>) {
         self.utable.rollback_to(snapshot)
     }
+
+    pub fn commit_snapshot(&mut self, snapshot: Snapshot<InPlace<Variable>>) {
+        self.utable.commit(snapshot)
+    }
 }
 
 #[inline(always)]
@@ -1265,21 +1269,24 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
                 err_tags.insert(tag, err_vars);
             }
 
+            let rec_error_type = Box::new(var_to_err_type(subs, state, rec_var));
+
             match var_to_err_type(subs, state, ext_var).unwrap_alias() {
                 ErrorType::RecursiveTagUnion(rec_var, sub_tags, sub_ext) => {
-                    ErrorType::RecursiveTagUnion(rec_var, sub_tags.union(err_tags), sub_ext)
+                    debug_assert!(rec_var == rec_error_type);
+                    ErrorType::RecursiveTagUnion(rec_error_type, sub_tags.union(err_tags), sub_ext)
                 }
 
                 ErrorType::TagUnion(sub_tags, sub_ext) => {
-                    ErrorType::RecursiveTagUnion(rec_var, sub_tags.union(err_tags), sub_ext)
+                    ErrorType::RecursiveTagUnion(rec_error_type, sub_tags.union(err_tags), sub_ext)
                 }
 
                 ErrorType::FlexVar(var) => {
-                    ErrorType::RecursiveTagUnion(rec_var, err_tags, TypeExt::FlexOpen(var))
+                    ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::FlexOpen(var))
                 }
 
                 ErrorType::RigidVar(var) => {
-                    ErrorType::RecursiveTagUnion(rec_var, err_tags, TypeExt::RigidOpen(var))
+                    ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::RigidOpen(var))
                 }
 
                 other =>

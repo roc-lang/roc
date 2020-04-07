@@ -222,7 +222,7 @@ mod test_reporting {
             .text
             .render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
 
-        assert_eq!(buf, "x");
+        assert_eq!(buf, "`x`");
     }
 
     #[test]
@@ -296,12 +296,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                y is not used anywhere in your code.
+                `y` is not used anywhere in your code.
 
                 2 ┆  y = 2
                   ┆  ^
 
-                If you didn't intend on using y then remove it so future readers of your code don't wonder why it is there."#
+                If you didn't intend on using `y` then remove it so future readers of your code don't wonder why it is there."#
             ),
         )
     }
@@ -321,7 +321,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                i is first defined here:
+                `i` is first defined here:
 
                 1 ┆  i = 1
                   ┆  ^
@@ -353,7 +353,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                Booly is first defined here:
+                `Booly` is first defined here:
 
                 1 ┆  Booly : [ Yes, No ]
                   ┆  ^^^^^^^^^^^^^^^^^^^
@@ -860,16 +860,16 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                This `if` condition needs to be a Bool.
+                This `if` condition needs to be a Bool:
 
                 1 ┆  if "foo" then 2 else 3
                   ┆     ^^^^^
 
-                Right now it’s a string of type
+                Right now it’s a string of type:
 
                     Str
 
-                but I need every `if` condition to evaluate to a Bool—either `True` or `False`.
+                But I need every `if` condition to evaluate to a Bool—either `True` or `False`.
                 "#
             ),
         )
@@ -887,16 +887,16 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                This `if` guard condition needs to be a Bool.
+                This `if` guard condition needs to be a Bool:
 
                 2 ┆      2 if 1 -> 0x0
                   ┆           ^
 
-                Right now it’s a number of type
+                Right now it’s a number of type:
 
                     Num a
 
-                but I need every `if` guard condition to evaluate to a Bool—either `True` or `False`.
+                But I need every `if` guard condition to evaluate to a Bool—either `True` or `False`.
                 "#
             ),
         )
@@ -917,15 +917,15 @@ mod test_reporting {
                 1 ┆  if True then 2 else "foo"
                   ┆                      ^^^^^
 
-                The `else` branch is a string of type
+                The `else` branch is a string of type:
 
                     Str
 
-                but the `then` branch has the type
+                but the `then` branch has the type:
 
                     Num a
 
-                instead. I need all branches in an `if` to have the same type!
+                I need all branches in an `if` to have the same type!
                 "#
             ),
         )
@@ -950,11 +950,9 @@ mod test_reporting {
 
     //                 Str
 
-    //             but all the previous branches have the type
+    //             But all the previous branches have the type
 
     //                 Num a
-
-    //             instead.
 
     //             "#
     //         ),
@@ -973,20 +971,20 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                The 2nd branch of this `when` does not match all the previous branches
+                The 2nd branch of this `when` does not match all the previous branches:
 
                 3 ┆      3 -> {}
                   ┆           ^^
 
-                The 2nd branch is a record of type
+                The 2nd branch is a record of type:
 
                     {}
 
-                but all the previous branches have type
+                But all the previous branches have type:
 
                     Str
 
-                instead. I need all branches of a `when` to have the same type!
+                I need all branches of a `when` to have the same type!
                 "#
             ),
         )
@@ -1002,20 +1000,20 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                The 3rd element of this list does not match all the previous elements
+                The 3rd element of this list does not match all the previous elements:
 
                 1 ┆  [ 1, 3, "foo" ]
                   ┆          ^^^^^
 
-                The 3rd element is a string of type
+                The 3rd element is a string of type:
 
                     Str
 
-                but all the previous elements in the list have type
+                But all the previous elements in the list have type:
 
                     Num a
 
-                instead. I need all elements of a list to have the same type!
+                I need all elements of a list to have the same type!
                 "#
             ),
         )
@@ -1034,20 +1032,20 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                I cannot update the .foo field like this
+                I cannot update the `.foo` field like this:
 
                 4 ┆  { x & foo: "bar" }
                   ┆  ^^^^^^^^^^^^^^^^^^
 
-                You are trying to update .foo to be a string of type
+                You are trying to update `.foo` to be a string of type:
 
                     Str
 
-                But it should be
+                But it should be:
 
                     {}
 
-                instead. Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax.
+                Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax.
                 "#
             ),
         )
@@ -1067,12 +1065,12 @@ mod test_reporting {
     //            ),
     //            indoc!(
     //                r#"
-    //                The `x` record does not have a `baz` field
+    //                The `x` record does not have a `baz` field:
     //
     //                4 ┆  { x & baz: "bar" }
     //                  ┆        ^^^
     //
-    //                This is usually a typo. Here are the `x` fields that are most similar
+    //                This is usually a typo. Here are the `x` fields that are most similar:
     //
     //                    { foo : {}
     //                    }
@@ -1096,20 +1094,19 @@ mod test_reporting {
     //            ),
     //            indoc!(
     //                r#"
-    //                Something is off with the body of the `x` definition
+    //                Something is off with the body of the `x` definition:
     //
     //                4 ┆  x = 4
     //                  ┆      ^
     //
-    //                The body is a number of type
+    //                The body is a number of type:
     //
     //                    Num a
     //
-    //                But the type annotation on `x` says that it should be
+    //                But the type annotation on `x` says that it should be:
     //
     //                    Str
     //
-    //                instead.
     //                "#
     //            ),
     //        )
@@ -1127,7 +1124,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                I'm inferring a weird self-referential type for g:
+                I'm inferring a weird self-referential type for `g`:
 
                 1 ┆  f = \g -> g g
                   ┆       ^
@@ -1152,7 +1149,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                I'm inferring a weird self-referential type for f:
+                I'm inferring a weird self-referential type for `f`:
 
                 1 ┆  f = \x -> f [x]
                   ┆  ^
@@ -1160,6 +1157,202 @@ mod test_reporting {
                 Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.
 
                     List ∞ -> a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_field_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                bar = { bar : 0x3 }
+
+                f : { foo : Int } -> Bool
+                f = \_ -> True
+
+                f bar
+                "#
+            ),
+            indoc!(
+                r#"
+                The 1st argument to `f` is not what I expect:
+
+                6 ┆  f bar
+                  ┆    ^^^
+
+                This `bar` value is a:
+
+                    { bar : Int }
+
+                But `f` needs the 1st argument to be:
+
+                    { foo : Int }
+
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn tag_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : [ Red, Green ] -> Bool
+                f = \_ -> True
+
+                f Blue
+                "#
+            ),
+            indoc!(
+                r#"
+                The 1st argument to `f` is not what I expect:
+
+                4 ┆  f Blue
+                  ┆    ^^^^
+
+                This `Blue` global tag application has the type:
+
+                    [ Blue ]a
+
+                But `f` needs the 1st argument to be:
+
+                    [ Green, Red ]
+
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn tag_with_arguments_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : [ Red Int, Green Bool ] -> Bool
+                f = \_ -> True
+
+                f (Blue 3.14)
+                "#
+            ),
+            indoc!(
+                r#"
+                The 1st argument to `f` is not what I expect:
+
+                4 ┆  f (Blue 3.14)
+                  ┆     ^^^^^^^^^
+
+                This `Blue` global tag application has the type:
+
+                    [ Blue Float ]a
+
+                But `f` needs the 1st argument to be:
+
+                    [ Green Bool, Red Int ]
+
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn from_annotation_if() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : Int
+                x = if True then 3.14 else 4
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                Something is off with the 1st branch of this `if` expression:
+
+                2 ┆  x = if True then 3.14 else 4
+                  ┆                   ^^^^
+
+                The 1st branch is a float of type:
+
+                    Float
+
+                But the type annotation on `x` says it should be:
+
+                    Int
+
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn from_annotation_when() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : Int
+                x = 
+                    when True is
+                        _ -> 3.14
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                Something is off with the 1st branch of this `when` expression:
+
+                4 ┆          _ -> 3.14
+                  ┆               ^^^^
+
+                The 1st branch is a float of type:
+
+                    Float
+
+                But the type annotation on `x` says it should be:
+
+                    Int
+
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn from_annotation_function() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : Int -> Int
+                x = \_ -> 3.14
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                Something is off with the body of the `x` definition:
+
+                2 ┆  x = \_ -> 3.14
+                  ┆      ^^^^^^^^^^
+
+                The body is an anonymous function of type:
+
+                    Int -> Float
+
+                But the type annotation on `x` says it should be:
+
+                    Int -> Int
+
+
                 "#
             ),
         )
