@@ -37,19 +37,69 @@ interface Float
 ##
 ## >>> 1_000_000.000_000_001
 ##
-## Unlike #Int values, #Float values are imprecise. A classic example of this imprecision:
+## Roc supports two types of floating-point numbers:
+##
+## - *Decimal* floating-point numbers
+## - *Binary* floating-point numbers
+##
+## Decimal floats are precise for decimal calculations. For example:
 ##
 ## >>> 0.1 + 0.2
 ##
-## Floating point values work this way because of some (very reasonable) hardware design decisions made in 1985, which are hardwired into all modern CPUs. The performance penalty for having things work any other way than this is severe, so Roc defaults to using the one with hardware support.
+## Operations on binary floats tend to run *much* faster than operations on
+## decimal floats, because almost all processors have dedicated instructions
+## for binary floats and not for decimal floats.
+## However, binary floats are less precise for decimal calculations.
 ##
-## It is possible to build fractional systems with different precision characteristics (for example, storing an #Int numerator and #Int denominator), but their basic arithmetic operations will be unavoidably slower than #Float.
+## For example, here is the same `0.1 + 0.2` calculation again, this time putting
+## `f64` after the numbers to specify that they should be #F64 binary floats
+## instead of the default of decimal floats.
 ##
-## See #Float.highest and #Float.lowest for the highest and
-## lowest values that can be held in a #Float.
+## >>> 0.1f64 + 0.2f64
 ##
-## Like #Int, it's possible for #Float operations to overflow.
-## if they exceed the bounds of #Float.highest and #Float.lowest. When this happens:
+## If decimal precision is unimportant, binary floats give better performance.
+## If decimal precision is important - for example, when representing money -
+## decimal floats tend to be worth the performance cost.
+##
+## Usually, Roc's compiler can infer a more specific type than #Float for
+## a particular float value, based on how it is used with other numbers. For example:
+##
+## >>> coordinates : { x : F32, y : F32 }
+## >>> coordinates = { x: 1, y: 2.5 }
+## >>>
+## >>> coordinates.x + 1
+##
+## On the last line, the compiler infers that the `1` in `+ 1` is an #F32
+## beacuse it's being added to `coordinates.x`, which was defined to be an #F32
+## on the first line.
+##
+## Sometimes the compiler has no information about which specific type to pick.
+## For example:
+##
+## >>> 0.1 + 0.2 == 0.3
+##
+## When this happens, the compiler defaults to choosing #D64 decimal floats.
+## If you want something else, you can write (for example) `0.1f32 + 0.2 == 0.3`
+## to compare them as #F32 values instead.
+##
+## Both decimal and binary #Float values conform to the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754#Interchange_formats)
+## specification for floating point numbers. Conforming to this specification
+## means Roc's binary floats have nearly universal hardware support, and its
+## decimal floats have [some hardware support](http://speleotrove.com/decimal/)
+## among the rare processors which support decimal float instructions at all.
+##
+## This specification covers these float formats, all of which Roc supports:
+##
+## - #F16 (16-bit binary float) # TODO show a table like we do with ints, with the min/max ranges
+## - #F32 (32-bit binary float)
+## - #F64 (64-bit binary float)
+## - #F128 (128-bit binary float)
+## - #D32 (32-bit decimal float)
+## - #D64 (64-bit decimal float)
+## - #D128 (128-bit decimal float)
+##
+## Like #Int, it's possible for #Float operations to overflow. Like with ints,
+## you'll typically get a crash when this happens.
 ##
 ## * In a development build, you'll get an assertion failure.
 ## * In an optimized build, you'll get [`Infinity` or `-Infinity`](https://en.wikipedia.org/wiki/IEEE_754-1985#Positive_and_negative_infinity).
@@ -78,25 +128,34 @@ interface Float
 ## is that they have quiet error handling built in. For example, in
 ## a 64-bit floating point number, there are certain patterns of those
 ## 64 bits which do not represent valid floats; instead, they represent
-## erroneous results of previous operations.
+## invalid results of previous operations.
 ##
-## Whenever any arithmetic operation is performed on an erroneous float,
-## the result is also erroneous. This is called *error propagation*, and
+## Whenever any arithmetic operation is performed on an invalid float,
+## the result is also invalid. This is called *error propagation*, and
 ## it is notoriously error-prone. In Roc, using equality operations like
-## `==` and `!=` on an erroneous float causes a crash. (See #Float.isErroneous
-## for other ways to check what erroneous value you have.)
+## `==` and `!=` on an invalid float causes a crash. (See #Float.verify
+## to check the validity of your float.)
 ##
-## Beause erroneous floats are so error-prone, Roc discourages using them.
+## Beause invalid floats are so error-prone, Roc discourages using them.
 ## Instead, by default it treats them the same way as overflow: by
 ## crashing whenever any #Float function would otherwise return one.
 ## You can also use functions like #Float.tryAdd to get an `Ok` or an error
-## back so you can gracefully recover from erroneous values.
+## back so you can gracefully recover from invalid values.
 ##
 ## Quiet errors can be useful sometimes. For example, you might want to
 ## do three floating point calculations in a row, and then gracefully handle
-## the situation where any one of the three was erroneous. In that situation,
+## the situation where any one of the three was invalid. In that situation,
 ## quiet errors can be more efficient than using three `try` functions, because
 ## it can have one condition at the end instead of three along the way.
+##
+## Another potential use for quiet errors is for risky performance optimizations.
+## When you are absolutely certain there is no chance of overflow or other
+## errors, using a *quiet* operation may save an entry in the instruction cache
+## by removing a branch that would always have been predicted correctly.
+## Always [measure the performance change](https://youtu.be/r-TLSBdHe1A)
+## if you do this! The compiler can optimize away those branches behind the scenes,
+## so you may find that using the quiet version expliitly
+## makes the code riskier to future change, without actually affecting performance.
 ##
 ## ## Performance Notes
 ##
@@ -201,7 +260,7 @@ tryRecip : Float a -> Result (Float a) [ DivByZero ]*
 
 ## Return an approximation of the absolute value of the square root of the #Float.
 ##
-## Return #InvalidSqrt if given a negative number or an erroneous #Float. The square root of a negative number is an irrational number, and #Float only supports rational numbers.
+## Return #InvalidSqrt if given a negative number or an invalid #Float. The square root of a negative number is an irrational number, and #Float only supports rational numbers.
 ##
 ## >>> Float.sqrt 4.0
 ##
@@ -247,16 +306,40 @@ asc : Float a, Float a -> [ Eq, Lt, Gt ]
 ##
 desc : Float a, Float a -> [ Eq, Lt, Gt ]
 
-## Returns `True` when given #NaN, #Infiniy, or #Infinity,
-## and `False` otherwise.
+## Any float that resulted from a quiet operation may be invalid.
+## This verifies whether they are still valid or have become invalid.
 ##
-## >>> Float.isErroneous (Float.sqrtQuiet -2)
+## >>> Float.verify (Float.quietSqrt -2)
 ##
-## >>> Float.isErroneous (Float.sqrtQuiet 2)
+## >>> Float.verify (Float.quietSqrt 2)
 ##
-## To check more specifically which erroneneous value you have, see
-## #Float.isNaN, #Float.isInfinite, #Float.isInfinity, and #Float.isNegativeInfinity
-isErroneous : Float * -> Bool
+## >>> Float.verify (Float.quietDiv 1 0)
+##
+## >>> Float.verify (Float.quietDiv -1 0)
+##
+## Note that even if you personally never use *quiet* operations, any float
+## you get from outside your code base, such as the host or a third-party module,
+## may be invalid.
+verify : Float * -> [ Valid, Infinity, MinusInfinity, NaN ]
+
+## Any float that resulted from a quiet operation may be invalid.
+## This returns `True` if the float is still valid.
+##
+## >>> Float.isValid (Float.quietSqrt -2)
+##
+## >>> Float.isValid (Float.quietSqrt 2)
+##
+## >>> Float.isValid (Float.quietDiv 1 0)
+##
+## >>> Float.isValid (Float.quietDiv -1 0)
+##
+## This will return `True` if calling #Float.verify on this float returns `Valid`,
+## and will return `False` otherwise.
+##
+## Note that even if you personally never use *quiet* operations, any float
+## you get from outside your code base, such as the host or a third-party module,
+## may be invalid.
+isValid : Float * -> Bool
 
 ## Limits
 
