@@ -130,7 +130,23 @@ fn to_expr_report(
 
     match expected {
         Expected::NoExpectation(expected_type) => {
-            todo!("hit no expectation with type {:?}", expected_type)
+            let comparison = type_comparison(
+                found,
+                expected_type,
+                add_category(plain_text("It is"), &category),
+                plain_text("But you are trying to use it as:"),
+                Concat(vec![]),
+            );
+
+            Report {
+                filename,
+                title: "TYPE MISMATCH".to_string(),
+                text: Concat(vec![
+                    plain_text("This expression is used in an unexpected way:"),
+                    Region(expr_region),
+                    comparison,
+                ]),
+            }
         }
         Expected::FromAnnotation(name, _arity, annotation_source, expected_type) => {
             use roc_types::types::AnnotationSource::*;
