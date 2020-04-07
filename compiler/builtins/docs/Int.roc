@@ -16,7 +16,7 @@ interface Int
 ## #U8 is an an example of an integer. It is an unsigned #Int that takes up 8 bits
 ## (aka 1 byte) in memory. The `U` is for Unsigned and the 8 is for 8 bits.
 ## Because it has 8 bits to work with, it can store 256 numbers (2^8),
-## and because it is unsigned, its lowest value is 0. This means the 256 numbers
+## and because it is unsigned, its min value is 0. This means the 256 numbers
 ## it can store range from 0 to 255.
 ##
 ## #I8 is a signed integer that takes up 8 bits. The `I` is for Integer, since
@@ -82,7 +82,7 @@ Ulen : Int @Ulen
 ##
 ## Integers come in two flavors: *signed* and *unsigned*.
 ##
-## * *Unsigned* integers can never be negative. The lowest value they can hold is zero.
+## * *Unsigned* integers can never be negative. The min value they can hold is zero.
 ## * *Signed* integers can be negative.
 ##
 ## Integers also come in different sizes. Choosing a size depends on your performance
@@ -135,7 +135,7 @@ Ulen : Int @Ulen
 ## and #Ilen is the same as #I32. In practice, #Ulen sees much more use than #Ilen.
 ##
 ## If any operation would result in an #Int that is either too big
-## or too small to fit in that range (e.g. calling `Int.highestI32 + 1`),
+## or too small to fit in that range (e.g. calling `Int.maxI32 + 1`),
 ## then the operation will *overflow*. When an overflow occurs, the program will crash.
 ##
 ## As such, it's very important to design your code not to exceed these bounds!
@@ -198,13 +198,13 @@ Ulen : Int @Ulen
 
 #bitwiseNot : Int -> Int
 
-## Sort ascending - that is, with the lowest first, and the highest last.
+## Sort ascending - that is, with the min first, and the max last.
 ##
 ##     List.sort Int.asc [ 3, 6, 0 ]
 ##
 asc : Int a, Int a -> [ Eq, Lt, Gt ]
 
-## Sort descending - that is, with the highest first, and the lowest last.
+## Sort descending - that is, with the max first, and the min last.
 ##
 ##     List.sort Int.desc [ 3, 6, 0 ]
 ##
@@ -224,16 +224,16 @@ hash64 : a -> U64
 
 ## Limits
 
-## The highest number that can be stored in an #I32 without overflowing its
+## The max number that can be stored in an #I32 without overflowing its
 ## available memory and crashing.
 ##
-## Note that this is smaller than the positive version of #Int.lowestI32
-## which means if you call #Num.abs on #Int.lowestI32, it will overflow and crash!
+## Note that this is smaller than the positive version of #Int.minI32
+## which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
 maxI32 : I32
 
-## The lowest number that can be stored in an #I32 without overflowing its
+## The min number that can be stored in an #I32 without overflowing its
 ## available memory and crashing.
 ##
 ## Note that the positive version of this number is this is larger than
-## #Int.highestI32, which means if you call #Num.abs on #Int.lowestI32, it will overflow and crash!
+## #Int.maxI32, which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
 minI32 : I32
