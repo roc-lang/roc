@@ -86,8 +86,13 @@ fn main() -> io::Result<()> {
             // Step 4: Run the compiled app
             Command::new(cwd.join("app"))
                 .spawn()
-                .expect("./app failed to run");
-
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "{} failed to run: {:?}",
+                        cwd.join("app").to_str().unwrap(),
+                        err
+                    )
+                });
             Ok(())
         }
         None => {
