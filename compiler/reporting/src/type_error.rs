@@ -129,7 +129,9 @@ fn to_expr_report(
     use ReportText::*;
 
     match expected {
-        Expected::NoExpectation(expected_type) => todo!("hit no expectation with type {:?}", expected_type),
+        Expected::NoExpectation(expected_type) => {
+            todo!("hit no expectation with type {:?}", expected_type)
+        }
         Expected::FromAnnotation(name, _arity, annotation_source, expected_type) => {
             use roc_types::types::AnnotationSource::*;
 
@@ -137,30 +139,50 @@ fn to_expr_report(
 
             // TODO special-case 2-branch if
             let thing = match annotation_source {
-                TypedIfBranch ( index ) => Concat(vec![ plain_text(&format!("{} branch of this ", int_to_ordinal(index))), keyword_text("if"), plain_text(" expression:") ]),
-                TypedWhenBranch ( index ) => Concat(vec![ plain_text(&format!("{} branch of this ", int_to_ordinal(index))), keyword_text("when"), plain_text(" expression:") ]),
-                TypedBody => Concat(vec![ plain_text("body of the "), name_text.clone(), plain_text(" definition:") ]),
+                TypedIfBranch(index) => Concat(vec![
+                    plain_text(&format!("{} branch of this ", int_to_ordinal(index))),
+                    keyword_text("if"),
+                    plain_text(" expression:"),
+                ]),
+                TypedWhenBranch(index) => Concat(vec![
+                    plain_text(&format!("{} branch of this ", int_to_ordinal(index))),
+                    keyword_text("when"),
+                    plain_text(" expression:"),
+                ]),
+                TypedBody => Concat(vec![
+                    plain_text("body of the "),
+                    name_text.clone(),
+                    plain_text(" definition:"),
+                ]),
             };
 
             let it_is = match annotation_source {
-                TypedIfBranch ( index ) => format!("The {} branch is", int_to_ordinal(index)),
-                TypedWhenBranch ( index ) => format!("The {} branch is", int_to_ordinal(index)),
+                TypedIfBranch(index) => format!("The {} branch is", int_to_ordinal(index)),
+                TypedWhenBranch(index) => format!("The {} branch is", int_to_ordinal(index)),
                 TypedBody => "The body is".into(),
             };
 
-            let comparison =
-                type_comparison(
-                    found,
-                    expected_type,
-                    add_category(plain_text(&it_is), &category),
-                    Concat(vec![ plain_text("But the type annotation on "), name_text, plain_text(" says it should be:")]),
-                    Concat(vec![]),
-                );
+            let comparison = type_comparison(
+                found,
+                expected_type,
+                add_category(plain_text(&it_is), &category),
+                Concat(vec![
+                    plain_text("But the type annotation on "),
+                    name_text,
+                    plain_text(" says it should be:"),
+                ]),
+                Concat(vec![]),
+            );
 
             Report {
                 title: "TYPE MISMATCH".to_string(),
                 filename,
-                text: Concat(vec![ plain_text("Something is off with the "), thing , Region(expr_region),  comparison ]),
+                text: Concat(vec![
+                    plain_text("Something is off with the "),
+                    thing,
+                    Region(expr_region),
+                    comparison,
+                ]),
             }
         }
         Expected::ForReason(reason, expected_type, region) => match reason {
@@ -337,7 +359,7 @@ fn to_expr_report(
                     plain_text("I need all elements of a list to have the same type!"),
                 )
             }
-            Reason::RecordUpdateValue(field) => { report_mismatch(
+            Reason::RecordUpdateValue(field) => report_mismatch(
                 filename,
                 &category,
                 found,
@@ -355,9 +377,105 @@ fn to_expr_report(
                     plain_text(" to be"),
                 ]),
                 plain_text("But it should be:"),
-                plain_text("Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax."),
-            )}
-            Reason::FnArg { name , arg_index } => {
+                plain_text(
+                    r#"Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax."#,
+                ),
+            ),
+            Reason::FnCall { name, arity } => match count_arguments(&found) {
+                0 => {
+                    let this_value = match name {
+                        None => plain_text("This value"),
+                        Some(symbol) => Concat(vec![
+                            plain_text("The "),
+                            Value(symbol),
+                            plain_text(" value"),
+                        ]),
+                    };
+
+                    let lines = vec![
+                        Concat(vec![
+                            this_value,
+                            plain_text(&format!(
+                                " is not a function, but it was given {}:",
+                                if arity == 1 {
+                                    "1 argument".into()
+                                } else {
+                                    format!("{} arguments", arity)
+                                }
+                            )),
+                        ]),
+                        ReportText::Region(expr_region),
+                        plain_text("Are there any missing commas? Or missing parentheses?"),
+                    ];
+
+                    Report {
+                        filename,
+                        title: "TOO MANY ARGS".to_string(),
+                        text: Concat(lines),
+                    }
+                }
+                n => {
+                    let this_function = match name {
+                        None => plain_text("This function"),
+                        Some(symbol) => Concat(vec![
+                            plain_text("The "),
+                            Value(symbol),
+                            plain_text(" function"),
+                        ]),
+                    };
+
+                    if n < arity as usize {
+                        let lines = vec![
+                            Concat(vec![
+                                this_function,
+                                plain_text(&format!(
+                                    " expects {}, but it got {} instead:",
+                                    if n == 1 {
+                                        "1 argument".into()
+                                    } else {
+                                        format!("{} arguments", n)
+                                    },
+                                    arity
+                                )),
+                            ]),
+                            ReportText::Region(expr_region),
+                            plain_text("Are there any missing commas? Or missing parentheses?"),
+                        ];
+
+                        Report {
+                            filename,
+                            title: "TOO MANY ARGS".to_string(),
+                            text: Concat(lines),
+                        }
+                    } else {
+                        let lines = vec![
+                            Concat(vec![
+                                this_function,
+                                plain_text(&format!(
+                                    " expects {}, but it got only {}:",
+                                    if n == 1 {
+                                        "1 argument".into()
+                                    } else {
+                                        format!("{} arguments", n)
+                                    },
+                                    arity
+                                )),
+                            ]),
+                            ReportText::Region(expr_region),
+                            plain_text(
+                                r#"Roc does not allow functions to be partially applied. Use a closure to make partial application explicit."#,
+                            ),
+                        ];
+
+                        Report {
+                            filename,
+                            title: "TOO FEW ARGS".to_string(),
+                            text: Concat(lines),
+                        }
+                    }
+                }
+            },
+            Reason::FnArg { name, arg_index } => {
                 let ith = int_to_ordinal(arg_index as usize + 1);
 
                 let this_function = match name {
@@ -372,13 +490,19 @@ fn to_expr_report(
                     expected_type,
                     region,
                     Some(expr_region),
-                    Concat(vec![ plain_text(&format!("The {} argument to ", ith))
-                        , this_function.clone(), plain_text(" is not what I expect:" )]),
+                    Concat(vec![
+                        plain_text(&format!("The {} argument to ", ith)),
+                        this_function.clone(),
+                        plain_text(" is not what I expect:"),
+                    ]),
                     plain_text("This argument is"),
-                    Concat(vec![ plain_text("But "), this_function, plain_text(&format!(" needs the {} argument to be:", ith))]),
+                    Concat(vec![
+                        plain_text("But "),
+                        this_function,
+                        plain_text(&format!(" needs the {} argument to be:", ith)),
+                    ]),
                     plain_text(""),
                 )
-
             }
             other => {
                 //    NamedFnArg(String /* function name */, u8 /* arg index */),
@@ -395,6 +519,17 @@ fn to_expr_report(
                 todo!("I don't have a message yet for reason {:?}", other)
             }
         },
+    }
+}
+
+fn count_arguments(tipe: &ErrorType) -> usize {
+    use ErrorType::*;
+
+    match tipe {
+        Function(args, _) => args.len(),
+        Type(Symbol::ATTR_ATTR, args) => count_arguments(&args[1]),
+        Alias(_, _, actual) => count_arguments(actual),
+        _ => 0,
     }
 }
 

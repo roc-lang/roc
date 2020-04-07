@@ -1357,4 +1357,73 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn fncall_value() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : Int
+                x = 42
+
+                x 3
+                "#
+            ),
+            indoc!(
+                r#"
+                The `x` value is not a function, but it was given 1 argument:
+
+                4 ┆  x 3
+                  ┆  ^
+
+                Are there any missing commas? Or missing parentheses?"#
+            ),
+        )
+    }
+
+    #[test]
+    fn fncall_overapplied() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Int -> Int
+                f = \_ -> 42
+
+                f 1 2
+                "#
+            ),
+            indoc!(
+                r#"
+                The `f` function expects 1 argument, but it got 2 instead:
+
+                4 ┆  f 1 2
+                  ┆  ^
+
+                Are there any missing commas? Or missing parentheses?"#
+            ),
+        )
+    }
+
+    #[test]
+    fn fncall_underapplied() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Int, Int -> Int
+                f = \_, _ -> 42
+
+                f 1
+                "#
+            ),
+            indoc!(
+                r#"
+                The `f` function expects 2 arguments, but it got only 1:
+
+                4 ┆  f 1
+                  ┆  ^
+
+                Roc does not allow functions to be partially applied. Use a closure to make partial application explicit."#
+            ),
+        )
+    }
 }
