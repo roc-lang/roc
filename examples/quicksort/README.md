@@ -4,7 +4,7 @@ Right now, there is only one way to build Roc programs: the Rube Goldberg Build 
 (In the future, it will be nicer. At the moment, the nicer build system exists only 
 in our imaginations...so Rube Goldberg it is!)
 
-*NOTE:* On macOS or Linux, you can run `sudo ./build.sh` from this directory instead of following these instructions.
+*NOTE:* On macOS or Linux, you can run `./build.sh` from this directory instead of following these instructions.
 
 ## Ingredients
 
@@ -14,17 +14,17 @@ in our imaginations...so Rube Goldberg it is!)
 
 ## Steps
 
-1. `cd` into `examples/hello-world/`
-2. Run `cargo run hello.roc` to compile the Roc source code into a `hello.o` file.
-3. Run `gcc -shared hello.o -o libroc_qs_main.so` to generate `libroc_qs_main.so`. (This filename must begin with `lib` and end in `.so` or else `host.rs` won't be able to find it!)
-4. Move `libroc_qs_main.so` onto the system library path, e.g. with `sudo mv libroc_qs_main.so /usr/local/lib/` on macOS, or `sudo mv libroc_qs_main.so /usr/local/lib /usr/lib` on Linux.
-5. Run `rustc host.rs -o qs` to generate the `qs` executable.
-6. Run `./qs` to see the output!
+1. `cd` into `examples/quicksort/`
+2. Run `cargo run qs.roc` to compile the Roc source code into a `qs.o` file.
+3. Run `ar rcs libroc_qs_main.a qs.o` to generate `libroc_qs_main.a`. (This filename must begin with `lib` and end in `.a` or else `host.rs` won't be able to find it!)
+4. Run `rustc -L . host.rs -o qs` to generate the `qs` executable.
+5. Run `./qs` to see the output!
+
 
 To run in release mode instead, do:
 
 ```bash
-cargo run --release hello.roc
+cargo run --release qs.roc
 ```
 
 ## Design Notes
