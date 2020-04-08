@@ -1004,7 +1004,7 @@ mod test_solve {
                     xEmpty = if thunk {} == 42 then { x: {} } else { x: {} }
 
                     when xEmpty is
-                        { x: {} } -> x
+                        { x: {} } -> {}
                 "#
             ),
             "{}",
@@ -1138,7 +1138,7 @@ mod test_solve {
             indoc!(
                 r#"
                     when { x: 5 } is
-                        { x: 4 } -> x
+                        { x: 4 } -> 4
                 "#
             ),
             "Num *",

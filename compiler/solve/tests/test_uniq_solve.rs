@@ -908,7 +908,7 @@ mod test_uniq_solve {
                     xEmpty = if thunk {} == 42 then { x: {} } else { x: {} }
 
                     when xEmpty is
-                        { x: {} } -> x
+                        { x: {} } -> {}
             "#
             ),
             "Attr * {}",
@@ -1046,7 +1046,7 @@ mod test_uniq_solve {
             indoc!(
                 r#"
                     when { x: 5 } is
-                        { x: 4 } -> x
+                        { x: 4 } -> 4
                 "#
             ),
             "Attr * (Num (Attr * *))",

@@ -882,6 +882,12 @@ pub mod suggest {
         }
     }
 
+    impl ToStr for &str {
+        fn to_str(&self) -> &str {
+            self
+        }
+    }
+
     pub fn sort<'a, T>(typo: &'a str, mut options: Vec<T>) -> Vec<T>
     where
         T: ToStr,

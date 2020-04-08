@@ -1500,36 +1500,98 @@ mod test_reporting {
         )
     }
 
-    // Currently hits a bug where `x` is marked as unused
-    // https://github.com/rtfeldman/roc/issues/304
-    //    #[test]
-    //    fn pattern_guard_mismatch() {
-    //        report_problem_as(
-    //            indoc!(
-    //                r#"
-    //                when { foo: 1 } is
-    //                    { x: True } -> 42
-    //                "#
-    //            ),
-    //            indoc!(
-    //                r#"
-    //                The 2nd pattern in this `when` does not match the previous ones:
-    //
-    //                3 ┆      {} -> 42
-    //                  ┆      ^^
-    //
-    //                The 2nd pattern is trying to match record values of type:
-    //
-    //                    {}a
-    //
-    //                But all the previous branches match:
-    //
-    //                    Num a
-    //
-    //                "#
-    //            ),
-    //        )
-    //    }
+    #[test]
+    fn pattern_guard_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 when { foo: 1 } is
+                     { foo: True } -> 42
+                 "#
+            ),
+            indoc!(
+                r#"
+                The 1st pattern in this `when` is causing a mismatch:
+
+                2 ┆      { foo: True } -> 42
+                  ┆      ^^^^^^^^^^^^^
+
+                The first pattern is trying to match record values of type:
+
+                    { foo : [ True ]a }
+
+                But the expression between `when` and `is` has the type:
+
+                    { foo : Num a }
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_guard_does_not_bind_label() {
+        // needs some improvement, but the principle works
+        report_problem_as(
+            indoc!(
+                r#"
+                 when { foo: 1 } is
+                     { foo: 2 } -> foo
+                 "#
+            ),
+            indoc!(
+                r#"
+                I cannot find a `foo` value
+
+
+                2 ┆      { foo: 2 } -> foo
+                  ┆                    ^^^
+
+
+                these names seem close though:
+                    Bool
+                    Int
+                    Num
+                    Map
+                    
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_guard_can_be_shadowed_above() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = 3
+
+                when { foo: 1 } is
+                    { foo: 2 } -> foo
+                 "#
+            ),
+            // should give no error
+            "",
+        )
+    }
+
+    #[test]
+    fn pattern_guard_can_be_shadowed_below() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when { foo: 1 } is
+                    { foo: 2 } -> 
+                        foo = 3
+
+                        foo
+                 "#
+            ),
+            // should give no error
+            "",
+        )
+    }
 
     #[test]
     fn pattern_or_pattern_mismatch() {

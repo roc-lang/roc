@@ -1,5 +1,6 @@
 use crate::report::ReportText::{BinOp, Concat, Module, Region, Value};
 use bumpalo::Bump;
+use roc_collections::all::MutSet;
 use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
@@ -130,8 +131,16 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
                 shadowing_report(&mut texts, original_region, shadow);
             }
 
-            _ => {
-                panic!("TODO implement run time error reporting");
+            RuntimeError::LookupNotInScope(loc_name, options) => {
+                texts.push(not_found(
+                    loc_name.region,
+                    &loc_name.value,
+                    "value",
+                    options,
+                ));
+            }
+            other => {
+                todo!("TODO implement run time error reporting for {:?}", other);
             }
         },
     };
@@ -154,6 +163,53 @@ fn shadowing_report(
     texts.push(plain_text("But then it's defined a second time here:"));
     texts.push(Region(shadow.region));
     texts.push(plain_text("Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."));
+}
+
+fn not_found(
+    region: roc_region::all::Region,
+    name: &str,
+    thing: &str,
+    options: MutSet<Box<str>>,
+) -> ReportText {
+    use crate::type_error::suggest;
+
+    let mut suggestions = suggest::sort(name, options.iter().map(|v| v.as_ref()).collect());
+    suggestions.truncate(4);
+
+    let to_details = |no_suggestion_details, yes_suggestion_details| {
+        if suggestions.is_empty() {
+            no_suggestion_details
+        } else {
+            ReportText::Stack(vec![
+                yes_suggestion_details,
+                ReportText::Indent(
+                    4,
+                    Box::new(ReportText::Stack(
+                        suggestions
+                            .into_iter()
+                            .map(|v: &str| plain_text(v))
+                            .collect(),
+                    )),
+                ),
+            ])
+        }
+    };
+
+    let default_no = ReportText::Concat(vec![
+        plain_text("Is there an "),
+        keyword_text("import"),
+        plain_text(" or "),
+        keyword_text("exposing"),
+        plain_text(" missing up-top?"),
+    ]);
+
+    let default_yes = plain_text("these names seem close though:");
+
+    ReportText::Stack(vec![
+        plain_text(&format!("I cannot find a `{}` {}", name, thing)),
+        ReportText::Region(region),
+        to_details(default_no, default_yes),
+    ])
 }
 
 #[derive(Debug, Clone)]
