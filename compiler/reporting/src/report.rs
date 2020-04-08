@@ -13,6 +13,8 @@ use roc_region::all::Located;
 use std::fmt;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
 
+const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annotations always help me give more specific messages, and I think they could help a lot in this case"#;
+
 /// A textual report.
 pub struct Report {
     pub title: String,
@@ -32,6 +34,8 @@ pub struct Palette<'a> {
     pub gutter_bar: &'a str,
     pub module_name: &'a str,
     pub binop: &'a str,
+    pub typo: &'a str,
+    pub typo_suggestion: &'a str,
 }
 
 pub const DEFAULT_PALETTE: Palette = Palette {
@@ -46,6 +50,8 @@ pub const DEFAULT_PALETTE: Palette = Palette {
     gutter_bar: MAGENTA_CODE,
     module_name: GREEN_CODE,
     binop: GREEN_CODE,
+    typo: YELLOW_CODE,
+    typo_suggestion: GREEN_CODE,
 };
 
 pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
@@ -163,6 +169,8 @@ pub enum ReportText {
     /// A type. Render it using roc_types::pretty_print for now, but maybe
     /// do something fancier later.
     Type(Content),
+
+    TypeProblem(crate::type_error::Problem),
 
     ErrorTypeInline(ErrorType),
     ErrorTypeBlock(Box<ReportText>),
@@ -307,6 +315,9 @@ pub enum Annotation {
     CodeBlock,
     TypeBlock,
     Module,
+    Typo,
+    TypoSuggestion,
+    Hint,
 }
 
 /// Render with minimal formatting
@@ -374,7 +385,9 @@ where
             Url => {
                 self.write_str("<")?;
             }
-            GlobalTag | PrivateTag | Keyword | RecordField | Symbol if !self.in_type_block => {
+            GlobalTag | PrivateTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
+                if !self.in_type_block =>
+            {
                 self.write_str("`")?;
             }
 
@@ -399,7 +412,9 @@ where
                 Url => {
                     self.write_str(">")?;
                 }
-                GlobalTag | PrivateTag | Keyword | RecordField | Symbol if !self.in_type_block => {
+                GlobalTag | PrivateTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
+                    if !self.in_type_block =>
+                {
                     self.write_str("`")?;
                 }
 
@@ -435,7 +450,7 @@ where
             Emphasized => {
                 self.write_str(BOLD_CODE)?;
             }
-            Url => {
+            Url | Hint => {
                 self.write_str(UNDERLINE_CODE)?;
             }
             PlainText => {
@@ -471,6 +486,12 @@ where
             Module => {
                 self.write_str(self.palette.module_name)?;
             }
+            Typo => {
+                self.write_str(self.palette.typo)?;
+            }
+            TypoSuggestion => {
+                self.write_str(self.palette.typo_suggestion)?;
+            }
             TypeBlock | GlobalTag | PrivateTag | RecordField | Keyword => { /* nothing yet */ }
         }
         self.style_stack.push(*annotation);
@@ -484,7 +505,8 @@ where
             None => {}
             Some(annotation) => match annotation {
                 Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | Error | GutterBar
-                | Structure | CodeBlock | PlainText | LineNumber | Module => {
+                | Typo | TypoSuggestion | Structure | CodeBlock | PlainText | LineNumber | Hint
+                | Module => {
                     self.write_str(RESET_CODE)?;
                 }
 
@@ -758,6 +780,98 @@ impl ReportText {
             Name(ident) => alloc
                 .text(format!("{}", ident.as_inline_str()))
                 .annotate(Annotation::Symbol),
+            TypeProblem(problem) => Self::type_problem_to_pretty(alloc, home, interns, problem),
         }
+    }
+
+    fn type_problem_to_pretty<'b, D>(
+        alloc: &'b D,
+        home: ModuleId,
+        interns: &Interns,
+        problem: crate::type_error::Problem,
+    ) -> DocBuilder<'b, D, Annotation>
+    where
+        D: DocAllocator<'b, Annotation>,
+        D::Doc: Clone,
+    {
+        use crate::type_error::suggest;
+        use crate::type_error::Problem::*;
+
+        match problem {
+            FieldTypo(typo, possibilities) => {
+                let suggestions = suggest::sort(typo.as_str(), possibilities);
+
+                match suggestions.get(0) {
+                    None => alloc.nil(),
+                    Some(nearest) => {
+                        let typo_str = format!("{}", typo);
+                        let nearest_str = format!("{}", nearest);
+
+                        let found = alloc.text(typo_str).annotate(Annotation::Typo);
+                        let suggestion =
+                            alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);
+
+                        let hint1 = Self::hint(alloc)
+                            .append(alloc.reflow("Seems like a record field typo. Maybe "))
+                            .append(found)
+                            .append(alloc.reflow(" should be "))
+                            .append(suggestion)
+                            .append(alloc.text("?"));
+
+                        let hint2 = Self::hint(alloc).append(alloc.reflow(ADD_ANNOTATIONS));
+
+                        hint1
+                            .append(alloc.line())
+                            .append(alloc.line())
+                            .append(hint2)
+                    }
+                }
+            }
+            TagTypo(typo, possibilities_tn) => {
+                let possibilities = possibilities_tn
+                    .into_iter()
+                    .map(|tag_name| tag_name.into_string(interns, home))
+                    .collect();
+                let typo_str = format!("{}", typo.into_string(interns, home));
+                let suggestions = suggest::sort(&typo_str, possibilities);
+
+                match suggestions.get(0) {
+                    None => alloc.nil(),
+                    Some(nearest) => {
+                        let nearest_str = format!("{}", nearest);
+
+                        let found = alloc.text(typo_str).annotate(Annotation::Typo);
+                        let suggestion =
+                            alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);
+
+                        let hint1 = Self::hint(alloc)
+                            .append(alloc.reflow("Seems like a tag typo. Maybe "))
+                            .append(found)
+                            .append(" should be ")
+                            .append(suggestion)
+                            .append(alloc.text("?"));
+
+                        let hint2 = Self::hint(alloc).append(alloc.reflow(ADD_ANNOTATIONS));
+
+                        hint1
+                            .append(alloc.line())
+                            .append(alloc.line())
+                            .append(hint2)
+                    }
+                }
+            }
+            _ => todo!(),
+        }
+    }
+
+    fn hint<'b, D>(alloc: &'b D) -> DocBuilder<'b, D, Annotation>
+    where
+        D: DocAllocator<'b, Annotation>,
+        D::Doc: Clone,
+    {
+        alloc
+            .text("Hint:")
+            .append(alloc.softline())
+            .annotate(Annotation::Hint)
     }
 }

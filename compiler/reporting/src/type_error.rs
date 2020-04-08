@@ -838,7 +838,7 @@ fn to_circular_report(
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Problem {
     IntFloat,
     ArityMismatch(usize, usize),
@@ -851,9 +851,50 @@ pub enum Problem {
     BadRigidVar(Lowercase, ErrorType),
 }
 
-fn problems_to_hint(_problems: Vec<Problem>) -> Vec<ReportText> {
-    // TODO
-    vec![]
+fn problems_to_hint(mut problems: Vec<Problem>) -> Option<ReportText> {
+    if problems.is_empty() {
+        None
+    } else {
+        let problem = problems.remove(problems.len() - 1);
+        Some(ReportText::TypeProblem(problem))
+    }
+}
+
+pub mod suggest {
+    use core::convert::AsRef;
+    use distance;
+    use inlinable_string::InlinableString;
+    use roc_module::ident::Lowercase;
+
+    pub trait ToStr {
+        fn to_str(&self) -> &str;
+    }
+
+    impl ToStr for Lowercase {
+        fn to_str(&self) -> &str {
+            self.as_str()
+        }
+    }
+
+    impl ToStr for InlinableString {
+        fn to_str(&self) -> &str {
+            self.as_ref()
+        }
+    }
+
+    pub fn sort<'a, T>(typo: &'a str, mut options: Vec<T>) -> Vec<T>
+    where
+        T: ToStr,
+    {
+        options.sort_by(|a, b| {
+            let l = distance::damerau_levenshtein(typo, a.to_str());
+            let r = distance::damerau_levenshtein(typo, b.to_str());
+
+            l.cmp(&r)
+        });
+
+        options
+    }
 }
 
 pub struct Comparison {

@@ -1190,6 +1190,11 @@ mod test_reporting {
                     { foo : Int }
 
 
+                Hint: Seems like a record field typo. Maybe `bar` should be `foo`?
+
+                Hint: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )
@@ -1222,6 +1227,11 @@ mod test_reporting {
                     [ Green, Red ]
 
 
+                Hint: Seems like a tag typo. Maybe `Blue` should be `Red`?
+
+                Hint: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )
@@ -1254,6 +1264,11 @@ mod test_reporting {
                     [ Green Bool, Red Int ]
 
 
+                Hint: Seems like a tag typo. Maybe `Blue` should be `Red`?
+
+                Hint: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
                 "#
             ),
         )

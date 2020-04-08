@@ -18,6 +18,7 @@ ven_pretty = { path = "../../vendor/pretty" }
 inlinable_string = "0.1.0"
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
+distance = "0.4.0"
 
 [dev-dependencies]
 roc_constrain = { path = "../constrain" }
