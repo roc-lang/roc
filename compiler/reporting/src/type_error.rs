@@ -1143,15 +1143,22 @@ fn to_diff(parens: Parens, type1: &ErrorType, type2: &ErrorType) -> Diff<ReportT
             }
         }
 
-        _ => {
+        pair => {
             // We hit none of the specific cases where we give more detailed information
             let left = to_doc(Parens::Unnecessary, type1);
             let right = to_doc(Parens::Unnecessary, type2);
 
+            let problems = match pair {
+                (RigidVar(x), other) | (other, RigidVar(x)) => {
+                    vec![Problem::BadRigidVar(x.clone(), other.clone())]
+                }
+                _ => vec![],
+            };
+
             Diff {
                 left,
                 right,
-                status: Status::Similar,
+                status: Status::Different(problems),
             }
         }
     }
@@ -1200,8 +1207,8 @@ fn diff_record(
         let diff = to_diff(Parens::Unnecessary, t1, t2);
 
         Diff {
-            left: (plain_text(field.as_str()), diff.left),
-            right: (plain_text(field.as_str()), diff.right),
+            left: (field.clone(), plain_text(field.as_str()), diff.left),
+            right: (field.clone(), plain_text(field.as_str()), diff.right),
             status: diff.status,
         }
     };
@@ -1262,7 +1269,7 @@ fn diff_record(
 
     let ext_diff = ext_to_diff(ext1, ext2);
 
-    let mut fields_diff: Diff<Vec<(ReportText, ReportText)>> = Diff {
+    let mut fields_diff: Diff<Vec<(Lowercase, ReportText, ReportText)>> = Diff {
         left: vec![],
         right: vec![],
         status: Status::Similar,
@@ -1275,13 +1282,31 @@ fn diff_record(
     }
 
     if !all_fields_shared {
-        fields_diff.left.extend(left.map(|(_, x, y)| (x, y)));
-        fields_diff.right.extend(right.map(|(_, x, y)| (x, y)));
+        fields_diff.left.extend(left);
+        fields_diff.right.extend(right);
         fields_diff.status.merge(Status::Different(vec![]));
     }
 
-    let doc1 = report_text::record(fields_diff.left, ext_diff.left);
-    let doc2 = report_text::record(fields_diff.right, ext_diff.right);
+    // sort fields for display
+    fields_diff.left.sort_by(|a, b| a.0.cmp(&b.0));
+    fields_diff.right.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let doc1 = report_text::record(
+        fields_diff
+            .left
+            .into_iter()
+            .map(|(_, b, c)| (b, c))
+            .collect(),
+        ext_diff.left,
+    );
+    let doc2 = report_text::record(
+        fields_diff
+            .right
+            .into_iter()
+            .map(|(_, b, c)| (b, c))
+            .collect(),
+        ext_diff.right,
+    );
 
     fields_diff.status.merge(status);
 

@@ -1624,4 +1624,147 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn missing_fields() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : { a : Int, b : Float, c : Bool }
+                x = { b: 4.0 }
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                Something is off with the body of the `x` definition:
+
+                2 ┆  x = { b: 4.0 }
+                  ┆      ^^^^^^^^^^
+
+                The body is a record of type:
+
+                    { b : Float }
+
+                But the type annotation on `x` says it should be:
+
+                    { a : Int, b : Float, c : Bool }
+
+
+                Hint: Looks like the c and a fields are missing.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn bad_double_rigid() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : a, b -> a
+                f = \x, y -> if True then x else y
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                Something is off with the body of the `f` definition:
+
+                2 ┆  f = \x, y -> if True then x else y
+                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                The body is an anonymous function of type:
+
+                    a, a -> a
+
+                But the type annotation on `f` says it should be:
+
+                    a, b -> a
+
+
+                Hint: Your type annotation uses a and b as separate type variables.
+                Your code seems to be saying they are the same though. Maybe they
+                should be the same your type annotation? Maybe your code uses them in
+                a weird way?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn bad_rigid_function() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Bool -> msg
+                f = \_ -> Foo
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                Something is off with the body of the `f` definition:
+
+                2 ┆  f = \_ -> Foo
+                  ┆      ^^^^^^^^^
+
+                The body is an anonymous function of type:
+
+                    Bool -> [ Foo ]a
+
+                But the type annotation on `f` says it should be:
+
+                    Bool -> msg
+
+
+                Hint: The type annotation uses the type variable `msg` to say that
+                this definition can produce any type of value. But in the body I see
+                that it will only produce a tag value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn bad_rigid_value() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : msg
+                f = 0x3
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                Something is off with the body of the `f` definition:
+
+                2 ┆  f = 0x3
+                  ┆      ^^^
+
+                The body is an integer of type:
+
+                    Int
+
+                But the type annotation on `f` says it should be:
+
+                    msg
+
+
+                Hint: The type annotation uses the type variable `msg` to say that
+                this definition can produce any type of value. But in the body I see
+                that it will only produce a Int value of a single specific type. Maybe
+                change the type annotation to be more specific? Maybe change the code
+                to be more general?
+                "#
+            ),
+        )
+    }
 }

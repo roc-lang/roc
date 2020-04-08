@@ -1,4 +1,5 @@
 use crate::report::ReportText::{BinOp, Concat, Module, Region, Value};
+use bumpalo::Bump;
 use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
@@ -527,11 +528,12 @@ impl ReportText {
         src_lines: &[&str],
         interns: &Interns,
     ) {
+        let arena = Bump::new();
         let alloc = BoxAllocator;
 
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
-        self.pretty::<_>(&alloc, subs, home, src_lines, interns)
+        self.pretty::<_>(&alloc, &arena, subs, home, src_lines, interns)
             .1
             .render_raw(70, &mut CiWrite::new(buf))
             .expect(err_msg);
@@ -547,11 +549,12 @@ impl ReportText {
         interns: &Interns,
         palette: &Palette,
     ) {
+        let arena = Bump::new();
         let alloc = BoxAllocator;
 
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
-        self.pretty::<_>(&alloc, subs, home, src_lines, interns)
+        self.pretty::<_>(&alloc, &arena, subs, home, src_lines, interns)
             .1
             .render_raw(70, &mut ColorWrite::new(palette, buf))
             .expect(err_msg);
@@ -562,6 +565,7 @@ impl ReportText {
     pub fn pretty<'b, D>(
         self,
         alloc: &'b D,
+        arena: &'b Bump,
         subs: &mut Subs,
         home: ModuleId,
         src_lines: &'b [&'b str],
@@ -656,14 +660,14 @@ impl ReportText {
                 .append(alloc.hardline())
                 .append(
                     error_type
-                        .pretty(alloc, subs, home, src_lines, interns)
+                        .pretty(alloc, arena, subs, home, src_lines, interns)
                         .indent(4)
                         .annotate(Annotation::TypeBlock),
                 )
                 .append(alloc.hardline()),
 
             Indent(n, nested) => {
-                let rest = nested.pretty(alloc, subs, home, src_lines, interns);
+                let rest = nested.pretty(alloc, arena, subs, home, src_lines, interns);
                 alloc.nil().append(rest).indent(n)
             }
             Docs(_) => {
@@ -672,22 +676,22 @@ impl ReportText {
             Concat(report_texts) => alloc.concat(
                 report_texts
                     .into_iter()
-                    .map(|rep| rep.pretty(alloc, subs, home, src_lines, interns)),
+                    .map(|rep| rep.pretty(alloc, arena, subs, home, src_lines, interns)),
             ),
             Stack(report_texts) => alloc
                 .intersperse(
                     report_texts
                         .into_iter()
-                        .map(|rep| (rep.pretty(alloc, subs, home, src_lines, interns))),
+                        .map(|rep| (rep.pretty(alloc, arena, subs, home, src_lines, interns))),
                     alloc.hardline(),
                 )
                 .append(alloc.hardline()),
             Intersperse { separator, items } => alloc.intersperse(
                 items
                     .into_iter()
-                    .map(|rep| (rep.pretty(alloc, subs, home, src_lines, interns)))
+                    .map(|rep| (rep.pretty(alloc, arena, subs, home, src_lines, interns)))
                     .collect::<Vec<_>>(),
-                separator.pretty(alloc, subs, home, src_lines, interns),
+                separator.pretty(alloc, arena, subs, home, src_lines, interns),
             ),
             BinOp(bin_op) => alloc.text(bin_op.to_string()).annotate(Annotation::BinOp),
             Region(region) => {
@@ -780,12 +784,15 @@ impl ReportText {
             Name(ident) => alloc
                 .text(format!("{}", ident.as_inline_str()))
                 .annotate(Annotation::Symbol),
-            TypeProblem(problem) => Self::type_problem_to_pretty(alloc, home, interns, problem),
+            TypeProblem(problem) => {
+                Self::type_problem_to_pretty(alloc, arena, home, interns, problem)
+            }
         }
     }
 
     fn type_problem_to_pretty<'b, D>(
         alloc: &'b D,
+        arena: &'b Bump,
         home: ModuleId,
         interns: &Interns,
         problem: crate::type_error::Problem,
@@ -827,6 +834,26 @@ impl ReportText {
                     }
                 }
             }
+            FieldsMissing(missing) => match missing.split_last() {
+                None => alloc.nil(),
+                Some((f1, [])) => Self::hint(alloc)
+                    .append(alloc.reflow("Looks like the "))
+                    .append(f1.as_str().to_owned())
+                    .append(alloc.reflow(" field is missing.")),
+                Some((last, init)) => {
+                    let separator = alloc.reflow(", ");
+
+                    Self::hint(alloc)
+                        .append(alloc.reflow("Looks like the "))
+                        .append(
+                            alloc
+                                .intersperse(init.iter().map(|v| v.as_str().to_owned()), separator),
+                        )
+                        .append(alloc.reflow(" and "))
+                        .append(alloc.text(last.as_str().to_owned()))
+                        .append(alloc.reflow(" fields are missing."))
+                }
+            },
             TagTypo(typo, possibilities_tn) => {
                 let possibilities = possibilities_tn
                     .into_iter()
@@ -860,6 +887,59 @@ impl ReportText {
                     }
                 }
             }
+            ArityMismatch(found, expected) => {
+                let line = if found < expected {
+                    format!(
+                        "It looks like it takes too few arguments. I was expecting {} more.",
+                        expected - found
+                    )
+                } else {
+                    format!(
+                        "It looks like it takes too many arguments. I'm seeing {} extra.",
+                        found - expected
+                    )
+                };
+
+                Self::hint(alloc).append(line)
+            }
+
+            BadRigidVar(x, tipe) => {
+                use ErrorType::*;
+
+                let bad_rigid_var = |name: &str, a_thing| {
+                    let text = format!(
+                        r#"The type annotation uses the type variable `{}` to say that this definition can produce any type of value. But in the body I see that it will only produce {} of a single specific type. Maybe change the type annotation to be more specific? Maybe change the code to be more general?"#,
+                        name, a_thing
+                    );
+
+                    Self::hint(alloc).append(alloc.reflow(arena.alloc(text)))
+                };
+
+                let bad_double_rigid = |a, b| {
+                    let text = format!(
+                        r#"Your type annotation uses {} and {} as separate type variables. Your code seems to be saying they are the same though. Maybe they should be the same your type annotation? Maybe your code uses them in a weird way?"#,
+                        a, b
+                    );
+
+                    Self::hint(alloc).append(alloc.reflow(arena.alloc(text)))
+                };
+
+                match tipe {
+                    Infinite | Error | FlexVar(_) => alloc.nil(),
+                    RigidVar(y) => bad_double_rigid(x.as_str(), y.as_str()),
+                    Function(_, _) => bad_rigid_var(x.as_str(), "a function value"),
+                    Record(_, _) => bad_rigid_var(x.as_str(), "a record value"),
+                    TagUnion(_, _) | RecursiveTagUnion(_, _, _) => {
+                        bad_rigid_var(x.as_str(), "a tag value")
+                    }
+                    Alias(symbol, _, _) | Type(symbol, _) => bad_rigid_var(
+                        x.as_str(),
+                        &format!("a {} value", symbol.ident_string(interns)),
+                    ),
+                    Boolean(_) => bad_rigid_var(x.as_str(), "a uniqueness attribute value"),
+                }
+            }
+
             _ => todo!(),
         }
     }
