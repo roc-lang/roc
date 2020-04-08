@@ -1227,11 +1227,7 @@ fn clone_list<'a, 'ctx, 'env>(
         // one we just malloc'd.
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder
-            .build_memcpy(clone_ptr, ptr_bytes, elems_ptr, ptr_bytes, size)
-            .unwrap_or_else(|err| {
-                panic!("Error while attempting LLVM memcpy: {:?}", err);
-            });
+        builder.build_memcpy(clone_ptr, ptr_bytes, elems_ptr, ptr_bytes, size);
     } else {
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }

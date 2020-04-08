@@ -10,7 +10,7 @@ jobs:
       - uses: actions/checkout@v1
 
       - name: Install LLVM
-        run: sudo ./ci/install-llvm.sh 8
+        run: sudo ./ci/install-llvm.sh 10
 
       - name: Enable LLD
         run: sudo ./ci/enable-lld.sh
