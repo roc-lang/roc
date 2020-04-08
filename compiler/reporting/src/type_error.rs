@@ -129,7 +129,25 @@ fn to_expr_report(
     use ReportText::*;
 
     match expected {
-        Expected::NoExpectation(expected_type) => todo!("hit no expectation with type {:?}", expected_type),
+        Expected::NoExpectation(expected_type) => {
+            let comparison = type_comparison(
+                found,
+                expected_type,
+                add_category(plain_text("It is"), &category),
+                plain_text("But you are trying to use it as:"),
+                Concat(vec![]),
+            );
+
+            Report {
+                filename,
+                title: "TYPE MISMATCH".to_string(),
+                text: Concat(vec![
+                    plain_text("This expression is used in an unexpected way:"),
+                    Region(expr_region),
+                    comparison,
+                ]),
+            }
+        }
         Expected::FromAnnotation(name, _arity, annotation_source, expected_type) => {
             use roc_types::types::AnnotationSource::*;
 
@@ -137,30 +155,50 @@ fn to_expr_report(
 
             // TODO special-case 2-branch if
             let thing = match annotation_source {
-                TypedIfBranch ( index ) => Concat(vec![ plain_text(&format!("{} branch of this ", int_to_ordinal(index))), keyword_text("if"), plain_text(" expression:") ]),
-                TypedWhenBranch ( index ) => Concat(vec![ plain_text(&format!("{} branch of this ", int_to_ordinal(index))), keyword_text("when"), plain_text(" expression:") ]),
-                TypedBody => Concat(vec![ plain_text("body of the "), name_text.clone(), plain_text(" definition:") ]),
+                TypedIfBranch(index) => Concat(vec![
+                    plain_text(&format!("{} branch of this ", int_to_ordinal(index))),
+                    keyword_text("if"),
+                    plain_text(" expression:"),
+                ]),
+                TypedWhenBranch(index) => Concat(vec![
+                    plain_text(&format!("{} branch of this ", int_to_ordinal(index))),
+                    keyword_text("when"),
+                    plain_text(" expression:"),
+                ]),
+                TypedBody => Concat(vec![
+                    plain_text("body of the "),
+                    name_text.clone(),
+                    plain_text(" definition:"),
+                ]),
             };
 
             let it_is = match annotation_source {
-                TypedIfBranch ( index ) => format!("The {} branch is", int_to_ordinal(index)),
-                TypedWhenBranch ( index ) => format!("The {} branch is", int_to_ordinal(index)),
+                TypedIfBranch(index) => format!("The {} branch is", int_to_ordinal(index)),
+                TypedWhenBranch(index) => format!("The {} branch is", int_to_ordinal(index)),
                 TypedBody => "The body is".into(),
             };
 
-            let comparison =
-                type_comparison(
-                    found,
-                    expected_type,
-                    add_category(plain_text(&it_is), &category),
-                    Concat(vec![ plain_text("But the type annotation on "), name_text, plain_text(" says it should be:")]),
-                    Concat(vec![]),
-                );
+            let comparison = type_comparison(
+                found,
+                expected_type,
+                add_category(plain_text(&it_is), &category),
+                Concat(vec![
+                    plain_text("But the type annotation on "),
+                    name_text,
+                    plain_text(" says it should be:"),
+                ]),
+                Concat(vec![]),
+            );
 
             Report {
                 title: "TYPE MISMATCH".to_string(),
                 filename,
-                text: Concat(vec![ plain_text("Something is off with the "), thing , Region(expr_region),  comparison ]),
+                text: Concat(vec![
+                    plain_text("Something is off with the "),
+                    thing,
+                    Region(expr_region),
+                    comparison,
+                ]),
             }
         }
         Expected::ForReason(reason, expected_type, region) => match reason {
@@ -337,7 +375,7 @@ fn to_expr_report(
                     plain_text("I need all elements of a list to have the same type!"),
                 )
             }
-            Reason::RecordUpdateValue(field) => { report_mismatch(
+            Reason::RecordUpdateValue(field) => report_mismatch(
                 filename,
                 &category,
                 found,
@@ -355,9 +393,105 @@ fn to_expr_report(
                     plain_text(" to be"),
                 ]),
                 plain_text("But it should be:"),
-                plain_text("Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax."),
-            )}
-            Reason::FnArg { name , arg_index } => {
+                plain_text(
+                    r#"Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax."#,
+                ),
+            ),
+            Reason::FnCall { name, arity } => match count_arguments(&found) {
+                0 => {
+                    let this_value = match name {
+                        None => plain_text("This value"),
+                        Some(symbol) => Concat(vec![
+                            plain_text("The "),
+                            Value(symbol),
+                            plain_text(" value"),
+                        ]),
+                    };
+
+                    let lines = vec![
+                        Concat(vec![
+                            this_value,
+                            plain_text(&format!(
+                                " is not a function, but it was given {}:",
+                                if arity == 1 {
+                                    "1 argument".into()
+                                } else {
+                                    format!("{} arguments", arity)
+                                }
+                            )),
+                        ]),
+                        ReportText::Region(expr_region),
+                        plain_text("Are there any missing commas? Or missing parentheses?"),
+                    ];
+
+                    Report {
+                        filename,
+                        title: "TOO MANY ARGS".to_string(),
+                        text: Concat(lines),
+                    }
+                }
+                n => {
+                    let this_function = match name {
+                        None => plain_text("This function"),
+                        Some(symbol) => Concat(vec![
+                            plain_text("The "),
+                            Value(symbol),
+                            plain_text(" function"),
+                        ]),
+                    };
+
+                    if n < arity as usize {
+                        let lines = vec![
+                            Concat(vec![
+                                this_function,
+                                plain_text(&format!(
+                                    " expects {}, but it got {} instead:",
+                                    if n == 1 {
+                                        "1 argument".into()
+                                    } else {
+                                        format!("{} arguments", n)
+                                    },
+                                    arity
+                                )),
+                            ]),
+                            ReportText::Region(expr_region),
+                            plain_text("Are there any missing commas? Or missing parentheses?"),
+                        ];
+
+                        Report {
+                            filename,
+                            title: "TOO MANY ARGS".to_string(),
+                            text: Concat(lines),
+                        }
+                    } else {
+                        let lines = vec![
+                            Concat(vec![
+                                this_function,
+                                plain_text(&format!(
+                                    " expects {}, but it got only {}:",
+                                    if n == 1 {
+                                        "1 argument".into()
+                                    } else {
+                                        format!("{} arguments", n)
+                                    },
+                                    arity
+                                )),
+                            ]),
+                            ReportText::Region(expr_region),
+                            plain_text(
+                                r#"Roc does not allow functions to be partially applied. Use a closure to make partial application explicit."#,
+                            ),
+                        ];
+
+                        Report {
+                            filename,
+                            title: "TOO FEW ARGS".to_string(),
+                            text: Concat(lines),
+                        }
+                    }
+                }
+            },
+            Reason::FnArg { name, arg_index } => {
                 let ith = int_to_ordinal(arg_index as usize + 1);
 
                 let this_function = match name {
@@ -372,13 +506,19 @@ fn to_expr_report(
                     expected_type,
                     region,
                     Some(expr_region),
-                    Concat(vec![ plain_text(&format!("The {} argument to ", ith))
-                        , this_function.clone(), plain_text(" is not what I expect:" )]),
+                    Concat(vec![
+                        plain_text(&format!("The {} argument to ", ith)),
+                        this_function.clone(),
+                        plain_text(" is not what I expect:"),
+                    ]),
                     plain_text("This argument is"),
-                    Concat(vec![ plain_text("But "), this_function, plain_text(&format!(" needs the {} argument to be:", ith))]),
+                    Concat(vec![
+                        plain_text("But "),
+                        this_function,
+                        plain_text(&format!(" needs the {} argument to be:", ith)),
+                    ]),
                     plain_text(""),
                 )
-
             }
             other => {
                 //    NamedFnArg(String /* function name */, u8 /* arg index */),
@@ -398,6 +538,17 @@ fn to_expr_report(
     }
 }
 
+fn count_arguments(tipe: &ErrorType) -> usize {
+    use ErrorType::*;
+
+    match tipe {
+        Function(args, _) => args.len(),
+        Type(Symbol::ATTR_ATTR, args) => count_arguments(&args[1]),
+        Alias(_, _, actual) => count_arguments(actual),
+        _ => 0,
+    }
+}
+
 fn type_comparison(
     actual: ErrorType,
     expected: ErrorType,
@@ -407,14 +558,17 @@ fn type_comparison(
 ) -> ReportText {
     let comparison = to_comparison(actual, expected);
 
-    ReportText::Stack(vec![
+    let mut lines = vec![
         i_am_seeing,
         comparison.actual,
         instead_of,
         comparison.expected,
         context_hints,
-        problems_to_hint(comparison.problems),
-    ])
+    ];
+
+    lines.extend(problems_to_hint(comparison.problems));
+
+    ReportText::Stack(lines)
 }
 
 fn lone_type(
@@ -425,12 +579,11 @@ fn lone_type(
 ) -> ReportText {
     let comparison = to_comparison(actual, expected);
 
-    ReportText::Stack(vec![
-        i_am_seeing,
-        comparison.actual,
-        further_details,
-        problems_to_hint(comparison.problems),
-    ])
+    let mut lines = vec![i_am_seeing, comparison.actual, further_details];
+
+    lines.extend(problems_to_hint(comparison.problems));
+
+    ReportText::Stack(lines)
 }
 
 fn add_category(this_is: ReportText, category: &Category) -> ReportText {
@@ -503,13 +656,153 @@ fn add_category(this_is: ReportText, category: &Category) -> ReportText {
 }
 
 fn to_pattern_report(
-    _filename: PathBuf,
-    _expr_region: roc_region::all::Region,
-    _category: PatternCategory,
-    _found: ErrorType,
-    _expected: PExpected<ErrorType>,
+    filename: PathBuf,
+    expr_region: roc_region::all::Region,
+    category: PatternCategory,
+    found: ErrorType,
+    expected: PExpected<ErrorType>,
 ) -> Report {
-    todo!()
+    use roc_types::types::PReason;
+    use ReportText::*;
+
+    match expected {
+        PExpected::NoExpectation(expected_type) => {
+            let text = Concat(vec![
+                plain_text("This pattern is being used in an unexpected way:"),
+                Region(expr_region),
+                pattern_type_comparision(
+                    found,
+                    expected_type,
+                    add_pattern_category(plain_text("It is"), &category),
+                    plain_text("But it needs to match:"),
+                    vec![],
+                ),
+            ]);
+
+            Report {
+                filename,
+                title: "TYPE MISMATCH".to_string(),
+                text,
+            }
+        }
+
+        PExpected::ForReason(reason, expected_type, region) => match reason {
+            PReason::WhenMatch { index } => {
+                if index == 0 {
+                    let text = Concat(vec![
+                        plain_text("The 1st pattern in this "),
+                        keyword_text("when"),
+                        plain_text(" is causing a mismatch:"),
+                        Region(region),
+                        pattern_type_comparision(
+                            found,
+                            expected_type,
+                            add_pattern_category(
+                                plain_text("The first pattern is trying to match"),
+                                &category,
+                            ),
+                            Concat(vec![
+                                plain_text("But the expression between "),
+                                keyword_text("when"),
+                                plain_text(" and "),
+                                keyword_text("is"),
+                                plain_text(" has the type:"),
+                            ]),
+                            vec![],
+                        ),
+                    ]);
+
+                    Report {
+                        filename,
+                        title: "TYPE MISMATCH".to_string(),
+                        text,
+                    }
+                } else {
+                    let text = Concat(vec![
+                        plain_text(&format!(
+                            "The {} pattern in this ",
+                            int_to_ordinal(index + 1)
+                        )),
+                        keyword_text("when"),
+                        plain_text(" does not match the previous ones:"),
+                        Region(region),
+                        pattern_type_comparision(
+                            found,
+                            expected_type,
+                            add_pattern_category(
+                                plain_text(&format!(
+                                    "The {} pattern is trying to match",
+                                    int_to_ordinal(index + 1)
+                                )),
+                                &category,
+                            ),
+                            plain_text("But all the previous branches match:"),
+                            vec![],
+                        ),
+                    ]);
+
+                    Report {
+                        filename,
+                        title: "TYPE MISMATCH".to_string(),
+                        text,
+                    }
+                }
+            }
+            PReason::TagArg { .. } => {
+                panic!("I didn't think this could trigger. Please tell Folkert about it!")
+            }
+            PReason::PatternGuard => {
+                todo!("Blocked on https://github.com/rtfeldman/roc/issues/304")
+            }
+        },
+    }
+}
+
+fn pattern_type_comparision(
+    actual: ErrorType,
+    expected: ErrorType,
+    i_am_seeing: ReportText,
+    instead_of: ReportText,
+    reason_hints: Vec<ReportText>,
+) -> ReportText {
+    let comparison = to_comparison(actual, expected);
+
+    let mut lines = vec![
+        i_am_seeing,
+        comparison.actual,
+        instead_of,
+        comparison.expected,
+    ];
+
+    lines.extend(problems_to_hint(comparison.problems));
+    lines.extend(reason_hints);
+
+    ReportText::Stack(lines)
+}
+
+fn add_pattern_category(
+    i_am_trying_to_match: ReportText,
+    category: &PatternCategory,
+) -> ReportText {
+    use PatternCategory::*;
+
+    let rest = match category {
+        Record => plain_text(" record values of type:"),
+        EmptyRecord => plain_text(" an empty record:"),
+        PatternGuard => plain_text(" a pattern guard of type:"),
+        Set => plain_text(" sets of type:"),
+        Map => plain_text(" maps of type:"),
+        Ctor(tag_name) => ReportText::Concat(vec![
+            tag_name_text(tag_name.clone()),
+            plain_text(" values of type:"),
+        ]),
+        Str => plain_text(" strings:"),
+        Num => plain_text(" numbers:"),
+        Int => plain_text(" integers:"),
+        Float => plain_text(" floats"),
+    };
+
+    ReportText::Concat(vec![i_am_trying_to_match, rest])
 }
 
 fn to_circular_report(
@@ -552,9 +845,9 @@ pub enum Problem {
     BadRigidVar(Lowercase, ErrorType),
 }
 
-fn problems_to_hint(_problems: Vec<Problem>) -> ReportText {
+fn problems_to_hint(_problems: Vec<Problem>) -> Vec<ReportText> {
     // TODO
-    ReportText::Concat(vec![])
+    vec![]
 }
 
 pub struct Comparison {

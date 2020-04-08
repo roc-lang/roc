@@ -107,17 +107,14 @@ mod test_reporting {
             }
         }
 
-        match type_problems.first() {
-            None => {}
-            Some(problem) => {
-                let report = type_problem(
-                    filename_from_string(r"\code\proj\Main.roc"),
-                    problem.clone(),
-                );
-                report
-                    .text
-                    .render_ci(&mut buf, &mut subs, home, &src_lines, &interns)
-            }
+        for problem in type_problems {
+            let report = type_problem(
+                filename_from_string(r"\code\proj\Main.roc"),
+                problem.clone(),
+            );
+            report
+                .text
+                .render_ci(&mut buf, &mut subs, home, &src_lines, &interns)
         }
 
         assert_eq!(buf, expected_rendering);
@@ -1132,6 +1129,7 @@ mod test_reporting {
                 Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.
 
                     ∞ -> a
+
                 "#
             ),
         )
@@ -1157,6 +1155,7 @@ mod test_reporting {
                 Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.
 
                     List ∞ -> a
+
                 "#
             ),
         )
@@ -1298,7 +1297,7 @@ mod test_reporting {
             indoc!(
                 r#"
                 x : Int
-                x = 
+                x =
                     when True is
                         _ -> 3.14
 
@@ -1351,6 +1350,227 @@ mod test_reporting {
                 But the type annotation on `x` says it should be:
 
                     Int -> Int
+
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn fncall_value() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : Int
+                x = 42
+
+                x 3
+                "#
+            ),
+            indoc!(
+                r#"
+                The `x` value is not a function, but it was given 1 argument:
+
+                4 ┆  x 3
+                  ┆  ^
+
+                Are there any missing commas? Or missing parentheses?"#
+            ),
+        )
+    }
+
+    #[test]
+    fn fncall_overapplied() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Int -> Int
+                f = \_ -> 42
+
+                f 1 2
+                "#
+            ),
+            indoc!(
+                r#"
+                The `f` function expects 1 argument, but it got 2 instead:
+
+                4 ┆  f 1 2
+                  ┆  ^
+
+                Are there any missing commas? Or missing parentheses?"#
+            ),
+        )
+    }
+
+    #[test]
+    fn fncall_underapplied() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Int, Int -> Int
+                f = \_, _ -> 42
+
+                f 1
+                "#
+            ),
+            indoc!(
+                r#"
+                The `f` function expects 2 arguments, but it got only 1:
+
+                4 ┆  f 1
+                  ┆  ^
+
+                Roc does not allow functions to be partially applied. Use a closure to make partial application explicit."#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_when_condition() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 1 is
+                    {} -> 42
+                "#
+            ),
+            indoc!(
+                r#"
+                The 1st pattern in this `when` is causing a mismatch:
+
+                2 ┆      {} -> 42
+                  ┆      ^^
+
+                The first pattern is trying to match record values of type:
+
+                    {}a
+
+                But the expression between `when` and `is` has the type:
+
+                    Num a
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_when_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 1 is
+                    2 -> 3
+                    {} -> 42
+                "#
+            ),
+            indoc!(
+                r#"
+                The 2nd pattern in this `when` does not match the previous ones:
+
+                3 ┆      {} -> 42
+                  ┆      ^^
+
+                The 2nd pattern is trying to match record values of type:
+
+                    {}a
+
+                But all the previous branches match:
+
+                    Num a
+
+                "#
+            ),
+        )
+    }
+
+    // Currently hits a bug where `x` is marked as unused
+    // https://github.com/rtfeldman/roc/issues/304
+    //    #[test]
+    //    fn pattern_guard_mismatch() {
+    //        report_problem_as(
+    //            indoc!(
+    //                r#"
+    //                when { foo: 1 } is
+    //                    { x: True } -> 42
+    //                "#
+    //            ),
+    //            indoc!(
+    //                r#"
+    //                The 2nd pattern in this `when` does not match the previous ones:
+    //
+    //                3 ┆      {} -> 42
+    //                  ┆      ^^
+    //
+    //                The 2nd pattern is trying to match record values of type:
+    //
+    //                    {}a
+    //
+    //                But all the previous branches match:
+    //
+    //                    Num a
+    //
+    //                "#
+    //            ),
+    //        )
+    //    }
+
+    #[test]
+    fn pattern_or_pattern_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when { foo: 1 } is
+                    {} | 1 -> 3
+                "#
+            ),
+            // Just putting this here. We should probably handle or-patterns better
+            indoc!(
+                r#"
+                The 1st pattern in this `when` is causing a mismatch:
+
+                2 ┆      {} | 1 -> 3
+                  ┆      ^^^^^^
+
+                The first pattern is trying to match numbers:
+
+                    Num a
+
+                But the expression between `when` and `is` has the type:
+
+                    { foo : Num a }
+
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_let_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                (Foo x) = 42
+
+                x
+                "#
+            ),
+            // Maybe this should specifically say the pattern doesn't work?
+            indoc!(
+                r#"
+                This expression is used in an unexpected way:
+
+                1 ┆  (Foo x) = 42
+                  ┆            ^^
+
+                It is a number of type:
+
+                    Num a
+
+                But you are trying to use it as:
+
+                    [ Foo a ]b
 
 
                 "#

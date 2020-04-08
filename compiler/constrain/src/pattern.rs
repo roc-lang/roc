@@ -8,7 +8,7 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
-use roc_types::types::{Category, PatternCategory, Type};
+use roc_types::types::{Category, PReason, PatternCategory, Type};
 
 pub struct PatternState {
     pub headers: SendMap<Symbol, Located<Type>>,
@@ -207,7 +207,11 @@ pub fn constrain_pattern(
                         region,
                         PatternCategory::PatternGuard,
                         Type::Variable(*guard_var),
-                        PExpected::NoExpectation(pat_type.clone()),
+                        PExpected::ForReason(
+                            PReason::PatternGuard,
+                            pat_type.clone(),
+                            loc_guard.region,
+                        ),
                     ));
                     state.vars.push(*guard_var);
 
@@ -243,13 +247,20 @@ pub fn constrain_pattern(
             arguments,
         } => {
             let mut argument_types = Vec::with_capacity(arguments.len());
-            for (pattern_var, loc_pattern) in arguments {
+            for (index, (pattern_var, loc_pattern)) in arguments.iter().enumerate() {
                 state.vars.push(*pattern_var);
 
                 let pattern_type = Type::Variable(*pattern_var);
                 argument_types.push(pattern_type.clone());
 
-                let expected = PExpected::NoExpectation(pattern_type);
+                let expected = PExpected::ForReason(
+                    PReason::TagArg {
+                        tag_name: tag_name.clone(),
+                        index,
+                    },
+                    pattern_type,
+                    region,
+                );
                 constrain_pattern(&loc_pattern.value, loc_pattern.region, expected, state);
             }
 
