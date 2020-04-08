@@ -110,12 +110,12 @@ fn report_bad_type(
     }
 }
 
-fn pattern_to_doc(pattern: &roc_can::pattern::Pattern) -> ReportText {
+fn pattern_to_doc(pattern: &roc_can::pattern::Pattern) -> Option<ReportText> {
     use roc_can::pattern::Pattern::*;
+
     match pattern {
-        Identifier(symbol) => ReportText::Value(*symbol),
-        Underscore => plain_text("_"),
-        _ => todo!(),
+        Identifier(symbol) => Some(ReportText::Value(*symbol)),
+        _ => None,
     }
 }
 
@@ -151,7 +151,13 @@ fn to_expr_report(
         Expected::FromAnnotation(name, _arity, annotation_source, expected_type) => {
             use roc_types::types::AnnotationSource::*;
 
-            let name_text = pattern_to_doc(&name.value);
+            let (the_name_text, on_name_text) = match pattern_to_doc(&name.value) {
+                Some(doc) => (
+                    Concat(vec![plain_text("the "), doc.clone()]),
+                    Concat(vec![plain_text(" on "), doc]),
+                ),
+                None => (plain_text("this"), plain_text("")),
+            };
 
             // TODO special-case 2-branch if
             let thing = match annotation_source {
@@ -166,8 +172,8 @@ fn to_expr_report(
                     plain_text(" expression:"),
                 ]),
                 TypedBody => Concat(vec![
-                    plain_text("body of the "),
-                    name_text.clone(),
+                    plain_text("body of "),
+                    the_name_text,
                     plain_text(" definition:"),
                 ]),
             };
@@ -183,8 +189,8 @@ fn to_expr_report(
                 expected_type,
                 add_category(plain_text(&it_is), &category),
                 Concat(vec![
-                    plain_text("But the type annotation on "),
-                    name_text,
+                    plain_text("But the type annotation"),
+                    on_name_text,
                     plain_text(" says it should be:"),
                 ]),
                 Concat(vec![]),

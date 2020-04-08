@@ -1577,4 +1577,36 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn from_annotation_complex_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                { x } : { x : Int }
+                { x } = { x: 4.0 }
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                Something is off with the body of this definition:
+
+                2 ┆  { x } = { x: 4.0 }
+                  ┆          ^^^^^^^^^^
+
+                The body is a record of type:
+
+                    { x : Float }
+
+                But the type annotation says it should be:
+
+                    { x : Int }
+
+
+                "#
+            ),
+        )
+    }
 }
