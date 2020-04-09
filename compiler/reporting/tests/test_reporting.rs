@@ -318,7 +318,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                `i` is first defined here:
+                The `i` name is first defined here:
 
                 1 ┆  i = 1
                   ┆  ^
@@ -328,7 +328,8 @@ mod test_reporting {
                 3 ┆  s = \i ->
                   ┆       ^
 
-                Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#
+                Since these variables have the same name, it's easy to use the wrong
+                one on accident. Give one of them a new name."#
             ),
         )
     }
@@ -350,7 +351,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                `Booly` is first defined here:
+                The `Booly` name is first defined here:
 
                 1 ┆  Booly : [ Yes, No ]
                   ┆  ^^^^^^^^^^^^^^^^^^^
@@ -360,7 +361,8 @@ mod test_reporting {
                 3 ┆  Booly : [ Yes, No, Maybe ]
                   ┆  ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#
+                Since these variables have the same name, it's easy to use the wrong
+                one on accident. Give one of them a new name."#
             ),
         )
     }
@@ -1543,19 +1545,15 @@ mod test_reporting {
                 r#"
                 I cannot find a `foo` value
 
-
                 2 ┆      { foo: 2 } -> foo
                   ┆                    ^^^
 
-
                 these names seem close though:
+
                     Bool
                     Int
                     Num
-                    Map
-                    
-
-                "#
+                    Map"#
             ),
         )
     }
@@ -1582,7 +1580,7 @@ mod test_reporting {
             indoc!(
                 r#"
                 when { foo: 1 } is
-                    { foo: 2 } -> 
+                    { foo: 2 } ->
                         foo = 3
 
                         foo
@@ -1825,6 +1823,78 @@ mod test_reporting {
                 that it will only produce a Int value of a single specific type. Maybe
                 change the type annotation to be more specific? Maybe change the code
                 to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn typo_lowercase_ok() {
+        // TODO improve tag suggestions
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Bool -> [ Ok Int, InvalidFoo ]
+                f = \_ -> ok 4
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                I cannot find a `ok` value
+
+                2 ┆  f = \_ -> ok 4
+                  ┆            ^^
+
+                these names seem close though:
+
+                    f
+                    Int
+                    Num
+                    Map"#
+            ),
+        )
+    }
+
+    #[test]
+    fn typo_uppercase_ok() {
+        // these error messages seem pretty helpful
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Bool -> Int
+                f = \_ ->
+                    ok = 3
+
+                    Ok
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                `ok` is not used anywhere in your code.
+
+                3 ┆      ok = 3
+                  ┆      ^^
+
+                If you didn't intend on using `ok` then remove it so future readers of your code don't wonder why it is there.Something is off with the body of the `f` definition:
+
+                2 ┆>  f = \_ ->
+                3 ┆>      ok = 3
+                4 ┆>
+                5 ┆>      Ok
+
+                The body is an anonymous function of type:
+
+                    Bool -> [ Ok ]a
+
+                But the type annotation on `f` says it should be:
+
+                    Bool -> Int
+
+
                 "#
             ),
         )

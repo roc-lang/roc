@@ -346,7 +346,7 @@ impl Subs {
         self.utable.is_redirect(var)
     }
 
-    pub fn occurs(&mut self, var: Variable) -> Option<(Variable, Vec<Variable>)> {
+    pub fn occurs(&self, var: Variable) -> Option<(Variable, Vec<Variable>)> {
         occurs(self, &ImSet::default(), var)
     }
 
@@ -807,19 +807,19 @@ pub enum Builtin {
 }
 
 fn occurs(
-    subs: &mut Subs,
+    subs: &Subs,
     seen: &ImSet<Variable>,
     input_var: Variable,
 ) -> Option<(Variable, Vec<Variable>)> {
     use self::Content::*;
     use self::FlatType::*;
 
-    let root_var = subs.get_root_key(input_var);
+    let root_var = subs.get_root_key_without_compacting(input_var);
 
     if seen.contains(&root_var) {
         Some((root_var, vec![]))
     } else {
-        match subs.get(root_var).content {
+        match subs.get_without_compacting(root_var).content {
             FlexVar(_) | RigidVar(_) | Error => None,
 
             Structure(flat_type) => {
@@ -869,7 +869,7 @@ fn occurs(
 }
 
 fn short_circuit<'a, T>(
-    subs: &mut Subs,
+    subs: &Subs,
     root_key: Variable,
     seen: &ImSet<Variable>,
     iter: T,

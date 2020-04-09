@@ -1,7 +1,7 @@
 use crate::report::ReportText::{BinOp, Concat, Module, Region, Value};
 use bumpalo::Bump;
 use roc_collections::all::MutSet;
-use roc_module::ident::TagName;
+use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{Problem, RuntimeError};
@@ -11,7 +11,6 @@ use roc_types::types::{write_error_type, ErrorType};
 use std::path::PathBuf;
 
 use roc_module::ident::Ident;
-use roc_region::all::Located;
 use std::fmt;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
 
@@ -23,6 +22,12 @@ pub struct Report {
     pub filename: PathBuf,
     pub text: ReportText,
 }
+
+// impl Report {
+//     fn pretty<'b>(alloc: &'b RocDocAllocator<'b>) -> RocDocBuilder<'b> {
+//         todo!()
+//     }
+// }
 
 pub struct Palette<'a> {
     pub primary: &'a str,
@@ -121,28 +126,14 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
             original_region,
             shadow,
         } => {
-            shadowing_report(&mut texts, original_region, shadow);
-        }
-        Problem::RuntimeError(runtime_error) => match runtime_error {
-            RuntimeError::Shadowing {
+            texts.push(ReportText::RuntimeError(RuntimeError::Shadowing {
                 original_region,
                 shadow,
-            } => {
-                shadowing_report(&mut texts, original_region, shadow);
-            }
-
-            RuntimeError::LookupNotInScope(loc_name, options) => {
-                texts.push(not_found(
-                    loc_name.region,
-                    &loc_name.value,
-                    "value",
-                    options,
-                ));
-            }
-            other => {
-                todo!("TODO implement run time error reporting for {:?}", other);
-            }
-        },
+            }));
+        }
+        Problem::RuntimeError(runtime_error) => {
+            texts.push(ReportText::RuntimeError(runtime_error));
+        }
     };
 
     Report {
@@ -152,62 +143,70 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
     }
 }
 
-fn shadowing_report(
-    texts: &mut Vec<ReportText>,
-    original_region: roc_region::all::Region,
-    shadow: Located<Ident>,
-) {
-    texts.push(name(shadow.value));
-    texts.push(plain_text(" is first defined here:"));
-    texts.push(Region(original_region));
-    texts.push(plain_text("But then it's defined a second time here:"));
-    texts.push(Region(shadow.region));
-    texts.push(plain_text("Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."));
+fn pretty_runtime_error<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    runtime_error: RuntimeError,
+) -> RocDocBuilder<'b> {
+    match runtime_error {
+        RuntimeError::Shadowing {
+            original_region,
+            shadow,
+        } => alloc.stack(vec![
+            alloc
+                .text("The ")
+                .append(alloc.ident(shadow.value))
+                .append(alloc.reflow(" name is first defined here:")),
+            alloc.region(original_region),
+            alloc.reflow("But then it's defined a second time here:"),
+            alloc.region(shadow.region),
+            alloc.reflow(r#"Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#),
+        ]),
+
+        RuntimeError::LookupNotInScope(loc_name, options) => {
+            not_found(alloc, loc_name.region, &loc_name.value, "value", options)
+        }
+        other => todo!("TODO implement run time error reporting for {:?}", other),
+    }
 }
 
-fn not_found(
+fn not_found<'b>(
+    alloc: &'b RocDocAllocator<'b>,
     region: roc_region::all::Region,
     name: &str,
     thing: &str,
     options: MutSet<Box<str>>,
-) -> ReportText {
+) -> RocDocBuilder<'b> {
     use crate::type_error::suggest;
 
     let mut suggestions = suggest::sort(name, options.iter().map(|v| v.as_ref()).collect());
     suggestions.truncate(4);
 
+    let default_no = alloc.concat(vec![
+        alloc.reflow("Is there an "),
+        alloc.keyword("import"),
+        alloc.reflow(" or "),
+        alloc.keyword("exposing"),
+        alloc.reflow(" missing up-top"),
+    ]);
+
+    let default_yes = alloc.reflow("these names seem close though:");
+
     let to_details = |no_suggestion_details, yes_suggestion_details| {
         if suggestions.is_empty() {
             no_suggestion_details
         } else {
-            ReportText::Stack(vec![
+            alloc.stack(vec![
                 yes_suggestion_details,
-                ReportText::Indent(
-                    4,
-                    Box::new(ReportText::Stack(
-                        suggestions
-                            .into_iter()
-                            .map(|v: &str| plain_text(v))
-                            .collect(),
-                    )),
-                ),
+                alloc
+                    .vcat(suggestions.into_iter().map(|v| alloc.string(v.to_string())))
+                    .indent(4),
             ])
         }
     };
 
-    let default_no = ReportText::Concat(vec![
-        plain_text("Is there an "),
-        keyword_text("import"),
-        plain_text(" or "),
-        keyword_text("exposing"),
-        plain_text(" missing up-top?"),
-    ]);
-
-    let default_yes = plain_text("these names seem close though:");
-
-    ReportText::Stack(vec![
-        plain_text(&format!("I cannot find a `{}` {}", name, thing)),
-        ReportText::Region(region),
+    alloc.stack(vec![
+        alloc.string(format!("I cannot find a `{}` {}", name, thing)),
+        alloc.region(region),
         to_details(default_no, default_yes),
     ])
 }
@@ -228,6 +227,7 @@ pub enum ReportText {
     Type(Content),
 
     TypeProblem(crate::type_error::Problem),
+    RuntimeError(RuntimeError),
 
     ErrorTypeInline(ErrorType),
     ErrorTypeBlock(Box<ReportText>),
@@ -351,6 +351,223 @@ pub const BOLD_CODE: &str = "\u{001b}[1m";
 pub const UNDERLINE_CODE: &str = "\u{001b}[4m";
 
 pub const RESET_CODE: &str = "\u{001b}[0m";
+
+// define custom allocator struct so we can `impl RocDocAllocator` custom helpers
+pub struct RocDocAllocator<'a> {
+    upstream: BoxAllocator,
+    arena: &'a Bump,
+    subs: &'a mut Subs,
+    home: ModuleId,
+    src_lines: &'a [&'a str],
+    interns: &'a Interns,
+}
+
+type RocDocBuilder<'b> = DocBuilder<'b, RocDocAllocator<'b>, Annotation>;
+
+impl<'a, A> DocAllocator<'a, A> for RocDocAllocator<'a>
+where
+    A: 'a,
+{
+    type Doc = ven_pretty::BoxDoc<'a, A>;
+
+    fn alloc(&'a self, doc: ven_pretty::Doc<'a, Self::Doc, A>) -> Self::Doc {
+        self.upstream.alloc(doc)
+    }
+
+    fn alloc_column_fn(
+        &'a self,
+        f: impl Fn(usize) -> Self::Doc + 'a,
+    ) -> <Self::Doc as ven_pretty::DocPtr<'a, A>>::ColumnFn {
+        self.upstream.alloc_column_fn(f)
+    }
+
+    fn alloc_width_fn(
+        &'a self,
+        f: impl Fn(isize) -> Self::Doc + 'a,
+    ) -> <Self::Doc as ven_pretty::DocPtr<'a, A>>::WidthFn {
+        self.upstream.alloc_width_fn(f)
+    }
+}
+
+impl<'a> RocDocAllocator<'a> {
+    pub fn new(
+        arena: &'a Bump,
+        subs: &'a mut Subs,
+        src_lines: &'a [&'a str],
+        home: ModuleId,
+        interns: &'a Interns,
+    ) -> Self {
+        RocDocAllocator {
+            upstream: BoxAllocator,
+            arena,
+            subs,
+            home,
+            src_lines,
+            interns,
+        }
+    }
+
+    fn vcat<A, I>(&'a self, docs: I) -> DocBuilder<'a, Self, A>
+    where
+        A: 'a + Clone,
+        I: IntoIterator,
+        I::Item: Into<ven_pretty::BuildDoc<'a, ven_pretty::BoxDoc<'a, A>, A>>,
+    {
+        self.intersperse(docs, self.line())
+    }
+
+    fn stack<A, I>(&'a self, docs: I) -> DocBuilder<'a, Self, A>
+    where
+        A: 'a + Clone,
+        I: IntoIterator,
+        I::Item: Into<ven_pretty::BuildDoc<'a, ven_pretty::BoxDoc<'a, A>, A>>,
+    {
+        self.intersperse(docs, self.line().append(self.line()))
+    }
+
+    pub fn string(&'a self, string: String) -> DocBuilder<'a, Self, Annotation> {
+        let x: std::borrow::Cow<'a, str> = string.into();
+
+        self.text(x)
+    }
+
+    pub fn keyword(&'a self, string: &'a str) -> DocBuilder<'a, Self, Annotation> {
+        self.text(string).annotate(Annotation::Keyword)
+    }
+
+    pub fn tag_name(&'a self, tn: TagName) -> DocBuilder<'a, Self, Annotation> {
+        match tn {
+            TagName::Global(uppercase) => self.global_tag_name(uppercase),
+            TagName::Private(symbol) => self.private_tag_name(symbol),
+        }
+    }
+
+    pub fn symbol_unqualified(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
+        self.text(format!("{}", symbol.ident_string(self.interns)))
+            .annotate(Annotation::Symbol)
+    }
+    pub fn symbol_foreign_qualified(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
+        if symbol.module_id() == self.home || symbol.module_id().is_builtin() {
+            // Render it unqualified if it's in the current module or a builtin
+            self.text(format!("{}", symbol.ident_string(self.interns)))
+                .annotate(Annotation::Symbol)
+        } else {
+            self.text(format!(
+                "{}.{}",
+                symbol.module_string(self.interns),
+                symbol.ident_string(self.interns),
+            ))
+            .annotate(Annotation::Symbol)
+        }
+    }
+    pub fn symbol_qualified(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
+        self.text(format!(
+            "{}.{}",
+            symbol.module_string(self.interns),
+            symbol.ident_string(self.interns),
+        ))
+        .annotate(Annotation::Symbol)
+    }
+
+    pub fn private_tag_name(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
+        if symbol.module_id() == self.home {
+            // Render it unqualified if it's in the current module.
+            self.text(format!("{}", symbol.ident_string(self.interns)))
+                .annotate(Annotation::PrivateTag)
+        } else {
+            self.text(format!(
+                "{}.{}",
+                symbol.module_string(self.interns),
+                symbol.ident_string(self.interns),
+            ))
+            .annotate(Annotation::PrivateTag)
+        }
+    }
+
+    pub fn global_tag_name(&'a self, uppercase: Uppercase) -> DocBuilder<'a, Self, Annotation> {
+        self.text(format!("{}", uppercase))
+            .annotate(Annotation::GlobalTag)
+    }
+    pub fn record_field(&'a self, lowercase: Lowercase) -> DocBuilder<'a, Self, Annotation> {
+        self.text(format!(".{}", lowercase))
+            .annotate(Annotation::RecordField)
+    }
+
+    pub fn region(&'a self, region: roc_region::all::Region) -> DocBuilder<'a, Self, Annotation> {
+        let max_line_number_length = (region.end_line + 1).to_string().len();
+        let indent = 2;
+
+        if region.start_line == region.end_line {
+            let i = region.start_line;
+
+            let line_number_string = (i + 1).to_string();
+            let line_number = line_number_string;
+            let this_line_number_length = line_number.len();
+
+            let line = self.src_lines[i as usize];
+            let rest_of_line = if line.trim().is_empty() {
+                self.nil()
+            } else {
+                self.nil()
+                    .append(self.text(line).indent(2))
+                    .annotate(Annotation::CodeBlock)
+            };
+
+            let source_line = self
+                .text(" ".repeat(max_line_number_length - this_line_number_length))
+                .append(self.text(line_number).annotate(Annotation::LineNumber))
+                .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                .append(rest_of_line);
+
+            let highlight_line = self
+                .line()
+                .append(self.text(" ".repeat(max_line_number_length)))
+                .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                .append(
+                    self.text(" ".repeat(region.start_col as usize))
+                        .indent(indent),
+                )
+                .append(
+                    self.text("^".repeat((region.end_col - region.start_col) as usize))
+                        .annotate(Annotation::Error),
+                );
+
+            source_line.append(highlight_line)
+        } else {
+            let mut result = self.nil();
+            for i in region.start_line..=region.end_line {
+                let line_number_string = (i + 1).to_string();
+                let line_number = line_number_string;
+                let this_line_number_length = line_number.len();
+
+                let line = self.src_lines[i as usize];
+                let rest_of_line = if !line.trim().is_empty() {
+                    self.text(line)
+                        .annotate(Annotation::CodeBlock)
+                        .indent(indent)
+                } else {
+                    self.nil()
+                };
+
+                let source_line = self
+                    .text(" ".repeat(max_line_number_length - this_line_number_length))
+                    .append(self.text(line_number).annotate(Annotation::LineNumber))
+                    .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                    .append(self.text(">").annotate(Annotation::Error))
+                    .append(rest_of_line);
+
+                result = result.append(source_line);
+            }
+
+            result
+        }
+    }
+
+    pub fn ident(&'a self, ident: Ident) -> DocBuilder<'a, Self, Annotation> {
+        self.text(format!("{}", ident.as_inline_str()))
+            .annotate(Annotation::Symbol)
+    }
+}
 
 #[derive(Copy, Clone)]
 pub enum Annotation {
@@ -585,11 +802,11 @@ impl ReportText {
         interns: &Interns,
     ) {
         let arena = Bump::new();
-        let alloc = BoxAllocator;
+        let alloc = RocDocAllocator::new(&arena, subs, src_lines, home, interns);
 
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
-        self.pretty::<_>(&alloc, &arena, subs, home, src_lines, interns)
+        self.pretty(&alloc)
             .1
             .render_raw(70, &mut CiWrite::new(buf))
             .expect(err_msg);
@@ -606,11 +823,11 @@ impl ReportText {
         palette: &Palette,
     ) {
         let arena = Bump::new();
-        let alloc = BoxAllocator;
+        let alloc = RocDocAllocator::new(&arena, subs, src_lines, home, interns);
 
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
-        self.pretty::<_>(&alloc, &arena, subs, home, src_lines, interns)
+        self.pretty(&alloc)
             .1
             .render_raw(70, &mut ColorWrite::new(palette, buf))
             .expect(err_msg);
@@ -618,19 +835,10 @@ impl ReportText {
 
     /// General idea: this function puts all the characters in. Any styling (emphasis, colors,
     /// monospace font, etc) is done in the CiWrite and ColorWrite `RenderAnnotated` instances.
-    pub fn pretty<'b, D>(
+    pub fn pretty<'b>(
         self,
-        alloc: &'b D,
-        arena: &'b Bump,
-        subs: &mut Subs,
-        home: ModuleId,
-        src_lines: &'b [&'b str],
-        interns: &Interns,
-    ) -> DocBuilder<'b, D, Annotation>
-    where
-        D: DocAllocator<'b, Annotation>,
-        D::Doc: Clone,
-    {
+        alloc: &'b RocDocAllocator<'b>,
+    ) -> DocBuilder<'b, RocDocAllocator<'b>, Annotation> {
         use ReportText::*;
 
         match self {
@@ -650,63 +858,53 @@ impl ReportText {
             RecordField(string) => alloc
                 .text(format!(".{}", string))
                 .annotate(Annotation::RecordField),
-            PrivateTag(symbol) => {
-                if symbol.module_id() == home {
-                    // Render it unqualified if it's in the current module.
-                    alloc
-                        .text(format!("{}", symbol.ident_string(interns)))
-                        .annotate(Annotation::PrivateTag)
-                } else {
-                    alloc
-                        .text(format!(
-                            "{}.{}",
-                            symbol.module_string(interns),
-                            symbol.ident_string(interns),
-                        ))
-                        .annotate(Annotation::PrivateTag)
-                }
-            }
-            Value(symbol) => {
-                if symbol.module_id() == home || symbol.module_id().is_builtin() {
-                    // Render it unqualified if it's in the current module or a builtin
-                    alloc
-                        .text(format!("{}", symbol.ident_string(interns)))
-                        .annotate(Annotation::Symbol)
-                } else {
-                    alloc
-                        .text(format!(
-                            "{}.{}",
-                            symbol.module_string(interns),
-                            symbol.ident_string(interns),
-                        ))
-                        .annotate(Annotation::Symbol)
-                }
-            }
+            PrivateTag(symbol) => alloc.private_tag_name(symbol),
+            Value(symbol) => alloc.symbol_foreign_qualified(symbol),
 
             Module(module_id) => alloc
-                .text(format!("{}", interns.module_name(module_id)))
+                .text(format!("{}", alloc.interns.module_name(module_id)))
                 .annotate(Annotation::Module),
             Type(content) => match content {
                 Content::FlexVar(_) | Content::RigidVar(_) => alloc
-                    .text(content_to_string(content, subs, home, interns))
+                    .text(content_to_string(
+                        content,
+                        alloc.subs,
+                        alloc.home,
+                        alloc.interns,
+                    ))
                     .annotate(Annotation::TypeVariable),
 
                 Content::Structure(_) => alloc
-                    .text(content_to_string(content, subs, home, interns))
+                    .text(content_to_string(
+                        content,
+                        alloc.subs,
+                        alloc.home,
+                        alloc.interns,
+                    ))
                     .annotate(Annotation::Structure),
 
                 Content::Alias(_, _, _) => alloc
-                    .text(content_to_string(content, subs, home, interns))
+                    .text(content_to_string(
+                        content,
+                        alloc.subs,
+                        alloc.home,
+                        alloc.interns,
+                    ))
                     .annotate(Annotation::Alias),
 
-                Content::Error => alloc.text(content_to_string(content, subs, home, interns)),
+                Content::Error => alloc.text(content_to_string(
+                    content,
+                    alloc.subs,
+                    alloc.home,
+                    alloc.interns,
+                )),
             },
             ErrorTypeInline(error_type) => alloc
                 .nil()
                 .append(alloc.hardline())
                 .append(
                     alloc
-                        .text(write_error_type(home, interns, error_type))
+                        .text(write_error_type(alloc.home, alloc.interns, error_type))
                         .indent(4),
                 )
                 .append(alloc.hardline()),
@@ -716,38 +914,34 @@ impl ReportText {
                 .append(alloc.hardline())
                 .append(
                     error_type
-                        .pretty(alloc, arena, subs, home, src_lines, interns)
+                        .pretty(alloc)
                         .indent(4)
                         .annotate(Annotation::TypeBlock),
                 )
                 .append(alloc.hardline()),
 
             Indent(n, nested) => {
-                let rest = nested.pretty(alloc, arena, subs, home, src_lines, interns);
+                let rest = nested.pretty(alloc);
                 alloc.nil().append(rest).indent(n)
             }
             Docs(_) => {
                 panic!("TODO implment docs");
             }
-            Concat(report_texts) => alloc.concat(
-                report_texts
-                    .into_iter()
-                    .map(|rep| rep.pretty(alloc, arena, subs, home, src_lines, interns)),
-            ),
+            Concat(report_texts) => {
+                alloc.concat(report_texts.into_iter().map(|rep| rep.pretty(alloc)))
+            }
             Stack(report_texts) => alloc
                 .intersperse(
-                    report_texts
-                        .into_iter()
-                        .map(|rep| (rep.pretty(alloc, arena, subs, home, src_lines, interns))),
+                    report_texts.into_iter().map(|rep| (rep.pretty(alloc))),
                     alloc.hardline(),
                 )
                 .append(alloc.hardline()),
             Intersperse { separator, items } => alloc.intersperse(
                 items
                     .into_iter()
-                    .map(|rep| (rep.pretty(alloc, arena, subs, home, src_lines, interns)))
+                    .map(|rep| (rep.pretty(alloc)))
                     .collect::<Vec<_>>(),
-                separator.pretty(alloc, arena, subs, home, src_lines, interns),
+                separator.pretty(alloc),
             ),
             BinOp(bin_op) => alloc.text(bin_op.to_string()).annotate(Annotation::BinOp),
             Region(region) => {
@@ -761,7 +955,7 @@ impl ReportText {
                     let line_number = line_number_string;
                     let this_line_number_length = line_number.len();
 
-                    let line = src_lines[i as usize];
+                    let line = alloc.src_lines[i as usize];
                     let rest_of_line = if line.trim().is_empty() {
                         alloc.nil()
                     } else {
@@ -804,7 +998,7 @@ impl ReportText {
                         let line_number = line_number_string;
                         let this_line_number_length = line_number.len();
 
-                        let line = src_lines[i as usize];
+                        let line = alloc.src_lines[i as usize];
                         let rest_of_line = if !line.trim().is_empty() {
                             alloc
                                 .text(line)
@@ -840,23 +1034,15 @@ impl ReportText {
             Name(ident) => alloc
                 .text(format!("{}", ident.as_inline_str()))
                 .annotate(Annotation::Symbol),
-            TypeProblem(problem) => {
-                Self::type_problem_to_pretty(alloc, arena, home, interns, problem)
-            }
+            TypeProblem(problem) => Self::type_problem_to_pretty(alloc, problem),
+            RuntimeError(problem) => pretty_runtime_error(alloc, problem),
         }
     }
 
-    fn type_problem_to_pretty<'b, D>(
-        alloc: &'b D,
-        arena: &'b Bump,
-        home: ModuleId,
-        interns: &Interns,
+    fn type_problem_to_pretty<'b>(
+        alloc: &'b RocDocAllocator<'b>,
         problem: crate::type_error::Problem,
-    ) -> DocBuilder<'b, D, Annotation>
-    where
-        D: DocAllocator<'b, Annotation>,
-        D::Doc: Clone,
-    {
+    ) -> DocBuilder<'b, RocDocAllocator<'b>, Annotation> {
         use crate::type_error::suggest;
         use crate::type_error::Problem::*;
 
@@ -913,9 +1099,9 @@ impl ReportText {
             TagTypo(typo, possibilities_tn) => {
                 let possibilities = possibilities_tn
                     .into_iter()
-                    .map(|tag_name| tag_name.into_string(interns, home))
+                    .map(|tag_name| tag_name.into_string(alloc.interns, alloc.home))
                     .collect();
-                let typo_str = format!("{}", typo.into_string(interns, home));
+                let typo_str = format!("{}", typo.into_string(alloc.interns, alloc.home));
                 let suggestions = suggest::sort(&typo_str, possibilities);
 
                 match suggestions.get(0) {
@@ -968,7 +1154,7 @@ impl ReportText {
                         name, a_thing
                     );
 
-                    Self::hint(alloc).append(alloc.reflow(arena.alloc(text)))
+                    Self::hint(alloc).append(alloc.reflow(alloc.arena.alloc(text)))
                 };
 
                 let bad_double_rigid = |a, b| {
@@ -977,7 +1163,7 @@ impl ReportText {
                         a, b
                     );
 
-                    Self::hint(alloc).append(alloc.reflow(arena.alloc(text)))
+                    Self::hint(alloc).append(alloc.reflow(alloc.arena.alloc(text)))
                 };
 
                 match tipe {
@@ -990,7 +1176,7 @@ impl ReportText {
                     }
                     Alias(symbol, _, _) | Type(symbol, _) => bad_rigid_var(
                         x.as_str(),
-                        &format!("a {} value", symbol.ident_string(interns)),
+                        &format!("a {} value", symbol.ident_string(alloc.interns)),
                     ),
                     Boolean(_) => bad_rigid_var(x.as_str(), "a uniqueness attribute value"),
                 }
@@ -1000,11 +1186,7 @@ impl ReportText {
         }
     }
 
-    fn hint<'b, D>(alloc: &'b D) -> DocBuilder<'b, D, Annotation>
-    where
-        D: DocAllocator<'b, Annotation>,
-        D::Doc: Clone,
-    {
+    fn hint<'b>(alloc: &'b RocDocAllocator<'b>) -> DocBuilder<'b, RocDocAllocator<'b>, Annotation> {
         alloc
             .text("Hint:")
             .append(alloc.softline())
