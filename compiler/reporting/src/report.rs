@@ -23,11 +23,62 @@ pub struct Report {
     pub text: ReportText,
 }
 
-// impl Report {
-//     fn pretty<'b>(alloc: &'b RocDocAllocator<'b>) -> RocDocBuilder<'b> {
-//         todo!()
-//     }
-// }
+impl Report {
+    /// Render to CI console output, where no colors are available.
+    pub fn render_ci(
+        self,
+        buf: &mut String,
+        subs: &mut Subs,
+        home: ModuleId,
+        src_lines: &[&str],
+        interns: &Interns,
+    ) {
+        let arena = Bump::new();
+        let alloc = RocDocAllocator::new(&arena, subs, src_lines, home, interns);
+
+        let err_msg = "<buffer is not a utf-8 encoded string>";
+
+        self.pretty(&alloc)
+            .1
+            .render_raw(70, &mut CiWrite::new(buf))
+            .expect(err_msg);
+    }
+
+    /// Render to a color terminal using ANSI escape sequences
+    pub fn render_color_terminal(
+        self,
+        buf: &mut String,
+        subs: &mut Subs,
+        home: ModuleId,
+        src_lines: &[&str],
+        interns: &Interns,
+        palette: &Palette,
+    ) {
+        let arena = Bump::new();
+        let alloc = RocDocAllocator::new(&arena, subs, src_lines, home, interns);
+
+        let err_msg = "<buffer is not a utf-8 encoded string>";
+
+        self.pretty(&alloc)
+            .1
+            .render_raw(70, &mut ColorWrite::new(palette, buf))
+            .expect(err_msg);
+    }
+
+    fn pretty<'b>(self, alloc: &'b RocDocAllocator<'b>) -> RocDocBuilder<'b> {
+        if self.title.is_empty() {
+            self.text.pretty(alloc)
+        } else {
+            let header = format!(
+                "-- {} {}",
+                self.title,
+                "-".repeat(80 - self.title.len() - 4)
+            );
+
+            alloc.stack(vec![alloc.text(header), self.text.pretty(alloc)])
+        }
+    }
+}
 
 pub struct Palette<'a> {
     pub primary: &'a str,
@@ -792,47 +843,6 @@ where
 }
 
 impl ReportText {
-    /// Render to CI console output, where no colors are available.
-    pub fn render_ci(
-        self,
-        buf: &mut String,
-        subs: &mut Subs,
-        home: ModuleId,
-        src_lines: &[&str],
-        interns: &Interns,
-    ) {
-        let arena = Bump::new();
-        let alloc = RocDocAllocator::new(&arena, subs, src_lines, home, interns);
-
-        let err_msg = "<buffer is not a utf-8 encoded string>";
-
-        self.pretty(&alloc)
-            .1
-            .render_raw(70, &mut CiWrite::new(buf))
-            .expect(err_msg);
-    }
-
-    /// Render to a color terminal using ANSI escape sequences
-    pub fn render_color_terminal(
-        self,
-        buf: &mut String,
-        subs: &mut Subs,
-        home: ModuleId,
-        src_lines: &[&str],
-        interns: &Interns,
-        palette: &Palette,
-    ) {
-        let arena = Bump::new();
-        let alloc = RocDocAllocator::new(&arena, subs, src_lines, home, interns);
-
-        let err_msg = "<buffer is not a utf-8 encoded string>";
-
-        self.pretty(&alloc)
-            .1
-            .render_raw(70, &mut ColorWrite::new(palette, buf))
-            .expect(err_msg);
-    }
-
     /// General idea: this function puts all the characters in. Any styling (emphasis, colors,
     /// monospace font, etc) is done in the CiWrite and ColorWrite `RenderAnnotated` instances.
     pub fn pretty<'b>(

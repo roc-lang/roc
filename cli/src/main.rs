@@ -122,9 +122,7 @@ fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
         let report = can_problem(filename.clone(), problem);
         let mut buf = String::new();
 
-        report
-            .text
-            .render_color_terminal(&mut buf, &mut subs, home, &src_lines, &interns, &palette);
+        report.render_color_terminal(&mut buf, &mut subs, home, &src_lines, &interns, &palette);
 
         println!("\n{}\n", buf);
     }
@@ -133,9 +131,7 @@ fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
         let report = type_problem(filename.clone(), problem);
         let mut buf = String::new();
 
-        report
-            .text
-            .render_color_terminal(&mut buf, &mut subs, home, &src_lines, &interns, &palette);
+        report.render_color_terminal(&mut buf, &mut subs, home, &src_lines, &interns, &palette);
 
         println!("\n{}\n", buf);
     }

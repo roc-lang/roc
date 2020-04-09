@@ -26,6 +26,7 @@ mod test_reporting {
     use roc_solve::solve;
     use roc_types::subs::Content::{FlexVar, RigidVar, Structure};
     use roc_types::subs::FlatType::EmptyRecord;
+    use std::fmt::Write;
 
     fn filename_from_string(str: &str) -> PathBuf {
         let mut filename = PathBuf::new();
@@ -37,7 +38,7 @@ mod test_reporting {
     // use roc_problem::can;
     fn to_simple_report(text: ReportText) -> Report {
         Report {
-            title: "SYNTAX PROBLEM".to_string(),
+            title: "".to_string(),
             text: text,
             filename: filename_from_string(r"\code\proj\Main.roc"),
         }
@@ -81,9 +82,7 @@ mod test_reporting {
         let mut buf: String = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
 
-        report
-            .text
-            .render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
+        report.render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
 
         assert_eq!(buf, expected_rendering);
     }
@@ -101,20 +100,25 @@ mod test_reporting {
                     filename_from_string(r"\code\proj\Main.roc"),
                     problem.clone(),
                 );
-                report
-                    .text
-                    .render_ci(&mut buf, &mut subs, home, &src_lines, &interns)
+                report.render_ci(&mut buf, &mut subs, home, &src_lines, &interns)
             }
         }
 
-        for problem in type_problems {
+        if !can_problems.is_empty() && !type_problems.is_empty() {
+            write!(buf, "\n\n").unwrap();
+        }
+
+        let mut it = type_problems.into_iter().peekable();
+        while let Some(problem) = it.next() {
             let report = type_problem(
                 filename_from_string(r"\code\proj\Main.roc"),
                 problem.clone(),
             );
-            report
-                .text
-                .render_ci(&mut buf, &mut subs, home, &src_lines, &interns)
+            report.render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
+
+            if it.peek().is_some() {
+                write!(buf, "\n\n").unwrap();
+            }
         }
 
         assert_eq!(buf, expected_rendering);
@@ -139,7 +143,7 @@ mod test_reporting {
         let mut buf: String = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
 
-        report.text.render_color_terminal(
+        report.render_color_terminal(
             &mut buf,
             &mut subs,
             home,
@@ -216,7 +220,6 @@ mod test_reporting {
         let src_lines: Vec<&str> = src.split('\n').collect();
 
         to_simple_report(Value(interns.symbol(test_home(), "x".into())))
-            .text
             .render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
 
         assert_eq!(buf, "`x`");
@@ -240,7 +243,6 @@ mod test_reporting {
         let module_id = interns.module_id(&"Main".into());
 
         to_simple_report(Module(module_id))
-            .text
             .render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
 
         assert_eq!(buf, "Main");
@@ -293,6 +295,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
                 `y` is not used anywhere in your code.
 
                 2 ┆  y = 2
@@ -318,6 +322,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
                 The `i` name is first defined here:
 
                 1 ┆  i = 1
@@ -351,6 +357,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
                 The `Booly` name is first defined here:
 
                 1 ┆  Booly : [ Yes, No ]
@@ -448,6 +456,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
                 Using != and == together requires parentheses, to clarify how they should be grouped.
 
                 3 ┆      if selectedId != thisId == adminsId then
@@ -476,6 +486,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
                 Using more than one == like this requires parentheses, to clarify how things should be grouped.
 
                 2 ┆>      1
@@ -578,7 +590,6 @@ mod test_reporting {
         to_simple_report(Value(
             interns.symbol(test_home(), "activityIndicatorLarge".into()),
         ))
-        .text
         .render_color_terminal(
             &mut buf,
             &mut subs,
@@ -608,16 +619,14 @@ mod test_reporting {
         let src_lines: Vec<&str> = src.split('\n').collect();
         let module_id = interns.module_id(&"Util.Int".into());
 
-        to_simple_report(Module(module_id))
-            .text
-            .render_color_terminal(
-                &mut buf,
-                &mut subs,
-                home,
-                &src_lines,
-                &interns,
-                &DEFAULT_PALETTE,
-            );
+        to_simple_report(Module(module_id)).render_color_terminal(
+            &mut buf,
+            &mut subs,
+            home,
+            &src_lines,
+            &interns,
+            &DEFAULT_PALETTE,
+        );
 
         assert_eq!(human_readable(&buf), "<green>Util.Int<reset>");
     }
@@ -859,6 +868,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 This `if` condition needs to be a Bool:
 
                 1 ┆  if "foo" then 2 else 3
@@ -886,6 +897,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 This `if` guard condition needs to be a Bool:
 
                 2 ┆      2 if 1 -> 0x0
@@ -911,6 +924,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 This `if` has an `else` branch with a different type from its `then` branch:
 
                 1 ┆  if True then 2 else "foo"
@@ -940,6 +955,8 @@ mod test_reporting {
     //         ),
     //         indoc!(
     //             r#"
+    //  -- TYPE MISMATCH ---------------------------------------------------------------
+
     //             The 2nd branch of this `if` does not match all the previous branches:
 
     //             1 ┆  if True then 2 else "foo"
@@ -970,6 +987,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 2nd branch of this `when` does not match all the previous branches:
 
                 3 ┆      3 -> {}
@@ -999,6 +1018,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 3rd element of this list does not match all the previous elements:
 
                 1 ┆  [ 1, 3, "foo" ]
@@ -1031,6 +1052,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 I cannot update the `.foo` field like this:
 
                 4 ┆  { x & foo: "bar" }
@@ -1123,6 +1146,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 I'm inferring a weird self-referential type for `g`:
 
                 1 ┆  f = \g -> g g
@@ -1149,6 +1174,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 I'm inferring a weird self-referential type for `f`:
 
                 1 ┆  f = \x -> f [x]
@@ -1178,6 +1205,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 1st argument to `f` is not what I expect:
 
                 6 ┆  f bar
@@ -1215,6 +1244,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 1st argument to `f` is not what I expect:
 
                 4 ┆  f Blue
@@ -1252,6 +1283,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 1st argument to `f` is not what I expect:
 
                 4 ┆  f (Blue 3.14)
@@ -1289,6 +1322,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the 1st branch of this `if` expression:
 
                 2 ┆  x = if True then 3.14 else 4
@@ -1323,6 +1358,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the 1st branch of this `when` expression:
 
                 4 ┆          _ -> 3.14
@@ -1355,6 +1392,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the body of the `x` definition:
 
                 2 ┆  x = \_ -> 3.14
@@ -1387,6 +1426,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TOO MANY ARGS ---------------------------------------------------------------
+
                 The `x` value is not a function, but it was given 1 argument:
 
                 4 ┆  x 3
@@ -1410,6 +1451,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TOO MANY ARGS ---------------------------------------------------------------
+
                 The `f` function expects 1 argument, but it got 2 instead:
 
                 4 ┆  f 1 2
@@ -1433,6 +1476,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TOO FEW ARGS ----------------------------------------------------------------
+
                 The `f` function expects 2 arguments, but it got only 1:
 
                 4 ┆  f 1
@@ -1454,6 +1499,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 1st pattern in this `when` is causing a mismatch:
 
                 2 ┆      {} -> 42
@@ -1484,6 +1531,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 2nd pattern in this `when` does not match the previous ones:
 
                 3 ┆      {} -> 42
@@ -1513,6 +1562,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 1st pattern in this `when` is causing a mismatch:
 
                 2 ┆      { foo: True } -> 42
@@ -1543,6 +1594,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
                 I cannot find a `foo` value
 
                 2 ┆      { foo: 2 } -> foo
@@ -1603,6 +1656,8 @@ mod test_reporting {
             // Just putting this here. We should probably handle or-patterns better
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 1st pattern in this `when` is causing a mismatch:
 
                 2 ┆      {} | 1 -> 3
@@ -1634,6 +1689,8 @@ mod test_reporting {
             // Maybe this should specifically say the pattern doesn't work?
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 This expression is used in an unexpected way:
 
                 1 ┆  (Foo x) = 42
@@ -1666,6 +1723,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the body of this definition:
 
                 2 ┆  { x } = { x: 4.0 }
@@ -1698,6 +1757,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the body of the `x` definition:
 
                 2 ┆  x = { b: 4.0 }
@@ -1731,6 +1792,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the body of the `f` definition:
 
                 2 ┆  f = \x, y -> if True then x else y
@@ -1767,6 +1830,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the body of the `f` definition:
 
                 2 ┆  f = \_ -> Foo
@@ -1804,6 +1869,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the body of the `f` definition:
 
                 2 ┆  f = 0x3
@@ -1842,6 +1909,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
                 I cannot find a `ok` value
 
                 2 ┆  f = \_ -> ok 4
@@ -1874,12 +1943,18 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
                 `ok` is not used anywhere in your code.
 
                 3 ┆      ok = 3
                   ┆      ^^
 
-                If you didn't intend on using `ok` then remove it so future readers of your code don't wonder why it is there.Something is off with the body of the `f` definition:
+                If you didn't intend on using `ok` then remove it so future readers of your code don't wonder why it is there.
+
+                -- TYPE MISMATCH ---------------------------------------------------------------
+                
+                Something is off with the body of the `f` definition:
 
                 2 ┆>  f = \_ ->
                 3 ┆>      ok = 3
