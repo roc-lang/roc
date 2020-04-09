@@ -110,12 +110,12 @@ fn report_bad_type(
     }
 }
 
-fn pattern_to_doc(pattern: &roc_can::pattern::Pattern) -> ReportText {
+fn pattern_to_doc(pattern: &roc_can::pattern::Pattern) -> Option<ReportText> {
     use roc_can::pattern::Pattern::*;
+
     match pattern {
-        Identifier(symbol) => ReportText::Value(*symbol),
-        Underscore => plain_text("_"),
-        _ => todo!(),
+        Identifier(symbol) => Some(ReportText::Value(*symbol)),
+        _ => None,
     }
 }
 
@@ -151,7 +151,13 @@ fn to_expr_report(
         Expected::FromAnnotation(name, _arity, annotation_source, expected_type) => {
             use roc_types::types::AnnotationSource::*;
 
-            let name_text = pattern_to_doc(&name.value);
+            let (the_name_text, on_name_text) = match pattern_to_doc(&name.value) {
+                Some(doc) => (
+                    Concat(vec![plain_text("the "), doc.clone()]),
+                    Concat(vec![plain_text(" on "), doc]),
+                ),
+                None => (plain_text("this"), plain_text("")),
+            };
 
             // TODO special-case 2-branch if
             let thing = match annotation_source {
@@ -166,8 +172,8 @@ fn to_expr_report(
                     plain_text(" expression:"),
                 ]),
                 TypedBody => Concat(vec![
-                    plain_text("body of the "),
-                    name_text.clone(),
+                    plain_text("body of "),
+                    the_name_text,
                     plain_text(" definition:"),
                 ]),
             };
@@ -183,8 +189,8 @@ fn to_expr_report(
                 expected_type,
                 add_category(plain_text(&it_is), &category),
                 Concat(vec![
-                    plain_text("But the type annotation on "),
-                    name_text,
+                    plain_text("But the type annotation"),
+                    on_name_text,
                     plain_text(" says it should be:"),
                 ]),
                 Concat(vec![]),
@@ -832,7 +838,7 @@ fn to_circular_report(
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Problem {
     IntFloat,
     ArityMismatch(usize, usize),
@@ -845,9 +851,56 @@ pub enum Problem {
     BadRigidVar(Lowercase, ErrorType),
 }
 
-fn problems_to_hint(_problems: Vec<Problem>) -> Vec<ReportText> {
-    // TODO
-    vec![]
+fn problems_to_hint(mut problems: Vec<Problem>) -> Option<ReportText> {
+    if problems.is_empty() {
+        None
+    } else {
+        let problem = problems.remove(problems.len() - 1);
+        Some(ReportText::TypeProblem(problem))
+    }
+}
+
+pub mod suggest {
+    use core::convert::AsRef;
+    use distance;
+    use inlinable_string::InlinableString;
+    use roc_module::ident::Lowercase;
+
+    pub trait ToStr {
+        fn to_str(&self) -> &str;
+    }
+
+    impl ToStr for Lowercase {
+        fn to_str(&self) -> &str {
+            self.as_str()
+        }
+    }
+
+    impl ToStr for InlinableString {
+        fn to_str(&self) -> &str {
+            self.as_ref()
+        }
+    }
+
+    impl ToStr for &str {
+        fn to_str(&self) -> &str {
+            self
+        }
+    }
+
+    pub fn sort<'a, T>(typo: &'a str, mut options: Vec<T>) -> Vec<T>
+    where
+        T: ToStr,
+    {
+        options.sort_by(|a, b| {
+            let l = distance::damerau_levenshtein(typo, a.to_str());
+            let r = distance::damerau_levenshtein(typo, b.to_str());
+
+            l.cmp(&r)
+        });
+
+        options
+    }
 }
 
 pub struct Comparison {
@@ -1096,15 +1149,22 @@ fn to_diff(parens: Parens, type1: &ErrorType, type2: &ErrorType) -> Diff<ReportT
             }
         }
 
-        _ => {
+        pair => {
             // We hit none of the specific cases where we give more detailed information
             let left = to_doc(Parens::Unnecessary, type1);
             let right = to_doc(Parens::Unnecessary, type2);
 
+            let problems = match pair {
+                (RigidVar(x), other) | (other, RigidVar(x)) => {
+                    vec![Problem::BadRigidVar(x.clone(), other.clone())]
+                }
+                _ => vec![],
+            };
+
             Diff {
                 left,
                 right,
-                status: Status::Similar,
+                status: Status::Different(problems),
             }
         }
     }
@@ -1153,8 +1213,8 @@ fn diff_record(
         let diff = to_diff(Parens::Unnecessary, t1, t2);
 
         Diff {
-            left: (plain_text(field.as_str()), diff.left),
-            right: (plain_text(field.as_str()), diff.right),
+            left: (field.clone(), plain_text(field.as_str()), diff.left),
+            right: (field.clone(), plain_text(field.as_str()), diff.right),
             status: diff.status,
         }
     };
@@ -1215,7 +1275,7 @@ fn diff_record(
 
     let ext_diff = ext_to_diff(ext1, ext2);
 
-    let mut fields_diff: Diff<Vec<(ReportText, ReportText)>> = Diff {
+    let mut fields_diff: Diff<Vec<(Lowercase, ReportText, ReportText)>> = Diff {
         left: vec![],
         right: vec![],
         status: Status::Similar,
@@ -1228,13 +1288,31 @@ fn diff_record(
     }
 
     if !all_fields_shared {
-        fields_diff.left.extend(left.map(|(_, x, y)| (x, y)));
-        fields_diff.right.extend(right.map(|(_, x, y)| (x, y)));
+        fields_diff.left.extend(left);
+        fields_diff.right.extend(right);
         fields_diff.status.merge(Status::Different(vec![]));
     }
 
-    let doc1 = report_text::record(fields_diff.left, ext_diff.left);
-    let doc2 = report_text::record(fields_diff.right, ext_diff.right);
+    // sort fields for display
+    fields_diff.left.sort_by(|a, b| a.0.cmp(&b.0));
+    fields_diff.right.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let doc1 = report_text::record(
+        fields_diff
+            .left
+            .into_iter()
+            .map(|(_, b, c)| (b, c))
+            .collect(),
+        ext_diff.left,
+    );
+    let doc2 = report_text::record(
+        fields_diff
+            .right
+            .into_iter()
+            .map(|(_, b, c)| (b, c))
+            .collect(),
+        ext_diff.right,
+    );
 
     fields_diff.status.merge(status);
 

@@ -267,45 +267,26 @@ pub fn canonicalize_pattern<'a>(
                         };
                     }
                     RecordField(label, loc_guard) => {
-                        match scope.introduce(
-                            label.into(),
-                            &env.exposed_ident_ids,
-                            &mut env.ident_ids,
-                            region,
-                        ) {
-                            Ok(symbol) => {
-                                let can_guard = canonicalize_pattern(
-                                    env,
-                                    var_store,
-                                    scope,
-                                    pattern_type,
-                                    &loc_guard.value,
-                                    loc_guard.region,
-                                );
+                        // a guard does not introduce the label into scope!
+                        let symbol = scope.ignore(label.into(), &mut env.ident_ids);
+                        let can_guard = canonicalize_pattern(
+                            env,
+                            var_store,
+                            scope,
+                            pattern_type,
+                            &loc_guard.value,
+                            loc_guard.region,
+                        );
 
-                                destructs.push(Located {
-                                    region: loc_pattern.region,
-                                    value: RecordDestruct {
-                                        var: var_store.fresh(),
-                                        label: Lowercase::from(label),
-                                        symbol,
-                                        guard: Some((var_store.fresh(), can_guard)),
-                                    },
-                                });
-                            }
-                            Err((original_region, shadow)) => {
-                                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
-                                    original_region,
-                                    shadow: shadow.clone(),
-                                }));
-
-                                // No matter what the other patterns
-                                // are, we're definitely shadowed and will
-                                // get a runtime exception as soon as we
-                                // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
-                            }
-                        };
+                        destructs.push(Located {
+                            region: loc_pattern.region,
+                            value: RecordDestruct {
+                                var: var_store.fresh(),
+                                label: Lowercase::from(label),
+                                symbol,
+                                guard: Some((var_store.fresh(), can_guard)),
+                            },
+                        });
                     }
                     _ => panic!("invalid pattern in record"),
                 }

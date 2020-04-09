@@ -1,4 +1,5 @@
 use inlinable_string::InlinableString;
+use roc_collections::all::MutSet;
 use roc_module::ident::Ident;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::operator::BinOp;
@@ -37,7 +38,7 @@ pub enum RuntimeError {
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
     UnrecognizedFunctionName(Located<InlinableString>),
-    LookupNotInScope(Located<InlinableString>),
+    LookupNotInScope(Located<InlinableString>, MutSet<Box<str>>),
     ValueNotExposed {
         module_name: InlinableString,
         ident: InlinableString,

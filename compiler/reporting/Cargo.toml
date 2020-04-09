@@ -18,6 +18,8 @@ ven_pretty = { path = "../../vendor/pretty" }
 inlinable_string = "0.1.0"
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
+distance = "0.4.0"
+bumpalo = { version = "3.2", features = ["collections"] }
 
 [dev-dependencies]
 roc_constrain = { path = "../constrain" }
@@ -29,4 +31,3 @@ maplit = "1.0.1"
 indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
-bumpalo = { version = "3.2", features = ["collections"] }

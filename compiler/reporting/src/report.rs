@@ -1,4 +1,6 @@
 use crate::report::ReportText::{BinOp, Concat, Module, Region, Value};
+use bumpalo::Bump;
+use roc_collections::all::MutSet;
 use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
@@ -12,6 +14,8 @@ use roc_module::ident::Ident;
 use roc_region::all::Located;
 use std::fmt;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
+
+const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annotations always help me give more specific messages, and I think they could help a lot in this case"#;
 
 /// A textual report.
 pub struct Report {
@@ -32,6 +36,8 @@ pub struct Palette<'a> {
     pub gutter_bar: &'a str,
     pub module_name: &'a str,
     pub binop: &'a str,
+    pub typo: &'a str,
+    pub typo_suggestion: &'a str,
 }
 
 pub const DEFAULT_PALETTE: Palette = Palette {
@@ -46,6 +52,8 @@ pub const DEFAULT_PALETTE: Palette = Palette {
     gutter_bar: MAGENTA_CODE,
     module_name: GREEN_CODE,
     binop: GREEN_CODE,
+    typo: YELLOW_CODE,
+    typo_suggestion: GREEN_CODE,
 };
 
 pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
@@ -123,8 +131,16 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
                 shadowing_report(&mut texts, original_region, shadow);
             }
 
-            _ => {
-                panic!("TODO implement run time error reporting");
+            RuntimeError::LookupNotInScope(loc_name, options) => {
+                texts.push(not_found(
+                    loc_name.region,
+                    &loc_name.value,
+                    "value",
+                    options,
+                ));
+            }
+            other => {
+                todo!("TODO implement run time error reporting for {:?}", other);
             }
         },
     };
@@ -149,6 +165,53 @@ fn shadowing_report(
     texts.push(plain_text("Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."));
 }
 
+fn not_found(
+    region: roc_region::all::Region,
+    name: &str,
+    thing: &str,
+    options: MutSet<Box<str>>,
+) -> ReportText {
+    use crate::type_error::suggest;
+
+    let mut suggestions = suggest::sort(name, options.iter().map(|v| v.as_ref()).collect());
+    suggestions.truncate(4);
+
+    let to_details = |no_suggestion_details, yes_suggestion_details| {
+        if suggestions.is_empty() {
+            no_suggestion_details
+        } else {
+            ReportText::Stack(vec![
+                yes_suggestion_details,
+                ReportText::Indent(
+                    4,
+                    Box::new(ReportText::Stack(
+                        suggestions
+                            .into_iter()
+                            .map(|v: &str| plain_text(v))
+                            .collect(),
+                    )),
+                ),
+            ])
+        }
+    };
+
+    let default_no = ReportText::Concat(vec![
+        plain_text("Is there an "),
+        keyword_text("import"),
+        plain_text(" or "),
+        keyword_text("exposing"),
+        plain_text(" missing up-top?"),
+    ]);
+
+    let default_yes = plain_text("these names seem close though:");
+
+    ReportText::Stack(vec![
+        plain_text(&format!("I cannot find a `{}` {}", name, thing)),
+        ReportText::Region(region),
+        to_details(default_no, default_yes),
+    ])
+}
+
 #[derive(Debug, Clone)]
 pub enum ReportText {
     /// A value. Render it qualified unless it was defined in the current module.
@@ -163,6 +226,8 @@ pub enum ReportText {
     /// A type. Render it using roc_types::pretty_print for now, but maybe
     /// do something fancier later.
     Type(Content),
+
+    TypeProblem(crate::type_error::Problem),
 
     ErrorTypeInline(ErrorType),
     ErrorTypeBlock(Box<ReportText>),
@@ -307,6 +372,9 @@ pub enum Annotation {
     CodeBlock,
     TypeBlock,
     Module,
+    Typo,
+    TypoSuggestion,
+    Hint,
 }
 
 /// Render with minimal formatting
@@ -374,7 +442,9 @@ where
             Url => {
                 self.write_str("<")?;
             }
-            GlobalTag | PrivateTag | Keyword | RecordField | Symbol if !self.in_type_block => {
+            GlobalTag | PrivateTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
+                if !self.in_type_block =>
+            {
                 self.write_str("`")?;
             }
 
@@ -399,7 +469,9 @@ where
                 Url => {
                     self.write_str(">")?;
                 }
-                GlobalTag | PrivateTag | Keyword | RecordField | Symbol if !self.in_type_block => {
+                GlobalTag | PrivateTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
+                    if !self.in_type_block =>
+                {
                     self.write_str("`")?;
                 }
 
@@ -435,7 +507,7 @@ where
             Emphasized => {
                 self.write_str(BOLD_CODE)?;
             }
-            Url => {
+            Url | Hint => {
                 self.write_str(UNDERLINE_CODE)?;
             }
             PlainText => {
@@ -471,6 +543,12 @@ where
             Module => {
                 self.write_str(self.palette.module_name)?;
             }
+            Typo => {
+                self.write_str(self.palette.typo)?;
+            }
+            TypoSuggestion => {
+                self.write_str(self.palette.typo_suggestion)?;
+            }
             TypeBlock | GlobalTag | PrivateTag | RecordField | Keyword => { /* nothing yet */ }
         }
         self.style_stack.push(*annotation);
@@ -484,7 +562,8 @@ where
             None => {}
             Some(annotation) => match annotation {
                 Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | Error | GutterBar
-                | Structure | CodeBlock | PlainText | LineNumber | Module => {
+                | Typo | TypoSuggestion | Structure | CodeBlock | PlainText | LineNumber | Hint
+                | Module => {
                     self.write_str(RESET_CODE)?;
                 }
 
@@ -505,11 +584,12 @@ impl ReportText {
         src_lines: &[&str],
         interns: &Interns,
     ) {
+        let arena = Bump::new();
         let alloc = BoxAllocator;
 
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
-        self.pretty::<_>(&alloc, subs, home, src_lines, interns)
+        self.pretty::<_>(&alloc, &arena, subs, home, src_lines, interns)
             .1
             .render_raw(70, &mut CiWrite::new(buf))
             .expect(err_msg);
@@ -525,11 +605,12 @@ impl ReportText {
         interns: &Interns,
         palette: &Palette,
     ) {
+        let arena = Bump::new();
         let alloc = BoxAllocator;
 
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
-        self.pretty::<_>(&alloc, subs, home, src_lines, interns)
+        self.pretty::<_>(&alloc, &arena, subs, home, src_lines, interns)
             .1
             .render_raw(70, &mut ColorWrite::new(palette, buf))
             .expect(err_msg);
@@ -540,6 +621,7 @@ impl ReportText {
     pub fn pretty<'b, D>(
         self,
         alloc: &'b D,
+        arena: &'b Bump,
         subs: &mut Subs,
         home: ModuleId,
         src_lines: &'b [&'b str],
@@ -634,14 +716,14 @@ impl ReportText {
                 .append(alloc.hardline())
                 .append(
                     error_type
-                        .pretty(alloc, subs, home, src_lines, interns)
+                        .pretty(alloc, arena, subs, home, src_lines, interns)
                         .indent(4)
                         .annotate(Annotation::TypeBlock),
                 )
                 .append(alloc.hardline()),
 
             Indent(n, nested) => {
-                let rest = nested.pretty(alloc, subs, home, src_lines, interns);
+                let rest = nested.pretty(alloc, arena, subs, home, src_lines, interns);
                 alloc.nil().append(rest).indent(n)
             }
             Docs(_) => {
@@ -650,22 +732,22 @@ impl ReportText {
             Concat(report_texts) => alloc.concat(
                 report_texts
                     .into_iter()
-                    .map(|rep| rep.pretty(alloc, subs, home, src_lines, interns)),
+                    .map(|rep| rep.pretty(alloc, arena, subs, home, src_lines, interns)),
             ),
             Stack(report_texts) => alloc
                 .intersperse(
                     report_texts
                         .into_iter()
-                        .map(|rep| (rep.pretty(alloc, subs, home, src_lines, interns))),
+                        .map(|rep| (rep.pretty(alloc, arena, subs, home, src_lines, interns))),
                     alloc.hardline(),
                 )
                 .append(alloc.hardline()),
             Intersperse { separator, items } => alloc.intersperse(
                 items
                     .into_iter()
-                    .map(|rep| (rep.pretty(alloc, subs, home, src_lines, interns)))
+                    .map(|rep| (rep.pretty(alloc, arena, subs, home, src_lines, interns)))
                     .collect::<Vec<_>>(),
-                separator.pretty(alloc, subs, home, src_lines, interns),
+                separator.pretty(alloc, arena, subs, home, src_lines, interns),
             ),
             BinOp(bin_op) => alloc.text(bin_op.to_string()).annotate(Annotation::BinOp),
             Region(region) => {
@@ -758,6 +840,174 @@ impl ReportText {
             Name(ident) => alloc
                 .text(format!("{}", ident.as_inline_str()))
                 .annotate(Annotation::Symbol),
+            TypeProblem(problem) => {
+                Self::type_problem_to_pretty(alloc, arena, home, interns, problem)
+            }
         }
+    }
+
+    fn type_problem_to_pretty<'b, D>(
+        alloc: &'b D,
+        arena: &'b Bump,
+        home: ModuleId,
+        interns: &Interns,
+        problem: crate::type_error::Problem,
+    ) -> DocBuilder<'b, D, Annotation>
+    where
+        D: DocAllocator<'b, Annotation>,
+        D::Doc: Clone,
+    {
+        use crate::type_error::suggest;
+        use crate::type_error::Problem::*;
+
+        match problem {
+            FieldTypo(typo, possibilities) => {
+                let suggestions = suggest::sort(typo.as_str(), possibilities);
+
+                match suggestions.get(0) {
+                    None => alloc.nil(),
+                    Some(nearest) => {
+                        let typo_str = format!("{}", typo);
+                        let nearest_str = format!("{}", nearest);
+
+                        let found = alloc.text(typo_str).annotate(Annotation::Typo);
+                        let suggestion =
+                            alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);
+
+                        let hint1 = Self::hint(alloc)
+                            .append(alloc.reflow("Seems like a record field typo. Maybe "))
+                            .append(found)
+                            .append(alloc.reflow(" should be "))
+                            .append(suggestion)
+                            .append(alloc.text("?"));
+
+                        let hint2 = Self::hint(alloc).append(alloc.reflow(ADD_ANNOTATIONS));
+
+                        hint1
+                            .append(alloc.line())
+                            .append(alloc.line())
+                            .append(hint2)
+                    }
+                }
+            }
+            FieldsMissing(missing) => match missing.split_last() {
+                None => alloc.nil(),
+                Some((f1, [])) => Self::hint(alloc)
+                    .append(alloc.reflow("Looks like the "))
+                    .append(f1.as_str().to_owned())
+                    .append(alloc.reflow(" field is missing.")),
+                Some((last, init)) => {
+                    let separator = alloc.reflow(", ");
+
+                    Self::hint(alloc)
+                        .append(alloc.reflow("Looks like the "))
+                        .append(
+                            alloc
+                                .intersperse(init.iter().map(|v| v.as_str().to_owned()), separator),
+                        )
+                        .append(alloc.reflow(" and "))
+                        .append(alloc.text(last.as_str().to_owned()))
+                        .append(alloc.reflow(" fields are missing."))
+                }
+            },
+            TagTypo(typo, possibilities_tn) => {
+                let possibilities = possibilities_tn
+                    .into_iter()
+                    .map(|tag_name| tag_name.into_string(interns, home))
+                    .collect();
+                let typo_str = format!("{}", typo.into_string(interns, home));
+                let suggestions = suggest::sort(&typo_str, possibilities);
+
+                match suggestions.get(0) {
+                    None => alloc.nil(),
+                    Some(nearest) => {
+                        let nearest_str = format!("{}", nearest);
+
+                        let found = alloc.text(typo_str).annotate(Annotation::Typo);
+                        let suggestion =
+                            alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);
+
+                        let hint1 = Self::hint(alloc)
+                            .append(alloc.reflow("Seems like a tag typo. Maybe "))
+                            .append(found)
+                            .append(" should be ")
+                            .append(suggestion)
+                            .append(alloc.text("?"));
+
+                        let hint2 = Self::hint(alloc).append(alloc.reflow(ADD_ANNOTATIONS));
+
+                        hint1
+                            .append(alloc.line())
+                            .append(alloc.line())
+                            .append(hint2)
+                    }
+                }
+            }
+            ArityMismatch(found, expected) => {
+                let line = if found < expected {
+                    format!(
+                        "It looks like it takes too few arguments. I was expecting {} more.",
+                        expected - found
+                    )
+                } else {
+                    format!(
+                        "It looks like it takes too many arguments. I'm seeing {} extra.",
+                        found - expected
+                    )
+                };
+
+                Self::hint(alloc).append(line)
+            }
+
+            BadRigidVar(x, tipe) => {
+                use ErrorType::*;
+
+                let bad_rigid_var = |name: &str, a_thing| {
+                    let text = format!(
+                        r#"The type annotation uses the type variable `{}` to say that this definition can produce any type of value. But in the body I see that it will only produce {} of a single specific type. Maybe change the type annotation to be more specific? Maybe change the code to be more general?"#,
+                        name, a_thing
+                    );
+
+                    Self::hint(alloc).append(alloc.reflow(arena.alloc(text)))
+                };
+
+                let bad_double_rigid = |a, b| {
+                    let text = format!(
+                        r#"Your type annotation uses {} and {} as separate type variables. Your code seems to be saying they are the same though. Maybe they should be the same your type annotation? Maybe your code uses them in a weird way?"#,
+                        a, b
+                    );
+
+                    Self::hint(alloc).append(alloc.reflow(arena.alloc(text)))
+                };
+
+                match tipe {
+                    Infinite | Error | FlexVar(_) => alloc.nil(),
+                    RigidVar(y) => bad_double_rigid(x.as_str(), y.as_str()),
+                    Function(_, _) => bad_rigid_var(x.as_str(), "a function value"),
+                    Record(_, _) => bad_rigid_var(x.as_str(), "a record value"),
+                    TagUnion(_, _) | RecursiveTagUnion(_, _, _) => {
+                        bad_rigid_var(x.as_str(), "a tag value")
+                    }
+                    Alias(symbol, _, _) | Type(symbol, _) => bad_rigid_var(
+                        x.as_str(),
+                        &format!("a {} value", symbol.ident_string(interns)),
+                    ),
+                    Boolean(_) => bad_rigid_var(x.as_str(), "a uniqueness attribute value"),
+                }
+            }
+
+            _ => todo!(),
+        }
+    }
+
+    fn hint<'b, D>(alloc: &'b D) -> DocBuilder<'b, D, Annotation>
+    where
+        D: DocAllocator<'b, Annotation>,
+        D::Doc: Clone,
+    {
+        alloc
+            .text("Hint:")
+            .append(alloc.softline())
+            .annotate(Annotation::Hint)
     }
 }
