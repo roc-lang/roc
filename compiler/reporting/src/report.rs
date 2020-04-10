@@ -1,17 +1,17 @@
 use crate::report::ReportText::{BinOp, Concat, Module, Region, Value};
 use bumpalo::Bump;
 use roc_collections::all::MutSet;
+use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{Problem, RuntimeError};
+use roc_solve::solve;
 use roc_types::pretty_print::content_to_string;
 use roc_types::subs::{Content, Subs};
 use roc_types::types::{write_error_type, ErrorType};
-use std::path::PathBuf;
-
-use roc_module::ident::Ident;
 use std::fmt;
+use std::path::PathBuf;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
 
 const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annotations always help me give more specific messages, and I think they could help a lot in this case"#;
@@ -72,7 +72,7 @@ impl Report {
             let header = format!(
                 "-- {} {}",
                 self.title,
-                "-".repeat(80 - self.title.len() - 4)
+                "-".repeat(80 - (self.title.len() + 4))
             );
 
             alloc.stack(vec![alloc.text(header), self.text.pretty(alloc)])
@@ -202,21 +202,65 @@ fn pretty_runtime_error<'b>(
         RuntimeError::Shadowing {
             original_region,
             shadow,
-        } => alloc.stack(vec![
-            alloc
-                .text("The ")
-                .append(alloc.ident(shadow.value))
-                .append(alloc.reflow(" name is first defined here:")),
-            alloc.region(original_region),
-            alloc.reflow("But then it's defined a second time here:"),
-            alloc.region(shadow.region),
-            alloc.reflow(r#"Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#),
-        ]),
+        } => {
+            let line = r#"Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
+
+            alloc.stack(vec![
+                alloc
+                    .text("The ")
+                    .append(alloc.ident(shadow.value))
+                    .append(alloc.reflow(" name is first defined here:")),
+                alloc.region(original_region),
+                alloc.reflow("But then it's defined a second time here:"),
+                alloc.region(shadow.region),
+                alloc.reflow(line),
+            ])
+        }
 
         RuntimeError::LookupNotInScope(loc_name, options) => {
             not_found(alloc, loc_name.region, &loc_name.value, "value", options)
         }
-        other => todo!("TODO implement run time error reporting for {:?}", other),
+        RuntimeError::CircularDef(idents, _regions) => match idents.first() {
+            Some(ident) => alloc.stack(vec![alloc
+                .reflow("The ")
+                .append(alloc.ident(ident.value.clone()))
+                .append(alloc.reflow(
+                    " value is defined directly in terms of itself, causing an infinite loop.",
+                ))]),
+            None => alloc.nil(),
+        },
+        other => {
+            //    // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
+            //    UnsupportedPattern(Region),
+            //    UnrecognizedFunctionName(Located<InlinableString>),
+            //    ValueNotExposed {
+            //        module_name: InlinableString,
+            //        ident: InlinableString,
+            //        region: Region,
+            //    },
+            //    ModuleNotImported {
+            //        module_name: InlinableString,
+            //        ident: InlinableString,
+            //        region: Region,
+            //    },
+            //    InvalidPrecedence(PrecedenceProblem, Region),
+            //    MalformedIdentifier(Box<str>, Region),
+            //    MalformedClosure(Region),
+            //    FloatOutsideRange(Box<str>),
+            //    IntOutsideRange(Box<str>),
+            //    InvalidHex(std::num::ParseIntError, Box<str>),
+            //    InvalidOctal(std::num::ParseIntError, Box<str>),
+            //    InvalidBinary(std::num::ParseIntError, Box<str>),
+            //    QualifiedPatternIdent(InlinableString),
+            //    CircularDef(
+            //        Vec<Located<Ident>>,
+            //        Vec<(Region /* pattern */, Region /* expr */)>,
+            //    ),
+            //
+            //    /// When the author specifies a type annotation but no implementation
+            //    NoImplementation,
+            todo!("TODO implement run time error reporting for {:?}", other)
+        }
     }
 }
 
@@ -279,6 +323,7 @@ pub enum ReportText {
 
     TypeProblem(crate::type_error::Problem),
     RuntimeError(RuntimeError),
+    TypeError(solve::TypeError),
 
     ErrorTypeInline(ErrorType),
     ErrorTypeBlock(Box<ReportText>),
@@ -413,7 +458,7 @@ pub struct RocDocAllocator<'a> {
     interns: &'a Interns,
 }
 
-type RocDocBuilder<'b> = DocBuilder<'b, RocDocAllocator<'b>, Annotation>;
+pub type RocDocBuilder<'b> = DocBuilder<'b, RocDocAllocator<'b>, Annotation>;
 
 impl<'a, A> DocAllocator<'a, A> for RocDocAllocator<'a>
 where
@@ -458,7 +503,7 @@ impl<'a> RocDocAllocator<'a> {
         }
     }
 
-    fn vcat<A, I>(&'a self, docs: I) -> DocBuilder<'a, Self, A>
+    pub fn vcat<A, I>(&'a self, docs: I) -> DocBuilder<'a, Self, A>
     where
         A: 'a + Clone,
         I: IntoIterator,
@@ -467,7 +512,7 @@ impl<'a> RocDocAllocator<'a> {
         self.intersperse(docs, self.line())
     }
 
-    fn stack<A, I>(&'a self, docs: I) -> DocBuilder<'a, Self, A>
+    pub fn stack<A, I>(&'a self, docs: I) -> DocBuilder<'a, Self, A>
     where
         A: 'a + Clone,
         I: IntoIterator,
@@ -542,6 +587,13 @@ impl<'a> RocDocAllocator<'a> {
     pub fn record_field(&'a self, lowercase: Lowercase) -> DocBuilder<'a, Self, Annotation> {
         self.text(format!(".{}", lowercase))
             .annotate(Annotation::RecordField)
+    }
+
+    pub fn type_block(
+        &'a self,
+        content: DocBuilder<'a, Self, Annotation>,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        content.annotate(Annotation::TypeBlock).indent(4)
     }
 
     pub fn region(&'a self, region: roc_region::all::Region) -> DocBuilder<'a, Self, Annotation> {
@@ -1046,6 +1098,7 @@ impl ReportText {
                 .annotate(Annotation::Symbol),
             TypeProblem(problem) => Self::type_problem_to_pretty(alloc, problem),
             RuntimeError(problem) => pretty_runtime_error(alloc, problem),
+            TypeError(problem) => crate::type_error::pretty_type_error(alloc, problem),
         }
     }
 

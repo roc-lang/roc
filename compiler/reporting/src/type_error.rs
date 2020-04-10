@@ -12,6 +12,9 @@ use roc_types::subs::{Content, Variable};
 use roc_types::types::{Category, ErrorType, PatternCategory, Reason, TypeExt};
 use std::path::PathBuf;
 
+use crate::report::{RocDocAllocator, RocDocBuilder};
+use ven_pretty::DocAllocator;
+
 pub fn type_problem(filename: PathBuf, problem: solve::TypeError) -> Report {
     use solve::TypeError::*;
 
@@ -25,6 +28,31 @@ pub fn type_problem(filename: PathBuf, problem: solve::TypeError) -> Report {
         CircularType(region, symbol, overall_type) => {
             to_circular_report(filename, region, symbol, overall_type)
         }
+    }
+}
+
+pub fn pretty_type_error<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    problem: solve::TypeError,
+) -> RocDocBuilder<'b> {
+    use solve::TypeError::*;
+
+    match problem {
+        CircularType(region, symbol, overall_type) => {
+            let line = r#"Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely."#;
+            alloc.stack(vec![
+                alloc
+                    .reflow("I'm inferring a weird self-referential type for ")
+                    .append(alloc.symbol_unqualified(symbol))
+                    .append(alloc.text(":")),
+                alloc.region(region),
+                alloc.stack(vec![
+                    alloc.reflow(line),
+                    alloc.type_block(pretty_to_doc(alloc, Parens::Unnecessary, overall_type)),
+                ]),
+            ])
+        }
+        _ => todo!(),
     }
 }
 
@@ -817,24 +845,10 @@ fn to_circular_report(
     symbol: Symbol,
     overall_type: ErrorType,
 ) -> Report {
-    use ReportText::*;
-
-    let lines = vec![
-        plain_text("I'm inferring a weird self-referential type for "),
-        Value(symbol),
-        plain_text(":"),
-        Region(region),
-        Stack(vec![
-            plain_text("Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely."),
-            error_type_block(to_doc(Parens::Unnecessary, &overall_type)),
-            /* TODO hint */
-        ]),
-    ];
-
     Report {
-        title: "TYPE MISMATCH".to_string(),
+        title: "CIRCULAR TYPE".to_string(),
         filename,
-        text: Concat(lines),
+        text: ReportText::TypeError(solve::TypeError::CircularType(region, symbol, overall_type)),
     }
 }
 
@@ -952,6 +966,129 @@ pub struct Diff<T> {
     left: T,
     right: T,
     status: Status,
+}
+
+fn pretty_ext_to_doc<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    ext: TypeExt,
+) -> Option<RocDocBuilder<'b>> {
+    use TypeExt::*;
+
+    match ext {
+        Closed => None,
+        FlexOpen(lowercase) | RigidOpen(lowercase) => {
+            Some(alloc.string(lowercase.as_str().to_string()))
+        }
+    }
+}
+
+pub fn pretty_to_doc<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    parens: Parens,
+    tipe: ErrorType,
+) -> RocDocBuilder<'b> {
+    use ErrorType::*;
+
+    match tipe {
+        Function(args, ret) => to_pretty::function(
+            alloc,
+            parens,
+            args.into_iter()
+                .map(|arg| pretty_to_doc(alloc, Parens::InFn, arg))
+                .collect(),
+            pretty_to_doc(alloc, Parens::InFn, *ret),
+        ),
+        Infinite => alloc.text("∞"),
+        Error => alloc.text("?"),
+
+        FlexVar(lowercase) => alloc.string(lowercase.as_str().to_string()),
+        RigidVar(lowercase) => alloc.string(lowercase.as_str().to_string()),
+
+        Type(symbol, args) => to_pretty::apply(
+            alloc,
+            parens,
+            alloc.symbol_foreign_qualified(symbol),
+            args.into_iter()
+                .map(|arg| pretty_to_doc(alloc, Parens::InTypeParam, arg))
+                .collect(),
+        ),
+
+        Alias(symbol, args, _) => to_pretty::apply(
+            alloc,
+            parens,
+            alloc.symbol_foreign_qualified(symbol),
+            args.into_iter()
+                .map(|(_, arg)| pretty_to_doc(alloc, Parens::InTypeParam, arg))
+                .collect(),
+        ),
+
+        Record(fields_map, ext) => {
+            let mut fields = fields_map.into_iter().collect::<Vec<_>>();
+            fields.sort_by(|(a, _), (b, _)| a.cmp(&b));
+
+            to_pretty::record(
+                alloc,
+                fields
+                    .into_iter()
+                    .map(|(k, v)| {
+                        (
+                            alloc.string(k.as_str().to_string()),
+                            pretty_to_doc(alloc, Parens::Unnecessary, v),
+                        )
+                    })
+                    .collect(),
+                pretty_ext_to_doc(alloc, ext),
+            )
+        }
+
+        TagUnion(tags_map, ext) => {
+            let mut tags = tags_map
+                .into_iter()
+                .map(|(name, args)| {
+                    (
+                        name,
+                        args.into_iter()
+                            .map(|arg| pretty_to_doc(alloc, Parens::InTypeParam, arg))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            tags.sort_by(|(a, _), (b, _)| a.cmp(&b));
+
+            to_pretty::tag_union(
+                alloc,
+                tags.into_iter()
+                    .map(|(k, v)| (alloc.tag_name(k.clone()), v))
+                    .collect(),
+                pretty_ext_to_doc(alloc, ext),
+            )
+        }
+
+        RecursiveTagUnion(rec_var, tags_map, ext) => {
+            let mut tags = tags_map
+                .into_iter()
+                .map(|(name, args)| {
+                    (
+                        name,
+                        args.into_iter()
+                            .map(|arg| pretty_to_doc(alloc, Parens::InTypeParam, arg))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            tags.sort_by(|(a, _), (b, _)| a.cmp(&b));
+
+            to_pretty::recursive_tag_union(
+                alloc,
+                pretty_to_doc(alloc, Parens::Unnecessary, *rec_var),
+                tags.into_iter()
+                    .map(|(k, v)| (alloc.tag_name(k.clone()), v))
+                    .collect(),
+                pretty_ext_to_doc(alloc, ext),
+            )
+        }
+        Boolean(b) => alloc.string(format!("{:?}", b)),
+    }
 }
 
 pub fn to_doc(parens: Parens, tipe: &ErrorType) -> ReportText {
@@ -1486,6 +1623,173 @@ fn ext_to_status(ext1: &TypeExt, ext2: &TypeExt) -> Status {
                 }
             }
         },
+    }
+}
+
+mod to_pretty {
+    use crate::report::{RocDocAllocator, RocDocBuilder};
+    use roc_types::pretty_print::Parens;
+    use ven_pretty::DocAllocator;
+
+    fn with_parens<'b>(
+        alloc: &'b RocDocAllocator<'b>,
+        text: RocDocBuilder<'b>,
+    ) -> RocDocBuilder<'b> {
+        alloc.text("(").append(text).append(alloc.text(")"))
+    }
+
+    pub fn function<'b>(
+        alloc: &'b RocDocAllocator<'b>,
+        parens: Parens,
+        args: Vec<RocDocBuilder<'b>>,
+        ret: RocDocBuilder<'b>,
+    ) -> RocDocBuilder<'b> {
+        let function_text = alloc.concat(vec![
+            alloc.intersperse(args, alloc.reflow(", ")),
+            alloc.reflow(" -> "),
+            ret,
+        ]);
+
+        match parens {
+            Parens::Unnecessary => function_text,
+            _ => with_parens(alloc, function_text),
+        }
+    }
+
+    pub fn apply<'b>(
+        alloc: &'b RocDocAllocator<'b>,
+        parens: Parens,
+        name: RocDocBuilder<'b>,
+        args: Vec<RocDocBuilder<'b>>,
+    ) -> RocDocBuilder<'b> {
+        if args.is_empty() {
+            name
+        } else {
+            let apply_text = alloc.concat(vec![
+                name,
+                alloc.space(),
+                alloc.intersperse(args, alloc.space()),
+            ]);
+
+            match parens {
+                Parens::Unnecessary | Parens::InFn => apply_text,
+                Parens::InTypeParam => with_parens(alloc, apply_text),
+            }
+        }
+    }
+
+    pub fn record<'b>(
+        alloc: &'b RocDocAllocator<'b>,
+        entries: Vec<(RocDocBuilder<'b>, RocDocBuilder<'b>)>,
+        opt_ext: Option<RocDocBuilder<'b>>,
+    ) -> RocDocBuilder<'b> {
+        let ext_text = if let Some(t) = opt_ext {
+            t
+        } else {
+            alloc.nil()
+        };
+
+        if entries.is_empty() {
+            ext_text
+        } else {
+            let entry_to_text =
+                |(field_name, field_type): (RocDocBuilder<'b>, RocDocBuilder<'b>)| {
+                    field_name.append(alloc.text(" : ")).append(field_type)
+                };
+
+            let starts =
+                std::iter::once(alloc.reflow("{ ")).chain(std::iter::repeat(alloc.reflow(", ")));
+
+            let entries_doc = alloc.concat(
+                entries
+                    .into_iter()
+                    .zip(starts)
+                    .map(|(entry, start)| start.append(entry_to_text(entry))),
+            );
+
+            entries_doc.append(alloc.reflow(" }")).append(ext_text)
+        }
+    }
+
+    pub fn tag_union<'b>(
+        alloc: &'b RocDocAllocator<'b>,
+        entries: Vec<(RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>,
+        opt_ext: Option<RocDocBuilder<'b>>,
+    ) -> RocDocBuilder<'b> {
+        let ext_text = if let Some(t) = opt_ext {
+            t
+        } else {
+            alloc.nil()
+        };
+
+        if entries.is_empty() {
+            alloc.text("[]")
+        } else {
+            let entry_to_text = |(tag_name, arguments): (RocDocBuilder<'b>, Vec<_>)| {
+                if arguments.is_empty() {
+                    tag_name
+                } else {
+                    tag_name
+                        .append(alloc.space())
+                        .append(alloc.intersperse(arguments, alloc.space()))
+                }
+            };
+
+            let starts =
+                std::iter::once(alloc.reflow("[ ")).chain(std::iter::repeat(alloc.reflow(", ")));
+
+            let entries_doc = alloc.concat(
+                entries
+                    .into_iter()
+                    .zip(starts)
+                    .map(|(entry, start)| start.append(entry_to_text(entry))),
+            );
+
+            entries_doc.append(alloc.reflow(" ]")).append(ext_text)
+        }
+    }
+
+    pub fn recursive_tag_union<'b>(
+        alloc: &'b RocDocAllocator<'b>,
+        rec_var: RocDocBuilder<'b>,
+        entries: Vec<(RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>,
+        opt_ext: Option<RocDocBuilder<'b>>,
+    ) -> RocDocBuilder<'b> {
+        let ext_text = if let Some(t) = opt_ext {
+            t
+        } else {
+            alloc.nil()
+        };
+
+        if entries.is_empty() {
+            alloc.text("[]")
+        } else {
+            let entry_to_text = |(tag_name, arguments): (RocDocBuilder<'b>, Vec<_>)| {
+                if arguments.is_empty() {
+                    tag_name
+                } else {
+                    tag_name
+                        .append(alloc.space())
+                        .append(alloc.intersperse(arguments, alloc.space()))
+                }
+            };
+
+            let starts =
+                std::iter::once(alloc.reflow("[ ")).chain(std::iter::repeat(alloc.reflow(", ")));
+
+            let entries_doc = alloc.concat(
+                entries
+                    .into_iter()
+                    .zip(starts)
+                    .map(|(entry, start)| start.append(entry_to_text(entry))),
+            );
+
+            entries_doc
+                .append(alloc.reflow(" ]"))
+                .append(ext_text)
+                .append(alloc.text(" as "))
+                .append(rec_var)
+        }
     }
 }
 

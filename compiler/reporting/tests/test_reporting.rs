@@ -1146,18 +1146,18 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                -- CIRCULAR TYPE ---------------------------------------------------------------
 
                 I'm inferring a weird self-referential type for `g`:
 
                 1 ┆  f = \g -> g g
                   ┆       ^
 
-                Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
 
-                    ∞ -> a
-
-                "#
+                    ∞ -> a"#
             ),
         )
     }
@@ -1174,18 +1174,18 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                -- CIRCULAR TYPE ---------------------------------------------------------------
 
                 I'm inferring a weird self-referential type for `f`:
 
                 1 ┆  f = \x -> f [x]
                   ┆  ^
 
-                Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
 
-                    List ∞ -> a
-
-                "#
+                    List ∞ -> a"#
             ),
         )
     }
@@ -1971,6 +1971,29 @@ mod test_reporting {
 
 
                 "#
+            ),
+        )
+    }
+
+    #[test]
+    fn circular_definition() {
+        // these error messages seem pretty helpful
+        report_problem_as(
+            indoc!(
+                r#"
+                f = g
+
+                g = f
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                The `f` value is defined directly in terms of itself, causing an
+                infinite loop."#
             ),
         )
     }
