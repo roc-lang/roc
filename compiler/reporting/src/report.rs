@@ -17,25 +17,15 @@ use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated
 const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annotations always help me give more specific messages, and I think they could help a lot in this case"#;
 
 /// A textual report.
-pub struct Report {
+pub struct Report<'b> {
     pub title: String,
     pub filename: PathBuf,
-    pub text: ReportText,
+    pub doc: RocDocBuilder<'b>,
 }
 
-impl Report {
+impl<'b> Report<'b> {
     /// Render to CI console output, where no colors are available.
-    pub fn render_ci(
-        self,
-        buf: &mut String,
-        subs: &mut Subs,
-        home: ModuleId,
-        src_lines: &[&str],
-        interns: &Interns,
-    ) {
-        let arena = Bump::new();
-        let alloc = RocDocAllocator::new(&arena, subs, src_lines, home, interns);
-
+    pub fn render_ci(self, buf: &'b mut String, alloc: &'b RocDocAllocator<'b>) {
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
         self.pretty(&alloc)
@@ -48,15 +38,9 @@ impl Report {
     pub fn render_color_terminal(
         self,
         buf: &mut String,
-        subs: &mut Subs,
-        home: ModuleId,
-        src_lines: &[&str],
-        interns: &Interns,
-        palette: &Palette,
+        alloc: &'b RocDocAllocator<'b>,
+        palette: &'b Palette,
     ) {
-        let arena = Bump::new();
-        let alloc = RocDocAllocator::new(&arena, subs, src_lines, home, interns);
-
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
         self.pretty(&alloc)
@@ -65,9 +49,9 @@ impl Report {
             .expect(err_msg);
     }
 
-    fn pretty<'b>(self, alloc: &'b RocDocAllocator<'b>) -> RocDocBuilder<'b> {
+    fn pretty(self, alloc: &'b RocDocAllocator<'b>) -> RocDocBuilder<'b> {
         if self.title.is_empty() {
-            self.text.pretty(alloc)
+            self.doc
         } else {
             let header = format!(
                 "-- {} {}",
@@ -75,7 +59,7 @@ impl Report {
                 "-".repeat(80 - (self.title.len() + 4))
             );
 
-            alloc.stack(vec![alloc.text(header), self.text.pretty(alloc)])
+            alloc.stack(vec![alloc.text(header), self.doc])
         }
     }
 }
@@ -112,7 +96,11 @@ pub const DEFAULT_PALETTE: Palette = Palette {
     typo_suggestion: GREEN_CODE,
 };
 
-pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
+pub fn can_problem<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    filename: PathBuf,
+    problem: Problem,
+) -> Report<'b> {
     let mut texts = Vec::new();
     match problem {
         Problem::UnusedDef(symbol, region) => {
@@ -190,7 +178,7 @@ pub fn can_problem(filename: PathBuf, problem: Problem) -> Report {
     Report {
         title: "SYNTAX PROBLEM".to_string(),
         filename,
-        text: Concat(texts),
+        doc: alloc.nil(),
     }
 }
 
@@ -410,10 +398,6 @@ pub fn error_type_inline(err: ErrorType) -> ReportText {
     ReportText::ErrorTypeInline(err)
 }
 
-pub fn error_type_block(err: ReportText) -> ReportText {
-    ReportText::ErrorTypeBlock(Box::new(err))
-}
-
 pub fn url(str: &str) -> ReportText {
     ReportText::Url(Box::from(str))
 }
@@ -451,7 +435,6 @@ pub const RESET_CODE: &str = "\u{001b}[0m";
 // define custom allocator struct so we can `impl RocDocAllocator` custom helpers
 pub struct RocDocAllocator<'a> {
     upstream: BoxAllocator,
-    arena: &'a Bump,
     subs: &'a mut Subs,
     home: ModuleId,
     src_lines: &'a [&'a str],
@@ -487,7 +470,6 @@ where
 
 impl<'a> RocDocAllocator<'a> {
     pub fn new(
-        arena: &'a Bump,
         subs: &'a mut Subs,
         src_lines: &'a [&'a str],
         home: ModuleId,
@@ -495,7 +477,6 @@ impl<'a> RocDocAllocator<'a> {
     ) -> Self {
         RocDocAllocator {
             upstream: BoxAllocator,
-            arena,
             subs,
             home,
             src_lines,
@@ -529,6 +510,10 @@ impl<'a> RocDocAllocator<'a> {
 
     pub fn keyword(&'a self, string: &'a str) -> DocBuilder<'a, Self, Annotation> {
         self.text(string).annotate(Annotation::Keyword)
+    }
+
+    pub fn type_str(&'a self, content: &str) -> DocBuilder<'a, Self, Annotation> {
+        self.string(content.to_owned()).annotate(Annotation::Alias)
     }
 
     pub fn tag_name(&'a self, tn: TagName) -> DocBuilder<'a, Self, Annotation> {
@@ -1098,7 +1083,7 @@ impl ReportText {
                 .annotate(Annotation::Symbol),
             TypeProblem(problem) => Self::type_problem_to_pretty(alloc, problem),
             RuntimeError(problem) => pretty_runtime_error(alloc, problem),
-            TypeError(problem) => crate::type_error::pretty_type_error(alloc, problem),
+            TypeError(problem) => todo!(),
         }
     }
 
@@ -1217,7 +1202,7 @@ impl ReportText {
                         name, a_thing
                     );
 
-                    Self::hint(alloc).append(alloc.reflow(alloc.arena.alloc(text)))
+                    Self::hint(alloc).append(alloc.string(text))
                 };
 
                 let bad_double_rigid = |a, b| {
@@ -1226,7 +1211,7 @@ impl ReportText {
                         a, b
                     );
 
-                    Self::hint(alloc).append(alloc.reflow(alloc.arena.alloc(text)))
+                    Self::hint(alloc).append(alloc.string(text))
                 };
 
                 match tipe {

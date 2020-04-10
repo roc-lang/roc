@@ -1,58 +1,32 @@
-use crate::report::{
-    error_type_block, global_tag_text, keyword_text, plain_text, private_tag_text,
-    record_field_text, tag_name_text, Report, ReportText,
-};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::SendMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_solve::solve;
 use roc_types::pretty_print::Parens;
-use roc_types::subs::{Content, Variable};
 use roc_types::types::{Category, ErrorType, PatternCategory, Reason, TypeExt};
 use std::path::PathBuf;
 
-use crate::report::{RocDocAllocator, RocDocBuilder};
+use crate::report::{Report, RocDocAllocator, RocDocBuilder};
 use ven_pretty::DocAllocator;
 
-pub fn type_problem(filename: PathBuf, problem: solve::TypeError) -> Report {
+pub fn type_problem<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    filename: PathBuf,
+    problem: solve::TypeError,
+) -> Report<'b> {
     use solve::TypeError::*;
 
     match problem {
         BadExpr(region, category, found, expected) => {
-            to_expr_report(filename, region, category, found, expected)
+            to_expr_report(alloc, filename, region, category, found, expected)
         }
         BadPattern(region, category, found, expected) => {
-            to_pattern_report(filename, region, category, found, expected)
+            to_pattern_report(alloc, filename, region, category, found, expected)
         }
         CircularType(region, symbol, overall_type) => {
-            to_circular_report(filename, region, symbol, overall_type)
+            to_circular_report(alloc, filename, region, symbol, overall_type)
         }
-    }
-}
-
-pub fn pretty_type_error<'b>(
-    alloc: &'b RocDocAllocator<'b>,
-    problem: solve::TypeError,
-) -> RocDocBuilder<'b> {
-    use solve::TypeError::*;
-
-    match problem {
-        CircularType(region, symbol, overall_type) => {
-            let line = r#"Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely."#;
-            alloc.stack(vec![
-                alloc
-                    .reflow("I'm inferring a weird self-referential type for ")
-                    .append(alloc.symbol_unqualified(symbol))
-                    .append(alloc.text(":")),
-                alloc.region(region),
-                alloc.stack(vec![
-                    alloc.reflow(line),
-                    alloc.type_block(pretty_to_doc(alloc, Parens::Unnecessary, overall_type)),
-                ]),
-            ])
-        }
-        _ => todo!(),
     }
 }
 
@@ -75,26 +49,27 @@ fn int_to_ordinal(number: usize) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn report_mismatch(
+fn report_mismatch<'b>(
+    alloc: &'b RocDocAllocator<'b>,
     filename: PathBuf,
     category: &Category,
     found: ErrorType,
     expected_type: ErrorType,
     region: roc_region::all::Region,
     _opt_highlight: Option<roc_region::all::Region>,
-    problem: ReportText,
-    this_is: ReportText,
-    instead_of: ReportText,
-    further_details: ReportText,
-) -> Report {
-    use ReportText::*;
+    problem: RocDocBuilder<'b>,
+    this_is: RocDocBuilder<'b>,
+    instead_of: RocDocBuilder<'b>,
+    further_details: RocDocBuilder<'b>,
+) -> Report<'b> {
     let lines = vec![
         problem,
-        Region(region),
+        alloc.region(region),
         type_comparison(
+            alloc,
             found,
             expected_type,
-            add_category(this_is, category),
+            add_category(alloc, this_is, category),
             instead_of,
             further_details,
         ),
@@ -103,30 +78,31 @@ fn report_mismatch(
     Report {
         title: "TYPE MISMATCH".to_string(),
         filename,
-        text: Concat(lines),
+        doc: alloc.stack(lines),
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn report_bad_type(
+fn report_bad_type<'b>(
+    alloc: &'b RocDocAllocator<'b>,
     filename: PathBuf,
     category: &Category,
     found: ErrorType,
     expected_type: ErrorType,
     region: roc_region::all::Region,
     _opt_highlight: Option<roc_region::all::Region>,
-    problem: ReportText,
-    this_is: ReportText,
-    further_details: ReportText,
-) -> Report {
-    use ReportText::*;
+    problem: RocDocBuilder<'b>,
+    this_is: RocDocBuilder<'b>,
+    further_details: RocDocBuilder<'b>,
+) -> Report<'b> {
     let lines = vec![
         problem,
-        Region(region),
+        alloc.region(region),
         lone_type(
+            alloc,
             found,
             expected_type,
-            add_category(this_is, &category),
+            add_category(alloc, this_is, &category),
             further_details,
         ),
     ];
@@ -134,44 +110,47 @@ fn report_bad_type(
     Report {
         title: "TYPE MISMATCH".to_string(),
         filename,
-        text: Concat(lines),
+        doc: alloc.stack(lines),
     }
 }
 
-fn pattern_to_doc(pattern: &roc_can::pattern::Pattern) -> Option<ReportText> {
+fn pattern_to_doc<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    pattern: &roc_can::pattern::Pattern,
+) -> Option<RocDocBuilder<'b>> {
     use roc_can::pattern::Pattern::*;
 
     match pattern {
-        Identifier(symbol) => Some(ReportText::Value(*symbol)),
+        Identifier(symbol) => Some(alloc.symbol_unqualified(*symbol)),
         _ => None,
     }
 }
 
-fn to_expr_report(
+fn to_expr_report<'b>(
+    alloc: &'b RocDocAllocator<'b>,
     filename: PathBuf,
     expr_region: roc_region::all::Region,
     category: Category,
     found: ErrorType,
     expected: Expected<ErrorType>,
-) -> Report {
-    use ReportText::*;
-
+) -> Report<'b> {
     match expected {
         Expected::NoExpectation(expected_type) => {
             let comparison = type_comparison(
+                alloc,
                 found,
                 expected_type,
-                add_category(plain_text("It is"), &category),
-                plain_text("But you are trying to use it as:"),
-                Concat(vec![]),
+                add_category(alloc, alloc.text("It is"), &category),
+                alloc.text("But you are trying to use it as:"),
+                alloc.nil()
             );
 
             Report {
                 filename,
                 title: "TYPE MISMATCH".to_string(),
-                text: Concat(vec![
-                    plain_text("This expression is used in an unexpected way:"),
-                    Region(expr_region),
+                doc: alloc.concat(vec![
+                    alloc.text("This expression is used in an unexpected way:"),
+                    alloc.region(expr_region),
                     comparison,
                 ]),
             }
@@ -179,30 +158,30 @@ fn to_expr_report(
         Expected::FromAnnotation(name, _arity, annotation_source, expected_type) => {
             use roc_types::types::AnnotationSource::*;
 
-            let (the_name_text, on_name_text) = match pattern_to_doc(&name.value) {
+            let (the_name_text, on_name_text) = match pattern_to_doc(alloc, &name.value) {
                 Some(doc) => (
-                    Concat(vec![plain_text("the "), doc.clone()]),
-                    Concat(vec![plain_text(" on "), doc]),
+                    alloc.concat(vec![alloc.text("the "), doc.clone()]),
+                    alloc.concat(vec![alloc.text(" on "), doc]),
                 ),
-                None => (plain_text("this"), plain_text("")),
+                None => (alloc.text("this"), alloc.text("")),
             };
 
             // TODO special-case 2-branch if
             let thing = match annotation_source {
-                TypedIfBranch(index) => Concat(vec![
-                    plain_text(&format!("{} branch of this ", int_to_ordinal(index))),
-                    keyword_text("if"),
-                    plain_text(" expression:"),
+                TypedIfBranch(index) => alloc.concat(vec![
+                    alloc.string(format!("{} branch of this ", int_to_ordinal(index))),
+                    alloc.keyword("if"),
+                    alloc.text(" expression:"),
                 ]),
-                TypedWhenBranch(index) => Concat(vec![
-                    plain_text(&format!("{} branch of this ", int_to_ordinal(index))),
-                    keyword_text("when"),
-                    plain_text(" expression:"),
+                TypedWhenBranch(index) => alloc.concat(vec![
+                    alloc.string(format!("{} branch of this ", int_to_ordinal(index))),
+                    alloc.keyword("when"),
+                    alloc.text(" expression:"),
                 ]),
-                TypedBody => Concat(vec![
-                    plain_text("body of "),
+                TypedBody => alloc.concat(vec![
+                    alloc.text("body of "),
                     the_name_text,
-                    plain_text(" definition:"),
+                    alloc.text(" definition:"),
                 ]),
             };
 
@@ -213,39 +192,39 @@ fn to_expr_report(
             };
 
             let comparison = type_comparison(
+                alloc,
                 found,
                 expected_type,
-                add_category(plain_text(&it_is), &category),
-                Concat(vec![
-                    plain_text("But the type annotation"),
+                add_category(alloc, alloc.text(it_is), &category),
+                alloc.concat(vec![
+                    alloc.text("But the type annotation"),
                     on_name_text,
-                    plain_text(" says it should be:"),
+                    alloc.text(" says it should be:"),
                 ]),
-                Concat(vec![]),
+                alloc.nil()
             );
 
             Report {
                 title: "TYPE MISMATCH".to_string(),
                 filename,
-                text: Concat(vec![
-                    plain_text("Something is off with the "),
-                    thing,
-                    Region(expr_region),
+                doc: alloc.stack(vec![
+                    alloc.text("Something is off with the ").append( thing),
+                    alloc.region(expr_region),
                     comparison,
                 ]),
             }
         }
         Expected::ForReason(reason, expected_type, region) => match reason {
             Reason::IfCondition => {
-                let problem = Concat(vec![
-                    plain_text("This "),
-                    keyword_text("if"),
-                    plain_text(" condition needs to be a "),
-                    ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
-                    plain_text(":"),
+                let problem = alloc.concat(vec![
+                    alloc.text("This "),
+                    alloc.keyword("if"),
+                    alloc.text(" condition needs to be a "),
+alloc.type_str("Bool"),                    alloc.text(":"),
                 ]);
 
                 report_bad_type(
+                    alloc,
                     filename,
                     &category,
                     found,
@@ -253,17 +232,16 @@ fn to_expr_report(
                     region,
                     Some(expr_region),
                     problem,
-                    plain_text("Right now it’s"),
-                    Concat(vec![
-                        plain_text("But I need every "),
-                        keyword_text("if"),
-                        plain_text(" condition to evaluate to a "),
-                        ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
-                        plain_text("—either "),
-                        global_tag_text("True"),
-                        plain_text(" or "),
-                        global_tag_text("False"),
-                        plain_text("."),
+                    alloc.text("Right now it’s"),
+                    alloc.concat(vec![
+                        alloc.text("But I need every "),
+                        alloc.keyword("if"),
+                        alloc.text(" condition to evaluate to a "),
+    alloc.type_str("Bool"),                        alloc.text("—either "),
+                        alloc.global_tag_name("True".into()),
+                        alloc.text(" or "),
+                        alloc.global_tag_name("False".into()),
+                        alloc.text("."),
                     ]),
                     // Note: Elm has a hint here about truthiness. I think that
                     // makes sense for Elm, since most Elm users will come from
@@ -274,14 +252,14 @@ fn to_expr_report(
                 )
             }
             Reason::WhenGuard => {
-                let problem = Concat(vec![
-                    plain_text("This "),
-                    keyword_text("if"),
-                    plain_text(" guard condition needs to be a "),
-                    ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
-                    plain_text(":"),
+                let problem = alloc.concat(vec![
+                    alloc.text("This "),
+                    alloc.keyword("if"),
+                    alloc.text(" guard condition needs to be a "),
+alloc.type_str("Bool"),                    alloc.text(":"),
                 ]);
                 report_bad_type(
+                    alloc,
                     filename,
                     &category,
                     found,
@@ -289,17 +267,16 @@ fn to_expr_report(
                     region,
                     Some(expr_region),
                     problem,
-                    plain_text("Right now it’s"),
-                    Concat(vec![
-                        plain_text("But I need every "),
-                        keyword_text("if"),
-                        plain_text(" guard condition to evaluate to a "),
-                        ReportText::Type(Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL)),
-                        plain_text("—either "),
-                        global_tag_text("True"),
-                        plain_text(" or "),
-                        global_tag_text("False"),
-                        plain_text("."),
+                    alloc.text("Right now it’s"),
+                    alloc.concat(vec![
+                        alloc.text("But I need every "),
+                        alloc.keyword("if"),
+                        alloc.text(" guard condition to evaluate to a "),
+    alloc.type_str("Bool"),                        alloc.text("—either "),
+                        alloc.global_tag_name("True".into()),
+                        alloc.text(" or "),
+                        alloc.global_tag_name("False".into()),
+                        alloc.text("."),
                     ]),
                 )
             }
@@ -308,57 +285,59 @@ fn to_expr_report(
                 total_branches,
             } => match total_branches {
                 2 => report_mismatch(
+                    alloc,
                     filename,
                     &category,
                     found,
                     expected_type,
                     region,
                     Some(expr_region),
-                    Concat(vec![
-                        plain_text("This "),
-                        keyword_text("if"),
-                        plain_text(" has an "),
-                        keyword_text("else"),
-                        plain_text(" branch with a different type from its "),
-                        keyword_text("then"),
-                        plain_text(" branch:"),
+                    alloc.concat(vec![
+                        alloc.text("This "),
+                        alloc.keyword("if"),
+                        alloc.text(" has an "),
+                        alloc.keyword("else"),
+                        alloc.text(" branch with a different type from its "),
+                        alloc.keyword("then"),
+                        alloc.text(" branch:"),
                     ]),
-                    Concat(vec![
-                        plain_text("The "),
-                        keyword_text("else"),
-                        plain_text(" branch is"),
+                    alloc.concat(vec![
+                        alloc.text("The "),
+                        alloc.keyword("else"),
+                        alloc.text(" branch is"),
                     ]),
-                    Concat(vec![
-                        plain_text("but the "),
-                        keyword_text("then"),
-                        plain_text(" branch has the type:"),
+                    alloc.concat(vec![
+                        alloc.text("but the "),
+                        alloc.keyword("then"),
+                        alloc.text(" branch has the type:"),
                     ]),
-                    Concat(vec![
-                        plain_text("I need all branches in an "),
-                        keyword_text("if"),
-                        plain_text(" to have the same type!"),
+                    alloc.concat(vec![
+                        alloc.text("I need all branches in an "),
+                        alloc.keyword("if"),
+                        alloc.text(" to have the same type!"),
                     ]),
                 ),
                 _ => {
                     let ith = int_to_ordinal(index);
 
                     report_mismatch(
+                        alloc,
                         filename,
                         &category,
                         found,
                         expected_type,
                         region,
                         Some(expr_region),
-                        plain_text(&format!(
+                        alloc.string(format!(
                             "The {} branch of this `if` does not match all the previous branches:",
                             ith
                         )),
-                        plain_text(&format!("The {} branch is", ith)),
-                        plain_text("But all the previous branches have type:"),
-                        Concat(vec![
-                            plain_text("I need all branches in an "),
-                            keyword_text("if"),
-                            plain_text(" to have the same type!"),
+                        alloc.string(format!("The {} branch is", ith)),
+                        alloc.text("But all the previous branches have type:"),
+                        alloc.concat(vec![
+                            alloc.text("I need all branches in an "),
+                            alloc.keyword("if"),
+                            alloc.text(" to have the same type!"),
                         ]),
                     )
                 }
@@ -368,23 +347,24 @@ fn to_expr_report(
                 let ith = int_to_ordinal(index + 1);
 
                 report_mismatch(
+                    alloc,
                     filename,
                     &category,
                     found,
                     expected_type,
                     region,
                     Some(expr_region),
-                    Concat(vec![
-                        plain_text(&format!("The {} branch of this ", ith)),
-                        keyword_text("when"),
-                        plain_text(" does not match all the previous branches:"),
+                    alloc.concat(vec![
+                        alloc.string(format!("The {} branch of this ", ith)),
+                        alloc.keyword("when"),
+                        alloc.text(" does not match all the previous branches:"),
                     ]),
-                    plain_text(&format!("The {} branch is", ith)),
-                    plain_text("But all the previous branches have type:"),
-                    Concat(vec![
-                        plain_text("I need all branches of a "),
-                        keyword_text("when"),
-                        plain_text(" to have the same type!"),
+                    alloc.string(format!("The {} branch is", ith)),
+                    alloc.text("But all the previous branches have type:"),
+                    alloc.concat(vec![
+                        alloc.text("I need all branches of a "),
+                        alloc.keyword("when"),
+                        alloc.text(" to have the same type!"),
                     ]),
                 )
             }
@@ -394,58 +374,60 @@ fn to_expr_report(
                 let ith = int_to_ordinal(index + 1);
 
                 report_mismatch(
+                    alloc,
                     filename,
                     &category,
                     found,
                     expected_type,
                     region,
                     Some(expr_region),
-                    plain_text(&format!(
+                    alloc.string(format!(
                         "The {} element of this list does not match all the previous elements:",
                         ith
                     )),
-                    plain_text(&format!("The {} element is", ith)),
-                    plain_text("But all the previous elements in the list have type:"),
-                    plain_text("I need all elements of a list to have the same type!"),
+                    alloc.string(format!("The {} element is", ith)),
+                    alloc.text("But all the previous elements in the list have type:"),
+                    alloc.text("I need all elements of a list to have the same type!"),
                 )
             }
             Reason::RecordUpdateValue(field) => report_mismatch(
+                alloc,
                 filename,
                 &category,
                 found,
                 expected_type,
                 region,
                 Some(expr_region),
-                Concat(vec![
-                    plain_text("I cannot update the "),
-                    record_field_text(field.as_str()),
-                    plain_text(" field like this:"),
+                alloc.concat(vec![
+                    alloc.text("I cannot update the "),
+                    alloc.record_field(field.to_owned()),
+                    alloc.text(" field like this:"),
                 ]),
-                Concat(vec![
-                    plain_text("You are trying to update "),
-                    record_field_text(field.as_str()),
-                    plain_text(" to be"),
+                alloc.concat(vec![
+                    alloc.text("You are trying to update "),
+                    alloc.record_field(field.to_owned()),
+                    alloc.text(" to be"),
                 ]),
-                plain_text("But it should be:"),
-                plain_text(
+                alloc.text("But it should be:"),
+                alloc.text(
                     r#"Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax."#,
                 ),
             ),
             Reason::FnCall { name, arity } => match count_arguments(&found) {
                 0 => {
                     let this_value = match name {
-                        None => plain_text("This value"),
-                        Some(symbol) => Concat(vec![
-                            plain_text("The "),
-                            Value(symbol),
-                            plain_text(" value"),
+                        None => alloc.text("This value"),
+                        Some(symbol) => alloc.concat(vec![
+                            alloc.text("The "),
+                            alloc.symbol_unqualified(symbol),
+                            alloc.text(" value"),
                         ]),
                     };
 
                     let lines = vec![
-                        Concat(vec![
+                        alloc.concat(vec![
                             this_value,
-                            plain_text(&format!(
+                            alloc.string(format!(
                                 " is not a function, but it was given {}:",
                                 if arity == 1 {
                                     "1 argument".into()
@@ -454,31 +436,31 @@ fn to_expr_report(
                                 }
                             )),
                         ]),
-                        ReportText::Region(expr_region),
-                        plain_text("Are there any missing commas? Or missing parentheses?"),
+                        alloc.region(expr_region),
+                        alloc.text("Are there any missing commas? Or missing parentheses?"),
                     ];
 
                     Report {
                         filename,
                         title: "TOO MANY ARGS".to_string(),
-                        text: Concat(lines),
+                        doc: alloc.concat(lines),
                     }
                 }
                 n => {
                     let this_function = match name {
-                        None => plain_text("This function"),
-                        Some(symbol) => Concat(vec![
-                            plain_text("The "),
-                            Value(symbol),
-                            plain_text(" function"),
+                        None => alloc.text("This function"),
+                        Some(symbol) => alloc.concat(vec![
+                            alloc.text("The "),
+                            alloc.symbol_unqualified(symbol),
+                            alloc.text(" function"),
                         ]),
                     };
 
                     if n < arity as usize {
                         let lines = vec![
-                            Concat(vec![
+                            alloc.concat(vec![
                                 this_function,
-                                plain_text(&format!(
+                                alloc.string(format!(
                                     " expects {}, but it got {} instead:",
                                     if n == 1 {
                                         "1 argument".into()
@@ -488,20 +470,20 @@ fn to_expr_report(
                                     arity
                                 )),
                             ]),
-                            ReportText::Region(expr_region),
-                            plain_text("Are there any missing commas? Or missing parentheses?"),
+                            alloc.region(expr_region),
+                            alloc.text("Are there any missing commas? Or missing parentheses?"),
                         ];
 
                         Report {
                             filename,
                             title: "TOO MANY ARGS".to_string(),
-                            text: Concat(lines),
+                            doc: alloc.concat(lines),
                         }
                     } else {
                         let lines = vec![
-                            Concat(vec![
+                            alloc.concat(vec![
                                 this_function,
-                                plain_text(&format!(
+                                alloc.string(format!(
                                     " expects {}, but it got only {}:",
                                     if n == 1 {
                                         "1 argument".into()
@@ -511,8 +493,8 @@ fn to_expr_report(
                                     arity
                                 )),
                             ]),
-                            ReportText::Region(expr_region),
-                            plain_text(
+                            alloc.region(expr_region),
+                            alloc.text(
                                 r#"Roc does not allow functions to be partially applied. Use a closure to make partial application explicit."#,
                             ),
                         ];
@@ -520,7 +502,7 @@ fn to_expr_report(
                         Report {
                             filename,
                             title: "TOO FEW ARGS".to_string(),
-                            text: Concat(lines),
+                            doc: alloc.concat(lines),
                         }
                     }
                 }
@@ -529,29 +511,30 @@ fn to_expr_report(
                 let ith = int_to_ordinal(arg_index as usize + 1);
 
                 let this_function = match name {
-                    None => plain_text("this function"),
-                    Some(symbol) => ReportText::Value(symbol),
+                    None => alloc.text("this function"),
+                    Some(symbol) => alloc.symbol_unqualified(symbol),
                 };
 
                 report_mismatch(
+                    alloc,
                     filename,
                     &category,
                     found,
                     expected_type,
                     region,
                     Some(expr_region),
-                    Concat(vec![
-                        plain_text(&format!("The {} argument to ", ith)),
+                    alloc.concat(vec![
+                        alloc.string(format!("The {} argument to ", ith)),
                         this_function.clone(),
-                        plain_text(" is not what I expect:"),
+                        alloc.text(" is not what I expect:"),
                     ]),
-                    plain_text("This argument is"),
-                    Concat(vec![
-                        plain_text("But "),
+                    alloc.text("This argument is"),
+                    alloc.concat(vec![
+                        alloc.text("But "),
                         this_function,
-                        plain_text(&format!(" needs the {} argument to be:", ith)),
+                        alloc.string(format!(" needs the {} argument to be:", ith)),
                     ]),
-                    plain_text(""),
+                    alloc.text(""),
                 )
             }
             other => {
@@ -583,14 +566,15 @@ fn count_arguments(tipe: &ErrorType) -> usize {
     }
 }
 
-fn type_comparison(
+fn type_comparison<'b>(
+    alloc: &'b RocDocAllocator<'b>,
     actual: ErrorType,
     expected: ErrorType,
-    i_am_seeing: ReportText,
-    instead_of: ReportText,
-    context_hints: ReportText,
-) -> ReportText {
-    let comparison = to_comparison(actual, expected);
+    i_am_seeing: RocDocBuilder<'b>,
+    instead_of: RocDocBuilder<'b>,
+    context_hints: RocDocBuilder<'b>,
+) -> RocDocBuilder<'b> {
+    let comparison = to_comparison(alloc, actual, expected);
 
     let mut lines = vec![
         i_am_seeing,
@@ -602,113 +586,118 @@ fn type_comparison(
 
     lines.extend(problems_to_hint(comparison.problems));
 
-    ReportText::Stack(lines)
+    alloc.stack(lines)
 }
 
-fn lone_type(
+fn lone_type<'b>(
+    alloc: &'b RocDocAllocator<'b>,
     actual: ErrorType,
     expected: ErrorType,
-    i_am_seeing: ReportText,
-    further_details: ReportText,
-) -> ReportText {
-    let comparison = to_comparison(actual, expected);
+    i_am_seeing: RocDocBuilder<'b>,
+    further_details: RocDocBuilder<'b>,
+) -> RocDocBuilder<'b> {
+    let comparison = to_comparison(alloc, actual, expected);
 
     let mut lines = vec![i_am_seeing, comparison.actual, further_details];
 
     lines.extend(problems_to_hint(comparison.problems));
 
-    ReportText::Stack(lines)
+    alloc.stack(lines)
 }
 
-fn add_category(this_is: ReportText, category: &Category) -> ReportText {
+fn add_category<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    this_is: RocDocBuilder<'b>,
+    category: &Category,
+) -> RocDocBuilder<'b> {
     use Category::*;
-    use ReportText::*;
 
     match category {
-        Lookup(name) => Concat(vec![
-            plain_text("This "),
-            Value(*name),
-            plain_text(" value is a:"),
+        Lookup(name) => alloc.concat(vec![
+            alloc.text("This "),
+            alloc.symbol_foreign_qualified(*name),
+            alloc.text(" value is a:"),
         ]),
 
-        If => Concat(vec![
-            plain_text("This "),
-            keyword_text("if"),
-            plain_text("expression produces:"),
+        If => alloc.concat(vec![
+            alloc.text("This "),
+            alloc.keyword("if"),
+            alloc.text("expression produces:"),
         ]),
-        When => Concat(vec![
-            plain_text("This "),
-            keyword_text("when"),
-            plain_text("expression produces:"),
-        ]),
-
-        List => Concat(vec![this_is, plain_text(" a list of type:")]),
-        Num => Concat(vec![this_is, plain_text(" a number of type:")]),
-        Int => Concat(vec![this_is, plain_text(" an integer of type:")]),
-        Float => Concat(vec![this_is, plain_text(" a float of type:")]),
-        Str => Concat(vec![this_is, plain_text(" a string of type:")]),
-
-        Lambda => Concat(vec![this_is, plain_text(" an anonymous function of type:")]),
-
-        TagApply(TagName::Global(name)) => Concat(vec![
-            plain_text("This "),
-            global_tag_text(name.as_str()),
-            plain_text(" global tag application has the type:"),
-        ]),
-        TagApply(TagName::Private(name)) => Concat(vec![
-            plain_text("This "),
-            private_tag_text(*name),
-            plain_text(" private tag application has the type:"),
+        When => alloc.concat(vec![
+            alloc.text("This "),
+            alloc.keyword("when"),
+            alloc.text("expression produces:"),
         ]),
 
-        Record => Concat(vec![this_is, plain_text(" a record of type:")]),
+        List => alloc.concat(vec![this_is, alloc.text(" a list of type:")]),
+        Num => alloc.concat(vec![this_is, alloc.text(" a number of type:")]),
+        Int => alloc.concat(vec![this_is, alloc.text(" an integer of type:")]),
+        Float => alloc.concat(vec![this_is, alloc.text(" a float of type:")]),
+        Str => alloc.concat(vec![this_is, alloc.text(" a string of type:")]),
 
-        Accessor(field) => Concat(vec![
-            plain_text("This "),
-            record_field_text(field.as_str()),
-            plain_text(" value is a:"),
+        Lambda => alloc.concat(vec![this_is, alloc.text(" an anonymous function of type:")]),
+
+        TagApply(TagName::Global(name)) => alloc.concat(vec![
+            alloc.text("This "),
+            alloc.global_tag_name(name.to_owned()),
+            alloc.text(" global tag application has the type:"),
         ]),
-        Access(field) => Concat(vec![
-            plain_text("The value at "),
-            record_field_text(field.as_str()),
-            plain_text(" is a:"),
+        TagApply(TagName::Private(name)) => alloc.concat(vec![
+            alloc.text("This "),
+            alloc.private_tag_name(*name),
+            alloc.text(" private tag application has the type:"),
         ]),
 
-        CallResult(Some(symbol)) => Concat(vec![
-            plain_text("This "),
-            Value(*symbol),
-            plain_text(" call produces:"),
-        ]),
-        CallResult(None) => Concat(vec![this_is, plain_text(":")]),
+        Record => alloc.concat(vec![this_is, alloc.text(" a record of type:")]),
 
-        Uniqueness => Concat(vec![
+        Accessor(field) => alloc.concat(vec![
+            alloc.text("This "),
+            alloc.record_field(field.to_owned()),
+            alloc.text(" value is a:"),
+        ]),
+        Access(field) => alloc.concat(vec![
+            alloc.text("The value at "),
+            alloc.record_field(field.to_owned()),
+            alloc.text(" is a:"),
+        ]),
+
+        CallResult(Some(symbol)) => alloc.concat(vec![
+            alloc.text("This "),
+            alloc.symbol_foreign_qualified(*symbol),
+            alloc.text(" call produces:"),
+        ]),
+        CallResult(None) => alloc.concat(vec![this_is, alloc.text(":")]),
+
+        Uniqueness => alloc.concat(vec![
             this_is,
-            plain_text(" an uniqueness attribute of type:"),
+            alloc.text(" an uniqueness attribute of type:"),
         ]),
-        Storage => Concat(vec![this_is, plain_text(" a value of type:")]),
+        Storage => alloc.concat(vec![this_is, alloc.text(" a value of type:")]),
     }
 }
 
-fn to_pattern_report(
+fn to_pattern_report<'b>(
+    alloc: &'b RocDocAllocator<'b>,
     filename: PathBuf,
     expr_region: roc_region::all::Region,
     category: PatternCategory,
     found: ErrorType,
     expected: PExpected<ErrorType>,
-) -> Report {
+) -> Report<'b> {
     use roc_types::types::PReason;
-    use ReportText::*;
 
     match expected {
         PExpected::NoExpectation(expected_type) => {
-            let text = Concat(vec![
-                plain_text("This pattern is being used in an unexpected way:"),
-                Region(expr_region),
+            let doc = alloc.concat(vec![
+                alloc.text("This pattern is being used in an unexpected way:"),
+                alloc.region(expr_region),
                 pattern_type_comparision(
+                    alloc,
                     found,
                     expected_type,
-                    add_pattern_category(plain_text("It is"), &category),
-                    plain_text("But it needs to match:"),
+                    add_pattern_category(alloc, alloc.text("It is"), &category),
+                    alloc.text("But it needs to match:"),
                     vec![],
                 ),
             ]);
@@ -716,31 +705,34 @@ fn to_pattern_report(
             Report {
                 filename,
                 title: "TYPE MISMATCH".to_string(),
-                text,
+                doc,
             }
         }
 
         PExpected::ForReason(reason, expected_type, region) => match reason {
             PReason::WhenMatch { index } => {
                 if index == 0 {
-                    let text = Concat(vec![
-                        plain_text("The 1st pattern in this "),
-                        keyword_text("when"),
-                        plain_text(" is causing a mismatch:"),
-                        Region(region),
+                    let doc = alloc.stack(vec![
+                        alloc
+                            .text("The 1st pattern in this ")
+                            .append(alloc.keyword("when"))
+                            .append(alloc.text(" is causing a mismatch:")),
+                        alloc.region(region),
                         pattern_type_comparision(
+                            alloc,
                             found,
                             expected_type,
                             add_pattern_category(
-                                plain_text("The first pattern is trying to match"),
+                                alloc,
+                                alloc.text("The first pattern is trying to match"),
                                 &category,
                             ),
-                            Concat(vec![
-                                plain_text("But the expression between "),
-                                keyword_text("when"),
-                                plain_text(" and "),
-                                keyword_text("is"),
-                                plain_text(" has the type:"),
+                            alloc.concat(vec![
+                                alloc.text("But the expression between "),
+                                alloc.keyword("when"),
+                                alloc.text(" and "),
+                                alloc.keyword("is"),
+                                alloc.text(" has the type:"),
                             ]),
                             vec![],
                         ),
@@ -749,28 +741,31 @@ fn to_pattern_report(
                     Report {
                         filename,
                         title: "TYPE MISMATCH".to_string(),
-                        text,
+                        doc,
                     }
                 } else {
-                    let text = Concat(vec![
-                        plain_text(&format!(
-                            "The {} pattern in this ",
-                            int_to_ordinal(index + 1)
-                        )),
-                        keyword_text("when"),
-                        plain_text(" does not match the previous ones:"),
-                        Region(region),
+                    let doc = alloc.stack(vec![
+                        alloc
+                            .string(format!(
+                                "The {} pattern in this ",
+                                int_to_ordinal(index + 1)
+                            ))
+                            .append(alloc.keyword("when"))
+                            .append(alloc.text(" does not match the previous ones:")),
+                        alloc.region(region),
                         pattern_type_comparision(
+                            alloc,
                             found,
                             expected_type,
                             add_pattern_category(
-                                plain_text(&format!(
+                                alloc,
+                                alloc.string(format!(
                                     "The {} pattern is trying to match",
                                     int_to_ordinal(index + 1)
                                 )),
                                 &category,
                             ),
-                            plain_text("But all the previous branches match:"),
+                            alloc.text("But all the previous branches match:"),
                             vec![],
                         ),
                     ]);
@@ -778,7 +773,7 @@ fn to_pattern_report(
                     Report {
                         filename,
                         title: "TYPE MISMATCH".to_string(),
-                        text,
+                        doc,
                     }
                 }
             }
@@ -792,14 +787,15 @@ fn to_pattern_report(
     }
 }
 
-fn pattern_type_comparision(
+fn pattern_type_comparision<'b>(
+    alloc: &'b RocDocAllocator<'b>,
     actual: ErrorType,
     expected: ErrorType,
-    i_am_seeing: ReportText,
-    instead_of: ReportText,
-    reason_hints: Vec<ReportText>,
-) -> ReportText {
-    let comparison = to_comparison(actual, expected);
+    i_am_seeing: RocDocBuilder<'b>,
+    instead_of: RocDocBuilder<'b>,
+    reason_hints: Vec<RocDocBuilder<'b>>,
+) -> RocDocBuilder<'b> {
+    let comparison = to_comparison(alloc, actual, expected);
 
     let mut lines = vec![
         i_am_seeing,
@@ -811,44 +807,59 @@ fn pattern_type_comparision(
     lines.extend(problems_to_hint(comparison.problems));
     lines.extend(reason_hints);
 
-    ReportText::Stack(lines)
+    alloc.stack(lines)
 }
 
-fn add_pattern_category(
-    i_am_trying_to_match: ReportText,
+fn add_pattern_category<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    i_am_trying_to_match: RocDocBuilder<'b>,
     category: &PatternCategory,
-) -> ReportText {
+) -> RocDocBuilder<'b> {
     use PatternCategory::*;
 
     let rest = match category {
-        Record => plain_text(" record values of type:"),
-        EmptyRecord => plain_text(" an empty record:"),
-        PatternGuard => plain_text(" a pattern guard of type:"),
-        Set => plain_text(" sets of type:"),
-        Map => plain_text(" maps of type:"),
-        Ctor(tag_name) => ReportText::Concat(vec![
-            tag_name_text(tag_name.clone()),
-            plain_text(" values of type:"),
+        Record => alloc.text(" record values of type:"),
+        EmptyRecord => alloc.text(" an empty record:"),
+        PatternGuard => alloc.text(" a pattern guard of type:"),
+        Set => alloc.text(" sets of type:"),
+        Map => alloc.text(" maps of type:"),
+        Ctor(tag_name) => alloc.concat(vec![
+            alloc.tag_name(tag_name.clone()),
+            alloc.text(" values of type:"),
         ]),
-        Str => plain_text(" strings:"),
-        Num => plain_text(" numbers:"),
-        Int => plain_text(" integers:"),
-        Float => plain_text(" floats"),
+        Str => alloc.text(" strings:"),
+        Num => alloc.text(" numbers:"),
+        Int => alloc.text(" integers:"),
+        Float => alloc.text(" floats"),
     };
 
-    ReportText::Concat(vec![i_am_trying_to_match, rest])
+    alloc.concat(vec![i_am_trying_to_match, rest])
 }
 
-fn to_circular_report(
+fn to_circular_report<'b>(
+    alloc: &'b RocDocAllocator<'b>,
     filename: PathBuf,
     region: roc_region::all::Region,
     symbol: Symbol,
     overall_type: ErrorType,
-) -> Report {
+) -> Report<'b> {
     Report {
         title: "CIRCULAR TYPE".to_string(),
         filename,
-        text: ReportText::TypeError(solve::TypeError::CircularType(region, symbol, overall_type)),
+        doc: {
+            let line = r#"Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely."#;
+            alloc.stack(vec![
+                alloc
+                    .reflow("I'm inferring a weird self-referential type for ")
+                    .append(alloc.symbol_unqualified(symbol))
+                    .append(alloc.text(":")),
+                alloc.region(region),
+                alloc.stack(vec![
+                    alloc.reflow(line),
+                    alloc.type_block(to_doc(alloc, Parens::Unnecessary, overall_type)),
+                ]),
+            ])
+        },
     }
 }
 
@@ -865,12 +876,13 @@ pub enum Problem {
     BadRigidVar(Lowercase, ErrorType),
 }
 
-fn problems_to_hint(mut problems: Vec<Problem>) -> Option<ReportText> {
+fn problems_to_hint<'b>(mut problems: Vec<Problem>) -> Option<RocDocBuilder<'b>> {
     if problems.is_empty() {
         None
     } else {
         let problem = problems.remove(problems.len() - 1);
-        Some(ReportText::TypeProblem(problem))
+        // Some(RocDocBuilder<'b>::TypeProblem(problem))
+        todo!()
     }
 }
 
@@ -917,18 +929,22 @@ pub mod suggest {
     }
 }
 
-pub struct Comparison {
-    actual: ReportText,
-    expected: ReportText,
+pub struct Comparison<'b> {
+    actual: RocDocBuilder<'b>,
+    expected: RocDocBuilder<'b>,
     problems: Vec<Problem>,
 }
 
-fn to_comparison(actual: ErrorType, expected: ErrorType) -> Comparison {
-    let diff = to_diff(Parens::Unnecessary, &actual, &expected);
+fn to_comparison<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    actual: ErrorType,
+    expected: ErrorType,
+) -> Comparison<'b> {
+    let diff = to_diff(alloc, Parens::Unnecessary, actual, expected);
 
     Comparison {
-        actual: error_type_block(diff.left),
-        expected: error_type_block(diff.right),
+        actual: alloc.type_block(diff.left),
+        expected: alloc.type_block(diff.right),
         problems: match diff.status {
             Status::Similar => vec![],
             Status::Different(problems) => problems,
@@ -968,10 +984,7 @@ pub struct Diff<T> {
     status: Status,
 }
 
-fn pretty_ext_to_doc<'b>(
-    alloc: &'b RocDocAllocator<'b>,
-    ext: TypeExt,
-) -> Option<RocDocBuilder<'b>> {
+fn ext_to_doc<'b>(alloc: &'b RocDocAllocator<'b>, ext: TypeExt) -> Option<RocDocBuilder<'b>> {
     use TypeExt::*;
 
     match ext {
@@ -982,7 +995,7 @@ fn pretty_ext_to_doc<'b>(
     }
 }
 
-pub fn pretty_to_doc<'b>(
+pub fn to_doc<'b>(
     alloc: &'b RocDocAllocator<'b>,
     parens: Parens,
     tipe: ErrorType,
@@ -990,13 +1003,13 @@ pub fn pretty_to_doc<'b>(
     use ErrorType::*;
 
     match tipe {
-        Function(args, ret) => to_pretty::function(
+        Function(args, ret) => report_text::function(
             alloc,
             parens,
             args.into_iter()
-                .map(|arg| pretty_to_doc(alloc, Parens::InFn, arg))
+                .map(|arg| to_doc(alloc, Parens::InFn, arg))
                 .collect(),
-            pretty_to_doc(alloc, Parens::InFn, *ret),
+            to_doc(alloc, Parens::InFn, *ret),
         ),
         Infinite => alloc.text("∞"),
         Error => alloc.text("?"),
@@ -1004,122 +1017,21 @@ pub fn pretty_to_doc<'b>(
         FlexVar(lowercase) => alloc.string(lowercase.as_str().to_string()),
         RigidVar(lowercase) => alloc.string(lowercase.as_str().to_string()),
 
-        Type(symbol, args) => to_pretty::apply(
-            alloc,
-            parens,
-            alloc.symbol_foreign_qualified(symbol),
-            args.into_iter()
-                .map(|arg| pretty_to_doc(alloc, Parens::InTypeParam, arg))
-                .collect(),
-        ),
-
-        Alias(symbol, args, _) => to_pretty::apply(
-            alloc,
-            parens,
-            alloc.symbol_foreign_qualified(symbol),
-            args.into_iter()
-                .map(|(_, arg)| pretty_to_doc(alloc, Parens::InTypeParam, arg))
-                .collect(),
-        ),
-
-        Record(fields_map, ext) => {
-            let mut fields = fields_map.into_iter().collect::<Vec<_>>();
-            fields.sort_by(|(a, _), (b, _)| a.cmp(&b));
-
-            to_pretty::record(
-                alloc,
-                fields
-                    .into_iter()
-                    .map(|(k, v)| {
-                        (
-                            alloc.string(k.as_str().to_string()),
-                            pretty_to_doc(alloc, Parens::Unnecessary, v),
-                        )
-                    })
-                    .collect(),
-                pretty_ext_to_doc(alloc, ext),
-            )
-        }
-
-        TagUnion(tags_map, ext) => {
-            let mut tags = tags_map
-                .into_iter()
-                .map(|(name, args)| {
-                    (
-                        name,
-                        args.into_iter()
-                            .map(|arg| pretty_to_doc(alloc, Parens::InTypeParam, arg))
-                            .collect::<Vec<_>>(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            tags.sort_by(|(a, _), (b, _)| a.cmp(&b));
-
-            to_pretty::tag_union(
-                alloc,
-                tags.into_iter()
-                    .map(|(k, v)| (alloc.tag_name(k.clone()), v))
-                    .collect(),
-                pretty_ext_to_doc(alloc, ext),
-            )
-        }
-
-        RecursiveTagUnion(rec_var, tags_map, ext) => {
-            let mut tags = tags_map
-                .into_iter()
-                .map(|(name, args)| {
-                    (
-                        name,
-                        args.into_iter()
-                            .map(|arg| pretty_to_doc(alloc, Parens::InTypeParam, arg))
-                            .collect::<Vec<_>>(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            tags.sort_by(|(a, _), (b, _)| a.cmp(&b));
-
-            to_pretty::recursive_tag_union(
-                alloc,
-                pretty_to_doc(alloc, Parens::Unnecessary, *rec_var),
-                tags.into_iter()
-                    .map(|(k, v)| (alloc.tag_name(k.clone()), v))
-                    .collect(),
-                pretty_ext_to_doc(alloc, ext),
-            )
-        }
-        Boolean(b) => alloc.string(format!("{:?}", b)),
-    }
-}
-
-pub fn to_doc(parens: Parens, tipe: &ErrorType) -> ReportText {
-    use ErrorType::*;
-
-    match tipe {
-        Function(args, ret) => report_text::function(
-            parens,
-            args.iter().map(|arg| to_doc(Parens::InFn, arg)).collect(),
-            to_doc(Parens::InFn, ret),
-        ),
-
-        Infinite => plain_text("∞"),
-        Error => plain_text("?"),
-
-        FlexVar(lowercase) => plain_text(lowercase.as_str()),
-        RigidVar(lowercase) => plain_text(lowercase.as_str()),
-
         Type(symbol, args) => report_text::apply(
+            alloc,
             parens,
-            ReportText::Value(*symbol),
-            args.iter()
-                .map(|arg| to_doc(Parens::InTypeParam, arg))
+            alloc.symbol_foreign_qualified(symbol),
+            args.into_iter()
+                .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
                 .collect(),
         ),
 
         Alias(symbol, args, _) => report_text::apply(
+            alloc,
             parens,
-            ReportText::Value(*symbol),
-            args.iter()
-                .map(|(_, arg)| to_doc(Parens::InTypeParam, arg))
+            alloc.symbol_foreign_qualified(symbol),
+            args.into_iter()
+                .map(|(_, arg)| to_doc(alloc, Parens::InTypeParam, arg))
                 .collect(),
         ),
 
@@ -1128,11 +1040,17 @@ pub fn to_doc(parens: Parens, tipe: &ErrorType) -> ReportText {
             fields.sort_by(|(a, _), (b, _)| a.cmp(&b));
 
             report_text::record(
+                alloc,
                 fields
                     .into_iter()
-                    .map(|(k, v)| (plain_text(k.as_str()), to_doc(Parens::Unnecessary, v)))
+                    .map(|(k, v)| {
+                        (
+                            alloc.string(k.as_str().to_string()),
+                            to_doc(alloc, Parens::Unnecessary, v),
+                        )
+                    })
                     .collect(),
-                ext_to_doc(ext),
+                ext_to_doc(alloc, ext),
             )
         }
 
@@ -1142,8 +1060,8 @@ pub fn to_doc(parens: Parens, tipe: &ErrorType) -> ReportText {
                 .map(|(name, args)| {
                     (
                         name,
-                        args.iter()
-                            .map(|arg| to_doc(Parens::InTypeParam, arg))
+                        args.into_iter()
+                            .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
                             .collect::<Vec<_>>(),
                     )
                 })
@@ -1151,10 +1069,11 @@ pub fn to_doc(parens: Parens, tipe: &ErrorType) -> ReportText {
             tags.sort_by(|(a, _), (b, _)| a.cmp(&b));
 
             report_text::tag_union(
+                alloc,
                 tags.into_iter()
-                    .map(|(k, v)| (tag_name_text(k.clone()), v))
+                    .map(|(k, v)| (alloc.tag_name(k.clone()), v))
                     .collect(),
-                ext_to_doc(ext),
+                ext_to_doc(alloc, ext),
             )
         }
 
@@ -1164,8 +1083,8 @@ pub fn to_doc(parens: Parens, tipe: &ErrorType) -> ReportText {
                 .map(|(name, args)| {
                     (
                         name,
-                        args.iter()
-                            .map(|arg| to_doc(Parens::InTypeParam, arg))
+                        args.into_iter()
+                            .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
                             .collect::<Vec<_>>(),
                     )
                 })
@@ -1173,29 +1092,24 @@ pub fn to_doc(parens: Parens, tipe: &ErrorType) -> ReportText {
             tags.sort_by(|(a, _), (b, _)| a.cmp(&b));
 
             report_text::recursive_tag_union(
-                to_doc(Parens::Unnecessary, rec_var),
+                alloc,
+                to_doc(alloc, Parens::Unnecessary, *rec_var),
                 tags.into_iter()
-                    .map(|(k, v)| (tag_name_text(k.clone()), v))
+                    .map(|(k, v)| (alloc.tag_name(k.clone()), v))
                     .collect(),
-                ext_to_doc(ext),
+                ext_to_doc(alloc, ext),
             )
         }
-
-        Boolean(b) => plain_text(&format!("{:?}", b)),
+        Boolean(b) => alloc.string(format!("{:?}", b)),
     }
 }
 
-fn ext_to_doc(ext: &TypeExt) -> Option<ReportText> {
-    use TypeExt::*;
-
-    match ext {
-        Closed => None,
-        FlexOpen(lowercase) | RigidOpen(lowercase) => Some(plain_text(lowercase.as_str())),
-    }
-}
-
-fn same(parens: Parens, tipe: &ErrorType) -> Diff<ReportText> {
-    let doc = to_doc(parens, tipe);
+fn same<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    parens: Parens,
+    tipe: ErrorType,
+) -> Diff<RocDocBuilder<'b>> {
+    let doc = to_doc(alloc, parens, tipe);
 
     Diff {
         left: doc.clone(),
@@ -1204,25 +1118,31 @@ fn same(parens: Parens, tipe: &ErrorType) -> Diff<ReportText> {
     }
 }
 
-fn to_diff(parens: Parens, type1: &ErrorType, type2: &ErrorType) -> Diff<ReportText> {
+fn to_diff<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    parens: Parens,
+    type1: ErrorType,
+    type2: ErrorType,
+) -> Diff<RocDocBuilder<'b>> {
     use ErrorType::*;
 
-    match (type1, type2) {
-        (Error, Error) | (Infinite, Infinite) => same(parens, type1),
+    // TODO remove clone
+    match (type1.clone(), type2.clone()) {
+        (Error, Error) | (Infinite, Infinite) => same(alloc, parens, type1),
 
-        (FlexVar(x), FlexVar(y)) if x == y => same(parens, type1),
-        (RigidVar(x), RigidVar(y)) if x == y => same(parens, type1),
+        (FlexVar(x), FlexVar(y)) if x == y => same(alloc, parens, type1),
+        (RigidVar(x), RigidVar(y)) if x == y => same(alloc, parens, type1),
 
         (Function(args1, ret1), Function(args2, ret2)) => {
             if args1.len() == args2.len() {
                 let mut status = Status::Similar;
-                let arg_diff = traverse(Parens::InFn, args1, args2);
-                let ret_diff = to_diff(Parens::InFn, ret1, ret2);
+                let arg_diff = traverse(alloc, Parens::InFn, args1, args2);
+                let ret_diff = to_diff(alloc, Parens::InFn, *ret1, *ret2);
                 status.merge(arg_diff.status);
                 status.merge(ret_diff.status);
 
-                let left = report_text::function(parens, arg_diff.left, ret_diff.left);
-                let right = report_text::function(parens, arg_diff.right, ret_diff.right);
+                let left = report_text::function(alloc, parens, arg_diff.left, ret_diff.left);
+                let right = report_text::function(alloc, parens, arg_diff.right, ret_diff.right);
 
                 Diff {
                     left,
@@ -1230,8 +1150,8 @@ fn to_diff(parens: Parens, type1: &ErrorType, type2: &ErrorType) -> Diff<ReportT
                     status,
                 }
             } else {
-                let left = to_doc(Parens::InFn, type1);
-                let right = to_doc(Parens::InFn, type2);
+                let left = to_doc(alloc, Parens::InFn, type1);
+                let right = to_doc(alloc, Parens::InFn, type2);
 
                 Diff {
                     left,
@@ -1244,9 +1164,19 @@ fn to_diff(parens: Parens, type1: &ErrorType, type2: &ErrorType) -> Diff<ReportT
             }
         }
         (Type(symbol1, args1), Type(symbol2, args2)) if symbol1 == symbol2 => {
-            let args_diff = traverse(Parens::InTypeParam, args1, args2);
-            let left = report_text::apply(parens, ReportText::Value(*symbol1), args_diff.left);
-            let right = report_text::apply(parens, ReportText::Value(*symbol2), args_diff.right);
+            let args_diff = traverse(alloc, Parens::InTypeParam, args1, args2);
+            let left = report_text::apply(
+                alloc,
+                parens,
+                alloc.symbol_unqualified(symbol1),
+                args_diff.left,
+            );
+            let right = report_text::apply(
+                alloc,
+                parens,
+                alloc.symbol_unqualified(symbol2),
+                args_diff.right,
+            );
 
             Diff {
                 left,
@@ -1257,11 +1187,21 @@ fn to_diff(parens: Parens, type1: &ErrorType, type2: &ErrorType) -> Diff<ReportT
 
         (Alias(symbol1, args1, _), Alias(symbol2, args2, _)) if symbol1 == symbol2 => {
             // TODO remove collects
-            let a1 = args1.iter().map(|(_, v)| v).collect::<Vec<_>>();
-            let a2 = args2.iter().map(|(_, v)| v).collect::<Vec<_>>();
-            let args_diff = traverse(Parens::InTypeParam, a1, a2);
-            let left = report_text::apply(parens, ReportText::Value(*symbol1), args_diff.left);
-            let right = report_text::apply(parens, ReportText::Value(*symbol2), args_diff.right);
+            let a1 = args1.into_iter().map(|(_, v)| v).collect::<Vec<_>>();
+            let a2 = args2.into_iter().map(|(_, v)| v).collect::<Vec<_>>();
+            let args_diff = traverse(alloc, Parens::InTypeParam, a1, a2);
+            let left = report_text::apply(
+                alloc,
+                parens,
+                alloc.symbol_unqualified(symbol1),
+                args_diff.left,
+            );
+            let right = report_text::apply(
+                alloc,
+                parens,
+                alloc.symbol_unqualified(symbol2),
+                args_diff.right,
+            );
 
             Diff {
                 left,
@@ -1270,14 +1210,18 @@ fn to_diff(parens: Parens, type1: &ErrorType, type2: &ErrorType) -> Diff<ReportT
             }
         }
 
-        (Record(fields1, ext1), Record(fields2, ext2)) => diff_record(fields1, ext1, fields2, ext2),
+        (Record(fields1, ext1), Record(fields2, ext2)) => {
+            diff_record(alloc, fields1, ext1, fields2, ext2)
+        }
 
-        (TagUnion(tags1, ext1), TagUnion(tags2, ext2)) => diff_tag_union(tags1, ext1, tags2, ext2),
+        (TagUnion(tags1, ext1), TagUnion(tags2, ext2)) => {
+            diff_tag_union(alloc, &tags1, ext1, &tags2, ext2)
+        }
 
         (RecursiveTagUnion(_rec1, _tags1, _ext1), RecursiveTagUnion(_rec2, _tags2, _ext2)) => {
             // TODO do a better job here
-            let left = to_doc(Parens::Unnecessary, type1);
-            let right = to_doc(Parens::Unnecessary, type2);
+            let left = to_doc(alloc, Parens::Unnecessary, type1);
+            let right = to_doc(alloc, Parens::Unnecessary, type2);
 
             Diff {
                 left,
@@ -1288,8 +1232,8 @@ fn to_diff(parens: Parens, type1: &ErrorType, type2: &ErrorType) -> Diff<ReportT
 
         pair => {
             // We hit none of the specific cases where we give more detailed information
-            let left = to_doc(Parens::Unnecessary, type1);
-            let right = to_doc(Parens::Unnecessary, type2);
+            let left = to_doc(alloc, Parens::Unnecessary, type1);
+            let right = to_doc(alloc, Parens::Unnecessary, type2);
 
             let problems = match pair {
                 (RigidVar(x), other) | (other, RigidVar(x)) => {
@@ -1307,9 +1251,14 @@ fn to_diff(parens: Parens, type1: &ErrorType, type2: &ErrorType) -> Diff<ReportT
     }
 }
 
-fn traverse<'a, I>(parens: Parens, args1: I, args2: I) -> Diff<Vec<ReportText>>
+fn traverse<'b, I>(
+    alloc: &'b RocDocAllocator<'b>,
+    parens: Parens,
+    args1: I,
+    args2: I,
+) -> Diff<Vec<RocDocBuilder<'b>>>
 where
-    I: IntoIterator<Item = &'a ErrorType>,
+    I: IntoIterator<Item = ErrorType>,
 {
     let mut status = Status::Similar;
 
@@ -1318,7 +1267,7 @@ where
     let mut right = Vec::new();
 
     for (arg1, arg2) in args1.into_iter().zip(args2.into_iter()) {
-        let diff = to_diff(parens, arg1, arg2);
+        let diff = to_diff(alloc, parens, arg1, arg2);
 
         left.push(diff.left);
         right.push(diff.right);
@@ -1340,26 +1289,35 @@ fn ext_has_fixed_fields(ext: &TypeExt) -> bool {
     }
 }
 
-fn diff_record(
-    fields1: &SendMap<Lowercase, ErrorType>,
-    ext1: &TypeExt,
-    fields2: &SendMap<Lowercase, ErrorType>,
-    ext2: &TypeExt,
-) -> Diff<ReportText> {
+fn diff_record<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    fields1: SendMap<Lowercase, ErrorType>,
+    ext1: TypeExt,
+    fields2: SendMap<Lowercase, ErrorType>,
+    ext2: TypeExt,
+) -> Diff<RocDocBuilder<'b>> {
     let to_overlap_docs = |(field, (t1, t2)): &(Lowercase, (ErrorType, ErrorType))| {
-        let diff = to_diff(Parens::Unnecessary, t1, t2);
+        let diff = to_diff(alloc, Parens::Unnecessary, t1.clone(), t2.clone());
 
         Diff {
-            left: (field.clone(), plain_text(field.as_str()), diff.left),
-            right: (field.clone(), plain_text(field.as_str()), diff.right),
+            left: (
+                field.clone(),
+                alloc.string(field.as_str().to_string()),
+                diff.left,
+            ),
+            right: (
+                field.clone(),
+                alloc.string(field.as_str().to_string()),
+                diff.right,
+            ),
             status: diff.status,
         }
     };
     let to_unknown_docs = |(field, tipe): &(Lowercase, ErrorType)| {
         (
             field.clone(),
-            plain_text(field.as_str()),
-            to_doc(Parens::Unnecessary, tipe),
+            alloc.string(field.as_str().to_string()),
+            to_doc(alloc, Parens::Unnecessary, tipe.clone()),
         )
     };
     let shared_keys = fields1
@@ -1410,9 +1368,9 @@ fn diff_record(
         (false, false) => Status::Similar,
     };
 
-    let ext_diff = ext_to_diff(ext1, ext2);
+    let ext_diff = ext_to_diff(alloc, ext1, ext2);
 
-    let mut fields_diff: Diff<Vec<(Lowercase, ReportText, ReportText)>> = Diff {
+    let mut fields_diff: Diff<Vec<(Lowercase, RocDocBuilder<'b>, RocDocBuilder<'b>)>> = Diff {
         left: vec![],
         right: vec![],
         status: Status::Similar,
@@ -1435,6 +1393,7 @@ fn diff_record(
     fields_diff.right.sort_by(|a, b| a.0.cmp(&b.0));
 
     let doc1 = report_text::record(
+        alloc,
         fields_diff
             .left
             .into_iter()
@@ -1443,6 +1402,7 @@ fn diff_record(
         ext_diff.left,
     );
     let doc2 = report_text::record(
+        alloc,
         fields_diff
             .right
             .into_iter()
@@ -1460,28 +1420,29 @@ fn diff_record(
     }
 }
 
-fn diff_tag_union(
+fn diff_tag_union<'b>(
+    alloc: &'b RocDocAllocator<'b>,
     fields1: &SendMap<TagName, Vec<ErrorType>>,
-    ext1: &TypeExt,
+    ext1: TypeExt,
     fields2: &SendMap<TagName, Vec<ErrorType>>,
-    ext2: &TypeExt,
-) -> Diff<ReportText> {
-    let to_overlap_docs = |(field, (t1, t2)): &(TagName, (Vec<ErrorType>, Vec<ErrorType>))| {
-        let diff = traverse(Parens::Unnecessary, t1, t2);
+    ext2: TypeExt,
+) -> Diff<RocDocBuilder<'b>> {
+    let to_overlap_docs = |(field, (t1, t2)): (TagName, (Vec<ErrorType>, Vec<ErrorType>))| {
+        let diff = traverse(alloc, Parens::Unnecessary, t1, t2);
 
         Diff {
-            left: (field.clone(), tag_name_text(field.clone()), diff.left),
-            right: (field.clone(), tag_name_text(field.clone()), diff.right),
+            left: (field.clone(), alloc.tag_name(field.clone()), diff.left),
+            right: (field.clone(), alloc.tag_name(field.clone()), diff.right),
             status: diff.status,
         }
     };
     let to_unknown_docs = |(field, args): &(TagName, Vec<ErrorType>)| {
         (
             field.clone(),
-            tag_name_text(field.clone()),
+            alloc.tag_name(field.clone()),
             // TODO add spaces between args
-            args.iter()
-                .map(|arg| to_doc(Parens::Unnecessary, arg))
+            args.into_iter()
+                .map(|arg| to_doc(alloc, Parens::Unnecessary, arg.clone()))
                 .collect(),
         )
     };
@@ -1492,7 +1453,7 @@ fn diff_tag_union(
     let left_keys = fields1.clone().relative_complement(fields2.clone());
     let right_keys = fields2.clone().relative_complement(fields1.clone());
 
-    let both = shared_keys.iter().map(to_overlap_docs);
+    let both = shared_keys.into_iter().map(to_overlap_docs);
     let mut left = left_keys.iter().map(to_unknown_docs).peekable();
     let mut right = right_keys.iter().map(to_unknown_docs).peekable();
 
@@ -1533,9 +1494,9 @@ fn diff_tag_union(
         (false, false) => Status::Similar,
     };
 
-    let ext_diff = ext_to_diff(ext1, ext2);
+    let ext_diff = ext_to_diff(alloc, ext1, ext2);
 
-    let mut fields_diff: Diff<Vec<(TagName, ReportText, Vec<ReportText>)>> = Diff {
+    let mut fields_diff: Diff<Vec<(TagName, RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>> = Diff {
         left: vec![],
         right: vec![],
         status: Status::Similar,
@@ -1567,8 +1528,8 @@ fn diff_tag_union(
         .map(|(_, a, b)| (a, b))
         .collect();
 
-    let doc1 = report_text::tag_union(lefts, ext_diff.left);
-    let doc2 = report_text::tag_union(rights, ext_diff.right);
+    let doc1 = report_text::tag_union(alloc, lefts, ext_diff.left);
+    let doc2 = report_text::tag_union(alloc, rights, ext_diff.right);
 
     fields_diff.status.merge(status);
 
@@ -1579,10 +1540,14 @@ fn diff_tag_union(
     }
 }
 
-fn ext_to_diff(ext1: &TypeExt, ext2: &TypeExt) -> Diff<Option<ReportText>> {
-    let status = ext_to_status(ext1, ext2);
-    let ext_doc_1 = ext_to_doc(ext1);
-    let ext_doc_2 = ext_to_doc(ext2);
+fn ext_to_diff<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    ext1: TypeExt,
+    ext2: TypeExt,
+) -> Diff<Option<RocDocBuilder<'b>>> {
+    let status = ext_to_status(&ext1, &ext2);
+    let ext_doc_1 = ext_to_doc(alloc, ext1);
+    let ext_doc_2 = ext_to_doc(alloc, ext2);
 
     match &status {
         Status::Similar => Diff {
@@ -1626,7 +1591,7 @@ fn ext_to_status(ext1: &TypeExt, ext2: &TypeExt) -> Status {
     }
 }
 
-mod to_pretty {
+mod report_text {
     use crate::report::{RocDocAllocator, RocDocBuilder};
     use roc_types::pretty_print::Parens;
     use ven_pretty::DocAllocator;
@@ -1644,15 +1609,15 @@ mod to_pretty {
         args: Vec<RocDocBuilder<'b>>,
         ret: RocDocBuilder<'b>,
     ) -> RocDocBuilder<'b> {
-        let function_text = alloc.concat(vec![
+        let function_doc = alloc.concat(vec![
             alloc.intersperse(args, alloc.reflow(", ")),
             alloc.reflow(" -> "),
             ret,
         ]);
 
         match parens {
-            Parens::Unnecessary => function_text,
-            _ => with_parens(alloc, function_text),
+            Parens::Unnecessary => function_doc,
+            _ => with_parens(alloc, function_doc),
         }
     }
 
@@ -1665,15 +1630,15 @@ mod to_pretty {
         if args.is_empty() {
             name
         } else {
-            let apply_text = alloc.concat(vec![
+            let apply_doc = alloc.concat(vec![
                 name,
                 alloc.space(),
                 alloc.intersperse(args, alloc.space()),
             ]);
 
             match parens {
-                Parens::Unnecessary | Parens::InFn => apply_text,
-                Parens::InTypeParam => with_parens(alloc, apply_text),
+                Parens::Unnecessary | Parens::InFn => apply_doc,
+                Parens::InTypeParam => with_parens(alloc, apply_doc),
             }
         }
     }
@@ -1683,16 +1648,16 @@ mod to_pretty {
         entries: Vec<(RocDocBuilder<'b>, RocDocBuilder<'b>)>,
         opt_ext: Option<RocDocBuilder<'b>>,
     ) -> RocDocBuilder<'b> {
-        let ext_text = if let Some(t) = opt_ext {
+        let ext_doc = if let Some(t) = opt_ext {
             t
         } else {
             alloc.nil()
         };
 
         if entries.is_empty() {
-            ext_text
+            alloc.text("{}").append(ext_doc)
         } else {
-            let entry_to_text =
+            let entry_to_doc =
                 |(field_name, field_type): (RocDocBuilder<'b>, RocDocBuilder<'b>)| {
                     field_name.append(alloc.text(" : ")).append(field_type)
                 };
@@ -1704,10 +1669,10 @@ mod to_pretty {
                 entries
                     .into_iter()
                     .zip(starts)
-                    .map(|(entry, start)| start.append(entry_to_text(entry))),
+                    .map(|(entry, start)| start.append(entry_to_doc(entry))),
             );
 
-            entries_doc.append(alloc.reflow(" }")).append(ext_text)
+            entries_doc.append(alloc.reflow(" }")).append(ext_doc)
         }
     }
 
@@ -1716,7 +1681,7 @@ mod to_pretty {
         entries: Vec<(RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>,
         opt_ext: Option<RocDocBuilder<'b>>,
     ) -> RocDocBuilder<'b> {
-        let ext_text = if let Some(t) = opt_ext {
+        let ext_doc = if let Some(t) = opt_ext {
             t
         } else {
             alloc.nil()
@@ -1725,7 +1690,7 @@ mod to_pretty {
         if entries.is_empty() {
             alloc.text("[]")
         } else {
-            let entry_to_text = |(tag_name, arguments): (RocDocBuilder<'b>, Vec<_>)| {
+            let entry_to_doc = |(tag_name, arguments): (RocDocBuilder<'b>, Vec<_>)| {
                 if arguments.is_empty() {
                     tag_name
                 } else {
@@ -1742,10 +1707,10 @@ mod to_pretty {
                 entries
                     .into_iter()
                     .zip(starts)
-                    .map(|(entry, start)| start.append(entry_to_text(entry))),
+                    .map(|(entry, start)| start.append(entry_to_doc(entry))),
             );
 
-            entries_doc.append(alloc.reflow(" ]")).append(ext_text)
+            entries_doc.append(alloc.reflow(" ]")).append(ext_doc)
         }
     }
 
@@ -1755,7 +1720,7 @@ mod to_pretty {
         entries: Vec<(RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>,
         opt_ext: Option<RocDocBuilder<'b>>,
     ) -> RocDocBuilder<'b> {
-        let ext_text = if let Some(t) = opt_ext {
+        let ext_doc = if let Some(t) = opt_ext {
             t
         } else {
             alloc.nil()
@@ -1764,7 +1729,7 @@ mod to_pretty {
         if entries.is_empty() {
             alloc.text("[]")
         } else {
-            let entry_to_text = |(tag_name, arguments): (RocDocBuilder<'b>, Vec<_>)| {
+            let entry_to_doc = |(tag_name, arguments): (RocDocBuilder<'b>, Vec<_>)| {
                 if arguments.is_empty() {
                     tag_name
                 } else {
@@ -1781,166 +1746,14 @@ mod to_pretty {
                 entries
                     .into_iter()
                     .zip(starts)
-                    .map(|(entry, start)| start.append(entry_to_text(entry))),
+                    .map(|(entry, start)| start.append(entry_to_doc(entry))),
             );
 
             entries_doc
                 .append(alloc.reflow(" ]"))
-                .append(ext_text)
+                .append(ext_doc)
                 .append(alloc.text(" as "))
                 .append(rec_var)
-        }
-    }
-}
-
-mod report_text {
-
-    use super::ReportText;
-    use crate::report::{concat, intersperse, plain_text, separate};
-    use roc_types::pretty_print::Parens;
-
-    fn with_parens(text: ReportText) -> ReportText {
-        ReportText::Concat(vec![plain_text("("), text, plain_text(")")])
-    }
-
-    pub fn function(parens: Parens, args: Vec<ReportText>, ret: ReportText) -> ReportText {
-        let function_text = concat(vec![
-            intersperse(plain_text(", "), args),
-            plain_text(" -> "),
-            ret,
-        ]);
-
-        match parens {
-            Parens::Unnecessary => function_text,
-            _ => with_parens(function_text),
-        }
-    }
-
-    pub fn apply(parens: Parens, name: ReportText, args: Vec<ReportText>) -> ReportText {
-        if args.is_empty() {
-            name
-        } else {
-            let apply_text = concat(vec![
-                name,
-                plain_text(" "),
-                intersperse(plain_text(" "), args),
-            ]);
-
-            match parens {
-                Parens::Unnecessary | Parens::InFn => apply_text,
-                Parens::InTypeParam => with_parens(apply_text),
-            }
-        }
-    }
-
-    pub fn record(
-        entries: Vec<(ReportText, ReportText)>,
-        opt_ext: Option<ReportText>,
-    ) -> ReportText {
-        let ext_text = if let Some(t) = opt_ext {
-            t
-        } else {
-            plain_text("")
-        };
-
-        if entries.is_empty() {
-            concat(vec![plain_text("{}"), ext_text])
-        } else {
-            let entry_to_text = |(field_name, field_type)| {
-                separate(vec![concat(vec![field_name, plain_text(" :")]), field_type])
-            };
-
-            let starts =
-                std::iter::once(plain_text("{ ")).chain(std::iter::repeat(plain_text(", ")));
-
-            let mut lines: Vec<_> = entries
-                .into_iter()
-                .zip(starts)
-                .map(|(entry, start)| concat(vec![start, entry_to_text(entry)]))
-                .collect();
-
-            lines.push(plain_text(" }"));
-            lines.push(ext_text);
-
-            concat(lines)
-        }
-    }
-
-    pub fn tag_union(
-        entries: Vec<(ReportText, Vec<ReportText>)>,
-        opt_ext: Option<ReportText>,
-    ) -> ReportText {
-        let ext_text = if let Some(t) = opt_ext {
-            t
-        } else {
-            plain_text("")
-        };
-
-        if entries.is_empty() {
-            concat(vec![plain_text("[]"), ext_text])
-        } else {
-            let entry_to_text = |(tag_name, arguments): (ReportText, Vec<_>)| {
-                if arguments.is_empty() {
-                    tag_name
-                } else {
-                    separate(vec![tag_name, separate(arguments)])
-                }
-            };
-
-            let starts =
-                std::iter::once(plain_text("[ ")).chain(std::iter::repeat(plain_text(", ")));
-
-            let mut lines: Vec<_> = entries
-                .into_iter()
-                .zip(starts)
-                .map(|(entry, start)| concat(vec![start, entry_to_text(entry)]))
-                .collect();
-
-            lines.push(plain_text(" ]"));
-            lines.push(ext_text);
-
-            concat(lines)
-        }
-    }
-
-    pub fn recursive_tag_union(
-        rec_var: ReportText,
-        entries: Vec<(ReportText, Vec<ReportText>)>,
-        opt_ext: Option<ReportText>,
-    ) -> ReportText {
-        let ext_text = if let Some(t) = opt_ext {
-            t
-        } else {
-            plain_text("")
-        };
-
-        if entries.is_empty() {
-            concat(vec![plain_text("[]"), ext_text])
-        } else {
-            let entry_to_text = |(tag_name, arguments): (ReportText, Vec<_>)| {
-                if arguments.is_empty() {
-                    tag_name
-                } else {
-                    separate(vec![tag_name, separate(arguments)])
-                }
-            };
-
-            let starts =
-                std::iter::once(plain_text("[ ")).chain(std::iter::repeat(plain_text(",")));
-
-            let mut lines: Vec<_> = entries
-                .into_iter()
-                .zip(starts)
-                .map(|(entry, start)| concat(vec![start, entry_to_text(entry)]))
-                .collect();
-
-            lines.push(plain_text(" ]"));
-            lines.push(ext_text);
-
-            lines.push(plain_text(" as "));
-            lines.push(rec_var);
-
-            concat(lines)
         }
     }
 }
