@@ -1690,14 +1690,11 @@ mod test_reporting {
     }
 
     #[test]
-    fn circular_definition() {
-        // these error messages seem pretty helpful
+    fn circular_definition_self() {
         report_problem_as(
             indoc!(
                 r#"
-                f = g
-
-                g = f
+                f = f
 
                 f
                 "#
@@ -1708,6 +1705,40 @@ mod test_reporting {
 
                 The `f` value is defined directly in terms of itself, causing an
                 infinite loop.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn circular_definition() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = bar
+
+                bar = foo
+
+                foo
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                The `foo` definition is causing a very tricky infinite loop:
+
+                1 ┆  foo = bar
+                  ┆  ^^^
+
+                The `foo` value depends on itself through the following chain of
+                definitions:
+
+                    ┌─────┐
+                    │     foo
+                    │     ↓
+                    │     bar
+                    └─────┘
                 "#
             ),
         )

@@ -8,6 +8,46 @@ use std::fmt;
 use std::path::PathBuf;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
 
+// const IS_WINDOWS: bool = std::env::consts::OS == "windows";
+const IS_WINDOWS: bool = false;
+
+// trick to branch in a const. Can be replaced by an if when that is merged into rustc
+const CYCLE_TOP: &str = ["+-----+", "┌─────┐"][(!IS_WINDOWS) as usize];
+const CYCLE_LN: &str = ["|     ", "│     "][!IS_WINDOWS as usize];
+const CYCLE_MID: &str = ["|     |", "│     ↓"][!IS_WINDOWS as usize];
+const CYCLE_END: &str = ["+-<---+", "└─────┘"][!IS_WINDOWS as usize];
+
+fn cycle<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    indent: usize,
+    name: RocDocBuilder<'b>,
+    names: Vec<RocDocBuilder<'b>>,
+) -> RocDocBuilder<'b> {
+    let mut lines = Vec::with_capacity(4 + (2 * names.len() - 1));
+
+    lines.push(alloc.text(CYCLE_TOP));
+
+    lines.push(alloc.text(CYCLE_LN).append(name));
+    lines.push(alloc.text(CYCLE_MID));
+
+    let mut it = names.into_iter().peekable();
+
+    while let Some(other_name) = it.next() {
+        lines.push(alloc.text(CYCLE_LN).append(other_name));
+
+        if it.peek().is_some() {
+            lines.push(alloc.text(CYCLE_MID));
+        }
+    }
+
+    lines.push(alloc.text(CYCLE_END));
+
+    alloc
+        .vcat(lines)
+        .indent(indent)
+        .annotate(Annotation::TypeBlock)
+}
+
 /// A textual report.
 pub struct Report<'b> {
     pub title: String,
@@ -155,24 +195,55 @@ pub fn can_problem<'b>(
         Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => alloc
             .stack(vec![
                 if left_bin_op.value == right_bin_op.value {
-                    alloc.reflow("Using more than one ")
-                .append(alloc.binop(left_bin_op.value))
-                .append(alloc.reflow(
-                    " like this requires parentheses, to clarify how things should be grouped.",
-                ))
+                    alloc.concat(vec![
+                        alloc.reflow("Using more than one "),
+                        alloc.binop(left_bin_op.value),
+                        alloc.reflow(concat!(
+                            " like this requires parentheses,",
+                            " to clarify how things should be grouped.",
+                        )),
+                    ])
                 } else {
-                    (alloc.reflow("Using "))
-                .append(alloc.binop(left_bin_op.value))
-                .append(alloc.reflow(" and "))
-                .append(alloc.binop(right_bin_op.value))
-                .append(alloc.reflow(
-                    " together requires parentheses, to clarify how they should be grouped.",
-                ))
+                    alloc.concat(vec![
+                        alloc.reflow("Using "),
+                        alloc.binop(left_bin_op.value),
+                        alloc.reflow(" and "),
+                        alloc.binop(right_bin_op.value),
+                        alloc.reflow(concat!(
+                            " together requires parentheses, ",
+                            "to clarify how they should be grouped."
+                        )),
+                    ])
                 },
                 alloc.region(region),
             ]),
-        Problem::UnsupportedPattern(_pattern_type, _region) => {
-            panic!("TODO implement unsupported pattern report")
+        Problem::UnsupportedPattern(pattern_type, region) => {
+            use roc_parse::pattern::PatternType::*;
+
+            let this_thing = match pattern_type {
+                TopLevelDef => "a top-level definition:",
+                DefExpr => "a value definition:",
+                FunctionArg => "function arguments:",
+                WhenBranch => unreachable!("all patterns are allowed in a When"),
+            };
+
+            let suggestion = vec![
+                alloc.reflow(
+                    "Patterns like this don't cover all possible shapes of the input type. Use a ",
+                ),
+                alloc.keyword("when"),
+                alloc.reflow(" ... "),
+                alloc.keyword("is"),
+                alloc.reflow(" instead."),
+            ];
+
+            alloc.stack(vec![
+                alloc
+                    .reflow("This pattern is not allowed in ")
+                    .append(alloc.reflow(this_thing)),
+                alloc.region(region),
+                alloc.concat(suggestion),
+            ])
         }
         Problem::ShadowingInAnnotation {
             original_region,
@@ -261,20 +332,51 @@ fn pretty_runtime_error<'b>(
         RuntimeError::LookupNotInScope(loc_name, options) => {
             not_found(alloc, loc_name.region, &loc_name.value, "value", options)
         }
-        RuntimeError::CircularDef(idents, _regions) => match idents.first() {
-            Some(ident) => alloc.stack(vec![alloc
-                .reflow("The ")
-                .append(alloc.ident(ident.value.clone()))
-                .append(alloc.reflow(
-                    " value is defined directly in terms of itself, causing an infinite loop.",
-                ))]),
-            None => alloc.nil(),
-        },
+        RuntimeError::CircularDef(mut idents, regions) => {
+            let first = idents.remove(0);
+
+            if idents.is_empty() {
+                alloc
+                    .reflow("The ")
+                    .append(alloc.ident(first.value.clone()))
+                    .append(alloc.reflow(
+                        " value is defined directly in terms of itself, causing an infinite loop.",
+                    ))
+            // TODO "are you trying to mutate a variable?
+            // TODO hint?
+            } else {
+                alloc.stack(vec![
+                    alloc
+                        .reflow("The ")
+                        .append(alloc.ident(first.value.clone()))
+                        .append(
+                            alloc.reflow(" definition is causing a very tricky infinite loop:"),
+                        ),
+                    alloc.region(regions[0].0),
+                    alloc
+                        .reflow("The ")
+                        .append(alloc.ident(first.value.clone()))
+                        .append(alloc.reflow(
+                            " value depends on itself through the following chain of definitions:",
+                        )),
+                    cycle(
+                        alloc,
+                        4,
+                        alloc.ident(first.value),
+                        idents
+                            .into_iter()
+                            .map(|ident| alloc.ident(ident.value))
+                            .collect::<Vec<_>>(),
+                    ),
+                    // TODO hint?
+                ])
+            }
+        }
         other => {
             //    // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
             //    UnsupportedPattern(Region),
             //    UnrecognizedFunctionName(Located<InlinableString>),
-            //    alloc.symbol_unqualified(NotExposed {
+            //    SymbolNotExposed {
             //        module_name: InlinableString,
             //        ident: InlinableString,
             //        region: Region,
