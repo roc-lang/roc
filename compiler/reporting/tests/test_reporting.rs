@@ -12,9 +12,8 @@ mod test_reporting {
     use crate::helpers::test_home;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_reporting::report::{
-        can_problem, em_text, plain_text, url, Report, ReportText, BLUE_CODE, BOLD_CODE, CYAN_CODE,
-        DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE,
-        WHITE_CODE, YELLOW_CODE,
+        can_problem, Report, BLUE_CODE, BOLD_CODE, CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE,
+        MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE, WHITE_CODE, YELLOW_CODE,
     };
     use roc_reporting::type_error::type_problem;
     use roc_types::pretty_print::name_all_type_vars;
@@ -23,11 +22,8 @@ mod test_reporting {
     // use roc_region::all;
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
     use roc_reporting::report;
-    use roc_reporting::report::ReportText::{Concat, Module, Region, Type, Value};
-    use roc_reporting::report::RocDocAllocator;
+    use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
-    use roc_types::subs::Content::{FlexVar, RigidVar, Structure};
-    use roc_types::subs::FlatType::EmptyRecord;
     use std::fmt::Write;
 
     fn filename_from_string(str: &str) -> PathBuf {
@@ -37,11 +33,10 @@ mod test_reporting {
         return filename;
     }
 
-    // use roc_problem::can;
-    fn to_simple_report<'b>(text: ReportText) -> Report<'b> {
+    fn to_simple_report<'b>(doc: RocDocBuilder<'b>) -> Report<'b> {
         Report {
             title: "".to_string(),
-            doc: todo!(),
+            doc: doc,
             filename: filename_from_string(r"\code\proj\Main.roc"),
         }
     }
@@ -51,7 +46,6 @@ mod test_reporting {
     ) -> (
         Vec<solve::TypeError>,
         Vec<roc_problem::can::Problem>,
-        Subs,
         ModuleId,
         Interns,
     ) {
@@ -76,11 +70,11 @@ mod test_reporting {
 
         name_all_type_vars(var, &mut subs);
 
-        (unify_problems, can_problems, subs, home, interns)
+        (unify_problems, can_problems, home, interns)
     }
 
     fn report_problem_as(src: &str, expected_rendering: &str) {
-        let (type_problems, can_problems, mut subs, home, interns) = infer_expr_help(src);
+        let (type_problems, can_problems, home, interns) = infer_expr_help(src);
 
         let mut buf: String = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -88,7 +82,7 @@ mod test_reporting {
         match can_problems.first() {
             None => {}
             Some(problem) => {
-                let alloc = RocDocAllocator::new(&mut subs, &src_lines, home, &interns);
+                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
                 let report = can_problem(
                     &alloc,
                     filename_from_string(r"\code\proj\Main.roc"),
@@ -104,7 +98,7 @@ mod test_reporting {
 
         let mut it = type_problems.into_iter().peekable();
         while let Some(problem) = it.next() {
-            let alloc = RocDocAllocator::new(&mut subs, &src_lines, home, &interns);
+            let alloc = RocDocAllocator::new(&src_lines, home, &interns);
             let report = type_problem(
                 &alloc,
                 filename_from_string(r"\code\proj\Main.roc"),
@@ -125,7 +119,7 @@ mod test_reporting {
     }
 
     fn color_report_problem_as(src: &str, expected_rendering: &str) {
-        let (type_problems, can_problems, mut subs, home, interns) = infer_expr_help(src);
+        let (type_problems, can_problems, home, interns) = infer_expr_help(src);
 
         let mut buf: String = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -133,7 +127,7 @@ mod test_reporting {
         match can_problems.first() {
             None => {}
             Some(problem) => {
-                let alloc = RocDocAllocator::new(&mut subs, &src_lines, home, &interns);
+                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
                 let report = can_problem(
                     &alloc,
                     filename_from_string(r"\code\proj\Main.roc"),
@@ -149,7 +143,7 @@ mod test_reporting {
 
         let mut it = type_problems.into_iter().peekable();
         while let Some(problem) = it.next() {
-            let alloc = RocDocAllocator::new(&mut subs, &src_lines, home, &interns);
+            let alloc = RocDocAllocator::new(&src_lines, home, &interns);
             let report = type_problem(
                 &alloc,
                 filename_from_string(r"\code\proj\Main.roc"),
@@ -162,7 +156,13 @@ mod test_reporting {
             }
         }
 
-        assert_eq!(buf, expected_rendering);
+        if !buf.is_empty() {
+            write!(buf, "\n").unwrap();
+        }
+
+        let readable = human_readable(&buf);
+
+        assert_eq!(readable, expected_rendering);
     }
 
     fn human_readable(str: &str) -> String {
@@ -199,7 +199,9 @@ mod test_reporting {
                 2 ┆  y = 2
                   ┆  ^
 
-                If you didn't intend on using `y` then remove it so future readers of your code don't wonder why it is there."#
+                If you didn't intend on using `y` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
             ),
         )
     }
@@ -232,7 +234,8 @@ mod test_reporting {
                   ┆       ^
 
                 Since these variables have the same name, it's easy to use the wrong
-                one on accident. Give one of them a new name."#
+                one on accident. Give one of them a new name.
+                "#
             ),
         )
     }
@@ -267,7 +270,8 @@ mod test_reporting {
                   ┆  ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Since these variables have the same name, it's easy to use the wrong
-                one on accident. Give one of them a new name."#
+                one on accident. Give one of them a new name.
+                "#
             ),
         )
     }
@@ -355,11 +359,11 @@ mod test_reporting {
                 r#"
                 -- SYNTAX PROBLEM --------------------------------------------------------------
 
-                Using != and == together requires parentheses, to clarify how they should be grouped.
+                Using != and == together requires parentheses, to clarify how they
+                should be grouped.
 
                 3 ┆      if selectedId != thisId == adminsId then
                   ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
                 "#
             ),
         )
@@ -385,12 +389,12 @@ mod test_reporting {
                 r#"
                 -- SYNTAX PROBLEM --------------------------------------------------------------
 
-                Using more than one == like this requires parentheses, to clarify how things should be grouped.
+                Using more than one == like this requires parentheses, to clarify how
+                things should be grouped.
 
                 2 ┆>      1
                 3 ┆>          == 2
                 4 ┆>          == 3
-
                 "#
             ),
         )
@@ -461,16 +465,20 @@ mod test_reporting {
             "#
         );
 
-        let (_type_problems, _can_problems, mut subs, home, interns) = infer_expr_help(src);
+        let (_type_problems, _can_problems, home, interns) = infer_expr_help(src);
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
 
-        let alloc = RocDocAllocator::new(&mut subs, &src_lines, home, &interns);
-        to_simple_report(Value(
-            interns.symbol(test_home(), "activityIndicatorLarge".into()),
-        ))
-        .render_color_terminal(&mut buf, &alloc, &DEFAULT_PALETTE);
+        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+        let symbol = interns.symbol(test_home(), "activityIndicatorLarge".into());
+
+        to_simple_report(alloc.symbol_unqualified(symbol)).render_color_terminal(
+            &mut buf,
+            &alloc,
+            &DEFAULT_PALETTE,
+        );
 
         assert_eq!(human_readable(&buf), "<blue>activityIndicatorLarge<reset>");
     }
@@ -486,14 +494,14 @@ mod test_reporting {
             "#
         );
 
-        let (_type_problems, _can_problems, mut subs, home, mut interns) = infer_expr_help(src);
+        let (_type_problems, _can_problems, home, mut interns) = infer_expr_help(src);
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
         let module_id = interns.module_id(&"Util.Int".into());
 
-        let alloc = RocDocAllocator::new(&mut subs, &src_lines, home, &interns);
-        to_simple_report(Module(module_id)).render_color_terminal(
+        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+        to_simple_report(alloc.module(module_id)).render_color_terminal(
             &mut buf,
             &alloc,
             &DEFAULT_PALETTE,
@@ -515,13 +523,19 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
 
+                I cannot find a `theAdmin` value
 
-                    <cyan>1<reset><magenta> ┆<reset><red>><reset>  <white>isDisabled = \user -> user.isAdmin<reset>
-                    <cyan>2<reset><magenta> ┆<reset><red>><reset>
-                    <cyan>3<reset><magenta> ┆<reset><red>><reset>  <white>theAdmin<reset>
-                    <cyan>4<reset><magenta> ┆<reset><red>><reset>  <white>    |> isDisabled<reset>
+                <cyan>3<reset><magenta> ┆<reset><white>  theAdmin<reset>
+                 <magenta> ┆<reset>  <red>^^^^^^^^<reset>
 
+                these names seem close though:
+
+                    Num
+                    Set
+                    Result
+                    Int
                 "#
             ),
         );
@@ -872,7 +886,8 @@ mod test_reporting {
                 parts of the type that repeat something already printed out
                 infinitely.
 
-                    ∞ -> a"#
+                    ∞ -> a
+                "#
             ),
         )
     }
@@ -900,7 +915,8 @@ mod test_reporting {
                 parts of the type that repeat something already printed out
                 infinitely.
 
-                    List ∞ -> a"#
+                    List ∞ -> a
+                "#
             ),
         )
     }
@@ -934,7 +950,6 @@ mod test_reporting {
                 But `f` needs the 1st argument to be:
 
                     { foo : Int }
-
 
                 Hint: Seems like a record field typo. Maybe `bar` should be `foo`?
 
@@ -974,7 +989,6 @@ mod test_reporting {
 
                     [ Green, Red ]
 
-
                 Hint: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
                 Hint: Can more type annotations be added? Type annotations always help
@@ -1013,7 +1027,6 @@ mod test_reporting {
 
                     [ Green Bool, Red Int ]
 
-
                 Hint: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
                 Hint: Can more type annotations be added? Type annotations always help
@@ -1051,8 +1064,6 @@ mod test_reporting {
                 But the type annotation on `x` says it should be:
 
                     Int
-
-
                 "#
             ),
         )
@@ -1087,8 +1098,6 @@ mod test_reporting {
                 But the type annotation on `x` says it should be:
 
                     Int
-
-
                 "#
             ),
         )
@@ -1121,8 +1130,6 @@ mod test_reporting {
                 But the type annotation on `x` says it should be:
 
                     Int -> Int
-
-
                 "#
             ),
         )
@@ -1148,7 +1155,8 @@ mod test_reporting {
                 4 ┆  x 3
                   ┆  ^
 
-                Are there any missing commas? Or missing parentheses?"#
+                Are there any missing commas? Or missing parentheses?
+                "#
             ),
         )
     }
@@ -1173,7 +1181,8 @@ mod test_reporting {
                 4 ┆  f 1 2
                   ┆  ^
 
-                Are there any missing commas? Or missing parentheses?"#
+                Are there any missing commas? Or missing parentheses?
+                "#
             ),
         )
     }
@@ -1198,7 +1207,8 @@ mod test_reporting {
                 4 ┆  f 1
                   ┆  ^
 
-                Roc does not allow functions to be partially applied. Use a closure to make partial application explicit."#
+                Roc does not allow functions to be partially applied. Use a closure to make partial application explicit.
+                "#
             ),
         )
     }
@@ -1289,7 +1299,6 @@ mod test_reporting {
                 But the expression between `when` and `is` has the type:
 
                     { foo : Num a }
-
                 "#
             ),
         )
@@ -1319,7 +1328,8 @@ mod test_reporting {
                     Bool
                     Int
                     Num
-                    Map"#
+                    Map
+                "#
             ),
         )
     }
@@ -1383,7 +1393,6 @@ mod test_reporting {
                 But the expression between `when` and `is` has the type:
 
                     { foo : Num a }
-
                 "#
             ),
         )
@@ -1416,8 +1425,6 @@ mod test_reporting {
                 But you are trying to use it as:
 
                     [ Foo a ]b
-
-
                 "#
             ),
         )
@@ -1450,8 +1457,6 @@ mod test_reporting {
                 But the type annotation says it should be:
 
                     { x : Int }
-
-
                 "#
             ),
         )
@@ -1484,7 +1489,6 @@ mod test_reporting {
                 But the type annotation on `x` says it should be:
 
                     { a : Int, b : Float, c : Bool }
-
 
                 Hint: Looks like the c and a fields are missing.
                 "#
@@ -1520,8 +1524,7 @@ mod test_reporting {
 
                     a, b -> a
 
-
-                Hint: Your type annotation uses a and b as separate type variables.
+                Hint: Your type annotation uses `a` and `b` as separate type variables.
                 Your code seems to be saying they are the same though. Maybe they
                 should be the same your type annotation? Maybe your code uses them in
                 a weird way?
@@ -1558,10 +1561,9 @@ mod test_reporting {
 
                     Bool -> msg
 
-
-                Hint: The type annotation uses the type variable `msg` to say that
-                this definition can produce any type of value. But in the body I see
-                that it will only produce a tag value of a single specific type. Maybe
+                Hint: The type annotation uses the type variable `msg` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a tag value of a single specific type. Maybe
                 change the type annotation to be more specific? Maybe change the code
                 to be more general?
                 "#
@@ -1597,10 +1599,9 @@ mod test_reporting {
 
                     msg
 
-
-                Hint: The type annotation uses the type variable `msg` to say that
-                this definition can produce any type of value. But in the body I see
-                that it will only produce a Int value of a single specific type. Maybe
+                Hint: The type annotation uses the type variable `msg` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `Int` value of a single specific type. Maybe
                 change the type annotation to be more specific? Maybe change the code
                 to be more general?
                 "#
@@ -1634,7 +1635,8 @@ mod test_reporting {
                     f
                     Int
                     Num
-                    Map"#
+                    Map
+               "#
             ),
         )
     }
@@ -1663,10 +1665,11 @@ mod test_reporting {
                 3 ┆      ok = 3
                   ┆      ^^
 
-                If you didn't intend on using `ok` then remove it so future readers of your code don't wonder why it is there.
+                If you didn't intend on using `ok` then remove it so future readers of
+                your code don't wonder why it is there.
 
                 -- TYPE MISMATCH ---------------------------------------------------------------
-                
+
                 Something is off with the body of the `f` definition:
 
                 2 ┆>  f = \_ ->
@@ -1681,8 +1684,6 @@ mod test_reporting {
                 But the type annotation on `f` says it should be:
 
                     Bool -> Int
-
-
                 "#
             ),
         )
@@ -1706,7 +1707,8 @@ mod test_reporting {
                 -- SYNTAX PROBLEM --------------------------------------------------------------
 
                 The `f` value is defined directly in terms of itself, causing an
-                infinite loop."#
+                infinite loop.
+                "#
             ),
         )
     }

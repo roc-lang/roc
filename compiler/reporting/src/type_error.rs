@@ -7,8 +7,10 @@ use roc_types::pretty_print::Parens;
 use roc_types::types::{Category, ErrorType, PatternCategory, Reason, TypeExt};
 use std::path::PathBuf;
 
-use crate::report::{Report, RocDocAllocator, RocDocBuilder};
+use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
 use ven_pretty::DocAllocator;
+
+const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annotations always help me give more specific messages, and I think they could help a lot in this case"#;
 
 pub fn type_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -60,7 +62,7 @@ fn report_mismatch<'b>(
     problem: RocDocBuilder<'b>,
     this_is: RocDocBuilder<'b>,
     instead_of: RocDocBuilder<'b>,
-    further_details: RocDocBuilder<'b>,
+    further_details: Option<RocDocBuilder<'b>>,
 ) -> Report<'b> {
     let lines = vec![
         problem,
@@ -142,13 +144,13 @@ fn to_expr_report<'b>(
                 expected_type,
                 add_category(alloc, alloc.text("It is"), &category),
                 alloc.text("But you are trying to use it as:"),
-                alloc.nil()
+                None,
             );
 
             Report {
                 filename,
                 title: "TYPE MISMATCH".to_string(),
-                doc: alloc.concat(vec![
+                doc: alloc.stack(vec![
                     alloc.text("This expression is used in an unexpected way:"),
                     alloc.region(expr_region),
                     comparison,
@@ -163,7 +165,7 @@ fn to_expr_report<'b>(
                     alloc.concat(vec![alloc.text("the "), doc.clone()]),
                     alloc.concat(vec![alloc.text(" on "), doc]),
                 ),
-                None => (alloc.text("this"), alloc.text("")),
+                None => (alloc.text("this"), alloc.nil()),
             };
 
             // TODO special-case 2-branch if
@@ -201,7 +203,7 @@ fn to_expr_report<'b>(
                     on_name_text,
                     alloc.text(" says it should be:"),
                 ]),
-                alloc.nil()
+                None,
             );
 
             Report {
@@ -220,7 +222,8 @@ fn to_expr_report<'b>(
                     alloc.text("This "),
                     alloc.keyword("if"),
                     alloc.text(" condition needs to be a "),
-alloc.type_str("Bool"),                    alloc.text(":"),
+                    alloc.type_str("Bool"),
+                    alloc.text(":"),
                 ]);
 
                 report_bad_type(
@@ -237,7 +240,8 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                         alloc.text("But I need every "),
                         alloc.keyword("if"),
                         alloc.text(" condition to evaluate to a "),
-    alloc.type_str("Bool"),                        alloc.text("—either "),
+                        alloc.type_str("Bool"),
+                        alloc.text("—either "),
                         alloc.global_tag_name("True".into()),
                         alloc.text(" or "),
                         alloc.global_tag_name("False".into()),
@@ -311,11 +315,12 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                         alloc.keyword("then"),
                         alloc.text(" branch has the type:"),
                     ]),
+                    Some(
                     alloc.concat(vec![
                         alloc.text("I need all branches in an "),
                         alloc.keyword("if"),
                         alloc.text(" to have the same type!"),
-                    ]),
+                    ])),
                 ),
                 _ => {
                     let ith = int_to_ordinal(index);
@@ -334,11 +339,11 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                         )),
                         alloc.string(format!("The {} branch is", ith)),
                         alloc.text("But all the previous branches have type:"),
-                        alloc.concat(vec![
+                        Some(alloc.concat(vec![
                             alloc.text("I need all branches in an "),
                             alloc.keyword("if"),
                             alloc.text(" to have the same type!"),
-                        ]),
+                        ])),
                     )
                 }
             },
@@ -361,11 +366,11 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                     ]),
                     alloc.string(format!("The {} branch is", ith)),
                     alloc.text("But all the previous branches have type:"),
-                    alloc.concat(vec![
+                    Some(alloc.concat(vec![
                         alloc.text("I need all branches of a "),
                         alloc.keyword("when"),
                         alloc.text(" to have the same type!"),
-                    ]),
+                    ])),
                 )
             }
             Reason::ElemInList { index } => {
@@ -387,7 +392,7 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                     )),
                     alloc.string(format!("The {} element is", ith)),
                     alloc.text("But all the previous elements in the list have type:"),
-                    alloc.text("I need all elements of a list to have the same type!"),
+                    Some(alloc.text("I need all elements of a list to have the same type!")),
                 )
             }
             Reason::RecordUpdateValue(field) => report_mismatch(
@@ -405,13 +410,13 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                 ]),
                 alloc.concat(vec![
                     alloc.text("You are trying to update "),
-                    alloc.record_field(field.to_owned()),
+                    alloc.record_field(field),
                     alloc.text(" to be"),
                 ]),
                 alloc.text("But it should be:"),
-                alloc.text(
+                Some(alloc.text(
                     r#"Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax."#,
-                ),
+                )),
             ),
             Reason::FnCall { name, arity } => match count_arguments(&found) {
                 0 => {
@@ -443,7 +448,7 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                     Report {
                         filename,
                         title: "TOO MANY ARGS".to_string(),
-                        doc: alloc.concat(lines),
+                        doc: alloc.stack(lines),
                     }
                 }
                 n => {
@@ -477,7 +482,7 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                         Report {
                             filename,
                             title: "TOO MANY ARGS".to_string(),
-                            doc: alloc.concat(lines),
+                            doc: alloc.stack(lines),
                         }
                     } else {
                         let lines = vec![
@@ -502,7 +507,7 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                         Report {
                             filename,
                             title: "TOO FEW ARGS".to_string(),
-                            doc: alloc.concat(lines),
+                            doc: alloc.stack(lines),
                         }
                     }
                 }
@@ -534,7 +539,7 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                         this_function,
                         alloc.string(format!(" needs the {} argument to be:", ith)),
                     ]),
-                    alloc.text(""),
+                    None,
                 )
             }
             other => {
@@ -572,7 +577,7 @@ fn type_comparison<'b>(
     expected: ErrorType,
     i_am_seeing: RocDocBuilder<'b>,
     instead_of: RocDocBuilder<'b>,
-    context_hints: RocDocBuilder<'b>,
+    context_hints: Option<RocDocBuilder<'b>>,
 ) -> RocDocBuilder<'b> {
     let comparison = to_comparison(alloc, actual, expected);
 
@@ -581,10 +586,13 @@ fn type_comparison<'b>(
         comparison.actual,
         instead_of,
         comparison.expected,
-        context_hints,
     ];
 
-    lines.extend(problems_to_hint(comparison.problems));
+    if context_hints.is_some() {
+        lines.push(alloc.concat(context_hints));
+    }
+
+    lines.extend(problems_to_hint(alloc, comparison.problems));
 
     alloc.stack(lines)
 }
@@ -600,7 +608,7 @@ fn lone_type<'b>(
 
     let mut lines = vec![i_am_seeing, comparison.actual, further_details];
 
-    lines.extend(problems_to_hint(comparison.problems));
+    lines.extend(problems_to_hint(alloc, comparison.problems));
 
     alloc.stack(lines)
 }
@@ -689,7 +697,7 @@ fn to_pattern_report<'b>(
 
     match expected {
         PExpected::NoExpectation(expected_type) => {
-            let doc = alloc.concat(vec![
+            let doc = alloc.stack(vec![
                 alloc.text("This pattern is being used in an unexpected way:"),
                 alloc.region(expr_region),
                 pattern_type_comparision(
@@ -804,7 +812,7 @@ fn pattern_type_comparision<'b>(
         comparison.expected,
     ];
 
-    lines.extend(problems_to_hint(comparison.problems));
+    lines.extend(problems_to_hint(alloc, comparison.problems));
     lines.extend(reason_hints);
 
     alloc.stack(lines)
@@ -876,13 +884,15 @@ pub enum Problem {
     BadRigidVar(Lowercase, ErrorType),
 }
 
-fn problems_to_hint<'b>(mut problems: Vec<Problem>) -> Option<RocDocBuilder<'b>> {
+fn problems_to_hint<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    mut problems: Vec<Problem>,
+) -> Option<RocDocBuilder<'b>> {
     if problems.is_empty() {
         None
     } else {
         let problem = problems.remove(problems.len() - 1);
-        // Some(RocDocBuilder<'b>::TypeProblem(problem))
-        todo!()
+        Some(type_problem_to_pretty(alloc, problem))
     }
 }
 
@@ -1071,7 +1081,7 @@ pub fn to_doc<'b>(
             report_text::tag_union(
                 alloc,
                 tags.into_iter()
-                    .map(|(k, v)| (alloc.tag_name(k.clone()), v))
+                    .map(|(k, v)| (alloc.tag_name(k), v))
                     .collect(),
                 ext_to_doc(alloc, ext),
             )
@@ -1095,7 +1105,7 @@ pub fn to_doc<'b>(
                 alloc,
                 to_doc(alloc, Parens::Unnecessary, *rec_var),
                 tags.into_iter()
-                    .map(|(k, v)| (alloc.tag_name(k.clone()), v))
+                    .map(|(k, v)| (alloc.tag_name(k), v))
                     .collect(),
                 ext_to_doc(alloc, ext),
             )
@@ -1236,9 +1246,7 @@ fn to_diff<'b>(
             let right = to_doc(alloc, Parens::Unnecessary, type2);
 
             let problems = match pair {
-                (RigidVar(x), other) | (other, RigidVar(x)) => {
-                    vec![Problem::BadRigidVar(x.clone(), other.clone())]
-                }
+                (RigidVar(x), other) | (other, RigidVar(x)) => vec![Problem::BadRigidVar(x, other)],
                 _ => vec![],
             };
 
@@ -1432,7 +1440,7 @@ fn diff_tag_union<'b>(
 
         Diff {
             left: (field.clone(), alloc.tag_name(field.clone()), diff.left),
-            right: (field.clone(), alloc.tag_name(field.clone()), diff.right),
+            right: (field.clone(), alloc.tag_name(field), diff.right),
             status: diff.status,
         }
     };
@@ -1441,7 +1449,7 @@ fn diff_tag_union<'b>(
             field.clone(),
             alloc.tag_name(field.clone()),
             // TODO add spaces between args
-            args.into_iter()
+            args.iter()
                 .map(|arg| to_doc(alloc, Parens::Unnecessary, arg.clone()))
                 .collect(),
         )
@@ -1755,5 +1763,160 @@ mod report_text {
                 .append(alloc.text(" as "))
                 .append(rec_var)
         }
+    }
+}
+
+fn type_problem_to_pretty<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    problem: crate::type_error::Problem,
+) -> RocDocBuilder<'b> {
+    use crate::type_error::Problem::*;
+
+    match problem {
+        FieldTypo(typo, possibilities) => {
+            let suggestions = suggest::sort(typo.as_str(), possibilities);
+
+            match suggestions.get(0) {
+                None => alloc.nil(),
+                Some(nearest) => {
+                    let typo_str = format!("{}", typo);
+                    let nearest_str = format!("{}", nearest);
+
+                    let found = alloc.text(typo_str).annotate(Annotation::Typo);
+                    let suggestion = alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);
+
+                    let hint1 = alloc
+                        .hint()
+                        .append(alloc.reflow("Seems like a record field typo. Maybe "))
+                        .append(found)
+                        .append(alloc.reflow(" should be "))
+                        .append(suggestion)
+                        .append(alloc.text("?"));
+
+                    let hint2 = alloc.hint().append(alloc.reflow(ADD_ANNOTATIONS));
+
+                    hint1
+                        .append(alloc.line())
+                        .append(alloc.line())
+                        .append(hint2)
+                }
+            }
+        }
+        FieldsMissing(missing) => match missing.split_last() {
+            None => alloc.nil(),
+            Some((f1, [])) => alloc
+                .hint()
+                .append(alloc.reflow("Looks like the "))
+                .append(f1.as_str().to_owned())
+                .append(alloc.reflow(" field is missing.")),
+            Some((last, init)) => {
+                let separator = alloc.reflow(", ");
+
+                alloc
+                    .hint()
+                    .append(alloc.reflow("Looks like the "))
+                    .append(
+                        alloc.intersperse(init.iter().map(|v| v.as_str().to_owned()), separator),
+                    )
+                    .append(alloc.reflow(" and "))
+                    .append(alloc.text(last.as_str().to_owned()))
+                    .append(alloc.reflow(" fields are missing."))
+            }
+        },
+        TagTypo(typo, possibilities_tn) => {
+            let possibilities = possibilities_tn
+                .into_iter()
+                .map(|tag_name| tag_name.into_string(alloc.interns, alloc.home))
+                .collect();
+            let typo_str = format!("{}", typo.into_string(alloc.interns, alloc.home));
+            let suggestions = suggest::sort(&typo_str, possibilities);
+
+            match suggestions.get(0) {
+                None => alloc.nil(),
+                Some(nearest) => {
+                    let nearest_str = format!("{}", nearest);
+
+                    let found = alloc.text(typo_str).annotate(Annotation::Typo);
+                    let suggestion = alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);
+
+                    let hint1 = alloc
+                        .hint()
+                        .append(alloc.reflow("Seems like a tag typo. Maybe "))
+                        .append(found)
+                        .append(" should be ")
+                        .append(suggestion)
+                        .append(alloc.text("?"));
+
+                    let hint2 = alloc.hint().append(alloc.reflow(ADD_ANNOTATIONS));
+
+                    hint1
+                        .append(alloc.line())
+                        .append(alloc.line())
+                        .append(hint2)
+                }
+            }
+        }
+        ArityMismatch(found, expected) => {
+            let line = if found < expected {
+                format!(
+                    "It looks like it takes too few arguments. I was expecting {} more.",
+                    expected - found
+                )
+            } else {
+                format!(
+                    "It looks like it takes too many arguments. I'm seeing {} extra.",
+                    found - expected
+                )
+            };
+
+            alloc.hint().append(line)
+        }
+
+        BadRigidVar(x, tipe) => {
+            use ErrorType::*;
+
+            let bad_rigid_var = |name: Lowercase, a_thing| {
+                alloc
+                    .hint()
+                    .append(alloc.reflow("The type annotation uses the type variable "))
+                    .append(alloc.type_variable(name))
+                    .append(alloc.reflow(" to say that this definition can produce any type of value. But in the body I see that it will only produce "))
+                    .append(a_thing)
+                    .append(alloc.reflow(" of a single specific type. Maybe change the type annotation to be more specific? Maybe change the code to be more general?"))
+            };
+
+            let bad_double_rigid = |a, b| {
+                let line = r#" as separate type variables. Your code seems to be saying they are the same though. Maybe they should be the same your type annotation? Maybe your code uses them in a weird way?"#;
+
+                alloc
+                    .hint()
+                    .append(alloc.reflow("Your type annotation uses "))
+                    .append(alloc.type_variable(a))
+                    .append(alloc.reflow(" and "))
+                    .append(alloc.type_variable(b))
+                    .append(alloc.reflow(line))
+            };
+
+            match tipe {
+                Infinite | Error | FlexVar(_) => alloc.nil(),
+                RigidVar(y) => bad_double_rigid(x, y),
+                Function(_, _) => bad_rigid_var(x, alloc.reflow("a function value")),
+                Record(_, _) => bad_rigid_var(x, alloc.reflow("a record value")),
+                TagUnion(_, _) | RecursiveTagUnion(_, _, _) => {
+                    bad_rigid_var(x, alloc.reflow("a tag value"))
+                }
+                Alias(symbol, _, _) | Type(symbol, _) => bad_rigid_var(
+                    x,
+                    alloc.concat(vec![
+                        alloc.reflow("a "),
+                        alloc.symbol_unqualified(symbol),
+                        alloc.reflow(" value"),
+                    ]),
+                ),
+                Boolean(_) => bad_rigid_var(x, alloc.reflow("a uniqueness attribute value")),
+            }
+        }
+
+        _ => todo!(),
     }
 }

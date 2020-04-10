@@ -1,20 +1,12 @@
-use crate::report::ReportText::{BinOp, Concat, Module, Region, Value};
-use bumpalo::Bump;
 use roc_collections::all::MutSet;
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{Problem, RuntimeError};
-use roc_solve::solve;
-use roc_types::pretty_print::content_to_string;
-use roc_types::subs::{Content, Subs};
-use roc_types::types::{write_error_type, ErrorType};
 use std::fmt;
 use std::path::PathBuf;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
-
-const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annotations always help me give more specific messages, and I think they could help a lot in this case"#;
 
 /// A textual report.
 pub struct Report<'b> {
@@ -96,159 +88,109 @@ pub const DEFAULT_PALETTE: Palette = Palette {
     typo_suggestion: GREEN_CODE,
 };
 
+pub const RED_CODE: &str = "\u{001b}[31m";
+pub const WHITE_CODE: &str = "\u{001b}[37m";
+pub const BLUE_CODE: &str = "\u{001b}[34m";
+pub const YELLOW_CODE: &str = "\u{001b}[33m";
+pub const GREEN_CODE: &str = "\u{001b}[42m";
+pub const CYAN_CODE: &str = "\u{001b}[36m";
+pub const MAGENTA_CODE: &str = "\u{001b}[35m";
+
+pub const BOLD_CODE: &str = "\u{001b}[1m";
+
+pub const UNDERLINE_CODE: &str = "\u{001b}[4m";
+
+pub const RESET_CODE: &str = "\u{001b}[0m";
+
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
     filename: PathBuf,
     problem: Problem,
 ) -> Report<'b> {
-    let mut texts = Vec::new();
-    match problem {
+    let doc = match problem {
         Problem::UnusedDef(symbol, region) => {
-            texts.push(Value(symbol));
-            texts.push(plain_text(" is not used anywhere in your code."));
-            texts.push(Region(region));
-            texts.push(plain_text("If you didn't intend on using "));
-            texts.push(Value(symbol));
-            texts.push(plain_text(
-                " then remove it so future readers of your code don't wonder why it is there.",
-            ));
+            let line =
+                r#" then remove it so future readers of your code don't wonder why it is there."#;
+
+            alloc.stack(vec![
+                alloc
+                    .symbol_unqualified(symbol)
+                    .append(alloc.reflow(" is not used anywhere in your code.")),
+                alloc.region(region),
+                alloc
+                    .reflow("If you didn't intend on using ")
+                    .append(alloc.symbol_unqualified(symbol))
+                    .append(alloc.reflow(line)),
+            ])
         }
-        Problem::UnusedImport(module_id, region) => {
-            texts.push(plain_text("Nothing from "));
-            texts.push(Module(module_id));
-            texts.push(plain_text(" is used in this module."));
-            texts.push(Region(region));
-            texts.push(plain_text("Since "));
-            texts.push(Module(module_id));
-            texts.push(plain_text(" isn't used, you don't need to import it."));
-        }
+        Problem::UnusedImport(module_id, region) => alloc.concat(vec![
+            alloc.reflow("Nothing from "),
+            alloc.module(module_id),
+            alloc.reflow(" is used in this module."),
+            alloc.region(region),
+            alloc.reflow("Since "),
+            alloc.module(module_id),
+            alloc.reflow(" isn't used, you don't need to import it."),
+        ]),
         Problem::UnusedArgument(closure_symbol, argument_symbol, region) => {
-            texts.push(Value(closure_symbol));
-            texts.push(plain_text(" doesn't use "));
-            texts.push(Value(argument_symbol));
-            texts.push(plain_text("."));
-            texts.push(Region(region));
-            texts.push(plain_text("If you don't need "));
-            texts.push(Value(argument_symbol));
-            texts.push(plain_text(
-                ", then you can just remove it. However, if you really do need ",
-            ));
-            texts.push(Value(argument_symbol));
-            texts.push(plain_text(" as an argument of "));
-            texts.push(Value(closure_symbol));
-            texts.push(plain_text(", prefix it with an underscore, like this: \"_"));
-            texts.push(Value(argument_symbol));
-            texts.push(plain_text("\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used."));
+            let line = "\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used.";
+
+            alloc.concat(vec![
+                alloc.symbol_unqualified(closure_symbol),
+                alloc.reflow(" doesn't use "),
+                alloc.symbol_unqualified(argument_symbol),
+                alloc.reflow("."),
+                alloc.region(region),
+                alloc.reflow("If you don't need "),
+                alloc.symbol_unqualified(argument_symbol),
+                alloc.reflow(", then you can just remove it. However, if you really do need "),
+                alloc.symbol_unqualified(argument_symbol),
+                alloc.reflow(" as an argument of "),
+                alloc.symbol_unqualified(closure_symbol),
+                alloc.reflow(", prefix it with an underscore, like this: \"_"),
+                alloc.symbol_unqualified(argument_symbol),
+                alloc.reflow(line),
+            ])
         }
-        Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => {
-            if left_bin_op.value == right_bin_op.value {
-                texts.push(plain_text("Using more than one "));
-                texts.push(BinOp(left_bin_op.value));
-                texts.push(plain_text(
+        Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => alloc
+            .stack(vec![
+                if left_bin_op.value == right_bin_op.value {
+                    alloc.reflow("Using more than one ")
+                .append(alloc.binop(left_bin_op.value))
+                .append(alloc.reflow(
                     " like this requires parentheses, to clarify how things should be grouped.",
                 ))
-            } else {
-                texts.push(plain_text("Using "));
-                texts.push(BinOp(left_bin_op.value));
-                texts.push(plain_text(" and "));
-                texts.push(BinOp(right_bin_op.value));
-                texts.push(plain_text(
+                } else {
+                    (alloc.reflow("Using "))
+                .append(alloc.binop(left_bin_op.value))
+                .append(alloc.reflow(" and "))
+                .append(alloc.binop(right_bin_op.value))
+                .append(alloc.reflow(
                     " together requires parentheses, to clarify how they should be grouped.",
                 ))
-            }
-            texts.push(Region(region));
-        }
+                },
+                alloc.region(region),
+            ]),
         Problem::UnsupportedPattern(_pattern_type, _region) => {
             panic!("TODO implement unsupported pattern report")
         }
         Problem::ShadowingInAnnotation {
             original_region,
             shadow,
-        } => {
-            texts.push(ReportText::RuntimeError(RuntimeError::Shadowing {
+        } => pretty_runtime_error(
+            alloc,
+            RuntimeError::Shadowing {
                 original_region,
                 shadow,
-            }));
-        }
-        Problem::RuntimeError(runtime_error) => {
-            texts.push(ReportText::RuntimeError(runtime_error));
-        }
+            },
+        ),
+        Problem::RuntimeError(runtime_error) => pretty_runtime_error(alloc, runtime_error),
     };
 
     Report {
         title: "SYNTAX PROBLEM".to_string(),
         filename,
-        doc: alloc.nil(),
-    }
-}
-
-fn pretty_runtime_error<'b>(
-    alloc: &'b RocDocAllocator<'b>,
-    runtime_error: RuntimeError,
-) -> RocDocBuilder<'b> {
-    match runtime_error {
-        RuntimeError::Shadowing {
-            original_region,
-            shadow,
-        } => {
-            let line = r#"Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
-
-            alloc.stack(vec![
-                alloc
-                    .text("The ")
-                    .append(alloc.ident(shadow.value))
-                    .append(alloc.reflow(" name is first defined here:")),
-                alloc.region(original_region),
-                alloc.reflow("But then it's defined a second time here:"),
-                alloc.region(shadow.region),
-                alloc.reflow(line),
-            ])
-        }
-
-        RuntimeError::LookupNotInScope(loc_name, options) => {
-            not_found(alloc, loc_name.region, &loc_name.value, "value", options)
-        }
-        RuntimeError::CircularDef(idents, _regions) => match idents.first() {
-            Some(ident) => alloc.stack(vec![alloc
-                .reflow("The ")
-                .append(alloc.ident(ident.value.clone()))
-                .append(alloc.reflow(
-                    " value is defined directly in terms of itself, causing an infinite loop.",
-                ))]),
-            None => alloc.nil(),
-        },
-        other => {
-            //    // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
-            //    UnsupportedPattern(Region),
-            //    UnrecognizedFunctionName(Located<InlinableString>),
-            //    ValueNotExposed {
-            //        module_name: InlinableString,
-            //        ident: InlinableString,
-            //        region: Region,
-            //    },
-            //    ModuleNotImported {
-            //        module_name: InlinableString,
-            //        ident: InlinableString,
-            //        region: Region,
-            //    },
-            //    InvalidPrecedence(PrecedenceProblem, Region),
-            //    MalformedIdentifier(Box<str>, Region),
-            //    MalformedClosure(Region),
-            //    FloatOutsideRange(Box<str>),
-            //    IntOutsideRange(Box<str>),
-            //    InvalidHex(std::num::ParseIntError, Box<str>),
-            //    InvalidOctal(std::num::ParseIntError, Box<str>),
-            //    InvalidBinary(std::num::ParseIntError, Box<str>),
-            //    QualifiedPatternIdent(InlinableString),
-            //    CircularDef(
-            //        Vec<Located<Ident>>,
-            //        Vec<(Region /* pattern */, Region /* expr */)>,
-            //    ),
-            //
-            //    /// When the author specifies a type annotation but no implementation
-            //    NoImplementation,
-            todo!("TODO implement run time error reporting for {:?}", other)
-        }
+        doc,
     }
 }
 
@@ -293,152 +235,82 @@ fn not_found<'b>(
         to_details(default_no, default_yes),
     ])
 }
+fn pretty_runtime_error<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    runtime_error: RuntimeError,
+) -> RocDocBuilder<'b> {
+    match runtime_error {
+        RuntimeError::Shadowing {
+            original_region,
+            shadow,
+        } => {
+            let line = r#"Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
 
-#[derive(Debug, Clone)]
-pub enum ReportText {
-    /// A value. Render it qualified unless it was defined in the current module.
-    Value(Symbol),
+            alloc.stack(vec![
+                alloc
+                    .text("The ")
+                    .append(alloc.ident(shadow.value))
+                    .append(alloc.reflow(" name is first defined here:")),
+                alloc.region(original_region),
+                alloc.reflow("But then it's defined a second time here:"),
+                alloc.region(shadow.region),
+                alloc.reflow(line),
+            ])
+        }
 
-    /// An identifier, should probably be rendered the same way as a symbol.
-    Name(Ident),
-
-    /// A module,
-    Module(ModuleId),
-
-    /// A type. Render it using roc_types::pretty_print for now, but maybe
-    /// do something fancier later.
-    Type(Content),
-
-    TypeProblem(crate::type_error::Problem),
-    RuntimeError(RuntimeError),
-    TypeError(solve::TypeError),
-
-    ErrorTypeInline(ErrorType),
-    ErrorTypeBlock(Box<ReportText>),
-
-    /// Plain text
-    Plain(Box<str>),
-
-    /// Emphasized text (might be bold, italics, a different color, etc)
-    EmText(Box<str>),
-
-    /// A global tag rendered as code (e.g. a monospace font, or with backticks around it).
-    GlobalTag(Box<str>),
-
-    /// A private tag rendered as code (e.g. a monospace font, or with backticks around it).
-    PrivateTag(Symbol),
-
-    /// A record field name rendered as code (e.g. a monospace font, or with backticks around it).
-    RecordField(Box<str>),
-
-    /// A language keyword like `if`, rendered as code (e.g. a monospace font, or with backticks around it).
-    Keyword(Box<str>),
-
-    /// A region in the original source
-    Region(roc_region::all::Region),
-
-    /// A URL, which should be rendered as a hyperlink.
-    Url(Box<str>),
-
-    /// The documentation for this symbol.
-    Docs(Symbol),
-
-    BinOp(roc_parse::operator::BinOp),
-
-    /// Many ReportText that should be concatenated together.
-    Concat(Vec<ReportText>),
-
-    /// Many ReportText that each get separate lines
-    Stack(Vec<ReportText>),
-
-    Intersperse {
-        separator: Box<ReportText>,
-        items: Vec<ReportText>,
-    },
-
-    Indent(usize, Box<ReportText>),
-}
-
-pub fn plain_text(str: &str) -> ReportText {
-    ReportText::Plain(Box::from(str))
-}
-
-pub fn name(ident: Ident) -> ReportText {
-    ReportText::Name(ident)
-}
-
-pub fn em_text(str: &str) -> ReportText {
-    ReportText::EmText(Box::from(str))
-}
-
-pub fn tag_name_text(tag_name: TagName) -> ReportText {
-    match tag_name {
-        TagName::Private(symbol) => ReportText::PrivateTag(symbol),
-        TagName::Global(uppercase) => global_tag_text(uppercase.as_str()),
+        RuntimeError::LookupNotInScope(loc_name, options) => {
+            not_found(alloc, loc_name.region, &loc_name.value, "value", options)
+        }
+        RuntimeError::CircularDef(idents, _regions) => match idents.first() {
+            Some(ident) => alloc.stack(vec![alloc
+                .reflow("The ")
+                .append(alloc.ident(ident.value.clone()))
+                .append(alloc.reflow(
+                    " value is defined directly in terms of itself, causing an infinite loop.",
+                ))]),
+            None => alloc.nil(),
+        },
+        other => {
+            //    // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
+            //    UnsupportedPattern(Region),
+            //    UnrecognizedFunctionName(Located<InlinableString>),
+            //    alloc.symbol_unqualified(NotExposed {
+            //        module_name: InlinableString,
+            //        ident: InlinableString,
+            //        region: Region,
+            //    },
+            //    ModuleNotImported {
+            //        module_name: InlinableString,
+            //        ident: InlinableString,
+            //        region: Region,
+            //    },
+            //    InvalidPrecedence(PrecedenceProblem, Region),
+            //    MalformedIdentifier(Box<str>, Region),
+            //    MalformedClosure(Region),
+            //    FloatOutsideRange(Box<str>),
+            //    IntOutsideRange(Box<str>),
+            //    InvalidHex(std::num::ParseIntError, Box<str>),
+            //    InvalidOctal(std::num::ParseIntError, Box<str>),
+            //    InvalidBinary(std::num::ParseIntError, Box<str>),
+            //    QualifiedPatternIdent(InlinableString),
+            //    CircularDef(
+            //        Vec<Located<Ident>>,
+            //        Vec<(Region /* pattern */, Region /* expr */)>,
+            //    ),
+            //
+            //    /// When the author specifies a type annotation but no implementation
+            //    NoImplementation,
+            todo!("TODO implement run time error reporting for {:?}", other)
+        }
     }
 }
-
-pub fn private_tag_text(symbol: Symbol) -> ReportText {
-    ReportText::PrivateTag(symbol)
-}
-
-pub fn global_tag_text(str: &str) -> ReportText {
-    ReportText::GlobalTag(Box::from(str))
-}
-
-pub fn record_field_text(str: &str) -> ReportText {
-    ReportText::RecordField(Box::from(str))
-}
-
-pub fn keyword_text(str: &str) -> ReportText {
-    ReportText::Keyword(Box::from(str))
-}
-
-pub fn error_type_inline(err: ErrorType) -> ReportText {
-    ReportText::ErrorTypeInline(err)
-}
-
-pub fn url(str: &str) -> ReportText {
-    ReportText::Url(Box::from(str))
-}
-
-pub fn concat(values: Vec<ReportText>) -> ReportText {
-    ReportText::Concat(values)
-}
-
-pub fn separate(values: Vec<ReportText>) -> ReportText {
-    // TODO I think this should be a possibly-breaking space
-    intersperse(plain_text(" "), values)
-}
-
-pub fn intersperse(separator: ReportText, items: Vec<ReportText>) -> ReportText {
-    ReportText::Intersperse {
-        separator: Box::new(separator),
-        items,
-    }
-}
-
-pub const RED_CODE: &str = "\u{001b}[31m";
-pub const WHITE_CODE: &str = "\u{001b}[37m";
-pub const BLUE_CODE: &str = "\u{001b}[34m";
-pub const YELLOW_CODE: &str = "\u{001b}[33m";
-pub const GREEN_CODE: &str = "\u{001b}[42m";
-pub const CYAN_CODE: &str = "\u{001b}[36m";
-pub const MAGENTA_CODE: &str = "\u{001b}[35m";
-
-pub const BOLD_CODE: &str = "\u{001b}[1m";
-
-pub const UNDERLINE_CODE: &str = "\u{001b}[4m";
-
-pub const RESET_CODE: &str = "\u{001b}[0m";
 
 // define custom allocator struct so we can `impl RocDocAllocator` custom helpers
 pub struct RocDocAllocator<'a> {
     upstream: BoxAllocator,
-    subs: &'a mut Subs,
-    home: ModuleId,
     src_lines: &'a [&'a str],
-    interns: &'a Interns,
+    pub home: ModuleId,
+    pub interns: &'a Interns,
 }
 
 pub type RocDocBuilder<'b> = DocBuilder<'b, RocDocAllocator<'b>, Annotation>;
@@ -469,15 +341,9 @@ where
 }
 
 impl<'a> RocDocAllocator<'a> {
-    pub fn new(
-        subs: &'a mut Subs,
-        src_lines: &'a [&'a str],
-        home: ModuleId,
-        interns: &'a Interns,
-    ) -> Self {
+    pub fn new(src_lines: &'a [&'a str], home: ModuleId, interns: &'a Interns) -> Self {
         RocDocAllocator {
             upstream: BoxAllocator,
-            subs,
             home,
             src_lines,
             interns,
@@ -514,6 +380,12 @@ impl<'a> RocDocAllocator<'a> {
 
     pub fn type_str(&'a self, content: &str) -> DocBuilder<'a, Self, Annotation> {
         self.string(content.to_owned()).annotate(Annotation::Alias)
+    }
+
+    pub fn type_variable(&'a self, content: Lowercase) -> DocBuilder<'a, Self, Annotation> {
+        // currently not annotated
+        self.string(content.to_string())
+            .annotate(Annotation::TypeVariable)
     }
 
     pub fn tag_name(&'a self, tn: TagName) -> DocBuilder<'a, Self, Annotation> {
@@ -569,9 +441,22 @@ impl<'a> RocDocAllocator<'a> {
         self.text(format!("{}", uppercase))
             .annotate(Annotation::GlobalTag)
     }
+
     pub fn record_field(&'a self, lowercase: Lowercase) -> DocBuilder<'a, Self, Annotation> {
         self.text(format!(".{}", lowercase))
             .annotate(Annotation::RecordField)
+    }
+
+    pub fn module(&'a self, module_id: ModuleId) -> DocBuilder<'a, Self, Annotation> {
+        self.text(format!("{}", self.interns.module_name(module_id)))
+            .annotate(Annotation::Module)
+    }
+
+    pub fn binop(
+        &'a self,
+        content: roc_parse::operator::BinOp,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        self.text(content.to_string()).annotate(Annotation::BinOp)
     }
 
     pub fn type_block(
@@ -579,6 +464,12 @@ impl<'a> RocDocAllocator<'a> {
         content: DocBuilder<'a, Self, Annotation>,
     ) -> DocBuilder<'a, Self, Annotation> {
         content.annotate(Annotation::TypeBlock).indent(4)
+    }
+
+    pub fn hint(&'a self) -> DocBuilder<'a, Self, Annotation> {
+        self.text("Hint:")
+            .append(self.softline())
+            .annotate(Annotation::Hint)
     }
 
     pub fn region(&'a self, region: roc_region::all::Region) -> DocBuilder<'a, Self, Annotation> {
@@ -645,6 +536,10 @@ impl<'a> RocDocAllocator<'a> {
                     .append(rest_of_line);
 
                 result = result.append(source_line);
+
+                if i != region.end_line {
+                    result = result.append(self.line())
+                }
             }
 
             result
@@ -748,6 +643,7 @@ where
                 self.write_str("<")?;
             }
             GlobalTag | PrivateTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
+            | TypeVariable
                 if !self.in_type_block =>
             {
                 self.write_str("`")?;
@@ -775,6 +671,7 @@ where
                     self.write_str(">")?;
                 }
                 GlobalTag | PrivateTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
+                | TypeVariable
                     if !self.in_type_block =>
                 {
                     self.write_str("`")?;
@@ -876,368 +773,5 @@ where
             },
         }
         Ok(())
-    }
-}
-
-impl ReportText {
-    /// General idea: this function puts all the characters in. Any styling (emphasis, colors,
-    /// monospace font, etc) is done in the CiWrite and ColorWrite `RenderAnnotated` instances.
-    pub fn pretty<'b>(
-        self,
-        alloc: &'b RocDocAllocator<'b>,
-    ) -> DocBuilder<'b, RocDocAllocator<'b>, Annotation> {
-        use ReportText::*;
-
-        match self {
-            Url(url) => alloc.text(url.into_string()).annotate(Annotation::Url),
-            Plain(string) => alloc
-                .text(string.into_string())
-                .annotate(Annotation::PlainText),
-            EmText(string) => alloc
-                .text(string.into_string())
-                .annotate(Annotation::Emphasized),
-            Keyword(string) => alloc
-                .text(string.into_string())
-                .annotate(Annotation::Keyword),
-            GlobalTag(string) => alloc
-                .text(string.into_string())
-                .annotate(Annotation::GlobalTag),
-            RecordField(string) => alloc
-                .text(format!(".{}", string))
-                .annotate(Annotation::RecordField),
-            PrivateTag(symbol) => alloc.private_tag_name(symbol),
-            Value(symbol) => alloc.symbol_foreign_qualified(symbol),
-
-            Module(module_id) => alloc
-                .text(format!("{}", alloc.interns.module_name(module_id)))
-                .annotate(Annotation::Module),
-            Type(content) => match content {
-                Content::FlexVar(_) | Content::RigidVar(_) => alloc
-                    .text(content_to_string(
-                        content,
-                        alloc.subs,
-                        alloc.home,
-                        alloc.interns,
-                    ))
-                    .annotate(Annotation::TypeVariable),
-
-                Content::Structure(_) => alloc
-                    .text(content_to_string(
-                        content,
-                        alloc.subs,
-                        alloc.home,
-                        alloc.interns,
-                    ))
-                    .annotate(Annotation::Structure),
-
-                Content::Alias(_, _, _) => alloc
-                    .text(content_to_string(
-                        content,
-                        alloc.subs,
-                        alloc.home,
-                        alloc.interns,
-                    ))
-                    .annotate(Annotation::Alias),
-
-                Content::Error => alloc.text(content_to_string(
-                    content,
-                    alloc.subs,
-                    alloc.home,
-                    alloc.interns,
-                )),
-            },
-            ErrorTypeInline(error_type) => alloc
-                .nil()
-                .append(alloc.hardline())
-                .append(
-                    alloc
-                        .text(write_error_type(alloc.home, alloc.interns, error_type))
-                        .indent(4),
-                )
-                .append(alloc.hardline()),
-
-            ErrorTypeBlock(error_type) => alloc
-                .nil()
-                .append(alloc.hardline())
-                .append(
-                    error_type
-                        .pretty(alloc)
-                        .indent(4)
-                        .annotate(Annotation::TypeBlock),
-                )
-                .append(alloc.hardline()),
-
-            Indent(n, nested) => {
-                let rest = nested.pretty(alloc);
-                alloc.nil().append(rest).indent(n)
-            }
-            Docs(_) => {
-                panic!("TODO implment docs");
-            }
-            Concat(report_texts) => {
-                alloc.concat(report_texts.into_iter().map(|rep| rep.pretty(alloc)))
-            }
-            Stack(report_texts) => alloc
-                .intersperse(
-                    report_texts.into_iter().map(|rep| (rep.pretty(alloc))),
-                    alloc.hardline(),
-                )
-                .append(alloc.hardline()),
-            Intersperse { separator, items } => alloc.intersperse(
-                items
-                    .into_iter()
-                    .map(|rep| (rep.pretty(alloc)))
-                    .collect::<Vec<_>>(),
-                separator.pretty(alloc),
-            ),
-            BinOp(bin_op) => alloc.text(bin_op.to_string()).annotate(Annotation::BinOp),
-            Region(region) => {
-                let max_line_number_length = (region.end_line + 1).to_string().len();
-                let indent = 2;
-
-                let body = if region.start_line == region.end_line {
-                    let i = region.start_line;
-
-                    let line_number_string = (i + 1).to_string();
-                    let line_number = line_number_string;
-                    let this_line_number_length = line_number.len();
-
-                    let line = alloc.src_lines[i as usize];
-                    let rest_of_line = if line.trim().is_empty() {
-                        alloc.nil()
-                    } else {
-                        alloc
-                            .nil()
-                            .append(alloc.text(line).indent(2))
-                            .annotate(Annotation::CodeBlock)
-                    };
-
-                    let source_line = alloc
-                        .line()
-                        .append(
-                            alloc
-                                .text(" ".repeat(max_line_number_length - this_line_number_length)),
-                        )
-                        .append(alloc.text(line_number).annotate(Annotation::LineNumber))
-                        .append(alloc.text(" ┆").annotate(Annotation::GutterBar))
-                        .append(rest_of_line);
-
-                    let highlight_line = alloc
-                        .line()
-                        .append(alloc.text(" ".repeat(max_line_number_length)))
-                        .append(alloc.text(" ┆").annotate(Annotation::GutterBar))
-                        .append(
-                            alloc
-                                .text(" ".repeat(region.start_col as usize))
-                                .indent(indent),
-                        )
-                        .append(
-                            alloc
-                                .text("^".repeat((region.end_col - region.start_col) as usize))
-                                .annotate(Annotation::Error),
-                        );
-
-                    source_line.append(highlight_line)
-                } else {
-                    let mut result = alloc.nil();
-                    for i in region.start_line..=region.end_line {
-                        let line_number_string = (i + 1).to_string();
-                        let line_number = line_number_string;
-                        let this_line_number_length = line_number.len();
-
-                        let line = alloc.src_lines[i as usize];
-                        let rest_of_line = if !line.trim().is_empty() {
-                            alloc
-                                .text(line)
-                                .annotate(Annotation::CodeBlock)
-                                .indent(indent)
-                        } else {
-                            alloc.nil()
-                        };
-
-                        let source_line =
-                            alloc
-                                .line()
-                                .append(alloc.text(
-                                    " ".repeat(max_line_number_length - this_line_number_length),
-                                ))
-                                .append(alloc.text(line_number).annotate(Annotation::LineNumber))
-                                .append(alloc.text(" ┆").annotate(Annotation::GutterBar))
-                                .append(alloc.text(">").annotate(Annotation::Error))
-                                .append(rest_of_line);
-
-                        result = result.append(source_line);
-                    }
-
-                    result
-                };
-                alloc
-                    .nil()
-                    .append(alloc.line())
-                    .append(body)
-                    .append(alloc.line())
-                    .append(alloc.line())
-            }
-            Name(ident) => alloc
-                .text(format!("{}", ident.as_inline_str()))
-                .annotate(Annotation::Symbol),
-            TypeProblem(problem) => Self::type_problem_to_pretty(alloc, problem),
-            RuntimeError(problem) => pretty_runtime_error(alloc, problem),
-            TypeError(problem) => todo!(),
-        }
-    }
-
-    fn type_problem_to_pretty<'b>(
-        alloc: &'b RocDocAllocator<'b>,
-        problem: crate::type_error::Problem,
-    ) -> DocBuilder<'b, RocDocAllocator<'b>, Annotation> {
-        use crate::type_error::suggest;
-        use crate::type_error::Problem::*;
-
-        match problem {
-            FieldTypo(typo, possibilities) => {
-                let suggestions = suggest::sort(typo.as_str(), possibilities);
-
-                match suggestions.get(0) {
-                    None => alloc.nil(),
-                    Some(nearest) => {
-                        let typo_str = format!("{}", typo);
-                        let nearest_str = format!("{}", nearest);
-
-                        let found = alloc.text(typo_str).annotate(Annotation::Typo);
-                        let suggestion =
-                            alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);
-
-                        let hint1 = Self::hint(alloc)
-                            .append(alloc.reflow("Seems like a record field typo. Maybe "))
-                            .append(found)
-                            .append(alloc.reflow(" should be "))
-                            .append(suggestion)
-                            .append(alloc.text("?"));
-
-                        let hint2 = Self::hint(alloc).append(alloc.reflow(ADD_ANNOTATIONS));
-
-                        hint1
-                            .append(alloc.line())
-                            .append(alloc.line())
-                            .append(hint2)
-                    }
-                }
-            }
-            FieldsMissing(missing) => match missing.split_last() {
-                None => alloc.nil(),
-                Some((f1, [])) => Self::hint(alloc)
-                    .append(alloc.reflow("Looks like the "))
-                    .append(f1.as_str().to_owned())
-                    .append(alloc.reflow(" field is missing.")),
-                Some((last, init)) => {
-                    let separator = alloc.reflow(", ");
-
-                    Self::hint(alloc)
-                        .append(alloc.reflow("Looks like the "))
-                        .append(
-                            alloc
-                                .intersperse(init.iter().map(|v| v.as_str().to_owned()), separator),
-                        )
-                        .append(alloc.reflow(" and "))
-                        .append(alloc.text(last.as_str().to_owned()))
-                        .append(alloc.reflow(" fields are missing."))
-                }
-            },
-            TagTypo(typo, possibilities_tn) => {
-                let possibilities = possibilities_tn
-                    .into_iter()
-                    .map(|tag_name| tag_name.into_string(alloc.interns, alloc.home))
-                    .collect();
-                let typo_str = format!("{}", typo.into_string(alloc.interns, alloc.home));
-                let suggestions = suggest::sort(&typo_str, possibilities);
-
-                match suggestions.get(0) {
-                    None => alloc.nil(),
-                    Some(nearest) => {
-                        let nearest_str = format!("{}", nearest);
-
-                        let found = alloc.text(typo_str).annotate(Annotation::Typo);
-                        let suggestion =
-                            alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);
-
-                        let hint1 = Self::hint(alloc)
-                            .append(alloc.reflow("Seems like a tag typo. Maybe "))
-                            .append(found)
-                            .append(" should be ")
-                            .append(suggestion)
-                            .append(alloc.text("?"));
-
-                        let hint2 = Self::hint(alloc).append(alloc.reflow(ADD_ANNOTATIONS));
-
-                        hint1
-                            .append(alloc.line())
-                            .append(alloc.line())
-                            .append(hint2)
-                    }
-                }
-            }
-            ArityMismatch(found, expected) => {
-                let line = if found < expected {
-                    format!(
-                        "It looks like it takes too few arguments. I was expecting {} more.",
-                        expected - found
-                    )
-                } else {
-                    format!(
-                        "It looks like it takes too many arguments. I'm seeing {} extra.",
-                        found - expected
-                    )
-                };
-
-                Self::hint(alloc).append(line)
-            }
-
-            BadRigidVar(x, tipe) => {
-                use ErrorType::*;
-
-                let bad_rigid_var = |name: &str, a_thing| {
-                    let text = format!(
-                        r#"The type annotation uses the type variable `{}` to say that this definition can produce any type of value. But in the body I see that it will only produce {} of a single specific type. Maybe change the type annotation to be more specific? Maybe change the code to be more general?"#,
-                        name, a_thing
-                    );
-
-                    Self::hint(alloc).append(alloc.string(text))
-                };
-
-                let bad_double_rigid = |a, b| {
-                    let text = format!(
-                        r#"Your type annotation uses {} and {} as separate type variables. Your code seems to be saying they are the same though. Maybe they should be the same your type annotation? Maybe your code uses them in a weird way?"#,
-                        a, b
-                    );
-
-                    Self::hint(alloc).append(alloc.string(text))
-                };
-
-                match tipe {
-                    Infinite | Error | FlexVar(_) => alloc.nil(),
-                    RigidVar(y) => bad_double_rigid(x.as_str(), y.as_str()),
-                    Function(_, _) => bad_rigid_var(x.as_str(), "a function value"),
-                    Record(_, _) => bad_rigid_var(x.as_str(), "a record value"),
-                    TagUnion(_, _) | RecursiveTagUnion(_, _, _) => {
-                        bad_rigid_var(x.as_str(), "a tag value")
-                    }
-                    Alias(symbol, _, _) | Type(symbol, _) => bad_rigid_var(
-                        x.as_str(),
-                        &format!("a {} value", symbol.ident_string(alloc.interns)),
-                    ),
-                    Boolean(_) => bad_rigid_var(x.as_str(), "a uniqueness attribute value"),
-                }
-            }
-
-            _ => todo!(),
-        }
-    }
-
-    fn hint<'b>(alloc: &'b RocDocAllocator<'b>) -> DocBuilder<'b, RocDocAllocator<'b>, Annotation> {
-        alloc
-            .text("Hint:")
-            .append(alloc.softline())
-            .annotate(Annotation::Hint)
     }
 }
