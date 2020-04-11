@@ -36,9 +36,14 @@ pub struct WhenBranch<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppHeader<'a> {
+    pub name: Loc<ModuleName<'a>>,
+    pub provides: Vec<'a, Loc<ExposesEntry<'a>>>,
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
 
     // Potential comments and newlines - these will typically all be empty.
+    pub after_interface: &'a [CommentOrNewline<'a>],
+    pub before_provides: &'a [CommentOrNewline<'a>],
+    pub after_provides: &'a [CommentOrNewline<'a>],
     pub before_imports: &'a [CommentOrNewline<'a>],
     pub after_imports: &'a [CommentOrNewline<'a>],
 }

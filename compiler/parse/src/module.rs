@@ -127,14 +127,49 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
 
 #[inline(always)]
 fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
-    move |_, _| {
-        panic!("TODO parse app header");
-    }
+    parser::map(
+        and!(
+            skip_first!(string("app"), and!(space1(1), loc!(module_name()))),
+            and!(provides(), imports())
+        ),
+        |(
+            (after_interface, name),
+            (
+                ((before_provides, after_provides), provides),
+                ((before_imports, after_imports), imports),
+            ),
+        )| {
+            AppHeader {
+                name,
+                provides,
+                imports,
+                after_interface,
+                before_provides,
+                after_provides,
+                before_imports,
+                after_imports,
+            }
+        },
+    )
 }
 
 #[inline(always)]
 pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>> {
     zero_or_more!(space0_around(loc(def(0)), 0))
+}
+
+#[inline(always)]
+fn provides<'a>() -> impl Parser<
+    'a,
+    (
+        (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
+        Vec<'a, Located<ExposesEntry<'a>>>,
+    ),
+> {
+    and!(
+        and!(skip_second!(space1(1), string("provides")), space1(1)),
+        collection!(char('['), loc!(exposes_entry()), char(','), char(']'), 1)
+    )
 }
 
 #[inline(always)]
