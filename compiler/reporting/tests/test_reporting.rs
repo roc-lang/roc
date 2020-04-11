@@ -12,9 +12,8 @@ mod test_reporting {
     use crate::helpers::test_home;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_reporting::report::{
-        can_problem, em_text, plain_text, url, Report, ReportText, BLUE_CODE, BOLD_CODE, CYAN_CODE,
-        DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE,
-        WHITE_CODE, YELLOW_CODE,
+        can_problem, Report, BLUE_CODE, BOLD_CODE, CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE,
+        MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE, WHITE_CODE, YELLOW_CODE,
     };
     use roc_reporting::type_error::type_problem;
     use roc_types::pretty_print::name_all_type_vars;
@@ -22,10 +21,10 @@ mod test_reporting {
     use std::path::PathBuf;
     // use roc_region::all;
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
-    use roc_reporting::report::ReportText::{Concat, Module, Region, Type, Value};
+    use roc_reporting::report;
+    use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
-    use roc_types::subs::Content::{FlexVar, RigidVar, Structure};
-    use roc_types::subs::FlatType::EmptyRecord;
+    use std::fmt::Write;
 
     fn filename_from_string(str: &str) -> PathBuf {
         let mut filename = PathBuf::new();
@@ -34,11 +33,10 @@ mod test_reporting {
         return filename;
     }
 
-    // use roc_problem::can;
-    fn to_simple_report(text: ReportText) -> Report {
+    fn to_simple_report<'b>(doc: RocDocBuilder<'b>) -> Report<'b> {
         Report {
-            title: "SYNTAX PROBLEM".to_string(),
-            text: text,
+            title: "".to_string(),
+            doc: doc,
             filename: filename_from_string(r"\code\proj\Main.roc"),
         }
     }
@@ -48,7 +46,6 @@ mod test_reporting {
     ) -> (
         Vec<solve::TypeError>,
         Vec<roc_problem::can::Problem>,
-        Subs,
         ModuleId,
         Interns,
     ) {
@@ -73,23 +70,11 @@ mod test_reporting {
 
         name_all_type_vars(var, &mut subs);
 
-        (unify_problems, can_problems, subs, home, interns)
-    }
-
-    fn report_renders_as_from_src(src: &str, report: Report, expected_rendering: &str) {
-        let (_type_problems, _can_problems, mut subs, home, interns) = infer_expr_help(src);
-        let mut buf: String = String::new();
-        let src_lines: Vec<&str> = src.split('\n').collect();
-
-        report
-            .text
-            .render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
-
-        assert_eq!(buf, expected_rendering);
+        (unify_problems, can_problems, home, interns)
     }
 
     fn report_problem_as(src: &str, expected_rendering: &str) {
-        let (type_problems, can_problems, mut subs, home, interns) = infer_expr_help(src);
+        let (type_problems, can_problems, home, interns) = infer_expr_help(src);
 
         let mut buf: String = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -97,27 +82,87 @@ mod test_reporting {
         match can_problems.first() {
             None => {}
             Some(problem) => {
+                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
                 let report = can_problem(
+                    &alloc,
                     filename_from_string(r"\code\proj\Main.roc"),
                     problem.clone(),
                 );
-                report
-                    .text
-                    .render_ci(&mut buf, &mut subs, home, &src_lines, &interns)
+                report.render_ci(&mut buf, &alloc);
             }
         }
 
-        for problem in type_problems {
+        if !can_problems.is_empty() && !type_problems.is_empty() {
+            write!(buf, "\n\n").unwrap();
+        }
+
+        let mut it = type_problems.into_iter().peekable();
+        while let Some(problem) = it.next() {
+            let alloc = RocDocAllocator::new(&src_lines, home, &interns);
             let report = type_problem(
+                &alloc,
                 filename_from_string(r"\code\proj\Main.roc"),
                 problem.clone(),
             );
-            report
-                .text
-                .render_ci(&mut buf, &mut subs, home, &src_lines, &interns)
+            report.render_ci(&mut buf, &alloc);
+
+            if it.peek().is_some() {
+                write!(buf, "\n\n").unwrap();
+            }
+        }
+
+        if !buf.is_empty() {
+            write!(buf, "\n").unwrap();
         }
 
         assert_eq!(buf, expected_rendering);
+    }
+
+    fn color_report_problem_as(src: &str, expected_rendering: &str) {
+        let (type_problems, can_problems, home, interns) = infer_expr_help(src);
+
+        let mut buf: String = String::new();
+        let src_lines: Vec<&str> = src.split('\n').collect();
+
+        match can_problems.first() {
+            None => {}
+            Some(problem) => {
+                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+                let report = can_problem(
+                    &alloc,
+                    filename_from_string(r"\code\proj\Main.roc"),
+                    problem.clone(),
+                );
+                report.render_color_terminal(&mut buf, &alloc, &report::DEFAULT_PALETTE);
+            }
+        }
+
+        if !can_problems.is_empty() && !type_problems.is_empty() {
+            write!(buf, "\n\n").unwrap();
+        }
+
+        let mut it = type_problems.into_iter().peekable();
+        while let Some(problem) = it.next() {
+            let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+            let report = type_problem(
+                &alloc,
+                filename_from_string(r"\code\proj\Main.roc"),
+                problem.clone(),
+            );
+            report.render_color_terminal(&mut buf, &alloc, &report::DEFAULT_PALETTE);
+
+            if it.peek().is_some() {
+                write!(buf, "\n\n").unwrap();
+            }
+        }
+
+        if !buf.is_empty() {
+            write!(buf, "\n").unwrap();
+        }
+
+        let readable = human_readable(&buf);
+
+        assert_eq!(readable, expected_rendering);
     }
 
     fn human_readable(str: &str) -> String {
@@ -134,152 +179,6 @@ mod test_reporting {
             .replace(UNDERLINE_CODE, "<underline>");
     }
 
-    fn report_renders_in_color_from_src(src: &str, report: Report, expected_rendering: &str) {
-        let (_type_problems, _can_problems, mut subs, home, interns) = infer_expr_help(src);
-        let mut buf: String = String::new();
-        let src_lines: Vec<&str> = src.split('\n').collect();
-
-        report.text.render_color_terminal(
-            &mut buf,
-            &mut subs,
-            home,
-            &src_lines,
-            &interns,
-            &DEFAULT_PALETTE,
-        );
-
-        assert_eq!(human_readable(&buf), expected_rendering);
-    }
-
-    fn report_renders_in_color(report: Report, expected_rendering: &str) {
-        report_renders_in_color_from_src(
-            indoc!(
-                r#"
-                    x = 1
-                    y = 2
-
-                    x
-                "#
-            ),
-            report,
-            expected_rendering,
-        )
-    }
-
-    fn report_renders_as(report: Report, expected_rendering: &str) {
-        report_renders_as_from_src(
-            indoc!(
-                r#"
-                    x = 1
-                    y = 2
-
-                    x
-                "#
-            ),
-            report,
-            expected_rendering,
-        )
-    }
-
-    #[test]
-    fn report_plain() {
-        report_renders_as(to_simple_report(plain_text("y")), "y");
-    }
-
-    #[test]
-    fn report_emphasized_text() {
-        report_renders_as(to_simple_report(em_text("y")), "*y*");
-    }
-
-    #[test]
-    fn report_url() {
-        report_renders_as(
-            to_simple_report(url("package.roc.org")),
-            "<package.roc.org>",
-        );
-    }
-
-    #[test]
-    fn report_symbol() {
-        let src: &str = indoc!(
-            r#"
-                x = 1
-                y = 2
-
-                x
-            "#
-        );
-
-        let (_type_problems, _can_problems, mut subs, home, interns) = infer_expr_help(src);
-
-        let mut buf = String::new();
-        let src_lines: Vec<&str> = src.split('\n').collect();
-
-        to_simple_report(Value(interns.symbol(test_home(), "x".into())))
-            .text
-            .render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
-
-        assert_eq!(buf, "`x`");
-    }
-
-    #[test]
-    fn report_module() {
-        let src: &str = indoc!(
-            r#"
-                x = 1
-                y = 2
-
-                x
-            "#
-        );
-
-        let (_type_problems, _can_problems, mut subs, home, mut interns) = infer_expr_help(src);
-
-        let mut buf = String::new();
-        let src_lines: Vec<&str> = src.split('\n').collect();
-        let module_id = interns.module_id(&"Main".into());
-
-        to_simple_report(Module(module_id))
-            .text
-            .render_ci(&mut buf, &mut subs, home, &src_lines, &interns);
-
-        assert_eq!(buf, "Main");
-    }
-
-    #[test]
-    fn report_wildcard() {
-        report_renders_as(to_simple_report(Type(FlexVar(None))), "*");
-    }
-
-    #[test]
-    fn report_flex_var() {
-        report_renders_as(to_simple_report(Type(FlexVar(Some("msg".into())))), "msg");
-    }
-
-    #[test]
-    fn report_rigid_var() {
-        report_renders_as(to_simple_report(Type(RigidVar("Str".into()))), "Str");
-    }
-
-    #[test]
-    fn report_empty_record() {
-        report_renders_as(to_simple_report(Type(Structure(EmptyRecord))), "{}");
-    }
-
-    #[test]
-    fn report_batch_of_plain_text() {
-        let mut report_texts = Vec::new();
-
-        report_texts.push(plain_text("Wait a second. "));
-        report_texts.push(plain_text("There is a problem here. -> "));
-        report_texts.push(em_text("y"));
-
-        report_renders_as(
-            to_simple_report(Concat(report_texts)),
-            "Wait a second. There is a problem here. -> *y*",
-        );
-    }
-
     #[test]
     fn report_unused_def() {
         report_problem_as(
@@ -293,12 +192,16 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
                 `y` is not used anywhere in your code.
 
                 2 ┆  y = 2
                   ┆  ^
 
-                If you didn't intend on using `y` then remove it so future readers of your code don't wonder why it is there."#
+                If you didn't intend on using `y` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
             ),
         )
     }
@@ -318,7 +221,9 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                `i` is first defined here:
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                The `i` name is first defined here:
 
                 1 ┆  i = 1
                   ┆  ^
@@ -328,7 +233,9 @@ mod test_reporting {
                 3 ┆  s = \i ->
                   ┆       ^
 
-                Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#
+                Since these variables have the same name, it's easy to use the wrong
+                one on accident. Give one of them a new name.
+                "#
             ),
         )
     }
@@ -350,7 +257,9 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                `Booly` is first defined here:
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                The `Booly` name is first defined here:
 
                 1 ┆  Booly : [ Yes, No ]
                   ┆  ^^^^^^^^^^^^^^^^^^^
@@ -360,7 +269,9 @@ mod test_reporting {
                 3 ┆  Booly : [ Yes, No, Maybe ]
                   ┆  ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#
+                Since these variables have the same name, it's easy to use the wrong
+                one on accident. Give one of them a new name.
+                "#
             ),
         )
     }
@@ -446,11 +357,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                Using != and == together requires parentheses, to clarify how they should be grouped.
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                Using != and == together requires parentheses, to clarify how they
+                should be grouped.
 
                 3 ┆      if selectedId != thisId == adminsId then
                   ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
                 "#
             ),
         )
@@ -474,12 +387,14 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                Using more than one == like this requires parentheses, to clarify how things should be grouped.
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                Using more than one == like this requires parentheses, to clarify how
+                things should be grouped.
 
                 2 ┆>      1
                 3 ┆>          == 2
                 4 ┆>          == 3
-
                 "#
             ),
         )
@@ -541,24 +456,6 @@ mod test_reporting {
     // }
 
     #[test]
-    fn report_plain_text_color() {
-        report_renders_in_color(to_simple_report(plain_text("y")), "<white>y<reset>");
-    }
-
-    #[test]
-    fn report_em_text_color() {
-        report_renders_in_color(to_simple_report(em_text("HELLO!")), "<bold>HELLO!<reset>");
-    }
-
-    #[test]
-    fn report_url_color() {
-        report_renders_in_color(
-            to_simple_report(url("www.roc.com/blog")),
-            "<underline>www.roc.com/blog<reset>",
-        );
-    }
-
-    #[test]
     fn report_value_color() {
         let src: &str = indoc!(
             r#"
@@ -568,21 +465,18 @@ mod test_reporting {
             "#
         );
 
-        let (_type_problems, _can_problems, mut subs, home, interns) = infer_expr_help(src);
+        let (_type_problems, _can_problems, home, interns) = infer_expr_help(src);
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
 
-        to_simple_report(Value(
-            interns.symbol(test_home(), "activityIndicatorLarge".into()),
-        ))
-        .text
-        .render_color_terminal(
+        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+        let symbol = interns.symbol(test_home(), "activityIndicatorLarge".into());
+
+        to_simple_report(alloc.symbol_unqualified(symbol)).render_color_terminal(
             &mut buf,
-            &mut subs,
-            home,
-            &src_lines,
-            &interns,
+            &alloc,
             &DEFAULT_PALETTE,
         );
 
@@ -600,72 +494,25 @@ mod test_reporting {
             "#
         );
 
-        let (_type_problems, _can_problems, mut subs, home, mut interns) = infer_expr_help(src);
+        let (_type_problems, _can_problems, home, mut interns) = infer_expr_help(src);
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
         let module_id = interns.module_id(&"Util.Int".into());
 
-        to_simple_report(Module(module_id))
-            .text
-            .render_color_terminal(
-                &mut buf,
-                &mut subs,
-                home,
-                &src_lines,
-                &interns,
-                &DEFAULT_PALETTE,
-            );
+        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+        to_simple_report(alloc.module(module_id)).render_color_terminal(
+            &mut buf,
+            &alloc,
+            &DEFAULT_PALETTE,
+        );
 
         assert_eq!(human_readable(&buf), "<green>Util.Int<reset>");
     }
 
     #[test]
-    fn report_wildcard_in_color() {
-        report_renders_in_color(to_simple_report(Type(FlexVar(None))), "<yellow>*<reset>");
-    }
-
-    #[test]
-    fn report_flex_var_in_color() {
-        report_renders_in_color(
-            to_simple_report(Type(FlexVar(Some("msg".into())))),
-            "<yellow>msg<reset>",
-        );
-    }
-
-    #[test]
-    fn report_rigid_var_in_color() {
-        report_renders_in_color(
-            to_simple_report(Type(RigidVar("Str".into()))),
-            "<yellow>Str<reset>",
-        );
-    }
-
-    #[test]
-    fn report_empty_record_in_color() {
-        report_renders_in_color(
-            to_simple_report(Type(Structure(EmptyRecord))),
-            "<green>{}<reset>",
-        );
-    }
-
-    #[test]
-    fn report_batch_in_color() {
-        let mut report_texts = Vec::new();
-
-        report_texts.push(Type(RigidVar("List".into())));
-        report_texts.push(plain_text(" "));
-        report_texts.push(Type(Structure(EmptyRecord)));
-
-        report_renders_in_color(
-            to_simple_report(Concat(report_texts)),
-            "<yellow>List<reset><white> <reset><green>{}<reset>",
-        );
-    }
-
-    #[test]
     fn report_region_in_color() {
-        report_renders_in_color_from_src(
+        color_report_problem_as(
             indoc!(
                 r#"
                     isDisabled = \user -> user.isAdmin
@@ -674,129 +521,22 @@ mod test_reporting {
                         |> isDisabled
                 "#
             ),
-            to_simple_report(Region(roc_region::all::Region {
-                start_line: 0,
-                end_line: 3,
-                start_col: 0,
-                end_col: 0,
-            })),
             indoc!(
                 r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
 
+                I cannot find a `theAdmin` value
 
-                    <cyan>1<reset><magenta> ┆<reset><red>><reset>  <white>isDisabled = \user -> user.isAdmin<reset>
-                    <cyan>2<reset><magenta> ┆<reset><red>><reset>
-                    <cyan>3<reset><magenta> ┆<reset><red>><reset>  <white>theAdmin<reset>
-                    <cyan>4<reset><magenta> ┆<reset><red>><reset>  <white>    |> isDisabled<reset>
+                <cyan>3<reset><magenta> ┆<reset><white>  theAdmin<reset>
+                 <magenta> ┆<reset>  <red>^^^^^^^^<reset>
 
+                these names seem close though:
+
+                    Num
+                    Set
+                    Result
+                    Int
                 "#
-            ),
-        );
-    }
-
-    #[test]
-    fn report_region() {
-        report_renders_as_from_src(
-            indoc!(
-                r#"
-                    x = 1
-                    y = 2
-                    f = \a -> a + 4
-
-                    f x
-                "#
-            ),
-            to_simple_report(Region(roc_region::all::Region {
-                start_line: 1,
-                end_line: 3,
-                start_col: 0,
-                end_col: 0,
-            })),
-            indoc!(
-                r#"
-
-
-                2 ┆>  y = 2
-                3 ┆>  f = \a -> a + 4
-                4 ┆>
-
-                "#
-            ),
-        );
-    }
-
-    #[test]
-    fn report_region_line_number_length_edge_case() {
-        // the highest line number is 9, but it's rendered as 10.
-        // Make sure that we render the line number as 2-wide
-        report_renders_as_from_src(
-            indoc!(
-                r#"
-
-
-
-
-                    x = 1
-                    y = 2
-                    f = \a -> a + 4
-
-                    f x
-                "#
-            ),
-            to_simple_report(Region(roc_region::all::Region {
-                start_line: 7,
-                end_line: 9,
-                start_col: 0,
-                end_col: 0,
-            })),
-            indoc!(
-                r#"
-
-
-                 8 ┆>
-                 9 ┆>  f x
-                10 ┆>
-
-                "#
-            ),
-        );
-    }
-
-    #[test]
-    fn report_region_different_line_number_lengths() {
-        report_renders_as_from_src(
-            indoc!(
-                r#"
-                    x = 1
-
-
-
-
-
-
-
-
-                    y = 2
-                    f = \a -> a + 4
-
-                    f x
-                "#
-            ),
-            to_simple_report(Region(roc_region::all::Region {
-                start_line: 8,
-                end_line: 10,
-                start_col: 0,
-                end_col: 0,
-            })),
-            indoc!(
-                r#"
-
-
-                     9 ┆>
-                    10 ┆>  y = 2
-                    11 ┆>  f = \a -> a + 4
-
-                    "#
             ),
         );
     }
@@ -857,6 +597,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 This `if` condition needs to be a Bool:
 
                 1 ┆  if "foo" then 2 else 3
@@ -884,6 +626,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 This `if` guard condition needs to be a Bool:
 
                 2 ┆      2 if 1 -> 0x0
@@ -909,6 +653,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 This `if` has an `else` branch with a different type from its `then` branch:
 
                 1 ┆  if True then 2 else "foo"
@@ -938,6 +684,8 @@ mod test_reporting {
     //         ),
     //         indoc!(
     //             r#"
+    //  -- TYPE MISMATCH ---------------------------------------------------------------
+
     //             The 2nd branch of this `if` does not match all the previous branches:
 
     //             1 ┆  if True then 2 else "foo"
@@ -968,6 +716,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 2nd branch of this `when` does not match all the previous branches:
 
                 3 ┆      3 -> {}
@@ -997,6 +747,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 3rd element of this list does not match all the previous elements:
 
                 1 ┆  [ 1, 3, "foo" ]
@@ -1029,6 +781,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 I cannot update the `.foo` field like this:
 
                 4 ┆  { x & foo: "bar" }
@@ -1121,15 +875,18 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- CIRCULAR TYPE ---------------------------------------------------------------
+
                 I'm inferring a weird self-referential type for `g`:
 
                 1 ┆  f = \g -> g g
                   ┆       ^
 
-                Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
 
                     ∞ -> a
-
                 "#
             ),
         )
@@ -1147,15 +904,18 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- CIRCULAR TYPE ---------------------------------------------------------------
+
                 I'm inferring a weird self-referential type for `f`:
 
                 1 ┆  f = \x -> f [x]
                   ┆  ^
 
-                Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely.
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
 
                     List ∞ -> a
-
                 "#
             ),
         )
@@ -1176,6 +936,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 1st argument to `f` is not what I expect:
 
                 6 ┆  f bar
@@ -1188,7 +950,6 @@ mod test_reporting {
                 But `f` needs the 1st argument to be:
 
                     { foo : Int }
-
 
                 Hint: Seems like a record field typo. Maybe `bar` should be `foo`?
 
@@ -1213,6 +974,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 1st argument to `f` is not what I expect:
 
                 4 ┆  f Blue
@@ -1225,7 +988,6 @@ mod test_reporting {
                 But `f` needs the 1st argument to be:
 
                     [ Green, Red ]
-
 
                 Hint: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
@@ -1250,6 +1012,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 1st argument to `f` is not what I expect:
 
                 4 ┆  f (Blue 3.14)
@@ -1262,7 +1026,6 @@ mod test_reporting {
                 But `f` needs the 1st argument to be:
 
                     [ Green Bool, Red Int ]
-
 
                 Hint: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
@@ -1287,6 +1050,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the 1st branch of this `if` expression:
 
                 2 ┆  x = if True then 3.14 else 4
@@ -1299,8 +1064,6 @@ mod test_reporting {
                 But the type annotation on `x` says it should be:
 
                     Int
-
-
                 "#
             ),
         )
@@ -1321,6 +1084,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the 1st branch of this `when` expression:
 
                 4 ┆          _ -> 3.14
@@ -1333,8 +1098,6 @@ mod test_reporting {
                 But the type annotation on `x` says it should be:
 
                     Int
-
-
                 "#
             ),
         )
@@ -1353,6 +1116,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the body of the `x` definition:
 
                 2 ┆  x = \_ -> 3.14
@@ -1365,8 +1130,6 @@ mod test_reporting {
                 But the type annotation on `x` says it should be:
 
                     Int -> Int
-
-
                 "#
             ),
         )
@@ -1385,12 +1148,15 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TOO MANY ARGS ---------------------------------------------------------------
+
                 The `x` value is not a function, but it was given 1 argument:
 
                 4 ┆  x 3
                   ┆  ^
 
-                Are there any missing commas? Or missing parentheses?"#
+                Are there any missing commas? Or missing parentheses?
+                "#
             ),
         )
     }
@@ -1408,12 +1174,15 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TOO MANY ARGS ---------------------------------------------------------------
+
                 The `f` function expects 1 argument, but it got 2 instead:
 
                 4 ┆  f 1 2
                   ┆  ^
 
-                Are there any missing commas? Or missing parentheses?"#
+                Are there any missing commas? Or missing parentheses?
+                "#
             ),
         )
     }
@@ -1431,12 +1200,15 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TOO FEW ARGS ----------------------------------------------------------------
+
                 The `f` function expects 2 arguments, but it got only 1:
 
                 4 ┆  f 1
                   ┆  ^
 
-                Roc does not allow functions to be partially applied. Use a closure to make partial application explicit."#
+                Roc does not allow functions to be partially applied. Use a closure to make partial application explicit.
+                "#
             ),
         )
     }
@@ -1452,6 +1224,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 1st pattern in this `when` is causing a mismatch:
 
                 2 ┆      {} -> 42
@@ -1464,7 +1238,6 @@ mod test_reporting {
                 But the expression between `when` and `is` has the type:
 
                     Num a
-
                 "#
             ),
         )
@@ -1482,6 +1255,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 2nd pattern in this `when` does not match the previous ones:
 
                 3 ┆      {} -> 42
@@ -1494,7 +1269,6 @@ mod test_reporting {
                 But all the previous branches match:
 
                     Num a
-
                 "#
             ),
         )
@@ -1511,6 +1285,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 1st pattern in this `when` is causing a mismatch:
 
                 2 ┆      { foo: True } -> 42
@@ -1523,7 +1299,6 @@ mod test_reporting {
                 But the expression between `when` and `is` has the type:
 
                     { foo : Num a }
-
                 "#
             ),
         )
@@ -1541,20 +1316,19 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                I cannot find a `foo` value
+                -- SYNTAX PROBLEM --------------------------------------------------------------
 
+                I cannot find a `foo` value
 
                 2 ┆      { foo: 2 } -> foo
                   ┆                    ^^^
 
-
                 these names seem close though:
+
                     Bool
                     Int
                     Num
                     Map
-                    
-
                 "#
             ),
         )
@@ -1582,7 +1356,7 @@ mod test_reporting {
             indoc!(
                 r#"
                 when { foo: 1 } is
-                    { foo: 2 } -> 
+                    { foo: 2 } ->
                         foo = 3
 
                         foo
@@ -1605,6 +1379,8 @@ mod test_reporting {
             // Just putting this here. We should probably handle or-patterns better
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 The 1st pattern in this `when` is causing a mismatch:
 
                 2 ┆      {} | 1 -> 3
@@ -1617,7 +1393,6 @@ mod test_reporting {
                 But the expression between `when` and `is` has the type:
 
                     { foo : Num a }
-
                 "#
             ),
         )
@@ -1636,6 +1411,8 @@ mod test_reporting {
             // Maybe this should specifically say the pattern doesn't work?
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 This expression is used in an unexpected way:
 
                 1 ┆  (Foo x) = 42
@@ -1648,8 +1425,6 @@ mod test_reporting {
                 But you are trying to use it as:
 
                     [ Foo a ]b
-
-
                 "#
             ),
         )
@@ -1668,6 +1443,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the body of this definition:
 
                 2 ┆  { x } = { x: 4.0 }
@@ -1680,8 +1457,6 @@ mod test_reporting {
                 But the type annotation says it should be:
 
                     { x : Int }
-
-
                 "#
             ),
         )
@@ -1700,6 +1475,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the body of the `x` definition:
 
                 2 ┆  x = { b: 4.0 }
@@ -1712,7 +1489,6 @@ mod test_reporting {
                 But the type annotation on `x` says it should be:
 
                     { a : Int, b : Float, c : Bool }
-
 
                 Hint: Looks like the c and a fields are missing.
                 "#
@@ -1733,6 +1509,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the body of the `f` definition:
 
                 2 ┆  f = \x, y -> if True then x else y
@@ -1746,8 +1524,7 @@ mod test_reporting {
 
                     a, b -> a
 
-
-                Hint: Your type annotation uses a and b as separate type variables.
+                Hint: Your type annotation uses `a` and `b` as separate type variables.
                 Your code seems to be saying they are the same though. Maybe they
                 should be the same your type annotation? Maybe your code uses them in
                 a weird way?
@@ -1769,6 +1546,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the body of the `f` definition:
 
                 2 ┆  f = \_ -> Foo
@@ -1782,10 +1561,9 @@ mod test_reporting {
 
                     Bool -> msg
 
-
-                Hint: The type annotation uses the type variable `msg` to say that
-                this definition can produce any type of value. But in the body I see
-                that it will only produce a tag value of a single specific type. Maybe
+                Hint: The type annotation uses the type variable `msg` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a tag value of a single specific type. Maybe
                 change the type annotation to be more specific? Maybe change the code
                 to be more general?
                 "#
@@ -1806,6 +1584,8 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
                 Something is off with the body of the `f` definition:
 
                 2 ┆  f = 0x3
@@ -1819,12 +1599,146 @@ mod test_reporting {
 
                     msg
 
-
-                Hint: The type annotation uses the type variable `msg` to say that
-                this definition can produce any type of value. But in the body I see
-                that it will only produce a Int value of a single specific type. Maybe
+                Hint: The type annotation uses the type variable `msg` to say that this
+                definition can produce any type of value. But in the body I see that
+                it will only produce a `Int` value of a single specific type. Maybe
                 change the type annotation to be more specific? Maybe change the code
                 to be more general?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn typo_lowercase_ok() {
+        // TODO improve tag suggestions
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Bool -> [ Ok Int, InvalidFoo ]
+                f = \_ -> ok 4
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                I cannot find a `ok` value
+
+                2 ┆  f = \_ -> ok 4
+                  ┆            ^^
+
+                these names seem close though:
+
+                    f
+                    Int
+                    Num
+                    Map
+               "#
+            ),
+        )
+    }
+
+    #[test]
+    fn typo_uppercase_ok() {
+        // these error messages seem pretty helpful
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Bool -> Int
+                f = \_ ->
+                    ok = 3
+
+                    Ok
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                `ok` is not used anywhere in your code.
+
+                3 ┆      ok = 3
+                  ┆      ^^
+
+                If you didn't intend on using `ok` then remove it so future readers of
+                your code don't wonder why it is there.
+
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                Something is off with the body of the `f` definition:
+
+                2 ┆>  f = \_ ->
+                3 ┆>      ok = 3
+                4 ┆>
+                5 ┆>      Ok
+
+                The body is an anonymous function of type:
+
+                    Bool -> [ Ok ]a
+
+                But the type annotation on `f` says it should be:
+
+                    Bool -> Int
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn circular_definition_self() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f = f
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                The `f` value is defined directly in terms of itself, causing an
+                infinite loop.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn circular_definition() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = bar
+
+                bar = foo
+
+                foo
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                The `foo` definition is causing a very tricky infinite loop:
+
+                1 ┆  foo = bar
+                  ┆  ^^^
+
+                The `foo` value depends on itself through the following chain of
+                definitions:
+
+                    ┌─────┐
+                    │     foo
+                    │     ↓
+                    │     bar
+                    └─────┘
                 "#
             ),
         )

@@ -102,7 +102,7 @@ fn main() -> io::Result<()> {
 }
 
 fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
-    use roc_reporting::report::{can_problem, DEFAULT_PALETTE};
+    use roc_reporting::report::{can_problem, RocDocAllocator, DEFAULT_PALETTE};
     use roc_reporting::type_error::type_problem;
 
     // Build the expr
@@ -118,24 +118,22 @@ fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
     let palette = DEFAULT_PALETTE;
 
     // Report parsing and canonicalization problems
+    let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
     for problem in can_problems.into_iter() {
-        let report = can_problem(filename.clone(), problem);
+        let report = can_problem(&alloc, filename.clone(), problem);
         let mut buf = String::new();
 
-        report
-            .text
-            .render_color_terminal(&mut buf, &mut subs, home, &src_lines, &interns, &palette);
+        report.render_color_terminal(&mut buf, &alloc, &palette);
 
         println!("\n{}\n", buf);
     }
 
     for problem in type_problems.into_iter() {
-        let report = type_problem(filename.clone(), problem);
+        let report = type_problem(&alloc, filename.clone(), problem);
         let mut buf = String::new();
 
-        report
-            .text
-            .render_color_terminal(&mut buf, &mut subs, home, &src_lines, &interns, &palette);
+        report.render_color_terminal(&mut buf, &alloc, &palette);
 
         println!("\n{}\n", buf);
     }
