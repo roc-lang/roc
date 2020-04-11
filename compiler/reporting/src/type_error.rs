@@ -1,5 +1,5 @@
 use roc_can::expected::{Expected, PExpected};
-use roc_collections::all::{MutSet, SendMap};
+use roc_collections::all::{Index, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_solve::solve;
@@ -30,24 +30,6 @@ pub fn type_problem<'b>(
             to_circular_report(alloc, filename, region, symbol, overall_type)
         }
     }
-}
-
-fn int_to_ordinal(number: usize) -> String {
-    // NOTE: one-based
-    let remainder10 = number % 10;
-    let remainder100 = number % 100;
-
-    let ending = match remainder100 {
-        11..=13 => "th",
-        _ => match remainder10 {
-            1 => "st",
-            2 => "nd",
-            3 => "rd",
-            _ => "th",
-        },
-    };
-
-    format!("{}{}", number, ending)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -162,22 +144,34 @@ fn to_expr_report<'b>(
 
             let (the_name_text, on_name_text) = match pattern_to_doc(alloc, &name.value) {
                 Some(doc) => (
-                    alloc.concat(vec![alloc.text("the "), doc.clone()]),
-                    alloc.concat(vec![alloc.text(" on "), doc]),
+                    alloc.concat(vec![alloc.reflow("the "), doc.clone()]),
+                    alloc.concat(vec![alloc.reflow(" on "), doc]),
                 ),
                 None => (alloc.text("this"), alloc.nil()),
             };
 
-            // TODO special-case 2-branch if
             let thing = match annotation_source {
-                TypedIfBranch(index) => alloc.concat(vec![
-                    alloc.string(format!("{}", int_to_ordinal(index))),
+                TypedIfBranch {
+                    index,
+                    num_branches,
+                } if num_branches == 2 => alloc.concat(vec![
+                    alloc.keyword(if index == Index::FIRST {
+                        "then"
+                    } else {
+                        "else"
+                    }),
+                    alloc.reflow(" branch of this "),
+                    alloc.keyword("if"),
+                    alloc.text(" expression:"),
+                ]),
+                TypedIfBranch { index, .. } => alloc.concat(vec![
+                    alloc.string(index.ordinal()),
                     alloc.reflow(" branch of this "),
                     alloc.keyword("if"),
                     alloc.text(" expression:"),
                 ]),
                 TypedWhenBranch(index) => alloc.concat(vec![
-                    alloc.string(format!("{}", int_to_ordinal(index))),
+                    alloc.string(index.ordinal()),
                     alloc.reflow(" branch of this "),
                     alloc.keyword("when"),
                     alloc.text(" expression:"),
@@ -190,8 +184,8 @@ fn to_expr_report<'b>(
             };
 
             let it_is = match annotation_source {
-                TypedIfBranch(index) => format!("The {} branch is", int_to_ordinal(index)),
-                TypedWhenBranch(index) => format!("The {} branch is", int_to_ordinal(index)),
+                TypedIfBranch { index, .. } => format!("The {} branch is", index.ordinal()),
+                TypedWhenBranch(index) => format!("The {} branch is", index.ordinal()),
                 TypedBody => "The body is".into(),
             };
 
@@ -325,39 +319,7 @@ fn to_expr_report<'b>(
                         alloc.text(" to have the same type!"),
                     ])),
                 ),
-                _ => {
-                    let ith = int_to_ordinal(index);
-
-                    report_mismatch(
-                        alloc,
-                        filename,
-                        &category,
-                        found,
-                        expected_type,
-                        region,
-                        Some(expr_region),
-                        alloc.concat(vec![
-                            alloc.reflow("The "),
-                            alloc.string(format!("{}", ith)),
-                            alloc.reflow(" branch of this "),
-                            alloc.keyword("if"),
-                            alloc.reflow(" does not match all the previous branches:"),
-                        ]),
-                        alloc.string(format!("The {} branch is", ith)),
-                        alloc.reflow("But all the previous branches have type:"),
-                        Some(alloc.concat(vec![
-                            alloc.reflow("I need all branches in an "),
-                            alloc.keyword("if"),
-                            alloc.reflow(" to have the same type!"),
-                        ])),
-                    )
-                }
-            },
-            Reason::WhenBranch { index } => {
-                // NOTE: is 0-based
-                let ith = int_to_ordinal(index + 1);
-
-                report_mismatch(
+                _ => report_mismatch(
                     alloc,
                     filename,
                     &category,
@@ -367,28 +329,49 @@ fn to_expr_report<'b>(
                     Some(expr_region),
                     alloc.concat(vec![
                         alloc.reflow("The "),
-                        alloc.string(format!("{}", ith)),
+                        alloc.string(index.ordinal()),
                         alloc.reflow(" branch of this "),
-                        alloc.keyword("when"),
+                        alloc.keyword("if"),
                         alloc.reflow(" does not match all the previous branches:"),
                     ]),
-                    alloc.concat(vec![
-                        alloc.reflow("The "),
-                        alloc.string(format!("{}", ith)),
-                        alloc.reflow(" branch is"),
-                    ]),
+                    alloc.string(format!("The {} branch is", index.ordinal())),
                     alloc.reflow("But all the previous branches have type:"),
                     Some(alloc.concat(vec![
-                        alloc.reflow("I need all branches of a "),
-                        alloc.keyword("when"),
+                        alloc.reflow("I need all branches in an "),
+                        alloc.keyword("if"),
                         alloc.reflow(" to have the same type!"),
                     ])),
-                )
-            }
+                ),
+            },
+            Reason::WhenBranch { index } => report_mismatch(
+                alloc,
+                filename,
+                &category,
+                found,
+                expected_type,
+                region,
+                Some(expr_region),
+                alloc.concat(vec![
+                    alloc.reflow("The "),
+                    alloc.string(index.ordinal()),
+                    alloc.reflow(" branch of this "),
+                    alloc.keyword("when"),
+                    alloc.reflow(" does not match all the previous branches:"),
+                ]),
+                alloc.concat(vec![
+                    alloc.reflow("The "),
+                    alloc.string(index.ordinal()),
+                    alloc.reflow(" branch is"),
+                ]),
+                alloc.reflow("But all the previous branches have type:"),
+                Some(alloc.concat(vec![
+                    alloc.reflow("I need all branches of a "),
+                    alloc.keyword("when"),
+                    alloc.reflow(" to have the same type!"),
+                ])),
+            ),
             Reason::ElemInList { index } => {
-                // NOTE: is 0-based
-
-                let ith = int_to_ordinal(index + 1);
+                let ith = index.ordinal();
 
                 report_mismatch(
                     alloc,
@@ -438,13 +421,9 @@ fn to_expr_report<'b>(
                     let expected_set: MutSet<_> = expected_fields.keys().cloned().collect();
                     let actual_set: MutSet<_> = actual_fields.keys().cloned().collect();
 
-                    let diff = expected_set.difference(&actual_set);
+                    let mut diff = expected_set.difference(&actual_set);
 
-                    match diff
-                        .into_iter()
-                        .next()
-                        .and_then(|k| Some((k, expected_fields.get(k)?)))
-                    {
+                    match diff.next().and_then(|k| Some((k, expected_fields.get(k)?))) {
                         None => report_mismatch(
                             alloc,
                             filename,
@@ -464,7 +443,7 @@ fn to_expr_report<'b>(
                         ),
                         Some((field, field_region)) => {
                             let r_doc = alloc.symbol_unqualified(symbol);
-                            let f_doc = alloc.record_field(field.clone().clone());
+                            let f_doc = alloc.record_field(field.clone());
 
                             let header = alloc.concat(vec![
                                 alloc.reflow("The "),
@@ -632,7 +611,7 @@ fn to_expr_report<'b>(
                 }
             },
             Reason::FnArg { name, arg_index } => {
-                let ith = int_to_ordinal(arg_index as usize + 1);
+                let ith = arg_index.ordinal();
 
                 let this_function = match name {
                     None => alloc.text("this function"),
@@ -661,17 +640,12 @@ fn to_expr_report<'b>(
                     None,
                 )
             }
-            other => {
-                //    NamedFnArg(String /* function name */, u8 /* arg index */),
-                //    AnonymousFnCall { arity: u8 },
-                //    NamedFnCall(String /* function name */, u8 /* arity */),
-                //    BinOpArg(BinOp, ArgSide),
-                //    BinOpRet(BinOp),
-                //    FloatLiteral,
-                //    IntLiteral,
-                //    NumLiteral,
-                //    InterpolatedStringVar,
-                todo!("I don't have a message yet for reason {:?}", other)
+            Reason::FloatLiteral | Reason::IntLiteral | Reason::NumLiteral => {
+                unreachable!("I don't think these can be reached")
+            }
+
+            Reason::InterpolatedStringVar => {
+                unimplemented!("string interpolation is not implemented yet")
             }
         },
     }
@@ -836,7 +810,7 @@ fn to_pattern_report<'b>(
 
         PExpected::ForReason(reason, expected_type, region) => match reason {
             PReason::WhenMatch { index } => {
-                if index == 0 {
+                if index == Index::FIRST {
                     let doc = alloc.stack(vec![
                         alloc
                             .text("The 1st pattern in this ")
@@ -871,10 +845,7 @@ fn to_pattern_report<'b>(
                 } else {
                     let doc = alloc.stack(vec![
                         alloc
-                            .string(format!(
-                                "The {} pattern in this ",
-                                int_to_ordinal(index + 1)
-                            ))
+                            .string(format!("The {} pattern in this ", index.ordinal()))
                             .append(alloc.keyword("when"))
                             .append(alloc.text(" does not match the previous ones:")),
                         alloc.region(region),
@@ -886,7 +857,7 @@ fn to_pattern_report<'b>(
                                 alloc,
                                 alloc.string(format!(
                                     "The {} pattern is trying to match",
-                                    int_to_ordinal(index + 1)
+                                    index.ordinal()
                                 )),
                                 &category,
                             ),
@@ -902,11 +873,8 @@ fn to_pattern_report<'b>(
                     }
                 }
             }
-            PReason::TagArg { .. } => {
-                panic!("I didn't think this could trigger. Please tell Folkert about it!")
-            }
-            PReason::PatternGuard => {
-                todo!("Blocked on https://github.com/rtfeldman/roc/issues/304")
+            PReason::TagArg { .. } | PReason::PatternGuard => {
+                unreachable!("I didn't think this could trigger. Please tell Folkert about it!")
             }
         },
     }
@@ -943,19 +911,19 @@ fn add_pattern_category<'b>(
     use PatternCategory::*;
 
     let rest = match category {
-        Record => alloc.text(" record values of type:"),
-        EmptyRecord => alloc.text(" an empty record:"),
-        PatternGuard => alloc.text(" a pattern guard of type:"),
-        Set => alloc.text(" sets of type:"),
-        Map => alloc.text(" maps of type:"),
+        Record => alloc.reflow(" record values of type:"),
+        EmptyRecord => alloc.reflow(" an empty record:"),
+        PatternGuard => alloc.reflow(" a pattern guard of type:"),
+        Set => alloc.reflow(" sets of type:"),
+        Map => alloc.reflow(" maps of type:"),
         Ctor(tag_name) => alloc.concat(vec![
             alloc.tag_name(tag_name.clone()),
-            alloc.text(" values of type:"),
+            alloc.reflow(" values of type:"),
         ]),
-        Str => alloc.text(" strings:"),
-        Num => alloc.text(" numbers:"),
-        Int => alloc.text(" integers:"),
-        Float => alloc.text(" floats"),
+        Str => alloc.reflow(" strings:"),
+        Num => alloc.reflow(" numbers:"),
+        Int => alloc.reflow(" integers:"),
+        Float => alloc.reflow(" floats"),
     };
 
     alloc.concat(vec![i_am_trying_to_match, rest])
@@ -972,7 +940,6 @@ fn to_circular_report<'b>(
         title: "CIRCULAR TYPE".to_string(),
         filename,
         doc: {
-            let line = r#"Here is my best effort at writing down the type. You will see ∞ for parts of the type that repeat something already printed out infinitely."#;
             alloc.stack(vec![
                 alloc
                     .reflow("I'm inferring a weird self-referential type for ")
@@ -980,7 +947,11 @@ fn to_circular_report<'b>(
                     .append(alloc.text(":")),
                 alloc.region(region),
                 alloc.stack(vec![
-                    alloc.reflow(line),
+                    alloc.reflow(
+                        "Here is my best effort at writing down the type. \
+                        You will see ∞ for parts of the type that repeat \
+                        something already printed out infinitely.",
+                    ),
                     alloc.type_block(to_doc(alloc, Parens::Unnecessary, overall_type)),
                 ]),
             ])
@@ -994,8 +965,6 @@ pub enum Problem {
     ArityMismatch(usize, usize),
     FieldTypo(Lowercase, Vec<Lowercase>),
     FieldsMissing(Vec<Lowercase>),
-
-    // TODO maybe these should include the arguments too?
     TagTypo(TagName, Vec<TagName>),
     TagsMissing(Vec<TagName>),
     BadRigidVar(Lowercase, ErrorType),
@@ -1375,8 +1344,34 @@ fn to_diff<'b>(
             let left = to_doc(alloc, Parens::Unnecessary, type1);
             let right = to_doc(alloc, Parens::Unnecessary, type2);
 
+            let is_int = |t: &ErrorType| match t {
+                ErrorType::Type(Symbol::INT_INT, _) => true,
+                ErrorType::Alias(Symbol::INT_INT, _, _) => true,
+
+                ErrorType::Type(Symbol::NUM_NUM, args) => match &args.get(0) {
+                    Some(ErrorType::Type(Symbol::INT_INTEGER, _)) => true,
+                    Some(ErrorType::Alias(Symbol::INT_INTEGER, _, _)) => true,
+                    _ => false,
+                },
+                ErrorType::Alias(Symbol::NUM_NUM, args, _) => match &args.get(0) {
+                    Some((_, ErrorType::Type(Symbol::INT_INTEGER, _))) => true,
+                    Some((_, ErrorType::Alias(Symbol::INT_INTEGER, _, _))) => true,
+                    _ => false,
+                },
+                _ => false,
+            };
+            let is_float = |t: &ErrorType| match t {
+                ErrorType::Type(Symbol::FLOAT_FLOAT, _) => true,
+                ErrorType::Alias(Symbol::FLOAT_FLOAT, _, _) => true,
+
+                _ => false,
+            };
+
             let problems = match pair {
                 (RigidVar(x), other) | (other, RigidVar(x)) => vec![Problem::BadRigidVar(x, other)],
+                (a, b) if (is_int(&a) && is_float(&b)) || (is_float(&a) && is_int(&b)) => {
+                    vec![Problem::IntFloat]
+                }
                 _ => vec![],
             };
 
@@ -2148,7 +2143,58 @@ fn type_problem_to_pretty<'b>(
                 Boolean(_) => bad_rigid_var(x, alloc.reflow("a uniqueness attribute value")),
             }
         }
+        IntFloat => alloc.hint().append(alloc.concat(vec![
+            alloc.reflow("Convert between "),
+            alloc.type_str("Int"),
+            alloc.reflow(" and "),
+            alloc.type_str("Float"),
+            alloc.reflow(" with "),
+            alloc.symbol_qualified(Symbol::NUM_TO_FLOAT),
+            alloc.reflow(" and "),
+            alloc.symbol_qualified(Symbol::FLOAT_ROUND),
+            alloc.reflow("."),
+        ])),
 
-        _ => todo!(),
+        TagsMissing(missing) => match missing.split_last() {
+            None => alloc.nil(),
+            Some((f1, [])) => {
+                let hint1 = alloc
+                    .hint()
+                    .append(alloc.reflow("Looks like a closed tag union does not have the "))
+                    .append(alloc.tag_name(f1.clone()))
+                    .append(alloc.reflow(" tag."));
+
+                let hint2 = alloc.hint().append(alloc.reflow(
+                    "Closed tag unions can't grow, \
+                    because that might change the size in memory. \
+                    Can you use an open tag union?",
+                ));
+
+                alloc.stack(vec![hint1, hint2])
+            }
+
+            Some((last, init)) => {
+                let separator = alloc.reflow(", ");
+
+                let hint1 = alloc
+                    .hint()
+                    .append(alloc.reflow("Looks like a closed tag union does not have the "))
+                    .append(
+                        alloc
+                            .intersperse(init.iter().map(|v| alloc.tag_name(v.clone())), separator),
+                    )
+                    .append(alloc.reflow(" and "))
+                    .append(alloc.tag_name(last.clone()))
+                    .append(alloc.reflow(" tags."));
+
+                let hint2 = alloc.hint().append(alloc.reflow(
+                    "Closed tag unions can't grow, \
+                    because that might change the size in memory. \
+                    Can you use an open tag union?",
+                ));
+
+                alloc.stack(vec![hint1, hint2])
+            }
+        },
     }
 }

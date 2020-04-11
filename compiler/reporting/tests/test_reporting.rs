@@ -1067,6 +1067,8 @@ mod test_reporting {
                 But the type annotation on `x` says it should be:
 
                     Int
+
+                Hint: Convert between Int and Float with `Num.toFloat` and `Float.round`.
                 "#
             ),
         )
@@ -1101,6 +1103,8 @@ mod test_reporting {
                 But the type annotation on `x` says it should be:
 
                     Int
+
+                Hint: Convert between Int and Float with `Num.toFloat` and `Float.round`.
                 "#
             ),
         )
@@ -1133,6 +1137,8 @@ mod test_reporting {
                 But the type annotation on `x` says it should be:
 
                     Int -> Int
+
+                Hint: Convert between Int and Float with `Num.toFloat` and `Float.round`.
                 "#
             ),
         )
@@ -1461,6 +1467,8 @@ mod test_reporting {
                 But the type annotation says it should be:
 
                     { x : Int }
+
+                Hint: Convert between Int and Float with `Num.toFloat` and `Float.round`.
                 "#
             ),
         )
@@ -1881,6 +1889,157 @@ mod test_reporting {
                 So maybe `.foo` should be `.fo`?
                 "#
             ),
+        )
+    }
+
+    #[test]
+    fn plus_on_str() {
+        report_problem_as(
+            indoc!(
+                r#"
+                0x4 + "foo"
+                "#
+            ),
+            // TODO also suggest fields with the correct type
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                The 2nd argument to `add` is not what I expect:
+
+                1 ┆  0x4 + "foo"
+                  ┆        ^^^^^
+
+                This argument is a string of type:
+
+                    Str
+
+                But `add` needs the 2nd argument to be:
+
+                    Num Integer
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn int_float() {
+        report_problem_as(
+            indoc!(
+                r#"
+                0x4 + 3.14
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                The 2nd argument to `add` is not what I expect:
+
+                1 ┆  0x4 + 3.14
+                  ┆        ^^^^
+
+                This argument is a float of type:
+
+                    Float
+
+                But `add` needs the 2nd argument to be:
+
+                    Num Integer
+
+                Hint: Convert between Int and Float with `Num.toFloat` and `Float.round`.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn tag_missing() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : [ A ] -> [ A, B ]
+                f = \a -> a
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                Something is off with the body of the `f` definition:
+
+                2 ┆  f = \a -> a
+                  ┆      ^^^^^^^
+
+                The body is an anonymous function of type:
+
+                    [ A ] -> [ A ]
+
+                But the type annotation on `f` says it should be:
+
+                    [ A ] -> [ A, B ]
+
+                Hint: Looks like a closed tag union does not have the `B` tag.
+
+                Hint: Closed tag unions can't grow, because that might change the size
+                in memory. Can you use an open tag union?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn tags_missing() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : [ A ] -> [ A, B, C ]
+                f = \a -> a
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                Something is off with the body of the `f` definition:
+
+                2 ┆  f = \a -> a
+                  ┆      ^^^^^^^
+
+                The body is an anonymous function of type:
+
+                    [ A ] -> [ A ]
+
+                But the type annotation on `f` says it should be:
+
+                    [ A ] -> [ A, B, C ]
+
+                Hint: Looks like a closed tag union does not have the `C` and `B` tags.
+
+                Hint: Closed tag unions can't grow, because that might change the size
+                in memory. Can you use an open tag union?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn open_tag_union_can_grow() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : [ A ]* -> [ A, B, C ]
+                f = \a -> a
+
+                f
+                "#
+            ),
+            // should not give errors
+            indoc!(""),
         )
     }
 }

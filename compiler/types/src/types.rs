@@ -2,10 +2,9 @@ use crate::boolean_algebra;
 use crate::pretty_print::Parens;
 use crate::subs::{Subs, VarStore, Variable};
 use inlinable_string::InlinableString;
-use roc_collections::all::{union, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::all::{union, ImMap, ImSet, Index, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_parse::operator::{ArgSide, BinOp};
 use roc_region::all::{Located, Region};
 use std::fmt;
 
@@ -598,33 +597,46 @@ pub struct RecordStructure {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PReason {
-    WhenMatch { index: usize },
-    TagArg { tag_name: TagName, index: usize },
+    WhenMatch { index: Index },
+    TagArg { tag_name: TagName, index: Index },
     PatternGuard,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnnotationSource {
-    TypedIfBranch(usize /* index */),
-    TypedWhenBranch(usize /* index */),
+    TypedIfBranch { index: Index, num_branches: usize },
+    TypedWhenBranch(Index),
     TypedBody,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reason {
-    FnArg { name: Option<Symbol>, arg_index: u8 },
-    FnCall { name: Option<Symbol>, arity: u8 },
-    BinOpArg(BinOp, ArgSide),
-    BinOpRet(BinOp),
+    FnArg {
+        name: Option<Symbol>,
+        arg_index: Index,
+    },
+    FnCall {
+        name: Option<Symbol>,
+        arity: u8,
+    },
+    //    BinOpArg(BinOp, ArgSide),
+    //    BinOpRet(BinOp),
     FloatLiteral,
     IntLiteral,
     NumLiteral,
     InterpolatedStringVar,
-    WhenBranch { index: usize },
+    WhenBranch {
+        index: Index,
+    },
     WhenGuard,
     IfCondition,
-    IfBranch { index: usize, total_branches: usize },
-    ElemInList { index: usize },
+    IfBranch {
+        index: Index,
+        total_branches: usize,
+    },
+    ElemInList {
+        index: Index,
+    },
     RecordUpdateValue(Lowercase),
     RecordUpdateKeys(Symbol, SendMap<Lowercase, Region>),
 }

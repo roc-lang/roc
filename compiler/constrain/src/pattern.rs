@@ -3,7 +3,7 @@ use roc_can::constraint::Constraint;
 use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::RecordDestruct;
-use roc_collections::all::SendMap;
+use roc_collections::all::{Index, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
@@ -256,7 +256,7 @@ pub fn constrain_pattern(
                 let expected = PExpected::ForReason(
                     PReason::TagArg {
                         tag_name: tag_name.clone(),
-                        index,
+                        index: Index::zero_based(index),
                     },
                     pattern_type,
                     region,

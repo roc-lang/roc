@@ -6,7 +6,7 @@ use roc_can::def::{Declaration, Def};
 use roc_can::expected::{Expected, PExpected};
 use roc_can::expr::{Expr, Field, WhenBranch};
 use roc_can::pattern::{Pattern, RecordDestruct};
-use roc_collections::all::{ImMap, ImSet, SendMap};
+use roc_collections::all::{ImMap, ImSet, Index, SendMap};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
@@ -598,7 +598,9 @@ pub fn constrain_expr(
 
                 for (index, loc_elem) in loc_elems.iter().enumerate() {
                     let elem_expected = Expected::ForReason(
-                        Reason::ElemInList { index },
+                        Reason::ElemInList {
+                            index: Index::zero_based(index),
+                        },
                         entry_type.clone(),
                         region,
                     );
@@ -755,7 +757,7 @@ pub fn constrain_expr(
 
                 let reason = Reason::FnArg {
                     name: opt_symbol,
-                    arg_index: index as u8,
+                    arg_index: Index::zero_based(index),
                 };
 
                 let expected_arg = Expected::ForReason(reason, arg_type.clone(), region);
@@ -936,7 +938,10 @@ pub fn constrain_expr(
                             Expected::FromAnnotation(
                                 name.clone(),
                                 arity,
-                                AnnotationSource::TypedIfBranch(index + 1),
+                                AnnotationSource::TypedIfBranch {
+                                    index: Index::zero_based(index),
+                                    num_branches: branches.len(),
+                                },
                                 tipe.clone(),
                             ),
                         );
@@ -954,7 +959,10 @@ pub fn constrain_expr(
                         Expected::FromAnnotation(
                             name,
                             arity,
-                            AnnotationSource::TypedIfBranch(branches.len() + 1),
+                            AnnotationSource::TypedIfBranch {
+                                index: Index::zero_based(branches.len()),
+                                num_branches: branches.len(),
+                            },
                             tipe.clone(),
                         ),
                     );
@@ -1003,7 +1011,7 @@ pub fn constrain_expr(
                             &loc_body.value,
                             Expected::ForReason(
                                 Reason::IfBranch {
-                                    index: index + 1,
+                                    index: Index::zero_based(index),
                                     total_branches: branches.len(),
                                 },
                                 Type::Variable(*branch_var),
@@ -1023,7 +1031,7 @@ pub fn constrain_expr(
                         &final_else.value,
                         Expected::ForReason(
                             Reason::IfBranch {
-                                index: branches.len() + 1,
+                                index: Index::zero_based(branches.len()),
                                 total_branches: branches.len(),
                             },
                             Type::Variable(*branch_var),
@@ -1085,14 +1093,16 @@ pub fn constrain_expr(
                             region,
                             when_branch,
                             PExpected::ForReason(
-                                PReason::WhenMatch { index },
+                                PReason::WhenMatch {
+                                    index: Index::zero_based(index),
+                                },
                                 cond_type.clone(),
                                 region,
                             ),
                             Expected::FromAnnotation(
                                 name.clone(),
                                 *arity,
-                                TypedWhenBranch(index),
+                                TypedWhenBranch(Index::zero_based(index)),
                                 typ.clone(),
                             ),
                         );
@@ -1118,12 +1128,16 @@ pub fn constrain_expr(
                             region,
                             when_branch,
                             PExpected::ForReason(
-                                PReason::WhenMatch { index },
+                                PReason::WhenMatch {
+                                    index: Index::zero_based(index),
+                                },
                                 cond_type.clone(),
                                 region,
                             ),
                             Expected::ForReason(
-                                Reason::WhenBranch { index },
+                                Reason::WhenBranch {
+                                    index: Index::zero_based(index),
+                                },
                                 branch_type.clone(),
                                 region,
                             ),
@@ -1176,7 +1190,7 @@ pub fn constrain_expr(
 
             let fields_type = attr_type(
                 Bool::variable(uniq_var),
-                Type::Record(fields.clone(), Box::new(Type::Variable(*ext_var))),
+                Type::Record(fields, Box::new(Type::Variable(*ext_var))),
             );
             let record_type = Type::Variable(*record_var);
 
