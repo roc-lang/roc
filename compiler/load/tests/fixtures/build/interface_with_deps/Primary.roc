@@ -3,7 +3,7 @@ interface Primary
     imports [ Dep1, Dep2.{ two, foo }, Dep3.Blah.{ bar }, Res ]
 
 blah2 = Dep2.two
-blah3 = bar # TODO FIXME does work as Dep3.Blah.bar, some scoping issue
+blah3 = bar
 
 str = Dep1.str
 
@@ -12,11 +12,7 @@ alwaysThree = \_ -> "foo"
 
 identity = \a -> a
 
-# z = identity (alwaysThree {}) # TODO FIXME for some reason this infers as a circular type
-# z = identity 3                # TODO FIXME for some reason this also infers as a circular type
-
-z : Dep1.Unit
-z = Unit
+z = identity (alwaysThree {})
 
 w : Dep1.Identity {}
 w = Identity {}
