@@ -170,7 +170,7 @@ fn to_expr_report<'b>(
                     alloc.keyword("if"),
                     alloc.text(" expression:"),
                 ]),
-                TypedWhenBranch(index) => alloc.concat(vec![
+                TypedWhenBranch { index } => alloc.concat(vec![
                     alloc.string(index.ordinal()),
                     alloc.reflow(" branch of this "),
                     alloc.keyword("when"),
@@ -185,7 +185,7 @@ fn to_expr_report<'b>(
 
             let it_is = match annotation_source {
                 TypedIfBranch { index, .. } => format!("The {} branch is", index.ordinal()),
-                TypedWhenBranch(index) => format!("The {} branch is", index.ordinal()),
+                TypedWhenBranch { index, .. } => format!("The {} branch is", index.ordinal()),
                 TypedBody => "The body is".into(),
             };
 
@@ -1317,6 +1317,15 @@ fn to_diff<'b>(
                 right,
                 status: args_diff.status,
             }
+        }
+
+        (Alias(symbol, _, actual), other) if !symbol.module_id().is_builtin() => {
+            // when diffing an alias with a non-alias, de-alias
+            to_diff(alloc, parens, *actual, other)
+        }
+        (other, Alias(symbol, _, actual)) if !symbol.module_id().is_builtin() => {
+            // when diffing an alias with a non-alias, de-alias
+            to_diff(alloc, parens, other, *actual)
         }
 
         (Record(fields1, ext1), Record(fields2, ext2)) => {

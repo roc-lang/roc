@@ -605,7 +605,7 @@ pub enum PReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnnotationSource {
     TypedIfBranch { index: Index, num_branches: usize },
-    TypedWhenBranch(Index),
+    TypedWhenBranch { index: Index },
     TypedBody,
 }
 
@@ -619,8 +619,6 @@ pub enum Reason {
         name: Option<Symbol>,
         arity: u8,
     },
-    //    BinOpArg(BinOp, ArgSide),
-    //    BinOpRet(BinOp),
     FloatLiteral,
     IntLiteral,
     NumLiteral,

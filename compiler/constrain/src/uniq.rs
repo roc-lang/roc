@@ -1085,6 +1085,9 @@ pub fn constrain_expr(
                     ));
 
                     for (index, when_branch) in branches.iter().enumerate() {
+                        let pattern_region =
+                            Region::across_all(when_branch.patterns.iter().map(|v| &v.region));
+
                         let branch_con = constrain_when_branch(
                             var_store,
                             var_usage,
@@ -1097,12 +1100,14 @@ pub fn constrain_expr(
                                     index: Index::zero_based(index),
                                 },
                                 cond_type.clone(),
-                                region,
+                                pattern_region,
                             ),
                             Expected::FromAnnotation(
                                 name.clone(),
                                 *arity,
-                                TypedWhenBranch(Index::zero_based(index)),
+                                TypedWhenBranch {
+                                    index: Index::zero_based(index),
+                                },
                                 typ.clone(),
                             ),
                         );
@@ -1120,6 +1125,8 @@ pub fn constrain_expr(
                     let mut branch_cons = Vec::with_capacity(branches.len());
 
                     for (index, when_branch) in branches.iter().enumerate() {
+                        let pattern_region =
+                            Region::across_all(when_branch.patterns.iter().map(|v| &v.region));
                         let branch_con = constrain_when_branch(
                             var_store,
                             var_usage,
@@ -1132,7 +1139,7 @@ pub fn constrain_expr(
                                     index: Index::zero_based(index),
                                 },
                                 cond_type.clone(),
-                                region,
+                                pattern_region,
                             ),
                             Expected::ForReason(
                                 Reason::WhenBranch {

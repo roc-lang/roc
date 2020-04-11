@@ -462,7 +462,7 @@ impl<'a> RocDocAllocator<'a> {
         self.intersperse(docs, self.line())
     }
 
-    /// live vcat, but adds a double line break between elements. Visually this means an empty line
+    /// like vcat, but adds a double line break between elements. Visually this means an empty line
     /// between elements.
     pub fn stack<A, I>(&'a self, docs: I) -> DocBuilder<'a, Self, A>
     where
