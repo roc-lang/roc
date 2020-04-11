@@ -212,11 +212,28 @@ mod test_load {
     }
 
     #[test]
-    fn load_and_typecheck_quicksort() {
+    fn iface_quicksort() {
         test_async(async {
             let subs_by_module = MutMap::default();
             let loaded_module =
                 load_fixture("interface_with_deps", "Quicksort", subs_by_module).await;
+
+            expect_types(
+                loaded_module,
+                hashmap! {
+                    "swap" => "Int, Int, List a -> List a",
+                    "partition" => "Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]",
+                    "quicksort" => "List (Num a), Int, Int -> List (Num a)",
+                },
+            );
+        });
+    }
+
+    #[test]
+    fn app_quicksort() {
+        test_async(async {
+            let subs_by_module = MutMap::default();
+            let loaded_module = load_fixture("app_with_deps", "Quicksort", subs_by_module).await;
 
             expect_types(
                 loaded_module,
@@ -266,11 +283,35 @@ mod test_load {
     }
 
     #[test]
-    fn load_dep_types() {
+    fn iface_dep_types() {
         test_async(async {
             let subs_by_module = MutMap::default();
             let loaded_module =
                 load_fixture("interface_with_deps", "Primary", subs_by_module).await;
+
+            expect_types(
+                loaded_module,
+                hashmap! {
+                    "blah2" => "Float",
+                    "blah3" => "Str",
+                    "str" => "Str",
+                    "alwaysThree" => "* -> Str",
+                    "identity" => "a -> a",
+                    "z" => "Str",
+                    "w" => "Dep1.Identity {}",
+                    "succeed" => "a -> Dep1.Identity a",
+                    "yay" => "Res.Res {} err",
+                    "withDefault" => "Res.Res a *, a -> a",
+                },
+            );
+        });
+    }
+
+    #[test]
+    fn app_dep_types() {
+        test_async(async {
+            let subs_by_module = MutMap::default();
+            let loaded_module = load_fixture("app_with_deps", "Primary", subs_by_module).await;
 
             expect_types(
                 loaded_module,
