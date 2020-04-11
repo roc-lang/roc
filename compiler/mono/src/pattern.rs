@@ -1,4 +1,4 @@
-use roc_collections::all::MutMap;
+use roc_collections::all::{Index, MutMap};
 use roc_module::ident::TagName;
 use roc_region::all::{Located, Region};
 
@@ -121,7 +121,11 @@ fn simplify<'a>(pattern: &crate::expr::Pattern<'a>) -> Pattern {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Error {
     Incomplete(Region, Context, Vec<Pattern>),
-    Redundant(Region, Region, usize),
+    Redundant {
+        overall_region: Region,
+        branch_region: Region,
+        index: Index,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -339,11 +343,11 @@ fn to_nonredundant_rows<'a>(
         if is_useful(&checked_rows, &next_row) {
             checked_rows.push(next_row);
         } else {
-            return Err(Error::Redundant(
+            return Err(Error::Redundant {
                 overall_region,
-                region,
-                checked_rows.len() + 1,
-            ));
+                branch_region: region,
+                index: Index::zero_based(checked_rows.len()),
+            });
         }
     }
 

@@ -10,10 +10,12 @@ mod helpers;
 #[cfg(test)]
 mod test_reporting {
     use crate::helpers::test_home;
+    use bumpalo::Bump;
     use roc_module::symbol::{Interns, ModuleId};
+    use roc_mono::expr::{Expr, Procs};
     use roc_reporting::report::{
-        can_problem, Report, BLUE_CODE, BOLD_CODE, CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE,
-        MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE, WHITE_CODE, YELLOW_CODE,
+        can_problem, mono_problem, Report, BLUE_CODE, BOLD_CODE, CYAN_CODE, DEFAULT_PALETTE,
+        GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE, WHITE_CODE, YELLOW_CODE,
     };
     use roc_reporting::type_error::type_problem;
     use roc_types::pretty_print::name_all_type_vars;
@@ -46,16 +48,18 @@ mod test_reporting {
     ) -> (
         Vec<solve::TypeError>,
         Vec<roc_problem::can::Problem>,
+        Vec<roc_mono::expr::MonoProblem>,
         ModuleId,
         Interns,
     ) {
         let CanExprOut {
+            loc_expr,
             output,
             var_store,
             var,
             constraint,
             home,
-            interns,
+            mut interns,
             problems: can_problems,
             ..
         } = can_expr(expr_src);
@@ -70,95 +74,108 @@ mod test_reporting {
 
         name_all_type_vars(var, &mut subs);
 
-        (unify_problems, can_problems, home, interns)
+        let mut mono_problems = Vec::new();
+
+        // MONO
+
+        if unify_problems.is_empty() && can_problems.is_empty() {
+            let arena = Bump::new();
+
+            // Compile and add all the Procs before adding main
+            let mut procs = Procs::default();
+            let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
+
+            // assume 64-bit pointers
+            let pointer_size = std::mem::size_of::<u64>() as u32;
+
+            // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
+            let mono_expr = Expr::new(
+                &arena,
+                &mut subs,
+                &mut mono_problems,
+                loc_expr.value,
+                &mut procs,
+                home,
+                &mut ident_ids,
+                pointer_size,
+            );
+        }
+
+        (unify_problems, can_problems, mono_problems, home, interns)
+    }
+
+    fn list_reports<F>(src: &str, buf: &mut String, callback: F)
+    where
+        F: FnOnce(RocDocBuilder<'_>, &mut String) -> (),
+    {
+        use ven_pretty::DocAllocator;
+
+        let (type_problems, can_problems, mono_problems, home, interns) = infer_expr_help(src);
+
+        let src_lines: Vec<&str> = src.split('\n').collect();
+        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+        let filename = filename_from_string(r"\code\proj\Main.roc");
+        let mut reports = Vec::new();
+
+        for problem in can_problems {
+            let report = can_problem(&alloc, filename.clone(), problem.clone());
+            reports.push(report);
+        }
+
+        for problem in type_problems {
+            let report = type_problem(&alloc, filename.clone(), problem.clone());
+            reports.push(report);
+        }
+
+        for problem in mono_problems {
+            let report = mono_problem(&alloc, filename.clone(), problem.clone());
+            reports.push(report);
+        }
+
+        let has_reports = !reports.is_empty();
+
+        let doc = alloc
+            .stack(reports.into_iter().map(|v| v.pretty(&alloc)))
+            .append(if has_reports {
+                alloc.line()
+            } else {
+                alloc.nil()
+            });
+
+        callback(doc, buf)
     }
 
     fn report_problem_as(src: &str, expected_rendering: &str) {
-        let (type_problems, can_problems, home, interns) = infer_expr_help(src);
-
         let mut buf: String = String::new();
-        let src_lines: Vec<&str> = src.split('\n').collect();
 
-        match can_problems.first() {
-            None => {}
-            Some(problem) => {
-                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
-                let report = can_problem(
-                    &alloc,
-                    filename_from_string(r"\code\proj\Main.roc"),
-                    problem.clone(),
-                );
-                report.render_ci(&mut buf, &alloc);
-            }
-        }
+        let callback = |doc: RocDocBuilder<'_>, buf: &mut String| {
+            doc.1
+                .render_raw(70, &mut roc_reporting::report::CiWrite::new(buf))
+                .expect("list_reports")
+        };
 
-        if !can_problems.is_empty() && !type_problems.is_empty() {
-            write!(buf, "\n\n").unwrap();
-        }
-
-        let mut it = type_problems.into_iter().peekable();
-        while let Some(problem) = it.next() {
-            let alloc = RocDocAllocator::new(&src_lines, home, &interns);
-            let report = type_problem(
-                &alloc,
-                filename_from_string(r"\code\proj\Main.roc"),
-                problem.clone(),
-            );
-            report.render_ci(&mut buf, &alloc);
-
-            if it.peek().is_some() {
-                write!(buf, "\n\n").unwrap();
-            }
-        }
-
-        if !buf.is_empty() {
-            write!(buf, "\n").unwrap();
-        }
+        list_reports(src, &mut buf, callback);
 
         assert_eq!(buf, expected_rendering);
     }
 
     fn color_report_problem_as(src: &str, expected_rendering: &str) {
-        let (type_problems, can_problems, home, interns) = infer_expr_help(src);
-
         let mut buf: String = String::new();
-        let src_lines: Vec<&str> = src.split('\n').collect();
 
-        match can_problems.first() {
-            None => {}
-            Some(problem) => {
-                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
-                let report = can_problem(
-                    &alloc,
-                    filename_from_string(r"\code\proj\Main.roc"),
-                    problem.clone(),
-                );
-                report.render_color_terminal(&mut buf, &alloc, &report::DEFAULT_PALETTE);
-            }
-        }
+        let callback = |doc: RocDocBuilder<'_>, buf: &mut String| {
+            doc.1
+                .render_raw(
+                    70,
+                    &mut roc_reporting::report::ColorWrite::new(
+                        &roc_reporting::report::DEFAULT_PALETTE,
+                        buf,
+                    ),
+                )
+                .expect("list_reports")
+        };
 
-        if !can_problems.is_empty() && !type_problems.is_empty() {
-            write!(buf, "\n\n").unwrap();
-        }
-
-        let mut it = type_problems.into_iter().peekable();
-        while let Some(problem) = it.next() {
-            let alloc = RocDocAllocator::new(&src_lines, home, &interns);
-            let report = type_problem(
-                &alloc,
-                filename_from_string(r"\code\proj\Main.roc"),
-                problem.clone(),
-            );
-            report.render_color_terminal(&mut buf, &alloc, &report::DEFAULT_PALETTE);
-
-            if it.peek().is_some() {
-                write!(buf, "\n\n").unwrap();
-            }
-        }
-
-        if !buf.is_empty() {
-            write!(buf, "\n").unwrap();
-        }
+        list_reports(src, &mut buf, callback);
 
         let readable = human_readable(&buf);
 
@@ -255,6 +272,7 @@ mod test_reporting {
                 x
            "#
             ),
+            // Booly is called a "variable"
             indoc!(
                 r#"
                 -- SYNTAX PROBLEM --------------------------------------------------------------
@@ -271,6 +289,16 @@ mod test_reporting {
 
                 Since these variables have the same name, it's easy to use the wrong
                 one on accident. Give one of them a new name.
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                `Booly` is not used anywhere in your code.
+
+                1 ┆  Booly : [ Yes, No ]
+                  ┆  ^^^^^^^^^^^^^^^^^^^
+
+                If you didn't intend on using `Booly` then remove it so future readers
+                of your code don't wonder why it is there.
                 "#
             ),
         )
@@ -465,7 +493,7 @@ mod test_reporting {
             "#
         );
 
-        let (_type_problems, _can_problems, home, interns) = infer_expr_help(src);
+        let (_type_problems, _can_problems, _mono_problems, home, interns) = infer_expr_help(src);
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -494,7 +522,8 @@ mod test_reporting {
             "#
         );
 
-        let (_type_problems, _can_problems, home, mut interns) = infer_expr_help(src);
+        let (_type_problems, _can_problems, _mono_problems, home, mut interns) =
+            infer_expr_help(src);
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -1353,6 +1382,7 @@ mod test_reporting {
 
                 when { foo: 1 } is
                     { foo: 2 } -> foo
+                    _ -> foo
                  "#
             ),
             // should give no error
@@ -1370,6 +1400,7 @@ mod test_reporting {
                         foo = 3
 
                         foo
+                    _ -> 3
                  "#
             ),
             // should give no error
@@ -2040,6 +2071,36 @@ mod test_reporting {
             ),
             // should not give errors
             indoc!(""),
+        )
+    }
+
+    #[test]
+    fn patterns_int_not_exhaustive() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 0x1 is
+                    2 -> 0x3
+                "#
+            ),
+            // should not give errors
+            indoc!("wrong"),
+        )
+    }
+
+    #[test]
+    fn patterns_int_redundant() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 0x1 is
+                    2 -> 0x3
+                    2 -> 0x4
+                    _ -> 0x5
+                "#
+            ),
+            // should not give errors
+            indoc!("wrong"),
         )
     }
 }

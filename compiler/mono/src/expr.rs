@@ -102,6 +102,7 @@ pub struct Proc<'a> {
 pub struct Env<'a, 'i> {
     pub arena: &'a Bump,
     pub subs: &'a mut Subs,
+    pub problems: &'i mut std::vec::Vec<MonoProblem>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub pointer_size: u32,
@@ -204,10 +205,17 @@ pub enum Expr<'a> {
     RuntimeError(&'a str),
 }
 
+#[derive(Clone, Debug)]
+pub enum MonoProblem {
+    PatternProblem(crate::pattern::Error),
+}
+
+#[allow(clippy::too_many_arguments)]
 impl<'a> Expr<'a> {
     pub fn new(
         arena: &'a Bump,
         subs: &'a mut Subs,
+        problems: &mut std::vec::Vec<MonoProblem>,
         can_expr: roc_can::expr::Expr,
         procs: &mut Procs<'a>,
         home: ModuleId,
@@ -217,6 +225,7 @@ impl<'a> Expr<'a> {
         let mut env = Env {
             arena,
             subs,
+            problems,
             home,
             ident_ids,
             pointer_size,
@@ -1059,7 +1068,13 @@ fn from_can_when<'a>(
             )],
         ) {
             Ok(_) => {}
-            Err(errors) => panic!("Errors in patterns: {:?}", errors),
+            Err(errors) => {
+                for error in errors {
+                    env.problems.push(MonoProblem::PatternProblem(error))
+                }
+
+                // panic!("generate runtime error, should probably also optimize this");
+            }
         }
 
         let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
@@ -1166,7 +1181,16 @@ fn from_can_when<'a>(
         match crate::pattern::check(Region::zero(), &loc_branches) {
             Ok(_) => {}
             Err(errors) => {
-                panic!("Errors in patterns: {:?}", errors);
+                for error in errors {
+                    env.problems.push(MonoProblem::PatternProblem(error))
+                }
+
+                opt_branches.push((
+                    Pattern::Underscore,
+                    crate::decision_tree::Guard::NoGuard,
+                    &[],
+                    Expr::RuntimeError("non-exhaustive pattern match"),
+                ));
             }
         }
 

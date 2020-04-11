@@ -81,7 +81,7 @@ impl<'b> Report<'b> {
             .expect(err_msg);
     }
 
-    fn pretty(self, alloc: &'b RocDocAllocator<'b>) -> RocDocBuilder<'b> {
+    pub fn pretty(self, alloc: &'b RocDocAllocator<'b>) -> RocDocBuilder<'b> {
         if self.title.is_empty() {
             self.doc
         } else {
@@ -141,6 +141,43 @@ pub const BOLD_CODE: &str = "\u{001b}[1m";
 pub const UNDERLINE_CODE: &str = "\u{001b}[4m";
 
 pub const RESET_CODE: &str = "\u{001b}[0m";
+
+pub fn mono_problem<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    filename: PathBuf,
+    problem: roc_mono::expr::MonoProblem,
+) -> Report<'b> {
+    use roc_mono::expr::MonoProblem::*;
+    use roc_mono::pattern::Error::*;
+
+    //#[derive(Clone, Debug, PartialEq)]
+    //pub enum Error {
+    //    Incomplete(Region, Context, Vec<Pattern>),
+    //    Redundant(Region, Region, usize),
+    //}
+    //
+    //pub enum Context {
+    //    BadArg,
+    //    BadDestruct,
+    //    BadCase,
+    //}
+    //
+    //#[derive(Clone, Debug, PartialEq)]
+    //pub enum Guard {
+    //    HasGuard,
+    //    NoGuard,
+    //}
+    //
+
+    match problem {
+        PatternProblem(Incomplete(region, context, missing)) => todo!("incomplete"),
+        PatternProblem(Redundant {
+            overall_region,
+            branch_region,
+            index,
+        }) => todo!("redundant"),
+    }
+}
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
