@@ -1,10 +1,18 @@
-quicksort : List (Num a), Int, Int -> List (Num a)
-quicksort = \list, low, high ->
+app Quicksort provides [ quicksort ] imports []
+
+
+quicksort : List (Num a) -> List (Num a)
+quicksort = \list ->
+    quicksortHelp list 0 (List.len list - 1)
+
+
+quicksortHelp : List (Num a), Int, Int -> List (Num a)
+quicksortHelp = \list, low, high ->
     when partition low high list is
         Pair partitionIndex partitioned ->
             partitioned
-                |> quicksort low (partitionIndex - 1)
-                |> quicksort (partitionIndex + 1) high
+                |> quicksortHelp low (partitionIndex - 1)
+                |> quicksortHelp (partitionIndex + 1) high
 
 
 swap : Int, Int, List a -> List a
@@ -44,4 +52,3 @@ partition = \low, high, initialList ->
         Err _ ->
             Pair (low - 1) initialList
 
-quicksort [ 7, 4, 9 ]
