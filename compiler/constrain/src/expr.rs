@@ -174,7 +174,13 @@ pub fn constrain_expr(
             let con = Lookup(
                 *symbol,
                 ForReason(
-                    Reason::RecordUpdateKeys(*symbol, fields),
+                    Reason::RecordUpdateKeys(
+                        *symbol,
+                        updates
+                            .iter()
+                            .map(|(key, field)| (key.clone(), field.region))
+                            .collect(),
+                    ),
                     record_type,
                     region,
                 ),

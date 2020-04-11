@@ -1,5 +1,5 @@
 use roc_can::expected::{Expected, PExpected};
-use roc_collections::all::SendMap;
+use roc_collections::all::{MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_solve::solve;
@@ -171,12 +171,14 @@ fn to_expr_report<'b>(
             // TODO special-case 2-branch if
             let thing = match annotation_source {
                 TypedIfBranch(index) => alloc.concat(vec![
-                    alloc.string(format!("{} branch of this ", int_to_ordinal(index))),
+                    alloc.string(format!("{}", int_to_ordinal(index))),
+                    alloc.reflow(" branch of this "),
                     alloc.keyword("if"),
                     alloc.text(" expression:"),
                 ]),
                 TypedWhenBranch(index) => alloc.concat(vec![
-                    alloc.string(format!("{} branch of this ", int_to_ordinal(index))),
+                    alloc.string(format!("{}", int_to_ordinal(index))),
+                    alloc.reflow(" branch of this "),
                     alloc.keyword("when"),
                     alloc.text(" expression:"),
                 ]),
@@ -210,7 +212,7 @@ fn to_expr_report<'b>(
                 title: "TYPE MISMATCH".to_string(),
                 filename,
                 doc: alloc.stack(vec![
-                    alloc.text("Something is off with the ").append( thing),
+                    alloc.text("Something is off with the ").append(thing),
                     alloc.region(expr_region),
                     comparison,
                 ]),
@@ -237,15 +239,15 @@ fn to_expr_report<'b>(
                     problem,
                     alloc.text("Right now it’s"),
                     alloc.concat(vec![
-                        alloc.text("But I need every "),
+                        alloc.reflow("But I need every "),
                         alloc.keyword("if"),
-                        alloc.text(" condition to evaluate to a "),
+                        alloc.reflow(" condition to evaluate to a "),
                         alloc.type_str("Bool"),
-                        alloc.text("—either "),
+                        alloc.reflow("—either "),
                         alloc.global_tag_name("True".into()),
-                        alloc.text(" or "),
+                        alloc.reflow(" or "),
                         alloc.global_tag_name("False".into()),
-                        alloc.text("."),
+                        alloc.reflow("."),
                     ]),
                     // Note: Elm has a hint here about truthiness. I think that
                     // makes sense for Elm, since most Elm users will come from
@@ -260,7 +262,8 @@ fn to_expr_report<'b>(
                     alloc.text("This "),
                     alloc.keyword("if"),
                     alloc.text(" guard condition needs to be a "),
-alloc.type_str("Bool"),                    alloc.text(":"),
+                    alloc.type_str("Bool"),
+                    alloc.text(":"),
                 ]);
                 report_bad_type(
                     alloc,
@@ -273,14 +276,15 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                     problem,
                     alloc.text("Right now it’s"),
                     alloc.concat(vec![
-                        alloc.text("But I need every "),
+                        alloc.reflow("But I need every "),
                         alloc.keyword("if"),
-                        alloc.text(" guard condition to evaluate to a "),
-    alloc.type_str("Bool"),                        alloc.text("—either "),
+                        alloc.reflow(" guard condition to evaluate to a "),
+                        alloc.type_str("Bool"),
+                        alloc.reflow("—either "),
                         alloc.global_tag_name("True".into()),
-                        alloc.text(" or "),
+                        alloc.reflow(" or "),
                         alloc.global_tag_name("False".into()),
-                        alloc.text("."),
+                        alloc.reflow("."),
                     ]),
                 )
             }
@@ -315,8 +319,7 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                         alloc.keyword("then"),
                         alloc.text(" branch has the type:"),
                     ]),
-                    Some(
-                    alloc.concat(vec![
+                    Some(alloc.concat(vec![
                         alloc.text("I need all branches in an "),
                         alloc.keyword("if"),
                         alloc.text(" to have the same type!"),
@@ -333,16 +336,19 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                         expected_type,
                         region,
                         Some(expr_region),
-                        alloc.string(format!(
-                            "The {} branch of this `if` does not match all the previous branches:",
-                            ith
-                        )),
-                        alloc.string(format!("The {} branch is", ith)),
-                        alloc.text("But all the previous branches have type:"),
-                        Some(alloc.concat(vec![
-                            alloc.text("I need all branches in an "),
+                        alloc.concat(vec![
+                            alloc.reflow("The "),
+                            alloc.string(format!("{}", ith)),
+                            alloc.reflow(" branch of this "),
                             alloc.keyword("if"),
-                            alloc.text(" to have the same type!"),
+                            alloc.reflow(" does not match all the previous branches:"),
+                        ]),
+                        alloc.string(format!("The {} branch is", ith)),
+                        alloc.reflow("But all the previous branches have type:"),
+                        Some(alloc.concat(vec![
+                            alloc.reflow("I need all branches in an "),
+                            alloc.keyword("if"),
+                            alloc.reflow(" to have the same type!"),
                         ])),
                     )
                 }
@@ -360,16 +366,22 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                     region,
                     Some(expr_region),
                     alloc.concat(vec![
-                        alloc.string(format!("The {} branch of this ", ith)),
+                        alloc.reflow("The "),
+                        alloc.string(format!("{}", ith)),
+                        alloc.reflow(" branch of this "),
                         alloc.keyword("when"),
-                        alloc.text(" does not match all the previous branches:"),
+                        alloc.reflow(" does not match all the previous branches:"),
                     ]),
-                    alloc.string(format!("The {} branch is", ith)),
-                    alloc.text("But all the previous branches have type:"),
+                    alloc.concat(vec![
+                        alloc.reflow("The "),
+                        alloc.string(format!("{}", ith)),
+                        alloc.reflow(" branch is"),
+                    ]),
+                    alloc.reflow("But all the previous branches have type:"),
                     Some(alloc.concat(vec![
-                        alloc.text("I need all branches of a "),
+                        alloc.reflow("I need all branches of a "),
                         alloc.keyword("when"),
-                        alloc.text(" to have the same type!"),
+                        alloc.reflow(" to have the same type!"),
                     ])),
                 )
             }
@@ -391,8 +403,8 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                         ith
                     )),
                     alloc.string(format!("The {} element is", ith)),
-                    alloc.text("But all the previous elements in the list have type:"),
-                    Some(alloc.text("I need all elements of a list to have the same type!")),
+                    alloc.reflow("But all the previous elements in the list have type:"),
+                    Some(alloc.reflow("I need all elements of a list to have the same type!")),
                 )
             }
             Reason::RecordUpdateValue(field) => report_mismatch(
@@ -414,10 +426,116 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                     alloc.text(" to be"),
                 ]),
                 alloc.text("But it should be:"),
-                Some(alloc.text(
-                    r#"Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax."#,
+                Some(alloc.reflow(
+                    "Record update syntax does not allow you \
+                        to change the type of fields. \
+                        You can achieve that with record literal syntax.",
                 )),
             ),
+            Reason::RecordUpdateKeys(symbol, expected_fields) => match found.clone().unwrap_alias()
+            {
+                ErrorType::Record(actual_fields, ext) => {
+                    let expected_set: MutSet<_> = expected_fields.keys().cloned().collect();
+                    let actual_set: MutSet<_> = actual_fields.keys().cloned().collect();
+
+                    let diff = expected_set.difference(&actual_set);
+
+                    match diff
+                        .into_iter()
+                        .next()
+                        .and_then(|k| Some((k, expected_fields.get(k)?)))
+                    {
+                        None => report_mismatch(
+                            alloc,
+                            filename,
+                            &category,
+                            found,
+                            expected_type,
+                            region,
+                            Some(expr_region),
+                            alloc.reflow("Something is off with this record update:"),
+                            alloc.concat(vec![
+                                alloc.reflow("The"),
+                                alloc.symbol_unqualified(symbol),
+                                alloc.reflow(" record is"),
+                            ]),
+                            alloc.reflow("But this update needs it to be compatible with:"),
+                            None,
+                        ),
+                        Some((field, field_region)) => {
+                            let r_doc = alloc.symbol_unqualified(symbol);
+                            let f_doc = alloc.record_field(field.clone().clone());
+
+                            let header = alloc.concat(vec![
+                                alloc.reflow("The "),
+                                r_doc.clone(),
+                                alloc.reflow(" record does not have a "),
+                                f_doc.clone(),
+                                alloc.reflow(" field:"),
+                            ]);
+
+                            let mut suggestions = suggest::sort(
+                                field.as_str(),
+                                actual_fields.into_iter().collect::<Vec<_>>(),
+                            );
+
+                            let doc = alloc.stack(vec![
+                                header,
+                                alloc.region(*field_region),
+                                if suggestions.is_empty() {
+                                    alloc.concat(vec![
+                                        alloc.reflow("In fact, "),
+                                        r_doc,
+                                        alloc.reflow(" is a record with NO fields!"),
+                                    ])
+                                } else {
+                                    let f = suggestions.remove(0);
+                                    let fs = suggestions;
+
+                                    alloc.stack(vec![
+                                        alloc.concat(vec![
+                                            alloc.reflow("This is usually a typo. Here are the "),
+                                            r_doc,
+                                            alloc.reflow(" fields that are most similar:"),
+                                        ]),
+                                        report_text::to_suggestion_record(
+                                            alloc,
+                                            f.clone(),
+                                            fs,
+                                            ext,
+                                        ),
+                                        alloc.concat(vec![
+                                            alloc.reflow("So maybe "),
+                                            f_doc,
+                                            alloc.reflow(" should be "),
+                                            alloc.record_field(f.0),
+                                            alloc.reflow("?"),
+                                        ]),
+                                    ])
+                                },
+                            ]);
+
+                            Report {
+                                filename,
+                                title: "TYPE MISMATCH".to_string(),
+                                doc,
+                            }
+                        }
+                    }
+                }
+                _ => report_bad_type(
+                    alloc,
+                    filename,
+                    &category,
+                    found,
+                    expected_type,
+                    region,
+                    Some(expr_region),
+                    alloc.reflow("This is not a record, so it has no fields to update!"),
+                    alloc.reflow("It is"),
+                    alloc.reflow("But I need a record!"),
+                ),
+            },
             Reason::FnCall { name, arity } => match count_arguments(&found) {
                 0 => {
                     let this_value = match name {
@@ -442,7 +560,7 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                             )),
                         ]),
                         alloc.region(expr_region),
-                        alloc.text("Are there any missing commas? Or missing parentheses?"),
+                        alloc.reflow("Are there any missing commas? Or missing parentheses?"),
                     ];
 
                     Report {
@@ -476,7 +594,7 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                                 )),
                             ]),
                             alloc.region(expr_region),
-                            alloc.text("Are there any missing commas? Or missing parentheses?"),
+                            alloc.reflow("Are there any missing commas? Or missing parentheses?"),
                         ];
 
                         Report {
@@ -499,8 +617,9 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                                 )),
                             ]),
                             alloc.region(expr_region),
-                            alloc.text(
-                                r#"Roc does not allow functions to be partially applied. Use a closure to make partial application explicit."#,
+                            alloc.reflow(
+                                "Roc does not allow functions to be partially applied. \
+                                Use a closure to make partial application explicit.",
                             ),
                         ];
 
@@ -552,8 +671,6 @@ alloc.type_str("Bool"),                    alloc.text(":"),
                 //    IntLiteral,
                 //    NumLiteral,
                 //    InterpolatedStringVar,
-                //    RecordUpdateValue(Lowercase),
-                //    RecordUpdateKeys(Symbol, SendMap<Lowercase, Type>),
                 todo!("I don't have a message yet for reason {:?}", other)
             }
         },
@@ -912,6 +1029,12 @@ pub mod suggest {
         }
     }
 
+    impl ToStr for &Lowercase {
+        fn to_str(&self) -> &str {
+            self.as_str()
+        }
+    }
+
     impl ToStr for InlinableString {
         fn to_str(&self) -> &str {
             self.as_ref()
@@ -921,6 +1044,15 @@ pub mod suggest {
     impl ToStr for &str {
         fn to_str(&self) -> &str {
             self
+        }
+    }
+
+    impl<A, B> ToStr for (A, B)
+    where
+        A: ToStr,
+    {
+        fn to_str(&self) -> &str {
+            self.0.to_str()
         }
     }
 
@@ -999,9 +1131,7 @@ fn ext_to_doc<'b>(alloc: &'b RocDocAllocator<'b>, ext: TypeExt) -> Option<RocDoc
 
     match ext {
         Closed => None,
-        FlexOpen(lowercase) | RigidOpen(lowercase) => {
-            Some(alloc.string(lowercase.as_str().to_string()))
-        }
+        FlexOpen(lowercase) | RigidOpen(lowercase) => Some(alloc.type_variable(lowercase)),
     }
 }
 
@@ -1024,8 +1154,8 @@ pub fn to_doc<'b>(
         Infinite => alloc.text("∞"),
         Error => alloc.text("?"),
 
-        FlexVar(lowercase) => alloc.string(lowercase.as_str().to_string()),
-        RigidVar(lowercase) => alloc.string(lowercase.as_str().to_string()),
+        FlexVar(lowercase) => alloc.type_variable(lowercase),
+        RigidVar(lowercase) => alloc.type_variable(lowercase),
 
         Type(symbol, args) => report_text::apply(
             alloc,
@@ -1600,8 +1730,10 @@ fn ext_to_status(ext1: &TypeExt, ext2: &TypeExt) -> Status {
 }
 
 mod report_text {
-    use crate::report::{RocDocAllocator, RocDocBuilder};
+    use crate::report::{Annotation, RocDocAllocator, RocDocBuilder};
+    use roc_module::ident::Lowercase;
     use roc_types::pretty_print::Parens;
+    use roc_types::types::{ErrorType, TypeExt};
     use ven_pretty::DocAllocator;
 
     fn with_parens<'b>(
@@ -1682,6 +1814,106 @@ mod report_text {
 
             entries_doc.append(alloc.reflow(" }")).append(ext_doc)
         }
+    }
+
+    pub fn to_suggestion_record<'b>(
+        alloc: &'b RocDocAllocator<'b>,
+        f: (Lowercase, ErrorType),
+        fs: Vec<(Lowercase, ErrorType)>,
+        ext: TypeExt,
+    ) -> RocDocBuilder<'b> {
+        use crate::type_error::{ext_to_doc, to_doc};
+
+        let entry_to_doc = |(name, tipe): (Lowercase, ErrorType)| {
+            (
+                alloc.string(name.as_str().to_string()),
+                to_doc(alloc, Parens::Unnecessary, tipe),
+            )
+        };
+
+        if fs.len() <= 3 {
+            let mut selection = vec![f];
+            selection.extend(fs);
+
+            let fields = selection.into_iter().map(entry_to_doc).collect();
+
+            vertical_record(alloc, fields, ext_to_doc(alloc, ext))
+                .annotate(Annotation::TypeBlock)
+                .indent(4)
+        } else {
+            let fields = fs.into_iter().take(3).map(entry_to_doc).collect();
+
+            vertical_record_snippet(alloc, entry_to_doc(f), fields)
+                .annotate(Annotation::TypeBlock)
+                .indent(4)
+        }
+    }
+
+    fn vertical_record<'b>(
+        alloc: &'b RocDocAllocator<'b>,
+        entries: Vec<(RocDocBuilder<'b>, RocDocBuilder<'b>)>,
+        opt_ext: Option<RocDocBuilder<'b>>,
+    ) -> RocDocBuilder<'b> {
+        let entry_to_doc = |(field_name, field_type): (RocDocBuilder<'b>, RocDocBuilder<'b>)| {
+            field_name
+                .append(alloc.text(" : "))
+                .hang(4)
+                .append(field_type)
+        };
+
+        match opt_ext {
+            None => {
+                if entries.is_empty() {
+                    alloc.text("{}")
+                } else {
+                    let start = std::iter::once(alloc.reflow("{ "))
+                        .chain(std::iter::repeat(alloc.reflow(", ")));
+                    let entry_docs = start
+                        .zip(entries.into_iter().map(entry_to_doc))
+                        .map(|(a, b)| a.append(b));
+                    alloc.vcat(entry_docs.chain(std::iter::once(alloc.text("}"))))
+                }
+            }
+            Some(ext) => {
+                let start = std::iter::once(alloc.reflow("{ "))
+                    .chain(std::iter::repeat(alloc.reflow(", ")));
+                let entry_docs = start
+                    .zip(entries.into_iter().map(entry_to_doc))
+                    .map(|(a, b)| a.append(b));
+                alloc
+                    .vcat(entry_docs.chain(std::iter::once(alloc.text("}"))))
+                    .append(ext)
+            }
+        }
+    }
+
+    fn vertical_record_snippet<'b>(
+        alloc: &'b RocDocAllocator<'b>,
+        entry: (RocDocBuilder<'b>, RocDocBuilder<'b>),
+        entries: Vec<(RocDocBuilder<'b>, RocDocBuilder<'b>)>,
+    ) -> RocDocBuilder<'b> {
+        let entry_to_doc = |(field_name, field_type): (RocDocBuilder<'b>, RocDocBuilder<'b>)| {
+            field_name
+                .append(alloc.text(" : "))
+                .hang(4)
+                .append(field_type)
+        };
+
+        let field = alloc.reflow("{ ").append(entry_to_doc(entry));
+        let fields = std::iter::repeat(alloc.reflow(", "))
+            .zip(
+                entries
+                    .into_iter()
+                    .map(entry_to_doc)
+                    .chain(std::iter::once(alloc.text("..."))),
+            )
+            .map(|(a, b)| a.append(b));
+
+        alloc.vcat(
+            std::iter::once(field)
+                .chain(fields)
+                .chain(std::iter::once(alloc.text("}"))),
+        )
     }
 
     pub fn tag_union<'b>(

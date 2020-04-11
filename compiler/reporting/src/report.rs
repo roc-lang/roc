@@ -452,6 +452,7 @@ impl<'a> RocDocAllocator<'a> {
         }
     }
 
+    /// vertical concatenation. Adds a newline between elements
     pub fn vcat<A, I>(&'a self, docs: I) -> DocBuilder<'a, Self, A>
     where
         A: 'a + Clone,
@@ -461,6 +462,8 @@ impl<'a> RocDocAllocator<'a> {
         self.intersperse(docs, self.line())
     }
 
+    /// live vcat, but adds a double line break between elements. Visually this means an empty line
+    /// between elements.
     pub fn stack<A, I>(&'a self, docs: I) -> DocBuilder<'a, Self, A>
     where
         A: 'a + Clone,
@@ -470,6 +473,7 @@ impl<'a> RocDocAllocator<'a> {
         self.intersperse(docs, self.line().append(self.line()))
     }
 
+    /// text from a String. Note that this does not reflow!
     pub fn string(&'a self, string: String) -> DocBuilder<'a, Self, Annotation> {
         let x: std::borrow::Cow<'a, str> = string.into();
 

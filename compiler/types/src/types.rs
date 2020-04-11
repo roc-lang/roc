@@ -626,7 +626,7 @@ pub enum Reason {
     IfBranch { index: usize, total_branches: usize },
     ElemInList { index: usize },
     RecordUpdateValue(Lowercase),
-    RecordUpdateKeys(Symbol, SendMap<Lowercase, Type>),
+    RecordUpdateKeys(Symbol, SendMap<Lowercase, Region>),
 }
 
 #[derive(PartialEq, Debug, Clone)]

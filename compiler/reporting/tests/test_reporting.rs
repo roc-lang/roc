@@ -608,7 +608,8 @@ mod test_reporting {
 
                     Str
 
-                But I need every `if` condition to evaluate to a Bool—either `True` or `False`.
+                But I need every `if` condition to evaluate to a Bool—either `True` or
+                `False`.
                 "#
             ),
         )
@@ -637,7 +638,8 @@ mod test_reporting {
 
                     Num a
 
-                But I need every `if` guard condition to evaluate to a Bool—either `True` or `False`.
+                But I need every `if` guard condition to evaluate to a Bool—either
+                `True` or `False`.
                 "#
             ),
         )
@@ -796,7 +798,8 @@ mod test_reporting {
 
                     {}
 
-                Record update syntax does not allow you to change the type of fields. You can achieve that with record literal syntax.
+                Record update syntax does not allow you to change the type of fields.
+                You can achieve that with record literal syntax.
                 "#
             ),
         )
@@ -1207,7 +1210,8 @@ mod test_reporting {
                 4 ┆  f 1
                   ┆  ^
 
-                Roc does not allow functions to be partially applied. Use a closure to make partial application explicit.
+                Roc does not allow functions to be partially applied. Use a closure to
+                make partial application explicit.
                 "#
             ),
         )
@@ -1739,6 +1743,142 @@ mod test_reporting {
                     │     ↓
                     │     bar
                     └─────┘
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn update_empty_record() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x = {}
+
+                { x & foo: 3 }
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                The `x` record does not have a `.foo` field:
+
+                3 ┆  { x & foo: 3 }
+                  ┆        ^^^^^^
+
+                In fact, `x` is a record with NO fields!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn update_record() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x = { fo: 3, bar: 4 }
+
+                { x & foo: 3 }
+                "#
+            ),
+            // TODO also suggest fields with the correct type
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                The `x` record does not have a `.foo` field:
+
+                3 ┆  { x & foo: 3 }
+                  ┆        ^^^^^^
+
+                This is usually a typo. Here are the `x` fields that are most similar:
+
+                    { fo : Num b
+                    , bar : Num a
+                    }
+
+                So maybe `.foo` should be `.fo`?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn update_record_ext() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { fo: Int }ext -> Int
+                f = \r ->
+                    r2 = { r & foo: r.fo }
+
+                    r2.fo
+
+                f
+                "#
+            ),
+            // TODO also suggest fields with the correct type
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                Something is off with the body of the `f` definition:
+
+                2 ┆>  f = \r ->
+                3 ┆>      r2 = { r & foo: r.fo }
+                4 ┆>
+                5 ┆>      r2.fo
+
+                The body is an anonymous function of type:
+
+                    { fo : Int, foo : Int }a -> Int
+
+                But the type annotation on `f` says it should be:
+
+                    { fo : Int }ext -> Int
+
+                Hint: Seems like a record field typo. Maybe `foo` should be `fo`?
+
+                Hint: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn update_record_snippet() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x = { fo: 3, bar: 4, baz: 3, spam: 42, foobar: 3 }
+
+                { x & foo: 3 }
+                "#
+            ),
+            // TODO also suggest fields with the correct type
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                The `x` record does not have a `.foo` field:
+
+                3 ┆  { x & foo: 3 }
+                  ┆        ^^^^^^
+
+                This is usually a typo. Here are the `x` fields that are most similar:
+
+                    { fo : Num c
+                    , foobar : Num a
+                    , bar : Num e
+                    , baz : Num b
+                    , ...
+                    }
+
+                So maybe `.foo` should be `.fo`?
                 "#
             ),
         )
