@@ -2040,7 +2040,6 @@ mod test_reporting {
                 f x
                 "#
             ),
-            // what?
             indoc!(
                 r#"
                 -- UNSAFE PATTERN --------------------------------------------------------------
@@ -2137,7 +2136,6 @@ mod test_reporting {
                     False -> 3
                 "#
             ),
-            // should not give errors
             indoc!(
                 r#"
                 -- UNSAFE PATTERN --------------------------------------------------------------
@@ -2170,7 +2168,6 @@ mod test_reporting {
                     Green -> 1
                 "#
             ),
-            // should not give errors
             indoc!(
                 r#"
                 -- UNSAFE PATTERN --------------------------------------------------------------
@@ -2202,7 +2199,6 @@ mod test_reporting {
                     _ -> 5
                 "#
             ),
-            // should not give errors
             indoc!(
                 r#"
                 -- REDUNDANT PATTERN -----------------------------------------------------------
