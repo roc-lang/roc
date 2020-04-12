@@ -612,6 +612,7 @@ define_builtins! {
         8 FLOAT_ADD: "#add"
         9 FLOAT_SUB: "#sub"
         10 FLOAT_EQ: "#eq"
+        11 FLOAT_ROUND: "round"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias

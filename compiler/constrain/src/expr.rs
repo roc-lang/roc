@@ -9,7 +9,7 @@ use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{Field, WhenBranch};
 use roc_can::pattern::Pattern;
-use roc_collections::all::{ImMap, SendMap};
+use roc_collections::all::{ImMap, Index, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
@@ -156,7 +156,7 @@ pub fn constrain_expr(
                 cons.push(con);
             }
 
-            let fields_type = Type::Record(fields.clone(), Box::new(Type::Variable(*ext_var)));
+            let fields_type = Type::Record(fields, Box::new(Type::Variable(*ext_var)));
             let record_type = Type::Variable(*record_var);
 
             // NOTE from elm compiler: fields_type is separate so that Error propagates better
@@ -174,7 +174,13 @@ pub fn constrain_expr(
             let con = Lookup(
                 *symbol,
                 ForReason(
-                    Reason::RecordUpdateKeys(*symbol, fields),
+                    Reason::RecordUpdateKeys(
+                        *symbol,
+                        updates
+                            .iter()
+                            .map(|(key, field)| (key.clone(), field.region))
+                            .collect(),
+                    ),
                     record_type,
                     region,
                 ),
@@ -205,7 +211,9 @@ pub fn constrain_expr(
 
                 for (index, loc_elem) in loc_elems.iter().enumerate() {
                     let elem_expected = ForReason(
-                        Reason::ElemInList { index },
+                        Reason::ElemInList {
+                            index: Index::zero_based(index),
+                        },
                         list_elem_type.clone(),
                         loc_elem.region,
                     );
@@ -264,7 +272,7 @@ pub fn constrain_expr(
 
                 let reason = Reason::FnArg {
                     name: opt_symbol,
-                    arg_index: index as u8,
+                    arg_index: Index::zero_based(index),
                 };
                 let expected_arg = ForReason(reason, arg_type.clone(), region);
                 let arg_con = constrain_expr(env, loc_arg.region, &loc_arg.value, expected_arg);
@@ -395,7 +403,10 @@ pub fn constrain_expr(
                             FromAnnotation(
                                 name.clone(),
                                 arity,
-                                AnnotationSource::TypedIfBranch(index + 1),
+                                AnnotationSource::TypedIfBranch {
+                                    index: Index::zero_based(index),
+                                    num_branches: branches.len(),
+                                },
                                 tipe.clone(),
                             ),
                         );
@@ -410,7 +421,10 @@ pub fn constrain_expr(
                         FromAnnotation(
                             name,
                             arity,
-                            AnnotationSource::TypedIfBranch(branches.len() + 1),
+                            AnnotationSource::TypedIfBranch {
+                                index: Index::zero_based(branches.len()),
+                                num_branches: branches.len(),
+                            },
                             tipe.clone(),
                         ),
                     );
@@ -442,7 +456,7 @@ pub fn constrain_expr(
                             &loc_body.value,
                             ForReason(
                                 Reason::IfBranch {
-                                    index: index + 1,
+                                    index: Index::zero_based(index),
                                     total_branches: branches.len(),
                                 },
                                 Type::Variable(*branch_var),
@@ -459,7 +473,7 @@ pub fn constrain_expr(
                         &final_else.value,
                         ForReason(
                             Reason::IfBranch {
-                                index: branches.len() + 1,
+                                index: Index::zero_based(branches.len()),
                                 total_branches: branches.len() + 1,
                             },
                             Type::Variable(*branch_var),
@@ -510,19 +524,26 @@ pub fn constrain_expr(
                     constraints.push(ast_con);
 
                     for (index, when_branch) in branches.iter().enumerate() {
+                        let pattern_region =
+                            Region::across_all(when_branch.patterns.iter().map(|v| &v.region));
+
                         let branch_con = constrain_when_branch(
                             env,
                             when_branch.value.region,
                             when_branch,
                             PExpected::ForReason(
-                                PReason::WhenMatch { index },
+                                PReason::WhenMatch {
+                                    index: Index::zero_based(index),
+                                },
                                 cond_type.clone(),
-                                Region::across_all(when_branch.patterns.iter().map(|v| &v.region)),
+                                pattern_region,
                             ),
                             FromAnnotation(
                                 name.clone(),
                                 *arity,
-                                TypedWhenBranch(index + 1),
+                                TypedWhenBranch {
+                                    index: Index::zero_based(index),
+                                },
                                 typ.clone(),
                             ),
                         );
@@ -536,17 +557,23 @@ pub fn constrain_expr(
                     let mut branch_cons = Vec::with_capacity(branches.len());
 
                     for (index, when_branch) in branches.iter().enumerate() {
+                        let pattern_region =
+                            Region::across_all(when_branch.patterns.iter().map(|v| &v.region));
                         let branch_con = constrain_when_branch(
                             env,
                             region,
                             when_branch,
                             PExpected::ForReason(
-                                PReason::WhenMatch { index },
+                                PReason::WhenMatch {
+                                    index: Index::zero_based(index),
+                                },
                                 cond_type.clone(),
-                                Region::across_all(when_branch.patterns.iter().map(|v| &v.region)),
+                                pattern_region,
                             ),
                             ForReason(
-                                Reason::WhenBranch { index },
+                                Reason::WhenBranch {
+                                    index: Index::zero_based(index),
+                                },
                                 branch_type.clone(),
                                 when_branch.value.region,
                             ),
