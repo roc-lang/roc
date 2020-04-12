@@ -311,9 +311,32 @@ fn patterns_to_when<'a>(
     // to pass type checking. So the order in which we add them to the body does not matter: there
     // are only stores anyway, no branches.
     for (pattern_var, pattern) in patterns.into_iter() {
-        let (new_symbol, new_body) = pattern_to_when(env, pattern_var, pattern, body_var, body);
-        body = new_body;
-        symbols.push(new_symbol);
+        let context = crate::pattern::Context::BadArg;
+        let mono_pattern = from_can_pattern(env, &pattern.value);
+        match crate::pattern::check(
+            pattern.region,
+            &[(
+                Located::at(pattern.region, mono_pattern.clone()),
+                crate::pattern::Guard::NoGuard,
+            )],
+            context,
+        ) {
+            Ok(_) => {
+                let (new_symbol, new_body) =
+                    pattern_to_when(env, pattern_var, pattern, body_var, body);
+                symbols.push(new_symbol);
+                body = new_body;
+            }
+            Err(errors) => {
+                for error in errors {
+                    env.problems.push(MonoProblem::PatternProblem(error))
+                }
+
+                let error = roc_problem::can::RuntimeError::UnsupportedPattern(pattern.region);
+                body = Located::at(pattern.region, roc_can::expr::Expr::RuntimeError(error));
+            }
+        }
+
         arg_vars.push(pattern_var);
     }
 
@@ -422,6 +445,7 @@ fn from_can<'a>(
             // foo = \r -> when r is { x } -> body
             //
             // conversion of one-pattern when expressions will do the most optimal thing
+
             let (arg_vars, arg_symbols, body) = patterns_to_when(env, loc_args, ret_var, loc_body);
 
             let symbol = match name {
@@ -805,6 +829,7 @@ fn from_can<'a>(
                 elems: elems.into_bump_slice(),
             }
         }
+        RuntimeError(error) => Expr::RuntimeError(env.arena.alloc(format!("{:?}", error))),
         other => panic!("TODO convert canonicalized {:?} to mono::Expr", other),
     }
 }
@@ -1001,6 +1026,25 @@ fn from_can_defs<'a>(
                 ));
             }
             _ => {
+                let context = crate::pattern::Context::BadDestruct;
+                match crate::pattern::check(
+                    loc_pattern.region,
+                    &[(
+                        Located::at(loc_pattern.region, mono_pattern.clone()),
+                        crate::pattern::Guard::NoGuard,
+                    )],
+                    context,
+                ) {
+                    Ok(_) => {}
+                    Err(errors) => {
+                        for error in errors {
+                            env.problems.push(MonoProblem::PatternProblem(error))
+                        }
+
+                        // panic!("generate runtime error, should probably also optimize this");
+                    }
+                }
+
                 let symbol = env.fresh_symbol();
                 stored.push((
                     symbol,
@@ -1060,12 +1104,14 @@ fn from_can_when<'a>(
             Guard::NoGuard
         };
 
+        let context = crate::pattern::Context::BadCase;
         match crate::pattern::check(
-            Region::zero(),
+            loc_when_pattern.region,
             &[(
                 Located::at(loc_when_pattern.region, mono_pattern.clone()),
                 guard,
             )],
+            context,
         ) {
             Ok(_) => {}
             Err(errors) => {
@@ -1178,19 +1224,40 @@ fn from_can_when<'a>(
             }
         }
 
-        match crate::pattern::check(Region::zero(), &loc_branches) {
+        let context = crate::pattern::Context::BadCase;
+        match crate::pattern::check(loc_cond.region, &loc_branches, context) {
             Ok(_) => {}
             Err(errors) => {
+                use crate::pattern::Error::*;
+                let mut is_not_exhaustive = false;
+                let mut overlapping_branches = std::vec::Vec::new();
+
                 for error in errors {
+                    match &error {
+                        Incomplete(_, _, _) => {
+                            is_not_exhaustive = true;
+                        }
+                        Redundant { index, .. } => {
+                            overlapping_branches.push(index.to_zero_based());
+                        }
+                    }
                     env.problems.push(MonoProblem::PatternProblem(error))
                 }
 
-                opt_branches.push((
-                    Pattern::Underscore,
-                    crate::decision_tree::Guard::NoGuard,
-                    &[],
-                    Expr::RuntimeError("non-exhaustive pattern match"),
-                ));
+                overlapping_branches.sort();
+
+                for i in overlapping_branches.into_iter().rev() {
+                    opt_branches.remove(i);
+                }
+
+                if is_not_exhaustive {
+                    opt_branches.push((
+                        Pattern::Underscore,
+                        crate::decision_tree::Guard::NoGuard,
+                        &[],
+                        Expr::RuntimeError("non-exhaustive pattern match"),
+                    ));
+                }
             }
         }
 

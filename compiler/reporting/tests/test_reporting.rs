@@ -2075,7 +2075,80 @@ mod test_reporting {
     }
 
     #[test]
-    fn patterns_int_not_exhaustive() {
+    fn patterns_fn_not_exhaustive() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Either : [ Left Int, Right Bool ]
+
+                x : Either
+                x = Left 42
+
+                f : Either -> Int
+                f = \Left v -> v
+
+                f x
+                "#
+            ),
+            // what?
+            indoc!(
+                r#"
+                -- UNSAFE PATTERN --------------------------------------------------------------
+
+                This pattern does not cover all the possibilities
+
+                7 ┆  f = \Left v -> v
+                  ┆       ^^^^
+
+                Other possibilities include:
+
+                    Right _
+
+                I would have to crash if I saw one of those! So rather than pattern
+                matching in function arguments, put a `when` in the function body to
+                account for all possibilities.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn patterns_let_not_exhaustive() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : [ Left Int, Right Bool ]
+                x = Left 42
+
+
+                (Left y) = x
+
+                y
+                "#
+            ),
+            indoc!(
+                r#"
+                -- UNSAFE PATTERN --------------------------------------------------------------
+
+                This pattern does not cover all the possibilities
+
+                5 ┆  (Left y) = x
+                  ┆   ^^^^
+
+                Other possibilities include:
+
+                    Right _
+
+                I would have to crash if I saw one of those! You can use a binding to
+                deconstruct a value if there is only ONE possibility. Use a `when` to
+                account for all possibilities.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn patterns_when_not_exhaustive() {
         report_problem_as(
             indoc!(
                 r#"
@@ -2083,8 +2156,22 @@ mod test_reporting {
                     2 -> 0x3
                 "#
             ),
-            // should not give errors
-            indoc!("wrong"),
+            indoc!(
+                r#"
+                -- UNSAFE PATTERN --------------------------------------------------------------
+
+                This `when` does not cover all the possibilities
+
+                2 ┆      2 -> 0x3
+                  ┆      ^
+
+                Other possibilities include:
+
+                    _
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
         )
     }
 
@@ -2100,7 +2187,60 @@ mod test_reporting {
                 "#
             ),
             // should not give errors
-            indoc!("wrong"),
+            indoc!(
+                r#"
+                -- REDUNDANT PATTERN -----------------------------------------------------------
+
+                The 2nd pattern is redundant:
+
+                3 ┆      2 -> 0x4
+                  ┆      ^
+
+                Any value of this shape will be handled by a previous pattern, so this
+                one should be removed.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unify_alias_other() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo : { x : Int }
+
+                f : Foo -> Int
+                f = \r -> r.x
+
+                f { y: 3.14 }
+                "#
+            ),
+            // de-aliases the alias to give a better error message
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                The 1st argument to `f` is not what I expect:
+
+                6 ┆  f { y: 3.14 }
+                  ┆    ^^^^^^^^^^^
+
+                This argument is a record of type:
+
+                    { y : Float }
+
+                But `f` needs the 1st argument to be:
+
+                    { x : Int }
+
+                Hint: Seems like a record field typo. Maybe `y` should be `x`?
+
+                Hint: Can more type annotations be added? Type annotations always help
+                me give more specific messages, and I think they could help a lot in
+                this case
+                "#
+            ),
         )
     }
 }

@@ -104,6 +104,10 @@ impl Index {
         Index(i)
     }
 
+    pub fn to_zero_based(self) -> usize {
+        self.0
+    }
+
     pub fn one_based(i: usize) -> Self {
         Index(i - 1)
     }

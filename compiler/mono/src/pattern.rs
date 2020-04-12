@@ -146,9 +146,10 @@ pub enum Guard {
 pub fn check<'a>(
     region: Region,
     patterns: &[(Located<crate::expr::Pattern<'a>>, Guard)],
+    context: Context,
 ) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
-    check_patterns(region, Context::BadArg, patterns, &mut errors);
+    check_patterns(region, context, patterns, &mut errors);
 
     if errors.is_empty() {
         Ok(())
