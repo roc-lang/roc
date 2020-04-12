@@ -55,6 +55,7 @@ pub struct LoadedModule {
     pub can_problems: Vec<roc_problem::can::Problem>,
     pub type_problems: Vec<solve::TypeError>,
     pub declarations: Vec<Declaration>,
+    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub src: Box<str>,
 }
 
@@ -96,6 +97,7 @@ enum Msg {
         solved_types: MutMap<Symbol, SolvedType>,
         aliases: MutMap<Symbol, Alias>,
         subs: Arc<Solved<Subs>>,
+        exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         problems: Vec<solve::TypeError>,
     },
 }
@@ -395,6 +397,7 @@ pub async fn load<'a>(
                 solved_types,
                 subs,
                 problems,
+                exposed_vars_by_symbol,
                 aliases,
                 src,
             } => {
@@ -431,6 +434,7 @@ pub async fn load<'a>(
                         can_problems,
                         type_problems,
                         declarations,
+                        exposed_vars_by_symbol,
                         src,
                     });
                 } else {
@@ -928,10 +932,10 @@ fn solve_module(
         // annotations which are decoupled from our Subs, because that's how
         // other modules will generate constraints for imported values
         // within the context of their own Subs.
-        for (symbol, var) in exposed_vars_by_symbol {
-            let solved_type = SolvedType::new(&solved_subs, var);
+        for (symbol, var) in exposed_vars_by_symbol.iter() {
+            let solved_type = SolvedType::new(&solved_subs, *var);
 
-            solved_types.insert(symbol, solved_type);
+            solved_types.insert(*symbol, solved_type);
         }
 
         tokio::spawn(async move {
@@ -942,6 +946,7 @@ fn solve_module(
                 src,
                 module_id: home,
                 subs: Arc::new(solved_subs),
+                exposed_vars_by_symbol,
                 solved_types,
                 problems,
                 aliases: env.aliases,

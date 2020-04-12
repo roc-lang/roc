@@ -1,3 +1,3 @@
-app Hello provides [ text ] imports []
+app Hello provides [ main ] imports []
 
-text = "Hello, World!"
+main = "Hello, World!"

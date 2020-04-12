@@ -1,5 +1,6 @@
-app Quicksort provides [ quicksort ] imports []
+app Quicksort provides [ main ] imports []
 
+main = quicksort [ 7, 19, 4, 21 ]
 
 quicksort : List (Num a) -> List (Num a)
 quicksort = \list ->
