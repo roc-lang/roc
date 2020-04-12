@@ -40,15 +40,20 @@ fn report_mismatch<'b>(
     found: ErrorType,
     expected_type: ErrorType,
     region: roc_region::all::Region,
-    _opt_highlight: Option<roc_region::all::Region>,
+    opt_highlight: Option<roc_region::all::Region>,
     problem: RocDocBuilder<'b>,
     this_is: RocDocBuilder<'b>,
     instead_of: RocDocBuilder<'b>,
     further_details: Option<RocDocBuilder<'b>>,
 ) -> Report<'b> {
+    let snippet = if let Some(highlight) = opt_highlight {
+        alloc.region_with_subregion(highlight, region)
+    } else {
+        alloc.region(region)
+    };
     let lines = vec![
         problem,
-        alloc.region(region),
+        snippet,
         type_comparison(
             alloc,
             found,
@@ -74,14 +79,19 @@ fn report_bad_type<'b>(
     found: ErrorType,
     expected_type: ErrorType,
     region: roc_region::all::Region,
-    _opt_highlight: Option<roc_region::all::Region>,
+    opt_highlight: Option<roc_region::all::Region>,
     problem: RocDocBuilder<'b>,
     this_is: RocDocBuilder<'b>,
     further_details: RocDocBuilder<'b>,
 ) -> Report<'b> {
+    let snippet = if let Some(highlight) = opt_highlight {
+        alloc.region_with_subregion(highlight, region)
+    } else {
+        alloc.region(region)
+    };
     let lines = vec![
         problem,
-        alloc.region(region),
+        snippet,
         lone_type(
             alloc,
             found,
@@ -150,6 +160,8 @@ fn to_expr_report<'b>(
                 None => (alloc.text("this"), alloc.nil()),
             };
 
+            let mut region = None;
+
             let thing = match annotation_source {
                 TypedIfBranch {
                     index,
@@ -176,17 +188,20 @@ fn to_expr_report<'b>(
                     alloc.keyword("when"),
                     alloc.text(" expression:"),
                 ]),
-                TypedBody => alloc.concat(vec![
-                    alloc.text("body of "),
-                    the_name_text,
-                    alloc.text(" definition:"),
-                ]),
+                TypedBody { region: ann_region } => {
+                    region = Some(ann_region);
+                    alloc.concat(vec![
+                        alloc.text("body of "),
+                        the_name_text,
+                        alloc.text(" definition:"),
+                    ])
+                }
             };
 
             let it_is = match annotation_source {
                 TypedIfBranch { index, .. } => format!("The {} branch is", index.ordinal()),
                 TypedWhenBranch { index, .. } => format!("The {} branch is", index.ordinal()),
-                TypedBody => "The body is".into(),
+                TypedBody { .. } => "The body is".into(),
             };
 
             let comparison = type_comparison(
@@ -207,7 +222,14 @@ fn to_expr_report<'b>(
                 filename,
                 doc: alloc.stack(vec![
                     alloc.text("Something is off with the ").append(thing),
-                    alloc.region(expr_region),
+                    match region {
+                        None => alloc.region(expr_region),
+                        Some(ann_region) => {
+                            let joined =
+                                roc_region::all::Region::span_across(&ann_region, &expr_region);
+                            alloc.region_with_subregion(joined, expr_region)
+                        }
+                    },
                     comparison,
                 ]),
             }

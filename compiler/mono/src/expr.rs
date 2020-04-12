@@ -393,6 +393,7 @@ fn pattern_to_when<'a>(
             let wrapped_body = When {
                 cond_var: pattern_var,
                 expr_var: body_var,
+                region: Region::zero(),
                 loc_cond: Box::new(Located::at_zero(Var(symbol))),
                 branches: vec![WhenBranch {
                     patterns: vec![pattern],
@@ -613,9 +614,10 @@ fn from_can<'a>(
         When {
             cond_var,
             expr_var,
+            region,
             loc_cond,
             branches,
-        } => from_can_when(env, cond_var, expr_var, *loc_cond, branches, procs),
+        } => from_can_when(env, cond_var, expr_var, region, *loc_cond, branches, procs),
 
         If {
             cond_var,
@@ -1077,6 +1079,7 @@ fn from_can_when<'a>(
     env: &mut Env<'a, '_>,
     cond_var: Variable,
     expr_var: Variable,
+    region: Region,
     loc_cond: Located<roc_can::expr::Expr>,
     mut branches: std::vec::Vec<roc_can::expr::WhenBranch>,
     procs: &mut Procs<'a>,
@@ -1106,7 +1109,7 @@ fn from_can_when<'a>(
 
         let context = crate::pattern::Context::BadCase;
         match crate::pattern::check(
-            loc_when_pattern.region,
+            region,
             &[(
                 Located::at(loc_when_pattern.region, mono_pattern.clone()),
                 guard,
@@ -1225,7 +1228,7 @@ fn from_can_when<'a>(
         }
 
         let context = crate::pattern::Context::BadCase;
-        match crate::pattern::check(loc_cond.region, &loc_branches, context) {
+        match crate::pattern::check(region, &loc_branches, context) {
             Ok(_) => {}
             Err(errors) => {
                 use crate::pattern::Error::*;

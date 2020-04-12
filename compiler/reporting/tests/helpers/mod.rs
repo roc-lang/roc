@@ -234,7 +234,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         &mut env,
         &var_store,
         &mut scope,
-        Region::zero(),
+        loc_expr.region,
         &loc_expr.value,
     );
 

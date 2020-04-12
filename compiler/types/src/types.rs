@@ -606,7 +606,7 @@ pub enum PReason {
 pub enum AnnotationSource {
     TypedIfBranch { index: Index, num_branches: usize },
     TypedWhenBranch { index: Index },
-    TypedBody,
+    TypedBody { region: Region },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

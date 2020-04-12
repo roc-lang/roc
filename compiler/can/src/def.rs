@@ -22,14 +22,21 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use ven_graph::{strongly_connected_components, topological_sort_into_groups};
 
-#[allow(clippy::type_complexity)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Def {
     pub loc_pattern: Located<Pattern>,
     pub loc_expr: Located<Expr>,
     pub expr_var: Variable,
     pub pattern_vars: SendMap<Symbol, Variable>,
-    pub annotation: Option<(Type, IntroducedVariables, SendMap<Symbol, Alias>)>,
+    pub annotation: Option<Annotation>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Annotation {
+    pub signature: Type,
+    pub introduced_variables: IntroducedVariables,
+    pub aliases: SendMap<Symbol, Alias>,
+    pub region: Region,
 }
 
 #[derive(Debug)]
@@ -794,11 +801,12 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((
-                            typ.clone(),
-                            output.introduced_variables.clone(),
-                            ann.aliases.clone(),
-                        )),
+                        annotation: Some(Annotation {
+                            signature: typ.clone(),
+                            introduced_variables: output.introduced_variables.clone(),
+                            aliases: ann.aliases.clone(),
+                            region: loc_ann.region,
+                        }),
                     },
                 );
             }
@@ -996,11 +1004,12 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((
-                            typ.clone(),
-                            output.introduced_variables.clone(),
-                            ann.aliases.clone(),
-                        )),
+                        annotation: Some(Annotation {
+                            signature: typ.clone(),
+                            introduced_variables: output.introduced_variables.clone(),
+                            aliases: ann.aliases.clone(),
+                            region: loc_ann.region,
+                        }),
                     },
                 );
             }

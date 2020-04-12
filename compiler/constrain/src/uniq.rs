@@ -1059,6 +1059,7 @@ pub fn constrain_expr(
             expr_var,
             loc_cond,
             branches,
+            ..
         } => {
             let cond_var = *cond_var;
             let cond_type = Variable(cond_var);
@@ -1897,15 +1898,15 @@ fn constrain_def(
     let mut new_rigids = Vec::new();
 
     let expr_con = match &def.annotation {
-        Some((annotation, introduced_vars, ann_def_aliases)) => {
-            def_aliases = ann_def_aliases.clone();
-            let arity = annotation.arity();
+        Some(annotation) => {
+            def_aliases = annotation.aliases.clone();
+            let arity = annotation.signature.arity();
             let mut ftv = env.rigids.clone();
 
-            let annotation = instantiate_rigids(
+            let signature = instantiate_rigids(
                 var_store,
-                annotation,
-                &introduced_vars,
+                &annotation.signature,
+                &annotation.introduced_variables,
                 &mut new_rigids,
                 &mut ftv,
                 &def.loc_pattern,
@@ -1915,8 +1916,10 @@ fn constrain_def(
             let annotation_expected = Expected::FromAnnotation(
                 def.loc_pattern.clone(),
                 arity,
-                AnnotationSource::TypedBody,
-                annotation,
+                AnnotationSource::TypedBody {
+                    region: annotation.region,
+                },
+                signature,
             );
 
             pattern_state.constraints.push(Eq(
@@ -2119,16 +2122,16 @@ pub fn rec_defs_help(
                 flex_info.def_types.extend(pattern_state.headers);
             }
 
-            Some((annotation, introduced_vars, ann_def_aliases)) => {
-                for (symbol, alias) in ann_def_aliases.clone() {
+            Some(annotation) => {
+                for (symbol, alias) in annotation.aliases.clone() {
                     def_aliases.insert(symbol, alias);
                 }
-                let arity = annotation.arity();
+                let arity = annotation.signature.arity();
                 let mut ftv = env.rigids.clone();
-                let annotation = instantiate_rigids(
+                let signature = instantiate_rigids(
                     var_store,
-                    annotation,
-                    &introduced_vars,
+                    &annotation.signature,
+                    &annotation.introduced_variables,
                     &mut new_rigids,
                     &mut ftv,
                     &def.loc_pattern,
@@ -2137,8 +2140,10 @@ pub fn rec_defs_help(
                 let annotation_expected = Expected::FromAnnotation(
                     def.loc_pattern.clone(),
                     arity,
-                    AnnotationSource::TypedBody,
-                    annotation.clone(),
+                    AnnotationSource::TypedBody {
+                        region: annotation.region,
+                    },
+                    signature.clone(),
                 );
                 let expr_con = constrain_expr(
                     &Env {

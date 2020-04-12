@@ -23,10 +23,8 @@ mod test_reporting {
     use std::path::PathBuf;
     // use roc_region::all;
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
-    use roc_reporting::report;
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
-    use std::fmt::Write;
 
     fn filename_from_string(str: &str) -> PathBuf {
         let mut filename = PathBuf::new();
@@ -89,7 +87,7 @@ mod test_reporting {
             let pointer_size = std::mem::size_of::<u64>() as u32;
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let mono_expr = Expr::new(
+            let _mono_expr = Expr::new(
                 &arena,
                 &mut subs,
                 &mut mono_problems,
@@ -556,7 +554,7 @@ mod test_reporting {
 
                 I cannot find a `theAdmin` value
 
-                <cyan>3<reset><magenta> ┆<reset><white>  theAdmin<reset>
+                <cyan>3<reset><magenta> ┆<reset>  <white>theAdmin<reset>
                  <magenta> ┆<reset>  <red>^^^^^^^^<reset>
 
                 these names seem close though:
@@ -660,8 +658,9 @@ mod test_reporting {
 
                 This `if` guard condition needs to be a Bool:
 
-                2 ┆      2 if 1 -> 0x0
-                  ┆           ^
+                1 ┆   when 1 is
+                2 ┆>      2 if 1 -> 0x0
+                3 ┆       _ -> 0x1
 
                 Right now it’s a number of type:
 
@@ -751,6 +750,8 @@ mod test_reporting {
 
                 The 2nd branch of this `when` does not match all the previous branches:
 
+                1 ┆  when 1 is
+                2 ┆      2 -> "foo"
                 3 ┆      3 -> {}
                   ┆           ^^
 
@@ -817,7 +818,7 @@ mod test_reporting {
                 I cannot update the `.foo` field like this:
 
                 4 ┆  { x & foo: "bar" }
-                  ┆  ^^^^^^^^^^^^^^^^^^
+                  ┆             ^^^^^
 
                 You are trying to update `.foo` to be a string of type:
 
@@ -833,67 +834,6 @@ mod test_reporting {
             ),
         )
     }
-
-    // needs a bit more infrastructure re. diffing records
-    //    #[test]
-    //    fn record_update_keys() {
-    //        report_problem_as(
-    //            indoc!(
-    //                r#"
-    //                x : { foo : {} }
-    //                x = { foo: {} }
-    //
-    //                { x & baz: "bar" }
-    //                "#
-    //            ),
-    //            indoc!(
-    //                r#"
-    //                The `x` record does not have a `baz` field:
-    //
-    //                4 ┆  { x & baz: "bar" }
-    //                  ┆        ^^^
-    //
-    //                This is usually a typo. Here are the `x` fields that are most similar:
-    //
-    //                    { foo : {}
-    //                    }
-    //
-    //                So maybe `baz` should be `foo`?
-    //                "#
-    //            ),
-    //        )
-    //    }
-
-    //    #[test]
-    //    fn num_literal() {
-    //        report_problem_as(
-    //            indoc!(
-    //                r#"
-    //                x : Str
-    //                x = 4
-    //
-    //                x
-    //                "#
-    //            ),
-    //            indoc!(
-    //                r#"
-    //                Something is off with the body of the `x` definition:
-    //
-    //                4 ┆  x = 4
-    //                  ┆      ^
-    //
-    //                The body is a number of type:
-    //
-    //                    Num a
-    //
-    //                But the type annotation on `x` says that it should be:
-    //
-    //                    Str
-    //
-    //                "#
-    //            ),
-    //        )
-    //    }
 
     #[test]
     fn circular_type() {
@@ -1156,6 +1096,7 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
+                1 ┆  x : Int -> Int
                 2 ┆  x = \_ -> 3.14
                   ┆      ^^^^^^^^^^
 
@@ -1488,6 +1429,7 @@ mod test_reporting {
 
                 Something is off with the body of this definition:
 
+                1 ┆  { x } : { x : Int }
                 2 ┆  { x } = { x: 4.0 }
                   ┆          ^^^^^^^^^^
 
@@ -1522,6 +1464,7 @@ mod test_reporting {
 
                 Something is off with the body of the `x` definition:
 
+                1 ┆  x : { a : Int, b : Float, c : Bool }
                 2 ┆  x = { b: 4.0 }
                   ┆      ^^^^^^^^^^
 
@@ -1556,6 +1499,7 @@ mod test_reporting {
 
                 Something is off with the body of the `f` definition:
 
+                1 ┆  f : a, b -> a
                 2 ┆  f = \x, y -> if True then x else y
                   ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -1593,6 +1537,7 @@ mod test_reporting {
 
                 Something is off with the body of the `f` definition:
 
+                1 ┆  f : Bool -> msg
                 2 ┆  f = \_ -> Foo
                   ┆      ^^^^^^^^^
 
@@ -1631,6 +1576,7 @@ mod test_reporting {
 
                 Something is off with the body of the `f` definition:
 
+                1 ┆  f : msg
                 2 ┆  f = 0x3
                   ┆      ^^^
 
@@ -1715,6 +1661,7 @@ mod test_reporting {
 
                 Something is off with the body of the `f` definition:
 
+                1 ┆   f : Bool -> Int
                 2 ┆>  f = \_ ->
                 3 ┆>      ok = 3
                 4 ┆>
@@ -1865,6 +1812,7 @@ mod test_reporting {
 
                 Something is off with the body of the `f` definition:
 
+                1 ┆   f : { fo: Int }ext -> Int
                 2 ┆>  f = \r ->
                 3 ┆>      r2 = { r & foo: r.fo }
                 4 ┆>
@@ -2001,6 +1949,7 @@ mod test_reporting {
 
                 Something is off with the body of the `f` definition:
 
+                1 ┆  f : [ A ] -> [ A, B ]
                 2 ┆  f = \a -> a
                   ┆      ^^^^^^^
 
@@ -2038,6 +1987,7 @@ mod test_reporting {
 
                 Something is off with the body of the `f` definition:
 
+                1 ┆  f : [ A ] -> [ A, B, C ]
                 2 ┆  f = \a -> a
                   ┆      ^^^^^^^
 
@@ -2162,8 +2112,8 @@ mod test_reporting {
 
                 This `when` does not cover all the possibilities
 
-                2 ┆      2 -> 0x3
-                  ┆      ^
+                1 ┆>  when 0x1 is
+                2 ┆>      2 -> 0x3
 
                 Other possibilities include:
 
@@ -2181,9 +2131,9 @@ mod test_reporting {
             indoc!(
                 r#"
                 when 0x1 is
-                    2 -> 0x3
-                    2 -> 0x4
-                    _ -> 0x5
+                    2 -> 3
+                    2 -> 4
+                    _ -> 5
                 "#
             ),
             // should not give errors
@@ -2193,8 +2143,10 @@ mod test_reporting {
 
                 The 2nd pattern is redundant:
 
-                3 ┆      2 -> 0x4
-                  ┆      ^
+                1 ┆   when 0x1 is
+                2 ┆       2 -> 3
+                3 ┆>      2 -> 4
+                4 ┆       _ -> 5
 
                 Any value of this shape will be handled by a previous pattern, so this
                 one should be removed.

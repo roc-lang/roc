@@ -233,7 +233,7 @@ pub fn mono_problem<'b>(
                     alloc.string(index.ordinal()),
                     alloc.reflow(" pattern is redundant:"),
                 ]),
-                alloc.region(branch_region),
+                alloc.region_with_subregion(overall_region, branch_region),
                 alloc.reflow(
                     "Any value of this shape will be handled by \
                 a previous pattern, so this one should be removed.",
@@ -253,8 +253,6 @@ pub fn unhandled_patterns_to_doc_block<'b>(
     alloc: &'b RocDocAllocator<'b>,
     patterns: Vec<roc_mono::pattern::Pattern>,
 ) -> RocDocBuilder<'b> {
-    use roc_mono::pattern::Pattern::*;
-
     alloc
         .vcat(patterns.into_iter().map(|v| pattern_to_doc(alloc, v)))
         .indent(4)
@@ -726,33 +724,68 @@ impl<'a> RocDocAllocator<'a> {
             .annotate(Annotation::Hint)
     }
 
-    pub fn region(&'a self, region: roc_region::all::Region) -> DocBuilder<'a, Self, Annotation> {
+    pub fn region_with_subregion(
+        &'a self,
+        region: roc_region::all::Region,
+        sub_region: roc_region::all::Region,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        debug_assert!(region.contains(&sub_region));
+
+        // if true, the final line of the snippet will be some ^^^ that point to the region where
+        // the problem is. Otherwise, the snippet will have a > on the lines that are in the regon
+        // where the problem is.
+        let error_highlight_line = sub_region.start_line == region.end_line;
+
         let max_line_number_length = (region.end_line + 1).to_string().len();
         let indent = 2;
 
-        if region.start_line == region.end_line {
-            let i = region.start_line;
-
+        let mut result = self.nil();
+        for i in region.start_line..=region.end_line {
             let line_number_string = (i + 1).to_string();
             let line_number = line_number_string;
             let this_line_number_length = line_number.len();
 
             let line = self.src_lines[i as usize];
-            let rest_of_line = if line.trim().is_empty() {
-                self.nil()
+
+            let rest_of_line = if !line.trim().is_empty() {
+                self.text(line)
+                    .annotate(Annotation::CodeBlock)
+                    .indent(indent)
             } else {
                 self.nil()
-                    .append(self.text(line).indent(2))
-                    .annotate(Annotation::CodeBlock)
             };
 
-            let source_line = self
-                .text(" ".repeat(max_line_number_length - this_line_number_length))
-                .append(self.text(line_number).annotate(Annotation::LineNumber))
-                .append(self.text(" ┆").annotate(Annotation::GutterBar))
-                .append(rest_of_line);
+            let source_line = if !error_highlight_line
+                && i >= sub_region.start_line
+                && i <= sub_region.end_line
+            {
+                self.text(" ".repeat(max_line_number_length - this_line_number_length))
+                    .append(self.text(line_number).annotate(Annotation::LineNumber))
+                    .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                    .append(self.text(">").annotate(Annotation::Error))
+                    .append(rest_of_line)
+            } else if error_highlight_line {
+                self.text(" ".repeat(max_line_number_length - this_line_number_length))
+                    .append(self.text(line_number).annotate(Annotation::LineNumber))
+                    .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                    .append(rest_of_line)
+            } else {
+                self.text(" ".repeat(max_line_number_length - this_line_number_length))
+                    .append(self.text(line_number).annotate(Annotation::LineNumber))
+                    .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                    .append(self.text(" "))
+                    .append(rest_of_line)
+            };
 
-            let highlight_text = "^".repeat((region.end_col - region.start_col) as usize);
+            result = result.append(source_line);
+
+            if i != region.end_line {
+                result = result.append(self.line())
+            }
+        }
+
+        if error_highlight_line {
+            let highlight_text = "^".repeat((sub_region.end_col - sub_region.start_col) as usize);
             let highlight_line = self
                 .line()
                 .append(self.text(" ".repeat(max_line_number_length)))
@@ -760,44 +793,19 @@ impl<'a> RocDocAllocator<'a> {
                 .append(if highlight_text.is_empty() {
                     self.nil()
                 } else {
-                    self.text(" ".repeat(region.start_col as usize))
+                    self.text(" ".repeat(sub_region.start_col as usize))
                         .indent(indent)
                         .append(self.text(highlight_text).annotate(Annotation::Error))
                 });
 
-            source_line.append(highlight_line)
-        } else {
-            let mut result = self.nil();
-            for i in region.start_line..=region.end_line {
-                let line_number_string = (i + 1).to_string();
-                let line_number = line_number_string;
-                let this_line_number_length = line_number.len();
-
-                let line = self.src_lines[i as usize];
-                let rest_of_line = if !line.trim().is_empty() {
-                    self.text(line)
-                        .annotate(Annotation::CodeBlock)
-                        .indent(indent)
-                } else {
-                    self.nil()
-                };
-
-                let source_line = self
-                    .text(" ".repeat(max_line_number_length - this_line_number_length))
-                    .append(self.text(line_number).annotate(Annotation::LineNumber))
-                    .append(self.text(" ┆").annotate(Annotation::GutterBar))
-                    .append(self.text(">").annotate(Annotation::Error))
-                    .append(rest_of_line);
-
-                result = result.append(source_line);
-
-                if i != region.end_line {
-                    result = result.append(self.line())
-                }
-            }
-
-            result
+            result = result.append(highlight_line);
         }
+
+        result
+    }
+
+    pub fn region(&'a self, region: roc_region::all::Region) -> DocBuilder<'a, Self, Annotation> {
+        self.region_with_subregion(region, region)
     }
 
     pub fn ident(&'a self, ident: Ident) -> DocBuilder<'a, Self, Annotation> {
