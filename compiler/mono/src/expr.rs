@@ -854,7 +854,7 @@ fn store_pattern<'a>(
             // Since _ is never read, it's safe to reassign it.
             // stored.push((Symbol::UNDERSCORE, layout, Expr::Load(outer_symbol)))
         }
-        IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral(_) => {}
+        IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral { .. } => {}
         AppliedTag {
             union, arguments, ..
         } => {
@@ -886,7 +886,7 @@ fn store_pattern<'a>(
                     Underscore => {
                         // ignore
                     }
-                    IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral(_) => {}
+                    IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral { .. } => {}
                     _ => {
                         // store the field in a symbol, and continue matching on it
                         let symbol = env.fresh_symbol();
@@ -963,7 +963,7 @@ fn store_record_destruct<'a>(
                 //
                 // internally. But `y` is never used, so we must make sure it't not stored/loaded.
             }
-            IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral(_) => {}
+            IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral { .. } => {}
             _ => {
                 let symbol = env.fresh_symbol();
                 stored.push((symbol, destruct.layout.clone(), load));
@@ -1416,10 +1416,15 @@ pub enum Pattern<'a> {
 
     IntLiteral(i64),
     FloatLiteral(u64),
-    BitLiteral(bool),
+    BitLiteral {
+        value: bool,
+        tag_name: TagName,
+        union: crate::pattern::Union,
+    },
     EnumLiteral {
         tag_id: u8,
-        enum_size: u8,
+        tag_name: TagName,
+        union: crate::pattern::Union,
     },
     StrLiteral(Box<str>),
 
@@ -1479,6 +1484,7 @@ fn from_can_pattern<'a>(
             ..
         } => {
             use crate::layout::UnionVariant::*;
+            use crate::pattern::Union;
 
             let variant =
                 crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.pointer_size);
@@ -1487,18 +1493,52 @@ fn from_can_pattern<'a>(
                 Never => unreachable!("there is no pattern of type `[]`"),
                 Unit => Pattern::EnumLiteral {
                     tag_id: 0,
-                    enum_size: 1,
+                    tag_name: tag_name.clone(),
+                    union: Union {
+                        alternatives: vec![Ctor {
+                            name: tag_name.clone(),
+                            arity: 0,
+                        }],
+                    },
                 },
-                BoolUnion { ttrue, .. } => Pattern::BitLiteral(tag_name == &ttrue),
+                BoolUnion { ttrue, ffalse } => Pattern::BitLiteral {
+                    value: tag_name == &ttrue,
+                    tag_name: tag_name.clone(),
+                    union: Union {
+                        alternatives: vec![
+                            Ctor {
+                                name: ttrue,
+                                arity: 0,
+                            },
+                            Ctor {
+                                name: ffalse,
+                                arity: 0,
+                            },
+                        ],
+                    },
+                },
                 ByteUnion(tag_names) => {
                     let tag_id = tag_names
                         .iter()
                         .position(|key| key == tag_name)
                         .expect("tag must be in its own type");
 
+                    let mut ctors = std::vec::Vec::with_capacity(tag_names.len());
+                    for tag_name in &tag_names {
+                        ctors.push(Ctor {
+                            name: tag_name.clone(),
+                            arity: 0,
+                        })
+                    }
+
+                    let union = crate::pattern::Union {
+                        alternatives: ctors,
+                    };
+
                     Pattern::EnumLiteral {
                         tag_id: tag_id as u8,
-                        enum_size: tag_names.len() as u8,
+                        tag_name: tag_name.clone(),
+                        union,
                     }
                 }
                 Unwrapped(field_layouts) => {

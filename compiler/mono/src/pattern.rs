@@ -42,33 +42,12 @@ fn simplify<'a>(pattern: &crate::expr::Pattern<'a>) -> Pattern {
 
         // To make sure these are exhaustive, we have to "fake" a union here
         // TODO: use the hash or some other integer to discriminate between constructors
-        BitLiteral(b) => {
-            let union = Union {
-                alternatives: vec![
-                    Ctor {
-                        name: TagName::Global("False".into()),
-                        arity: 0,
-                    },
-                    Ctor {
-                        name: TagName::Global("True".into()),
-                        arity: 0,
-                    },
-                ],
-            };
-
-            Ctor(union, TagName::Global(format!("{}", b).into()), vec![])
-        }
-        EnumLiteral { tag_id, enum_size } => {
-            let alternatives = (0..*enum_size)
-                .map(|id| Ctor {
-                    name: TagName::Global(format!("{}", id).into()),
-                    arity: 0,
-                })
-                .collect();
-
-            let union = Union { alternatives };
-            Ctor(union, TagName::Global(format!("{}", tag_id).into()), vec![])
-        }
+        BitLiteral {
+            tag_name, union, ..
+        } => Ctor(union.clone(), tag_name.clone(), vec![]),
+        EnumLiteral {
+            tag_name, union, ..
+        } => Ctor(union.clone(), tag_name.clone(), vec![]),
 
         Underscore => Anything,
         Identifier(_) => Anything,

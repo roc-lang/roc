@@ -2045,7 +2045,7 @@ mod test_reporting {
                 r#"
                 -- UNSAFE PATTERN --------------------------------------------------------------
 
-                This pattern does not cover all the possibilities
+                This pattern does not cover all the possibilities:
 
                 7 ┆  f = \Left v -> v
                   ┆       ^^^^
@@ -2080,7 +2080,7 @@ mod test_reporting {
                 r#"
                 -- UNSAFE PATTERN --------------------------------------------------------------
 
-                This pattern does not cover all the possibilities
+                This pattern does not cover all the possibilities:
 
                 5 ┆  (Left y) = x
                   ┆   ^^^^
@@ -2110,7 +2110,7 @@ mod test_reporting {
                 r#"
                 -- UNSAFE PATTERN --------------------------------------------------------------
 
-                This `when` does not cover all the possibilities
+                This `when` does not cover all the possibilities:
 
                 1 ┆>  when 0x1 is
                 2 ┆>      2 -> 0x3
@@ -2118,6 +2118,72 @@ mod test_reporting {
                 Other possibilities include:
 
                     _
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn patterns_bool_not_exhaustive() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : Bool
+                x = True
+
+                when x is
+                    False -> 3
+                "#
+            ),
+            // should not give errors
+            indoc!(
+                r#"
+                -- UNSAFE PATTERN --------------------------------------------------------------
+
+                This `when` does not cover all the possibilities:
+
+                4 ┆>  when x is
+                5 ┆>      False -> 3
+
+                Other possibilities include:
+
+                    True
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn patterns_enum_not_exhaustive() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : [ Red, Green, Blue ]
+                x = Red
+
+                when x is
+                    Red -> 0
+                    Green -> 1
+                "#
+            ),
+            // should not give errors
+            indoc!(
+                r#"
+                -- UNSAFE PATTERN --------------------------------------------------------------
+
+                This `when` does not cover all the possibilities:
+
+                4 ┆>  when x is
+                5 ┆>      Red -> 0
+                6 ┆>      Green -> 1
+
+                Other possibilities include:
+
+                    Blue
 
                 I would have to crash if I saw one of those! Add branches for them!
                 "#

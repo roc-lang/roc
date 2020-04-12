@@ -160,7 +160,7 @@ fn to_expr_report<'b>(
                 None => (alloc.text("this"), alloc.nil()),
             };
 
-            let mut region = None;
+            let mut sub_region = None;
 
             let thing = match annotation_source {
                 TypedIfBranch {
@@ -189,7 +189,7 @@ fn to_expr_report<'b>(
                     alloc.text(" expression:"),
                 ]),
                 TypedBody { region: ann_region } => {
-                    region = Some(ann_region);
+                    sub_region = Some(ann_region);
                     alloc.concat(vec![
                         alloc.text("body of "),
                         the_name_text,
@@ -222,9 +222,10 @@ fn to_expr_report<'b>(
                 filename,
                 doc: alloc.stack(vec![
                     alloc.text("Something is off with the ").append(thing),
-                    match region {
+                    match sub_region {
                         None => alloc.region(expr_region),
                         Some(ann_region) => {
+                            // for typed bodies, include the line(s) have the signature
                             let joined =
                                 roc_region::all::Region::span_across(&ann_region, &expr_region);
                             alloc.region_with_subregion(joined, expr_region)
