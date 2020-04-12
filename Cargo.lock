@@ -871,6 +871,7 @@ dependencies = [
  "roc_collections",
  "roc_constrain",
  "roc_gen",
+ "roc_load",
  "roc_module",
  "roc_mono",
  "roc_parse",
@@ -882,6 +883,7 @@ dependencies = [
  "roc_unify",
  "roc_uniq",
  "target-lexicon",
+ "tokio",
 ]
 
 [[package]]

@@ -44,6 +44,7 @@ pub struct Module {
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: MutMap<Variable, Lowercase>,
     pub imported_modules: MutSet<ModuleId>,
+    pub src: Box<str>,
 }
 
 #[derive(Debug)]
@@ -54,6 +55,7 @@ pub struct LoadedModule {
     pub can_problems: Vec<roc_problem::can::Problem>,
     pub type_problems: Vec<solve::TypeError>,
     pub declarations: Vec<Declaration>,
+    pub src: Box<str>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +91,7 @@ enum Msg {
         var_store: VarStore,
     },
     Solved {
+        src: Box<str>,
         module_id: ModuleId,
         solved_types: MutMap<Symbol, SolvedType>,
         aliases: MutMap<Symbol, Alias>,
@@ -393,7 +396,7 @@ pub async fn load<'a>(
                 subs,
                 problems,
                 aliases,
-                ..
+                src,
             } => {
                 type_problems.extend(problems);
 
@@ -428,6 +431,7 @@ pub async fn load<'a>(
                         can_problems,
                         type_problems,
                         declarations,
+                        src,
                     });
                 } else {
                     // This was a dependency. Write it down and keep processing messages.
@@ -885,6 +889,7 @@ fn solve_module(
         aliases: module.aliases,
     };
 
+    let src = module.src;
     let mut subs = Subs::new(var_store.into());
 
     for (var, name) in module.rigid_variables {
@@ -934,6 +939,7 @@ fn solve_module(
 
             // Send the subs to the main thread for processing,
             tx.send(Msg::Solved {
+                src,
                 module_id: home,
                 subs: Arc::new(solved_subs),
                 solved_types,
@@ -1069,6 +1075,7 @@ fn parse_and_constrain(
                 aliases,
                 rigid_variables,
                 imported_modules: header.imported_modules,
+                src: header.src,
             };
 
             (module, ident_ids, constraint, problems)
