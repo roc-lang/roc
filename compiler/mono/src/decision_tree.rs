@@ -420,13 +420,13 @@ fn test_at_path<'a>(selected_path: &Path, branch: Branch<'a>, all_tests: &mut Ve
                         arguments: arguments.to_vec(),
                     });
                 }
-                BitLiteral(v) => {
-                    all_tests.push(IsBit(*v));
+                BitLiteral { value, .. } => {
+                    all_tests.push(IsBit(*value));
                 }
-                EnumLiteral { tag_id, enum_size } => {
+                EnumLiteral { tag_id, union, .. } => {
                     all_tests.push(IsByte {
                         tag_id: *tag_id,
-                        num_alts: *enum_size as usize,
+                        num_alts: union.alternatives.len(),
                     });
                 }
                 IntLiteral(v) => {
@@ -629,7 +629,7 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
-        BitLiteral(bit) => match test {
+        BitLiteral { value: bit, .. } => match test {
             IsBit(test_bit) if bit == *test_bit => {
                 start.extend(end);
                 Some(Branch {
@@ -714,7 +714,7 @@ fn needs_tests<'a>(pattern: &Pattern<'a>) -> bool {
 
         RecordDestructure(_, _)
         | AppliedTag { .. }
-        | BitLiteral(_)
+        | BitLiteral { .. }
         | EnumLiteral { .. }
         | IntLiteral(_)
         | FloatLiteral(_)

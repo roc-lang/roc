@@ -30,6 +30,23 @@ impl Region {
         }
     }
 
+    pub fn contains(&self, other: &Self) -> bool {
+        use std::cmp::Ordering::*;
+        match self.start_line.cmp(&other.start_line) {
+            Greater => false,
+            Equal => match self.end_line.cmp(&other.end_line) {
+                Less => false,
+                Equal => self.start_col <= other.start_col && self.end_col >= other.end_col,
+                Greater => self.start_col >= other.start_col,
+            },
+            Less => match self.end_line.cmp(&other.end_line) {
+                Less => false,
+                Equal => self.end_col >= other.end_col,
+                Greater => true,
+            },
+        }
+    }
+
     pub fn span_across(start: &Region, end: &Region) -> Self {
         Region {
             start_line: start.start_line,

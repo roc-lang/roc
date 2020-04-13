@@ -43,7 +43,8 @@ macro_rules! assert_llvm_evals_to {
         let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
         // Populate Procs and get the low-level Expr from the canonical Expr
-        let main_body = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, ptr_bytes);
+        let mut mono_problems = Vec::new();
+        let main_body = Expr::new(&arena, &mut subs, &mut mono_problems, loc_expr.value, &mut procs, home, &mut ident_ids, ptr_bytes);
 
         // Put this module's ident_ids back in the interns, so we can use them in Env.
         env.interns.all_ident_ids.insert(home, ident_ids);
@@ -176,7 +177,8 @@ macro_rules! assert_opt_evals_to {
         let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
         // Populate Procs and get the low-level Expr from the canonical Expr
-        let main_body = Expr::new(&arena, &mut subs, loc_expr.value, &mut procs, home, &mut ident_ids, ptr_bytes);
+        let mut mono_problems = Vec::new();
+        let main_body = Expr::new(&arena, &mut subs, &mut mono_problems, loc_expr.value, &mut procs, home, &mut ident_ids, ptr_bytes);
 
         // Put this module's ident_ids back in the interns, so we can use them in Env.
         env.interns.all_ident_ids.insert(home, ident_ids);

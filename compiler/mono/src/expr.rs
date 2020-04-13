@@ -102,6 +102,7 @@ pub struct Proc<'a> {
 pub struct Env<'a, 'i> {
     pub arena: &'a Bump,
     pub subs: &'a mut Subs,
+    pub problems: &'i mut std::vec::Vec<MonoProblem>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub pointer_size: u32,
@@ -204,10 +205,17 @@ pub enum Expr<'a> {
     RuntimeError(&'a str),
 }
 
+#[derive(Clone, Debug)]
+pub enum MonoProblem {
+    PatternProblem(crate::pattern::Error),
+}
+
+#[allow(clippy::too_many_arguments)]
 impl<'a> Expr<'a> {
     pub fn new(
         arena: &'a Bump,
         subs: &'a mut Subs,
+        problems: &mut std::vec::Vec<MonoProblem>,
         can_expr: roc_can::expr::Expr,
         procs: &mut Procs<'a>,
         home: ModuleId,
@@ -217,6 +225,7 @@ impl<'a> Expr<'a> {
         let mut env = Env {
             arena,
             subs,
+            problems,
             home,
             ident_ids,
             pointer_size,
@@ -302,9 +311,32 @@ fn patterns_to_when<'a>(
     // to pass type checking. So the order in which we add them to the body does not matter: there
     // are only stores anyway, no branches.
     for (pattern_var, pattern) in patterns.into_iter() {
-        let (new_symbol, new_body) = pattern_to_when(env, pattern_var, pattern, body_var, body);
-        body = new_body;
-        symbols.push(new_symbol);
+        let context = crate::pattern::Context::BadArg;
+        let mono_pattern = from_can_pattern(env, &pattern.value);
+        match crate::pattern::check(
+            pattern.region,
+            &[(
+                Located::at(pattern.region, mono_pattern.clone()),
+                crate::pattern::Guard::NoGuard,
+            )],
+            context,
+        ) {
+            Ok(_) => {
+                let (new_symbol, new_body) =
+                    pattern_to_when(env, pattern_var, pattern, body_var, body);
+                symbols.push(new_symbol);
+                body = new_body;
+            }
+            Err(errors) => {
+                for error in errors {
+                    env.problems.push(MonoProblem::PatternProblem(error))
+                }
+
+                let error = roc_problem::can::RuntimeError::UnsupportedPattern(pattern.region);
+                body = Located::at(pattern.region, roc_can::expr::Expr::RuntimeError(error));
+            }
+        }
+
         arg_vars.push(pattern_var);
     }
 
@@ -361,6 +393,7 @@ fn pattern_to_when<'a>(
             let wrapped_body = When {
                 cond_var: pattern_var,
                 expr_var: body_var,
+                region: Region::zero(),
                 loc_cond: Box::new(Located::at_zero(Var(symbol))),
                 branches: vec![WhenBranch {
                     patterns: vec![pattern],
@@ -413,6 +446,7 @@ fn from_can<'a>(
             // foo = \r -> when r is { x } -> body
             //
             // conversion of one-pattern when expressions will do the most optimal thing
+
             let (arg_vars, arg_symbols, body) = patterns_to_when(env, loc_args, ret_var, loc_body);
 
             let symbol = match name {
@@ -580,9 +614,10 @@ fn from_can<'a>(
         When {
             cond_var,
             expr_var,
+            region,
             loc_cond,
             branches,
-        } => from_can_when(env, cond_var, expr_var, *loc_cond, branches, procs),
+        } => from_can_when(env, cond_var, expr_var, region, *loc_cond, branches, procs),
 
         If {
             cond_var,
@@ -796,6 +831,7 @@ fn from_can<'a>(
                 elems: elems.into_bump_slice(),
             }
         }
+        RuntimeError(error) => Expr::RuntimeError(env.arena.alloc(format!("{:?}", error))),
         other => panic!("TODO convert canonicalized {:?} to mono::Expr", other),
     }
 }
@@ -818,7 +854,7 @@ fn store_pattern<'a>(
             // Since _ is never read, it's safe to reassign it.
             // stored.push((Symbol::UNDERSCORE, layout, Expr::Load(outer_symbol)))
         }
-        IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral(_) => {}
+        IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral { .. } => {}
         AppliedTag {
             union, arguments, ..
         } => {
@@ -850,7 +886,7 @@ fn store_pattern<'a>(
                     Underscore => {
                         // ignore
                     }
-                    IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral(_) => {}
+                    IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral { .. } => {}
                     _ => {
                         // store the field in a symbol, and continue matching on it
                         let symbol = env.fresh_symbol();
@@ -927,7 +963,7 @@ fn store_record_destruct<'a>(
                 //
                 // internally. But `y` is never used, so we must make sure it't not stored/loaded.
             }
-            IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral(_) => {}
+            IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral { .. } => {}
             _ => {
                 let symbol = env.fresh_symbol();
                 stored.push((symbol, destruct.layout.clone(), load));
@@ -992,6 +1028,25 @@ fn from_can_defs<'a>(
                 ));
             }
             _ => {
+                let context = crate::pattern::Context::BadDestruct;
+                match crate::pattern::check(
+                    loc_pattern.region,
+                    &[(
+                        Located::at(loc_pattern.region, mono_pattern.clone()),
+                        crate::pattern::Guard::NoGuard,
+                    )],
+                    context,
+                ) {
+                    Ok(_) => {}
+                    Err(errors) => {
+                        for error in errors {
+                            env.problems.push(MonoProblem::PatternProblem(error))
+                        }
+
+                        // panic!("generate runtime error, should probably also optimize this");
+                    }
+                }
+
                 let symbol = env.fresh_symbol();
                 stored.push((
                     symbol,
@@ -1024,6 +1079,7 @@ fn from_can_when<'a>(
     env: &mut Env<'a, '_>,
     cond_var: Variable,
     expr_var: Variable,
+    region: Region,
     loc_cond: Located<roc_can::expr::Expr>,
     mut branches: std::vec::Vec<roc_can::expr::WhenBranch>,
     procs: &mut Procs<'a>,
@@ -1051,15 +1107,23 @@ fn from_can_when<'a>(
             Guard::NoGuard
         };
 
+        let context = crate::pattern::Context::BadCase;
         match crate::pattern::check(
-            Region::zero(),
+            region,
             &[(
                 Located::at(loc_when_pattern.region, mono_pattern.clone()),
                 guard,
             )],
+            context,
         ) {
             Ok(_) => {}
-            Err(errors) => panic!("Errors in patterns: {:?}", errors),
+            Err(errors) => {
+                for error in errors {
+                    env.problems.push(MonoProblem::PatternProblem(error))
+                }
+
+                // panic!("generate runtime error, should probably also optimize this");
+            }
         }
 
         let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
@@ -1163,10 +1227,40 @@ fn from_can_when<'a>(
             }
         }
 
-        match crate::pattern::check(Region::zero(), &loc_branches) {
+        let context = crate::pattern::Context::BadCase;
+        match crate::pattern::check(region, &loc_branches, context) {
             Ok(_) => {}
             Err(errors) => {
-                panic!("Errors in patterns: {:?}", errors);
+                use crate::pattern::Error::*;
+                let mut is_not_exhaustive = false;
+                let mut overlapping_branches = std::vec::Vec::new();
+
+                for error in errors {
+                    match &error {
+                        Incomplete(_, _, _) => {
+                            is_not_exhaustive = true;
+                        }
+                        Redundant { index, .. } => {
+                            overlapping_branches.push(index.to_zero_based());
+                        }
+                    }
+                    env.problems.push(MonoProblem::PatternProblem(error))
+                }
+
+                overlapping_branches.sort();
+
+                for i in overlapping_branches.into_iter().rev() {
+                    opt_branches.remove(i);
+                }
+
+                if is_not_exhaustive {
+                    opt_branches.push((
+                        Pattern::Underscore,
+                        crate::decision_tree::Guard::NoGuard,
+                        &[],
+                        Expr::RuntimeError("non-exhaustive pattern match"),
+                    ));
+                }
             }
         }
 
@@ -1322,10 +1416,15 @@ pub enum Pattern<'a> {
 
     IntLiteral(i64),
     FloatLiteral(u64),
-    BitLiteral(bool),
+    BitLiteral {
+        value: bool,
+        tag_name: TagName,
+        union: crate::pattern::Union,
+    },
     EnumLiteral {
         tag_id: u8,
-        enum_size: u8,
+        tag_name: TagName,
+        union: crate::pattern::Union,
     },
     StrLiteral(Box<str>),
 
@@ -1385,6 +1484,7 @@ fn from_can_pattern<'a>(
             ..
         } => {
             use crate::layout::UnionVariant::*;
+            use crate::pattern::Union;
 
             let variant =
                 crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.pointer_size);
@@ -1393,18 +1493,52 @@ fn from_can_pattern<'a>(
                 Never => unreachable!("there is no pattern of type `[]`"),
                 Unit => Pattern::EnumLiteral {
                     tag_id: 0,
-                    enum_size: 1,
+                    tag_name: tag_name.clone(),
+                    union: Union {
+                        alternatives: vec![Ctor {
+                            name: tag_name.clone(),
+                            arity: 0,
+                        }],
+                    },
                 },
-                BoolUnion { ttrue, .. } => Pattern::BitLiteral(tag_name == &ttrue),
+                BoolUnion { ttrue, ffalse } => Pattern::BitLiteral {
+                    value: tag_name == &ttrue,
+                    tag_name: tag_name.clone(),
+                    union: Union {
+                        alternatives: vec![
+                            Ctor {
+                                name: ttrue,
+                                arity: 0,
+                            },
+                            Ctor {
+                                name: ffalse,
+                                arity: 0,
+                            },
+                        ],
+                    },
+                },
                 ByteUnion(tag_names) => {
                     let tag_id = tag_names
                         .iter()
                         .position(|key| key == tag_name)
                         .expect("tag must be in its own type");
 
+                    let mut ctors = std::vec::Vec::with_capacity(tag_names.len());
+                    for tag_name in &tag_names {
+                        ctors.push(Ctor {
+                            name: tag_name.clone(),
+                            arity: 0,
+                        })
+                    }
+
+                    let union = crate::pattern::Union {
+                        alternatives: ctors,
+                    };
+
                     Pattern::EnumLiteral {
                         tag_id: tag_id as u8,
-                        enum_size: tag_names.len() as u8,
+                        tag_name: tag_name.clone(),
+                        union,
                     }
                 }
                 Unwrapped(field_layouts) => {

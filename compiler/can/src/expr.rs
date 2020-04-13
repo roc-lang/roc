@@ -67,6 +67,7 @@ pub enum Expr {
     When {
         cond_var: Variable,
         expr_var: Variable,
+        region: Region,
         loc_cond: Box<Located<Expr>>,
         branches: Vec<WhenBranch>,
     },
@@ -464,7 +465,7 @@ pub fn canonicalize_expr<'a>(
             // Infer the condition expression's type.
             let cond_var = var_store.fresh();
             let (can_cond, mut output) =
-                canonicalize_expr(env, var_store, scope, region, &loc_cond.value);
+                canonicalize_expr(env, var_store, scope, loc_cond.region, &loc_cond.value);
 
             // the condition can never be a tail-call
             output.tail_call = None;
@@ -491,6 +492,7 @@ pub fn canonicalize_expr<'a>(
             let expr = When {
                 expr_var: var_store.fresh(),
                 cond_var,
+                region,
                 loc_cond: Box::new(can_cond),
                 branches: can_branches,
             };

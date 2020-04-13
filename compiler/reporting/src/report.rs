@@ -81,7 +81,7 @@ impl<'b> Report<'b> {
             .expect(err_msg);
     }
 
-    fn pretty(self, alloc: &'b RocDocAllocator<'b>) -> RocDocBuilder<'b> {
+    pub fn pretty(self, alloc: &'b RocDocAllocator<'b>) -> RocDocBuilder<'b> {
         if self.title.is_empty() {
             self.doc
         } else {
@@ -141,6 +141,152 @@ pub const BOLD_CODE: &str = "\u{001b}[1m";
 pub const UNDERLINE_CODE: &str = "\u{001b}[4m";
 
 pub const RESET_CODE: &str = "\u{001b}[0m";
+
+pub fn mono_problem<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    filename: PathBuf,
+    problem: roc_mono::expr::MonoProblem,
+) -> Report<'b> {
+    use roc_mono::expr::MonoProblem::*;
+    use roc_mono::pattern::Context::*;
+    use roc_mono::pattern::Error::*;
+
+    match problem {
+        PatternProblem(Incomplete(region, context, missing)) => match context {
+            BadArg => {
+                let doc = alloc.stack(vec![
+                    alloc.reflow("This pattern does not cover all the possibilities:"),
+                    alloc.region(region),
+                    alloc.reflow("Other possibilities include:"),
+                    unhandled_patterns_to_doc_block(alloc, missing),
+                    alloc.concat(vec![
+                        alloc.reflow(
+                            "I would have to crash if I saw one of those! \
+                        So rather than pattern matching in function arguments, put a ",
+                        ),
+                        alloc.keyword("when"),
+                        alloc.reflow(" in the function body to account for all possibilities."),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    title: "UNSAFE PATTERN".to_string(),
+                    doc,
+                }
+            }
+            BadDestruct => {
+                let doc = alloc.stack(vec![
+                    alloc.reflow("This pattern does not cover all the possibilities:"),
+                    alloc.region(region),
+                    alloc.reflow("Other possibilities include:"),
+                    unhandled_patterns_to_doc_block(alloc, missing),
+                    alloc.concat(vec![
+                        alloc.reflow(
+                            "I would have to crash if I saw one of those! \
+                       You can use a binding to deconstruct a value if there is only ONE possibility. \
+                       Use a "
+                        ),
+                        alloc.keyword("when"),
+                        alloc.reflow(" to account for all possibilities."),
+                    ]),
+                ]);
+
+                Report {
+                    filename,
+                    title: "UNSAFE PATTERN".to_string(),
+                    doc,
+                }
+            }
+            BadCase => {
+                let doc = alloc.stack(vec![
+                    alloc.concat(vec![
+                        alloc.reflow("This "),
+                        alloc.keyword("when"),
+                        alloc.reflow(" does not cover all the possibilities:"),
+                    ]),
+                    alloc.region(region),
+                    alloc.reflow("Other possibilities include:"),
+                    unhandled_patterns_to_doc_block(alloc, missing),
+                    alloc.reflow(
+                        "I would have to crash if I saw one of those! \
+                        Add branches for them!",
+                    ),
+                    // alloc.hint().append(alloc.reflow("or use a hole.")),
+                ]);
+
+                Report {
+                    filename,
+                    title: "UNSAFE PATTERN".to_string(),
+                    doc,
+                }
+            }
+        },
+        PatternProblem(Redundant {
+            overall_region,
+            branch_region,
+            index,
+        }) => {
+            let doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("The "),
+                    alloc.string(index.ordinal()),
+                    alloc.reflow(" pattern is redundant:"),
+                ]),
+                alloc.region_with_subregion(overall_region, branch_region),
+                alloc.reflow(
+                    "Any value of this shape will be handled by \
+                a previous pattern, so this one should be removed.",
+                ),
+            ]);
+
+            Report {
+                filename,
+                title: "REDUNDANT PATTERN".to_string(),
+                doc,
+            }
+        }
+    }
+}
+
+pub fn unhandled_patterns_to_doc_block<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    patterns: Vec<roc_mono::pattern::Pattern>,
+) -> RocDocBuilder<'b> {
+    alloc
+        .vcat(patterns.into_iter().map(|v| pattern_to_doc(alloc, v)))
+        .indent(4)
+        .annotate(Annotation::TypeBlock)
+}
+
+fn pattern_to_doc<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    pattern: roc_mono::pattern::Pattern,
+) -> RocDocBuilder<'b> {
+    use roc_mono::pattern::Literal::*;
+    use roc_mono::pattern::Pattern::*;
+    //    Anything,
+    //    Literal(Literal),
+    //    Ctor(Union, TagName, std::vec::Vec<Pattern>),
+    match pattern {
+        Anything => alloc.text("_"),
+        Literal(l) => match l {
+            Int(i) => alloc.text(i.to_string()),
+            Bit(true) => alloc.text("True"),
+            Bit(false) => alloc.text("False"),
+            Byte(b) => alloc.text(b.to_string()),
+            Float(f) => alloc.text(f.to_string()),
+            Str(s) => alloc.string(s.into()),
+        },
+        Ctor(_, tag_name, args) => {
+            let arg_docs = args.into_iter().map(|v| pattern_to_doc(alloc, v));
+
+            let docs = std::iter::once(alloc.tag_name(tag_name)).chain(arg_docs);
+
+            alloc.intersperse(docs, alloc.space())
+        }
+    }
+}
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -578,78 +724,88 @@ impl<'a> RocDocAllocator<'a> {
             .annotate(Annotation::Hint)
     }
 
-    pub fn region(&'a self, region: roc_region::all::Region) -> DocBuilder<'a, Self, Annotation> {
+    pub fn region_with_subregion(
+        &'a self,
+        region: roc_region::all::Region,
+        sub_region: roc_region::all::Region,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        debug_assert!(region.contains(&sub_region));
+
+        // if true, the final line of the snippet will be some ^^^ that point to the region where
+        // the problem is. Otherwise, the snippet will have a > on the lines that are in the regon
+        // where the problem is.
+        let error_highlight_line = sub_region.start_line == region.end_line;
+
         let max_line_number_length = (region.end_line + 1).to_string().len();
         let indent = 2;
 
-        if region.start_line == region.end_line {
-            let i = region.start_line;
-
+        let mut result = self.nil();
+        for i in region.start_line..=region.end_line {
             let line_number_string = (i + 1).to_string();
             let line_number = line_number_string;
             let this_line_number_length = line_number.len();
 
             let line = self.src_lines[i as usize];
-            let rest_of_line = if line.trim().is_empty() {
-                self.nil()
+
+            let rest_of_line = if !line.trim().is_empty() {
+                self.text(line)
+                    .annotate(Annotation::CodeBlock)
+                    .indent(indent)
             } else {
                 self.nil()
-                    .append(self.text(line).indent(2))
-                    .annotate(Annotation::CodeBlock)
             };
 
-            let source_line = self
-                .text(" ".repeat(max_line_number_length - this_line_number_length))
-                .append(self.text(line_number).annotate(Annotation::LineNumber))
-                .append(self.text(" ┆").annotate(Annotation::GutterBar))
-                .append(rest_of_line);
+            let source_line = if !error_highlight_line
+                && i >= sub_region.start_line
+                && i <= sub_region.end_line
+            {
+                self.text(" ".repeat(max_line_number_length - this_line_number_length))
+                    .append(self.text(line_number).annotate(Annotation::LineNumber))
+                    .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                    .append(self.text(">").annotate(Annotation::Error))
+                    .append(rest_of_line)
+            } else if error_highlight_line {
+                self.text(" ".repeat(max_line_number_length - this_line_number_length))
+                    .append(self.text(line_number).annotate(Annotation::LineNumber))
+                    .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                    .append(rest_of_line)
+            } else {
+                self.text(" ".repeat(max_line_number_length - this_line_number_length))
+                    .append(self.text(line_number).annotate(Annotation::LineNumber))
+                    .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                    .append(self.text(" "))
+                    .append(rest_of_line)
+            };
 
+            result = result.append(source_line);
+
+            if i != region.end_line {
+                result = result.append(self.line())
+            }
+        }
+
+        if error_highlight_line {
+            let highlight_text = "^".repeat((sub_region.end_col - sub_region.start_col) as usize);
             let highlight_line = self
                 .line()
                 .append(self.text(" ".repeat(max_line_number_length)))
                 .append(self.text(" ┆").annotate(Annotation::GutterBar))
-                .append(
-                    self.text(" ".repeat(region.start_col as usize))
-                        .indent(indent),
-                )
-                .append(
-                    self.text("^".repeat((region.end_col - region.start_col) as usize))
-                        .annotate(Annotation::Error),
-                );
-
-            source_line.append(highlight_line)
-        } else {
-            let mut result = self.nil();
-            for i in region.start_line..=region.end_line {
-                let line_number_string = (i + 1).to_string();
-                let line_number = line_number_string;
-                let this_line_number_length = line_number.len();
-
-                let line = self.src_lines[i as usize];
-                let rest_of_line = if !line.trim().is_empty() {
-                    self.text(line)
-                        .annotate(Annotation::CodeBlock)
-                        .indent(indent)
-                } else {
+                .append(if highlight_text.is_empty() {
                     self.nil()
-                };
+                } else {
+                    self.text(" ".repeat(sub_region.start_col as usize))
+                        .indent(indent)
+                        .append(self.text(highlight_text).annotate(Annotation::Error))
+                });
 
-                let source_line = self
-                    .text(" ".repeat(max_line_number_length - this_line_number_length))
-                    .append(self.text(line_number).annotate(Annotation::LineNumber))
-                    .append(self.text(" ┆").annotate(Annotation::GutterBar))
-                    .append(self.text(">").annotate(Annotation::Error))
-                    .append(rest_of_line);
-
-                result = result.append(source_line);
-
-                if i != region.end_line {
-                    result = result.append(self.line())
-                }
-            }
-
-            result
+            result = result.append(highlight_line);
         }
+
+        result
+    }
+
+    pub fn region(&'a self, region: roc_region::all::Region) -> DocBuilder<'a, Self, Annotation> {
+        self.region_with_subregion(region, region)
     }
 
     pub fn ident(&'a self, ident: Ident) -> DocBuilder<'a, Self, Annotation> {

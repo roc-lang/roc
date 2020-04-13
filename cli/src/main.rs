@@ -175,9 +175,11 @@ fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
     // Populate Procs and get the low-level Expr from the canonical Expr
+    let mut mono_problems = std::vec::Vec::new();
     let main_body = Expr::new(
         &arena,
         &mut subs,
+        &mut mono_problems,
         loc_expr.value,
         &mut procs,
         home,

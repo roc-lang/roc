@@ -1,4 +1,4 @@
-use roc_collections::all::MutMap;
+use roc_collections::all::{Index, MutMap};
 use roc_module::ident::TagName;
 use roc_region::all::{Located, Region};
 
@@ -42,33 +42,12 @@ fn simplify<'a>(pattern: &crate::expr::Pattern<'a>) -> Pattern {
 
         // To make sure these are exhaustive, we have to "fake" a union here
         // TODO: use the hash or some other integer to discriminate between constructors
-        BitLiteral(b) => {
-            let union = Union {
-                alternatives: vec![
-                    Ctor {
-                        name: TagName::Global("False".into()),
-                        arity: 0,
-                    },
-                    Ctor {
-                        name: TagName::Global("True".into()),
-                        arity: 0,
-                    },
-                ],
-            };
-
-            Ctor(union, TagName::Global(format!("{}", b).into()), vec![])
-        }
-        EnumLiteral { tag_id, enum_size } => {
-            let alternatives = (0..*enum_size)
-                .map(|id| Ctor {
-                    name: TagName::Global(format!("{}", id).into()),
-                    arity: 0,
-                })
-                .collect();
-
-            let union = Union { alternatives };
-            Ctor(union, TagName::Global(format!("{}", tag_id).into()), vec![])
-        }
+        BitLiteral {
+            tag_name, union, ..
+        } => Ctor(union.clone(), tag_name.clone(), vec![]),
+        EnumLiteral {
+            tag_name, union, ..
+        } => Ctor(union.clone(), tag_name.clone(), vec![]),
 
         Underscore => Anything,
         Identifier(_) => Anything,
@@ -121,7 +100,11 @@ fn simplify<'a>(pattern: &crate::expr::Pattern<'a>) -> Pattern {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Error {
     Incomplete(Region, Context, Vec<Pattern>),
-    Redundant(Region, Region, usize),
+    Redundant {
+        overall_region: Region,
+        branch_region: Region,
+        index: Index,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -142,9 +125,10 @@ pub enum Guard {
 pub fn check<'a>(
     region: Region,
     patterns: &[(Located<crate::expr::Pattern<'a>>, Guard)],
+    context: Context,
 ) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
-    check_patterns(region, Context::BadArg, patterns, &mut errors);
+    check_patterns(region, context, patterns, &mut errors);
 
     if errors.is_empty() {
         Ok(())
@@ -339,11 +323,11 @@ fn to_nonredundant_rows<'a>(
         if is_useful(&checked_rows, &next_row) {
             checked_rows.push(next_row);
         } else {
-            return Err(Error::Redundant(
+            return Err(Error::Redundant {
                 overall_region,
-                region,
-                checked_rows.len() + 1,
-            ));
+                branch_region: region,
+                index: Index::zero_based(checked_rows.len()),
+            });
         }
     }
 

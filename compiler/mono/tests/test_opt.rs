@@ -41,9 +41,11 @@ mod test_opt {
         let pointer_size = std::mem::size_of::<u64>() as u32;
 
         // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
+        let mut mono_problems = Vec::new();
         let mono_expr = Expr::new(
             &arena,
             &mut subs,
+            &mut mono_problems,
             loc_expr.value,
             &mut procs,
             home,
@@ -190,9 +192,11 @@ mod test_opt {
         let pointer_size = std::mem::size_of::<u64>() as u32;
 
         // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
+        let mut mono_problems = Vec::new();
         let mono_expr = Expr::new(
             &arena,
             &mut subs,
+            &mut mono_problems,
             loc_expr.value,
             &mut procs,
             home,
