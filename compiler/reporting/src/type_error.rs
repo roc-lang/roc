@@ -74,10 +74,64 @@ pub fn type_problem<'b>(
                         doc,
                     }
                 }
+                CyclicAlias(symbol, region, others) => {
+                    let (doc, title) = cyclic_alias(alloc, symbol, region, others);
+
+                    Report {
+                        filename,
+                        title,
+                        doc,
+                    }
+                }
+
                 other => panic!("unhandled bad type: {:?}", other),
             }
         }
     }
+}
+
+pub fn cyclic_alias<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    symbol: Symbol,
+    region: roc_region::all::Region,
+    others: Vec<Symbol>,
+) -> (RocDocBuilder<'b>, String) {
+    let doc = if others.is_empty() {
+        alloc.stack(vec![
+            alloc
+                .reflow("The ")
+                .append(alloc.symbol_unqualified(symbol))
+                .append(alloc.reflow(" alias is self-recursive in an invalid way:")),
+            alloc.region(region),
+            alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tag."),
+        ])
+    } else {
+        alloc.stack(vec![
+            alloc
+                .reflow("The ")
+                .append(alloc.symbol_unqualified(symbol))
+                .append(alloc.reflow(" alias is recursive in an invalid way:")),
+            alloc.region(region),
+            alloc
+                .reflow("The ")
+                .append(alloc.symbol_unqualified(symbol))
+                .append(alloc.reflow(
+                    " alias depends on itself through the following chain of definitions:",
+                )),
+            crate::report::cycle(
+                alloc,
+                4,
+                alloc.symbol_unqualified(symbol),
+                others
+                    .into_iter()
+                    .map(|other| alloc.symbol_unqualified(other))
+                    .collect::<Vec<_>>(),
+            ),
+            alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tag."),
+        ])
+    };
+
+    (doc, "CYCLIC ALIAS".to_string())
 }
 
 #[allow(clippy::too_many_arguments)]

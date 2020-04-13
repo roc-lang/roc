@@ -17,7 +17,7 @@ const CYCLE_LN: &str = ["|     ", "│     "][!IS_WINDOWS as usize];
 const CYCLE_MID: &str = ["|     |", "│     ↓"][!IS_WINDOWS as usize];
 const CYCLE_END: &str = ["+-<---+", "└─────┘"][!IS_WINDOWS as usize];
 
-fn cycle<'b>(
+pub fn cycle<'b>(
     alloc: &'b RocDocAllocator<'b>,
     indent: usize,
     name: RocDocBuilder<'b>,
@@ -402,35 +402,13 @@ pub fn can_problem<'b>(
             },
         ),
         Problem::CyclicAlias(symbol, region, others) => {
-            if others.is_empty() {
-                todo!("cyclic alias")
-            } else {
-                alloc.stack(vec![
-                    alloc
-                        .reflow("The ")
-                        .append(alloc.symbol_unqualified(symbol))
-                        .append(alloc.reflow(" alias is recursive in an invalid way:")),
-                    alloc.region(region),
-                    alloc
-                        .reflow("The ")
-                        .append(alloc.symbol_unqualified(symbol))
-                        .append(alloc.reflow(
-                            " alias depends on itself through the following chain of definitions:",
-                        )),
-                    cycle(
-                        alloc,
-                        4,
-                        alloc.symbol_unqualified(symbol),
-                        others
-                            .into_iter()
-                            .map(|other| alloc.symbol_unqualified(other))
-                            .collect::<Vec<_>>(),
-                    ),
-                    alloc.reflow(
-                        "Recursion in aliases is only allowed if recursion happens behind a tag.",
-                    ),
-                ])
-            }
+            let (doc, title) = crate::type_error::cyclic_alias(alloc, symbol, region, others);
+
+            return Report {
+                filename,
+                title,
+                doc,
+            };
         }
         Problem::PhantomTypeArgument {
             alias,
@@ -466,7 +444,7 @@ pub fn can_problem<'b>(
             record_region,
         } => alloc.stack(vec![
             alloc.concat(vec![
-                alloc.reflow("This annotation defines the "),
+                alloc.reflow("This record type defines the "),
                 alloc.record_field(field_name),
                 alloc.reflow(" field twice!"),
             ]),
@@ -479,7 +457,7 @@ pub fn can_problem<'b>(
             tag_region,
         } => alloc.stack(vec![
             alloc.concat(vec![
-                alloc.reflow("This annotation defines the "),
+                alloc.reflow("This tag union type defines the "),
                 alloc.tag_name(tag_name),
                 alloc.reflow(" tag twice!"),
             ]),
@@ -500,7 +478,7 @@ fn not_found<'b>(
     alloc: &'b RocDocAllocator<'b>,
     region: roc_region::all::Region,
     name: &str,
-    thing: &str,
+    thing: &'b str,
     options: MutSet<Box<str>>,
 ) -> RocDocBuilder<'b> {
     use crate::type_error::suggest;
@@ -532,7 +510,12 @@ fn not_found<'b>(
     };
 
     alloc.stack(vec![
-        alloc.string(format!("I cannot find a `{}` {}", name, thing)),
+        alloc.concat(vec![
+            alloc.reflow("I cannot find a `"),
+            alloc.string(name.to_string()),
+            alloc.reflow("` "),
+            alloc.reflow(thing),
+        ]),
         alloc.region(region),
         to_details(default_no, default_yes),
     ])

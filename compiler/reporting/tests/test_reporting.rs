@@ -2274,7 +2274,7 @@ mod test_reporting {
             // should not report Bar as unused!
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                -- CYCLIC ALIAS ----------------------------------------------------------------
 
                 The `Bar` alias is recursive in an invalid way:
 
@@ -2302,6 +2302,36 @@ mod test_reporting {
 
                 If you didn't intend on using `Bar` then remove it so future readers of
                 your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn self_recursive_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo : { x : Foo }
+
+                f : Foo
+                f = 3
+
+                f
+                "#
+            ),
+            // should not report Bar as unused!
+            indoc!(
+                r#"
+                -- CYCLIC ALIAS ----------------------------------------------------------------
+
+                The `Foo` alias is self-recursive in an invalid way:
+
+                1 ┆  Foo : { x : Foo }
+                  ┆  ^^^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tag.
                 "#
             ),
         )
@@ -2368,7 +2398,7 @@ mod test_reporting {
                 r#"
                 -- SYNTAX PROBLEM --------------------------------------------------------------
 
-                This annotation defines the `.foo` field twice!
+                This record type defines the `.foo` field twice!
 
                 1 ┆  a : { foo : Int, bar : Float, foo : Str }
                   ┆                                ^^^^^^^^^
@@ -2394,7 +2424,7 @@ mod test_reporting {
                 r#"
                 -- SYNTAX PROBLEM --------------------------------------------------------------
 
-                This annotation defines the `Foo` tag twice!
+                This tag union type defines the `Foo` tag twice!
 
                 1 ┆  a : [ Foo Int, Bar Float, Foo Str ]
                   ┆                            ^^^^^^^
