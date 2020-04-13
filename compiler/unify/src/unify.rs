@@ -73,6 +73,7 @@ struct Context {
 pub enum Unified {
     Success(Pool),
     Failure(Pool, ErrorType, ErrorType),
+    BadType(Pool, roc_types::types::Problem),
 }
 
 #[derive(Debug)]
@@ -91,11 +92,18 @@ pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable) -> Unified {
     if mismatches.is_empty() {
         Unified::Success(vars)
     } else {
-        let type1 = subs.var_to_error_type(var1);
-        let type2 = subs.var_to_error_type(var2);
+        let (type1, mut problems) = subs.var_to_error_type(var1);
+        let (type2, problems2) = subs.var_to_error_type(var2);
+
+        problems.extend(problems2);
 
         subs.union(var1, var2, Content::Error.into());
-        Unified::Failure(vars, type1, type2)
+
+        if !problems.is_empty() {
+            Unified::BadType(vars, problems.remove(0))
+        } else {
+            Unified::Failure(vars, type1, type2)
+        }
     }
 }
 

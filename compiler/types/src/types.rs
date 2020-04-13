@@ -395,6 +395,7 @@ impl Type {
 
     pub fn instantiate_aliases(
         &mut self,
+        region: Region,
         aliases: &ImMap<Symbol, Alias>,
         var_store: &VarStore,
         introduced: &mut ImSet<Variable>,
@@ -404,34 +405,44 @@ impl Type {
         match self {
             Function(args, ret) => {
                 for arg in args {
-                    arg.instantiate_aliases(aliases, var_store, introduced);
+                    arg.instantiate_aliases(region, aliases, var_store, introduced);
                 }
-                ret.instantiate_aliases(aliases, var_store, introduced);
+                ret.instantiate_aliases(region, aliases, var_store, introduced);
             }
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 for (_, args) in tags {
                     for x in args {
-                        x.instantiate_aliases(aliases, var_store, introduced);
+                        x.instantiate_aliases(region, aliases, var_store, introduced);
                     }
                 }
-                ext.instantiate_aliases(aliases, var_store, introduced);
+                ext.instantiate_aliases(region, aliases, var_store, introduced);
             }
             Record(fields, ext) => {
                 for x in fields.iter_mut() {
-                    x.instantiate_aliases(aliases, var_store, introduced);
+                    x.instantiate_aliases(region, aliases, var_store, introduced);
                 }
-                ext.instantiate_aliases(aliases, var_store, introduced);
+                ext.instantiate_aliases(region, aliases, var_store, introduced);
             }
             Alias(_, type_args, actual_type) => {
                 for arg in type_args {
-                    arg.1.instantiate_aliases(aliases, var_store, introduced);
+                    arg.1
+                        .instantiate_aliases(region, aliases, var_store, introduced);
                 }
 
-                actual_type.instantiate_aliases(aliases, var_store, introduced);
+                actual_type.instantiate_aliases(region, aliases, var_store, introduced);
             }
             Apply(symbol, args) => {
                 if let Some(alias) = aliases.get(symbol) {
-                    debug_assert!(args.len() == alias.vars.len());
+                    if args.len() != alias.vars.len() {
+                        *self = Type::Erroneous(Problem::BadTypeArguments {
+                            symbol: *symbol,
+                            region,
+                            type_got: args.len() as u8,
+                            alias_needs: alias.vars.len() as u8,
+                        });
+                        return;
+                    }
+
                     let mut actual = alias.typ.clone();
 
                     let mut named_args = Vec::with_capacity(args.len());
@@ -447,7 +458,7 @@ impl Type {
                     ) in alias.vars.iter().zip(args.iter())
                     {
                         let mut filler = filler.clone();
-                        filler.instantiate_aliases(aliases, var_store, introduced);
+                        filler.instantiate_aliases(region, aliases, var_store, introduced);
                         named_args.push((lowercase.clone(), filler.clone()));
                         substitution.insert(*placeholder, filler);
                     }
@@ -463,7 +474,7 @@ impl Type {
                     }
 
                     actual.substitute(&substitution);
-                    actual.instantiate_aliases(aliases, var_store, introduced);
+                    actual.instantiate_aliases(region, aliases, var_store, introduced);
 
                     // instantiate recursion variable!
                     if let Type::RecursiveTagUnion(rec_var, mut tags, mut ext) = actual {
@@ -487,7 +498,7 @@ impl Type {
                 } else {
                     // one of the special-cased Apply types.
                     for x in args {
-                        x.instantiate_aliases(aliases, var_store, introduced);
+                        x.instantiate_aliases(region, aliases, var_store, introduced);
                     }
                 }
             }
@@ -691,11 +702,18 @@ pub struct Alias {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Problem {
     CanonicalizationProblem,
-    Mismatch(Mismatch, ErrorType, ErrorType),
     CircularType(Symbol, ErrorType, Region),
+    CyclicAlias(Symbol, Region, Vec<Symbol>),
     UnrecognizedIdent(InlinableString),
     Shadowed(Region, Located<Ident>),
+    BadTypeArguments {
+        symbol: Symbol,
+        region: Region,
+        type_got: u8,
+        alias_needs: u8,
+    },
     InvalidModule,
+    //    Mismatch(Mismatch, ErrorType, ErrorType),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

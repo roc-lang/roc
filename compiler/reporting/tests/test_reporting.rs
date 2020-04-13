@@ -2257,4 +2257,286 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn circular_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo : { x: Bar }
+                Bar : { y : Foo }
+
+                f : Foo
+
+                f
+                "#
+            ),
+            // should not report Bar as unused!
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                The `Bar` alias is recursive in an invalid way:
+
+                2 ┆  Bar : { y : Foo }
+                  ┆        ^^^^^^^^^^^
+
+                The `Bar` alias depends on itself through the following chain of
+                definitions:
+
+                    ┌─────┐
+                    │     Bar
+                    │     ↓
+                    │     Foo
+                    └─────┘
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tag.
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                `Bar` is not used anywhere in your code.
+
+                2 ┆  Bar : { y : Foo }
+                  ┆  ^^^^^^^^^^^^^^^^^
+
+                If you didn't intend on using `Bar` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_duplicate_field_same_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                { x: 4, y: 3, x: 4 }
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This record defines the `.x` field twice!
+
+                1 ┆  { x: 4, y: 3, x: 4 }
+                  ┆                ^^^^
+
+                In the rest of the program, I will use the second definition.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_duplicate_field_different_types() {
+        report_problem_as(
+            indoc!(
+                r#"
+                { x: 4, y: 3, x: "foo" }
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This record defines the `.x` field twice!
+
+                1 ┆  { x: 4, y: 3, x: "foo" }
+                  ┆                ^^^^^^^^
+
+                In the rest of the program, I will use the second definition.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_type_duplicate_field() {
+        report_problem_as(
+            indoc!(
+                r#"
+                a : { foo : Int, bar : Float, foo : Str }
+                a = { bar: 3.0, foo: "foo" }
+
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This annotation defines the `.foo` field twice!
+
+                1 ┆  a : { foo : Int, bar : Float, foo : Str }
+                  ┆                                ^^^^^^^^^
+
+                In the rest of the program, I will use the second definition.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn tag_union_duplicate_tag() {
+        report_problem_as(
+            indoc!(
+                r#"
+                a : [ Foo Int, Bar Float, Foo Str ]
+                a = Foo "foo"
+
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This annotation defines the `Foo` tag twice!
+
+                1 ┆  a : [ Foo Int, Bar Float, Foo Str ]
+                  ┆                            ^^^^^^^
+
+                In the rest of the program, I will use the second definition.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_num() {
+        report_problem_as(
+            indoc!(
+                r#"
+                a : Num Int Float
+                a = 3
+
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TOO MANY TYPE ARGUMENTS -----------------------------------------------------
+
+                The `Num` alias expects 1 type argument, but it got 2 instead:
+
+                1 ┆  a : Num Int Float
+                  ┆      ^^^^^^^^^^^^^
+
+                Are there missing parentheses?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_num_fn() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Bool -> Num Int Float
+                f = \_ -> 3
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TOO MANY TYPE ARGUMENTS -----------------------------------------------------
+
+                The `Num` alias expects 1 type argument, but it got 2 instead:
+
+                1 ┆  f : Bool -> Num Int Float
+                  ┆              ^^^^^^^^^^^^^
+
+                Are there missing parentheses?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn too_few_type_arguments() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Pair a b : [ Pair a b ]
+
+                x : Pair Int
+                x = 3
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TOO FEW TYPE ARGUMENTS ------------------------------------------------------
+
+                The `Pair` alias expects 2 type arguments, but it got 1 instead:
+
+                3 ┆  x : Pair Int
+                  ┆      ^^^^^^^^
+
+                Are there missing parentheses?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn too_many_type_arguments() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Pair a b : [ Pair a b ]
+
+                x : Pair Int Int Int
+                x = 3
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TOO MANY TYPE ARGUMENTS -----------------------------------------------------
+
+                The `Pair` alias expects 2 type arguments, but it got 3 instead:
+
+                3 ┆  x : Pair Int Int Int
+                  ┆      ^^^^^^^^^^^^^^^^
+
+                Are there missing parentheses?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn phantom_type_variable() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo a : [ Foo ]
+
+                f : Foo Int
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                The `a` type variable is not used in the `Foo` alias definition:
+
+                1 ┆  Foo a : [ Foo ]
+                  ┆      ^
+
+                Roc does not allow phantom type parameters!
+                "#
+            ),
+        )
+    }
 }

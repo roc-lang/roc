@@ -29,6 +29,54 @@ pub fn type_problem<'b>(
         CircularType(region, symbol, overall_type) => {
             to_circular_report(alloc, filename, region, symbol, overall_type)
         }
+        BadType(type_problem) => {
+            use roc_types::types::Problem::*;
+            match type_problem {
+                BadTypeArguments {
+                    symbol,
+                    region,
+                    type_got,
+                    alias_needs,
+                } => {
+                    let needed_arguments = if alias_needs == 1 {
+                        alloc.reflow("1 type argument")
+                    } else {
+                        alloc
+                            .text(alias_needs.to_string())
+                            .append(alloc.reflow(" type arguments"))
+                    };
+
+                    let found_arguments = alloc.text(type_got.to_string());
+
+                    let doc = alloc.stack(vec![
+                        alloc.concat(vec![
+                            alloc.reflow("The "),
+                            alloc.symbol_unqualified(symbol),
+                            alloc.reflow(" alias expects "),
+                            needed_arguments,
+                            alloc.reflow(", but it got "),
+                            found_arguments,
+                            alloc.reflow(" instead:"),
+                        ]),
+                        alloc.region(region),
+                        alloc.reflow("Are there missing parentheses?"),
+                    ]);
+
+                    let title = if type_got > alias_needs {
+                        "TOO MANY TYPE ARGUMENTS".to_string()
+                    } else {
+                        "TOO FEW TYPE ARGUMENTS".to_string()
+                    };
+
+                    Report {
+                        filename,
+                        title,
+                        doc,
+                    }
+                }
+                other => panic!("unhandled bad type: {:?}", other),
+            }
+        }
     }
 }
 

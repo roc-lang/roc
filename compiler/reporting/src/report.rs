@@ -401,6 +401,91 @@ pub fn can_problem<'b>(
                 shadow,
             },
         ),
+        Problem::CyclicAlias(symbol, region, others) => {
+            if others.is_empty() {
+                todo!("cyclic alias")
+            } else {
+                alloc.stack(vec![
+                    alloc
+                        .reflow("The ")
+                        .append(alloc.symbol_unqualified(symbol))
+                        .append(alloc.reflow(" alias is recursive in an invalid way:")),
+                    alloc.region(region),
+                    alloc
+                        .reflow("The ")
+                        .append(alloc.symbol_unqualified(symbol))
+                        .append(alloc.reflow(
+                            " alias depends on itself through the following chain of definitions:",
+                        )),
+                    cycle(
+                        alloc,
+                        4,
+                        alloc.symbol_unqualified(symbol),
+                        others
+                            .into_iter()
+                            .map(|other| alloc.symbol_unqualified(other))
+                            .collect::<Vec<_>>(),
+                    ),
+                    alloc.reflow(
+                        "Recursion in aliases is only allowed if recursion happens behind a tag.",
+                    ),
+                ])
+            }
+        }
+        Problem::PhantomTypeArgument {
+            alias,
+            variable_region,
+            variable_name,
+        } => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("The "),
+                alloc.type_variable(variable_name),
+                alloc.reflow(" type variable is not used in the "),
+                alloc.symbol_unqualified(alias),
+                alloc.reflow(" alias definition:"),
+            ]),
+            alloc.region(variable_region),
+            alloc.reflow("Roc does not allow phantom type parameters!"),
+        ]),
+        Problem::DuplicateRecordFieldValue {
+            field_name,
+            field_region,
+            record_region,
+        } => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("This record defines the "),
+                alloc.record_field(field_name),
+                alloc.reflow(" field twice!"),
+            ]),
+            alloc.region_with_subregion(record_region, field_region),
+            alloc.reflow("In the rest of the program, I will use the second definition."),
+        ]),
+        Problem::DuplicateRecordFieldType {
+            field_name,
+            field_region,
+            record_region,
+        } => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("This annotation defines the "),
+                alloc.record_field(field_name),
+                alloc.reflow(" field twice!"),
+            ]),
+            alloc.region_with_subregion(record_region, field_region),
+            alloc.reflow("In the rest of the program, I will use the second definition."),
+        ]),
+        Problem::DuplicateTag {
+            tag_name,
+            tag_union_region,
+            tag_region,
+        } => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("This annotation defines the "),
+                alloc.tag_name(tag_name),
+                alloc.reflow(" tag twice!"),
+            ]),
+            alloc.region_with_subregion(tag_union_region, tag_region),
+            alloc.reflow("In the rest of the program, I will use the second definition."),
+        ]),
         Problem::RuntimeError(runtime_error) => pretty_runtime_error(alloc, runtime_error),
     };
 
@@ -711,6 +796,7 @@ impl<'a> RocDocAllocator<'a> {
         self.text(content.to_string()).annotate(Annotation::BinOp)
     }
 
+    /// Turns of backticks/colors in a block
     pub fn type_block(
         &'a self,
         content: DocBuilder<'a, Self, Annotation>,
@@ -730,6 +816,11 @@ impl<'a> RocDocAllocator<'a> {
         sub_region: roc_region::all::Region,
     ) -> DocBuilder<'a, Self, Annotation> {
         debug_assert!(region.contains(&sub_region));
+
+        // If the outer region takes more than 1 full screen (~60 lines), only show the inner region
+        if region.end_line - region.start_line > 60 {
+            return self.region_with_subregion(sub_region, sub_region);
+        }
 
         // if true, the final line of the snippet will be some ^^^ that point to the region where
         // the problem is. Otherwise, the snippet will have a > on the lines that are in the regon

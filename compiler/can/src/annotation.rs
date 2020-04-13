@@ -326,6 +326,8 @@ fn can_annotation_help(
         TagUnion { tags, ext } => {
             let mut tag_types = Vec::with_capacity(tags.len());
 
+            let mut seen = MutSet::default();
+
             for tag in tags.iter() {
                 can_tag(
                     env,
@@ -338,6 +340,17 @@ fn can_annotation_help(
                     &mut tag_types,
                     references,
                 );
+
+                let added = &tag_types.last().unwrap().0;
+                let is_new = seen.insert(added.clone());
+
+                if !is_new {
+                    env.problem(roc_problem::can::Problem::DuplicateTag {
+                        tag_name: added.clone(),
+                        tag_region: tag.region,
+                        tag_union_region: region,
+                    });
+                }
             }
 
             let ext_type = match ext {
@@ -405,7 +418,16 @@ fn can_assigned_field<'a>(
             );
             let label = Lowercase::from(field_name.value);
 
-            field_types.insert(label, field_type);
+            let removed = field_types.insert(label, field_type);
+
+            if removed.is_some() {
+                let field_region = Region::span_across(&field_name.region, &annotation.region);
+                env.problem(roc_problem::can::Problem::DuplicateRecordFieldType {
+                    field_name: field_name.value.into(),
+                    field_region,
+                    record_region: region,
+                });
+            }
         }
         LabelOnly(loc_field_name) => {
             // Interpret { a, b } as { a : a, b : b }
