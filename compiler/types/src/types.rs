@@ -713,7 +713,7 @@ pub enum Problem {
         alias_needs: u8,
     },
     InvalidModule,
-    //    Mismatch(Mismatch, ErrorType, ErrorType),
+    SolvedTypeError,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

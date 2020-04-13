@@ -831,8 +831,9 @@ fn from_can<'a>(
                 elems: elems.into_bump_slice(),
             }
         }
+        Accessor { .. } => todo!("record accessor"),
+        Update { .. } => todo!("record update"),
         RuntimeError(error) => Expr::RuntimeError(env.arena.alloc(format!("{:?}", error))),
-        other => panic!("TODO convert canonicalized {:?} to mono::Expr", other),
     }
 }
 
