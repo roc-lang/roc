@@ -3,12 +3,12 @@ use roc_can::constraint::Constraint;
 use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::RecordDestruct;
-use roc_collections::all::SendMap;
+use roc_collections::all::{Index, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
-use roc_types::types::{PatternCategory, Type};
+use roc_types::types::{Category, PReason, PatternCategory, Type};
 
 pub struct PatternState {
     pub headers: SendMap<Symbol, Located<Type>>,
@@ -53,11 +53,12 @@ fn headers_from_annotation_help(
         Underscore
         | Shadowed(_, _)
         | UnsupportedPattern(_)
+        | NumLiteral(_, _)
         | IntLiteral(_)
         | FloatLiteral(_)
         | StrLiteral(_) => true,
 
-        RecordDestructure(_, destructs) => match annotation.value.shallow_dealias() {
+        RecordDestructure { destructs, .. } => match annotation.value.shallow_dealias() {
             Type::Record(fields, _) => {
                 for destruct in destructs {
                     // NOTE ignores the .guard field.
@@ -76,7 +77,11 @@ fn headers_from_annotation_help(
             _ => false,
         },
 
-        AppliedTag(_, tag_name, arguments) => match annotation.value.shallow_dealias() {
+        AppliedTag {
+            tag_name,
+            arguments,
+            ..
+        } => match annotation.value.shallow_dealias() {
             Type::TagUnion(tags, _) => {
                 if let Some((_, arg_types)) = tags.iter().find(|(name, _)| name == tag_name) {
                     if !arguments.len() == arg_types.len() {
@@ -112,9 +117,10 @@ pub fn constrain_pattern(
     state: &mut PatternState,
 ) {
     match pattern {
-        Underscore | UnsupportedPattern(_) => {
+        Underscore | UnsupportedPattern(_) | Shadowed(_, _) => {
             // Neither the _ pattern nor erroneous ones add any constraints.
         }
+
         Identifier(symbol) => {
             state.headers.insert(
                 symbol.clone(),
@@ -124,10 +130,22 @@ pub fn constrain_pattern(
                 },
             );
         }
+
+        NumLiteral(var, _) => {
+            state.vars.push(*var);
+
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Num,
+                builtins::builtin_type(Symbol::NUM_NUM, vec![Type::Variable(*var)]),
+                expected,
+            ));
+        }
+
         IntLiteral(_) => {
             state.constraints.push(Constraint::Pattern(
                 region,
-                PatternCategory::Int,
+                PatternCategory::Float,
                 builtins::builtin_type(Symbol::INT_INT, vec![]),
                 expected,
             ));
@@ -151,7 +169,12 @@ pub fn constrain_pattern(
             ));
         }
 
-        RecordDestructure(ext_var, patterns) => {
+        RecordDestructure {
+            whole_var,
+            ext_var,
+            destructs,
+        } => {
+            state.vars.push(*whole_var);
             state.vars.push(*ext_var);
             let ext_type = Type::Variable(*ext_var);
 
@@ -166,7 +189,7 @@ pub fn constrain_pattern(
                         guard,
                     },
                 ..
-            } in patterns
+            } in destructs
             {
                 let pat_type = Type::Variable(*var);
                 let expected = PExpected::NoExpectation(pat_type.clone());
@@ -180,10 +203,15 @@ pub fn constrain_pattern(
                 field_types.insert(label.clone(), pat_type.clone());
 
                 if let Some((guard_var, loc_guard)) = guard {
-                    state.constraints.push(Constraint::Eq(
-                        Type::Variable(*guard_var),
-                        Expected::NoExpectation(pat_type.clone()),
+                    state.constraints.push(Constraint::Pattern(
                         region,
+                        PatternCategory::PatternGuard,
+                        Type::Variable(*guard_var),
+                        PExpected::ForReason(
+                            PReason::PatternGuard,
+                            pat_type.clone(),
+                            loc_guard.region,
+                        ),
                     ));
                     state.vars.push(*guard_var);
 
@@ -194,38 +222,69 @@ pub fn constrain_pattern(
             }
 
             let record_type = Type::Record(field_types, Box::new(ext_type));
-            let record_con =
-                Constraint::Pattern(region, PatternCategory::Record, record_type, expected);
 
+            let whole_con = Constraint::Eq(
+                Type::Variable(*whole_var),
+                Expected::NoExpectation(record_type),
+                Category::Storage,
+                region,
+            );
+
+            let record_con = Constraint::Pattern(
+                region,
+                PatternCategory::Record,
+                Type::Variable(*whole_var),
+                expected,
+            );
+
+            state.constraints.push(whole_con);
             state.constraints.push(record_con);
         }
-        AppliedTag(ext_var, tag_name, patterns) => {
-            let mut argument_types = Vec::with_capacity(patterns.len());
-            for (pattern_var, loc_pattern) in patterns {
+        AppliedTag {
+            whole_var,
+            ext_var,
+            tag_name,
+            arguments,
+        } => {
+            let mut argument_types = Vec::with_capacity(arguments.len());
+            for (index, (pattern_var, loc_pattern)) in arguments.iter().enumerate() {
                 state.vars.push(*pattern_var);
 
                 let pattern_type = Type::Variable(*pattern_var);
                 argument_types.push(pattern_type.clone());
 
-                let expected = PExpected::NoExpectation(pattern_type);
+                let expected = PExpected::ForReason(
+                    PReason::TagArg {
+                        tag_name: tag_name.clone(),
+                        index: Index::zero_based(index),
+                    },
+                    pattern_type,
+                    region,
+                );
                 constrain_pattern(&loc_pattern.value, loc_pattern.region, expected, state);
             }
+
+            let whole_con = Constraint::Eq(
+                Type::Variable(*whole_var),
+                Expected::NoExpectation(Type::TagUnion(
+                    vec![(tag_name.clone(), argument_types)],
+                    Box::new(Type::Variable(*ext_var)),
+                )),
+                Category::Storage,
+                region,
+            );
 
             let tag_con = Constraint::Pattern(
                 region,
                 PatternCategory::Ctor(tag_name.clone()),
-                Type::TagUnion(
-                    vec![(tag_name.clone(), argument_types)],
-                    Box::new(Type::Variable(*ext_var)),
-                ),
+                Type::Variable(*whole_var),
                 expected,
             );
 
+            state.vars.push(*whole_var);
             state.vars.push(*ext_var);
+            state.constraints.push(whole_con);
             state.constraints.push(tag_con);
-        }
-        Shadowed(_, _) => {
-            panic!("TODO constrain Shadowed pattern");
         }
     }
 }

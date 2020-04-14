@@ -22,14 +22,21 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use ven_graph::{strongly_connected_components, topological_sort_into_groups};
 
-#[allow(clippy::type_complexity)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Def {
     pub loc_pattern: Located<Pattern>,
     pub loc_expr: Located<Expr>,
     pub expr_var: Variable,
     pub pattern_vars: SendMap<Symbol, Variable>,
-    pub annotation: Option<(Type, IntroducedVariables, SendMap<Symbol, Alias>)>,
+    pub annotation: Option<Annotation>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Annotation {
+    pub signature: Type,
+    pub introduced_variables: IntroducedVariables,
+    pub aliases: SendMap<Symbol, Alias>,
+    pub region: Region,
 }
 
 #[derive(Debug)]
@@ -71,6 +78,8 @@ enum PendingDef<'a> {
         vars: Vec<Located<Lowercase>>,
         ann: &'a Located<ast::TypeAnnotation<'a>>,
     },
+
+    ShadowedAlias,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -118,7 +127,7 @@ pub fn canonicalize_defs<'a>(
     // This way, whenever any expr is doing lookups, it knows everything that's in scope -
     // even defs that appear after it in the source.
     //
-    // This naturally handles recursion too, because a given exper which refers
+    // This naturally handles recursion too, because a given expr which refers
     // to itself won't be processed until after its def has been added to scope.
 
     use roc_parse::ast::Def::*;
@@ -662,19 +671,24 @@ fn pattern_to_vars_by_symbol(
             vars_by_symbol.insert(symbol.clone(), expr_var);
         }
 
-        AppliedTag(_, _, arguments) => {
+        AppliedTag { arguments, .. } => {
             for (var, nested) in arguments {
                 pattern_to_vars_by_symbol(vars_by_symbol, &nested.value, *var);
             }
         }
 
-        RecordDestructure(_, destructs) => {
+        RecordDestructure { destructs, .. } => {
             for destruct in destructs {
                 vars_by_symbol.insert(destruct.value.symbol.clone(), destruct.value.var);
             }
         }
 
-        IntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | Underscore | UnsupportedPattern(_) => {}
+        NumLiteral(_, _)
+        | IntLiteral(_)
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | Underscore
+        | UnsupportedPattern(_) => {}
 
         Shadowed(_, _) => {}
     }
@@ -787,11 +801,12 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((
-                            typ.clone(),
-                            output.introduced_variables.clone(),
-                            ann.aliases.clone(),
-                        )),
+                        annotation: Some(Annotation {
+                            signature: typ.clone(),
+                            introduced_variables: output.introduced_variables.clone(),
+                            aliases: ann.aliases.clone(),
+                            region: loc_ann.region,
+                        }),
                     },
                 );
             }
@@ -848,6 +863,11 @@ fn canonicalize_pending_def<'a>(
                 .introduced_variables
                 .union(&can_ann.introduced_variables);
         }
+
+        ShadowedAlias => {
+            // Since this alias was shadowed, it gets ignored and has no
+            // effect on the output.
+        }
         TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
             let ann =
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
@@ -879,6 +899,8 @@ fn canonicalize_pending_def<'a>(
 
             let (mut loc_can_expr, can_output) =
                 canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
+
+            output.references = output.references.union(can_output.references.clone());
 
             // reset the tailcallable_symbol
             env.tailcallable_symbol = outer_identifier;
@@ -982,11 +1004,12 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((
-                            typ.clone(),
-                            output.introduced_variables.clone(),
-                            ann.aliases.clone(),
-                        )),
+                        annotation: Some(Annotation {
+                            signature: typ.clone(),
+                            introduced_variables: output.introduced_variables.clone(),
+                            aliases: ann.aliases.clone(),
+                            region: loc_ann.region,
+                        }),
                     },
                 );
             }
@@ -1285,6 +1308,7 @@ fn to_pending_def<'a>(
 
         Alias { name, vars, ann } => {
             let region = Region::span_across(&name.region, &ann.region);
+
             match scope.introduce(
                 name.value.into(),
                 &env.exposed_ident_ids,
@@ -1321,7 +1345,14 @@ fn to_pending_def<'a>(
                     }
                 }
 
-                Err(_err) => panic!("TODO gracefully handle shadowing of type alias"),
+                Err((original_region, loc_shadowed_symbol)) => {
+                    env.problem(Problem::ShadowingInAnnotation {
+                        original_region,
+                        shadow: loc_shadowed_symbol,
+                    });
+
+                    PendingDef::ShadowedAlias
+                }
             }
         }
 

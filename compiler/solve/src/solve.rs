@@ -1,18 +1,27 @@
 use roc_can::constraint::Constraint::{self, *};
+use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{ImMap, MutMap, SendMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
-use roc_region::all::Located;
+use roc_region::all::{Located, Region};
 use roc_types::boolean_algebra::{self, Atom};
 use roc_types::solved_types::{Solved, SolvedType};
 use roc_types::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use roc_types::types::Type::{self, *};
-use roc_types::types::{Alias, Problem};
-use roc_unify::unify::{unify, Unified};
+use roc_types::types::{Alias, Category, ErrorType, PatternCategory};
+use roc_unify::unify::unify;
+use roc_unify::unify::Unified::*;
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler
 // Thank you, Evan!
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum TypeError {
+    BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
+    BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
+    CircularType(Region, Symbol, ErrorType),
+}
 
 pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
 
@@ -85,7 +94,7 @@ struct State {
 
 pub fn run(
     env: &Env,
-    problems: &mut Vec<Problem>,
+    problems: &mut Vec<TypeError>,
     mut subs: Subs,
     constraint: &Constraint,
 ) -> (Solved<Subs>, Env) {
@@ -115,7 +124,7 @@ fn solve(
     state: State,
     rank: Rank,
     pools: &mut Pools,
-    problems: &mut Vec<Problem>,
+    problems: &mut Vec<TypeError>,
     cached_aliases: &mut MutMap<Symbol, Variable>,
     subs: &mut Subs,
     constraint: &Constraint,
@@ -129,28 +138,42 @@ fn solve(
 
             copy
         }
-        Eq(typ, expected_type, _region) => {
+        Eq(typ, expectation, category, region) => {
             let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
             let expected = type_to_var(
                 subs,
                 rank,
                 pools,
                 cached_aliases,
-                expected_type.get_type_ref(),
+                expectation.get_type_ref(),
             );
-            let Unified { vars, mismatches } = unify(subs, actual, expected);
 
-            // TODO use region when reporting a problem
-            problems.extend(mismatches);
+            match unify(subs, actual, expected) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
 
-            introduce(subs, rank, pools, &vars);
+                    state
+                }
+                Failure(vars, actual_type, expected_type) => {
+                    introduce(subs, rank, pools, &vars);
 
-            state
+                    let problem = TypeError::BadExpr(
+                        *region,
+                        category.clone(),
+                        actual_type,
+                        expectation.clone().replace(expected_type),
+                    );
+
+                    problems.push(problem);
+
+                    state
+                }
+            }
         }
-        Lookup(symbol, expected_type, _region) => {
+        Lookup(symbol, expectation, region) => {
             let var = *env.vars_by_symbol.get(&symbol).unwrap_or_else(|| {
                 // TODO Instead of panicking, solve this as True and record
-                // a Problem ("module Foo does not expose `bar`") for later.
+                // a TypeError ("module Foo does not expose `bar`") for later.
                 panic!(
                     "Could not find symbol {:?} in vars_by_symbol {:?}",
                     symbol, env.vars_by_symbol
@@ -184,16 +207,30 @@ fn solve(
                 rank,
                 pools,
                 cached_aliases,
-                expected_type.get_type_ref(),
+                expectation.get_type_ref(),
             );
-            let Unified { vars, mismatches } = unify(subs, actual, expected);
+            match unify(subs, actual, expected) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
 
-            // TODO use region when reporting a problem
-            problems.extend(mismatches);
+                    state
+                }
 
-            introduce(subs, rank, pools, &vars);
+                Failure(vars, actual_type, expected_type) => {
+                    introduce(subs, rank, pools, &vars);
 
-            state
+                    let problem = TypeError::BadExpr(
+                        *region,
+                        Category::Lookup(*symbol),
+                        actual_type,
+                        expectation.clone().replace(expected_type),
+                    );
+
+                    problems.push(problem);
+
+                    state
+                }
+            }
         }
         And(sub_constraints) => {
             let mut state = state;
@@ -213,17 +250,37 @@ fn solve(
 
             state
         }
-        Pattern(_region, _category, typ, expected) => {
+        Pattern(region, category, typ, expectation) => {
             let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
-            let expected = type_to_var(subs, rank, pools, cached_aliases, expected.get_type_ref());
-            let Unified { vars, mismatches } = unify(subs, actual, expected);
+            let expected = type_to_var(
+                subs,
+                rank,
+                pools,
+                cached_aliases,
+                expectation.get_type_ref(),
+            );
 
-            // TODO use region when reporting a problem
-            problems.extend(mismatches);
+            match unify(subs, actual, expected) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
 
-            introduce(subs, rank, pools, &vars);
+                    state
+                }
+                Failure(vars, actual_type, expected_type) => {
+                    introduce(subs, rank, pools, &vars);
 
-            state
+                    let problem = TypeError::BadPattern(
+                        *region,
+                        category.clone(),
+                        actual_type,
+                        expectation.clone().replace(expected_type),
+                    );
+
+                    problems.push(problem);
+
+                    state
+                }
+            }
         }
         Let(let_con) => {
             match &let_con.ret_constraint {
@@ -504,8 +561,17 @@ fn type_to_variable(
                 );
             }
 
-            let ext_var = type_to_variable(subs, rank, pools, cached, ext);
-            let content = Content::Structure(FlatType::Record(field_vars, ext_var));
+            let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
+            let new_ext_var = match roc_types::pretty_print::chase_ext_record(
+                subs,
+                temp_ext_var,
+                &mut field_vars,
+            ) {
+                Ok(()) => Variable::EMPTY_RECORD,
+                Err((new, _)) => new,
+            };
+
+            let content = Content::Structure(FlatType::Record(field_vars, new_ext_var));
 
             register(subs, rank, pools, content)
         }
@@ -522,8 +588,19 @@ fn type_to_variable(
                 tag_vars.insert(tag.clone(), tag_argument_vars);
             }
 
-            let ext_var = type_to_variable(subs, rank, pools, cached, ext);
-            let content = Content::Structure(FlatType::TagUnion(tag_vars, ext_var));
+            let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
+            let mut ext_tag_vec = Vec::new();
+            let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(
+                subs,
+                temp_ext_var,
+                &mut ext_tag_vec,
+            ) {
+                Ok(()) => Variable::EMPTY_TAG_UNION,
+                Err((new, _)) => new,
+            };
+            tag_vars.extend(ext_tag_vec.into_iter());
+
+            let content = Content::Structure(FlatType::TagUnion(tag_vars, new_ext_var));
 
             register(subs, rank, pools, content)
         }
@@ -540,12 +617,24 @@ fn type_to_variable(
                 tag_vars.insert(tag.clone(), tag_argument_vars);
             }
 
-            let ext_var = type_to_variable(subs, rank, pools, cached, ext);
+            let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
+            let mut ext_tag_vec = Vec::new();
+            let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(
+                subs,
+                temp_ext_var,
+                &mut ext_tag_vec,
+            ) {
+                Ok(()) => Variable::EMPTY_TAG_UNION,
+                Err((new, _)) => new,
+            };
+            tag_vars.extend(ext_tag_vec.into_iter());
+
             let content =
-                Content::Structure(FlatType::RecursiveTagUnion(*rec_var, tag_vars, ext_var));
+                Content::Structure(FlatType::RecursiveTagUnion(*rec_var, tag_vars, new_ext_var));
 
             register(subs, rank, pools, content)
         }
+        Alias(Symbol::BOOL_BOOL, _, _) => Variable::BOOL,
         Alias(symbol, args, alias_type) => {
             // Cache aliases without type arguments. Commonly used aliases like `Int` would otherwise get O(n)
             // different variables (once for each occurence). The recursion restriction is required
@@ -560,6 +649,7 @@ fn type_to_variable(
             //
             // This `u` variable can be different between lists, so giving just one variable to
             // this type is incorrect.
+            // TODO does caching work at all with uniqueness types? even Int then hides a uniqueness variable
             let is_recursive = alias_type.is_recursive();
             let no_args = args.is_empty();
             if no_args && !is_recursive {
@@ -599,7 +689,7 @@ fn type_to_variable(
 
 fn check_for_infinite_type(
     subs: &mut Subs,
-    problems: &mut Vec<Problem>,
+    problems: &mut Vec<TypeError>,
     symbol: Symbol,
     loc_var: Located<Variable>,
 ) {
@@ -734,13 +824,13 @@ fn correct_recursive_attr(
 
 fn circular_error(
     subs: &mut Subs,
-    problems: &mut Vec<Problem>,
+    problems: &mut Vec<TypeError>,
     symbol: Symbol,
     loc_var: &Located<Variable>,
 ) {
     let var = loc_var.value;
     let error_type = subs.var_to_error_type(var);
-    let problem = Problem::CircularType(symbol, error_type, loc_var.region);
+    let problem = TypeError::CircularType(loc_var.region, symbol, error_type);
 
     subs.set_content(var, Content::Error);
 

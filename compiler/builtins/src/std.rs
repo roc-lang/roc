@@ -367,7 +367,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // isEmpty : List * -> Bool
     add_type(
-        Symbol::LIST_ISEMPTY,
+        Symbol::LIST_IS_EMPTY,
         SolvedType::Func(
             vec![SolvedType::Apply(
                 Symbol::LIST_LIST,
@@ -408,6 +408,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // concat : List elem, List elem -> List elem
+    add_type(
+        Symbol::LIST_CONCAT,
+        SolvedType::Func(
+            vec![list_type(flex(TVAR1)), list_type(flex(TVAR1))],
+            Box::new(list_type(flex(TVAR1))),
+        ),
+    );
+
     // map : List before, (before -> after) -> List after
     add_type(
         Symbol::LIST_MAP,
@@ -442,9 +451,9 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // length : List a -> Int
+    // len : List * -> Int
     add_type(
-        Symbol::LIST_LENGTH,
+        Symbol::LIST_LEN,
         SolvedType::Func(vec![list_type(flex(TVAR1))], Box::new(int_type())),
     );
 

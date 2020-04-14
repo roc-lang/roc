@@ -37,6 +37,13 @@ impl<T> PExpected<T> {
             PExpected::ForReason(_, val, _) => val,
         }
     }
+
+    pub fn replace<U>(self, new: U) -> PExpected<U> {
+        match self {
+            PExpected::NoExpectation(_val) => PExpected::NoExpectation(new),
+            PExpected::ForReason(reason, _val, region) => PExpected::ForReason(reason, new, region),
+        }
+    }
 }
 
 impl<T> Expected<T> {
@@ -61,6 +68,16 @@ impl<T> Expected<T> {
             Expected::NoExpectation(val) => val,
             Expected::ForReason(_, val, _) => val,
             Expected::FromAnnotation(_, _, _, val) => val,
+        }
+    }
+
+    pub fn replace<U>(self, new: U) -> Expected<U> {
+        match self {
+            Expected::NoExpectation(_val) => Expected::NoExpectation(new),
+            Expected::ForReason(reason, _val, region) => Expected::ForReason(reason, new, region),
+            Expected::FromAnnotation(pattern, size, source, _val) => {
+                Expected::FromAnnotation(pattern, size, source, new)
+            }
         }
     }
 }

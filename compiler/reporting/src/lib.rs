@@ -12,3 +12,4 @@
 #![allow(clippy::large_enum_variant)]
 
 pub mod report;
+pub mod type_error;

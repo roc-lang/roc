@@ -93,3 +93,44 @@ where
 
     map
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Index(usize);
+
+impl Index {
+    pub const FIRST: Self = Index(0);
+
+    pub fn zero_based(i: usize) -> Self {
+        Index(i)
+    }
+
+    pub fn to_zero_based(self) -> usize {
+        self.0
+    }
+
+    pub fn one_based(i: usize) -> Self {
+        Index(i - 1)
+    }
+
+    pub fn ordinal(self) -> std::string::String {
+        int_to_ordinal(self.0 + 1)
+    }
+}
+
+fn int_to_ordinal(number: usize) -> std::string::String {
+    // NOTE: one-based
+    let remainder10 = number % 10;
+    let remainder100 = number % 100;
+
+    let ending = match remainder100 {
+        11..=13 => "th",
+        _ => match remainder10 {
+            1 => "st",
+            2 => "nd",
+            3 => "rd",
+            _ => "th",
+        },
+    };
+
+    format!("{}{}", number, ending)
+}

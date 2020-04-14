@@ -63,7 +63,7 @@ updateCost = \current, neighbour, model ->
     newCosts = Map.insert model.costs neighbour distanceTo
 
     distanceTo = reconstructPath newCameFrom neighbour
-            |> List.length
+            |> List.len
             |> Num.toFloat
 
     newModel = { model & costs : newCosts , cameFrom : newCameFrom }

@@ -3,7 +3,7 @@ use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
-    int_expr_from_result,
+    int_expr_from_result, num_expr_from_result,
 };
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
@@ -14,7 +14,7 @@ use roc_module::symbol::Symbol;
 use roc_parse::ast;
 use roc_parse::operator::CalledVia;
 use roc_parse::pattern::PatternType::*;
-use roc_problem::can::{Problem, RuntimeError};
+use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;
@@ -30,9 +30,28 @@ pub struct Output {
     pub aliases: SendMap<Symbol, Alias>,
 }
 
+impl Output {
+    pub fn union(&mut self, other: Self) {
+        self.references.union_mut(other.references);
+
+        if let (None, Some(later)) = (self.tail_call, other.tail_call) {
+            self.tail_call = Some(later);
+        }
+
+        self.introduced_variables.union(&other.introduced_variables);
+        self.aliases.extend(other.aliases);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
+
+    // Num stores the `a` variable in `Num a`. Not the same as the variable
+    // stored in Int and Float below, which is strictly for better error messages
+    Num(Variable, i64),
+
+    // Int and Float store a variable to generate better error messages
     Int(Variable, i64),
     Float(Variable, f64),
     Str(Box<str>),
@@ -48,8 +67,9 @@ pub enum Expr {
     When {
         cond_var: Variable,
         expr_var: Variable,
+        region: Region,
         loc_cond: Box<Located<Expr>>,
-        branches: Vec<(Located<Pattern>, Located<Expr>)>,
+        branches: Vec<WhenBranch>,
     },
     If {
         cond_var: Variable,
@@ -79,13 +99,17 @@ pub enum Expr {
     ),
 
     // Product Types
-    Record(Variable, SendMap<Lowercase, Field>),
+    Record {
+        record_var: Variable,
+        fields: SendMap<Lowercase, Field>,
+    },
 
     /// Empty record constant
     EmptyRecord,
 
     /// Look up exactly one field on a record, e.g. (expr).foo.
     Access {
+        record_var: Variable,
         ext_var: Variable,
         field_var: Variable,
         loc_expr: Box<Located<Expr>>,
@@ -93,6 +117,7 @@ pub enum Expr {
     },
     /// field accessor as a function, e.g. (.foo) expr
     Accessor {
+        record_var: Variable,
         ext_var: Variable,
         field_var: Variable,
         field: Lowercase,
@@ -134,6 +159,13 @@ pub enum Recursive {
     NotRecursive,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct WhenBranch {
+    pub patterns: Vec<Located<Pattern>>,
+    pub value: Located<Expr>,
+    pub guard: Option<Located<Expr>>,
+}
+
 pub fn canonicalize_expr<'a>(
     env: &mut Env<'a>,
     var_store: &VarStore,
@@ -144,8 +176,8 @@ pub fn canonicalize_expr<'a>(
     use Expr::*;
 
     let (expr, output) = match expr {
-        ast::Expr::Int(string) => {
-            let answer = int_expr_from_result(var_store, finish_parsing_int(*string), env);
+        ast::Expr::Num(string) => {
+            let answer = num_expr_from_result(var_store, finish_parsing_int(*string), env);
 
             (answer, Output::default())
         }
@@ -189,7 +221,13 @@ pub fn canonicalize_expr<'a>(
             } else {
                 let (can_fields, output) = canonicalize_fields(env, var_store, scope, fields);
 
-                (Record(var_store.fresh(), can_fields), output)
+                (
+                    Record {
+                        record_var: var_store.fresh(),
+                        fields: can_fields,
+                    },
+                    output,
+                )
             }
         }
         ast::Expr::Str(string) => (Str((*string).into()), Output::default()),
@@ -394,20 +432,19 @@ pub fn canonicalize_expr<'a>(
                 loc_body_expr.region,
                 &loc_body_expr.value,
             );
-
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
-            for (symbol, region) in scope.symbols() {
-                if !original_scope.contains_symbol(*symbol) {
-                    if !output.references.has_lookup(*symbol) {
+            for (sub_symbol, region) in scope.symbols() {
+                if !original_scope.contains_symbol(*sub_symbol) {
+                    if !output.references.has_lookup(*sub_symbol) {
                         // The body never referenced this argument we declared. It's an unused argument!
-                        env.problem(Problem::UnusedArgument(*symbol, *region));
+                        env.problem(Problem::UnusedArgument(symbol, *sub_symbol, *region));
                     }
 
                     // We shouldn't ultimately count arguments as referenced locals. Otherwise,
                     // we end up with weird conclusions like the expression (\x -> x + 1)
                     // references the (nonexistant) local variable x!
-                    output.references.lookups.remove(symbol);
+                    output.references.lookups.remove(sub_symbol);
                 }
             }
 
@@ -428,7 +465,7 @@ pub fn canonicalize_expr<'a>(
             // Infer the condition expression's type.
             let cond_var = var_store.fresh();
             let (can_cond, mut output) =
-                canonicalize_expr(env, var_store, scope, region, &loc_cond.value);
+                canonicalize_expr(env, var_store, scope, loc_cond.region, &loc_cond.value);
 
             // the condition can never be a tail-call
             output.tail_call = None;
@@ -436,19 +473,12 @@ pub fn canonicalize_expr<'a>(
             let mut can_branches = Vec::with_capacity(branches.len());
 
             for branch in branches {
-                let (can_when_pattern, loc_can_expr, branch_references) = canonicalize_when_branch(
-                    env,
-                    var_store,
-                    scope,
-                    region,
-                    branch.patterns.first().unwrap(),
-                    &branch.value,
-                    &mut output,
-                );
+                let (can_when_branch, branch_references) =
+                    canonicalize_when_branch(env, var_store, scope, region, *branch, &mut output);
 
                 output.references = output.references.union(branch_references);
 
-                can_branches.push((can_when_pattern, loc_can_expr));
+                can_branches.push(can_when_branch);
             }
 
             // A "when" with no branches is a runtime error, but it will mess things up
@@ -462,6 +492,7 @@ pub fn canonicalize_expr<'a>(
             let expr = When {
                 expr_var: var_store.fresh(),
                 cond_var,
+                region,
                 loc_cond: Box::new(can_cond),
                 branches: can_branches,
             };
@@ -473,6 +504,7 @@ pub fn canonicalize_expr<'a>(
 
             (
                 Access {
+                    record_var: var_store.fresh(),
                     field_var: var_store.fresh(),
                     ext_var: var_store.fresh(),
                     loc_expr: Box::new(loc_expr),
@@ -481,20 +513,15 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::AccessorFunction(field) => {
-            let ext_var = var_store.fresh();
-            let field_var = var_store.fresh();
-            let field_name: Lowercase = (*field).into();
-
-            (
-                Accessor {
-                    field: field_name,
-                    ext_var,
-                    field_var,
-                },
-                Output::default(),
-            )
-        }
+        ast::Expr::AccessorFunction(field) => (
+            Accessor {
+                record_var: var_store.fresh(),
+                ext_var: var_store.fresh(),
+                field_var: var_store.fresh(),
+                field: (*field).into(),
+            },
+            Output::default(),
+        ),
         ast::Expr::GlobalTag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -557,14 +584,32 @@ pub fn canonicalize_expr<'a>(
             )
         }
 
-        ast::Expr::MalformedIdent(_)
-        | ast::Expr::MalformedClosure
-        | ast::Expr::PrecedenceConflict(_, _, _) => {
-            panic!(
-                "TODO restore the rest of canonicalize()'s branches {:?} {:?}",
-                &expr,
-                local_successors(&References::new(), &env.closures)
+        ast::Expr::PrecedenceConflict(whole_region, binop1, binop2, _expr) => {
+            use roc_problem::can::RuntimeError::*;
+
+            let problem = PrecedenceProblem::BothNonAssociative(
+                *whole_region,
+                binop1.clone(),
+                binop2.clone(),
             );
+
+            env.problem(Problem::PrecedenceProblem(problem.clone()));
+
+            (
+                RuntimeError(InvalidPrecedence(problem, region)),
+                Output::default(),
+            )
+        }
+        ast::Expr::MalformedClosure => {
+            use roc_problem::can::RuntimeError::*;
+            (RuntimeError(MalformedClosure(region)), Output::default())
+        }
+        ast::Expr::MalformedIdent(name) => {
+            use roc_problem::can::RuntimeError::*;
+            (
+                RuntimeError(MalformedIdentifier((*name).into(), region)),
+                Output::default(),
+            )
         }
         ast::Expr::Nested(sub_expr) => {
             let (answer, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
@@ -644,34 +689,45 @@ pub fn canonicalize_expr<'a>(
 fn canonicalize_when_branch<'a>(
     env: &mut Env<'a>,
     var_store: &VarStore,
-    scope: &Scope,
-    region: Region,
-    loc_pattern: &Located<ast::Pattern<'a>>,
-    loc_expr: &'a Located<ast::Expr<'a>>,
+    scope: &mut Scope,
+    _region: Region,
+    branch: &'a ast::WhenBranch<'a>,
     output: &mut Output,
-) -> (Located<Pattern>, Located<Expr>, References) {
-    // Each case branch gets a new scope for canonicalization.
-    // Shadow `scope` to make sure we don't accidentally use the original one for the
-    // rest of this block, but keep the original around for later diffing.
+) -> (WhenBranch, References) {
+    let mut patterns = Vec::with_capacity(branch.patterns.len());
+
     let original_scope = scope;
     let mut scope = original_scope.clone();
 
-    let loc_can_pattern = canonicalize_pattern(
+    // TODO report symbols not bound in all patterns
+    for loc_pattern in &branch.patterns {
+        patterns.push(canonicalize_pattern(
+            env,
+            var_store,
+            &mut scope,
+            WhenBranch,
+            &loc_pattern.value,
+            loc_pattern.region,
+        ));
+    }
+
+    let (value, mut branch_output) = canonicalize_expr(
         env,
         var_store,
         &mut scope,
-        WhenBranch,
-        &loc_pattern.value,
-        loc_pattern.region,
+        branch.value.region,
+        &branch.value.value,
     );
 
-    let (can_expr, branch_output) =
-        canonicalize_expr(env, var_store, &mut scope, region, &loc_expr.value);
+    let guard = match &branch.guard {
+        None => None,
+        Some(loc_expr) => {
+            let (can_guard, guard_branch_output) =
+                canonicalize_expr(env, var_store, &mut scope, loc_expr.region, &loc_expr.value);
 
-    // If we already recorded a tail call then keep it, else use this branch's tail call
-    match output.tail_call {
-        Some(_) => {}
-        None => output.tail_call = branch_output.tail_call,
+            branch_output.union(guard_branch_output);
+            Some(can_guard)
+        }
     };
 
     // Now that we've collected all the references for this branch, check to see if
@@ -687,7 +743,17 @@ fn canonicalize_when_branch<'a>(
         }
     }
 
-    (loc_can_pattern, can_expr, branch_output.references)
+    let references = branch_output.references.clone();
+    output.union(branch_output);
+
+    (
+        WhenBranch {
+            patterns,
+            value,
+            guard,
+        },
+        references,
+    )
 }
 
 pub fn local_successors<'a>(
