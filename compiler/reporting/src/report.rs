@@ -425,7 +425,12 @@ pub fn can_problem<'b>(
                 alloc.reflow(" alias definition:"),
             ]),
             alloc.region(variable_region),
-            alloc.reflow("Roc does not allow phantom type parameters!"),
+            alloc.reflow("Roc does not allow unused type parameters!"),
+            // TODO add link to this guide section
+            alloc.hint().append(alloc.reflow(
+                "If you want an unused type parameter (a so-called \"phantom type\"), \
+                read the guide section on phantom data.",
+            )),
         ]),
         Problem::DuplicateRecordFieldValue {
             field_name,

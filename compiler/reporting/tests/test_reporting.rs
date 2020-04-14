@@ -2663,7 +2663,10 @@ mod test_reporting {
                 1 ┆  Foo a : [ Foo ]
                   ┆      ^
 
-                Roc does not allow phantom type parameters!
+                Roc does not allow unused type parameters!
+
+                Hint: If you want an unused type parameter (a so-called "phantom
+                type"), read the guide section on phantom data.
                 "#
             ),
         )
