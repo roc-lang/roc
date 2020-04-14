@@ -905,11 +905,12 @@ fn canonicalize_fields<'a>(
 
         let replaced = can_fields.insert(label.clone(), field);
 
-        if replaced.is_some() {
+        if let Some(old) = replaced {
             env.problems.push(Problem::DuplicateRecordFieldValue {
                 field_name: label,
                 field_region: loc_field.region,
                 record_region: region,
+                replaced_region: old.region,
             });
         }
 

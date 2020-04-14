@@ -2352,9 +2352,14 @@ mod test_reporting {
                 This record defines the `.x` field twice!
 
                 1 ┆  { x: 4, y: 3, x: 4 }
+                  ┆    ^^^^        ^^^^
+
+                In the rest of the program, I will only use the latter definition:
+
+                1 ┆  { x: 4, y: 3, x: 4 }
                   ┆                ^^^^
 
-                In the rest of the program, I will use the second definition.
+                For clarity, remove the previous `.x` definitions from this record.
                 "#
             ),
         )
@@ -2375,9 +2380,91 @@ mod test_reporting {
                 This record defines the `.x` field twice!
 
                 1 ┆  { x: 4, y: 3, x: "foo" }
+                  ┆    ^^^^        ^^^^^^^^
+
+                In the rest of the program, I will only use the latter definition:
+
+                1 ┆  { x: 4, y: 3, x: "foo" }
                   ┆                ^^^^^^^^
 
-                In the rest of the program, I will use the second definition.
+                For clarity, remove the previous `.x` definitions from this record.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_duplicate_field_multiline() {
+        report_problem_as(
+            indoc!(
+                r#"
+                {
+                    x: 4,
+                    y: 3,
+                    x: "foo"
+                }
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This record defines the `.x` field twice!
+
+                1 ┆   {
+                2 ┆>      x: 4,
+                3 ┆       y: 3,
+                4 ┆>      x: "foo"
+                5 ┆   }
+
+                In the rest of the program, I will only use the latter definition:
+
+                1 ┆   {
+                2 ┆       x: 4,
+                3 ┆       y: 3,
+                4 ┆>      x: "foo"
+                5 ┆   }
+
+                For clarity, remove the previous `.x` definitions from this record.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_update_duplicate_field_multiline() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \r ->
+                    { r &
+                        x: 4,
+                        y: 3,
+                        x: "foo"
+                    }
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This record defines the `.x` field twice!
+
+                2 ┆       { r &
+                3 ┆>          x: 4,
+                4 ┆           y: 3,
+                5 ┆>          x: "foo"
+                6 ┆       }
+
+                In the rest of the program, I will only use the latter definition:
+
+                2 ┆       { r &
+                3 ┆           x: 4,
+                4 ┆           y: 3,
+                5 ┆>          x: "foo"
+                6 ┆       }
+
+                For clarity, remove the previous `.x` definitions from this record.
                 "#
             ),
         )
@@ -2401,9 +2488,15 @@ mod test_reporting {
                 This record type defines the `.foo` field twice!
 
                 1 ┆  a : { foo : Int, bar : Float, foo : Str }
+                  ┆        ^^^^^^^^^               ^^^^^^^^^
+
+                In the rest of the program, I will only use the latter definition:
+
+                1 ┆  a : { foo : Int, bar : Float, foo : Str }
                   ┆                                ^^^^^^^^^
 
-                In the rest of the program, I will use the second definition.
+                For clarity, remove the previous `.foo` definitions from this record
+                type.
                 "#
             ),
         )
@@ -2427,9 +2520,15 @@ mod test_reporting {
                 This tag union type defines the `Foo` tag twice!
 
                 1 ┆  a : [ Foo Int, Bar Float, Foo Str ]
+                  ┆        ^^^^^^^             ^^^^^^^
+
+                In the rest of the program, I will only use the latter definition:
+
+                1 ┆  a : [ Foo Int, Bar Float, Foo Str ]
                   ┆                            ^^^^^^^
 
-                In the rest of the program, I will use the second definition.
+                For clarity, remove the previous `Foo` definitions from this tag union
+                type.
                 "#
             ),
         )

@@ -31,16 +31,19 @@ pub enum Problem {
         field_name: Lowercase,
         record_region: Region,
         field_region: Region,
+        replaced_region: Region,
     },
     DuplicateRecordFieldType {
         field_name: Lowercase,
         record_region: Region,
         field_region: Region,
+        replaced_region: Region,
     },
     DuplicateTag {
         tag_name: TagName,
         tag_union_region: Region,
         tag_region: Region,
+        replaced_region: Region,
     },
     RuntimeError(RuntimeError),
 }
