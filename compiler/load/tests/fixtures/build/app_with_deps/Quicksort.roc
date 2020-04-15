@@ -1,3 +1,7 @@
+app Quicksort
+    provides [ swap, partition, quicksort ]
+    imports []
+
 quicksort : List (Num a), Int, Int -> List (Num a)
 quicksort = \list, low, high ->
     when partition low high list is
@@ -43,5 +47,3 @@ partition = \low, high, initialList ->
 
         Err _ ->
             Pair (low - 1) initialList
-
-quicksort [ 7, 4, 9 ]

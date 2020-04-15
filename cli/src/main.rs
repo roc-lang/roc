@@ -1,7 +1,6 @@
 extern crate roc_gen;
 extern crate roc_reporting;
 
-use crate::helpers::{infer_expr, uniq_expr_with};
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
@@ -9,10 +8,13 @@ use inkwell::passes::PassManager;
 use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_collections::all::ImMap;
+use roc_collections::all::MutMap;
 use roc_gen::llvm::build::{
     build_proc, build_proc_header, get_call_conventions, module_from_builtins,
 };
 use roc_gen::llvm::convert::basic_type_from_layout;
+use roc_load::file::{load, LoadedModule, LoadingProblem};
+use roc_module::symbol::Symbol;
 use roc_mono::expr::{Expr, Procs};
 use roc_mono::layout::Layout;
 use std::time::SystemTime;
@@ -20,77 +22,38 @@ use std::time::SystemTime;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
 };
-use std::fs::File;
+use std::env::current_dir;
 use std::io;
-use std::io::prelude::*;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
-
-pub mod helpers;
+use tokio::process::Command;
+use tokio::runtime::Builder;
 
 fn main() -> io::Result<()> {
-    let now = SystemTime::now();
     let argv = std::env::args().collect::<Vec<String>>();
 
     match argv.get(1) {
         Some(filename) => {
             let mut path = Path::new(filename).canonicalize().unwrap();
+            let src_dir = current_dir()?;
 
             if !path.is_absolute() {
-                path = std::env::current_dir()?.join(path).canonicalize().unwrap();
+                path = src_dir.join(path).canonicalize().unwrap();
             }
 
-            // Step 1: build the .o file for the app
-            let mut file = File::open(path.clone())?;
-            let mut contents = String::new();
+            // Create the runtime
+            let mut rt = Builder::new()
+                .thread_name("roc")
+                .threaded_scheduler()
+                .enable_io()
+                .build()
+                .expect("Error spawning initial compiler thread."); // TODO make this error nicer.
 
-            file.read_to_string(&mut contents)?;
+            // Spawn the root task
+            let loaded = rt.block_on(load_file(src_dir, path));
 
-            let dest_filename = path.with_extension("o");
+            loaded.expect("TODO gracefully handle LoadingProblem");
 
-            gen(
-                Path::new(filename).to_path_buf(),
-                contents.as_str(),
-                Triple::host(),
-                &dest_filename,
-            );
-
-            let end_time = now.elapsed().unwrap();
-
-            println!(
-                "Finished compilation and code gen in {} ms\n",
-                end_time.as_millis()
-            );
-
-            let cwd = dest_filename.parent().unwrap();
-            let lib_path = dest_filename.with_file_name("libroc_app.a");
-
-            // Step 2: turn the .o file into a .a static library
-            Command::new("ar") // TODO on Windows, use `link`
-                .args(&[
-                    "rcs",
-                    lib_path.to_str().unwrap(),
-                    dest_filename.to_str().unwrap(),
-                ])
-                .spawn()
-                .expect("`ar` failed to run");
-
-            // Step 3: have rustc compile the host and link in the .a file
-            Command::new("rustc")
-                .args(&["-L", ".", "host.rs", "-o", "app"])
-                .current_dir(cwd)
-                .spawn()
-                .expect("rustc failed to run");
-
-            // Step 4: Run the compiled app
-            Command::new(cwd.join("app")).spawn().unwrap_or_else(|err| {
-                panic!(
-                    "{} failed to run: {:?}",
-                    cwd.join("app").to_str().unwrap(),
-                    err
-                )
-            });
             Ok(())
         }
         None => {
@@ -101,26 +64,110 @@ fn main() -> io::Result<()> {
     }
 }
 
-fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
+async fn load_file(src_dir: PathBuf, filename: PathBuf) -> Result<(), LoadingProblem> {
+    let compilation_start = SystemTime::now();
+    let arena = Bump::new();
+
+    // Step 1: compile the app and generate the .o file
+    let subs_by_module = MutMap::default();
+    let loaded = load(
+        &roc_builtins::std::standard_stdlib(),
+        src_dir,
+        filename.clone(),
+        subs_by_module,
+    )
+    .await?;
+
+    let dest_filename = filename.with_extension("o");
+
+    gen(&arena, loaded, filename, Triple::host(), &dest_filename);
+
+    let compilation_end = compilation_start.elapsed().unwrap();
+
+    println!(
+        "Finished compilation and code gen in {} ms\n",
+        compilation_end.as_millis()
+    );
+
+    let cwd = dest_filename.parent().unwrap();
+    let lib_path = dest_filename.with_file_name("libroc_app.a");
+
+    // Step 2: turn the .o file into a .a static library
+    Command::new("ar") // TODO on Windows, use `link`
+        .args(&[
+            "rcs",
+            lib_path.to_str().unwrap(),
+            dest_filename.to_str().unwrap(),
+        ])
+        .spawn()
+        .map_err(|_| {
+            todo!("gracefully handle `ar` failing to spawn.");
+        })?
+        .await
+        .map_err(|_| {
+            todo!("gracefully handle error after `ar` spawned");
+        })?;
+
+    // Step 3: have rustc compile the host and link in the .a file
+    let binary_path = cwd.join("app");
+
+    Command::new("rustc")
+        .args(&[
+            "-L",
+            ".",
+            "--crate-type",
+            "bin",
+            "host.rs",
+            "-o",
+            binary_path.as_path().to_str().unwrap(),
+        ])
+        .current_dir(cwd)
+        .spawn()
+        .map_err(|_| {
+            todo!("gracefully handle `rustc` failing to spawn.");
+        })?
+        .await
+        .map_err(|_| {
+            todo!("gracefully handle error after `rustc` spawned");
+        })?;
+
+    // Step 4: Run the compiled app
+    Command::new(binary_path)
+        .spawn()
+        .unwrap_or_else(|err| {
+            panic!(
+                "{} failed to run: {:?}",
+                cwd.join("app").to_str().unwrap(),
+                err
+            )
+        })
+        .await
+        .map_err(|_| {
+            todo!("gracefully handle error after `app` spawned");
+        })?;
+
+    Ok(())
+}
+
+fn gen(
+    arena: &Bump,
+    loaded: LoadedModule,
+    filename: PathBuf,
+    target: Triple,
+    dest_filename: &Path,
+) {
     use roc_reporting::report::{can_problem, RocDocAllocator, DEFAULT_PALETTE};
     use roc_reporting::type_error::type_problem;
 
-    // Build the expr
-    let arena = Bump::new();
-
-    let (loc_expr, _output, can_problems, subs, var, constraint, home, interns) =
-        uniq_expr_with(&arena, src, &ImMap::default());
-
-    let mut type_problems = Vec::new();
-    let (content, mut subs) = infer_expr(subs, &mut type_problems, &constraint, var);
-
+    let src = loaded.src;
+    let home = loaded.module_id;
     let src_lines: Vec<&str> = src.split('\n').collect();
     let palette = DEFAULT_PALETTE;
 
     // Report parsing and canonicalization problems
-    let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+    let alloc = RocDocAllocator::new(&src_lines, home, &loaded.interns);
 
-    for problem in can_problems.into_iter() {
+    for problem in loaded.can_problems.into_iter() {
         let report = can_problem(&alloc, filename.clone(), problem);
         let mut buf = String::new();
 
@@ -129,7 +176,7 @@ fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
         println!("\n{}\n", buf);
     }
 
-    for problem in type_problems.into_iter() {
+    for problem in loaded.type_problems.into_iter() {
         let report = type_problem(&alloc, filename.clone(), problem);
         let mut buf = String::new();
 
@@ -137,6 +184,63 @@ fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
 
         println!("\n{}\n", buf);
     }
+
+    // Look up the types and expressions of the `provided` values
+
+    // TODO instead of hardcoding this to `main`, use the `provided` list and gen all of them.
+    let ident_ids = loaded.interns.all_ident_ids.get(&home).unwrap();
+    let main_ident_id = *ident_ids.get_id(&"main".into()).unwrap_or_else(|| {
+        todo!("TODO gracefully handle the case where `main` wasn't declared in the app")
+    });
+    let main_symbol = Symbol::new(home, main_ident_id);
+    let mut main_var = None;
+    let mut main_expr = None;
+
+    for (symbol, var) in loaded.exposed_vars_by_symbol {
+        if symbol == main_symbol {
+            main_var = Some(var);
+
+            break;
+        }
+    }
+
+    // We use a loop label here so we can break all the way out of a nested
+    // loop inside DeclareRec if we find the expr there.
+    //
+    // https://doc.rust-lang.org/1.30.0/book/first-edition/loops.html#loop-labels
+    'find_expr: for decl in loaded.declarations {
+        use roc_can::def::Declaration::*;
+
+        match decl {
+            Declare(def) => {
+                if def.pattern_vars.contains_key(&main_symbol) {
+                    main_expr = Some(def.loc_expr);
+
+                    break 'find_expr;
+                }
+            }
+
+            DeclareRec(defs) => {
+                for def in defs {
+                    if def.pattern_vars.contains_key(&main_symbol) {
+                        main_expr = Some(def.loc_expr);
+
+                        break 'find_expr;
+                    }
+                }
+            }
+            InvalidCycle(_, _) => {}
+        }
+    }
+
+    let loc_expr = main_expr.unwrap_or_else(|| {
+        panic!("TODO gracefully handle the case where `main` was declared but not exposed")
+    });
+    let mut subs = loaded.solved.into_inner();
+    let content = match main_var {
+        Some(var) => subs.get_without_compacting(var).content,
+        None => todo!("TODO gracefully handle the case where `main` was declared but not exposed"),
+    };
 
     // Generate the binary
 
@@ -160,14 +264,14 @@ fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
 
     let main_fn_type =
         basic_type_from_layout(&arena, &context, &layout, ptr_bytes).fn_type(&[], false);
-    let main_fn_name = "$Test.main";
+    let main_fn_name = "$main";
 
     // Compile and add all the Procs before adding main
     let mut env = roc_gen::llvm::build::Env {
         arena: &arena,
         builder: &builder,
         context: &context,
-        interns,
+        interns: loaded.interns,
         module: arena.alloc(module),
         ptr_bytes,
     };

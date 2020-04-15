@@ -31,12 +31,14 @@ roc_uniq = { path = "../compiler/uniq" }
 roc_unify = { path = "../compiler/unify" }
 roc_solve = { path = "../compiler/solve" }
 roc_mono = { path = "../compiler/mono" }
+roc_load = { path = "../compiler/load", version = "0.1.0" }
 roc_gen = { path = "../compiler/gen", version = "0.1.0" }
 roc_reporting = { path = "../compiler/reporting", version = "0.1.0" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1.0"
+tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded", "process", "io-driver"] }
 # NOTE: rtfeldman/inkwell is a fork of TheDan64/inkwell which does not change anything.
 #
 # The reason for this fork is that the way Inkwell is designed, you have to use
