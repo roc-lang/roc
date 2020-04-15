@@ -22,7 +22,6 @@ use std::time::SystemTime;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
 };
-use std::env::current_dir;
 use std::io;
 use std::path::{Path, PathBuf};
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
@@ -34,12 +33,8 @@ fn main() -> io::Result<()> {
 
     match argv.get(1) {
         Some(filename) => {
-            let mut path = Path::new(filename).canonicalize().unwrap();
-            let src_dir = current_dir()?;
-
-            if !path.is_absolute() {
-                path = src_dir.join(path).canonicalize().unwrap();
-            }
+            let path = Path::new(filename);
+            let src_dir = path.parent().unwrap().canonicalize().unwrap();
 
             // Create the runtime
             let mut rt = Builder::new()
@@ -50,7 +45,7 @@ fn main() -> io::Result<()> {
                 .expect("Error spawning initial compiler thread."); // TODO make this error nicer.
 
             // Spawn the root task
-            let loaded = rt.block_on(load_file(src_dir, path));
+            let loaded = rt.block_on(load_file(src_dir, path.canonicalize().unwrap()));
 
             loaded.expect("TODO gracefully handle LoadingProblem");
 
