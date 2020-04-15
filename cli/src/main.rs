@@ -25,7 +25,7 @@ use inkwell::targets::{
 use std::env::current_dir;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use tokio::process::Command;
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
 use tokio::runtime::Builder;
 
@@ -45,6 +45,7 @@ fn main() -> io::Result<()> {
             let mut rt = Builder::new()
                 .thread_name("roc")
                 .threaded_scheduler()
+                .enable_io()
                 .build()
                 .expect("Error spawning initial compiler thread."); // TODO make this error nicer.
 
@@ -99,16 +100,29 @@ async fn load_file(src_dir: PathBuf, filename: PathBuf) -> Result<(), LoadingPro
             dest_filename.to_str().unwrap(),
         ])
         .spawn()
-        .expect("`ar` failed to run");
+        .map_err(|_| {
+            todo!("gracefully handle `ar` failing to spawn.");
+        })?
+        .await
+        .map_err(|_| {
+            todo!("gracefully handle error after `ar` spawned");
+        })?;
 
     // Step 3: have rustc compile the host and link in the .a file
     let binary_path = cwd.join("app");
+
 
     Command::new("rustc")
         .args(&["-L", ".", "--crate-type", "bin", "host.rs", "-o", binary_path.as_path().to_str().unwrap()])
         .current_dir(cwd)
         .spawn()
-        .expect("rustc failed to run");
+        .map_err(|_| {
+            todo!("gracefully handle `rustc` failing to spawn.");
+        })?
+        .await
+        .map_err(|_| {
+            todo!("gracefully handle error after `rustc` spawned");
+        })?;
 
     // Step 4: Run the compiled app
     Command::new(binary_path).spawn().unwrap_or_else(|err| {
@@ -117,7 +131,12 @@ async fn load_file(src_dir: PathBuf, filename: PathBuf) -> Result<(), LoadingPro
             cwd.join("app").to_str().unwrap(),
             err
         )
-    });
+    })
+    .await
+    .map_err(|_| {
+        todo!("gracefully handle error after `app` spawned");
+    })?;
+
 
     Ok(())
 }
