@@ -193,7 +193,8 @@ pub fn canonicalize_expr<'a>(
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
             if let Var(symbol) = &can_update.value {
-                let (can_fields, mut output) = canonicalize_fields(env, var_store, scope, fields);
+                let (can_fields, mut output) =
+                    canonicalize_fields(env, var_store, scope, region, fields);
 
                 output.references = output.references.union(update_out.references);
 
@@ -219,7 +220,8 @@ pub fn canonicalize_expr<'a>(
             if fields.is_empty() {
                 (EmptyRecord, Output::default())
             } else {
-                let (can_fields, output) = canonicalize_fields(env, var_store, scope, fields);
+                let (can_fields, output) =
+                    canonicalize_fields(env, var_store, scope, region, fields);
 
                 (
                     Record {
@@ -885,6 +887,7 @@ fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
     var_store: &VarStore,
     scope: &mut Scope,
+    region: Region,
     fields: &'a [Located<ast::AssignedField<'a, ast::Expr<'a>>>],
 ) -> (SendMap<Lowercase, Field>, Output) {
     let mut can_fields = SendMap::default();
@@ -900,7 +903,16 @@ fn canonicalize_fields<'a>(
             loc_expr: Box::new(field_expr),
         };
 
-        can_fields.insert(label, field);
+        let replaced = can_fields.insert(label.clone(), field);
+
+        if let Some(old) = replaced {
+            env.problems.push(Problem::DuplicateRecordFieldValue {
+                field_name: label,
+                field_region: loc_field.region,
+                record_region: region,
+                replaced_region: old.region,
+            });
+        }
 
         output.references = output.references.union(field_out.references);
     }

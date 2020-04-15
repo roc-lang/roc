@@ -1,6 +1,6 @@
 use crate::env::Env;
 use crate::scope::Scope;
-use roc_collections::all::{MutSet, SendMap};
+use roc_collections::all::{MutMap, MutSet, SendMap};
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -292,9 +292,10 @@ fn can_annotation_help(
 
         Record { fields, ext } => {
             let mut field_types = SendMap::default();
+            let mut seen = MutMap::default();
 
             for field in fields.iter() {
-                can_assigned_field(
+                let opt_field_name = can_assigned_field(
                     env,
                     &field.value,
                     region,
@@ -305,6 +306,17 @@ fn can_annotation_help(
                     &mut field_types,
                     references,
                 );
+
+                if let Some(added) = opt_field_name {
+                    if let Some(replaced_region) = seen.insert(added.clone(), field.region) {
+                        env.problem(roc_problem::can::Problem::DuplicateRecordFieldType {
+                            field_name: added.clone(),
+                            field_region: field.region,
+                            record_region: region,
+                            replaced_region,
+                        });
+                    }
+                }
             }
 
             let ext_type = match ext {
@@ -325,9 +337,10 @@ fn can_annotation_help(
         }
         TagUnion { tags, ext } => {
             let mut tag_types = Vec::with_capacity(tags.len());
+            let mut seen = MutMap::default();
 
             for tag in tags.iter() {
-                can_tag(
+                let opt_tag_name = can_tag(
                     env,
                     &tag.value,
                     region,
@@ -338,6 +351,17 @@ fn can_annotation_help(
                     &mut tag_types,
                     references,
                 );
+
+                if let Some(added) = opt_tag_name {
+                    if let Some(replaced_region) = seen.insert(added.clone(), tag.region) {
+                        env.problem(roc_problem::can::Problem::DuplicateTag {
+                            tag_name: added.clone(),
+                            tag_region: tag.region,
+                            tag_union_region: region,
+                            replaced_region,
+                        });
+                    }
+                }
             }
 
             let ext_type = match ext {
@@ -388,7 +412,7 @@ fn can_assigned_field<'a>(
     local_aliases: &mut SendMap<Symbol, Alias>,
     field_types: &mut SendMap<Lowercase, Type>,
     references: &mut MutSet<Symbol>,
-) {
+) -> Option<Lowercase> {
     use roc_parse::ast::AssignedField::*;
 
     match field {
@@ -396,16 +420,18 @@ fn can_assigned_field<'a>(
             let field_type = can_annotation_help(
                 env,
                 &annotation.value,
-                region,
+                annotation.region,
                 scope,
                 var_store,
                 introduced_variables,
                 local_aliases,
                 references,
             );
-            let label = Lowercase::from(field_name.value);
 
-            field_types.insert(label, field_type);
+            let label = Lowercase::from(field_name.value);
+            field_types.insert(label.clone(), field_type);
+
+            Some(label)
         }
         LabelOnly(loc_field_name) => {
             // Interpret { a, b } as { a : a, b : b }
@@ -420,7 +446,9 @@ fn can_assigned_field<'a>(
                 }
             };
 
-            field_types.insert(field_name, field_type);
+            field_types.insert(field_name.clone(), field_type);
+
+            Some(field_name)
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => can_assigned_field(
             env,
@@ -433,7 +461,7 @@ fn can_assigned_field<'a>(
             field_types,
             references,
         ),
-        Malformed(_) => (),
+        Malformed(_) => None,
     }
 }
 
@@ -449,7 +477,7 @@ fn can_tag<'a>(
     local_aliases: &mut SendMap<Symbol, Alias>,
     tag_types: &mut Vec<(TagName, Vec<Type>)>,
     references: &mut MutSet<Symbol>,
-) {
+) -> Option<TagName> {
     match tag {
         Tag::Global { name, args } => {
             let name = name.value.into();
@@ -470,7 +498,10 @@ fn can_tag<'a>(
                 arg_types.push(ann);
             }
 
-            tag_types.push((TagName::Global(name), arg_types));
+            let tag_name = TagName::Global(name);
+            tag_types.push((tag_name.clone(), arg_types));
+
+            Some(tag_name)
         }
         Tag::Private { name, args } => {
             let ident_id = env.ident_ids.get_or_insert(&name.value.into());
@@ -492,7 +523,10 @@ fn can_tag<'a>(
                 arg_types.push(ann);
             }
 
-            tag_types.push((TagName::Private(symbol), arg_types));
+            let tag_name = TagName::Private(symbol);
+            tag_types.push((tag_name.clone(), arg_types));
+
+            Some(tag_name)
         }
         Tag::SpaceBefore(nested, _) | Tag::SpaceAfter(nested, _) => can_tag(
             env,
@@ -505,6 +539,6 @@ fn can_tag<'a>(
             tag_types,
             references,
         ),
-        Tag::Malformed(_) => (),
+        Tag::Malformed(_) => None,
     }
 }

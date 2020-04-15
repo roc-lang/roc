@@ -17,7 +17,9 @@ const CYCLE_LN: &str = ["|     ", "│     "][!IS_WINDOWS as usize];
 const CYCLE_MID: &str = ["|     |", "│     ↓"][!IS_WINDOWS as usize];
 const CYCLE_END: &str = ["+-<---+", "└─────┘"][!IS_WINDOWS as usize];
 
-fn cycle<'b>(
+const GUTTER_BAR: &str = " ┆";
+
+pub fn cycle<'b>(
     alloc: &'b RocDocAllocator<'b>,
     indent: usize,
     name: RocDocBuilder<'b>,
@@ -401,6 +403,125 @@ pub fn can_problem<'b>(
                 shadow,
             },
         ),
+        Problem::CyclicAlias(symbol, region, others) => {
+            let (doc, title) = crate::type_error::cyclic_alias(alloc, symbol, region, others);
+
+            return Report {
+                filename,
+                title,
+                doc,
+            };
+        }
+        Problem::PhantomTypeArgument {
+            alias,
+            variable_region,
+            variable_name,
+        } => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("The "),
+                alloc.type_variable(variable_name),
+                alloc.reflow(" type variable is not used in the "),
+                alloc.symbol_unqualified(alias),
+                alloc.reflow(" alias definition:"),
+            ]),
+            alloc.region(variable_region),
+            alloc.reflow("Roc does not allow unused type parameters!"),
+            // TODO add link to this guide section
+            alloc.hint().append(alloc.reflow(
+                "If you want an unused type parameter (a so-called \"phantom type\"), \
+                read the guide section on phantom data.",
+            )),
+        ]),
+        Problem::DuplicateRecordFieldValue {
+            field_name,
+            field_region,
+            record_region,
+            replaced_region,
+        } => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("This record defines the "),
+                alloc.record_field(field_name.clone()),
+                alloc.reflow(" field twice!"),
+            ]),
+            alloc.region_all_the_things(
+                record_region,
+                replaced_region,
+                field_region,
+                Annotation::Error,
+            ),
+            alloc.reflow("In the rest of the program, I will only use the latter definition:"),
+            alloc.region_all_the_things(
+                record_region,
+                field_region,
+                field_region,
+                Annotation::TypoSuggestion,
+            ),
+            alloc.concat(vec![
+                alloc.reflow("For clarity, remove the previous "),
+                alloc.record_field(field_name),
+                alloc.reflow(" definitions from this record."),
+            ]),
+        ]),
+        Problem::DuplicateRecordFieldType {
+            field_name,
+            field_region,
+            record_region,
+            replaced_region,
+        } => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("This record type defines the "),
+                alloc.record_field(field_name.clone()),
+                alloc.reflow(" field twice!"),
+            ]),
+            alloc.region_all_the_things(
+                record_region,
+                replaced_region,
+                field_region,
+                Annotation::Error,
+            ),
+            alloc.reflow("In the rest of the program, I will only use the latter definition:"),
+            alloc.region_all_the_things(
+                record_region,
+                field_region,
+                field_region,
+                Annotation::TypoSuggestion,
+            ),
+            alloc.concat(vec![
+                alloc.reflow("For clarity, remove the previous "),
+                alloc.record_field(field_name),
+                alloc.reflow(" definitions from this record type."),
+            ]),
+        ]),
+        Problem::DuplicateTag {
+            tag_name,
+            tag_union_region,
+            tag_region,
+            replaced_region,
+        } => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("This tag union type defines the "),
+                alloc.tag_name(tag_name.clone()),
+                alloc.reflow(" tag twice!"),
+            ]),
+            alloc.region_all_the_things(
+                tag_union_region,
+                replaced_region,
+                tag_region,
+                Annotation::Error,
+            ),
+            alloc.reflow("In the rest of the program, I will only use the latter definition:"),
+            alloc.region_all_the_things(
+                tag_union_region,
+                tag_region,
+                tag_region,
+                Annotation::TypoSuggestion,
+            ),
+            alloc.concat(vec![
+                alloc.reflow("For clarity, remove the previous "),
+                alloc.tag_name(tag_name),
+                alloc.reflow(" definitions from this tag union type."),
+            ]),
+        ]),
         Problem::RuntimeError(runtime_error) => pretty_runtime_error(alloc, runtime_error),
     };
 
@@ -415,7 +536,7 @@ fn not_found<'b>(
     alloc: &'b RocDocAllocator<'b>,
     region: roc_region::all::Region,
     name: &str,
-    thing: &str,
+    thing: &'b str,
     options: MutSet<Box<str>>,
 ) -> RocDocBuilder<'b> {
     use crate::type_error::suggest;
@@ -447,7 +568,12 @@ fn not_found<'b>(
     };
 
     alloc.stack(vec![
-        alloc.string(format!("I cannot find a `{}` {}", name, thing)),
+        alloc.concat(vec![
+            alloc.reflow("I cannot find a `"),
+            alloc.string(name.to_string()),
+            alloc.reflow("` "),
+            alloc.reflow(thing),
+        ]),
         alloc.region(region),
         to_details(default_no, default_yes),
     ])
@@ -711,6 +837,7 @@ impl<'a> RocDocAllocator<'a> {
         self.text(content.to_string()).annotate(Annotation::BinOp)
     }
 
+    /// Turns of backticks/colors in a block
     pub fn type_block(
         &'a self,
         content: DocBuilder<'a, Self, Annotation>,
@@ -724,12 +851,118 @@ impl<'a> RocDocAllocator<'a> {
             .annotate(Annotation::Hint)
     }
 
+    pub fn region_all_the_things(
+        &'a self,
+        region: roc_region::all::Region,
+        sub_region1: roc_region::all::Region,
+        sub_region2: roc_region::all::Region,
+        error_annotation: Annotation,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        debug_assert!(region.contains(&sub_region1));
+        debug_assert!(region.contains(&sub_region2));
+
+        // if true, the final line of the snippet will be some ^^^ that point to the region where
+        // the problem is. Otherwise, the snippet will have a > on the lines that are in the regon
+        // where the problem is.
+        let error_highlight_line = region.start_line == region.end_line;
+
+        let max_line_number_length = (region.end_line + 1).to_string().len();
+        let indent = 2;
+
+        let mut result = self.nil();
+        for i in region.start_line..=region.end_line {
+            let line_number_string = (i + 1).to_string();
+            let line_number = line_number_string;
+            let this_line_number_length = line_number.len();
+
+            let line = self.src_lines[i as usize];
+
+            let rest_of_line = if !line.trim().is_empty() {
+                self.text(line).indent(indent)
+            } else {
+                self.nil()
+            };
+
+            let highlight = !error_highlight_line
+                && ((i >= sub_region1.start_line && i <= sub_region1.end_line)
+                    || (i >= sub_region2.start_line && i <= sub_region2.end_line));
+
+            let source_line = if highlight {
+                self.text(" ".repeat(max_line_number_length - this_line_number_length))
+                    .append(self.text(line_number).annotate(Annotation::LineNumber))
+                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
+                    .append(self.text(">").annotate(error_annotation))
+                    .append(rest_of_line)
+            } else if error_highlight_line {
+                self.text(" ".repeat(max_line_number_length - this_line_number_length))
+                    .append(self.text(line_number).annotate(Annotation::LineNumber))
+                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
+                    .append(rest_of_line)
+            } else {
+                self.text(" ".repeat(max_line_number_length - this_line_number_length))
+                    .append(self.text(line_number).annotate(Annotation::LineNumber))
+                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
+                    .append(self.text(" "))
+                    .append(rest_of_line)
+            };
+
+            result = result.append(source_line);
+
+            if i != region.end_line {
+                result = result.append(self.line())
+            }
+        }
+
+        if error_highlight_line {
+            let overlapping = sub_region2.start_col < sub_region1.end_col;
+
+            let highlight = if overlapping {
+                self.text("^".repeat((sub_region2.end_col - sub_region1.start_col) as usize))
+            } else {
+                let highlight1 = "^".repeat((sub_region1.end_col - sub_region1.start_col) as usize);
+                let highlight2 = if sub_region1 == sub_region2 {
+                    "".repeat(0)
+                } else {
+                    "^".repeat((sub_region2.end_col - sub_region2.start_col) as usize)
+                };
+                let inbetween = " "
+                    .repeat((sub_region2.start_col.saturating_sub(sub_region1.end_col)) as usize);
+
+                self.text(highlight1)
+                    .append(self.text(inbetween))
+                    .append(self.text(highlight2))
+            };
+
+            let highlight_line = self
+                .line()
+                .append(self.text(" ".repeat(max_line_number_length)))
+                .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
+                .append(if sub_region1.is_empty() && sub_region2.is_empty() {
+                    self.nil()
+                } else {
+                    self.text(" ".repeat(sub_region1.start_col as usize))
+                        .indent(indent)
+                        .append(highlight)
+                        .annotate(error_annotation)
+                });
+
+            result = result.append(highlight_line);
+        }
+
+        result.annotate(Annotation::CodeBlock)
+    }
+
     pub fn region_with_subregion(
         &'a self,
         region: roc_region::all::Region,
         sub_region: roc_region::all::Region,
     ) -> DocBuilder<'a, Self, Annotation> {
         debug_assert!(region.contains(&sub_region));
+
+        // If the outer region takes more than 1 full screen (~60 lines), only show the inner region
+        if region.end_line - region.start_line > 60 {
+            return self.region_with_subregion(sub_region, sub_region);
+        }
 
         // if true, the final line of the snippet will be some ^^^ that point to the region where
         // the problem is. Otherwise, the snippet will have a > on the lines that are in the regon
@@ -761,18 +994,18 @@ impl<'a> RocDocAllocator<'a> {
             {
                 self.text(" ".repeat(max_line_number_length - this_line_number_length))
                     .append(self.text(line_number).annotate(Annotation::LineNumber))
-                    .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
                     .append(self.text(">").annotate(Annotation::Error))
                     .append(rest_of_line)
             } else if error_highlight_line {
                 self.text(" ".repeat(max_line_number_length - this_line_number_length))
                     .append(self.text(line_number).annotate(Annotation::LineNumber))
-                    .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
                     .append(rest_of_line)
             } else {
                 self.text(" ".repeat(max_line_number_length - this_line_number_length))
                     .append(self.text(line_number).annotate(Annotation::LineNumber))
-                    .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
                     .append(self.text(" "))
                     .append(rest_of_line)
             };
@@ -789,7 +1022,7 @@ impl<'a> RocDocAllocator<'a> {
             let highlight_line = self
                 .line()
                 .append(self.text(" ".repeat(max_line_number_length)))
-                .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
                 .append(if highlight_text.is_empty() {
                     self.nil()
                 } else {
@@ -806,6 +1039,40 @@ impl<'a> RocDocAllocator<'a> {
 
     pub fn region(&'a self, region: roc_region::all::Region) -> DocBuilder<'a, Self, Annotation> {
         self.region_with_subregion(region, region)
+    }
+
+    pub fn region_without_error(
+        &'a self,
+        region: roc_region::all::Region,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        let mut result = self.nil();
+        for i in region.start_line..=region.end_line {
+            let line = if i == region.start_line {
+                if i == region.end_line {
+                    &self.src_lines[i as usize][region.start_col as usize..region.end_col as usize]
+                } else {
+                    &self.src_lines[i as usize][region.start_col as usize..]
+                }
+            } else if i == region.end_line {
+                &self.src_lines[i as usize][0..region.end_col as usize]
+            } else {
+                self.src_lines[i as usize]
+            };
+
+            let rest_of_line = if !line.trim().is_empty() {
+                self.text(line).annotate(Annotation::CodeBlock)
+            } else {
+                self.nil()
+            };
+
+            result = result.append(rest_of_line);
+
+            if i != region.end_line {
+                result = result.append(self.line())
+            }
+        }
+
+        result.indent(4)
     }
 
     pub fn ident(&'a self, ident: Ident) -> DocBuilder<'a, Self, Annotation> {
@@ -843,6 +1110,7 @@ pub enum Annotation {
 pub struct CiWrite<W> {
     style_stack: Vec<Annotation>,
     in_type_block: bool,
+    in_code_block: bool,
     upstream: W,
 }
 
@@ -851,6 +1119,7 @@ impl<W> CiWrite<W> {
         CiWrite {
             style_stack: vec![],
             in_type_block: false,
+            in_code_block: false,
             upstream,
         }
     }
@@ -898,6 +1167,9 @@ where
             TypeBlock => {
                 self.in_type_block = true;
             }
+            CodeBlock => {
+                self.in_code_block = true;
+            }
             Emphasized => {
                 self.write_str("*")?;
             }
@@ -906,7 +1178,7 @@ where
             }
             GlobalTag | PrivateTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
             | TypeVariable
-                if !self.in_type_block =>
+                if !self.in_type_block && !self.in_code_block =>
             {
                 self.write_str("`")?;
             }
@@ -926,6 +1198,9 @@ where
                 TypeBlock => {
                     self.in_type_block = false;
                 }
+                CodeBlock => {
+                    self.in_code_block = false;
+                }
                 Emphasized => {
                     self.write_str("*")?;
                 }
@@ -934,7 +1209,7 @@ where
                 }
                 GlobalTag | PrivateTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
                 | TypeVariable
-                    if !self.in_type_block =>
+                    if !self.in_type_block && !self.in_code_block =>
                 {
                     self.write_str("`")?;
                 }
