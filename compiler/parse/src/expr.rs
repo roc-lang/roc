@@ -1247,7 +1247,11 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                 (Some(_loc_args), Some((_spaces_before_equals, Either::First(_equals_indent)))) => {
                     // We got args with an '=' after them, e.g. `foo a b = ...`
                     // This is a syntax error!
-                    panic!("TODO gracefully handle parse error for defs like `foo a b = ...`");
+                    let fail = Fail {
+                        attempting: state.attempting,
+                        reason: FailReason::ArgumentsBeforeEquals,
+                    };
+                    Err((fail, state))
                 }
                 (None, Some((spaces_before_equals, Either::First(equals_indent)))) => {
                     // We got '=' with no args before it

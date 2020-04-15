@@ -23,6 +23,7 @@ mod test_reporting {
     use std::path::PathBuf;
     // use roc_region::all;
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
+    use roc_parse::parser::Fail;
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
 
@@ -43,13 +44,16 @@ mod test_reporting {
 
     fn infer_expr_help(
         expr_src: &str,
-    ) -> (
-        Vec<solve::TypeError>,
-        Vec<roc_problem::can::Problem>,
-        Vec<roc_mono::expr::MonoProblem>,
-        ModuleId,
-        Interns,
-    ) {
+    ) -> Result<
+        (
+            Vec<solve::TypeError>,
+            Vec<roc_problem::can::Problem>,
+            Vec<roc_mono::expr::MonoProblem>,
+            ModuleId,
+            Interns,
+        ),
+        Fail,
+    > {
         let CanExprOut {
             loc_expr,
             output,
@@ -60,7 +64,7 @@ mod test_reporting {
             mut interns,
             problems: can_problems,
             ..
-        } = can_expr(expr_src);
+        } = can_expr(expr_src)?;
         let mut subs = Subs::new(var_store.into());
 
         for (var, name) in output.introduced_variables.name_by_var {
@@ -99,7 +103,7 @@ mod test_reporting {
             );
         }
 
-        (unify_problems, can_problems, mono_problems, home, interns)
+        Ok((unify_problems, can_problems, mono_problems, home, interns))
     }
 
     fn list_reports<F>(src: &str, buf: &mut String, callback: F)
@@ -108,40 +112,43 @@ mod test_reporting {
     {
         use ven_pretty::DocAllocator;
 
-        let (type_problems, can_problems, mono_problems, home, interns) = infer_expr_help(src);
+        match infer_expr_help(src) {
+            Err(fail) => todo!(),
+            Ok((type_problems, can_problems, mono_problems, home, interns)) => {
+                let src_lines: Vec<&str> = src.split('\n').collect();
+                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
-        let src_lines: Vec<&str> = src.split('\n').collect();
-        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+                let filename = filename_from_string(r"\code\proj\Main.roc");
+                let mut reports = Vec::new();
 
-        let filename = filename_from_string(r"\code\proj\Main.roc");
-        let mut reports = Vec::new();
+                for problem in can_problems {
+                    let report = can_problem(&alloc, filename.clone(), problem.clone());
+                    reports.push(report);
+                }
 
-        for problem in can_problems {
-            let report = can_problem(&alloc, filename.clone(), problem.clone());
-            reports.push(report);
+                for problem in type_problems {
+                    let report = type_problem(&alloc, filename.clone(), problem.clone());
+                    reports.push(report);
+                }
+
+                for problem in mono_problems {
+                    let report = mono_problem(&alloc, filename.clone(), problem.clone());
+                    reports.push(report);
+                }
+
+                let has_reports = !reports.is_empty();
+
+                let doc = alloc
+                    .stack(reports.into_iter().map(|v| v.pretty(&alloc)))
+                    .append(if has_reports {
+                        alloc.line()
+                    } else {
+                        alloc.nil()
+                    });
+
+                callback(doc, buf)
+            }
         }
-
-        for problem in type_problems {
-            let report = type_problem(&alloc, filename.clone(), problem.clone());
-            reports.push(report);
-        }
-
-        for problem in mono_problems {
-            let report = mono_problem(&alloc, filename.clone(), problem.clone());
-            reports.push(report);
-        }
-
-        let has_reports = !reports.is_empty();
-
-        let doc = alloc
-            .stack(reports.into_iter().map(|v| v.pretty(&alloc)))
-            .append(if has_reports {
-                alloc.line()
-            } else {
-                alloc.nil()
-            });
-
-        callback(doc, buf)
     }
 
     fn report_problem_as(src: &str, expected_rendering: &str) {
@@ -491,7 +498,8 @@ mod test_reporting {
             "#
         );
 
-        let (_type_problems, _can_problems, _mono_problems, home, interns) = infer_expr_help(src);
+        let (_type_problems, _can_problems, _mono_problems, home, interns) =
+            infer_expr_help(src).expect("parse error");
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -521,7 +529,7 @@ mod test_reporting {
         );
 
         let (_type_problems, _can_problems, _mono_problems, home, mut interns) =
-            infer_expr_help(src);
+            infer_expr_help(src).expect("parse error");
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -2652,6 +2660,32 @@ mod test_reporting {
                 f : Foo Int
 
                 f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                The `a` type variable is not used in the `Foo` alias definition:
+
+                1 ┆  Foo a : [ Foo ]
+                  ┆      ^
+
+                Roc does not allow unused type parameters!
+
+                Hint: If you want an unused type parameter (a so-called "phantom
+                type"), read the guide section on phantom data.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn elm_function_syntax() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f x y = x
                 "#
             ),
             indoc!(
