@@ -1244,12 +1244,12 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
         move |arena, state, (loc_ident, opt_extras)| {
             // This appears to be a var, keyword, or function application.
             match opt_extras {
-                (Some(_loc_args), Some((_spaces_before_equals, Either::First(_equals_indent)))) => {
-                    // We got args with an '=' after them, e.g. `foo a b = ...`
-                    // This is a syntax error!
+                (Some(loc_args), Some((_spaces_before_equals, Either::First(_equals_indent)))) => {
+                    // We got args with an '=' after them, e.g. `foo a b = ...` This is a syntax error!
+                    let region = Region::across_all(loc_args.iter().map(|v| &v.region));
                     let fail = Fail {
                         attempting: state.attempting,
-                        reason: FailReason::ArgumentsBeforeEquals,
+                        reason: FailReason::ArgumentsBeforeEquals(region),
                     };
                     Err((fail, state))
                 }

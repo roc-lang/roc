@@ -190,7 +190,7 @@ pub enum FailReason {
     Eof(Region),
     InvalidPattern,
     ReservedKeyword(Region),
-    ArgumentsBeforeEquals,
+    ArgumentsBeforeEquals(Region),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

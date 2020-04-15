@@ -2704,8 +2704,11 @@ mod test_reporting {
             indoc!(
                 r#"
                 -- PARSE PROBLEM ---------------------------------------------------------------
-                
+
                 Unexpected tokens in front of the `=` symbol:
+
+                1 ┆  f x y = x
+                  ┆    ^^^
                 "#
             ),
         )

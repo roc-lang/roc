@@ -12,8 +12,11 @@ pub fn parse_problem<'b>(
     use FailReason::*;
 
     match problem.reason {
-        ArgumentsBeforeEquals => {
-            let doc = alloc.text("Unexpected tokens in front of the `=` symbol:");
+        ArgumentsBeforeEquals(region) => {
+            let doc = alloc.stack(vec![
+                alloc.reflow("Unexpected tokens in front of the `=` symbol:"),
+                alloc.region(region),
+            ]);
 
             Report {
                 filename,

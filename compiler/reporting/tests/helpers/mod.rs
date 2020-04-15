@@ -1,7 +1,6 @@
 extern crate bumpalo;
 
 use self::bumpalo::Bump;
-use roc_builtins::unique::uniq_stdlib;
 use roc_can::constraint::Constraint;
 use roc_can::env::Env;
 use roc_can::expected::Expected;
@@ -11,13 +10,12 @@ use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, SendMap, SendSet};
 use roc_constrain::expr::constrain_expr;
 use roc_constrain::module::{constrain_imported_values, load_builtin_aliases, Import};
-use roc_module::ident::Ident;
-use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::parser::{loc, Fail, Parser, State};
 use roc_problem::can::Problem;
-use roc_region::all::{Located, Region};
+use roc_region::all::Located;
 use roc_solve::solve;
 use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
