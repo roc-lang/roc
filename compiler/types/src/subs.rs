@@ -6,7 +6,7 @@ use roc_module::symbol::Symbol;
 use std::fmt;
 use std::iter::{once, Iterator};
 use std::sync::atomic::{AtomicU32, Ordering};
-use ven_ena::unify::{InPlace, UnificationTable, UnifyKey};
+use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Mark(i32);
@@ -37,12 +37,13 @@ impl fmt::Debug for Mark {
 }
 
 #[derive(Default)]
-struct NameState {
+struct ErrorTypeState {
     taken: MutSet<Lowercase>,
     normals: u32,
+    problems: Vec<crate::types::Problem>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
 }
@@ -151,9 +152,11 @@ impl Variable {
 
     pub const EMPTY_RECORD: Variable = Variable(1);
     pub const EMPTY_TAG_UNION: Variable = Variable(2);
+    const BOOL_ENUM: Variable = Variable(3);
+    pub const BOOL: Variable = Variable(4);
+    pub const RESERVED: usize = 5;
 
-    // variables 1 and 2 are reserved for EmptyRecord and EmptyTagUnion
-    const FIRST_USER_SPACE_VAR: Variable = Variable(3);
+    const FIRST_USER_SPACE_VAR: Variable = Variable(Self::RESERVED as u32);
 
     /// # Safety
     ///
@@ -228,8 +231,26 @@ impl Subs {
             subs.utable.new_key(flex_var_descriptor());
         }
 
-        subs.set_content(Variable(1), Content::Structure(FlatType::EmptyRecord));
-        subs.set_content(Variable(2), Content::Structure(FlatType::EmptyTagUnion));
+        subs.set_content(
+            Variable::EMPTY_RECORD,
+            Content::Structure(FlatType::EmptyRecord),
+        );
+        subs.set_content(
+            Variable::EMPTY_TAG_UNION,
+            Content::Structure(FlatType::EmptyTagUnion),
+        );
+
+        subs.set_content(Variable::BOOL_ENUM, {
+            let mut tags = MutMap::default();
+            tags.insert(TagName::Global("False".into()), vec![]);
+            tags.insert(TagName::Global("True".into()), vec![]);
+
+            Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        });
+
+        subs.set_content(Variable::BOOL, {
+            Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL_ENUM)
+        });
 
         subs
     }
@@ -326,7 +347,7 @@ impl Subs {
         self.utable.is_redirect(var)
     }
 
-    pub fn occurs(&mut self, var: Variable) -> Option<(Variable, Vec<Variable>)> {
+    pub fn occurs(&self, var: Variable) -> Option<(Variable, Vec<Variable>)> {
         occurs(self, &ImSet::default(), var)
     }
 
@@ -343,7 +364,7 @@ impl Subs {
         explicit_substitute(self, x, y, z, &mut seen)
     }
 
-    pub fn var_to_error_type(&mut self, var: Variable) -> ErrorType {
+    pub fn var_to_error_type(&mut self, var: Variable) -> (ErrorType, Vec<crate::types::Problem>) {
         let names = get_var_names(self, var, ImMap::default());
         let mut taken = MutSet::default();
 
@@ -351,9 +372,13 @@ impl Subs {
             taken.insert(name);
         }
 
-        let mut state = NameState { taken, normals: 0 };
+        let mut state = ErrorTypeState {
+            taken,
+            normals: 0,
+            problems: Vec::new(),
+        };
 
-        var_to_err_type(self, &mut state, var)
+        (var_to_err_type(self, &mut state, var), state.problems)
     }
 
     pub fn restore(&mut self, var: Variable) {
@@ -381,6 +406,18 @@ impl Subs {
 
     pub fn is_empty(&self) -> bool {
         self.utable.is_empty()
+    }
+
+    pub fn snapshot(&mut self) -> Snapshot<InPlace<Variable>> {
+        self.utable.snapshot()
+    }
+
+    pub fn rollback_to(&mut self, snapshot: Snapshot<InPlace<Variable>>) {
+        self.utable.rollback_to(snapshot)
+    }
+
+    pub fn commit_snapshot(&mut self, snapshot: Snapshot<InPlace<Variable>>) {
+        self.utable.commit(snapshot)
     }
 }
 
@@ -522,6 +559,250 @@ pub enum FlatType {
     Boolean(boolean_algebra::Bool),
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Copy)]
+pub struct ContentHash(u64);
+
+impl ContentHash {
+    pub fn from_var(var: Variable, subs: &mut Subs) -> Self {
+        use std::hash::Hasher;
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        Self::from_var_help(var, subs, &mut hasher);
+
+        ContentHash(hasher.finish())
+    }
+
+    pub fn from_var_help<T>(var: Variable, subs: &mut Subs, hasher: &mut T)
+    where
+        T: std::hash::Hasher,
+    {
+        Self::from_content_help(var, &subs.get_without_compacting(var).content, subs, hasher)
+    }
+
+    pub fn from_content_help<T>(var: Variable, content: &Content, subs: &mut Subs, hasher: &mut T)
+    where
+        T: std::hash::Hasher,
+    {
+        match content {
+            Content::Alias(_, _, actual) => {
+                // ensure an alias has the same hash as just the body of the alias
+                Self::from_var_help(*actual, subs, hasher)
+            }
+            Content::Structure(flat_type) => {
+                hasher.write_u8(0x10);
+                Self::from_flat_type_help(var, flat_type, subs, hasher)
+            }
+            Content::FlexVar(_) | Content::RigidVar(_) => {
+                hasher.write_u8(0x11);
+            }
+            Content::Error => {
+                hasher.write_u8(0x12);
+            }
+        }
+    }
+
+    pub fn from_flat_type_help<T>(
+        flat_type_var: Variable,
+        flat_type: &FlatType,
+        subs: &mut Subs,
+        hasher: &mut T,
+    ) where
+        T: std::hash::Hasher,
+    {
+        use std::hash::Hash;
+
+        match flat_type {
+            FlatType::Func(arguments, ret) => {
+                hasher.write_u8(0);
+
+                for var in arguments {
+                    Self::from_var_help(*var, subs, hasher);
+                }
+
+                Self::from_var_help(*ret, subs, hasher);
+            }
+
+            FlatType::Apply(symbol, arguments) => {
+                hasher.write_u8(1);
+
+                symbol.hash(hasher);
+
+                for var in arguments {
+                    Self::from_var_help(*var, subs, hasher);
+                }
+            }
+
+            FlatType::EmptyRecord => {
+                hasher.write_u8(2);
+            }
+
+            FlatType::Record(record_fields, ext) => {
+                hasher.write_u8(3);
+
+                // NOTE: This function will modify the subs, putting all fields from the ext_var
+                // into the record itself, then setting the ext_var to EMPTY_RECORD
+
+                let mut fields = Vec::with_capacity(record_fields.len());
+
+                let mut extracted_fields_from_ext = false;
+                if *ext != Variable::EMPTY_RECORD {
+                    let mut fields_map = MutMap::default();
+                    match crate::pretty_print::chase_ext_record(subs, *ext, &mut fields_map) {
+                        Err((_, Content::FlexVar(_))) | Ok(()) => {
+                            if !fields_map.is_empty() {
+                                extracted_fields_from_ext = true;
+                                fields.extend(fields_map.into_iter());
+                            }
+                        }
+                        Err(content) => panic!("Record with unexpected ext_var: {:?}", content),
+                    }
+                }
+
+                fields.extend(record_fields.clone().into_iter());
+                fields.sort();
+
+                for (name, argument) in &fields {
+                    name.hash(hasher);
+                    Self::from_var_help(*argument, subs, hasher);
+                }
+
+                if *ext != Variable::EMPTY_RECORD {
+                    // unify ext with empty record
+                    let desc = subs.get(Variable::EMPTY_RECORD);
+                    subs.union(Variable::EMPTY_RECORD, *ext, desc);
+                }
+
+                if extracted_fields_from_ext {
+                    let fields_map = fields.into_iter().collect();
+
+                    subs.set_content(
+                        flat_type_var,
+                        Content::Structure(FlatType::Record(fields_map, Variable::EMPTY_RECORD)),
+                    );
+                }
+            }
+
+            FlatType::EmptyTagUnion => {
+                hasher.write_u8(4);
+            }
+
+            FlatType::TagUnion(tags, ext) => {
+                hasher.write_u8(5);
+
+                // NOTE: This function will modify the subs, putting all tags from the ext_var
+                // into the tag union itself, then setting the ext_var to EMPTY_TAG_UNION
+
+                let mut tag_vec = Vec::with_capacity(tags.len());
+
+                let mut extracted_fields_from_ext = false;
+                if *ext != Variable::EMPTY_TAG_UNION {
+                    match crate::pretty_print::chase_ext_tag_union(subs, *ext, &mut tag_vec) {
+                        Err((_, Content::FlexVar(_))) | Ok(()) => {
+                            extracted_fields_from_ext = !tag_vec.is_empty();
+                        }
+                        Err(content) => panic!("TagUnion with unexpected ext_var: {:?}", content),
+                    }
+                }
+
+                tag_vec.extend(tags.clone().into_iter());
+                tag_vec.sort();
+                for (name, arguments) in &tag_vec {
+                    name.hash(hasher);
+
+                    for var in arguments {
+                        Self::from_var_help(*var, subs, hasher);
+                    }
+                }
+
+                if *ext != Variable::EMPTY_TAG_UNION {
+                    // unify ext with empty record
+                    let desc = subs.get(Variable::EMPTY_TAG_UNION);
+                    subs.union(Variable::EMPTY_TAG_UNION, *ext, desc);
+                }
+
+                if extracted_fields_from_ext {
+                    let fields_map = tag_vec.into_iter().collect();
+
+                    subs.set_content(
+                        flat_type_var,
+                        Content::Structure(FlatType::TagUnion(
+                            fields_map,
+                            Variable::EMPTY_TAG_UNION,
+                        )),
+                    );
+                }
+            }
+
+            FlatType::RecursiveTagUnion(rec, tags, ext) => {
+                // NOTE: rec is not hashed in. If all the tags and their arguments are the same,
+                // then the recursive tag unions are the same
+                hasher.write_u8(6);
+
+                // NOTE: This function will modify the subs, putting all tags from the ext_var
+                // into the tag union itself, then setting the ext_var to EMPTY_TAG_UNION
+
+                let mut tag_vec = Vec::with_capacity(tags.len());
+
+                let mut extracted_fields_from_ext = false;
+                if *ext != Variable::EMPTY_TAG_UNION {
+                    match crate::pretty_print::chase_ext_tag_union(subs, *ext, &mut tag_vec) {
+                        Err((_, Content::FlexVar(_))) | Ok(()) => {
+                            extracted_fields_from_ext = !tag_vec.is_empty();
+                        }
+                        Err(content) => {
+                            panic!("RecursiveTagUnion with unexpected ext_var: {:?}", content)
+                        }
+                    }
+                }
+
+                tag_vec.extend(tags.clone().into_iter());
+                tag_vec.sort();
+                for (name, arguments) in &tag_vec {
+                    name.hash(hasher);
+
+                    for var in arguments {
+                        Self::from_var_help(*var, subs, hasher);
+                    }
+                }
+
+                if *ext != Variable::EMPTY_TAG_UNION {
+                    // unify ext with empty record
+                    let desc = subs.get(Variable::EMPTY_TAG_UNION);
+                    subs.union(Variable::EMPTY_TAG_UNION, *ext, desc);
+                }
+
+                if extracted_fields_from_ext {
+                    let fields_map = tag_vec.into_iter().collect();
+
+                    subs.set_content(
+                        flat_type_var,
+                        Content::Structure(FlatType::RecursiveTagUnion(
+                            *rec,
+                            fields_map,
+                            Variable::EMPTY_TAG_UNION,
+                        )),
+                    );
+                }
+            }
+
+            FlatType::Boolean(boolean) => {
+                hasher.write_u8(7);
+                match boolean.simplify(subs) {
+                    Ok(_variables) => hasher.write_u8(1),
+                    Err(crate::boolean_algebra::Atom::One) => hasher.write_u8(1),
+                    Err(crate::boolean_algebra::Atom::Zero) => hasher.write_u8(0),
+                    Err(crate::boolean_algebra::Atom::Variable(_)) => unreachable!(),
+                }
+            }
+
+            FlatType::Erroneous(_problem) => {
+                hasher.write_u8(8);
+                //TODO hash the problem?
+            }
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Builtin {
     Str,
@@ -531,19 +812,19 @@ pub enum Builtin {
 }
 
 fn occurs(
-    subs: &mut Subs,
+    subs: &Subs,
     seen: &ImSet<Variable>,
     input_var: Variable,
 ) -> Option<(Variable, Vec<Variable>)> {
     use self::Content::*;
     use self::FlatType::*;
 
-    let root_var = subs.get_root_key(input_var);
+    let root_var = subs.get_root_key_without_compacting(input_var);
 
     if seen.contains(&root_var) {
         Some((root_var, vec![]))
     } else {
-        match subs.get(root_var).content {
+        match subs.get_without_compacting(root_var).content {
             FlexVar(_) | RigidVar(_) | Error => None,
 
             Structure(flat_type) => {
@@ -593,7 +874,7 @@ fn occurs(
 }
 
 fn short_circuit<'a, T>(
-    subs: &mut Subs,
+    subs: &Subs,
     root_key: Variable,
     seen: &ImSet<Variable>,
     iter: T,
@@ -838,7 +1119,7 @@ where
     }
 }
 
-fn var_to_err_type(subs: &mut Subs, state: &mut NameState, var: Variable) -> ErrorType {
+fn var_to_err_type(subs: &mut Subs, state: &mut ErrorTypeState, var: Variable) -> ErrorType {
     let desc = subs.get(var);
 
     if desc.mark == Mark::OCCURS {
@@ -856,7 +1137,7 @@ fn var_to_err_type(subs: &mut Subs, state: &mut NameState, var: Variable) -> Err
 
 fn content_to_err_type(
     subs: &mut Subs,
-    state: &mut NameState,
+    state: &mut ErrorTypeState,
     var: Variable,
     content: Content,
 ) -> ErrorType {
@@ -898,7 +1179,11 @@ fn content_to_err_type(
     }
 }
 
-fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: FlatType) -> ErrorType {
+fn flat_type_to_err_type(
+    subs: &mut Subs,
+    state: &mut ErrorTypeState,
+    flat_type: FlatType,
+) -> ErrorType {
     use self::FlatType::*;
 
     match flat_type {
@@ -993,21 +1278,24 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
                 err_tags.insert(tag, err_vars);
             }
 
+            let rec_error_type = Box::new(var_to_err_type(subs, state, rec_var));
+
             match var_to_err_type(subs, state, ext_var).unwrap_alias() {
                 ErrorType::RecursiveTagUnion(rec_var, sub_tags, sub_ext) => {
-                    ErrorType::RecursiveTagUnion(rec_var, sub_tags.union(err_tags), sub_ext)
+                    debug_assert!(rec_var == rec_error_type);
+                    ErrorType::RecursiveTagUnion(rec_error_type, sub_tags.union(err_tags), sub_ext)
                 }
 
                 ErrorType::TagUnion(sub_tags, sub_ext) => {
-                    ErrorType::RecursiveTagUnion(rec_var, sub_tags.union(err_tags), sub_ext)
+                    ErrorType::RecursiveTagUnion(rec_error_type, sub_tags.union(err_tags), sub_ext)
                 }
 
                 ErrorType::FlexVar(var) => {
-                    ErrorType::RecursiveTagUnion(rec_var, err_tags, TypeExt::FlexOpen(var))
+                    ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::FlexOpen(var))
                 }
 
                 ErrorType::RigidVar(var) => {
-                    ErrorType::RecursiveTagUnion(rec_var, err_tags, TypeExt::RigidOpen(var))
+                    ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::RigidOpen(var))
                 }
 
                 other =>
@@ -1017,11 +1305,15 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
 
         Boolean(b) => ErrorType::Boolean(b),
 
-        Erroneous(_) => ErrorType::Error,
+        Erroneous(problem) => {
+            state.problems.push(problem);
+
+            ErrorType::Error
+        }
     }
 }
 
-fn get_fresh_var_name(state: &mut NameState) -> Lowercase {
+fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
     let (name, new_index) = name_type_var(state.normals, &mut state.taken);
 
     state.normals = new_index;

@@ -4,7 +4,7 @@ use roc_module::symbol::Symbol;
 use roc_types::boolean_algebra::{Atom, Bool};
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
-use roc_types::types::{gather_fields, Mismatch, Problem, RecordStructure};
+use roc_types::types::{gather_fields, ErrorType, Mismatch, RecordStructure};
 use std::hash::Hash;
 
 macro_rules! mismatch {
@@ -19,6 +19,45 @@ macro_rules! mismatch {
         }
         vec![Mismatch::TypeMismatch]
     }};
+    ($msg:expr) => {{
+        if cfg!(debug_assertions) {
+            println!(
+                "Mismatch in {} Line {} Column {}",
+                file!(),
+                line!(),
+                column!()
+            );
+        }
+        println!($msg);
+        println!("");
+        vec![Mismatch::TypeMismatch]
+    }};
+    ($msg:expr,) => {{
+        if cfg!(debug_assertions) {
+            println!(
+                "Mismatch in {} Line {} Column {}",
+                file!(),
+                line!(),
+                column!()
+            );
+        }
+        println!($msg);
+        println!("");
+        vec![Mismatch::TypeMismatch]
+    }};
+    ($msg:expr, $($arg:tt)*) => {{
+        if cfg!(debug_assertions) {
+            println!(
+                "Mismatch in {} Line {} Column {}",
+                file!(),
+                line!(),
+                column!()
+            );
+        }
+        println!($msg, $($arg)*);
+        println!("");
+        vec![Mismatch::TypeMismatch]
+    }};
 }
 
 type Pool = Vec<Variable>;
@@ -30,9 +69,11 @@ struct Context {
     second_desc: Descriptor,
 }
 
-pub struct Unified {
-    pub vars: Pool,
-    pub mismatches: Vec<Problem>,
+#[derive(Debug)]
+pub enum Unified {
+    Success(Pool),
+    Failure(Pool, ErrorType, ErrorType),
+    BadType(Pool, roc_types::types::Problem),
 }
 
 #[derive(Debug)]
@@ -46,19 +87,24 @@ type Outcome = Vec<Mismatch>;
 #[inline(always)]
 pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable) -> Unified {
     let mut vars = Vec::new();
-    let mismatches = unify_pool(subs, &mut vars, var1, var2)
-        .into_iter()
-        .map(|problem| {
-            let type1 = subs.var_to_error_type(var1);
-            let type2 = subs.var_to_error_type(var2);
+    let mismatches = unify_pool(subs, &mut vars, var1, var2);
 
-            subs.union(var1, var2, Content::Error.into());
+    if mismatches.is_empty() {
+        Unified::Success(vars)
+    } else {
+        let (type1, mut problems) = subs.var_to_error_type(var1);
+        let (type2, problems2) = subs.var_to_error_type(var2);
 
-            Problem::Mismatch(problem, type1, type2)
-        })
-        .collect();
+        problems.extend(problems2);
 
-    Unified { vars, mismatches }
+        subs.union(var1, var2, Content::Error.into());
+
+        if !problems.is_empty() {
+            Unified::BadType(vars, problems.remove(0))
+        } else {
+            Unified::Failure(vars, type1, type2)
+        }
+    }
 }
 
 #[inline(always)]
@@ -78,7 +124,7 @@ pub fn unify_pool(subs: &mut Subs, pool: &mut Pool, var1: Variable, var2: Variab
 }
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
-    // println!( "{:?} {:?} ~ {:?} {:?}", ctx.first, ctx.first_desc.content, ctx.second, ctx.second_desc.content);
+    // println!( "{:?} {:?} ~ {:?} {:?}", ctx.first, ctx.first_desc.content, ctx.second, ctx.second_desc.content,);
     match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(subs, pool, &ctx, opt_name, &ctx.second_desc.content),
         RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
@@ -154,9 +200,9 @@ fn unify_structure(
                 }
             }
         }
-        RigidVar(_) => {
+        RigidVar(name) => {
             // Type mismatch! Rigid can only unify with flex.
-            mismatch!()
+            mismatch!("trying to unify {:?} with rigid var {:?}", &flat_type, name)
         }
 
         Structure(ref other_flat_type) => {
@@ -207,6 +253,11 @@ fn unify_record(
     if unique_fields1.is_empty() {
         if unique_fields2.is_empty() {
             let ext_problems = unify_pool(subs, pool, rec1.ext, rec2.ext);
+
+            if !ext_problems.is_empty() {
+                return ext_problems;
+            }
+
             let other_fields = MutMap::default();
             let mut field_problems =
                 unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, rec1.ext);
@@ -218,6 +269,11 @@ fn unify_record(
             let flat_type = FlatType::Record(unique_fields2, rec2.ext);
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
             let ext_problems = unify_pool(subs, pool, rec1.ext, sub_record);
+
+            if !ext_problems.is_empty() {
+                return ext_problems;
+            }
+
             let other_fields = MutMap::default();
             let mut field_problems =
                 unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, sub_record);
@@ -230,6 +286,11 @@ fn unify_record(
         let flat_type = FlatType::Record(unique_fields1, rec1.ext);
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
         let ext_problems = unify_pool(subs, pool, sub_record, rec2.ext);
+
+        if !ext_problems.is_empty() {
+            return ext_problems;
+        }
+
         let other_fields = MutMap::default();
         let mut field_problems =
             unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, sub_record);
@@ -248,7 +309,14 @@ fn unify_record(
         let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
 
         let rec1_problems = unify_pool(subs, pool, rec1.ext, sub2);
+        if !rec1_problems.is_empty() {
+            return rec1_problems;
+        }
+
         let rec2_problems = unify_pool(subs, pool, sub1, rec2.ext);
+        if !rec2_problems.is_empty() {
+            return rec2_problems;
+        }
 
         let mut field_problems =
             unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, ext);
@@ -281,7 +349,15 @@ fn unify_shared_fields(
     }
 
     if num_shared_fields == matching_fields.len() {
-        let flat_type = FlatType::Record(union(matching_fields, &other_fields), ext);
+        // pull fields in from the ext_var
+        let mut fields = union(matching_fields, &other_fields);
+
+        let new_ext_var = match roc_types::pretty_print::chase_ext_record(subs, ext, &mut fields) {
+            Ok(()) => Variable::EMPTY_RECORD,
+            Err((new, _)) => new,
+        };
+
+        let flat_type = FlatType::Record(fields, new_ext_var);
 
         merge(subs, ctx, Structure(flat_type))
     } else {
@@ -316,6 +392,11 @@ fn unify_tag_union(
     if unique_tags1.is_empty() {
         if unique_tags2.is_empty() {
             let ext_problems = unify_pool(subs, pool, rec1.ext, rec2.ext);
+
+            if !ext_problems.is_empty() {
+                return ext_problems;
+            }
+
             let mut tag_problems = unify_shared_tags(
                 subs,
                 pool,
@@ -333,6 +414,11 @@ fn unify_tag_union(
             let flat_type = FlatType::TagUnion(unique_tags2, rec2.ext);
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
             let ext_problems = unify_pool(subs, pool, rec1.ext, sub_record);
+
+            if !ext_problems.is_empty() {
+                return ext_problems;
+            }
+
             let mut tag_problems = unify_shared_tags(
                 subs,
                 pool,
@@ -351,6 +437,11 @@ fn unify_tag_union(
         let flat_type = FlatType::TagUnion(unique_tags1, rec1.ext);
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
         let ext_problems = unify_pool(subs, pool, sub_record, rec2.ext);
+
+        if !ext_problems.is_empty() {
+            return ext_problems;
+        }
+
         let mut tag_problems = unify_shared_tags(
             subs,
             pool,
@@ -374,15 +465,42 @@ fn unify_tag_union(
         let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
         let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
 
-        let rec1_problems = unify_pool(subs, pool, rec1.ext, sub2);
-        let rec2_problems = unify_pool(subs, pool, sub1, rec2.ext);
+        // NOTE: for clearer error messages, we rollback unification of the ext vars when either fails
+        //
+        // This is inspired by
+        //
+        //
+        //      f : [ Red, Green ] -> Bool
+        //      f = \_ -> True
+        //
+        //      f Blue
+        //
+        //  In this case, we want the mismatch to be between `[ Blue ]a` and `[ Red, Green ]`, but
+        //  without rolling back, the mismatch is between `[ Blue, Red, Green ]a` and `[ Red, Green ]`.
+        //  TODO is this also required for the other cases?
+
+        let snapshot = subs.snapshot();
+
+        let ext1_problems = unify_pool(subs, pool, rec1.ext, sub2);
+        if !ext1_problems.is_empty() {
+            subs.rollback_to(snapshot);
+            return ext1_problems;
+        }
+
+        let ext2_problems = unify_pool(subs, pool, sub1, rec2.ext);
+        if !ext2_problems.is_empty() {
+            subs.rollback_to(snapshot);
+            return ext2_problems;
+        }
+
+        subs.commit_snapshot(snapshot);
 
         let mut tag_problems =
             unify_shared_tags(subs, pool, ctx, shared_tags, other_tags, ext, recursion_var);
 
-        tag_problems.reserve(rec1_problems.len() + rec2_problems.len());
-        tag_problems.extend(rec1_problems);
-        tag_problems.extend(rec2_problems);
+        tag_problems.reserve(ext1_problems.len() + ext2_problems.len());
+        tag_problems.extend(ext1_problems);
+        tag_problems.extend(ext2_problems);
 
         tag_problems
     }
@@ -421,10 +539,21 @@ fn unify_shared_tags(
     }
 
     if num_shared_tags == matching_tags.len() {
+        // merge fields from the ext_var into this tag union
+        let mut fields = Vec::new();
+        let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(subs, ext, &mut fields)
+        {
+            Ok(()) => Variable::EMPTY_TAG_UNION,
+            Err((new, _)) => new,
+        };
+
+        let mut new_tags = union(matching_tags, &other_tags);
+        new_tags.extend(fields.into_iter());
+
         let flat_type = if let Some(rec) = recursion_var {
-            FlatType::RecursiveTagUnion(rec, union(matching_tags, &other_tags), ext)
+            FlatType::RecursiveTagUnion(rec, new_tags, new_ext_var)
         } else {
-            FlatType::TagUnion(union(matching_tags, &other_tags), ext)
+            FlatType::TagUnion(new_tags, new_ext_var)
         };
 
         merge(subs, ctx, Structure(flat_type))
@@ -552,11 +681,11 @@ fn unify_flat_type(
                 problems
             }
         }
-        (_other1, _other2) => {
-            // Can't unify other1 and other2
-            // dbg!(&_other1, &_other2);
-            mismatch!()
-        }
+        (other1, other2) => mismatch!(
+            "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
+            other1,
+            other2
+        ),
     }
 }
 

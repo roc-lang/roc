@@ -22,14 +22,21 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use ven_graph::{strongly_connected_components, topological_sort_into_groups};
 
-#[allow(clippy::type_complexity)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Def {
     pub loc_pattern: Located<Pattern>,
     pub loc_expr: Located<Expr>,
     pub expr_var: Variable,
     pub pattern_vars: SendMap<Symbol, Variable>,
-    pub annotation: Option<(Type, IntroducedVariables, SendMap<Symbol, Alias>)>,
+    pub annotation: Option<Annotation>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Annotation {
+    pub signature: Type,
+    pub introduced_variables: IntroducedVariables,
+    pub aliases: SendMap<Symbol, Alias>,
+    pub region: Region,
 }
 
 #[derive(Debug)]
@@ -71,6 +78,8 @@ enum PendingDef<'a> {
         vars: Vec<Located<Lowercase>>,
         ann: &'a Located<ast::TypeAnnotation<'a>>,
     },
+
+    ShadowedAlias,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -118,7 +127,7 @@ pub fn canonicalize_defs<'a>(
     // This way, whenever any expr is doing lookups, it knows everything that's in scope -
     // even defs that appear after it in the source.
     //
-    // This naturally handles recursion too, because a given exper which refers
+    // This naturally handles recursion too, because a given expr which refers
     // to itself won't be processed until after its def has been added to scope.
 
     use roc_parse::ast::Def::*;
@@ -192,6 +201,7 @@ pub fn canonicalize_defs<'a>(
                 let mut can_vars: Vec<Located<(Lowercase, Variable)>> =
                     Vec::with_capacity(vars.len());
 
+                let mut is_phantom = false;
                 for loc_lowercase in vars {
                     if let Some(var) = can_ann
                         .introduced_variables
@@ -203,12 +213,31 @@ pub fn canonicalize_defs<'a>(
                             region: loc_lowercase.region,
                         });
                     } else {
-                        panic!("TODO handle phantom type variables, they are not allowed!\nThe {:?} variable in the definition of {:?} gives trouble", loc_lowercase, symbol);
+                        is_phantom = true;
+
+                        env.problems.push(Problem::PhantomTypeArgument {
+                            alias: symbol,
+                            variable_region: loc_lowercase.region,
+                            variable_name: loc_lowercase.value.clone(),
+                        });
                     }
                 }
 
+                if is_phantom {
+                    // Bail out
+                    continue;
+                }
+
                 if can_ann.typ.contains_symbol(symbol) {
-                    make_tag_union_recursive(symbol, &mut can_ann.typ, var_store);
+                    make_tag_union_recursive(
+                        env,
+                        symbol,
+                        name.region,
+                        vec![],
+                        &mut can_ann.typ,
+                        var_store,
+                        &mut false,
+                    );
                 }
 
                 let alias = roc_types::types::Alias {
@@ -222,7 +251,7 @@ pub fn canonicalize_defs<'a>(
         }
     }
 
-    correct_mutual_recursive_type_alias(&mut aliases, &var_store);
+    correct_mutual_recursive_type_alias(env, &mut aliases, &var_store);
 
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
@@ -662,19 +691,24 @@ fn pattern_to_vars_by_symbol(
             vars_by_symbol.insert(symbol.clone(), expr_var);
         }
 
-        AppliedTag(_, _, arguments) => {
+        AppliedTag { arguments, .. } => {
             for (var, nested) in arguments {
                 pattern_to_vars_by_symbol(vars_by_symbol, &nested.value, *var);
             }
         }
 
-        RecordDestructure(_, destructs) => {
+        RecordDestructure { destructs, .. } => {
             for destruct in destructs {
                 vars_by_symbol.insert(destruct.value.symbol.clone(), destruct.value.var);
             }
         }
 
-        IntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | Underscore | UnsupportedPattern(_) => {}
+        NumLiteral(_, _)
+        | IntLiteral(_)
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | Underscore
+        | UnsupportedPattern(_) => {}
 
         Shadowed(_, _) => {}
     }
@@ -787,11 +821,12 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((
-                            typ.clone(),
-                            output.introduced_variables.clone(),
-                            ann.aliases.clone(),
-                        )),
+                        annotation: Some(Annotation {
+                            signature: typ.clone(),
+                            introduced_variables: output.introduced_variables.clone(),
+                            aliases: ann.aliases.clone(),
+                            region: loc_ann.region,
+                        }),
                     },
                 );
             }
@@ -821,7 +856,11 @@ fn canonicalize_pending_def<'a>(
                         region: loc_lowercase.region,
                     });
                 } else {
-                    panic!("TODO handle phantom type variables, they are not allowed!");
+                    env.problems.push(Problem::PhantomTypeArgument {
+                        alias: symbol,
+                        variable_region: loc_lowercase.region,
+                        variable_name: loc_lowercase.value.clone(),
+                    });
                 }
             }
 
@@ -837,7 +876,9 @@ fn canonicalize_pending_def<'a>(
 
                     scope.add_alias(symbol, name.region, can_vars, rec_type_union);
                 } else {
-                    panic!("recursion in type alias that is not behind a Tag");
+                    env.problems
+                        .push(Problem::CyclicAlias(symbol, name.region, vec![]));
+                    return output;
                 }
             }
 
@@ -847,6 +888,11 @@ fn canonicalize_pending_def<'a>(
             output
                 .introduced_variables
                 .union(&can_ann.introduced_variables);
+        }
+
+        ShadowedAlias => {
+            // Since this alias was shadowed, it gets ignored and has no
+            // effect on the output.
         }
         TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
             let ann =
@@ -879,6 +925,8 @@ fn canonicalize_pending_def<'a>(
 
             let (mut loc_can_expr, can_output) =
                 canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
+
+            output.references = output.references.union(can_output.references.clone());
 
             // reset the tailcallable_symbol
             env.tailcallable_symbol = outer_identifier;
@@ -982,11 +1030,12 @@ fn canonicalize_pending_def<'a>(
                             value: loc_can_expr.value.clone(),
                         },
                         pattern_vars: im::HashMap::clone(&vars_by_symbol),
-                        annotation: Some((
-                            typ.clone(),
-                            output.introduced_variables.clone(),
-                            ann.aliases.clone(),
-                        )),
+                        annotation: Some(Annotation {
+                            signature: typ.clone(),
+                            introduced_variables: output.introduced_variables.clone(),
+                            aliases: ann.aliases.clone(),
+                            region: loc_ann.region,
+                        }),
                     },
                 );
             }
@@ -1285,6 +1334,7 @@ fn to_pending_def<'a>(
 
         Alias { name, vars, ann } => {
             let region = Region::span_across(&name.region, &ann.region);
+
             match scope.introduce(
                 name.value.into(),
                 &env.exposed_ident_ids,
@@ -1321,7 +1371,14 @@ fn to_pending_def<'a>(
                     }
                 }
 
-                Err(_err) => panic!("TODO gracefully handle shadowing of type alias"),
+                Err((original_region, loc_shadowed_symbol)) => {
+                    env.problem(Problem::ShadowingInAnnotation {
+                        original_region,
+                        shadow: loc_shadowed_symbol,
+                    });
+
+                    PendingDef::ShadowedAlias
+                }
             }
         }
 
@@ -1354,7 +1411,11 @@ fn pending_typed_body<'a>(
 }
 
 /// Make aliases recursive
-fn correct_mutual_recursive_type_alias(aliases: &mut SendMap<Symbol, Alias>, var_store: &VarStore) {
+fn correct_mutual_recursive_type_alias<'a>(
+    env: &mut Env<'a>,
+    aliases: &mut SendMap<Symbol, Alias>,
+    var_store: &VarStore,
+) {
     let mut symbols_introduced = ImSet::default();
 
     for (key, _) in aliases.iter() {
@@ -1403,11 +1464,17 @@ fn correct_mutual_recursive_type_alias(aliases: &mut SendMap<Symbol, Alias>, var
                 &mutually_recursive_symbols,
                 all_successors_without_self,
             ) {
+                // make sure we report only one error for the cycle, not an error for every
+                // alias in the cycle.
+                let mut can_still_report_error = true;
+
                 // TODO use itertools to be more efficient here
                 for rec in &cycle {
                     let mut to_instantiate = ImMap::default();
+                    let mut others = Vec::with_capacity(cycle.len() - 1);
                     for other in &cycle {
                         if rec != other {
+                            others.push(*other);
                             if let Some(alias) = originals.get(other) {
                                 to_instantiate.insert(*other, alias.clone());
                             }
@@ -1416,11 +1483,20 @@ fn correct_mutual_recursive_type_alias(aliases: &mut SendMap<Symbol, Alias>, var
 
                     if let Some(alias) = aliases.get_mut(rec) {
                         alias.typ.instantiate_aliases(
+                            alias.region,
                             &to_instantiate,
                             var_store,
                             &mut ImSet::default(),
                         );
-                        make_tag_union_recursive(*rec, &mut alias.typ, var_store);
+                        make_tag_union_recursive(
+                            env,
+                            *rec,
+                            alias.region,
+                            others,
+                            &mut alias.typ,
+                            var_store,
+                            &mut can_still_report_error,
+                        );
                     }
                 }
             }
@@ -1428,14 +1504,41 @@ fn correct_mutual_recursive_type_alias(aliases: &mut SendMap<Symbol, Alias>, var
     }
 }
 
-fn make_tag_union_recursive(symbol: Symbol, typ: &mut Type, var_store: &VarStore) {
+fn make_tag_union_recursive<'a>(
+    env: &mut Env<'a>,
+    symbol: Symbol,
+    region: Region,
+    others: Vec<Symbol>,
+    typ: &mut Type,
+    var_store: &VarStore,
+    can_report_error: &mut bool,
+) {
     match typ {
         Type::TagUnion(tags, ext) => {
             let rec_var = var_store.fresh();
             *typ = Type::RecursiveTagUnion(rec_var, tags.to_vec(), ext.clone());
             typ.substitute_alias(symbol, &Type::Variable(rec_var));
         }
-        Type::Alias(_, _, actual) => make_tag_union_recursive(symbol, actual, var_store),
-        _ => panic!("recursion in type alias is not behind a Tag"),
+        Type::Alias(_, _, actual) => make_tag_union_recursive(
+            env,
+            symbol,
+            region,
+            others,
+            actual,
+            var_store,
+            can_report_error,
+        ),
+        _ => {
+            let problem = roc_types::types::Problem::CyclicAlias(symbol, region, others.clone());
+            *typ = Type::Erroneous(problem);
+
+            // ensure cyclic error is only reported for one element of the cycle
+            if *can_report_error {
+                *can_report_error = false;
+
+                let problem = Problem::CyclicAlias(symbol, region, others);
+                env.problems.push(problem);
+            }
+        }
     }
 }

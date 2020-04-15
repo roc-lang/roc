@@ -1,10 +1,10 @@
 use crate::boolean_algebra;
+use crate::pretty_print::Parens;
 use crate::subs::{Subs, VarStore, Variable};
 use inlinable_string::InlinableString;
-use roc_collections::all::{union, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::all::{union, ImMap, ImSet, Index, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
-use roc_module::symbol::Symbol;
-use roc_parse::operator::{ArgSide, BinOp};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use std::fmt;
 
@@ -395,6 +395,7 @@ impl Type {
 
     pub fn instantiate_aliases(
         &mut self,
+        region: Region,
         aliases: &ImMap<Symbol, Alias>,
         var_store: &VarStore,
         introduced: &mut ImSet<Variable>,
@@ -404,34 +405,44 @@ impl Type {
         match self {
             Function(args, ret) => {
                 for arg in args {
-                    arg.instantiate_aliases(aliases, var_store, introduced);
+                    arg.instantiate_aliases(region, aliases, var_store, introduced);
                 }
-                ret.instantiate_aliases(aliases, var_store, introduced);
+                ret.instantiate_aliases(region, aliases, var_store, introduced);
             }
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 for (_, args) in tags {
                     for x in args {
-                        x.instantiate_aliases(aliases, var_store, introduced);
+                        x.instantiate_aliases(region, aliases, var_store, introduced);
                     }
                 }
-                ext.instantiate_aliases(aliases, var_store, introduced);
+                ext.instantiate_aliases(region, aliases, var_store, introduced);
             }
             Record(fields, ext) => {
                 for x in fields.iter_mut() {
-                    x.instantiate_aliases(aliases, var_store, introduced);
+                    x.instantiate_aliases(region, aliases, var_store, introduced);
                 }
-                ext.instantiate_aliases(aliases, var_store, introduced);
+                ext.instantiate_aliases(region, aliases, var_store, introduced);
             }
             Alias(_, type_args, actual_type) => {
                 for arg in type_args {
-                    arg.1.instantiate_aliases(aliases, var_store, introduced);
+                    arg.1
+                        .instantiate_aliases(region, aliases, var_store, introduced);
                 }
 
-                actual_type.instantiate_aliases(aliases, var_store, introduced);
+                actual_type.instantiate_aliases(region, aliases, var_store, introduced);
             }
             Apply(symbol, args) => {
                 if let Some(alias) = aliases.get(symbol) {
-                    debug_assert!(args.len() == alias.vars.len());
+                    if args.len() != alias.vars.len() {
+                        *self = Type::Erroneous(Problem::BadTypeArguments {
+                            symbol: *symbol,
+                            region,
+                            type_got: args.len() as u8,
+                            alias_needs: alias.vars.len() as u8,
+                        });
+                        return;
+                    }
+
                     let mut actual = alias.typ.clone();
 
                     let mut named_args = Vec::with_capacity(args.len());
@@ -447,7 +458,7 @@ impl Type {
                     ) in alias.vars.iter().zip(args.iter())
                     {
                         let mut filler = filler.clone();
-                        filler.instantiate_aliases(aliases, var_store, introduced);
+                        filler.instantiate_aliases(region, aliases, var_store, introduced);
                         named_args.push((lowercase.clone(), filler.clone()));
                         substitution.insert(*placeholder, filler);
                     }
@@ -463,7 +474,7 @@ impl Type {
                     }
 
                     actual.substitute(&substitution);
-                    actual.instantiate_aliases(aliases, var_store, introduced);
+                    actual.instantiate_aliases(region, aliases, var_store, introduced);
 
                     // instantiate recursion variable!
                     if let Type::RecursiveTagUnion(rec_var, mut tags, mut ext) = actual {
@@ -487,7 +498,7 @@ impl Type {
                 } else {
                     // one of the special-cased Apply types.
                     for x in args {
-                        x.instantiate_aliases(aliases, var_store, introduced);
+                        x.instantiate_aliases(region, aliases, var_store, introduced);
                     }
                 }
             }
@@ -597,49 +608,87 @@ pub struct RecordStructure {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PReason {
-    TypedArg { name: Box<str>, index: usize },
-    WhenMatch { index: usize },
-    CtorArg { name: Box<str>, index: usize },
-    ListEntry { index: usize },
-    Tail,
+    WhenMatch { index: Index },
+    TagArg { tag_name: TagName, index: Index },
+    PatternGuard,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnnotationSource {
-    TypedIfBranch(usize /* index */),
-    TypedWhenBranch(usize /* index */),
-    TypedBody,
+    TypedIfBranch { index: Index, num_branches: usize },
+    TypedWhenBranch { index: Index },
+    TypedBody { region: Region },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reason {
-    AnonymousFnArg { arg_index: u8 },
-    NamedFnArg(String /* function name */, u8 /* arg index */),
-    AnonymousFnCall { arity: u8 },
-    NamedFnCall(String /* function name */, u8 /* arity */),
-    BinOpArg(BinOp, ArgSide),
-    BinOpRet(BinOp),
+    FnArg {
+        name: Option<Symbol>,
+        arg_index: Index,
+    },
+    FnCall {
+        name: Option<Symbol>,
+        arity: u8,
+    },
     FloatLiteral,
     IntLiteral,
+    NumLiteral,
     InterpolatedStringVar,
-    WhenBranch { index: usize },
+    WhenBranch {
+        index: Index,
+    },
+    WhenGuard,
     IfCondition,
-    IfBranch { index: usize },
-    ElemInList,
+    IfBranch {
+        index: Index,
+        total_branches: usize,
+    },
+    ElemInList {
+        index: Index,
+    },
     RecordUpdateValue(Lowercase),
-    RecordUpdateKeys(Symbol, SendMap<Lowercase, Type>),
+    RecordUpdateKeys(Symbol, SendMap<Lowercase, Region>),
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum Category {
+    Lookup(Symbol),
+    CallResult(Option<Symbol>),
+    TagApply(TagName),
+    Lambda,
+    Uniqueness,
+
+    // storing variables in the ast
+    Storage,
+
+    // control flow
+    If,
+    When,
+
+    // types
+    Float,
+    Int,
+    Num,
+    List,
+    Str,
+
+    // records
+    Record,
+    Accessor(Lowercase),
+    Access(Lowercase),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatternCategory {
     Record,
     EmptyRecord,
-    List,
+    PatternGuard,
     Set,
     Map,
     Ctor(TagName),
-    Int,
     Str,
+    Num,
+    Int,
     Float,
 }
 
@@ -653,11 +702,18 @@ pub struct Alias {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Problem {
     CanonicalizationProblem,
-    Mismatch(Mismatch, ErrorType, ErrorType),
     CircularType(Symbol, ErrorType, Region),
+    CyclicAlias(Symbol, Region, Vec<Symbol>),
     UnrecognizedIdent(InlinableString),
     Shadowed(Region, Located<Ident>),
+    BadTypeArguments {
+        symbol: Symbol,
+        region: Region,
+        type_got: u8,
+        alias_needs: u8,
+    },
     InvalidModule,
+    SolvedTypeError,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -677,7 +733,7 @@ pub enum ErrorType {
     RigidVar(Lowercase),
     Record(SendMap<Lowercase, ErrorType>, TypeExt),
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
-    RecursiveTagUnion(Variable, SendMap<TagName, Vec<ErrorType>>, TypeExt),
+    RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
     Alias(Symbol, Vec<(Lowercase, ErrorType)>, Box<ErrorType>),
     Boolean(boolean_algebra::Bool),
@@ -693,11 +749,128 @@ impl ErrorType {
     }
 }
 
+pub fn write_error_type(home: ModuleId, interns: &Interns, error_type: ErrorType) -> String {
+    let mut buf = String::new();
+    write_error_type_help(home, interns, error_type, &mut buf, Parens::Unnecessary);
+
+    buf
+}
+
+fn write_error_type_help(
+    home: ModuleId,
+    interns: &Interns,
+    error_type: ErrorType,
+    buf: &mut String,
+    parens: Parens,
+) {
+    use ErrorType::*;
+
+    match error_type {
+        Infinite => buf.push_str("∞"),
+        Error => buf.push_str("?"),
+        FlexVar(name) => buf.push_str(name.as_str()),
+        RigidVar(name) => buf.push_str(name.as_str()),
+        Type(symbol, arguments) => {
+            let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
+
+            if write_parens {
+                buf.push('(');
+            }
+            buf.push_str(symbol.ident_string(interns));
+
+            for arg in arguments {
+                buf.push(' ');
+
+                write_error_type_help(home, interns, arg, buf, Parens::InTypeParam);
+            }
+
+            if write_parens {
+                buf.push(')');
+            }
+        }
+        Alias(Symbol::NUM_NUM, mut arguments, _actual) => {
+            debug_assert!(arguments.len() == 1);
+
+            let argument = arguments.remove(0).1;
+
+            match argument {
+                Type(Symbol::INT_INTEGER, _) => {
+                    buf.push_str("Int");
+                }
+                Type(Symbol::FLOAT_FLOATINGPOINT, _) => {
+                    buf.push_str("Float");
+                }
+                other => {
+                    let write_parens = parens == Parens::InTypeParam;
+
+                    if write_parens {
+                        buf.push('(');
+                    }
+                    buf.push_str("Num ");
+                    write_error_type_help(home, interns, other, buf, Parens::InTypeParam);
+
+                    if write_parens {
+                        buf.push(')');
+                    }
+                }
+            }
+        }
+        Function(arguments, result) => {
+            let write_parens = parens != Parens::Unnecessary;
+
+            if write_parens {
+                buf.push(')');
+            }
+
+            let mut it = arguments.into_iter().peekable();
+
+            while let Some(arg) = it.next() {
+                write_error_type_help(home, interns, arg, buf, Parens::InFn);
+                if it.peek().is_some() {
+                    buf.push_str(", ");
+                }
+            }
+
+            buf.push_str(" -> ");
+
+            write_error_type_help(home, interns, *result, buf, Parens::InFn);
+
+            if write_parens {
+                buf.push(')');
+            }
+        }
+        Record(fields, ext) => {
+            buf.push('{');
+
+            for (label, content) in fields {
+                buf.push_str(label.as_str());
+                buf.push_str(": ");
+                write_error_type_help(home, interns, content, buf, Parens::Unnecessary);
+            }
+
+            buf.push('}');
+            write_type_ext(ext, buf);
+        }
+
+        other => todo!("cannot format {:?} yet", other),
+    }
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum TypeExt {
     Closed,
     FlexOpen(Lowercase),
     RigidOpen(Lowercase),
+}
+
+fn write_type_ext(ext: TypeExt, buf: &mut String) {
+    use TypeExt::*;
+    match ext {
+        Closed => {}
+        FlexOpen(lowercase) | RigidOpen(lowercase) => {
+            buf.push_str(lowercase.as_str());
+        }
+    }
 }
 
 static THE_LETTER_A: u32 = 'a' as u32;
@@ -726,14 +899,14 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
 }
 
 pub fn gather_fields(
-    subs: &mut Subs,
+    subs: &Subs,
     fields: MutMap<Lowercase, Variable>,
     var: Variable,
 ) -> RecordStructure {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    match subs.get(var).content {
+    match subs.get_without_compacting(var).content {
         Structure(Record(sub_fields, sub_ext)) => {
             gather_fields(subs, union(fields, &sub_fields), sub_ext)
         }

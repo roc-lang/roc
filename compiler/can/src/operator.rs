@@ -62,8 +62,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
     match &loc_expr.value {
         Float(_)
         | Nested(Float(_))
-        | Int(_)
-        | Nested(Int(_))
+        | Num(_)
+        | Nested(Num(_))
         | NonBase10Int { .. }
         | Nested(NonBase10Int { .. })
         | Str(_)
@@ -78,8 +78,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
         | Nested(MalformedIdent(_))
         | MalformedClosure
         | Nested(MalformedClosure)
-        | PrecedenceConflict(_, _, _)
-        | Nested(PrecedenceConflict(_, _, _))
+        | PrecedenceConflict(_, _, _, _)
+        | Nested(PrecedenceConflict(_, _, _, _))
         | GlobalTag(_)
         | Nested(GlobalTag(_))
         | PrivateTag(_)
@@ -179,13 +179,19 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                     })
                 }
 
+                let desugared_guard = if let Some(guard) = &branch.guard {
+                    Some(desugar_expr(arena, guard).clone())
+                } else {
+                    None
+                };
+
                 desugared_branches.push(&*arena.alloc(WhenBranch {
                     patterns: alternatives,
                     value: Located {
                         region: desugared.region,
                         value: Nested(&desugared.value),
                     },
-                    guard: None,
+                    guard: desugared_guard,
                 }));
             }
 
@@ -412,8 +418,9 @@ fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a L
                                         );
                                         let region = broken_expr.region;
                                         let value = Expr::PrecedenceConflict(
-                                            bad_op,
+                                            loc_expr.region,
                                             stack_op,
+                                            bad_op,
                                             arena.alloc(broken_expr),
                                         );
 

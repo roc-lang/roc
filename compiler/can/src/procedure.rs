@@ -63,6 +63,11 @@ impl References {
         self
     }
 
+    pub fn union_mut(&mut self, other: References) {
+        self.lookups.extend(other.lookups);
+        self.calls.extend(other.calls);
+    }
+
     pub fn has_lookup(&self, symbol: Symbol) -> bool {
         self.lookups.contains(&symbol)
     }

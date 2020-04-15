@@ -11,7 +11,7 @@ extern crate roc_region;
 mod helpers;
 
 #[cfg(test)]
-mod test_canonicalize {
+mod test_can {
     use crate::helpers::{can_expr_with, test_home, CanExprOut};
     use bumpalo::Bump;
     use roc_can::expr::Expr::{self, *};
@@ -40,6 +40,7 @@ mod test_canonicalize {
             }
         }
     }
+
     fn assert_can_int(input: &str, expected: i64) {
         let arena = Bump::new();
         let actual_out = can_expr_with(&arena, test_home(), input);
@@ -50,6 +51,20 @@ mod test_canonicalize {
             }
             actual => {
                 panic!("Expected an Int, but got: {:?}", actual);
+            }
+        }
+    }
+
+    fn assert_can_num(input: &str, expected: i64) {
+        let arena = Bump::new();
+        let actual_out = can_expr_with(&arena, test_home(), input);
+
+        match actual_out.loc_expr.value {
+            Expr::Num(_, actual) => {
+                assert_eq!(expected, actual);
+            }
+            actual => {
+                panic!("Expected a Num, but got: {:?}", actual);
             }
         }
     }
@@ -98,12 +113,12 @@ mod test_canonicalize {
 
     #[test]
     fn zero() {
-        assert_can_int("0", 0);
+        assert_can_num("0", 0);
     }
 
     #[test]
     fn minus_zero() {
-        assert_can_int("-0", 0);
+        assert_can_num("-0", 0);
     }
 
     #[test]
@@ -549,6 +564,31 @@ mod test_canonicalize {
                 panic!("Expected a CircularDef runtime error, but got {:?}", actual);
             }
         }
+    }
+
+    #[test]
+    fn unused_def_regression() {
+        let src = indoc!(
+            r#"
+                Booly : [ Yes, No, Maybe ]
+
+                y : Booly
+                y = No
+
+                # There was a bug where annotating a def meant that its
+                # references no longer got reported.
+                #
+                # https://github.com/rtfeldman/roc/issues/298
+                x : List Booly
+                x = [ y ]
+
+                x
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
     }
 
     //#[test]

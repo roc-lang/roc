@@ -30,12 +30,52 @@ impl Region {
         }
     }
 
+    pub fn contains(&self, other: &Self) -> bool {
+        use std::cmp::Ordering::*;
+        match self.start_line.cmp(&other.start_line) {
+            Greater => false,
+            Equal => match self.end_line.cmp(&other.end_line) {
+                Less => false,
+                Equal => self.start_col <= other.start_col && self.end_col >= other.end_col,
+                Greater => self.start_col >= other.start_col,
+            },
+            Less => match self.end_line.cmp(&other.end_line) {
+                Less => false,
+                Equal => self.end_col >= other.end_col,
+                Greater => true,
+            },
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.end_line == self.start_line && self.start_col == self.end_col
+    }
+
     pub fn span_across(start: &Region, end: &Region) -> Self {
         Region {
             start_line: start.start_line,
             end_line: end.end_line,
             start_col: start.start_col,
             end_col: end.end_col,
+        }
+    }
+
+    pub fn across_all<'a, I>(regions: I) -> Self
+    where
+        I: IntoIterator<Item = &'a Region>,
+    {
+        let mut it = regions.into_iter();
+
+        if let Some(first) = it.next() {
+            let mut result = *first;
+
+            for r in it {
+                result = Self::span_across(&result, r);
+            }
+
+            result
+        } else {
+            Self::zero()
         }
     }
 }
@@ -87,6 +127,11 @@ impl<T> Located<T> {
     }
 
     pub fn at(region: Region, value: T) -> Located<T> {
+        Located { value, region }
+    }
+
+    pub fn at_zero(value: T) -> Located<T> {
+        let region = Region::zero();
         Located { value, region }
     }
 }

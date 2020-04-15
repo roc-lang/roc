@@ -24,7 +24,7 @@ static EMPTY_TAG_UNION: &str = "[]";
 ///
 /// Otherwise, parens are unnecessary.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Parens {
+pub enum Parens {
     InFn,
     InTypeParam,
     Unnecessary,
@@ -78,7 +78,9 @@ fn find_names_needed(
     use crate::subs::FlatType::*;
 
     while let Some((recursive, _)) = subs.occurs(variable) {
-        if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = subs.get(recursive).content {
+        if let Content::Structure(FlatType::TagUnion(tags, ext_var)) =
+            subs.get_without_compacting(recursive).content
+        {
             let rec_var = subs.fresh_unnamed_flex_var();
 
             let mut new_tags = MutMap::default();
@@ -100,9 +102,9 @@ fn find_names_needed(
         }
     }
 
-    match subs.get(variable).content {
+    match subs.get_without_compacting(variable).content {
         FlexVar(None) => {
-            let root = subs.get_root_key(variable);
+            let root = subs.get_root_key_without_compacting(variable);
 
             // If this var is *not* its own root, then the
             // root var necessarily appears in multiple places.
@@ -232,7 +234,7 @@ fn name_root(
 fn set_root_name(root: Variable, name: &Lowercase, subs: &mut Subs) {
     use crate::subs::Content::*;
 
-    let mut descriptor = subs.get(root);
+    let mut descriptor = subs.get_without_compacting(root);
 
     match descriptor.content {
         FlexVar(None) => {
@@ -250,7 +252,7 @@ fn set_root_name(root: Variable, name: &Lowercase, subs: &mut Subs) {
 
 pub fn content_to_string(
     content: Content,
-    subs: &mut Subs,
+    subs: &Subs,
     home: ModuleId,
     interns: &Interns,
 ) -> String {
@@ -262,7 +264,7 @@ pub fn content_to_string(
     buf
 }
 
-fn write_content(env: &Env, content: Content, subs: &mut Subs, buf: &mut String, parens: Parens) {
+fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, parens: Parens) {
     use crate::subs::Content::*;
 
     match content {
@@ -279,7 +281,7 @@ fn write_content(env: &Env, content: Content, subs: &mut Subs, buf: &mut String,
                     let (_, arg_var) = args
                         .get(0)
                         .expect("Num was not applied to a type argument!");
-                    let content = subs.get(*arg_var).content;
+                    let content = subs.get_without_compacting(*arg_var).content;
 
                     match &content {
                         Alias(nested, _, _) => match *nested {
@@ -293,7 +295,7 @@ fn write_content(env: &Env, content: Content, subs: &mut Subs, buf: &mut String,
                         },
 
                         Structure(FlatType::Apply(Symbol::ATTR_ATTR, nested_args)) => {
-                            let attr_content = subs.get(nested_args[1]).content;
+                            let attr_content = subs.get_without_compacting(nested_args[1]).content;
                             match &attr_content {
                                 Alias(nested, _, _) => match *nested {
                                     Symbol::INT_INTEGER => buf.push_str("Int"),
@@ -322,7 +324,13 @@ fn write_content(env: &Env, content: Content, subs: &mut Subs, buf: &mut String,
 
                     for (_, var) in args {
                         buf.push(' ');
-                        write_content(env, subs.get(var).content, subs, buf, Parens::InTypeParam);
+                        write_content(
+                            env,
+                            subs.get_without_compacting(var).content,
+                            subs,
+                            buf,
+                            Parens::InTypeParam,
+                        );
                     }
                 }),
             }
@@ -331,13 +339,7 @@ fn write_content(env: &Env, content: Content, subs: &mut Subs, buf: &mut String,
     }
 }
 
-fn write_flat_type(
-    env: &Env,
-    flat_type: FlatType,
-    subs: &mut Subs,
-    buf: &mut String,
-    parens: Parens,
-) {
+fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String, parens: Parens) {
     use crate::subs::FlatType::*;
 
     match flat_type {
@@ -374,13 +376,19 @@ fn write_flat_type(
                     buf.push_str(label.as_str());
 
                     buf.push_str(" : ");
-                    write_content(env, subs.get(field_var).content, subs, buf, parens);
+                    write_content(
+                        env,
+                        subs.get_without_compacting(field_var).content,
+                        subs,
+                        buf,
+                        parens,
+                    );
                 }
 
                 buf.push_str(" }");
             }
 
-            match subs.get(ext_var).content {
+            match subs.get_without_compacting(ext_var).content {
                 Content::Structure(EmptyRecord) => {
                     // This is a closed record. We're done!
                 }
@@ -430,13 +438,19 @@ fn write_flat_type(
 
                 for var in vars {
                     buf.push(' ');
-                    write_content(env, subs.get(var).content, subs, buf, Parens::InTypeParam);
+                    write_content(
+                        env,
+                        subs.get_without_compacting(var).content,
+                        subs,
+                        buf,
+                        Parens::InTypeParam,
+                    );
                 }
             }
 
             buf.push_str(" ]");
 
-            if let Some(content) = ext_content {
+            if let Err((_, content)) = ext_content {
                 // This is an open tag union, so print the variable
                 // right after the ']'
                 //
@@ -477,13 +491,19 @@ fn write_flat_type(
 
                 for var in vars {
                     buf.push(' ');
-                    write_content(env, subs.get(var).content, subs, buf, Parens::InTypeParam);
+                    write_content(
+                        env,
+                        subs.get_without_compacting(var).content,
+                        subs,
+                        buf,
+                        Parens::InTypeParam,
+                    );
                 }
             }
 
             buf.push_str(" ]");
 
-            if let Some(content) = ext_content {
+            if let Err((_, content)) = ext_content {
                 // This is an open tag union, so print the variable
                 // right after the ']'
                 //
@@ -493,7 +513,13 @@ fn write_flat_type(
             }
 
             buf.push_str(" as ");
-            write_content(env, subs.get(rec_var).content, subs, buf, parens)
+            write_content(
+                env,
+                subs.get_without_compacting(rec_var).content,
+                subs,
+                buf,
+                parens,
+            )
         }
         Boolean(b) => {
             write_boolean(env, b, subs, buf, Parens::InTypeParam);
@@ -504,14 +530,14 @@ fn write_flat_type(
     }
 }
 
-fn chase_ext_tag_union(
-    subs: &mut Subs,
+pub fn chase_ext_tag_union(
+    subs: &Subs,
     var: Variable,
     fields: &mut Vec<(TagName, Vec<Variable>)>,
-) -> Option<Content> {
+) -> Result<(), (Variable, Content)> {
     use FlatType::*;
-    match subs.get(var).content {
-        Content::Structure(EmptyTagUnion) => None,
+    match subs.get_without_compacting(var).content {
+        Content::Structure(EmptyTagUnion) => Ok(()),
         Content::Structure(TagUnion(tags, ext_var))
         | Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
             for (label, vars) in tags {
@@ -520,12 +546,45 @@ fn chase_ext_tag_union(
 
             chase_ext_tag_union(subs, ext_var, fields)
         }
+        Content::Structure(Apply(Symbol::ATTR_ATTR, arguments)) => {
+            debug_assert!(arguments.len() == 2);
+            chase_ext_tag_union(subs, arguments[1], fields)
+        }
+        Content::Alias(_, _, var) => chase_ext_tag_union(subs, var, fields),
 
-        content => Some(content),
+        content => Err((var, content)),
     }
 }
 
-fn write_boolean(env: &Env, boolean: Bool, subs: &mut Subs, buf: &mut String, parens: Parens) {
+pub fn chase_ext_record(
+    subs: &Subs,
+    var: Variable,
+    fields: &mut MutMap<Lowercase, Variable>,
+) -> Result<(), (Variable, Content)> {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    match subs.get_without_compacting(var).content {
+        Structure(Record(sub_fields, sub_ext)) => {
+            fields.extend(sub_fields.into_iter());
+
+            chase_ext_record(subs, sub_ext, fields)
+        }
+
+        Structure(EmptyRecord) => Ok(()),
+
+        Content::Structure(Apply(Symbol::ATTR_ATTR, arguments)) => {
+            debug_assert!(arguments.len() == 2);
+            chase_ext_record(subs, arguments[1], fields)
+        }
+
+        Alias(_, _, var) => chase_ext_record(subs, var, fields),
+
+        content => Err((var, content)),
+    }
+}
+
+fn write_boolean(env: &Env, boolean: Bool, subs: &Subs, buf: &mut String, parens: Parens) {
     match boolean.simplify(subs) {
         Err(atom) => write_boolean_atom(env, atom, subs, buf, parens),
         Ok(mut variables) => {
@@ -534,7 +593,13 @@ fn write_boolean(env: &Env, boolean: Bool, subs: &mut Subs, buf: &mut String, pa
 
             for v in variables {
                 let mut inner_buf: String = "".to_string();
-                write_content(env, subs.get(v).content, subs, &mut inner_buf, parens);
+                write_content(
+                    env,
+                    subs.get_without_compacting(v).content,
+                    subs,
+                    &mut inner_buf,
+                    parens,
+                );
                 buffers_set.insert(inner_buf);
             }
 
@@ -556,9 +621,15 @@ fn write_boolean(env: &Env, boolean: Bool, subs: &mut Subs, buf: &mut String, pa
     }
 }
 
-fn write_boolean_atom(env: &Env, atom: Atom, subs: &mut Subs, buf: &mut String, parens: Parens) {
+fn write_boolean_atom(env: &Env, atom: Atom, subs: &Subs, buf: &mut String, parens: Parens) {
     match atom {
-        Atom::Variable(var) => write_content(env, subs.get(var).content, subs, buf, parens),
+        Atom::Variable(var) => write_content(
+            env,
+            subs.get_without_compacting(var).content,
+            subs,
+            buf,
+            parens,
+        ),
         Atom::Zero => {
             buf.push_str("Shared");
         }
@@ -572,7 +643,7 @@ fn write_apply(
     env: &Env,
     symbol: Symbol,
     args: Vec<Variable>,
-    subs: &mut Subs,
+    subs: &Subs,
     buf: &mut String,
     parens: Parens,
 ) {
@@ -588,7 +659,7 @@ fn write_apply(
                 .into_iter()
                 .next()
                 .unwrap_or_else(|| panic!("Num did not have any type parameters somehow."));
-            let arg_content = subs.get(arg).content;
+            let arg_content = subs.get_without_compacting(arg).content;
             let mut arg_param = String::new();
 
             let mut default_case = |subs, content| {
@@ -646,7 +717,13 @@ fn write_apply(
 
             for arg in args {
                 buf.push_str(" ");
-                write_content(env, subs.get(arg).content, subs, buf, Parens::InTypeParam);
+                write_content(
+                    env,
+                    subs.get_without_compacting(arg).content,
+                    subs,
+                    buf,
+                    Parens::InTypeParam,
+                );
             }
 
             if write_parens {
@@ -660,7 +737,7 @@ fn write_fn(
     env: &Env,
     args: Vec<Variable>,
     ret: Variable,
-    subs: &mut Subs,
+    subs: &Subs,
     buf: &mut String,
     parens: Parens,
 ) {
@@ -678,11 +755,23 @@ fn write_fn(
             needs_comma = true;
         }
 
-        write_content(env, subs.get(arg).content, subs, buf, Parens::InFn);
+        write_content(
+            env,
+            subs.get_without_compacting(arg).content,
+            subs,
+            buf,
+            Parens::InFn,
+        );
     }
 
     buf.push_str(" -> ");
-    write_content(env, subs.get(ret).content, subs, buf, Parens::InFn);
+    write_content(
+        env,
+        subs.get_without_compacting(ret).content,
+        subs,
+        buf,
+        Parens::InFn,
+    );
 
     if use_parens {
         buf.push_str(")");

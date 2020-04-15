@@ -299,7 +299,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         }
 
         Expr::Float(string) => Ok(Pattern::FloatLiteral(string)),
-        Expr::Int(string) => Ok(Pattern::IntLiteral(string)),
+        Expr::Num(string) => Ok(Pattern::NumLiteral(string)),
         Expr::NonBase10Int {
             string,
             base,
@@ -323,7 +323,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         | Expr::If(_, _, _)
         | Expr::When(_, _)
         | Expr::MalformedClosure
-        | Expr::PrecedenceConflict(_, _, _)
+        | Expr::PrecedenceConflict(_, _, _, _)
         | Expr::Record {
             update: Some(_), ..
         }
@@ -551,7 +551,7 @@ fn annotation_or_alias<'a>(
         QualifiedIdentifier { .. } => {
             panic!("TODO gracefully handle trying to annotate a qualified identifier, e.g. `Foo.bar : ...`");
         }
-        IntLiteral(_)
+        NumLiteral(_)
         | NonBase10Literal { .. }
         | FloatLiteral(_)
         | StrLiteral(_)
@@ -1310,8 +1310,11 @@ pub fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                                                 region: loc_arg.region,
                                             });
                                         }
-                                        Err(_malformed) => {
-                                            panic!("TODO early return malformed pattern");
+                                        Err(malformed) => {
+                                            panic!(
+                                                "TODO early return malformed pattern {:?}",
+                                                malformed
+                                            );
                                         }
                                     }
                                 }

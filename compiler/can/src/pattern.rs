@@ -14,11 +14,21 @@ use roc_types::subs::{VarStore, Variable};
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
     Identifier(Symbol),
-    AppliedTag(Variable, TagName, Vec<(Variable, Located<Pattern>)>),
+    AppliedTag {
+        whole_var: Variable,
+        ext_var: Variable,
+        tag_name: TagName,
+        arguments: Vec<(Variable, Located<Pattern>)>,
+    },
+    RecordDestructure {
+        whole_var: Variable,
+        ext_var: Variable,
+        destructs: Vec<Located<RecordDestruct>>,
+    },
     IntLiteral(i64),
+    NumLiteral(Variable, i64),
     FloatLiteral(f64),
     StrLiteral(Box<str>),
-    RecordDestructure(Variable, Vec<Located<RecordDestruct>>),
     Underscore,
 
     // Runtime Exceptions
@@ -50,18 +60,23 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
             symbols.push(symbol.clone());
         }
 
-        AppliedTag(_, _, arguments) => {
+        AppliedTag { arguments, .. } => {
             for (_, nested) in arguments {
                 symbols_from_pattern_help(&nested.value, symbols);
             }
         }
-        RecordDestructure(_, destructs) => {
+        RecordDestructure { destructs, .. } => {
             for destruct in destructs {
                 symbols.push(destruct.value.symbol.clone());
             }
         }
 
-        IntLiteral(_) | FloatLiteral(_) | StrLiteral(_) | Underscore | UnsupportedPattern(_) => {}
+        NumLiteral(_, _)
+        | IntLiteral(_)
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | Underscore
+        | UnsupportedPattern(_) => {}
 
         Shadowed(_, _) => {}
     }
@@ -97,17 +112,23 @@ pub fn canonicalize_pattern<'a>(
         },
         GlobalTag(name) => {
             // Canonicalize the tag's name.
-            Pattern::AppliedTag(var_store.fresh(), TagName::Global((*name).into()), vec![])
+            Pattern::AppliedTag {
+                whole_var: var_store.fresh(),
+                ext_var: var_store.fresh(),
+                tag_name: TagName::Global((*name).into()),
+                arguments: vec![],
+            }
         }
         PrivateTag(name) => {
             let ident_id = env.ident_ids.get_or_insert(&(*name).into());
 
             // Canonicalize the tag's name.
-            Pattern::AppliedTag(
-                var_store.fresh(),
-                TagName::Private(Symbol::new(env.home, ident_id)),
-                vec![],
-            )
+            Pattern::AppliedTag {
+                whole_var: var_store.fresh(),
+                ext_var: var_store.fresh(),
+                tag_name: TagName::Private(Symbol::new(env.home, ident_id)),
+                arguments: vec![],
+            }
         }
         Apply(tag, patterns) => {
             let tag_name = match tag.value {
@@ -135,7 +156,12 @@ pub fn canonicalize_pattern<'a>(
                 ));
             }
 
-            Pattern::AppliedTag(var_store.fresh(), tag_name, can_patterns)
+            Pattern::AppliedTag {
+                whole_var: var_store.fresh(),
+                ext_var: var_store.fresh(),
+                tag_name,
+                arguments: can_patterns,
+            }
         }
 
         FloatLiteral(ref string) => match pattern_type {
@@ -155,12 +181,12 @@ pub fn canonicalize_pattern<'a>(
             ptype @ DefExpr | ptype @ TopLevelDef => unsupported_pattern(env, ptype, region),
         },
 
-        IntLiteral(string) => match pattern_type {
+        NumLiteral(string) => match pattern_type {
             WhenBranch => {
                 let int = finish_parsing_int(string)
                     .unwrap_or_else(|_| panic!("TODO handle malformed int pattern"));
 
-                Pattern::IntLiteral(int)
+                Pattern::NumLiteral(var_store.fresh(), int)
             }
             ptype @ DefExpr | ptype @ TopLevelDef | ptype @ FunctionArg => {
                 unsupported_pattern(env, ptype, region)
@@ -202,7 +228,8 @@ pub fn canonicalize_pattern<'a>(
         }
         RecordDestructure(patterns) => {
             let ext_var = var_store.fresh();
-            let mut fields = Vec::with_capacity(patterns.len());
+            let whole_var = var_store.fresh();
+            let mut destructs = Vec::with_capacity(patterns.len());
             let mut opt_erroneous = None;
 
             for loc_pattern in *patterns {
@@ -215,7 +242,7 @@ pub fn canonicalize_pattern<'a>(
                             region,
                         ) {
                             Ok(symbol) => {
-                                fields.push(Located {
+                                destructs.push(Located {
                                     region: loc_pattern.region,
                                     value: RecordDestruct {
                                         var: var_store.fresh(),
@@ -240,45 +267,26 @@ pub fn canonicalize_pattern<'a>(
                         };
                     }
                     RecordField(label, loc_guard) => {
-                        match scope.introduce(
-                            label.into(),
-                            &env.exposed_ident_ids,
-                            &mut env.ident_ids,
-                            region,
-                        ) {
-                            Ok(symbol) => {
-                                let can_guard = canonicalize_pattern(
-                                    env,
-                                    var_store,
-                                    scope,
-                                    pattern_type,
-                                    &loc_guard.value,
-                                    loc_guard.region,
-                                );
+                        // a guard does not introduce the label into scope!
+                        let symbol = scope.ignore(label.into(), &mut env.ident_ids);
+                        let can_guard = canonicalize_pattern(
+                            env,
+                            var_store,
+                            scope,
+                            pattern_type,
+                            &loc_guard.value,
+                            loc_guard.region,
+                        );
 
-                                fields.push(Located {
-                                    region: loc_pattern.region,
-                                    value: RecordDestruct {
-                                        var: var_store.fresh(),
-                                        label: Lowercase::from(label),
-                                        symbol,
-                                        guard: Some((var_store.fresh(), can_guard)),
-                                    },
-                                });
-                            }
-                            Err((original_region, shadow)) => {
-                                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
-                                    original_region,
-                                    shadow: shadow.clone(),
-                                }));
-
-                                // No matter what the other patterns
-                                // are, we're definitely shadowed and will
-                                // get a runtime exception as soon as we
-                                // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
-                            }
-                        };
+                        destructs.push(Located {
+                            region: loc_pattern.region,
+                            value: RecordDestruct {
+                                var: var_store.fresh(),
+                                label: Lowercase::from(label),
+                                symbol,
+                                guard: Some((var_store.fresh(), can_guard)),
+                            },
+                        });
                     }
                     _ => panic!("invalid pattern in record"),
                 }
@@ -286,7 +294,11 @@ pub fn canonicalize_pattern<'a>(
 
             // If we encountered an erroneous pattern (e.g. one with shadowing),
             // use the resulting RuntimeError. Otherwise, return a successful record destructure.
-            opt_erroneous.unwrap_or_else(|| Pattern::RecordDestructure(ext_var, fields))
+            opt_erroneous.unwrap_or_else(|| Pattern::RecordDestructure {
+                whole_var,
+                ext_var,
+                destructs,
+            })
         }
         RecordField(_name, _loc_pattern) => {
             unreachable!("should have been handled in RecordDestructure");
@@ -339,12 +351,15 @@ fn add_bindings_from_patterns(
         Identifier(symbol) => {
             answer.push((*symbol, *region));
         }
-        AppliedTag(_, _, loc_args) => {
+        AppliedTag {
+            arguments: loc_args,
+            ..
+        } => {
             for (_, loc_arg) in loc_args {
                 add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, scope, answer);
             }
         }
-        RecordDestructure(_, destructs) => {
+        RecordDestructure { destructs, .. } => {
             for Located {
                 region,
                 value: RecordDestruct { symbol, .. },
@@ -353,7 +368,8 @@ fn add_bindings_from_patterns(
                 answer.push((*symbol, *region));
             }
         }
-        IntLiteral(_)
+        NumLiteral(_, _)
+        | IntLiteral(_)
         | FloatLiteral(_)
         | StrLiteral(_)
         | Underscore

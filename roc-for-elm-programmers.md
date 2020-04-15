@@ -47,6 +47,9 @@ Rather than a `type alias` keyword, in Roc you define type aliases with `:` like
 Username : Str
 ```
 
+You can also define type aliases anywhere, not just at the top level.
+Their scoping rules work as normal.
+
 Separately, Roc also allows standalone type annotations with no corresponding implementation.
 So I can write this as an annotation with no implementation:
 
@@ -462,15 +465,15 @@ Quantity units data : [ Quantity units data ]
 
 km : Num n -> Quantity [ Km ] (Num n)
 km = \num ->
-    Quantity num Km
+    Quantity Km num
 
 cm : Num n -> Quantity [ Cm ] (Num n)
 cm = \num ->
-    Quantity num Cm
+    Quantity Cm num
 
 mm : Num n -> Quantity [ Mm ] (Num n)
 mm = \num ->
-    Quantity num Mm
+    Quantity Mm num
 
 add : Quantity u (Num n), Quantity u (Num n) -> Quantity u (Num n)
 add = \Quantity units a, Quantity _ b ->
@@ -691,24 +694,6 @@ Any operation which would result in one of these (such as `sqrt` or `/`) will
 result in a runtime exception. Similarly to overflow, you can opt into handling these
 a different way, such as `Float.trySqrt` which returns a `Result`.
 
-Also like Elm, number literals with decimal points are `Float`. However, number
-literals *without* a decimal point are always `Int`. So `x / 2` will never
-compile in Roc; it would have to be `x / 2.0`, like in Python. Also [like Python](https://www.python.org/dev/peps/pep-0515/)
-Roc permits underscores in number literals for readability purposes, and supports hexadecimal (`0x01`), octal (`0o01`), and binary (`0b01`) `Int` literals.
-
-If you put these into a hypothetical Roc REPL, here's what you'd see:
-
-```elm
-> 1_024 + 1_024
-2048 : Int
-
-> 1.0 + 2.14
-3.14 : Float
-
-> 1 + 2.14
-<type mismatch>
-```
-
 The way `+` works here is also a bit different than in Elm. Imagine if Elm's
 `(+)` operator had this type:
 
@@ -732,6 +717,32 @@ These don't exist in Roc.
 * `appendable` is only used in Elm for the `(++)` operator, and Roc doesn't have that operator.
 * `comparable` is used for comparison operators (like `<` and such), plus `List.sort`, `Dict`, and `Set`. Roc's `List.sort` accepts a `Sorter` argument which specifies how to sort the elements. Roc's comparison operators (like `<`) only accept numbers; `"foo" < "bar"` is valid Elm, but will not compile in Roc. Roc's dictionaries and sets are hashmaps behind the scenes (rather than ordered trees), and their keys have no visible type restrictions.
 * `number` is replaced by `Num`, as described earlier.
+
+Like in Elm, number literals with decimal points are `Float`. However, number
+literals *without* a decimal point are `Num *` instead of `number`. 
+Also [like Python](https://www.python.org/dev/peps/pep-0515/)
+Roc permits underscores in number literals for readability purposes. Roc also supports 
+hexadecimal (`0x01`), octal (`0o01`), and binary (`0b01`) integer literals; these 
+literals all have type `Int` instead of `Num *`.
+
+If you put these into a hypothetical Roc REPL, here's what you'd see:
+
+```elm
+> 1_024 + 1_024
+2048 : Num *
+
+> 1 + 2.14
+3.14 : Float
+
+> 1.0 + 1
+2.0 : Float
+
+> 1.1 + 0x11
+<type mismatch between 1.1 : Float and 0x11 : Int>
+
+> 11 + 0x11
+28 : Int
+```
 
 ## Operators
 
@@ -911,7 +922,6 @@ Roc's standard library has these modules:
 * `Bytes`
 * `Str`
 * `Result`
-* `Sort`
 
 Some differences to note:
 
@@ -924,7 +934,6 @@ Some differences to note:
 * No `Process`, `Platform`, `Cmd`, or `Sub` - similarly to `Task`, these are things platform authors would include, or not.
 * No `Maybe`. This is by design. If a function returns a potential error, use `Result` with an error type that uses a zero-arg tag to describe what went wrong. (For example, `List.first : List a -> Result a [ ListWasEmpty ]*` instead of `List.first : List a -> Maybe a`.) If you want to have a record field be optional, use an Optional Record Field directly (see earlier). If you want to describe something that's neither an operation that can fail nor an optional field, use a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, make a self-documenting API like `nullable : Decoder a -> Decoder [ Null, NonNull a ]*`.
 * `List` refers to something more like Elm's `Array`, as noted earlier.
-* `Sort` works [like this](https://package.elm-lang.org/packages/rtfeldman/elm-sorter-experiment/2.1.1/Sort). It's only for `List`, but it's important enough to be one of the standard modules - not only so that lists can be sortable without needing to install a separate package, but also because it demonstrates the "decoder pattern" of API design using opaque types.
 
 ## Operator Desugaring Table
 

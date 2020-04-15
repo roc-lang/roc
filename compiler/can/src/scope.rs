@@ -57,10 +57,13 @@ impl Scope {
     pub fn lookup(&mut self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
         match self.idents.get(ident) {
             Some((symbol, _)) => Ok(*symbol),
-            None => Err(RuntimeError::LookupNotInScope(Located {
-                region,
-                value: ident.clone().into(),
-            })),
+            None => Err(RuntimeError::LookupNotInScope(
+                Located {
+                    region,
+                    value: ident.clone().into(),
+                },
+                self.idents.keys().map(|v| v.as_ref().into()).collect(),
+            )),
         }
     }
 
@@ -105,6 +108,14 @@ impl Scope {
                 Ok(symbol)
             }
         }
+    }
+
+    /// Ignore an identifier.
+    ///
+    /// Used for record guards like { x: Just _ }
+    pub fn ignore(&mut self, ident: Ident, all_ident_ids: &mut IdentIds) -> Symbol {
+        let ident_id = all_ident_ids.add(ident.into());
+        Symbol::new(self.home, ident_id)
     }
 
     /// Import a Symbol from another module into this module's top-level scope.

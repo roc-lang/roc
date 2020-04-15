@@ -394,16 +394,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Bool module
 
-    // isEq or (==) : Attr u1 Bool, Attr u2 Bool -> Attr u3 Bool
+    // isEq or (==) : a, a -> Attr u Bool
     add_type(
         Symbol::BOOL_EQ,
-        unique_function(vec![bool_type(UVAR1), bool_type(UVAR2)], bool_type(UVAR3)),
+        unique_function(vec![flex(TVAR1), flex(TVAR1)], bool_type(UVAR3)),
     );
 
-    // isNeq or (!=) : Attr u1 Bool, Attr u2 Bool -> Attr u3 Bool
+    // isNeq or (!=) : a, a -> Attr u Bool
     add_type(
         Symbol::BOOL_NEQ,
-        unique_function(vec![bool_type(UVAR1), bool_type(UVAR2)], bool_type(UVAR3)),
+        unique_function(vec![flex(TVAR1), flex(TVAR1)], bool_type(UVAR3)),
     );
 
     // and or (&&) : Attr u1 Bool, Attr u2 Bool -> Attr u3 Bool
@@ -434,13 +434,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // isEmpty : Attr u (List *) -> Attr v Bool
     add_type(
-        Symbol::LIST_ISEMPTY,
+        Symbol::LIST_IS_EMPTY,
         unique_function(vec![list_type(UVAR1, TVAR1)], bool_type(UVAR2)),
     );
 
-    // length : List a -> Int
+    // len : List * -> Int
     add_type(
-        Symbol::LIST_LENGTH,
+        Symbol::LIST_LEN,
         unique_function(vec![list_type(UVAR1, TVAR1)], int_type(UVAR2)),
     );
 

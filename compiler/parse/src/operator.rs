@@ -1,5 +1,6 @@
 use self::BinOp::*;
 use std::cmp::Ordering;
+use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CalledVia {
@@ -107,5 +108,31 @@ impl PartialOrd for BinOp {
 impl Ord for BinOp {
     fn cmp(&self, other: &Self) -> Ordering {
         self.precedence().cmp(&other.precedence())
+    }
+}
+
+impl std::fmt::Display for BinOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let as_str = match self {
+            Caret => "^",
+            Star => "*",
+            Slash => "/",
+            DoubleSlash => "//",
+            Percent => "%",
+            DoublePercent => "%%",
+            Plus => "+",
+            Minus => "-",
+            Equals => "==",
+            NotEquals => "!=",
+            LessThan => "<",
+            GreaterThan => ">",
+            LessThanOrEq => "<=",
+            GreaterThanOrEq => ">=",
+            And => "&&",
+            Or => "||",
+            Pizza => "|>",
+        };
+
+        write!(f, "{}", as_str)
     }
 }
