@@ -156,8 +156,7 @@ fn gen(
     target: Triple,
     dest_filename: &Path,
 ) {
-    use roc_reporting::report::{can_problem, RocDocAllocator, DEFAULT_PALETTE};
-    use roc_reporting::type_error::type_problem;
+    use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
 
     let src = loaded.src;
     let home = loaded.module_id;

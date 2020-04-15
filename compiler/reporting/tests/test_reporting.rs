@@ -14,16 +14,15 @@ mod test_reporting {
     use roc_module::symbol::{Interns, ModuleId};
     use roc_mono::expr::{Expr, Procs};
     use roc_reporting::report::{
-        can_problem, mono_problem, Report, BLUE_CODE, BOLD_CODE, CYAN_CODE, DEFAULT_PALETTE,
-        GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE, WHITE_CODE, YELLOW_CODE,
+        can_problem, mono_problem, parse_problem, type_problem, Report, BLUE_CODE, BOLD_CODE,
+        CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE,
+        WHITE_CODE, YELLOW_CODE,
     };
-    use roc_reporting::type_error::type_problem;
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
     // use roc_region::all;
-    use crate::helpers::{can_expr, infer_expr, CanExprOut};
-    use roc_parse::parser::Fail;
+    use crate::helpers::{can_expr, infer_expr, CanExprOut, ParseErrOut};
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
 
@@ -52,7 +51,7 @@ mod test_reporting {
             ModuleId,
             Interns,
         ),
-        Fail,
+        ParseErrOut,
     > {
         let CanExprOut {
             loc_expr,
@@ -112,14 +111,28 @@ mod test_reporting {
     {
         use ven_pretty::DocAllocator;
 
+        let src_lines: Vec<&str> = src.split('\n').collect();
+
+        let filename = filename_from_string(r"\code\proj\Main.roc");
+
         match infer_expr_help(src) {
-            Err(fail) => todo!(),
-            Ok((type_problems, can_problems, mono_problems, home, interns)) => {
-                let src_lines: Vec<&str> = src.split('\n').collect();
+            Err(parse_err) => {
+                let ParseErrOut {
+                    fail,
+                    home,
+                    interns,
+                } = parse_err;
+
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
-                let filename = filename_from_string(r"\code\proj\Main.roc");
+                let doc = parse_problem(&alloc, filename, fail);
+
+                callback(doc.pretty(&alloc).append(alloc.line()), buf)
+            }
+            Ok((type_problems, can_problems, mono_problems, home, interns)) => {
                 let mut reports = Vec::new();
+
+                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
                 for problem in can_problems {
                     let report = can_problem(&alloc, filename.clone(), problem.clone());
@@ -2690,17 +2703,9 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
-
-                The `a` type variable is not used in the `Foo` alias definition:
-
-                1 ┆  Foo a : [ Foo ]
-                  ┆      ^
-
-                Roc does not allow unused type parameters!
-
-                Hint: If you want an unused type parameter (a so-called "phantom
-                type"), read the guide section on phantom data.
+                -- PARSE PROBLEM ---------------------------------------------------------------
+                
+                Unexpected tokens in front of the `=` symbol:
                 "#
             ),
         )

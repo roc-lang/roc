@@ -103,7 +103,7 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
 }
 
 #[allow(dead_code)]
-pub fn can_expr(expr_str: &str) -> Result<CanExprOut, Fail> {
+pub fn can_expr(expr_str: &str) -> Result<CanExprOut, ParseErrOut> {
     can_expr_with(&Bump::new(), test_home(), expr_str)
 }
 
@@ -118,12 +118,32 @@ pub struct CanExprOut {
     pub constraint: Constraint,
 }
 
+#[derive(Debug)]
+pub struct ParseErrOut {
+    pub fail: Fail,
+    pub home: ModuleId,
+    pub interns: Interns,
+}
+
 #[allow(dead_code)]
-pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> Result<CanExprOut, Fail> {
+pub fn can_expr_with(
+    arena: &Bump,
+    home: ModuleId,
+    expr_str: &str,
+) -> Result<CanExprOut, ParseErrOut> {
     let loc_expr = match parse_loc_with(&arena, expr_str) {
         Ok(e) => e,
         Err(fail) => {
-            return Err(fail);
+            let interns = Interns {
+                module_ids: ModuleIds::default(),
+                all_ident_ids: MutMap::default(),
+            };
+
+            return Err(ParseErrOut {
+                fail,
+                interns,
+                home,
+            });
         }
     };
 
