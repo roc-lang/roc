@@ -25,8 +25,8 @@ use inkwell::targets::{
 use std::env::current_dir;
 use std::io;
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
+use tokio::process::Command;
 use tokio::runtime::Builder;
 
 fn main() -> io::Result<()> {
@@ -111,9 +111,16 @@ async fn load_file(src_dir: PathBuf, filename: PathBuf) -> Result<(), LoadingPro
     // Step 3: have rustc compile the host and link in the .a file
     let binary_path = cwd.join("app");
 
-
     Command::new("rustc")
-        .args(&["-L", ".", "--crate-type", "bin", "host.rs", "-o", binary_path.as_path().to_str().unwrap()])
+        .args(&[
+            "-L",
+            ".",
+            "--crate-type",
+            "bin",
+            "host.rs",
+            "-o",
+            binary_path.as_path().to_str().unwrap(),
+        ])
         .current_dir(cwd)
         .spawn()
         .map_err(|_| {
@@ -125,23 +132,30 @@ async fn load_file(src_dir: PathBuf, filename: PathBuf) -> Result<(), LoadingPro
         })?;
 
     // Step 4: Run the compiled app
-    Command::new(binary_path).spawn().unwrap_or_else(|err| {
-        panic!(
-            "{} failed to run: {:?}",
-            cwd.join("app").to_str().unwrap(),
-            err
-        )
-    })
-    .await
-    .map_err(|_| {
-        todo!("gracefully handle error after `app` spawned");
-    })?;
-
+    Command::new(binary_path)
+        .spawn()
+        .unwrap_or_else(|err| {
+            panic!(
+                "{} failed to run: {:?}",
+                cwd.join("app").to_str().unwrap(),
+                err
+            )
+        })
+        .await
+        .map_err(|_| {
+            todo!("gracefully handle error after `app` spawned");
+        })?;
 
     Ok(())
 }
 
-fn gen(arena: &Bump, loaded: LoadedModule, filename: PathBuf, target: Triple, dest_filename: &Path) {
+fn gen(
+    arena: &Bump,
+    loaded: LoadedModule,
+    filename: PathBuf,
+    target: Triple,
+    dest_filename: &Path,
+) {
     use roc_reporting::report::{can_problem, RocDocAllocator, DEFAULT_PALETTE};
     use roc_reporting::type_error::type_problem;
 
@@ -215,13 +229,13 @@ fn gen(arena: &Bump, loaded: LoadedModule, filename: PathBuf, target: Triple, de
                     }
                 }
             }
-            InvalidCycle( _, _) => {}
+            InvalidCycle(_, _) => {}
         }
     }
 
-    let loc_expr = main_expr.unwrap_or_else(|| panic!
-        ("TODO gracefully handle the case where `main` was declared but not exposed")
-    );
+    let loc_expr = main_expr.unwrap_or_else(|| {
+        panic!("TODO gracefully handle the case where `main` was declared but not exposed")
+    });
     let mut subs = loaded.solved.into_inner();
     let content = match main_var {
         Some(var) => subs.get_without_compacting(var).content,
