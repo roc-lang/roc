@@ -14,15 +14,15 @@ mod test_reporting {
     use roc_module::symbol::{Interns, ModuleId};
     use roc_mono::expr::{Expr, Procs};
     use roc_reporting::report::{
-        can_problem, mono_problem, Report, BLUE_CODE, BOLD_CODE, CYAN_CODE, DEFAULT_PALETTE,
-        GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE, WHITE_CODE, YELLOW_CODE,
+        can_problem, mono_problem, parse_problem, type_problem, Report, BLUE_CODE, BOLD_CODE,
+        CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE,
+        WHITE_CODE, YELLOW_CODE,
     };
-    use roc_reporting::type_error::type_problem;
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
     // use roc_region::all;
-    use crate::helpers::{can_expr, infer_expr, CanExprOut};
+    use crate::helpers::{can_expr, infer_expr, CanExprOut, ParseErrOut};
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
 
@@ -43,13 +43,16 @@ mod test_reporting {
 
     fn infer_expr_help(
         expr_src: &str,
-    ) -> (
-        Vec<solve::TypeError>,
-        Vec<roc_problem::can::Problem>,
-        Vec<roc_mono::expr::MonoProblem>,
-        ModuleId,
-        Interns,
-    ) {
+    ) -> Result<
+        (
+            Vec<solve::TypeError>,
+            Vec<roc_problem::can::Problem>,
+            Vec<roc_mono::expr::MonoProblem>,
+            ModuleId,
+            Interns,
+        ),
+        ParseErrOut,
+    > {
         let CanExprOut {
             loc_expr,
             output,
@@ -60,7 +63,7 @@ mod test_reporting {
             mut interns,
             problems: can_problems,
             ..
-        } = can_expr(expr_src);
+        } = can_expr(expr_src)?;
         let mut subs = Subs::new(var_store.into());
 
         for (var, name) in output.introduced_variables.name_by_var {
@@ -99,7 +102,7 @@ mod test_reporting {
             );
         }
 
-        (unify_problems, can_problems, mono_problems, home, interns)
+        Ok((unify_problems, can_problems, mono_problems, home, interns))
     }
 
     fn list_reports<F>(src: &str, buf: &mut String, callback: F)
@@ -108,40 +111,57 @@ mod test_reporting {
     {
         use ven_pretty::DocAllocator;
 
-        let (type_problems, can_problems, mono_problems, home, interns) = infer_expr_help(src);
-
         let src_lines: Vec<&str> = src.split('\n').collect();
-        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
         let filename = filename_from_string(r"\code\proj\Main.roc");
-        let mut reports = Vec::new();
 
-        for problem in can_problems {
-            let report = can_problem(&alloc, filename.clone(), problem.clone());
-            reports.push(report);
+        match infer_expr_help(src) {
+            Err(parse_err) => {
+                let ParseErrOut {
+                    fail,
+                    home,
+                    interns,
+                } = parse_err;
+
+                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+                let doc = parse_problem(&alloc, filename, fail);
+
+                callback(doc.pretty(&alloc).append(alloc.line()), buf)
+            }
+            Ok((type_problems, can_problems, mono_problems, home, interns)) => {
+                let mut reports = Vec::new();
+
+                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+                for problem in can_problems {
+                    let report = can_problem(&alloc, filename.clone(), problem.clone());
+                    reports.push(report);
+                }
+
+                for problem in type_problems {
+                    let report = type_problem(&alloc, filename.clone(), problem.clone());
+                    reports.push(report);
+                }
+
+                for problem in mono_problems {
+                    let report = mono_problem(&alloc, filename.clone(), problem.clone());
+                    reports.push(report);
+                }
+
+                let has_reports = !reports.is_empty();
+
+                let doc = alloc
+                    .stack(reports.into_iter().map(|v| v.pretty(&alloc)))
+                    .append(if has_reports {
+                        alloc.line()
+                    } else {
+                        alloc.nil()
+                    });
+
+                callback(doc, buf)
+            }
         }
-
-        for problem in type_problems {
-            let report = type_problem(&alloc, filename.clone(), problem.clone());
-            reports.push(report);
-        }
-
-        for problem in mono_problems {
-            let report = mono_problem(&alloc, filename.clone(), problem.clone());
-            reports.push(report);
-        }
-
-        let has_reports = !reports.is_empty();
-
-        let doc = alloc
-            .stack(reports.into_iter().map(|v| v.pretty(&alloc)))
-            .append(if has_reports {
-                alloc.line()
-            } else {
-                alloc.nil()
-            });
-
-        callback(doc, buf)
     }
 
     fn report_problem_as(src: &str, expected_rendering: &str) {
@@ -491,7 +511,8 @@ mod test_reporting {
             "#
         );
 
-        let (_type_problems, _can_problems, _mono_problems, home, interns) = infer_expr_help(src);
+        let (_type_problems, _can_problems, _mono_problems, home, interns) =
+            infer_expr_help(src).expect("parse error");
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -521,7 +542,7 @@ mod test_reporting {
         );
 
         let (_type_problems, _can_problems, _mono_problems, home, mut interns) =
-            infer_expr_help(src);
+            infer_expr_help(src).expect("parse error");
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -2667,6 +2688,27 @@ mod test_reporting {
 
                 Hint: If you want an unused type parameter (a so-called "phantom
                 type"), read the guide section on phantom data.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn elm_function_syntax() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f x y = x
+                "#
+            ),
+            indoc!(
+                r#"
+                -- PARSE PROBLEM ---------------------------------------------------------------
+
+                Unexpected tokens in front of the `=` symbol:
+
+                1 ┆  f x y = x
+                  ┆    ^^^
                 "#
             ),
         )

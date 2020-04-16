@@ -1951,7 +1951,7 @@ mod report_text {
         fs: Vec<(Lowercase, ErrorType)>,
         ext: TypeExt,
     ) -> RocDocBuilder<'b> {
-        use crate::type_error::{ext_to_doc, to_doc};
+        use crate::error::r#type::{ext_to_doc, to_doc};
 
         let entry_to_doc = |(name, tipe): (Lowercase, ErrorType)| {
             (
@@ -2129,9 +2129,9 @@ mod report_text {
 
 fn type_problem_to_pretty<'b>(
     alloc: &'b RocDocAllocator<'b>,
-    problem: crate::type_error::Problem,
+    problem: crate::error::r#type::Problem,
 ) -> RocDocBuilder<'b> {
-    use crate::type_error::Problem::*;
+    use crate::error::r#type::Problem::*;
 
     match problem {
         FieldTypo(typo, possibilities) => {
