@@ -13,7 +13,7 @@ use roc_gen::llvm::build::{
     build_proc, build_proc_header, get_call_conventions, module_from_builtins,
 };
 use roc_gen::llvm::convert::basic_type_from_layout;
-use roc_load::file::{load, LoadedModule, LoadingProblem};
+use roc_load::file::{LoadedModule, LoadingProblem};
 use roc_module::symbol::Symbol;
 use roc_mono::expr::{Expr, Procs};
 use roc_mono::layout::Layout;
@@ -70,7 +70,7 @@ async fn load_file(src_dir: PathBuf, filename: PathBuf) -> Result<(), LoadingPro
 
     // Step 1: compile the app and generate the .o file
     let subs_by_module = MutMap::default();
-    let loaded = load(
+    let loaded = roc_load::file::load(
         &roc_builtins::std::standard_stdlib(),
         src_dir,
         filename.clone(),
