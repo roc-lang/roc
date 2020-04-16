@@ -4,11 +4,11 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
-use inkwell::passes::PassManager;
+use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
-use inkwell::{FloatPredicate, IntPredicate};
+use inkwell::{FloatPredicate, IntPredicate, OptimizationLevel};
 
 use crate::llvm::convert::{
     basic_type_from_layout, collection_wrapper, empty_collection, get_fn_type, ptr_int,
@@ -61,18 +61,32 @@ pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>) {
     fpm.add_instruction_combining_pass();
     fpm.add_tail_call_elimination_pass();
 
+    let pmb = PassManagerBuilder::create();
+
     // Enable more optimizations when running cargo test --release
-    if !cfg!(debug_assertions) {
-        fpm.add_reassociate_pass();
-        fpm.add_basic_alias_analysis_pass();
-        fpm.add_promote_memory_to_register_pass();
-        fpm.add_cfg_simplification_pass();
-        fpm.add_gvn_pass();
+    if cfg!(debug_assertions) {
+        pmb.set_optimization_level(OptimizationLevel::None);
+    } else {
+        // Default is O2, Aggressive is O3
+        //
+        // See https://llvm.org/doxygen/CodeGen_8h_source.html
+        pmb.set_optimization_level(OptimizationLevel::Aggressive);
+
+        // TODO figure out how enabling these individually differs from
+        // the broad "aggressive optimizations" setting.
+
+        // fpm.add_reassociate_pass();
+        // fpm.add_basic_alias_analysis_pass();
+        // fpm.add_promote_memory_to_register_pass();
+        // fpm.add_cfg_simplification_pass();
+        // fpm.add_gvn_pass();
         // TODO figure out why enabling any of these (even alone) causes LLVM to segfault
         // fpm.add_strip_dead_prototypes_pass();
         // fpm.add_dead_arg_elimination_pass();
         // fpm.add_function_inlining_pass();
+        // pmb.set_inliner_with_threshold(4);
     }
+    pmb.populate_function_pass_manager(&fpm);
 }
 
 #[allow(clippy::cognitive_complexity)]
