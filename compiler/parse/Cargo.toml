@@ -12,7 +12,7 @@ bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1.0"
 
 [dev-dependencies]
-pretty_assertions = "0.5.1 "
+pretty_assertions = "0.5.1"
 indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"

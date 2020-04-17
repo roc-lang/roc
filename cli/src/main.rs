@@ -1,5 +1,7 @@
 extern crate roc_gen;
 extern crate roc_reporting;
+#[macro_use]
+extern crate clap;
 
 use bumpalo::Bump;
 use inkwell::context::Context;
@@ -10,19 +12,19 @@ use inkwell::OptimizationLevel;
 use roc_collections::all::ImMap;
 use roc_collections::all::MutMap;
 use roc_gen::llvm::build::{
-    build_proc, build_proc_header, get_call_conventions, module_from_builtins,
+    build_proc, build_proc_header, get_call_conventions, module_from_builtins, OptLevel,
 };
 use roc_gen::llvm::convert::basic_type_from_layout;
-use roc_load::file::{load, LoadedModule, LoadingProblem};
+use roc_load::file::{LoadedModule, LoadingProblem};
 use roc_module::symbol::Symbol;
 use roc_mono::expr::{Expr, Procs};
 use roc_mono::layout::Layout;
 use std::time::SystemTime;
 
+use clap::{App, AppSettings, Arg, ArgMatches};
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
 };
-use std::env::current_dir;
 use std::io;
 use std::path::{Path, PathBuf};
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
@@ -30,57 +32,84 @@ use tokio::process::Command;
 use tokio::runtime::Builder;
 
 fn main() -> io::Result<()> {
-    let argv = std::env::args().collect::<Vec<String>>();
-
-    match argv.get(1) {
-        Some(filename) => {
-            let mut path = Path::new(filename).canonicalize().unwrap();
-            let src_dir = current_dir()?;
-
-            if !path.is_absolute() {
-                path = src_dir.join(path).canonicalize().unwrap();
-            }
-
-            // Create the runtime
-            let mut rt = Builder::new()
-                .thread_name("roc")
-                .threaded_scheduler()
-                .enable_io()
-                .build()
-                .expect("Error spawning initial compiler thread."); // TODO make this error nicer.
-
-            // Spawn the root task
-            let loaded = rt.block_on(load_file(src_dir, path));
-
-            loaded.expect("TODO gracefully handle LoadingProblem");
-
-            Ok(())
-        }
-        None => {
-            println!("Usage: roc FILENAME.roc");
-
-            Ok(())
-        }
-    }
+    run(build_app().get_matches())
 }
 
-async fn load_file(src_dir: PathBuf, filename: PathBuf) -> Result<(), LoadingProblem> {
+pub static FLAG_OPTIMIZE: &str = "optimize";
+pub static FLAG_ROC_FILE: &str = "ROC_FILE";
+
+pub fn build_app<'a>() -> App<'a> {
+    App::new("roc")
+        .version(crate_version!())
+        .setting(AppSettings::AllowNegativeNumbers)
+        .arg(
+            Arg::with_name(FLAG_ROC_FILE)
+                .help("The .roc file to compile and run")
+                .required(true),
+        )
+        .arg(
+            Arg::with_name(FLAG_OPTIMIZE)
+                .long(FLAG_OPTIMIZE)
+                .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                .required(false),
+        )
+}
+
+/// Run the CLI. This is separate from main() so that tests can call it directly.
+pub fn run(matches: ArgMatches) -> io::Result<()> {
+    let filename = matches.value_of(FLAG_ROC_FILE).unwrap();
+
+    let opt_level = if matches.is_present(FLAG_OPTIMIZE) {
+        OptLevel::Optimize
+    } else {
+        OptLevel::Normal
+    };
+    let path = Path::new(filename);
+    let src_dir = path.parent().unwrap().canonicalize().unwrap();
+
+    // Create the runtime
+    let mut rt = Builder::new()
+        .thread_name("roc")
+        .threaded_scheduler()
+        .enable_io()
+        .build()
+        .expect("Error spawning initial compiler thread."); // TODO make this error nicer.
+
+    // Spawn the root task
+    let loaded = rt.block_on(load_file(src_dir, path.canonicalize().unwrap(), opt_level));
+
+    loaded.expect("TODO gracefully handle LoadingProblem");
+
+    Ok(())
+}
+
+async fn load_file(
+    src_dir: PathBuf,
+    filename: PathBuf,
+    opt_level: OptLevel,
+) -> Result<(), LoadingProblem> {
     let compilation_start = SystemTime::now();
     let arena = Bump::new();
 
     // Step 1: compile the app and generate the .o file
     let subs_by_module = MutMap::default();
-    let loaded = load(
-        &roc_builtins::std::standard_stdlib(),
-        src_dir,
-        filename.clone(),
-        subs_by_module,
-    )
-    .await?;
 
+    // Release builds use uniqueness optimizations
+    let stdlib = match opt_level {
+        OptLevel::Normal => roc_builtins::std::standard_stdlib(),
+        OptLevel::Optimize => roc_builtins::unique::uniq_stdlib(),
+    };
+    let loaded = roc_load::file::load(&stdlib, src_dir, filename.clone(), subs_by_module).await?;
     let dest_filename = filename.with_extension("o");
 
-    gen(&arena, loaded, filename, Triple::host(), &dest_filename);
+    gen(
+        &arena,
+        loaded,
+        filename,
+        Triple::host(),
+        &dest_filename,
+        opt_level,
+    );
 
     let compilation_end = compilation_start.elapsed().unwrap();
 
@@ -155,6 +184,7 @@ fn gen(
     filename: PathBuf,
     target: Triple,
     dest_filename: &Path,
+    opt_level: OptLevel,
 ) {
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
 
@@ -248,7 +278,7 @@ fn gen(
     let builder = context.create_builder();
     let fpm = PassManager::create(&module);
 
-    roc_gen::llvm::build::add_passes(&fpm);
+    roc_gen::llvm::build::add_passes(&fpm, opt_level);
 
     fpm.initialize();
 
