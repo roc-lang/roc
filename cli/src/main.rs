@@ -21,12 +21,13 @@ use roc_mono::expr::{Expr, Procs};
 use roc_mono::layout::Layout;
 use std::time::SystemTime;
 
-use clap::{App, AppSettings, Arg, ArgMatches};
+use clap::{App, Arg, ArgMatches};
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
 };
-use std::io;
+use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
+use std::process;
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
 use tokio::process::Command;
 use tokio::runtime::Builder;
@@ -41,7 +42,6 @@ pub static FLAG_ROC_FILE: &str = "ROC_FILE";
 pub fn build_app<'a>() -> App<'a> {
     App::new("roc")
         .version(crate_version!())
-        .setting(AppSettings::AllowNegativeNumbers)
         .arg(
             Arg::with_name(FLAG_ROC_FILE)
                 .help("The .roc file to compile and run")
@@ -58,7 +58,6 @@ pub fn build_app<'a>() -> App<'a> {
 /// Run the CLI. This is separate from main() so that tests can call it directly.
 pub fn run(matches: ArgMatches) -> io::Result<()> {
     let filename = matches.value_of(FLAG_ROC_FILE).unwrap();
-
     let opt_level = if matches.is_present(FLAG_OPTIMIZE) {
         OptLevel::Optimize
     } else {
@@ -76,7 +75,24 @@ pub fn run(matches: ArgMatches) -> io::Result<()> {
         .expect("Error spawning initial compiler thread."); // TODO make this error nicer.
 
     // Spawn the root task
-    let loaded = rt.block_on(load_file(src_dir, path.canonicalize().unwrap(), opt_level));
+    let path = path.canonicalize().unwrap_or_else(|err| {
+        use ErrorKind::*;
+
+        match err.kind() {
+            NotFound => {
+                match path.to_str() {
+                    Some(path_str) => println!("File not found: {}", path_str),
+                    None => println!("Malformed file path : {:?}", path),
+                }
+
+                process::exit(1);
+            }
+            _ => {
+                todo!("TODO Gracefully handle opening {:?} - {:?}", path, err);
+            }
+        }
+    });
+    let loaded = rt.block_on(load_file(src_dir, path, opt_level));
 
     loaded.expect("TODO gracefully handle LoadingProblem");
 
