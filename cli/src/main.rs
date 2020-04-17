@@ -35,8 +35,8 @@ fn main() -> io::Result<()> {
     run(build_app().get_matches())
 }
 
-pub static FLAG_OPTIMIZE: &'static str = "optimize";
-pub static FLAG_ROC_FILE: &'static str = "ROC_FILE";
+pub static FLAG_OPTIMIZE: &str = "optimize";
+pub static FLAG_ROC_FILE: &str = "ROC_FILE";
 
 pub fn build_app<'a>() -> App<'a> {
     App::new("roc")
