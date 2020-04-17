@@ -31,6 +31,11 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 // TODO: experiment with different internal calling conventions, e.g. "fast"
 const DEFAULT_CALLING_CONVENTION: u32 = 0;
 
+pub enum OptLevel {
+    Normal,
+    Optimize,
+}
+
 type Scope<'a, 'ctx> = ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>;
 
 pub struct Env<'a, 'ctx, 'env> {
@@ -56,7 +61,7 @@ pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Modu
         .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err))
 }
 
-pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>) {
+pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>, opt_level: OptLevel) {
     // tail-call elimination is always on
     fpm.add_instruction_combining_pass();
     fpm.add_tail_call_elimination_pass();
@@ -64,28 +69,32 @@ pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>) {
     let pmb = PassManagerBuilder::create();
 
     // Enable more optimizations when running cargo test --release
-    if cfg!(debug_assertions) {
-        pmb.set_optimization_level(OptimizationLevel::None);
-    } else {
-        // Default is O2, Aggressive is O3
-        //
-        // See https://llvm.org/doxygen/CodeGen_8h_source.html
-        pmb.set_optimization_level(OptimizationLevel::Aggressive);
+    match opt_level {
+        OptLevel::Normal => {
+            pmb.set_optimization_level(OptimizationLevel::None);
+        }
+        OptLevel::Optimize => {
+            // Default is O2, Aggressive is O3
+            //
+            // See https://llvm.org/doxygen/CodeGen_8h_source.html
+            pmb.set_optimization_level(OptimizationLevel::Aggressive);
 
-        // TODO figure out how enabling these individually differs from
-        // the broad "aggressive optimizations" setting.
+            // TODO figure out how enabling these individually differs from
+            // the broad "aggressive optimizations" setting.
 
-        // fpm.add_reassociate_pass();
-        // fpm.add_basic_alias_analysis_pass();
-        // fpm.add_promote_memory_to_register_pass();
-        // fpm.add_cfg_simplification_pass();
-        // fpm.add_gvn_pass();
-        // TODO figure out why enabling any of these (even alone) causes LLVM to segfault
-        // fpm.add_strip_dead_prototypes_pass();
-        // fpm.add_dead_arg_elimination_pass();
-        // fpm.add_function_inlining_pass();
-        // pmb.set_inliner_with_threshold(4);
+            // fpm.add_reassociate_pass();
+            // fpm.add_basic_alias_analysis_pass();
+            // fpm.add_promote_memory_to_register_pass();
+            // fpm.add_cfg_simplification_pass();
+            // fpm.add_gvn_pass();
+            // TODO figure out why enabling any of these (even alone) causes LLVM to segfault
+            // fpm.add_strip_dead_prototypes_pass();
+            // fpm.add_dead_arg_elimination_pass();
+            // fpm.add_function_inlining_pass();
+            // pmb.set_inliner_with_threshold(4);
+        }
     }
+
     pmb.populate_function_pass_manager(&fpm);
 }
 
