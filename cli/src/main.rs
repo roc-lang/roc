@@ -1,5 +1,7 @@
 extern crate roc_gen;
 extern crate roc_reporting;
+#[macro_use]
+extern crate clap;
 
 use bumpalo::Bump;
 use inkwell::context::Context;
@@ -19,6 +21,7 @@ use roc_mono::expr::{Expr, Procs};
 use roc_mono::layout::Layout;
 use std::time::SystemTime;
 
+use clap::{App, AppSettings, Arg, ArgMatches};
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
 };
@@ -29,41 +32,55 @@ use tokio::process::Command;
 use tokio::runtime::Builder;
 
 fn main() -> io::Result<()> {
-    let argv = std::env::args().collect::<Vec<String>>();
+    run(build_app().get_matches())
+}
 
-    match argv.get(1) {
-        Some(filename) => {
-            let opt_level = match argv.get(1).map(String::as_str) {
-                Some("--optimize") => OptLevel::Optimize,
-                None => OptLevel::Normal,
-                Some(other) => {
-                    panic!("Unrecognized CLI argument: {}", other);
-                }
-            };
-            let path = Path::new(filename);
-            let src_dir = path.parent().unwrap().canonicalize().unwrap();
+pub static FLAG_OPTIMIZE: &'static str = "optimize";
+pub static FLAG_ROC_FILE: &'static str = "ROC_FILE";
 
-            // Create the runtime
-            let mut rt = Builder::new()
-                .thread_name("roc")
-                .threaded_scheduler()
-                .enable_io()
-                .build()
-                .expect("Error spawning initial compiler thread."); // TODO make this error nicer.
+pub fn build_app<'a>() -> App<'a> {
+    App::new("roc")
+        .version(crate_version!())
+        .setting(AppSettings::AllowNegativeNumbers)
+        .arg(
+            Arg::with_name(FLAG_ROC_FILE)
+                .help("The .roc file to compile and run")
+                .required(true),
+        )
+        .arg(
+            Arg::with_name(FLAG_OPTIMIZE)
+                .long(FLAG_OPTIMIZE)
+                .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                .required(false),
+        )
+}
 
-            // Spawn the root task
-            let loaded = rt.block_on(load_file(src_dir, path.canonicalize().unwrap(), opt_level));
+/// Run the CLI. This is separate from main() so that tests can call it directly.
+pub fn run(matches: ArgMatches) -> io::Result<()> {
+    let filename = matches.value_of(FLAG_ROC_FILE).unwrap();
 
-            loaded.expect("TODO gracefully handle LoadingProblem");
+    let opt_level = if matches.is_present(FLAG_OPTIMIZE) {
+        OptLevel::Optimize
+    } else {
+        OptLevel::Normal
+    };
+    let path = Path::new(filename);
+    let src_dir = path.parent().unwrap().canonicalize().unwrap();
 
-            Ok(())
-        }
-        None => {
-            println!("Usage: roc FILENAME.roc");
+    // Create the runtime
+    let mut rt = Builder::new()
+        .thread_name("roc")
+        .threaded_scheduler()
+        .enable_io()
+        .build()
+        .expect("Error spawning initial compiler thread."); // TODO make this error nicer.
 
-            Ok(())
-        }
-    }
+    // Spawn the root task
+    let loaded = rt.block_on(load_file(src_dir, path.canonicalize().unwrap(), opt_level));
+
+    loaded.expect("TODO gracefully handle LoadingProblem");
+
+    Ok(())
 }
 
 async fn load_file(
@@ -85,7 +102,14 @@ async fn load_file(
     let loaded = roc_load::file::load(&stdlib, src_dir, filename.clone(), subs_by_module).await?;
     let dest_filename = filename.with_extension("o");
 
-    gen(&arena, loaded, filename, Triple::host(), &dest_filename, opt_level);
+    gen(
+        &arena,
+        loaded,
+        filename,
+        Triple::host(),
+        &dest_filename,
+        opt_level,
+    );
 
     let compilation_end = compilation_start.elapsed().unwrap();
 
@@ -160,7 +184,7 @@ fn gen(
     filename: PathBuf,
     target: Triple,
     dest_filename: &Path,
-    opt_level: OptLevel
+    opt_level: OptLevel,
 ) {
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
 
