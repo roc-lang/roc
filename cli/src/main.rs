@@ -10,7 +10,7 @@ use inkwell::OptimizationLevel;
 use roc_collections::all::ImMap;
 use roc_collections::all::MutMap;
 use roc_gen::llvm::build::{
-    build_proc, build_proc_header, get_call_conventions, module_from_builtins,
+    build_proc, build_proc_header, get_call_conventions, module_from_builtins, OptLevel,
 };
 use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_load::file::{LoadedModule, LoadingProblem};
@@ -33,6 +33,13 @@ fn main() -> io::Result<()> {
 
     match argv.get(1) {
         Some(filename) => {
+            let opt_level = match argv.get(1).map(String::as_str) {
+                Some("--optimize") => OptLevel::Optimize,
+                None => OptLevel::Normal,
+                Some(other) => {
+                    panic!("Unrecognized CLI argument: {}", other);
+                }
+            };
             let path = Path::new(filename);
             let src_dir = path.parent().unwrap().canonicalize().unwrap();
 
@@ -45,7 +52,7 @@ fn main() -> io::Result<()> {
                 .expect("Error spawning initial compiler thread."); // TODO make this error nicer.
 
             // Spawn the root task
-            let loaded = rt.block_on(load_file(src_dir, path.canonicalize().unwrap()));
+            let loaded = rt.block_on(load_file(src_dir, path.canonicalize().unwrap(), opt_level));
 
             loaded.expect("TODO gracefully handle LoadingProblem");
 
@@ -59,23 +66,26 @@ fn main() -> io::Result<()> {
     }
 }
 
-async fn load_file(src_dir: PathBuf, filename: PathBuf) -> Result<(), LoadingProblem> {
+async fn load_file(
+    src_dir: PathBuf,
+    filename: PathBuf,
+    opt_level: OptLevel,
+) -> Result<(), LoadingProblem> {
     let compilation_start = SystemTime::now();
     let arena = Bump::new();
 
     // Step 1: compile the app and generate the .o file
     let subs_by_module = MutMap::default();
-    let loaded = roc_load::file::load(
-        &roc_builtins::std::standard_stdlib(),
-        src_dir,
-        filename.clone(),
-        subs_by_module,
-    )
-    .await?;
 
+    // Release builds use uniqueness optimizations
+    let stdlib = match opt_level {
+        OptLevel::Normal => roc_builtins::std::standard_stdlib(),
+        OptLevel::Optimize => roc_builtins::unique::uniq_stdlib(),
+    };
+    let loaded = roc_load::file::load(&stdlib, src_dir, filename.clone(), subs_by_module).await?;
     let dest_filename = filename.with_extension("o");
 
-    gen(&arena, loaded, filename, Triple::host(), &dest_filename);
+    gen(&arena, loaded, filename, Triple::host(), &dest_filename, opt_level);
 
     let compilation_end = compilation_start.elapsed().unwrap();
 
@@ -150,6 +160,7 @@ fn gen(
     filename: PathBuf,
     target: Triple,
     dest_filename: &Path,
+    opt_level: OptLevel
 ) {
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
 
@@ -243,7 +254,7 @@ fn gen(
     let builder = context.create_builder();
     let fpm = PassManager::create(&module);
 
-    roc_gen::llvm::build::add_passes(&fpm);
+    roc_gen::llvm::build::add_passes(&fpm, opt_level);
 
     fpm.initialize();
 
