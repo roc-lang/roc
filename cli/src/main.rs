@@ -2,7 +2,6 @@ extern crate roc_gen;
 extern crate roc_reporting;
 #[macro_use]
 extern crate clap;
-
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
@@ -31,6 +30,8 @@ use std::process;
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
 use tokio::process::Command;
 use tokio::runtime::Builder;
+
+pub mod repl;
 
 pub static FLAG_OPTIMIZE: &str = "optimize";
 pub static FLAG_ROC_FILE: &str = "ROC_FILE";
@@ -66,6 +67,9 @@ pub fn build_app<'a>() -> App<'a> {
                     .required(false),
             )
         )
+        .subcommand(App::new("repl")
+            .about("Launch the interactive Read Eval Print Loop (REPL)")
+        )
 }
 
 fn main() -> io::Result<()> {
@@ -74,9 +78,11 @@ fn main() -> io::Result<()> {
     match matches.subcommand_name() {
         Some("build") => build(matches.subcommand_matches("build").unwrap(), false),
         Some("run") => build(matches.subcommand_matches("run").unwrap(), true),
+        Some("repl") => repl::main(),
         _ => unreachable!(),
     }
 }
+
 
 pub fn build(matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {
     let filename = matches.value_of(FLAG_ROC_FILE).unwrap();
