@@ -12,7 +12,7 @@ macro_rules! assert_llvm_evals_to {
         let context = Context::create();
         let module = roc_gen::llvm::build::module_from_builtins(&context, "app");
         let builder = context.create_builder();
-        let opt_level = if(cfg!(debug_assertions)) {
+        let opt_level = if cfg!(debug_assertions) {
             roc_gen::llvm::build::OptLevel::Normal
         } else {
             roc_gen::llvm::build::OptLevel::Optimize
@@ -152,7 +152,7 @@ macro_rules! assert_opt_evals_to {
         let context = Context::create();
         let module = roc_gen::llvm::build::module_from_builtins(&context, "app");
         let builder = context.create_builder();
-        let opt_level = if(cfg!(debug_assertions)) {
+        let opt_level = if cfg!(debug_assertions) {
             roc_gen::llvm::build::OptLevel::Normal
         } else {
             roc_gen::llvm::build::OptLevel::Optimize
@@ -288,7 +288,7 @@ macro_rules! emit_expr {
         let context = Context::create();
         let module = context.create_module("app");
         let builder = context.create_builder();
-        let opt_level = if(cfg!(debug_assertions)) {
+        let opt_level = if cfg!(debug_assertions) {
             roc_gen::llvm::build::OptLevel::Normal
         } else {
             roc_gen::llvm::build::OptLevel::Optimize
