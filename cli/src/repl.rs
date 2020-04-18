@@ -37,11 +37,13 @@ use target_lexicon::Triple;
 pub fn main() -> io::Result<()> {
     use std::io::BufRead;
 
-    println!("\nThe rockin’ roc repl\n--------------------\n");
+    println!(
+        "\n  The rockin’ \u{001b}[36mroc repl\u{001b}[0m\n\u{001b}[35m────────────────────────\n"
+    );
 
     // Loop
 
-    print!("▶ ");
+    print!("\u{001b}[36m▶\u{001b}[0m ");
 
     io::stdout().flush().unwrap();
 
@@ -55,7 +57,7 @@ pub fn main() -> io::Result<()> {
 
     let (answer, answer_type) = gen(line.as_str(), Triple::host(), OptLevel::Normal);
 
-    println!("{} : {}", answer, answer_type);
+    println!("\n{} \u{001b}[35m:\u{001b}[0m {}", answer, answer_type);
 
     Ok(())
 }
