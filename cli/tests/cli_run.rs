@@ -92,13 +92,12 @@ mod cli_run {
 
     #[test]
     fn run_hello_world() {
-        let out = run_roc(&[example_file("hello-world", "Hello.roc").to_str().unwrap()]);
+        let out = run_roc(&[
+            "run",
+            example_file("hello-world", "Hello.roc").to_str().unwrap(),
+        ]);
 
         assert_eq!(&out.stderr, "");
-
-        // TODO make separate `roc build` and `roc run` commands, and here do
-        // `roc build` followed by manually executing the compiled `app` binary
-        // and doing an `assert_eq!` on the entire stdout of that compiled `app` binary
         assert!(&out.stdout.ends_with("Hello, World!\n"));
         assert!(out.status.success());
     }
