@@ -32,31 +32,53 @@ use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
 use tokio::process::Command;
 use tokio::runtime::Builder;
 
-fn main() -> io::Result<()> {
-    run(build_app().get_matches())
-}
-
 pub static FLAG_OPTIMIZE: &str = "optimize";
 pub static FLAG_ROC_FILE: &str = "ROC_FILE";
 
 pub fn build_app<'a>() -> App<'a> {
     App::new("roc")
         .version(crate_version!())
-        .arg(
-            Arg::with_name(FLAG_ROC_FILE)
-                .help("The .roc file to compile and run")
-                .required(true),
+        .subcommand(App::new("build")
+            .about("Build a program")
+            .arg(
+                Arg::with_name(FLAG_ROC_FILE)
+                    .help("The .roc file to build")
+                    .required(true),
+            )
+            .arg(
+                Arg::with_name(FLAG_OPTIMIZE)
+                    .long(FLAG_OPTIMIZE)
+                    .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
         )
-        .arg(
-            Arg::with_name(FLAG_OPTIMIZE)
-                .long(FLAG_OPTIMIZE)
-                .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
-                .required(false),
+        .subcommand(App::new("run")
+            .about("Build and run a program")
+            .arg(
+                Arg::with_name(FLAG_ROC_FILE)
+                    .help("The .roc file to build and run")
+                    .required(true),
+            )
+            .arg(
+                Arg::with_name(FLAG_OPTIMIZE)
+                    .long(FLAG_OPTIMIZE)
+                    .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
         )
 }
 
-/// Run the CLI. This is separate from main() so that tests can call it directly.
-pub fn run(matches: ArgMatches) -> io::Result<()> {
+fn main() -> io::Result<()> {
+    let matches = build_app().get_matches();
+
+    match matches.subcommand_name() {
+        Some("build") => build(matches.subcommand_matches("build").unwrap(), false),
+        Some("run") => build(matches.subcommand_matches("run").unwrap(), true),
+        _ => unreachable!(),
+    }
+}
+
+pub fn build(matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {
     let filename = matches.value_of(FLAG_ROC_FILE).unwrap();
     let opt_level = if matches.is_present(FLAG_OPTIMIZE) {
         OptLevel::Optimize
@@ -92,18 +114,32 @@ pub fn run(matches: ArgMatches) -> io::Result<()> {
             }
         }
     });
-    let loaded = rt.block_on(load_file(src_dir, path, opt_level));
+    let binary_path = rt
+        .block_on(build_file(src_dir, path, opt_level))
+        .expect("TODO gracefully handle block_on failing");
 
-    loaded.expect("TODO gracefully handle LoadingProblem");
+    if run_after_build {
+        // Run the compiled app
+        rt.block_on(async {
+            Command::new(binary_path)
+                .spawn()
+                .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
+                .await
+                .map_err(|_| {
+                    todo!("gracefully handle error after `app` spawned");
+                })
+        })
+        .expect("TODO gracefully handle block_on failing");
+    }
 
     Ok(())
 }
 
-async fn load_file(
+async fn build_file(
     src_dir: PathBuf,
     filename: PathBuf,
     opt_level: OptLevel,
-) -> Result<(), LoadingProblem> {
+) -> Result<PathBuf, LoadingProblem> {
     let compilation_start = SystemTime::now();
     let arena = Bump::new();
 
@@ -176,22 +212,7 @@ async fn load_file(
             todo!("gracefully handle error after `rustc` spawned");
         })?;
 
-    // Step 4: Run the compiled app
-    Command::new(binary_path)
-        .spawn()
-        .unwrap_or_else(|err| {
-            panic!(
-                "{} failed to run: {:?}",
-                cwd.join("app").to_str().unwrap(),
-                err
-            )
-        })
-        .await
-        .map_err(|_| {
-            todo!("gracefully handle error after `app` spawned");
-        })?;
-
-    Ok(())
+    Ok(binary_path)
 }
 
 fn gen(
