@@ -16,6 +16,21 @@ path = "src/main.rs"
 test = false
 bench = false
 
+[features]
+default = ["target-x86"]
+
+target-x86 = []
+
+# arm and wasm give linker errors on some platforms
+target-arm = []
+target-webassembly = []
+
+target-all = [
+    "target-x86",
+    "target-arm",
+    "target-webassembly"
+]
+
 
 [dependencies]
 roc_collections = { path = "../compiler/collections" }
