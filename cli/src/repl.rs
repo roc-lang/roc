@@ -26,6 +26,7 @@ use roc_parse::parser::{loc, Fail, Parser, State};
 use roc_problem::can::Problem;
 use roc_region::all::{Located, Region};
 use roc_solve::solve;
+use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
 use std::hash::Hash;
@@ -35,6 +36,10 @@ use target_lexicon::Triple;
 
 pub fn main() -> io::Result<()> {
     use std::io::BufRead;
+
+    println!("\nThe rockin’ roc repl\n--------------------\n");
+
+    // Loop
 
     print!("▶ ");
 
@@ -48,9 +53,9 @@ pub fn main() -> io::Result<()> {
         .expect("there was no next line")
         .expect("the line could not be read");
 
-    let out = gen(line.as_str(), Triple::host(), OptLevel::Normal);
+    let (answer, answer_type) = gen(line.as_str(), Triple::host(), OptLevel::Normal);
 
-    println!("{}", out);
+    println!("{} : {}", answer, answer_type);
 
     Ok(())
 }
@@ -59,7 +64,7 @@ pub fn repl_home() -> ModuleId {
     ModuleIds::default().get_or_insert(&"REPL".into())
 }
 
-pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> String {
+pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> (String, String) {
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
 
     // Look up the types and expressions of the `provided` values
@@ -117,6 +122,11 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> String {
     roc_gen::llvm::build::add_passes(&fpm, opt_level);
 
     fpm.initialize();
+
+    // pretty-print the expr type string for later.
+    name_all_type_vars(var, &mut subs);
+
+    let expr_type_str = content_to_string(content.clone(), &mut subs, home, &interns);
 
     // Compute main_fn_type before moving subs to Env
     let layout = Layout::from_content(&arena, content, &subs, ptr_bytes).unwrap_or_else(|err| {
@@ -232,13 +242,15 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> String {
     // env.module.print_to_stderr();
 
     unsafe {
-        let main: JitFunction<unsafe extern "C" fn() -> i64> = execution_engine
+        let main: JitFunction<
+            unsafe extern "C" fn() -> i64, /* TODO have this return Str, and in the generated code make sure to call the appropriate string conversion function on the return val based on its type! */
+        > = execution_engine
             .get_function(main_fn_name)
             .ok()
             .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
             .expect("errored");
 
-        format!("{}", main.call())
+        (format!("{}", main.call()), expr_type_str)
     }
 }
 
