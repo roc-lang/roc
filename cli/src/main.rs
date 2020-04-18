@@ -420,12 +420,16 @@ fn gen(
 
             "x86-64"
         }
-        Architecture::Arm(_) => {
+        Architecture::Arm(_) if cfg!(feature = "target-arm") => {
+            // NOTE: why not enable arm and wasm by default?
+            //
+            // We had some trouble getting them to link properly. This may be resolved in the
+            // future, or maybe it was just some weird configuration on one machine.
             Target::initialize_arm(&InitializationConfig::default());
 
             "arm"
         }
-        Architecture::Wasm32 => {
+        Architecture::Wasm32 if cfg!(feature = "target-webassembly") => {
             Target::initialize_webassembly(&InitializationConfig::default());
 
             "wasm32"
