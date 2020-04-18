@@ -3,13 +3,13 @@
 To run:
 
 ```bash
-$ cargo run hello.roc
+$ cargo run run Hello.roc
 ```
 
 To run in release mode instead, do:
 
 ```bash
-$ cargo run --release hello.roc
+$ cargo run --release run Hello.roc
 ```
 
 ## Design Notes
