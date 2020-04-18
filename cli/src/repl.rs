@@ -38,7 +38,8 @@ pub fn main() -> io::Result<()> {
     use std::io::BufRead;
 
     println!(
-        "\n  The rockin’ \u{001b}[36mroc repl\u{001b}[0m\n\u{001b}[35m────────────────────────\u{001b}[0m\n\nEnter :help for help, or :exit to exit."
+        "\n  The rockin’ \u{001b}[36mroc repl\u{001b}[0m\n\u{001b}[35m────────────────────────\u{001b}[0m\n\n{}",
+        WELCOME_MESSAGE
     );
 
     // Loop
@@ -60,6 +61,9 @@ pub fn main() -> io::Result<()> {
             ":help" => {
                 println!("Use :exit to exit.");
             }
+            "" => {
+                println!("\n{}", WELCOME_MESSAGE);
+            }
             ":exit" => {
                 break;
             }
@@ -73,6 +77,9 @@ pub fn main() -> io::Result<()> {
 
     Ok(())
 }
+
+const WELCOME_MESSAGE: &str =
+    "Enter an expression, or :help for a list of commands, or :exit to exit.";
 
 pub fn repl_home() -> ModuleId {
     ModuleIds::default().get_or_insert(&"REPL".into())
