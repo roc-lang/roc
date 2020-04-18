@@ -83,7 +83,6 @@ fn main() -> io::Result<()> {
     }
 }
 
-
 pub fn build(matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {
     let filename = matches.value_of(FLAG_ROC_FILE).unwrap();
     let opt_level = if matches.is_present(FLAG_OPTIMIZE) {
