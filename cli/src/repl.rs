@@ -92,7 +92,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> (String, String) {
         home,
         interns,
         problems: can_problems,
-        output: _,
+        ..
     } = can_expr(src);
     let subs = Subs::new(var_store.into());
     let mut type_problems = Vec::new();
@@ -140,7 +140,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> (String, String) {
     // pretty-print the expr type string for later.
     name_all_type_vars(var, &mut subs);
 
-    let expr_type_str = content_to_string(content.clone(), &mut subs, home, &interns);
+    let expr_type_str = content_to_string(content.clone(), &subs, home, &interns);
 
     // Compute main_fn_type before moving subs to Env
     let layout = Layout::from_content(&arena, content, &subs, ptr_bytes).unwrap_or_else(|err| {
@@ -233,7 +233,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> (String, String) {
         &ImMap::default(),
         main_fn,
         &main_body,
-        &mut Procs::default(),
+        &Procs::default(),
     );
 
     builder.build_return(Some(&ret));
