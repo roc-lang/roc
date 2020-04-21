@@ -174,6 +174,42 @@ mod gen_primitives {
     }
 
     #[test]
+    fn when_two_element_tag_first() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : [A Int, B Int]
+                x = A 0x2
+
+                when x is
+                    A v -> v
+                    B v -> v
+                "#
+            ),
+            2,
+            i64
+        );
+    }
+
+    #[test]
+    fn when_two_element_tag_second() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : [A Int, B Int]
+                x = B 0x3
+
+                when x is
+                    A v -> v
+                    B v -> v
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
     fn gen_when_one_branch() {
         assert_evals_to!(
             indoc!(
