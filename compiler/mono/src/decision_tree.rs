@@ -9,7 +9,7 @@ use roc_module::symbol::Symbol;
 use crate::expr::specialize_equality;
 use crate::layout::Builtin;
 use crate::layout::Layout;
-use crate::pattern::{Ctor, Union};
+use crate::pattern::{Ctor, TagId, Union};
 
 /// COMPILE CASES
 
@@ -383,6 +383,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: Branch<'a>, all_tests: &mut Ve
                 RecordDestructure(destructs, _) => {
                     let union = Union {
                         alternatives: vec![Ctor {
+                            tag_id: TagId(0),
                             name: TagName::Global("#Record".into()),
                             arity: destructs.len(),
                         }],

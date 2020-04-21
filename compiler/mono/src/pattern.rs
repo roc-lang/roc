@@ -9,10 +9,13 @@ pub struct Union {
     pub alternatives: Vec<Ctor>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
+pub struct TagId(pub u8);
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Ctor {
     pub name: TagName,
-    // pub tag_id: u8,
+    pub tag_id: TagId,
     pub arity: usize,
 }
 
@@ -20,7 +23,7 @@ pub struct Ctor {
 pub enum Pattern {
     Anything,
     Literal(Literal),
-    Ctor(Union, TagName, std::vec::Vec<Pattern>),
+    Ctor(Union, TagId, std::vec::Vec<Pattern>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -42,19 +45,17 @@ fn simplify<'a>(pattern: &crate::expr::Pattern<'a>) -> Pattern {
 
         // To make sure these are exhaustive, we have to "fake" a union here
         // TODO: use the hash or some other integer to discriminate between constructors
-        BitLiteral {
-            tag_name, union, ..
-        } => Ctor(union.clone(), tag_name.clone(), vec![]),
-        EnumLiteral {
-            tag_name, union, ..
-        } => Ctor(union.clone(), tag_name.clone(), vec![]),
+        BitLiteral { value, union, .. } => Ctor(union.clone(), TagId(*value as u8), vec![]),
+        EnumLiteral { tag_id, union, .. } => Ctor(union.clone(), TagId(*tag_id), vec![]),
 
         Underscore => Anything,
         Identifier(_) => Anything,
         RecordDestructure(destructures, _) => {
+            let tag_id = TagId(0);
             let union = Union {
                 alternatives: vec![Ctor {
                     name: TagName::Global("#Record".into()),
+                    tag_id,
                     arity: destructures.len(),
                 }],
             };
@@ -68,7 +69,7 @@ fn simplify<'a>(pattern: &crate::expr::Pattern<'a>) -> Pattern {
                 }
             }
 
-            Ctor(union, TagName::Global("#Record".into()), patterns)
+            Ctor(union, tag_id, patterns)
         }
 
         Shadowed(_region, _ident) => {
@@ -83,14 +84,14 @@ fn simplify<'a>(pattern: &crate::expr::Pattern<'a>) -> Pattern {
         }
 
         AppliedTag {
-            tag_name,
+            tag_id,
             arguments,
             union,
             ..
         } => {
             let simplified_args: std::vec::Vec<_> =
                 arguments.iter().map(|v| simplify(&v.0)).collect();
-            Ctor(union.clone(), tag_name.clone(), simplified_args)
+            Ctor(union.clone(), TagId(*tag_id), simplified_args)
         }
     }
 }
@@ -217,16 +218,16 @@ fn is_exhaustive(matrix: &PatternMatrix, n: usize) -> PatternMatrix {
 
                 result
             } else {
-                let is_alt_exhaustive = |Ctor { name, arity }| {
+                let is_alt_exhaustive = |Ctor { arity, tag_id, .. }| {
                     let new_matrix = matrix
                         .iter()
-                        .filter_map(|r| specialize_row_by_ctor(&name, arity, r))
+                        .filter_map(|r| specialize_row_by_ctor(tag_id, arity, r))
                         .collect();
                     let rest: Vec<Vec<Pattern>> = is_exhaustive(&new_matrix, arity + n - 1);
 
                     let mut result = Vec::with_capacity(rest.len());
                     for row in rest {
-                        result.push(recover_ctor(alts.clone(), name.clone(), arity, row));
+                        result.push(recover_ctor(alts.clone(), tag_id, arity, row));
                     }
 
                     result
@@ -243,27 +244,27 @@ fn is_exhaustive(matrix: &PatternMatrix, n: usize) -> PatternMatrix {
     }
 }
 
-fn is_missing<T>(union: Union, ctors: MutMap<TagName, T>, ctor: &Ctor) -> Option<Pattern> {
-    let Ctor { name, arity, .. } = ctor;
+fn is_missing<T>(union: Union, ctors: MutMap<TagId, T>, ctor: &Ctor) -> Option<Pattern> {
+    let Ctor { arity, tag_id, .. } = ctor;
 
-    if ctors.contains_key(&name) {
+    if ctors.contains_key(tag_id) {
         None
     } else {
         let anythings = std::iter::repeat(Anything).take(*arity).collect();
-        Some(Pattern::Ctor(union, name.clone(), anythings))
+        Some(Pattern::Ctor(union, *tag_id, anythings))
     }
 }
 
 fn recover_ctor(
     union: Union,
-    tag_name: TagName,
+    tag_id: TagId,
     arity: usize,
     mut patterns: Vec<Pattern>,
 ) -> Vec<Pattern> {
     let mut rest = patterns.split_off(arity);
     let args = patterns;
 
-    rest.push(Ctor(union, tag_name, args));
+    rest.push(Ctor(union, tag_id, args));
 
     rest
 }
@@ -302,18 +303,19 @@ fn to_nonredundant_rows<'a>(
                 Guard::NoGuard => Pattern::Anything,
             };
 
+            let tag_id = TagId(0);
+
             let union = Union {
                 alternatives: vec![Ctor {
+                    tag_id,
                     name: TagName::Global("#Guard".into()),
                     arity: 2,
                 }],
             };
 
-            let tag_name = TagName::Global("#Guard".into());
-
             vec![Pattern::Ctor(
                 union,
-                tag_name,
+                tag_id,
                 vec![simplify(&loc_pat.value), guard_pattern],
             )]
         } else {
@@ -350,10 +352,10 @@ fn is_useful(matrix: &PatternMatrix, vector: &Row) -> bool {
 
         match first_pattern {
             // keep checking rows that start with this Ctor or Anything
-            Ctor(_, name, args) => {
+            Ctor(_, id, args) => {
                 let new_matrix: Vec<_> = matrix
                     .iter()
-                    .filter_map(|r| specialize_row_by_ctor(&name, args.len(), r))
+                    .filter_map(|r| specialize_row_by_ctor(id, args.len(), r))
                     .collect();
 
                 let mut new_row = Vec::new();
@@ -381,10 +383,10 @@ fn is_useful(matrix: &PatternMatrix, vector: &Row) -> bool {
                         // All Ctors are covered, so this Anything is not needed for any
                         // of those. But what if some of those Ctors have subpatterns
                         // that make them less general? If so, this actually is useful!
-                        let is_useful_alt = |Ctor { name, arity, .. }| {
+                        let is_useful_alt = |Ctor { arity, tag_id, .. }| {
                             let new_matrix = matrix
                                 .iter()
-                                .filter_map(|r| specialize_row_by_ctor(&name, arity, r))
+                                .filter_map(|r| specialize_row_by_ctor(tag_id, arity, r))
                                 .collect();
                             let mut new_row: Vec<Pattern> =
                                 std::iter::repeat(Anything).take(arity).collect::<Vec<_>>();
@@ -412,15 +414,15 @@ fn is_useful(matrix: &PatternMatrix, vector: &Row) -> bool {
 }
 
 /// INVARIANT: (length row == N) ==> (length result == arity + N - 1)
-fn specialize_row_by_ctor(tag_name: &TagName, arity: usize, row: &Row) -> Option<Row> {
+fn specialize_row_by_ctor(tag_id: TagId, arity: usize, row: &Row) -> Option<Row> {
     let mut row = row.clone();
 
     let head = row.pop();
     let patterns = row;
 
     match head {
-        Some(Ctor(_,name, args)) =>
-            if &name == tag_name {
+        Some(Ctor(_, id, args)) =>
+            if id == tag_id {
                 // TODO order!
                 let mut new_patterns = Vec::new();
                 new_patterns.extend(args);
@@ -497,12 +499,12 @@ type RefPatternMatrix = [Vec<Pattern>];
 type PatternMatrix = Vec<Vec<Pattern>>;
 type Row = Vec<Pattern>;
 
-fn collect_ctors(matrix: &RefPatternMatrix) -> MutMap<TagName, Union> {
+fn collect_ctors(matrix: &RefPatternMatrix) -> MutMap<TagId, Union> {
     let mut ctors = MutMap::default();
 
     for row in matrix {
-        if let Some(Ctor(union, name, _)) = row.get(row.len() - 1) {
-            ctors.insert(name.clone(), union.clone());
+        if let Some(Ctor(union, id, _)) = row.get(row.len() - 1) {
+            ctors.insert(*id, union.clone());
         }
     }
 
