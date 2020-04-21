@@ -188,7 +188,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             build_expr(env, &scope, parent, ret, procs)
         }
-        CallByName(symbol, args) => match *symbol {
+        CallByName(symbol, args, ret_layout) => match *symbol {
             Symbol::BOOL_OR => {
                 // The (||) operator
                 debug_assert!(args.len() == 2);
@@ -236,7 +236,13 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     arg_tuples.push((build_expr(env, scope, parent, arg, procs), layout));
                 }
 
-                call_with_args(*symbol, parent, arg_tuples.into_bump_slice(), env)
+                call_with_args(
+                    *symbol,
+                    parent,
+                    arg_tuples.into_bump_slice(),
+                    env,
+                    ret_layout,
+                )
             }
         },
         FunctionPointer(symbol) => {
@@ -873,6 +879,7 @@ fn call_with_args<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
     env: &Env<'a, 'ctx, 'env>,
+    ret_layout: &'a Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     match symbol {
         Symbol::INT_ADD | Symbol::NUM_ADD => {
@@ -1072,6 +1079,7 @@ fn call_with_args<'a, 'ctx, 'env>(
                 }
             }
         }
+        Symbol::LIST_GET => list_get(parent, args, env, ret_layout),
         Symbol::LIST_SET => list_set(parent, args, env, InPlace::Clone),
         Symbol::LIST_SET_IN_PLACE => list_set(parent, args, env, InPlace::InPlace),
         _ => {
@@ -1193,6 +1201,82 @@ fn bounds_check_comparison<'ctx>(
     // and CPUs generally default to predicting that a forward jump
     // shouldn't be taken; that is, they predict "else" won't be taken.)
     builder.build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
+}
+
+fn list_get<'a, 'ctx, 'env>(
+    parent: FunctionValue<'ctx>,
+    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
+    env: &Env<'a, 'ctx, 'env>,
+    ret_layout: &'a Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    // List.get : List elem, Int -> [Ok elem, OutOfBounds]*
+    debug_assert!(args.len() == 2);
+
+    let builder = env.builder;
+    let original_wrapper = args[0].0.into_struct_value();
+    let list_layout = args[0].1;
+    let elem_index = args[1].0.into_int_value();
+
+    // Load the usize length from the wrapper. We need it for bounds checking.
+    let list_len = load_list_len(builder, original_wrapper);
+
+    // Bounds check: only proceed if index < length.
+    // Otherwise, return the list unaltered.
+    let comparison = bounds_check_comparison(builder, elem_index, list_len);
+
+    // If the index is in bounds, wrap the result in Ok
+    let build_then = || {
+        match list_layout {
+            Layout::Builtin(Builtin::List(_)) => {
+                // Load the pointer to the array data
+                let array_data_ptr = load_list_ptr(builder, original_wrapper);
+
+                // We already checked the bounds earlier.
+                let elem_ptr =
+                    unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem") };
+
+                match ret_layout {
+                    Layout::Union(tags) => {
+                        // TODO wrap this in an Ok.
+                        builder.build_load(elem_ptr, "List.get")
+                    }
+                    _ => {
+                        unreachable!(
+                            "List.get did not return a tag union somehow {:?}",
+                            list_layout
+                        );
+                    }
+                }
+            }
+            _ => {
+                unreachable!("Invalid List layout for List.get: {:?}", list_layout);
+            }
+        }
+    };
+
+    // If the index was out of bounds, return OutOfBounds
+    let build_else = || {
+        // let layout = Layout::Union(layouts.into_bump_slice());
+
+        // Expr::Tag {
+        //     tag_layout: layout,
+        //     tag_name,
+        //     tag_id: tag_id as u8,
+        //     union_size,
+        //     arguments: arguments.into_bump_slice(),
+        // }
+        BasicValueEnum::StructValue(original_wrapper)
+    };
+    let ret_type = original_wrapper.get_type();
+
+    build_basic_phi2(
+        env,
+        parent,
+        comparison,
+        build_then,
+        build_else,
+        ret_type.into(),
+    )
 }
 
 fn list_set<'a, 'ctx, 'env>(
