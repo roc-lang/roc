@@ -136,8 +136,14 @@ fn pattern_to_doc<'b>(
             Float(f) => alloc.text(f.to_string()),
             Str(s) => alloc.string(s.into()),
         },
-        Ctor(_, tag_name, args) => {
+        Ctor(union, tag_id, args) => {
             let arg_docs = args.into_iter().map(|v| pattern_to_doc(alloc, v));
+
+            let tag = &union.alternatives[tag_id.0 as usize];
+            let tag_name = tag.name.clone();
+
+            // We assume the alternatives are sorted. If not, this assert will trigger
+            debug_assert!(tag_id == tag.tag_id);
 
             let docs = std::iter::once(alloc.tag_name(tag_name)).chain(arg_docs);
 

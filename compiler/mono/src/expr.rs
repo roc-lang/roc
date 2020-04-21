@@ -1,5 +1,5 @@
 use crate::layout::{Builtin, Layout};
-use crate::pattern::{Ctor, Guard};
+use crate::pattern::{Ctor, Guard, TagId};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_can;
@@ -1497,6 +1497,7 @@ fn from_can_pattern<'a>(
                     tag_name: tag_name.clone(),
                     union: Union {
                         alternatives: vec![Ctor {
+                            tag_id: TagId(0),
                             name: tag_name.clone(),
                             arity: 0,
                         }],
@@ -1508,11 +1509,13 @@ fn from_can_pattern<'a>(
                     union: Union {
                         alternatives: vec![
                             Ctor {
-                                name: ttrue,
+                                tag_id: TagId(0),
+                                name: ffalse,
                                 arity: 0,
                             },
                             Ctor {
-                                name: ffalse,
+                                tag_id: TagId(1),
+                                name: ttrue,
                                 arity: 0,
                             },
                         ],
@@ -1525,8 +1528,9 @@ fn from_can_pattern<'a>(
                         .expect("tag must be in its own type");
 
                     let mut ctors = std::vec::Vec::with_capacity(tag_names.len());
-                    for tag_name in &tag_names {
+                    for (i, tag_name) in tag_names.iter().enumerate() {
                         ctors.push(Ctor {
+                            tag_id: TagId(i as u8),
                             name: tag_name.clone(),
                             arity: 0,
                         })
@@ -1545,6 +1549,7 @@ fn from_can_pattern<'a>(
                 Unwrapped(field_layouts) => {
                     let union = crate::pattern::Union {
                         alternatives: vec![Ctor {
+                            tag_id: TagId(0),
                             name: tag_name.clone(),
                             arity: field_layouts.len(),
                         }],
@@ -1567,8 +1572,9 @@ fn from_can_pattern<'a>(
                 }
                 Wrapped(tags) => {
                     let mut ctors = std::vec::Vec::with_capacity(tags.len());
-                    for (tag_name, args) in &tags {
+                    for (i, (tag_name, args)) in tags.iter().enumerate() {
                         ctors.push(Ctor {
+                            tag_id: TagId(i as u8),
                             name: tag_name.clone(),
                             // don't include tag discriminant in arity
                             arity: args.len() - 1,

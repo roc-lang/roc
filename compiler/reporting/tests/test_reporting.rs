@@ -2210,6 +2210,40 @@ mod test_reporting {
     }
 
     #[test]
+    fn patterns_remote_data_not_exhaustive() {
+        report_problem_as(
+            indoc!(
+                r#"
+                RemoteData e a :  [ NotAsked, Loading, Failure e, Success a ]
+
+                x : RemoteData Int Str
+
+                when x is
+                    NotAsked -> 3
+                "#
+            ),
+            indoc!(
+                r#"
+                -- UNSAFE PATTERN --------------------------------------------------------------
+
+                This `when` does not cover all the possibilities:
+
+                5 ┆>  when x is
+                6 ┆>      NotAsked -> 3
+
+                Other possibilities include:
+
+                    Failure _
+                    Loading
+                    Success _
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn patterns_int_redundant() {
         report_problem_as(
             indoc!(
