@@ -374,6 +374,8 @@ pub fn can_expr(expr_str: &str) -> Result<CanExprOut, Fail> {
     can_expr_with(&Bump::new(), repl_home(), expr_str)
 }
 
+// TODO make this return a named struct instead of a big tuple
+#[allow(clippy::type_complexity)]
 pub fn uniq_expr(
     expr_str: &str,
 ) -> Result<
@@ -394,6 +396,8 @@ pub fn uniq_expr(
     uniq_expr_with(&Bump::new(), expr_str, declared_idents)
 }
 
+// TODO make this return a named struct instead of a big tuple
+#[allow(clippy::type_complexity)]
 pub fn uniq_expr_with(
     arena: &Bump,
     expr_str: &str,
