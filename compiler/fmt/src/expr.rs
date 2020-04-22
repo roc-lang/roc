@@ -658,8 +658,18 @@ fn fmt_if<'a>(
                     }
                 }
             }
+
+            Expr::SpaceAfter(expr_above, spaces_below_expr) => {
+                newline(buf, return_indent);
+                fmt_expr(buf, &expr_above, return_indent, false, false);
+                fmt_condition_spaces(buf, spaces_below_expr.iter(), return_indent);
+                newline(buf, indent);
+            }
+
             _ => {
+                newline(buf, return_indent);
                 fmt_expr(buf, &loc_condition.value, return_indent, false, false);
+                newline(buf, indent);
             }
         }
     } else {
