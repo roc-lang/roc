@@ -198,15 +198,9 @@ pub fn fmt_expr<'a>(
             buf.push('.');
             buf.push_str(key);
         }
-        MalformedIdent(_) => {
-            panic!("TODO implement malformed indent formatting");
-        }
-        MalformedClosure => {
-            panic!("TODO implement malformed closure formatting");
-        }
-        PrecedenceConflict(_left_binop, _right_binop, _expr) => {
-            panic!("TODO implement precedence conflict formatting");
-        }
+        MalformedIdent(_) => {}
+        MalformedClosure => {}
+        PrecedenceConflict(_, _, _, _) => {}
     }
 }
 
