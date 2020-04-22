@@ -22,7 +22,7 @@ use roc_mono::expr::Procs;
 use roc_mono::layout::Layout;
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
-use roc_parse::parser::{loc, Fail, Parser, State};
+use roc_parse::parser::{loc, Fail, FailReason, Parser, State};
 use roc_problem::can::Problem;
 use roc_region::all::{Located, Region};
 use roc_solve::solve;
@@ -44,8 +44,15 @@ pub fn main() -> io::Result<()> {
 
     // Loop
 
+    let mut pending_src = String::new();
+    let mut prev_line_blank = false;
+
     loop {
-        print!("\n\u{001b}[36m▶\u{001b}[0m ");
+        if pending_src.is_empty() {
+            print!("\n\u{001b}[36m▶\u{001b}[0m ");
+        } else {
+            print!("\u{001b}[36m…\u{001b}[0m ");
+        }
 
         io::stdout().flush().unwrap();
 
@@ -62,17 +69,68 @@ pub fn main() -> io::Result<()> {
                 println!("Use :exit to exit.");
             }
             "" => {
-                println!("\n{}", WELCOME_MESSAGE);
+                if pending_src.is_empty() {
+                    println!("\n{}", WELCOME_MESSAGE);
+                } else if prev_line_blank {
+                    // After two blank lines in a row, give up and try parsing it
+                    // even though it's going to fail. This way you don't get stuck.
+                    match print_output(pending_src.as_str()) {
+                        Ok(output) => {
+                            println!("{}", output);
+                        }
+                        Err(fail) => {
+                            report_parse_error(fail);
+                        }
+                    }
+
+                    pending_src.clear();
+                } else {
+                    pending_src.push('\n');
+
+                    prev_line_blank = true;
+                    continue; // Skip the part where we reset prev_line_blank to false
+                }
             }
             ":exit" => {
                 break;
             }
             line => {
-                let (answer, answer_type) = gen(line, Triple::host(), OptLevel::Normal);
+                let result = if pending_src.is_empty() {
+                    print_output(line)
+                } else {
+                    pending_src.push('\n');
+                    pending_src.push_str(line);
 
-                println!("\n{} \u{001b}[35m:\u{001b}[0m {}", answer, answer_type);
+                    print_output(pending_src.as_str())
+                };
+
+                match result {
+                    Ok(output) => {
+                        println!("{}", output);
+                        pending_src.clear();
+                    }
+                    Err(Fail {
+                        reason: FailReason::Eof(_),
+                        ..
+                    }) => {
+                        // If we hit an eof, and we're allowed to keep going,
+                        // append the str to the src we're building up and continue.
+                        // (We only need to append it here if it was empty before;
+                        // otherwise, we already appended it before calling print_output.)
+
+                        if pending_src.is_empty() {
+                            pending_src.push_str(line);
+                        }
+                    }
+                    Err(fail) => {
+                        report_parse_error(fail);
+                        pending_src.clear();
+                    }
+                }
             }
         }
+
+        prev_line_blank = false;
     }
 
     Ok(())
@@ -81,11 +139,21 @@ pub fn main() -> io::Result<()> {
 const WELCOME_MESSAGE: &str =
     "Enter an expression, or :help for a list of commands, or :exit to exit.";
 
+fn report_parse_error(fail: Fail) {
+    println!("TODO Gracefully report parse error in repl: {:?}", fail);
+}
+
+fn print_output(src: &str) -> Result<String, Fail> {
+    gen(src, Triple::host(), OptLevel::Normal).map(|(answer, answer_type)| {
+        format!("\n{} \u{001b}[35m:\u{001b}[0m {}", answer, answer_type)
+    })
+}
+
 pub fn repl_home() -> ModuleId {
     ModuleIds::default().get_or_insert(&"REPL".into())
 }
 
-pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> (String, String) {
+pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, String), Fail> {
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
 
     // Look up the types and expressions of the `provided` values
@@ -100,7 +168,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> (String, String) {
         interns,
         problems: can_problems,
         ..
-    } = can_expr(src);
+    } = can_expr(src)?;
     let subs = Subs::new(var_store.into());
     let mut type_problems = Vec::new();
     let (content, mut subs) = infer_expr(subs, &mut type_problems, &constraint, var);
@@ -271,7 +339,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> (String, String) {
             .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
             .expect("errored");
 
-        (format!("{}", main.call()), expr_type_str)
+        Ok((format!("{}", main.call()), expr_type_str))
     }
 }
 
@@ -292,10 +360,6 @@ pub fn infer_expr(
     (content, solved.into_inner())
 }
 
-pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, Fail> {
-    parse_loc_with(arena, input).map(|loc_expr| loc_expr.value)
-}
-
 pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast::Expr<'a>>, Fail> {
     let state = State::new(&input, Attempting::Module);
     let parser = space0_before(loc(roc_parse::expr::expr(0)), 0);
@@ -306,41 +370,51 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
         .map_err(|(fail, _)| fail)
 }
 
-pub fn can_expr(expr_str: &str) -> CanExprOut {
+pub fn can_expr(expr_str: &str) -> Result<CanExprOut, Fail> {
     can_expr_with(&Bump::new(), repl_home(), expr_str)
 }
 
+// TODO make this return a named struct instead of a big tuple
+#[allow(clippy::type_complexity)]
 pub fn uniq_expr(
     expr_str: &str,
-) -> (
-    Located<roc_can::expr::Expr>,
-    Output,
-    Vec<Problem>,
-    Subs,
-    Variable,
-    Constraint,
-    ModuleId,
-    Interns,
-) {
+) -> Result<
+    (
+        Located<roc_can::expr::Expr>,
+        Output,
+        Vec<Problem>,
+        Subs,
+        Variable,
+        Constraint,
+        ModuleId,
+        Interns,
+    ),
+    Fail,
+> {
     let declared_idents: &ImMap<Ident, (Symbol, Region)> = &ImMap::default();
 
     uniq_expr_with(&Bump::new(), expr_str, declared_idents)
 }
 
+// TODO make this return a named struct instead of a big tuple
+#[allow(clippy::type_complexity)]
 pub fn uniq_expr_with(
     arena: &Bump,
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
-) -> (
-    Located<roc_can::expr::Expr>,
-    Output,
-    Vec<Problem>,
-    Subs,
-    Variable,
-    Constraint,
-    ModuleId,
-    Interns,
-) {
+) -> Result<
+    (
+        Located<roc_can::expr::Expr>,
+        Output,
+        Vec<Problem>,
+        Subs,
+        Variable,
+        Constraint,
+        ModuleId,
+        Interns,
+    ),
+    Fail,
+> {
     let home = repl_home();
     let CanExprOut {
         loc_expr,
@@ -350,7 +424,7 @@ pub fn uniq_expr_with(
         var,
         interns,
         ..
-    } = can_expr_with(arena, home, expr_str);
+    } = can_expr_with(arena, home, expr_str)?;
 
     // double check
     let var_store = VarStore::new(old_var_store.fresh());
@@ -389,9 +463,9 @@ pub fn uniq_expr_with(
 
     let subs2 = Subs::new(var_store.into());
 
-    (
+    Ok((
         loc_expr, output, problems, subs2, var, constraint, home, interns,
-    )
+    ))
 }
 
 pub struct CanExprOut {
@@ -405,14 +479,8 @@ pub struct CanExprOut {
     pub constraint: Constraint,
 }
 
-pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut {
-    let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|e| {
-        panic!(
-            "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?} {:?}",
-            expr_str, e
-        )
-    });
-
+pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> Result<CanExprOut, Fail> {
+    let loc_expr = parse_loc_with(&arena, expr_str)?;
     let var_store = VarStore::default();
     let var = var_store.fresh();
     let expected = Expected::NoExpectation(Type::Variable(var));
@@ -488,7 +556,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         all_ident_ids,
     };
 
-    CanExprOut {
+    Ok(CanExprOut {
         loc_expr,
         output,
         problems: env.problems,
@@ -497,7 +565,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         interns,
         var,
         constraint,
-    }
+    })
 }
 
 pub fn mut_map_from_pairs<K, V, I>(pairs: I) -> MutMap<K, V>
