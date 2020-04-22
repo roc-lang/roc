@@ -1119,7 +1119,7 @@ fn decide_to_branching<'a>(
             let fail = (fail_stores, &*env.arena.alloc(fail_expr));
             let pass = (pass_stores, &*env.arena.alloc(pass_expr));
 
-            let condition = boolean_all(env.arena, tests, &ret_layout);
+            let condition = boolean_all(env.arena, tests);
 
             let branch_symbol = env.fresh_symbol();
             let stores = [(branch_symbol, Layout::Builtin(Builtin::Bool), condition)];
@@ -1199,11 +1199,7 @@ fn decide_to_branching<'a>(
     }
 }
 
-fn boolean_all<'a>(
-    arena: &'a Bump,
-    tests: Vec<(Expr<'a>, Expr<'a>, Layout<'a>)>,
-    ret_layout: &Layout<'a>,
-) -> Expr<'a> {
+fn boolean_all<'a>(arena: &'a Bump, tests: Vec<(Expr<'a>, Expr<'a>, Layout<'a>)>) -> Expr<'a> {
     let mut expr = Expr::Bool(true);
 
     for (lhs, rhs, layout) in tests.into_iter().rev() {
@@ -1214,7 +1210,6 @@ fn boolean_all<'a>(
                 (test, Layout::Builtin(Builtin::Bool)),
                 (expr, Layout::Builtin(Builtin::Bool)),
             ]),
-            ret_layout.clone(),
         );
     }
 

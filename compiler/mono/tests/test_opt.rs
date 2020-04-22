@@ -73,7 +73,6 @@ mod test_opt {
 
         unexpected_calls
     }
-
     fn extract_named_calls_help(
         expr: &Expr<'_>,
         calls: &mut Vec<Symbol>,
@@ -99,7 +98,7 @@ mod test_opt {
                 }
             }
 
-            CallByName(symbol, args, _ret_layout) => {
+            CallByName(symbol, args) => {
                 // Search for the symbol. If we found it, check it off the list.
                 // If we didn't find it, add it to the list of unexpected calls.
                 match calls.binary_search(symbol) {
@@ -242,13 +241,11 @@ mod test_opt {
                                 (Int(1), Layout::Builtin(Builtin::Int64)),
                                 (Int(42), Layout::Builtin(Builtin::Int64)),
                             ],
-                            Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
                         ),
                         Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
                     ),
                     (Int(1), Layout::Builtin(Builtin::Int64)),
                 ],
-                Layout::Builtin(Builtin::Int64),
             ),
         );
     }

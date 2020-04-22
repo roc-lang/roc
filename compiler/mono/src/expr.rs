@@ -138,7 +138,7 @@ pub enum Expr<'a> {
 
     // Functions
     FunctionPointer(Symbol),
-    CallByName(Symbol, &'a [(Expr<'a>, Layout<'a>)], Layout<'a>),
+    CallByName(Symbol, &'a [(Expr<'a>, Layout<'a>)]),
     CallByPointer(&'a Expr<'a>, &'a [Expr<'a>], Layout<'a>),
 
     // Exactly two conditional branches, e.g. if/else
@@ -1303,7 +1303,7 @@ fn call_by_name<'a>(
                 Some(specialization) => {
                     opt_specialize_body = None;
 
-                    // a specialization with this type hash already exists, so use its symbol
+                    // a specialization with this type hash already exists, use its symbol
                     specialization.0
                 }
                 None => {
@@ -1354,18 +1354,13 @@ fn call_by_name<'a>(
     let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
 
     for (var, loc_arg) in loc_args {
-        let layout =
-            Layout::from_var(&env.arena, var, &env.subs, env.pointer_size).unwrap_or_else(|err| {
-                panic!("TODO gracefully handle bad function arg layout: {:?}", err)
-            });
+        let layout = Layout::from_var(&env.arena, var, &env.subs, env.pointer_size)
+            .unwrap_or_else(|err| panic!("TODO gracefully handle bad layout: {:?}", err));
 
         args.push((from_can(env, loc_arg.value, procs, None), layout));
     }
 
-    let ret_layout = Layout::from_var(&env.arena, ret_var, &env.subs, env.pointer_size)
-        .unwrap_or_else(|err| panic!("TODO gracefully handle bad function ret layout: {:?}", err));
-
-    Expr::CallByName(specialized_proc_name, args.into_bump_slice(), ret_layout)
+    Expr::CallByName(specialized_proc_name, args.into_bump_slice())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1709,6 +1704,5 @@ pub fn specialize_equality<'a>(
     Expr::CallByName(
         symbol,
         arena.alloc([(lhs, layout.clone()), (rhs, layout.clone())]),
-        Layout::Builtin(Builtin::Bool),
     )
 }

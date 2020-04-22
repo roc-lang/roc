@@ -90,7 +90,6 @@ mod test_mono {
                     (Float(3.0), Layout::Builtin(Builtin::Float64)),
                     (Float(4.0), Layout::Builtin(Builtin::Float64)),
                 ],
-                Layout::Builtin(Builtin::Float64),
             ),
         );
     }
@@ -105,7 +104,6 @@ mod test_mono {
                     (Int(3735928559), Layout::Builtin(Builtin::Int64)),
                     (Int(4), Layout::Builtin(Builtin::Int64)),
                 ],
-                Layout::Builtin(Builtin::Int64),
             ),
         );
     }
@@ -121,7 +119,6 @@ mod test_mono {
                     (Int(3), Layout::Builtin(Builtin::Int64)),
                     (Int(5), Layout::Builtin(Builtin::Int64)),
                 ],
-                Layout::Builtin(Builtin::Int64),
             ),
         );
     }
@@ -144,15 +141,11 @@ mod test_mono {
 
                 Struct(&[
                     (
-                        CallByName(gen_symbol_3, &[(Int(4), Builtin(Int64))], Builtin(Int64)),
+                        CallByName(gen_symbol_3, &[(Int(4), Builtin(Int64))]),
                         Builtin(Int64),
                     ),
                     (
-                        CallByName(
-                            gen_symbol_4,
-                            &[(Float(3.14), Builtin(Float64))],
-                            Builtin(Float64),
-                        ),
+                        CallByName(gen_symbol_4, &[(Float(3.14), Builtin(Float64))]),
                         Builtin(Float64),
                     ),
                 ])
@@ -331,12 +324,11 @@ mod test_mono {
                     gen_symbol_3,
                     &[(
                         Struct(&[(
-                            CallByName(gen_symbol_4, &[(Int(4), Builtin(Int64))], Builtin(Int64)),
+                            CallByName(gen_symbol_4, &[(Int(4), Builtin(Int64))]),
                             Builtin(Int64),
                         )]),
                         Layout::Struct(&[Builtin(Int64)]),
                     )],
-                    Layout::Struct(&[Builtin(Int64)]),
                 )
             },
         )
@@ -491,13 +483,11 @@ mod test_mono {
                                 (Int(1), Layout::Builtin(Builtin::Int64)),
                                 (Int(42), Layout::Builtin(Builtin::Int64)),
                             ],
-                            Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
                         ),
                         Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
                     ),
                     (Int(1), Layout::Builtin(Builtin::Int64)),
                 ],
-                Layout::Builtin(Builtin::Int64),
             )
         });
     }
