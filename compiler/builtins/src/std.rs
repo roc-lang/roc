@@ -377,9 +377,9 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // get : List elem, Int -> Result elem [ IndexOutOfBounds ]*
+    // get : List elem, Int -> Result elem [ OutOfBounds ]*
     let index_out_of_bounds = SolvedType::TagUnion(
-        vec![(TagName::Global("IndexOutOfBounds".into()), vec![])],
+        vec![(TagName::Global("OutOfBounds".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
