@@ -1630,6 +1630,43 @@ mod test_format {
         );
     }
 
+    #[test]
+    fn multi_line_when_condition_4() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            x = 2
+            y = 3
+
+            when 2
+                + 2
+            is
+                4 ->
+                    x
+
+                _ ->
+                    y
+            "#
+            ),
+            indoc!(
+                r#"
+            x = 2
+            y = 3
+
+            when
+                2
+                    + 2
+            is
+                4 ->
+                    x
+
+                _ ->
+                    y
+            "#
+            ),
+        );
+    }
+
     // NEWLINES
 
     #[test]
