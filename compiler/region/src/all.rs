@@ -47,6 +47,10 @@ impl Region {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.end_line == self.start_line && self.start_col == self.end_col
+    }
+
     pub fn span_across(start: &Region, end: &Region) -> Self {
         Region {
             start_line: start.start_line,

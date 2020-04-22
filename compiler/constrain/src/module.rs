@@ -277,9 +277,7 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarSt
 
             Type::Alias(*symbol, type_variables, Box::new(actual))
         }
-        Error => {
-            panic!("TODO convert from SolvedType::Error to Type somehow");
-        }
+        Error => Type::Erroneous(roc_types::types::Problem::SolvedTypeError),
         Erroneous(problem) => Type::Erroneous(problem.clone()),
     }
 }

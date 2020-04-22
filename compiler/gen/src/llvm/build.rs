@@ -4,11 +4,11 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
-use inkwell::passes::PassManager;
+use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
-use inkwell::{FloatPredicate, IntPredicate};
+use inkwell::{FloatPredicate, IntPredicate, OptimizationLevel};
 
 use crate::llvm::convert::{
     basic_type_from_layout, collection_wrapper, empty_collection, get_fn_type, ptr_int,
@@ -30,6 +30,11 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 // 0 is the C calling convention - see https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
 // TODO: experiment with different internal calling conventions, e.g. "fast"
 const DEFAULT_CALLING_CONVENTION: u32 = 0;
+
+pub enum OptLevel {
+    Normal,
+    Optimize,
+}
 
 type Scope<'a, 'ctx> = ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>;
 
@@ -56,23 +61,41 @@ pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Modu
         .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err))
 }
 
-pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>) {
+pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>, opt_level: OptLevel) {
     // tail-call elimination is always on
     fpm.add_instruction_combining_pass();
     fpm.add_tail_call_elimination_pass();
 
+    let pmb = PassManagerBuilder::create();
+
     // Enable more optimizations when running cargo test --release
-    if !cfg!(debug_assertions) {
-        fpm.add_reassociate_pass();
-        fpm.add_basic_alias_analysis_pass();
-        fpm.add_promote_memory_to_register_pass();
-        fpm.add_cfg_simplification_pass();
-        fpm.add_gvn_pass();
-        // TODO figure out why enabling any of these (even alone) causes LLVM to segfault
-        // fpm.add_strip_dead_prototypes_pass();
-        // fpm.add_dead_arg_elimination_pass();
-        // fpm.add_function_inlining_pass();
+    match opt_level {
+        OptLevel::Normal => {
+            pmb.set_optimization_level(OptimizationLevel::None);
+        }
+        OptLevel::Optimize => {
+            // Default is O2, Aggressive is O3
+            //
+            // See https://llvm.org/doxygen/CodeGen_8h_source.html
+            pmb.set_optimization_level(OptimizationLevel::Aggressive);
+
+            // TODO figure out how enabling these individually differs from
+            // the broad "aggressive optimizations" setting.
+
+            // fpm.add_reassociate_pass();
+            // fpm.add_basic_alias_analysis_pass();
+            // fpm.add_promote_memory_to_register_pass();
+            // fpm.add_cfg_simplification_pass();
+            // fpm.add_gvn_pass();
+            // TODO figure out why enabling any of these (even alone) causes LLVM to segfault
+            // fpm.add_strip_dead_prototypes_pass();
+            // fpm.add_dead_arg_elimination_pass();
+            // fpm.add_function_inlining_pass();
+            // pmb.set_inliner_with_threshold(4);
+        }
     }
+
+    pmb.populate_function_pass_manager(&fpm);
 }
 
 #[allow(clippy::cognitive_complexity)]
@@ -1002,6 +1025,17 @@ fn call_with_args<'a, 'ctx, 'env>(
                 args[0].0.into_float_value(),
                 args[1].0.into_float_value(),
                 "sub_f64",
+            );
+
+            BasicValueEnum::FloatValue(float_val)
+        }
+        Symbol::FLOAT_DIV => {
+            debug_assert!(args.len() == 2);
+
+            let float_val = env.builder.build_float_div(
+                args[0].0.into_float_value(),
+                args[1].0.into_float_value(),
+                "div_f64",
             );
 
             BasicValueEnum::FloatValue(float_val)

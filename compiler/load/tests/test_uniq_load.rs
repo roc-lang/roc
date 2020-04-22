@@ -275,7 +275,7 @@ mod test_uniq_load {
                     "str" => "Attr * Str",
                     "alwaysThree" => "Attr * (* -> Attr * Str)",
                     "identity" => "Attr * (a -> a)",
-                    "z" => "Attr * Dep1.Unit",
+                    "z" => "Attr * Str",
                     "w" => "Attr * (Dep1.Identity (Attr * {}))",
                     "succeed" => "Attr * (Attr b a -> Attr * (Dep1.Identity (Attr b a)))",
                     "yay" => "Attr * (Res.Res (Attr * {}) (Attr * err))",

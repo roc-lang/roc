@@ -1,7 +1,6 @@
 extern crate bumpalo;
 
 use self::bumpalo::Bump;
-use roc_builtins::unique::uniq_stdlib;
 use roc_can::constraint::Constraint;
 use roc_can::env::Env;
 use roc_can::expected::Expected;
@@ -11,13 +10,12 @@ use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, SendMap, SendSet};
 use roc_constrain::expr::constrain_expr;
 use roc_constrain::module::{constrain_imported_values, load_builtin_aliases, Import};
-use roc_module::ident::Ident;
-use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::parser::{loc, Fail, Parser, State};
 use roc_problem::can::Problem;
-use roc_region::all::{Located, Region};
+use roc_region::all::Located;
 use roc_solve::solve;
 use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
@@ -103,94 +101,8 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
 }
 
 #[allow(dead_code)]
-pub fn can_expr(expr_str: &str) -> CanExprOut {
+pub fn can_expr(expr_str: &str) -> Result<CanExprOut, ParseErrOut> {
     can_expr_with(&Bump::new(), test_home(), expr_str)
-}
-
-#[allow(dead_code)]
-pub fn uniq_expr(
-    expr_str: &str,
-) -> (
-    Located<Expr>,
-    Output,
-    Vec<Problem>,
-    Subs,
-    Variable,
-    Constraint,
-    ModuleId,
-    Interns,
-) {
-    let declared_idents: &ImMap<Ident, (Symbol, Region)> = &ImMap::default();
-
-    uniq_expr_with(&Bump::new(), expr_str, declared_idents)
-}
-
-#[allow(dead_code)]
-pub fn uniq_expr_with(
-    arena: &Bump,
-    expr_str: &str,
-    declared_idents: &ImMap<Ident, (Symbol, Region)>,
-) -> (
-    Located<Expr>,
-    Output,
-    Vec<Problem>,
-    Subs,
-    Variable,
-    Constraint,
-    ModuleId,
-    Interns,
-) {
-    let home = test_home();
-    let CanExprOut {
-        loc_expr,
-        output,
-        problems,
-        var_store: old_var_store,
-        var,
-        interns,
-        ..
-    } = can_expr_with(arena, home, expr_str);
-
-    // double check
-    let var_store = VarStore::new(old_var_store.fresh());
-
-    let expected2 = Expected::NoExpectation(Type::Variable(var));
-    let constraint = roc_constrain::uniq::constrain_declaration(
-        home,
-        &var_store,
-        Region::zero(),
-        &loc_expr,
-        declared_idents,
-        expected2,
-    );
-
-    let stdlib = uniq_stdlib();
-
-    let types = stdlib.types;
-    let imports: Vec<_> = types
-        .iter()
-        .map(|(symbol, (solved_type, region))| Import {
-            loc_symbol: Located::at(*region, *symbol),
-            solved_type: solved_type,
-        })
-        .collect();
-
-    // load builtin values
-
-    // TODO what to do with those rigids?
-    let (_introduced_rigids, constraint) =
-        constrain_imported_values(imports, constraint, &var_store);
-
-    // load builtin types
-    let mut constraint = load_builtin_aliases(&stdlib.aliases, constraint, &var_store);
-
-    constraint.instantiate_aliases(&var_store);
-
-    let subs2 = Subs::new(var_store.into());
-
-    (
-        loc_expr, output, problems, subs2, var, constraint, home, interns,
-    )
 }
 
 pub struct CanExprOut {
@@ -204,14 +116,34 @@ pub struct CanExprOut {
     pub constraint: Constraint,
 }
 
+#[derive(Debug)]
+pub struct ParseErrOut {
+    pub fail: Fail,
+    pub home: ModuleId,
+    pub interns: Interns,
+}
+
 #[allow(dead_code)]
-pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut {
-    let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|e| {
-        panic!(
-            "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?} {:?}",
-            expr_str, e
-        )
-    });
+pub fn can_expr_with(
+    arena: &Bump,
+    home: ModuleId,
+    expr_str: &str,
+) -> Result<CanExprOut, ParseErrOut> {
+    let loc_expr = match parse_loc_with(&arena, expr_str) {
+        Ok(e) => e,
+        Err(fail) => {
+            let interns = Interns {
+                module_ids: ModuleIds::default(),
+                all_ident_ids: MutMap::default(),
+            };
+
+            return Err(ParseErrOut {
+                fail,
+                interns,
+                home,
+            });
+        }
+    };
 
     let var_store = VarStore::default();
     let var = var_store.fresh();
@@ -283,7 +215,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         all_ident_ids,
     };
 
-    CanExprOut {
+    Ok(CanExprOut {
         loc_expr,
         output,
         problems: env.problems,
@@ -292,7 +224,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         interns,
         var,
         constraint,
-    }
+    })
 }
 
 #[allow(dead_code)]

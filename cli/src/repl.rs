@@ -1,28 +1,278 @@
 use bumpalo::Bump;
+use inkwell::context::Context;
+use inkwell::execution_engine::JitFunction;
+use inkwell::passes::PassManager;
+use inkwell::types::BasicType;
+use inkwell::OptimizationLevel;
 use roc_builtins::unique::uniq_stdlib;
 use roc_can::constraint::Constraint;
 use roc_can::env::Env;
 use roc_can::expected::Expected;
-use roc_can::expr::{canonicalize_expr, Expr, Output};
+use roc_can::expr::{canonicalize_expr, Output};
 use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, ImSet, MutMap, SendMap, SendSet};
 use roc_constrain::expr::constrain_expr;
 use roc_constrain::module::{constrain_imported_values, load_builtin_aliases, Import};
+use roc_gen::llvm::build::{build_proc, build_proc_header, OptLevel};
+use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
+use roc_mono::expr::Procs;
+use roc_mono::layout::Layout;
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::parser::{loc, Fail, Parser, State};
 use roc_problem::can::Problem;
 use roc_region::all::{Located, Region};
 use roc_solve::solve;
+use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
 use std::hash::Hash;
+use std::io::{self, Write};
+use std::path::PathBuf;
+use target_lexicon::Triple;
 
-pub fn test_home() -> ModuleId {
-    ModuleIds::default().get_or_insert(&"Test".into())
+pub fn main() -> io::Result<()> {
+    use std::io::BufRead;
+
+    println!(
+        "\n  The rockin’ \u{001b}[36mroc repl\u{001b}[0m\n\u{001b}[35m────────────────────────\u{001b}[0m\n\n{}",
+        WELCOME_MESSAGE
+    );
+
+    // Loop
+
+    loop {
+        print!("\n\u{001b}[36m▶\u{001b}[0m ");
+
+        io::stdout().flush().unwrap();
+
+        let stdin = io::stdin();
+        let line = stdin
+            .lock()
+            .lines()
+            .next()
+            .expect("there was no next line")
+            .expect("the line could not be read");
+
+        match line.trim() {
+            ":help" => {
+                println!("Use :exit to exit.");
+            }
+            "" => {
+                println!("\n{}", WELCOME_MESSAGE);
+            }
+            ":exit" => {
+                break;
+            }
+            line => {
+                let (answer, answer_type) = gen(line, Triple::host(), OptLevel::Normal);
+
+                println!("\n{} \u{001b}[35m:\u{001b}[0m {}", answer, answer_type);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+const WELCOME_MESSAGE: &str =
+    "Enter an expression, or :help for a list of commands, or :exit to exit.";
+
+pub fn repl_home() -> ModuleId {
+    ModuleIds::default().get_or_insert(&"REPL".into())
+}
+
+pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> (String, String) {
+    use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
+
+    // Look up the types and expressions of the `provided` values
+    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+    let arena = Bump::new();
+    let CanExprOut {
+        loc_expr,
+        var_store,
+        var,
+        constraint,
+        home,
+        interns,
+        problems: can_problems,
+        ..
+    } = can_expr(src);
+    let subs = Subs::new(var_store.into());
+    let mut type_problems = Vec::new();
+    let (content, mut subs) = infer_expr(subs, &mut type_problems, &constraint, var);
+
+    // Report problems
+    let src_lines: Vec<&str> = src.split('\n').collect();
+    let palette = DEFAULT_PALETTE;
+
+    // Report parsing and canonicalization problems
+    let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+    // Used for reporting where an error came from.
+    //
+    // TODO: maybe Reporting should have this be an Option?
+    let path = PathBuf::new();
+
+    for problem in can_problems.into_iter() {
+        let report = can_problem(&alloc, path.clone(), problem);
+        let mut buf = String::new();
+
+        report.render_color_terminal(&mut buf, &alloc, &palette);
+
+        println!("\n{}\n", buf);
+    }
+
+    for problem in type_problems.into_iter() {
+        let report = type_problem(&alloc, path.clone(), problem);
+        let mut buf = String::new();
+
+        report.render_color_terminal(&mut buf, &alloc, &palette);
+
+        println!("\n{}\n", buf);
+    }
+
+    let context = Context::create();
+    let module = roc_gen::llvm::build::module_from_builtins(&context, "app");
+    let builder = context.create_builder();
+    let fpm = PassManager::create(&module);
+
+    roc_gen::llvm::build::add_passes(&fpm, opt_level);
+
+    fpm.initialize();
+
+    // pretty-print the expr type string for later.
+    name_all_type_vars(var, &mut subs);
+
+    let expr_type_str = content_to_string(content.clone(), &subs, home, &interns);
+
+    // Compute main_fn_type before moving subs to Env
+    let layout = Layout::from_content(&arena, content, &subs, ptr_bytes).unwrap_or_else(|err| {
+        panic!(
+            "Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}",
+            err, subs
+        )
+    });
+    let execution_engine = module
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .expect("Error creating JIT execution engine for test");
+
+    let main_fn_type =
+        basic_type_from_layout(&arena, &context, &layout, ptr_bytes).fn_type(&[], false);
+    let main_fn_name = "$Test.main";
+
+    // Compile and add all the Procs before adding main
+    let mut env = roc_gen::llvm::build::Env {
+        arena: &arena,
+        builder: &builder,
+        context: &context,
+        interns,
+        module: arena.alloc(module),
+        ptr_bytes,
+    };
+    let mut procs = Procs::default();
+    let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
+
+    // Populate Procs and get the low-level Expr from the canonical Expr
+    let mut mono_problems = Vec::new();
+    let main_body = roc_mono::expr::Expr::new(
+        &arena,
+        &mut subs,
+        &mut mono_problems,
+        loc_expr.value,
+        &mut procs,
+        home,
+        &mut ident_ids,
+        ptr_bytes,
+    );
+
+    // Put this module's ident_ids back in the interns, so we can use them in Env.
+    env.interns.all_ident_ids.insert(home, ident_ids);
+
+    let mut headers = Vec::with_capacity(procs.len());
+
+    // Add all the Proc headers to the module.
+    // We have to do this in a separate pass first,
+    // because their bodies may reference each other.
+    for (symbol, opt_proc) in procs.as_map().into_iter() {
+        if let Some(proc) = opt_proc {
+            let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
+
+            headers.push((proc, fn_val, arg_basic_types));
+        }
+    }
+
+    // Build each proc using its header info.
+    for (proc, fn_val, arg_basic_types) in headers {
+        // NOTE: This is here to be uncommented in case verification fails.
+        // (This approach means we don't have to defensively clone name here.)
+        //
+        // println!("\n\nBuilding and then verifying function {}\n\n", name);
+        build_proc(&env, proc, &procs, fn_val, arg_basic_types);
+
+        if fn_val.verify(true) {
+            fpm.run_on(&fn_val);
+        } else {
+            // NOTE: If this fails, uncomment the above println to debug.
+            panic!(
+                "Non-main function failed LLVM verification. Uncomment the above println to debug!"
+            );
+        }
+    }
+
+    // Add main to the module.
+    let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
+    let cc =
+        roc_gen::llvm::build::get_call_conventions(target.default_calling_convention().unwrap());
+
+    main_fn.set_call_conventions(cc);
+
+    // Add main's body
+    let basic_block = context.append_basic_block(main_fn, "entry");
+
+    builder.position_at_end(basic_block);
+
+    let ret = roc_gen::llvm::build::build_expr(
+        &env,
+        &ImMap::default(),
+        main_fn,
+        &main_body,
+        &Procs::default(),
+    );
+
+    builder.build_return(Some(&ret));
+
+    // Uncomment this to see the module's un-optimized LLVM instruction output:
+    // env.module.print_to_stderr();
+
+    if main_fn.verify(true) {
+        fpm.run_on(&main_fn);
+    } else {
+        panic!("Function {} failed LLVM verification.", main_fn_name);
+    }
+
+    // Verify the module
+    if let Err(errors) = env.module.verify() {
+        panic!("Errors defining module: {:?}", errors);
+    }
+
+    // Uncomment this to see the module's optimized LLVM instruction output:
+    // env.module.print_to_stderr();
+
+    unsafe {
+        let main: JitFunction<
+            unsafe extern "C" fn() -> i64, /* TODO have this return Str, and in the generated code make sure to call the appropriate string conversion function on the return val based on its type! */
+        > = execution_engine
+            .get_function(main_fn_name)
+            .ok()
+            .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
+            .expect("errored");
+
+        (format!("{}", main.call()), expr_type_str)
+    }
 }
 
 pub fn infer_expr(
@@ -57,13 +307,13 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
 }
 
 pub fn can_expr(expr_str: &str) -> CanExprOut {
-    can_expr_with(&Bump::new(), test_home(), expr_str)
+    can_expr_with(&Bump::new(), repl_home(), expr_str)
 }
 
 pub fn uniq_expr(
     expr_str: &str,
 ) -> (
-    Located<Expr>,
+    Located<roc_can::expr::Expr>,
     Output,
     Vec<Problem>,
     Subs,
@@ -82,7 +332,7 @@ pub fn uniq_expr_with(
     expr_str: &str,
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
 ) -> (
-    Located<Expr>,
+    Located<roc_can::expr::Expr>,
     Output,
     Vec<Problem>,
     Subs,
@@ -91,7 +341,7 @@ pub fn uniq_expr_with(
     ModuleId,
     Interns,
 ) {
-    let home = test_home();
+    let home = repl_home();
     let CanExprOut {
         loc_expr,
         output,
@@ -145,7 +395,7 @@ pub fn uniq_expr_with(
 }
 
 pub struct CanExprOut {
-    pub loc_expr: Located<Expr>,
+    pub loc_expr: Located<roc_can::expr::Expr>,
     pub output: Output,
     pub problems: Vec<Problem>,
     pub home: ModuleId,

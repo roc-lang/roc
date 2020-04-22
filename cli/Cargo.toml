@@ -16,6 +16,21 @@ path = "src/main.rs"
 test = false
 bench = false
 
+[features]
+default = ["target-x86"]
+
+target-x86 = []
+
+# arm and wasm give linker errors on some platforms
+target-arm = []
+target-webassembly = []
+
+target-all = [
+    "target-x86",
+    "target-arm",
+    "target-webassembly"
+]
+
 
 [dependencies]
 roc_collections = { path = "../compiler/collections" }
@@ -31,12 +46,16 @@ roc_uniq = { path = "../compiler/uniq" }
 roc_unify = { path = "../compiler/unify" }
 roc_solve = { path = "../compiler/solve" }
 roc_mono = { path = "../compiler/mono" }
+roc_load = { path = "../compiler/load", version = "0.1.0" }
 roc_gen = { path = "../compiler/gen", version = "0.1.0" }
 roc_reporting = { path = "../compiler/reporting", version = "0.1.0" }
+ # TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
+clap = { git = "https://github.com/rtfeldman/clap", branch = "master" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1.0"
+tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded", "process", "io-driver"] }
 # NOTE: rtfeldman/inkwell is a fork of TheDan64/inkwell which does not change anything.
 #
 # The reason for this fork is that the way Inkwell is designed, you have to use
@@ -56,3 +75,10 @@ inlinable_string = "0.1.0"
 # This way, GitHub Actions works and nobody's builds get broken.
 inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm10-0.release1" }
 target-lexicon = "0.10"
+
+[dev-dependencies]
+pretty_assertions = "0.5.1"
+maplit = "1.0.1"
+indoc = "0.3.3"
+quickcheck = "0.8"
+quickcheck_macros = "0.8"

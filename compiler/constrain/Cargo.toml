@@ -15,7 +15,7 @@ roc_builtins = { path = "../builtins" }
 roc_uniq = { path = "../uniq" }
 
 [dev-dependencies]
-pretty_assertions = "0.5.1 "
+pretty_assertions = "0.5.1"
 maplit = "1.0.1"
 indoc = "0.3.3"
 quickcheck = "0.8"

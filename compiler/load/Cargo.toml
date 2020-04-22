@@ -21,7 +21,7 @@ inlinable_string = "0.1.0"
 tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
 
 [dev-dependencies]
-pretty_assertions = "0.5.1 "
+pretty_assertions = "0.5.1"
 maplit = "1.0.1"
 indoc = "0.3.3"
 quickcheck = "0.8"

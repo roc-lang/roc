@@ -37,9 +37,10 @@ impl fmt::Debug for Mark {
 }
 
 #[derive(Default)]
-struct NameState {
+struct ErrorTypeState {
     taken: MutSet<Lowercase>,
     normals: u32,
+    problems: Vec<crate::types::Problem>,
 }
 
 #[derive(Default, Clone)]
@@ -363,7 +364,7 @@ impl Subs {
         explicit_substitute(self, x, y, z, &mut seen)
     }
 
-    pub fn var_to_error_type(&mut self, var: Variable) -> ErrorType {
+    pub fn var_to_error_type(&mut self, var: Variable) -> (ErrorType, Vec<crate::types::Problem>) {
         let names = get_var_names(self, var, ImMap::default());
         let mut taken = MutSet::default();
 
@@ -371,9 +372,13 @@ impl Subs {
             taken.insert(name);
         }
 
-        let mut state = NameState { taken, normals: 0 };
+        let mut state = ErrorTypeState {
+            taken,
+            normals: 0,
+            problems: Vec::new(),
+        };
 
-        var_to_err_type(self, &mut state, var)
+        (var_to_err_type(self, &mut state, var), state.problems)
     }
 
     pub fn restore(&mut self, var: Variable) {
@@ -1114,7 +1119,7 @@ where
     }
 }
 
-fn var_to_err_type(subs: &mut Subs, state: &mut NameState, var: Variable) -> ErrorType {
+fn var_to_err_type(subs: &mut Subs, state: &mut ErrorTypeState, var: Variable) -> ErrorType {
     let desc = subs.get(var);
 
     if desc.mark == Mark::OCCURS {
@@ -1132,7 +1137,7 @@ fn var_to_err_type(subs: &mut Subs, state: &mut NameState, var: Variable) -> Err
 
 fn content_to_err_type(
     subs: &mut Subs,
-    state: &mut NameState,
+    state: &mut ErrorTypeState,
     var: Variable,
     content: Content,
 ) -> ErrorType {
@@ -1174,7 +1179,11 @@ fn content_to_err_type(
     }
 }
 
-fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: FlatType) -> ErrorType {
+fn flat_type_to_err_type(
+    subs: &mut Subs,
+    state: &mut ErrorTypeState,
+    flat_type: FlatType,
+) -> ErrorType {
     use self::FlatType::*;
 
     match flat_type {
@@ -1296,11 +1305,15 @@ fn flat_type_to_err_type(subs: &mut Subs, state: &mut NameState, flat_type: Flat
 
         Boolean(b) => ErrorType::Boolean(b),
 
-        Erroneous(_) => ErrorType::Error,
+        Erroneous(problem) => {
+            state.problems.push(problem);
+
+            ErrorType::Error
+        }
     }
 }
 
-fn get_fresh_var_name(state: &mut NameState) -> Lowercase {
+fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
     let (name, new_index) = name_type_var(state.normals, &mut state.taken);
 
     state.normals = new_index;

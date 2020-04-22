@@ -12,9 +12,14 @@ macro_rules! assert_llvm_evals_to {
         let context = Context::create();
         let module = roc_gen::llvm::build::module_from_builtins(&context, "app");
         let builder = context.create_builder();
-        let fpm = inkwell::passes::PassManager::create(&module);
+        let opt_level = if cfg!(debug_assertions) {
+            roc_gen::llvm::build::OptLevel::Normal
+        } else {
+            roc_gen::llvm::build::OptLevel::Optimize
+        };
+        let fpm = PassManager::create(&module);
 
-        roc_gen::llvm::build::add_passes(&fpm);
+        roc_gen::llvm::build::add_passes(&fpm, opt_level);
 
         fpm.initialize();
 
@@ -142,12 +147,19 @@ macro_rules! assert_opt_evals_to {
         let mut unify_problems = Vec::new();
         let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
+        assert_eq!(unify_problems, Vec::new(), "Encountered one or more type mismatches: {:?}", unify_problems);
+
         let context = Context::create();
         let module = roc_gen::llvm::build::module_from_builtins(&context, "app");
         let builder = context.create_builder();
+        let opt_level = if cfg!(debug_assertions) {
+            roc_gen::llvm::build::OptLevel::Normal
+        } else {
+            roc_gen::llvm::build::OptLevel::Optimize
+        };
         let fpm = PassManager::create(&module);
 
-        roc_gen::llvm::build::add_passes(&fpm);
+        roc_gen::llvm::build::add_passes(&fpm, opt_level);
 
         fpm.initialize();
 
@@ -271,12 +283,19 @@ macro_rules! emit_expr {
         let mut unify_problems = Vec::new();
         let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
+        assert_eq!(unify_problems, Vec::new(), "Encountered one or more type mismatches: {:?}", unify_problems);
+
         let context = Context::create();
         let module = context.create_module("app");
         let builder = context.create_builder();
+        let opt_level = if cfg!(debug_assertions) {
+            roc_gen::llvm::build::OptLevel::Normal
+        } else {
+            roc_gen::llvm::build::OptLevel::Optimize
+        };
         let fpm = PassManager::create(&module);
 
-        roc_gen::llvm::build::add_passes(&fpm);
+        roc_gen::llvm::build::add_passes(&fpm, opt_level);
 
         fpm.initialize();
 

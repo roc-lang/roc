@@ -21,6 +21,7 @@ pub enum TypeError {
     BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
     CircularType(Region, Symbol, ErrorType),
+    BadType(roc_types::types::Problem),
 }
 
 pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
@@ -168,6 +169,13 @@ fn solve(
 
                     state
                 }
+                BadType(vars, problem) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    problems.push(TypeError::BadType(problem));
+
+                    state
+                }
             }
         }
         Lookup(symbol, expectation, region) => {
@@ -230,6 +238,13 @@ fn solve(
 
                     state
                 }
+                BadType(vars, problem) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    problems.push(TypeError::BadType(problem));
+
+                    state
+                }
             }
         }
         And(sub_constraints) => {
@@ -277,6 +292,13 @@ fn solve(
                     );
 
                     problems.push(problem);
+
+                    state
+                }
+                BadType(vars, problem) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    problems.push(TypeError::BadType(problem));
 
                     state
                 }
@@ -829,7 +851,7 @@ fn circular_error(
     loc_var: &Located<Variable>,
 ) {
     let var = loc_var.value;
-    let error_type = subs.var_to_error_type(var);
+    let (error_type, _) = subs.var_to_error_type(var);
     let problem = TypeError::CircularType(loc_var.region, symbol, error_type);
 
     subs.set_content(var, Content::Error);

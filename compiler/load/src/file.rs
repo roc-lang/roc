@@ -12,7 +12,7 @@ use roc_constrain::module::{
 };
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
-use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry, InterfaceHeader};
+use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{Fail, Parser, State};
 use roc_region::all::{Located, Region};
@@ -44,6 +44,7 @@ pub struct Module {
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: MutMap<Variable, Lowercase>,
     pub imported_modules: MutSet<ModuleId>,
+    pub src: Box<str>,
 }
 
 #[derive(Debug)]
@@ -54,6 +55,8 @@ pub struct LoadedModule {
     pub can_problems: Vec<roc_problem::can::Problem>,
     pub type_problems: Vec<solve::TypeError>,
     pub declarations: Vec<Declaration>,
+    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub src: Box<str>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,10 +92,12 @@ enum Msg {
         var_store: VarStore,
     },
     Solved {
+        src: Box<str>,
         module_id: ModuleId,
         solved_types: MutMap<Symbol, SolvedType>,
         aliases: MutMap<Symbol, Alias>,
         subs: Arc<Solved<Subs>>,
+        exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         problems: Vec<solve::TypeError>,
     },
 }
@@ -108,6 +113,7 @@ pub enum LoadingProblem {
         fail: Fail,
     },
     MsgChannelDied,
+    TriedToImportAppModule,
 }
 
 enum MaybeShared<'a, 'b, A, B> {
@@ -391,8 +397,9 @@ pub async fn load<'a>(
                 solved_types,
                 subs,
                 problems,
+                exposed_vars_by_symbol,
                 aliases,
-                ..
+                src,
             } => {
                 type_problems.extend(problems);
 
@@ -427,6 +434,8 @@ pub async fn load<'a>(
                         can_problems,
                         type_problems,
                         declarations,
+                        exposed_vars_by_symbol,
+                        src,
                     });
                 } else {
                     // This was a dependency. Write it down and keep processing messages.
@@ -515,13 +524,36 @@ fn load_filename(
             #[allow(clippy::let_and_return)]
             let answer = match roc_parse::module::header().parse(&arena, state) {
                 Ok((ast::Module::Interface { header }, state)) => {
-                    let module_id = send_interface_header(header, state, module_ids, msg_tx);
+                    let module_id = send_header(
+                        header.name,
+                        header.exposes.into_bump_slice(),
+                        header.imports.into_bump_slice(),
+                        state,
+                        module_ids,
+                        msg_tx,
+                    );
 
                     Ok(module_id)
                 }
-                Ok((ast::Module::App { .. }, _)) => {
-                    panic!("TODO finish loading an App module");
-                }
+                Ok((ast::Module::App { header }, state)) => match module_ids {
+                    MaybeShared::Shared(_, _) => {
+                        // If this is Shared, it means we're trying to import
+                        // an app module which is not the root. Not alllowed!
+                        Err(LoadingProblem::TriedToImportAppModule)
+                    }
+                    unique_modules @ MaybeShared::Unique(_, _) => {
+                        let module_id = send_header(
+                            header.name,
+                            header.provides.into_bump_slice(),
+                            header.imports.into_bump_slice(),
+                            state,
+                            unique_modules,
+                            msg_tx,
+                        );
+
+                        Ok(module_id)
+                    }
+                },
                 Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
             };
 
@@ -534,36 +566,37 @@ fn load_filename(
     }
 }
 
-fn send_interface_header<'a>(
-    header: InterfaceHeader<'a>,
+fn send_header<'a>(
+    name: Located<roc_parse::header::ModuleName<'a>>,
+    exposes: &'a [Located<ExposesEntry<'a>>],
+    imports: &'a [Located<ImportsEntry<'a>>],
     state: State<'a>,
     shared_modules: SharedModules<'_, '_>,
     msg_tx: MsgSender,
 ) -> ModuleId {
     use MaybeShared::*;
 
-    let declared_name: ModuleName = header.name.value.as_str().into();
+    let declared_name: ModuleName = name.value.as_str().into();
 
     // TODO check to see if declared_name is consistent with filename.
     // If it isn't, report a problem!
 
-    let mut imports: Vec<(ModuleName, Vec<Ident>, Region)> =
-        Vec::with_capacity(header.imports.len());
+    let mut imported: Vec<(ModuleName, Vec<Ident>, Region)> = Vec::with_capacity(imports.len());
     let mut imported_modules: MutSet<ModuleId> = MutSet::default();
     let mut scope_size = 0;
 
-    for loc_entry in header.imports {
+    for loc_entry in imports {
         let (module_name, exposed) = exposed_from_import(&loc_entry.value);
 
         scope_size += exposed.len();
 
-        imports.push((module_name, exposed, loc_entry.region));
+        imported.push((module_name, exposed, loc_entry.region));
     }
 
-    let num_exposes = header.exposes.len();
+    let num_exposes = exposes.len();
     let mut deps_by_name: MutMap<ModuleName, ModuleId> =
         HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
-    let mut exposes: Vec<Symbol> = Vec::with_capacity(num_exposes);
+    let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
     // Make sure the module_ids has ModuleIds for all our deps,
     // then record those ModuleIds in can_module_ids for later.
@@ -592,7 +625,7 @@ fn send_interface_header<'a>(
             // For each of our imports, add an entry to deps_by_name
             //
             // e.g. for `imports [ Foo.{ bar } ]`, add `Foo` to deps_by_name
-            for (module_name, exposed, region) in imports.into_iter() {
+            for (module_name, exposed, region) in imported.into_iter() {
                 let cloned_module_name = module_name.clone();
                 let module_id = module_ids.get_or_insert(&module_name.into());
 
@@ -618,7 +651,7 @@ fn send_interface_header<'a>(
             //
             // We must *not* add them to scope yet, or else the Defs will
             // incorrectly think they're shadowing them!
-            for loc_exposed in header.exposes.iter() {
+            for loc_exposed in exposes.iter() {
                 // Use get_or_insert here because the ident_ids may already
                 // created an IdentId for this, when it was imported exposed
                 // in a dependent module.
@@ -629,7 +662,7 @@ fn send_interface_header<'a>(
                 let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str().into());
                 let symbol = Symbol::new(home, ident_id);
 
-                exposes.push(symbol);
+                exposed.push(symbol);
             }
 
             if cfg!(debug_assertions) {
@@ -648,7 +681,7 @@ fn send_interface_header<'a>(
             // and also add any exposed values to scope.
             //
             // e.g. for `imports [ Foo.{ bar } ]`, add `Foo` to deps_by_name and `bar` to scope.
-            for (module_name, exposed, region) in imports.into_iter() {
+            for (module_name, exposed, region) in imported.into_iter() {
                 let module_id = module_ids.get_or_insert(&module_name.clone().into());
 
                 deps_by_name.insert(module_name, module_id);
@@ -672,11 +705,11 @@ fn send_interface_header<'a>(
             //
             // We must *not* add them to scope yet, or else the Defs will
             // incorrectly think they're shadowing them!
-            for loc_exposed in header.exposes.iter() {
+            for loc_exposed in exposes.iter() {
                 let ident_id = ident_ids.add(loc_exposed.value.as_str().into());
                 let symbol = Symbol::new(home, ident_id);
 
-                exposes.push(symbol);
+                exposed.push(symbol);
             }
 
             if cfg!(debug_assertions) {
@@ -712,7 +745,7 @@ fn send_interface_header<'a>(
             module_name: declared_name,
             imported_modules,
             deps_by_name,
-            exposes,
+            exposes: exposed,
             src,
             exposed_imports: scope,
         }))
@@ -860,6 +893,7 @@ fn solve_module(
         aliases: module.aliases,
     };
 
+    let src = module.src;
     let mut subs = Subs::new(var_store.into());
 
     for (var, name) in module.rigid_variables {
@@ -898,10 +932,10 @@ fn solve_module(
         // annotations which are decoupled from our Subs, because that's how
         // other modules will generate constraints for imported values
         // within the context of their own Subs.
-        for (symbol, var) in exposed_vars_by_symbol {
-            let solved_type = SolvedType::new(&solved_subs, var);
+        for (symbol, var) in exposed_vars_by_symbol.iter() {
+            let solved_type = SolvedType::new(&solved_subs, *var);
 
-            solved_types.insert(symbol, solved_type);
+            solved_types.insert(*symbol, solved_type);
         }
 
         tokio::spawn(async move {
@@ -909,8 +943,10 @@ fn solve_module(
 
             // Send the subs to the main thread for processing,
             tx.send(Msg::Solved {
+                src,
                 module_id: home,
                 subs: Arc::new(solved_subs),
+                exposed_vars_by_symbol,
                 solved_types,
                 problems,
                 aliases: env.aliases,
@@ -1044,6 +1080,7 @@ fn parse_and_constrain(
                 aliases,
                 rigid_variables,
                 imported_modules: header.imported_modules,
+                src: header.src,
             };
 
             (module, ident_ids, constraint, problems)

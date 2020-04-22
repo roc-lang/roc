@@ -14,15 +14,15 @@ mod test_reporting {
     use roc_module::symbol::{Interns, ModuleId};
     use roc_mono::expr::{Expr, Procs};
     use roc_reporting::report::{
-        can_problem, mono_problem, Report, BLUE_CODE, BOLD_CODE, CYAN_CODE, DEFAULT_PALETTE,
-        GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE, WHITE_CODE, YELLOW_CODE,
+        can_problem, mono_problem, parse_problem, type_problem, Report, BLUE_CODE, BOLD_CODE,
+        CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE,
+        WHITE_CODE, YELLOW_CODE,
     };
-    use roc_reporting::type_error::type_problem;
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
     // use roc_region::all;
-    use crate::helpers::{can_expr, infer_expr, CanExprOut};
+    use crate::helpers::{can_expr, infer_expr, CanExprOut, ParseErrOut};
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
 
@@ -43,13 +43,16 @@ mod test_reporting {
 
     fn infer_expr_help(
         expr_src: &str,
-    ) -> (
-        Vec<solve::TypeError>,
-        Vec<roc_problem::can::Problem>,
-        Vec<roc_mono::expr::MonoProblem>,
-        ModuleId,
-        Interns,
-    ) {
+    ) -> Result<
+        (
+            Vec<solve::TypeError>,
+            Vec<roc_problem::can::Problem>,
+            Vec<roc_mono::expr::MonoProblem>,
+            ModuleId,
+            Interns,
+        ),
+        ParseErrOut,
+    > {
         let CanExprOut {
             loc_expr,
             output,
@@ -60,7 +63,7 @@ mod test_reporting {
             mut interns,
             problems: can_problems,
             ..
-        } = can_expr(expr_src);
+        } = can_expr(expr_src)?;
         let mut subs = Subs::new(var_store.into());
 
         for (var, name) in output.introduced_variables.name_by_var {
@@ -99,7 +102,7 @@ mod test_reporting {
             );
         }
 
-        (unify_problems, can_problems, mono_problems, home, interns)
+        Ok((unify_problems, can_problems, mono_problems, home, interns))
     }
 
     fn list_reports<F>(src: &str, buf: &mut String, callback: F)
@@ -108,40 +111,57 @@ mod test_reporting {
     {
         use ven_pretty::DocAllocator;
 
-        let (type_problems, can_problems, mono_problems, home, interns) = infer_expr_help(src);
-
         let src_lines: Vec<&str> = src.split('\n').collect();
-        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
         let filename = filename_from_string(r"\code\proj\Main.roc");
-        let mut reports = Vec::new();
 
-        for problem in can_problems {
-            let report = can_problem(&alloc, filename.clone(), problem.clone());
-            reports.push(report);
+        match infer_expr_help(src) {
+            Err(parse_err) => {
+                let ParseErrOut {
+                    fail,
+                    home,
+                    interns,
+                } = parse_err;
+
+                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+                let doc = parse_problem(&alloc, filename, fail);
+
+                callback(doc.pretty(&alloc).append(alloc.line()), buf)
+            }
+            Ok((type_problems, can_problems, mono_problems, home, interns)) => {
+                let mut reports = Vec::new();
+
+                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+                for problem in can_problems {
+                    let report = can_problem(&alloc, filename.clone(), problem.clone());
+                    reports.push(report);
+                }
+
+                for problem in type_problems {
+                    let report = type_problem(&alloc, filename.clone(), problem.clone());
+                    reports.push(report);
+                }
+
+                for problem in mono_problems {
+                    let report = mono_problem(&alloc, filename.clone(), problem.clone());
+                    reports.push(report);
+                }
+
+                let has_reports = !reports.is_empty();
+
+                let doc = alloc
+                    .stack(reports.into_iter().map(|v| v.pretty(&alloc)))
+                    .append(if has_reports {
+                        alloc.line()
+                    } else {
+                        alloc.nil()
+                    });
+
+                callback(doc, buf)
+            }
         }
-
-        for problem in type_problems {
-            let report = type_problem(&alloc, filename.clone(), problem.clone());
-            reports.push(report);
-        }
-
-        for problem in mono_problems {
-            let report = mono_problem(&alloc, filename.clone(), problem.clone());
-            reports.push(report);
-        }
-
-        let has_reports = !reports.is_empty();
-
-        let doc = alloc
-            .stack(reports.into_iter().map(|v| v.pretty(&alloc)))
-            .append(if has_reports {
-                alloc.line()
-            } else {
-                alloc.nil()
-            });
-
-        callback(doc, buf)
     }
 
     fn report_problem_as(src: &str, expected_rendering: &str) {
@@ -491,7 +511,8 @@ mod test_reporting {
             "#
         );
 
-        let (_type_problems, _can_problems, _mono_problems, home, interns) = infer_expr_help(src);
+        let (_type_problems, _can_problems, _mono_problems, home, interns) =
+            infer_expr_help(src).expect("parse error");
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -521,7 +542,7 @@ mod test_reporting {
         );
 
         let (_type_problems, _can_problems, _mono_problems, home, mut interns) =
-            infer_expr_help(src);
+            infer_expr_help(src).expect("parse error");
 
         let mut buf = String::new();
         let src_lines: Vec<&str> = src.split('\n').collect();
@@ -2253,6 +2274,441 @@ mod test_reporting {
                 Hint: Can more type annotations be added? Type annotations always help
                 me give more specific messages, and I think they could help a lot in
                 this case
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn circular_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo : { x: Bar }
+                Bar : { y : Foo }
+
+                f : Foo
+
+                f
+                "#
+            ),
+            // should not report Bar as unused!
+            indoc!(
+                r#"
+                -- CYCLIC ALIAS ----------------------------------------------------------------
+
+                The `Bar` alias is recursive in an invalid way:
+
+                2 ┆  Bar : { y : Foo }
+                  ┆        ^^^^^^^^^^^
+
+                The `Bar` alias depends on itself through the following chain of
+                definitions:
+
+                    ┌─────┐
+                    │     Bar
+                    │     ↓
+                    │     Foo
+                    └─────┘
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tag.
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                `Bar` is not used anywhere in your code.
+
+                2 ┆  Bar : { y : Foo }
+                  ┆  ^^^^^^^^^^^^^^^^^
+
+                If you didn't intend on using `Bar` then remove it so future readers of
+                your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn self_recursive_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo : { x : Foo }
+
+                f : Foo
+                f = 3
+
+                f
+                "#
+            ),
+            // should not report Bar as unused!
+            indoc!(
+                r#"
+                -- CYCLIC ALIAS ----------------------------------------------------------------
+
+                The `Foo` alias is self-recursive in an invalid way:
+
+                1 ┆  Foo : { x : Foo }
+                  ┆  ^^^
+
+                Recursion in aliases is only allowed if recursion happens behind a
+                tag.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_duplicate_field_same_type() {
+        report_problem_as(
+            indoc!(
+                r#"
+                { x: 4, y: 3, x: 4 }
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This record defines the `.x` field twice!
+
+                1 ┆  { x: 4, y: 3, x: 4 }
+                  ┆    ^^^^        ^^^^
+
+                In the rest of the program, I will only use the latter definition:
+
+                1 ┆  { x: 4, y: 3, x: 4 }
+                  ┆                ^^^^
+
+                For clarity, remove the previous `.x` definitions from this record.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_duplicate_field_different_types() {
+        report_problem_as(
+            indoc!(
+                r#"
+                { x: 4, y: 3, x: "foo" }
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This record defines the `.x` field twice!
+
+                1 ┆  { x: 4, y: 3, x: "foo" }
+                  ┆    ^^^^        ^^^^^^^^
+
+                In the rest of the program, I will only use the latter definition:
+
+                1 ┆  { x: 4, y: 3, x: "foo" }
+                  ┆                ^^^^^^^^
+
+                For clarity, remove the previous `.x` definitions from this record.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_duplicate_field_multiline() {
+        report_problem_as(
+            indoc!(
+                r#"
+                {
+                    x: 4,
+                    y: 3,
+                    x: "foo"
+                }
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This record defines the `.x` field twice!
+
+                1 ┆   {
+                2 ┆>      x: 4,
+                3 ┆       y: 3,
+                4 ┆>      x: "foo"
+                5 ┆   }
+
+                In the rest of the program, I will only use the latter definition:
+
+                1 ┆   {
+                2 ┆       x: 4,
+                3 ┆       y: 3,
+                4 ┆>      x: "foo"
+                5 ┆   }
+
+                For clarity, remove the previous `.x` definitions from this record.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_update_duplicate_field_multiline() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \r ->
+                    { r &
+                        x: 4,
+                        y: 3,
+                        x: "foo"
+                    }
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This record defines the `.x` field twice!
+
+                2 ┆       { r &
+                3 ┆>          x: 4,
+                4 ┆           y: 3,
+                5 ┆>          x: "foo"
+                6 ┆       }
+
+                In the rest of the program, I will only use the latter definition:
+
+                2 ┆       { r &
+                3 ┆           x: 4,
+                4 ┆           y: 3,
+                5 ┆>          x: "foo"
+                6 ┆       }
+
+                For clarity, remove the previous `.x` definitions from this record.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_type_duplicate_field() {
+        report_problem_as(
+            indoc!(
+                r#"
+                a : { foo : Int, bar : Float, foo : Str }
+                a = { bar: 3.0, foo: "foo" }
+
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This record type defines the `.foo` field twice!
+
+                1 ┆  a : { foo : Int, bar : Float, foo : Str }
+                  ┆        ^^^^^^^^^               ^^^^^^^^^
+
+                In the rest of the program, I will only use the latter definition:
+
+                1 ┆  a : { foo : Int, bar : Float, foo : Str }
+                  ┆                                ^^^^^^^^^
+
+                For clarity, remove the previous `.foo` definitions from this record
+                type.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn tag_union_duplicate_tag() {
+        report_problem_as(
+            indoc!(
+                r#"
+                a : [ Foo Int, Bar Float, Foo Str ]
+                a = Foo "foo"
+
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This tag union type defines the `Foo` tag twice!
+
+                1 ┆  a : [ Foo Int, Bar Float, Foo Str ]
+                  ┆        ^^^^^^^             ^^^^^^^
+
+                In the rest of the program, I will only use the latter definition:
+
+                1 ┆  a : [ Foo Int, Bar Float, Foo Str ]
+                  ┆                            ^^^^^^^
+
+                For clarity, remove the previous `Foo` definitions from this tag union
+                type.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_num() {
+        report_problem_as(
+            indoc!(
+                r#"
+                a : Num Int Float
+                a = 3
+
+                a
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TOO MANY TYPE ARGUMENTS -----------------------------------------------------
+
+                The `Num` alias expects 1 type argument, but it got 2 instead:
+
+                1 ┆  a : Num Int Float
+                  ┆      ^^^^^^^^^^^^^
+
+                Are there missing parentheses?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_num_fn() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Bool -> Num Int Float
+                f = \_ -> 3
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TOO MANY TYPE ARGUMENTS -----------------------------------------------------
+
+                The `Num` alias expects 1 type argument, but it got 2 instead:
+
+                1 ┆  f : Bool -> Num Int Float
+                  ┆              ^^^^^^^^^^^^^
+
+                Are there missing parentheses?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn too_few_type_arguments() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Pair a b : [ Pair a b ]
+
+                x : Pair Int
+                x = 3
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TOO FEW TYPE ARGUMENTS ------------------------------------------------------
+
+                The `Pair` alias expects 2 type arguments, but it got 1 instead:
+
+                3 ┆  x : Pair Int
+                  ┆      ^^^^^^^^
+
+                Are there missing parentheses?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn too_many_type_arguments() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Pair a b : [ Pair a b ]
+
+                x : Pair Int Int Int
+                x = 3
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TOO MANY TYPE ARGUMENTS -----------------------------------------------------
+
+                The `Pair` alias expects 2 type arguments, but it got 3 instead:
+
+                3 ┆  x : Pair Int Int Int
+                  ┆      ^^^^^^^^^^^^^^^^
+
+                Are there missing parentheses?
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn phantom_type_variable() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo a : [ Foo ]
+
+                f : Foo Int
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                The `a` type variable is not used in the `Foo` alias definition:
+
+                1 ┆  Foo a : [ Foo ]
+                  ┆      ^
+
+                Roc does not allow unused type parameters!
+
+                Hint: If you want an unused type parameter (a so-called "phantom
+                type"), read the guide section on phantom data.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn elm_function_syntax() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f x y = x
+                "#
+            ),
+            indoc!(
+                r#"
+                -- PARSE PROBLEM ---------------------------------------------------------------
+
+                Unexpected tokens in front of the `=` symbol:
+
+                1 ┆  f x y = x
+                  ┆    ^^^
                 "#
             ),
         )

@@ -71,6 +71,15 @@ impl<T> Expected<T> {
         }
     }
 
+    pub fn get_annotation_region(&self) -> Option<Region> {
+        match self {
+            Expected::FromAnnotation(_, _, AnnotationSource::TypedBody { region }, _) => {
+                Some(*region)
+            }
+            _ => None,
+        }
+    }
+
     pub fn replace<U>(self, new: U) -> Expected<U> {
         match self {
             Expected::NoExpectation(_val) => Expected::NoExpectation(new),

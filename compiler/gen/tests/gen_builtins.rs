@@ -85,6 +85,19 @@ mod gen_builtins {
     }
 
     #[test]
+    fn gen_div_f64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    48 / 2
+                "#
+            ),
+            24.0,
+            f64
+        );
+    }
+
+    #[test]
     fn gen_add_i64() {
         assert_evals_to!(
             indoc!(
@@ -148,6 +161,20 @@ mod gen_builtins {
             i64
         );
     }
+
+    #[test]
+    fn gen_order_of_arithmetic_ops_complex_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    48 / 2 + 3
+                "#
+            ),
+            27.0,
+            f64
+        );
+    }
+
     #[test]
     fn if_guard_bind_variable() {
         assert_evals_to!(

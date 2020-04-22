@@ -1,7 +1,7 @@
 extern crate roc_gen;
 extern crate roc_reporting;
-
-use crate::helpers::{infer_expr, uniq_expr_with};
+#[macro_use]
+extern crate clap;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
@@ -9,118 +9,236 @@ use inkwell::passes::PassManager;
 use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_collections::all::ImMap;
+use roc_collections::all::MutMap;
 use roc_gen::llvm::build::{
-    build_proc, build_proc_header, get_call_conventions, module_from_builtins,
+    build_proc, build_proc_header, get_call_conventions, module_from_builtins, OptLevel,
 };
 use roc_gen::llvm::convert::basic_type_from_layout;
+use roc_load::file::{LoadedModule, LoadingProblem};
+use roc_module::symbol::Symbol;
 use roc_mono::expr::{Expr, Procs};
 use roc_mono::layout::Layout;
 use std::time::SystemTime;
 
+use clap::{App, Arg, ArgMatches};
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
 };
-use std::fs::File;
-use std::io;
-use std::io::prelude::*;
+use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process;
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
+use tokio::process::Command;
+use tokio::runtime::Builder;
 
-pub mod helpers;
+pub mod repl;
+
+pub static FLAG_OPTIMIZE: &str = "optimize";
+pub static FLAG_ROC_FILE: &str = "ROC_FILE";
+
+pub fn build_app<'a>() -> App<'a> {
+    App::new("roc")
+        .version(crate_version!())
+        .subcommand(App::new("build")
+            .about("Build a program")
+            .arg(
+                Arg::with_name(FLAG_ROC_FILE)
+                    .help("The .roc file to build")
+                    .required(true),
+            )
+            .arg(
+                Arg::with_name(FLAG_OPTIMIZE)
+                    .long(FLAG_OPTIMIZE)
+                    .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
+        )
+        .subcommand(App::new("run")
+            .about("Build and run a program")
+            .arg(
+                Arg::with_name(FLAG_ROC_FILE)
+                    .help("The .roc file to build and run")
+                    .required(true),
+            )
+            .arg(
+                Arg::with_name(FLAG_OPTIMIZE)
+                    .long(FLAG_OPTIMIZE)
+                    .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
+        )
+        .subcommand(App::new("repl")
+            .about("Launch the interactive Read Eval Print Loop (REPL)")
+        )
+}
 
 fn main() -> io::Result<()> {
-    let now = SystemTime::now();
-    let argv = std::env::args().collect::<Vec<String>>();
+    let matches = build_app().get_matches();
 
-    match argv.get(1) {
-        Some(filename) => {
-            let mut path = Path::new(filename).canonicalize().unwrap();
-
-            if !path.is_absolute() {
-                path = std::env::current_dir()?.join(path).canonicalize().unwrap();
-            }
-
-            // Step 1: build the .o file for the app
-            let mut file = File::open(path.clone())?;
-            let mut contents = String::new();
-
-            file.read_to_string(&mut contents)?;
-
-            let dest_filename = path.with_extension("o");
-
-            gen(
-                Path::new(filename).to_path_buf(),
-                contents.as_str(),
-                Triple::host(),
-                &dest_filename,
-            );
-
-            let end_time = now.elapsed().unwrap();
-
-            println!(
-                "Finished compilation and code gen in {} ms\n",
-                end_time.as_millis()
-            );
-
-            let cwd = dest_filename.parent().unwrap();
-            let lib_path = dest_filename.with_file_name("libroc_app.a");
-
-            // Step 2: turn the .o file into a .a static library
-            Command::new("ar") // TODO on Windows, use `link`
-                .args(&[
-                    "rcs",
-                    lib_path.to_str().unwrap(),
-                    dest_filename.to_str().unwrap(),
-                ])
-                .spawn()
-                .expect("`ar` failed to run");
-
-            // Step 3: have rustc compile the host and link in the .a file
-            Command::new("rustc")
-                .args(&["-L", ".", "host.rs", "-o", "app"])
-                .current_dir(cwd)
-                .spawn()
-                .expect("rustc failed to run");
-
-            // Step 4: Run the compiled app
-            Command::new(cwd.join("app")).spawn().unwrap_or_else(|err| {
-                panic!(
-                    "{} failed to run: {:?}",
-                    cwd.join("app").to_str().unwrap(),
-                    err
-                )
-            });
-            Ok(())
-        }
-        None => {
-            println!("Usage: roc FILENAME.roc");
-
-            Ok(())
-        }
+    match matches.subcommand_name() {
+        Some("build") => build(matches.subcommand_matches("build").unwrap(), false),
+        Some("run") => build(matches.subcommand_matches("run").unwrap(), true),
+        Some("repl") => repl::main(),
+        _ => unreachable!(),
     }
 }
 
-fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
-    use roc_reporting::report::{can_problem, RocDocAllocator, DEFAULT_PALETTE};
-    use roc_reporting::type_error::type_problem;
+pub fn build(matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {
+    let filename = matches.value_of(FLAG_ROC_FILE).unwrap();
+    let opt_level = if matches.is_present(FLAG_OPTIMIZE) {
+        OptLevel::Optimize
+    } else {
+        OptLevel::Normal
+    };
+    let path = Path::new(filename);
+    let src_dir = path.parent().unwrap().canonicalize().unwrap();
 
-    // Build the expr
+    // Create the runtime
+    let mut rt = Builder::new()
+        .thread_name("roc")
+        .threaded_scheduler()
+        .enable_io()
+        .build()
+        .expect("Error spawning initial compiler thread."); // TODO make this error nicer.
+
+    // Spawn the root task
+    let path = path.canonicalize().unwrap_or_else(|err| {
+        use ErrorKind::*;
+
+        match err.kind() {
+            NotFound => {
+                match path.to_str() {
+                    Some(path_str) => println!("File not found: {}", path_str),
+                    None => println!("Malformed file path : {:?}", path),
+                }
+
+                process::exit(1);
+            }
+            _ => {
+                todo!("TODO Gracefully handle opening {:?} - {:?}", path, err);
+            }
+        }
+    });
+    let binary_path = rt
+        .block_on(build_file(src_dir, path, opt_level))
+        .expect("TODO gracefully handle block_on failing");
+
+    if run_after_build {
+        // Run the compiled app
+        rt.block_on(async {
+            Command::new(binary_path)
+                .spawn()
+                .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
+                .await
+                .map_err(|_| {
+                    todo!("gracefully handle error after `app` spawned");
+                })
+        })
+        .expect("TODO gracefully handle block_on failing");
+    }
+
+    Ok(())
+}
+
+async fn build_file(
+    src_dir: PathBuf,
+    filename: PathBuf,
+    opt_level: OptLevel,
+) -> Result<PathBuf, LoadingProblem> {
+    let compilation_start = SystemTime::now();
     let arena = Bump::new();
 
-    let (loc_expr, _output, can_problems, subs, var, constraint, home, interns) =
-        uniq_expr_with(&arena, src, &ImMap::default());
+    // Step 1: compile the app and generate the .o file
+    let subs_by_module = MutMap::default();
 
-    let mut type_problems = Vec::new();
-    let (content, mut subs) = infer_expr(subs, &mut type_problems, &constraint, var);
+    // Release builds use uniqueness optimizations
+    let stdlib = match opt_level {
+        OptLevel::Normal => roc_builtins::std::standard_stdlib(),
+        OptLevel::Optimize => roc_builtins::unique::uniq_stdlib(),
+    };
+    let loaded = roc_load::file::load(&stdlib, src_dir, filename.clone(), subs_by_module).await?;
+    let dest_filename = filename.with_extension("o");
 
+    gen(
+        &arena,
+        loaded,
+        filename,
+        Triple::host(),
+        &dest_filename,
+        opt_level,
+    );
+
+    let compilation_end = compilation_start.elapsed().unwrap();
+
+    println!(
+        "Finished compilation and code gen in {} ms\n",
+        compilation_end.as_millis()
+    );
+
+    let cwd = dest_filename.parent().unwrap();
+    let lib_path = dest_filename.with_file_name("libroc_app.a");
+
+    // Step 2: turn the .o file into a .a static library
+    Command::new("ar") // TODO on Windows, use `link`
+        .args(&[
+            "rcs",
+            lib_path.to_str().unwrap(),
+            dest_filename.to_str().unwrap(),
+        ])
+        .spawn()
+        .map_err(|_| {
+            todo!("gracefully handle `ar` failing to spawn.");
+        })?
+        .await
+        .map_err(|_| {
+            todo!("gracefully handle error after `ar` spawned");
+        })?;
+
+    // Step 3: have rustc compile the host and link in the .a file
+    let binary_path = cwd.join("app");
+
+    Command::new("rustc")
+        .args(&[
+            "-L",
+            ".",
+            "--crate-type",
+            "bin",
+            "host.rs",
+            "-o",
+            binary_path.as_path().to_str().unwrap(),
+        ])
+        .current_dir(cwd)
+        .spawn()
+        .map_err(|_| {
+            todo!("gracefully handle `rustc` failing to spawn.");
+        })?
+        .await
+        .map_err(|_| {
+            todo!("gracefully handle error after `rustc` spawned");
+        })?;
+
+    Ok(binary_path)
+}
+
+fn gen(
+    arena: &Bump,
+    loaded: LoadedModule,
+    filename: PathBuf,
+    target: Triple,
+    dest_filename: &Path,
+    opt_level: OptLevel,
+) {
+    use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
+
+    let src = loaded.src;
+    let home = loaded.module_id;
     let src_lines: Vec<&str> = src.split('\n').collect();
     let palette = DEFAULT_PALETTE;
 
     // Report parsing and canonicalization problems
-    let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+    let alloc = RocDocAllocator::new(&src_lines, home, &loaded.interns);
 
-    for problem in can_problems.into_iter() {
+    for problem in loaded.can_problems.into_iter() {
         let report = can_problem(&alloc, filename.clone(), problem);
         let mut buf = String::new();
 
@@ -129,7 +247,7 @@ fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
         println!("\n{}\n", buf);
     }
 
-    for problem in type_problems.into_iter() {
+    for problem in loaded.type_problems.into_iter() {
         let report = type_problem(&alloc, filename.clone(), problem);
         let mut buf = String::new();
 
@@ -138,6 +256,63 @@ fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
         println!("\n{}\n", buf);
     }
 
+    // Look up the types and expressions of the `provided` values
+
+    // TODO instead of hardcoding this to `main`, use the `provided` list and gen all of them.
+    let ident_ids = loaded.interns.all_ident_ids.get(&home).unwrap();
+    let main_ident_id = *ident_ids.get_id(&"main".into()).unwrap_or_else(|| {
+        todo!("TODO gracefully handle the case where `main` wasn't declared in the app")
+    });
+    let main_symbol = Symbol::new(home, main_ident_id);
+    let mut main_var = None;
+    let mut main_expr = None;
+
+    for (symbol, var) in loaded.exposed_vars_by_symbol {
+        if symbol == main_symbol {
+            main_var = Some(var);
+
+            break;
+        }
+    }
+
+    // We use a loop label here so we can break all the way out of a nested
+    // loop inside DeclareRec if we find the expr there.
+    //
+    // https://doc.rust-lang.org/1.30.0/book/first-edition/loops.html#loop-labels
+    'find_expr: for decl in loaded.declarations {
+        use roc_can::def::Declaration::*;
+
+        match decl {
+            Declare(def) => {
+                if def.pattern_vars.contains_key(&main_symbol) {
+                    main_expr = Some(def.loc_expr);
+
+                    break 'find_expr;
+                }
+            }
+
+            DeclareRec(defs) => {
+                for def in defs {
+                    if def.pattern_vars.contains_key(&main_symbol) {
+                        main_expr = Some(def.loc_expr);
+
+                        break 'find_expr;
+                    }
+                }
+            }
+            InvalidCycle(_, _) => {}
+        }
+    }
+
+    let loc_expr = main_expr.unwrap_or_else(|| {
+        panic!("TODO gracefully handle the case where `main` was declared but not exposed")
+    });
+    let mut subs = loaded.solved.into_inner();
+    let content = match main_var {
+        Some(var) => subs.get_without_compacting(var).content,
+        None => todo!("TODO gracefully handle the case where `main` was declared but not exposed"),
+    };
+
     // Generate the binary
 
     let context = Context::create();
@@ -145,7 +320,7 @@ fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
     let builder = context.create_builder();
     let fpm = PassManager::create(&module);
 
-    roc_gen::llvm::build::add_passes(&fpm);
+    roc_gen::llvm::build::add_passes(&fpm, opt_level);
 
     fpm.initialize();
 
@@ -160,14 +335,14 @@ fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
 
     let main_fn_type =
         basic_type_from_layout(&arena, &context, &layout, ptr_bytes).fn_type(&[], false);
-    let main_fn_name = "$Test.main";
+    let main_fn_name = "$main";
 
     // Compile and add all the Procs before adding main
     let mut env = roc_gen::llvm::build::Env {
         arena: &arena,
         builder: &builder,
         context: &context,
-        interns,
+        interns: loaded.interns,
         module: arena.alloc(module),
         ptr_bytes,
     };
@@ -271,12 +446,16 @@ fn gen(filename: PathBuf, src: &str, target: Triple, dest_filename: &Path) {
 
             "x86-64"
         }
-        Architecture::Arm(_) => {
+        Architecture::Arm(_) if cfg!(feature = "target-arm") => {
+            // NOTE: why not enable arm and wasm by default?
+            //
+            // We had some trouble getting them to link properly. This may be resolved in the
+            // future, or maybe it was just some weird configuration on one machine.
             Target::initialize_arm(&InitializationConfig::default());
 
             "arm"
         }
-        Architecture::Wasm32 => {
+        Architecture::Wasm32 if cfg!(feature = "target-webassembly") => {
             Target::initialize_webassembly(&InitializationConfig::default());
 
             "wasm32"

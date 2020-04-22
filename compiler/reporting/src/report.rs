@@ -1,12 +1,14 @@
-use roc_collections::all::MutSet;
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_problem::can::PrecedenceProblem::BothNonAssociative;
-use roc_problem::can::{Problem, RuntimeError};
 use std::fmt;
 use std::path::PathBuf;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
+
+pub use crate::error::canonicalize::can_problem;
+pub use crate::error::mono::mono_problem;
+pub use crate::error::parse::parse_problem;
+pub use crate::error::r#type::type_problem;
 
 // const IS_WINDOWS: bool = std::env::consts::OS == "windows";
 const IS_WINDOWS: bool = false;
@@ -17,7 +19,9 @@ const CYCLE_LN: &str = ["|     ", "│     "][!IS_WINDOWS as usize];
 const CYCLE_MID: &str = ["|     |", "│     ↓"][!IS_WINDOWS as usize];
 const CYCLE_END: &str = ["+-<---+", "└─────┘"][!IS_WINDOWS as usize];
 
-fn cycle<'b>(
+const GUTTER_BAR: &str = " ┆";
+
+pub fn cycle<'b>(
     alloc: &'b RocDocAllocator<'b>,
     indent: usize,
     name: RocDocBuilder<'b>,
@@ -141,417 +145,6 @@ pub const BOLD_CODE: &str = "\u{001b}[1m";
 pub const UNDERLINE_CODE: &str = "\u{001b}[4m";
 
 pub const RESET_CODE: &str = "\u{001b}[0m";
-
-pub fn mono_problem<'b>(
-    alloc: &'b RocDocAllocator<'b>,
-    filename: PathBuf,
-    problem: roc_mono::expr::MonoProblem,
-) -> Report<'b> {
-    use roc_mono::expr::MonoProblem::*;
-    use roc_mono::pattern::Context::*;
-    use roc_mono::pattern::Error::*;
-
-    match problem {
-        PatternProblem(Incomplete(region, context, missing)) => match context {
-            BadArg => {
-                let doc = alloc.stack(vec![
-                    alloc.reflow("This pattern does not cover all the possibilities:"),
-                    alloc.region(region),
-                    alloc.reflow("Other possibilities include:"),
-                    unhandled_patterns_to_doc_block(alloc, missing),
-                    alloc.concat(vec![
-                        alloc.reflow(
-                            "I would have to crash if I saw one of those! \
-                        So rather than pattern matching in function arguments, put a ",
-                        ),
-                        alloc.keyword("when"),
-                        alloc.reflow(" in the function body to account for all possibilities."),
-                    ]),
-                ]);
-
-                Report {
-                    filename,
-                    title: "UNSAFE PATTERN".to_string(),
-                    doc,
-                }
-            }
-            BadDestruct => {
-                let doc = alloc.stack(vec![
-                    alloc.reflow("This pattern does not cover all the possibilities:"),
-                    alloc.region(region),
-                    alloc.reflow("Other possibilities include:"),
-                    unhandled_patterns_to_doc_block(alloc, missing),
-                    alloc.concat(vec![
-                        alloc.reflow(
-                            "I would have to crash if I saw one of those! \
-                       You can use a binding to deconstruct a value if there is only ONE possibility. \
-                       Use a "
-                        ),
-                        alloc.keyword("when"),
-                        alloc.reflow(" to account for all possibilities."),
-                    ]),
-                ]);
-
-                Report {
-                    filename,
-                    title: "UNSAFE PATTERN".to_string(),
-                    doc,
-                }
-            }
-            BadCase => {
-                let doc = alloc.stack(vec![
-                    alloc.concat(vec![
-                        alloc.reflow("This "),
-                        alloc.keyword("when"),
-                        alloc.reflow(" does not cover all the possibilities:"),
-                    ]),
-                    alloc.region(region),
-                    alloc.reflow("Other possibilities include:"),
-                    unhandled_patterns_to_doc_block(alloc, missing),
-                    alloc.reflow(
-                        "I would have to crash if I saw one of those! \
-                        Add branches for them!",
-                    ),
-                    // alloc.hint().append(alloc.reflow("or use a hole.")),
-                ]);
-
-                Report {
-                    filename,
-                    title: "UNSAFE PATTERN".to_string(),
-                    doc,
-                }
-            }
-        },
-        PatternProblem(Redundant {
-            overall_region,
-            branch_region,
-            index,
-        }) => {
-            let doc = alloc.stack(vec![
-                alloc.concat(vec![
-                    alloc.reflow("The "),
-                    alloc.string(index.ordinal()),
-                    alloc.reflow(" pattern is redundant:"),
-                ]),
-                alloc.region_with_subregion(overall_region, branch_region),
-                alloc.reflow(
-                    "Any value of this shape will be handled by \
-                a previous pattern, so this one should be removed.",
-                ),
-            ]);
-
-            Report {
-                filename,
-                title: "REDUNDANT PATTERN".to_string(),
-                doc,
-            }
-        }
-    }
-}
-
-pub fn unhandled_patterns_to_doc_block<'b>(
-    alloc: &'b RocDocAllocator<'b>,
-    patterns: Vec<roc_mono::pattern::Pattern>,
-) -> RocDocBuilder<'b> {
-    alloc
-        .vcat(patterns.into_iter().map(|v| pattern_to_doc(alloc, v)))
-        .indent(4)
-        .annotate(Annotation::TypeBlock)
-}
-
-fn pattern_to_doc<'b>(
-    alloc: &'b RocDocAllocator<'b>,
-    pattern: roc_mono::pattern::Pattern,
-) -> RocDocBuilder<'b> {
-    use roc_mono::pattern::Literal::*;
-    use roc_mono::pattern::Pattern::*;
-    //    Anything,
-    //    Literal(Literal),
-    //    Ctor(Union, TagName, std::vec::Vec<Pattern>),
-    match pattern {
-        Anything => alloc.text("_"),
-        Literal(l) => match l {
-            Int(i) => alloc.text(i.to_string()),
-            Bit(true) => alloc.text("True"),
-            Bit(false) => alloc.text("False"),
-            Byte(b) => alloc.text(b.to_string()),
-            Float(f) => alloc.text(f.to_string()),
-            Str(s) => alloc.string(s.into()),
-        },
-        Ctor(_, tag_name, args) => {
-            let arg_docs = args.into_iter().map(|v| pattern_to_doc(alloc, v));
-
-            let docs = std::iter::once(alloc.tag_name(tag_name)).chain(arg_docs);
-
-            alloc.intersperse(docs, alloc.space())
-        }
-    }
-}
-
-pub fn can_problem<'b>(
-    alloc: &'b RocDocAllocator<'b>,
-    filename: PathBuf,
-    problem: Problem,
-) -> Report<'b> {
-    let doc = match problem {
-        Problem::UnusedDef(symbol, region) => {
-            let line =
-                r#" then remove it so future readers of your code don't wonder why it is there."#;
-
-            alloc.stack(vec![
-                alloc
-                    .symbol_unqualified(symbol)
-                    .append(alloc.reflow(" is not used anywhere in your code.")),
-                alloc.region(region),
-                alloc
-                    .reflow("If you didn't intend on using ")
-                    .append(alloc.symbol_unqualified(symbol))
-                    .append(alloc.reflow(line)),
-            ])
-        }
-        Problem::UnusedImport(module_id, region) => alloc.concat(vec![
-            alloc.reflow("Nothing from "),
-            alloc.module(module_id),
-            alloc.reflow(" is used in this module."),
-            alloc.region(region),
-            alloc.reflow("Since "),
-            alloc.module(module_id),
-            alloc.reflow(" isn't used, you don't need to import it."),
-        ]),
-        Problem::UnusedArgument(closure_symbol, argument_symbol, region) => {
-            let line = "\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used.";
-
-            alloc.concat(vec![
-                alloc.symbol_unqualified(closure_symbol),
-                alloc.reflow(" doesn't use "),
-                alloc.symbol_unqualified(argument_symbol),
-                alloc.reflow("."),
-                alloc.region(region),
-                alloc.reflow("If you don't need "),
-                alloc.symbol_unqualified(argument_symbol),
-                alloc.reflow(", then you can just remove it. However, if you really do need "),
-                alloc.symbol_unqualified(argument_symbol),
-                alloc.reflow(" as an argument of "),
-                alloc.symbol_unqualified(closure_symbol),
-                alloc.reflow(", prefix it with an underscore, like this: \"_"),
-                alloc.symbol_unqualified(argument_symbol),
-                alloc.reflow(line),
-            ])
-        }
-        Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => alloc
-            .stack(vec![
-                if left_bin_op.value == right_bin_op.value {
-                    alloc.concat(vec![
-                        alloc.reflow("Using more than one "),
-                        alloc.binop(left_bin_op.value),
-                        alloc.reflow(concat!(
-                            " like this requires parentheses,",
-                            " to clarify how things should be grouped.",
-                        )),
-                    ])
-                } else {
-                    alloc.concat(vec![
-                        alloc.reflow("Using "),
-                        alloc.binop(left_bin_op.value),
-                        alloc.reflow(" and "),
-                        alloc.binop(right_bin_op.value),
-                        alloc.reflow(concat!(
-                            " together requires parentheses, ",
-                            "to clarify how they should be grouped."
-                        )),
-                    ])
-                },
-                alloc.region(region),
-            ]),
-        Problem::UnsupportedPattern(pattern_type, region) => {
-            use roc_parse::pattern::PatternType::*;
-
-            let this_thing = match pattern_type {
-                TopLevelDef => "a top-level definition:",
-                DefExpr => "a value definition:",
-                FunctionArg => "function arguments:",
-                WhenBranch => unreachable!("all patterns are allowed in a When"),
-            };
-
-            let suggestion = vec![
-                alloc.reflow(
-                    "Patterns like this don't cover all possible shapes of the input type. Use a ",
-                ),
-                alloc.keyword("when"),
-                alloc.reflow(" ... "),
-                alloc.keyword("is"),
-                alloc.reflow(" instead."),
-            ];
-
-            alloc.stack(vec![
-                alloc
-                    .reflow("This pattern is not allowed in ")
-                    .append(alloc.reflow(this_thing)),
-                alloc.region(region),
-                alloc.concat(suggestion),
-            ])
-        }
-        Problem::ShadowingInAnnotation {
-            original_region,
-            shadow,
-        } => pretty_runtime_error(
-            alloc,
-            RuntimeError::Shadowing {
-                original_region,
-                shadow,
-            },
-        ),
-        Problem::RuntimeError(runtime_error) => pretty_runtime_error(alloc, runtime_error),
-    };
-
-    Report {
-        title: "SYNTAX PROBLEM".to_string(),
-        filename,
-        doc,
-    }
-}
-
-fn not_found<'b>(
-    alloc: &'b RocDocAllocator<'b>,
-    region: roc_region::all::Region,
-    name: &str,
-    thing: &str,
-    options: MutSet<Box<str>>,
-) -> RocDocBuilder<'b> {
-    use crate::type_error::suggest;
-
-    let mut suggestions = suggest::sort(name, options.iter().map(|v| v.as_ref()).collect());
-    suggestions.truncate(4);
-
-    let default_no = alloc.concat(vec![
-        alloc.reflow("Is there an "),
-        alloc.keyword("import"),
-        alloc.reflow(" or "),
-        alloc.keyword("exposing"),
-        alloc.reflow(" missing up-top"),
-    ]);
-
-    let default_yes = alloc.reflow("these names seem close though:");
-
-    let to_details = |no_suggestion_details, yes_suggestion_details| {
-        if suggestions.is_empty() {
-            no_suggestion_details
-        } else {
-            alloc.stack(vec![
-                yes_suggestion_details,
-                alloc
-                    .vcat(suggestions.into_iter().map(|v| alloc.string(v.to_string())))
-                    .indent(4),
-            ])
-        }
-    };
-
-    alloc.stack(vec![
-        alloc.string(format!("I cannot find a `{}` {}", name, thing)),
-        alloc.region(region),
-        to_details(default_no, default_yes),
-    ])
-}
-fn pretty_runtime_error<'b>(
-    alloc: &'b RocDocAllocator<'b>,
-    runtime_error: RuntimeError,
-) -> RocDocBuilder<'b> {
-    match runtime_error {
-        RuntimeError::Shadowing {
-            original_region,
-            shadow,
-        } => {
-            let line = r#"Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
-
-            alloc.stack(vec![
-                alloc
-                    .text("The ")
-                    .append(alloc.ident(shadow.value))
-                    .append(alloc.reflow(" name is first defined here:")),
-                alloc.region(original_region),
-                alloc.reflow("But then it's defined a second time here:"),
-                alloc.region(shadow.region),
-                alloc.reflow(line),
-            ])
-        }
-
-        RuntimeError::LookupNotInScope(loc_name, options) => {
-            not_found(alloc, loc_name.region, &loc_name.value, "value", options)
-        }
-        RuntimeError::CircularDef(mut idents, regions) => {
-            let first = idents.remove(0);
-
-            if idents.is_empty() {
-                alloc
-                    .reflow("The ")
-                    .append(alloc.ident(first.value.clone()))
-                    .append(alloc.reflow(
-                        " value is defined directly in terms of itself, causing an infinite loop.",
-                    ))
-            // TODO "are you trying to mutate a variable?
-            // TODO hint?
-            } else {
-                alloc.stack(vec![
-                    alloc
-                        .reflow("The ")
-                        .append(alloc.ident(first.value.clone()))
-                        .append(
-                            alloc.reflow(" definition is causing a very tricky infinite loop:"),
-                        ),
-                    alloc.region(regions[0].0),
-                    alloc
-                        .reflow("The ")
-                        .append(alloc.ident(first.value.clone()))
-                        .append(alloc.reflow(
-                            " value depends on itself through the following chain of definitions:",
-                        )),
-                    cycle(
-                        alloc,
-                        4,
-                        alloc.ident(first.value),
-                        idents
-                            .into_iter()
-                            .map(|ident| alloc.ident(ident.value))
-                            .collect::<Vec<_>>(),
-                    ),
-                    // TODO hint?
-                ])
-            }
-        }
-        other => {
-            //    // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
-            //    UnsupportedPattern(Region),
-            //    UnrecognizedFunctionName(Located<InlinableString>),
-            //    SymbolNotExposed {
-            //        module_name: InlinableString,
-            //        ident: InlinableString,
-            //        region: Region,
-            //    },
-            //    ModuleNotImported {
-            //        module_name: InlinableString,
-            //        ident: InlinableString,
-            //        region: Region,
-            //    },
-            //    InvalidPrecedence(PrecedenceProblem, Region),
-            //    MalformedIdentifier(Box<str>, Region),
-            //    MalformedClosure(Region),
-            //    FloatOutsideRange(Box<str>),
-            //    IntOutsideRange(Box<str>),
-            //    InvalidHex(std::num::ParseIntError, Box<str>),
-            //    InvalidOctal(std::num::ParseIntError, Box<str>),
-            //    InvalidBinary(std::num::ParseIntError, Box<str>),
-            //    QualifiedPatternIdent(InlinableString),
-            //    CircularDef(
-            //        Vec<Located<Ident>>,
-            //        Vec<(Region /* pattern */, Region /* expr */)>,
-            //    ),
-            //
-            //    /// When the author specifies a type annotation but no implementation
-            //    NoImplementation,
-            todo!("TODO implement run time error reporting for {:?}", other)
-        }
-    }
-}
 
 // define custom allocator struct so we can `impl RocDocAllocator` custom helpers
 pub struct RocDocAllocator<'a> {
@@ -711,6 +304,7 @@ impl<'a> RocDocAllocator<'a> {
         self.text(content.to_string()).annotate(Annotation::BinOp)
     }
 
+    /// Turns of backticks/colors in a block
     pub fn type_block(
         &'a self,
         content: DocBuilder<'a, Self, Annotation>,
@@ -724,12 +318,118 @@ impl<'a> RocDocAllocator<'a> {
             .annotate(Annotation::Hint)
     }
 
+    pub fn region_all_the_things(
+        &'a self,
+        region: roc_region::all::Region,
+        sub_region1: roc_region::all::Region,
+        sub_region2: roc_region::all::Region,
+        error_annotation: Annotation,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        debug_assert!(region.contains(&sub_region1));
+        debug_assert!(region.contains(&sub_region2));
+
+        // if true, the final line of the snippet will be some ^^^ that point to the region where
+        // the problem is. Otherwise, the snippet will have a > on the lines that are in the regon
+        // where the problem is.
+        let error_highlight_line = region.start_line == region.end_line;
+
+        let max_line_number_length = (region.end_line + 1).to_string().len();
+        let indent = 2;
+
+        let mut result = self.nil();
+        for i in region.start_line..=region.end_line {
+            let line_number_string = (i + 1).to_string();
+            let line_number = line_number_string;
+            let this_line_number_length = line_number.len();
+
+            let line = self.src_lines[i as usize];
+
+            let rest_of_line = if !line.trim().is_empty() {
+                self.text(line).indent(indent)
+            } else {
+                self.nil()
+            };
+
+            let highlight = !error_highlight_line
+                && ((i >= sub_region1.start_line && i <= sub_region1.end_line)
+                    || (i >= sub_region2.start_line && i <= sub_region2.end_line));
+
+            let source_line = if highlight {
+                self.text(" ".repeat(max_line_number_length - this_line_number_length))
+                    .append(self.text(line_number).annotate(Annotation::LineNumber))
+                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
+                    .append(self.text(">").annotate(error_annotation))
+                    .append(rest_of_line)
+            } else if error_highlight_line {
+                self.text(" ".repeat(max_line_number_length - this_line_number_length))
+                    .append(self.text(line_number).annotate(Annotation::LineNumber))
+                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
+                    .append(rest_of_line)
+            } else {
+                self.text(" ".repeat(max_line_number_length - this_line_number_length))
+                    .append(self.text(line_number).annotate(Annotation::LineNumber))
+                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
+                    .append(self.text(" "))
+                    .append(rest_of_line)
+            };
+
+            result = result.append(source_line);
+
+            if i != region.end_line {
+                result = result.append(self.line())
+            }
+        }
+
+        if error_highlight_line {
+            let overlapping = sub_region2.start_col < sub_region1.end_col;
+
+            let highlight = if overlapping {
+                self.text("^".repeat((sub_region2.end_col - sub_region1.start_col) as usize))
+            } else {
+                let highlight1 = "^".repeat((sub_region1.end_col - sub_region1.start_col) as usize);
+                let highlight2 = if sub_region1 == sub_region2 {
+                    "".repeat(0)
+                } else {
+                    "^".repeat((sub_region2.end_col - sub_region2.start_col) as usize)
+                };
+                let inbetween = " "
+                    .repeat((sub_region2.start_col.saturating_sub(sub_region1.end_col)) as usize);
+
+                self.text(highlight1)
+                    .append(self.text(inbetween))
+                    .append(self.text(highlight2))
+            };
+
+            let highlight_line = self
+                .line()
+                .append(self.text(" ".repeat(max_line_number_length)))
+                .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
+                .append(if sub_region1.is_empty() && sub_region2.is_empty() {
+                    self.nil()
+                } else {
+                    self.text(" ".repeat(sub_region1.start_col as usize))
+                        .indent(indent)
+                        .append(highlight)
+                        .annotate(error_annotation)
+                });
+
+            result = result.append(highlight_line);
+        }
+
+        result.annotate(Annotation::CodeBlock)
+    }
+
     pub fn region_with_subregion(
         &'a self,
         region: roc_region::all::Region,
         sub_region: roc_region::all::Region,
     ) -> DocBuilder<'a, Self, Annotation> {
         debug_assert!(region.contains(&sub_region));
+
+        // If the outer region takes more than 1 full screen (~60 lines), only show the inner region
+        if region.end_line - region.start_line > 60 {
+            return self.region_with_subregion(sub_region, sub_region);
+        }
 
         // if true, the final line of the snippet will be some ^^^ that point to the region where
         // the problem is. Otherwise, the snippet will have a > on the lines that are in the regon
@@ -761,18 +461,18 @@ impl<'a> RocDocAllocator<'a> {
             {
                 self.text(" ".repeat(max_line_number_length - this_line_number_length))
                     .append(self.text(line_number).annotate(Annotation::LineNumber))
-                    .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
                     .append(self.text(">").annotate(Annotation::Error))
                     .append(rest_of_line)
             } else if error_highlight_line {
                 self.text(" ".repeat(max_line_number_length - this_line_number_length))
                     .append(self.text(line_number).annotate(Annotation::LineNumber))
-                    .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
                     .append(rest_of_line)
             } else {
                 self.text(" ".repeat(max_line_number_length - this_line_number_length))
                     .append(self.text(line_number).annotate(Annotation::LineNumber))
-                    .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
                     .append(self.text(" "))
                     .append(rest_of_line)
             };
@@ -789,7 +489,7 @@ impl<'a> RocDocAllocator<'a> {
             let highlight_line = self
                 .line()
                 .append(self.text(" ".repeat(max_line_number_length)))
-                .append(self.text(" ┆").annotate(Annotation::GutterBar))
+                .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
                 .append(if highlight_text.is_empty() {
                     self.nil()
                 } else {
@@ -806,6 +506,40 @@ impl<'a> RocDocAllocator<'a> {
 
     pub fn region(&'a self, region: roc_region::all::Region) -> DocBuilder<'a, Self, Annotation> {
         self.region_with_subregion(region, region)
+    }
+
+    pub fn region_without_error(
+        &'a self,
+        region: roc_region::all::Region,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        let mut result = self.nil();
+        for i in region.start_line..=region.end_line {
+            let line = if i == region.start_line {
+                if i == region.end_line {
+                    &self.src_lines[i as usize][region.start_col as usize..region.end_col as usize]
+                } else {
+                    &self.src_lines[i as usize][region.start_col as usize..]
+                }
+            } else if i == region.end_line {
+                &self.src_lines[i as usize][0..region.end_col as usize]
+            } else {
+                self.src_lines[i as usize]
+            };
+
+            let rest_of_line = if !line.trim().is_empty() {
+                self.text(line).annotate(Annotation::CodeBlock)
+            } else {
+                self.nil()
+            };
+
+            result = result.append(rest_of_line);
+
+            if i != region.end_line {
+                result = result.append(self.line())
+            }
+        }
+
+        result.indent(4)
     }
 
     pub fn ident(&'a self, ident: Ident) -> DocBuilder<'a, Self, Annotation> {
@@ -843,6 +577,7 @@ pub enum Annotation {
 pub struct CiWrite<W> {
     style_stack: Vec<Annotation>,
     in_type_block: bool,
+    in_code_block: bool,
     upstream: W,
 }
 
@@ -851,6 +586,7 @@ impl<W> CiWrite<W> {
         CiWrite {
             style_stack: vec![],
             in_type_block: false,
+            in_code_block: false,
             upstream,
         }
     }
@@ -898,6 +634,9 @@ where
             TypeBlock => {
                 self.in_type_block = true;
             }
+            CodeBlock => {
+                self.in_code_block = true;
+            }
             Emphasized => {
                 self.write_str("*")?;
             }
@@ -906,7 +645,7 @@ where
             }
             GlobalTag | PrivateTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
             | TypeVariable
-                if !self.in_type_block =>
+                if !self.in_type_block && !self.in_code_block =>
             {
                 self.write_str("`")?;
             }
@@ -926,6 +665,9 @@ where
                 TypeBlock => {
                     self.in_type_block = false;
                 }
+                CodeBlock => {
+                    self.in_code_block = false;
+                }
                 Emphasized => {
                     self.write_str("*")?;
                 }
@@ -934,7 +676,7 @@ where
                 }
                 GlobalTag | PrivateTag | Keyword | RecordField | Symbol | Typo | TypoSuggestion
                 | TypeVariable
-                    if !self.in_type_block =>
+                    if !self.in_type_block && !self.in_code_block =>
                 {
                     self.write_str("`")?;
                 }
