@@ -198,7 +198,9 @@ pub fn fmt_expr<'a>(
             buf.push('.');
             buf.push_str(key);
         }
-        other => panic!("TODO implement Fmt for AST variant {:?}", other),
+        MalformedIdent(_) => {}
+        MalformedClosure => {}
+        PrecedenceConflict(_, _, _, _) => {}
     }
 }
 
@@ -558,7 +560,9 @@ fn fmt_when<'a>(
                 }
             }
             _ => {
+                newline(buf, condition_indent);
                 fmt_expr(buf, &loc_condition.value, condition_indent, false, false);
+                newline(buf, indent);
             }
         }
     } else {
@@ -654,8 +658,18 @@ fn fmt_if<'a>(
                     }
                 }
             }
+
+            Expr::SpaceAfter(expr_above, spaces_below_expr) => {
+                newline(buf, return_indent);
+                fmt_expr(buf, &expr_above, return_indent, false, false);
+                fmt_condition_spaces(buf, spaces_below_expr.iter(), return_indent);
+                newline(buf, indent);
+            }
+
             _ => {
+                newline(buf, return_indent);
                 fmt_expr(buf, &loc_condition.value, return_indent, false, false);
+                newline(buf, indent);
             }
         }
     } else {

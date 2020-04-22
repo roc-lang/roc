@@ -41,7 +41,7 @@ mod test_format {
                 fmt_expr(&mut buf, &actual, 0, false, true);
 
                 assert_eq!(buf, expected)
-            },
+            }
             Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", input, error)
         };
     }
@@ -71,7 +71,7 @@ mod test_format {
                 }
 
                 assert_eq!(buf, expected)
-            },
+            }
             Err(error) => panic!("Unexpected parse failure when parsing this for module header formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
         };
     }
@@ -494,6 +494,7 @@ mod test_format {
             ),
         );
     }
+
     #[test]
     fn doesnt_detect_comment_in_comment() {
         expr_formats_same(indoc!(
@@ -1075,7 +1076,10 @@ mod test_format {
                 identity
             "#
         ));
+    }
 
+    #[test]
+    fn multi_line_if_condition_with_spaces() {
         expr_formats_to(
             indoc!(
                 r#"
@@ -1103,6 +1107,37 @@ mod test_format {
                 "#
             ),
         );
+    }
+
+    #[test]
+    fn multi_line_if_condition_with_multi_line_expr_1() {
+        expr_formats_same(indoc!(
+            r#"
+            if
+                snowWillFall
+                    pressure
+                    temperature
+            then
+                bundleUp
+            else
+                identity
+            "#
+        ));
+    }
+
+    #[test]
+    fn multi_line_if_condition_with_multi_line_expr_2() {
+        expr_formats_same(indoc!(
+            r#"
+            if
+                1
+                    == 2
+            then
+                "yes"
+            else
+                "no"
+            "#
+        ));
     }
 
     #[test]
@@ -1526,7 +1561,7 @@ mod test_format {
     }
 
     #[test]
-    fn multi_line_when_condition() {
+    fn multi_line_when_condition_1() {
         expr_formats_same(indoc!(
             r#"
             when
@@ -1539,7 +1574,10 @@ mod test_format {
                     Just True
             "#
         ));
+    }
 
+    #[test]
+    fn multi_line_when_condition_2() {
         expr_formats_same(indoc!(
             r#"
             when
@@ -1554,6 +1592,79 @@ mod test_format {
                     z
             "#
         ));
+    }
+
+    #[test]
+    fn multi_line_when_condition_3() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            x = 2
+            y = 3
+
+            when 1
+                + 1 is
+                2 ->
+                    x
+
+                _ ->
+                    y
+            "#
+            ),
+            indoc!(
+                r#"
+            x = 2
+            y = 3
+
+            when
+                1
+                    + 1
+            is
+                2 ->
+                    x
+
+                _ ->
+                    y
+            "#
+            ),
+        );
+    }
+
+    #[test]
+    fn multi_line_when_condition_4() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            x = 2
+            y = 3
+
+            when 2
+                + 2
+            is
+                4 ->
+                    x
+
+                _ ->
+                    y
+            "#
+            ),
+            indoc!(
+                r#"
+            x = 2
+            y = 3
+
+            when
+                2
+                    + 2
+            is
+                4 ->
+                    x
+
+                _ ->
+                    y
+            "#
+            ),
+        );
     }
 
     // NEWLINES
@@ -1655,6 +1766,120 @@ mod test_format {
             "#
         ));
     }
+
+    // PRECEDENCE CONFLICT
+
+    #[test]
+    fn precedence_conflict() {
+        expr_formats_same(indoc!(
+            r#"
+            if True == False == True then
+                False
+            else
+                True
+            "#
+        ));
+    }
+
+    #[test]
+    fn multi_line_precedence_conflict_1() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            if True
+                == False == True
+            then
+                False
+            else
+                True
+            "#
+            ),
+            indoc!(
+                r#"
+            if
+                True
+                    == False
+                    == True
+            then
+                False
+            else
+                True
+            "#
+            ),
+        );
+    }
+
+    #[test]
+    fn multi_line_precedence_conflict_2() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            if False
+                == False == False then
+                "true"
+            else
+                "false"
+            "#
+            ),
+            indoc!(
+                r#"
+            if
+                False
+                    == False
+                    == False
+            then
+                "true"
+            else
+                "false"
+            "#
+            ),
+        );
+    }
+
+    #[test]
+    fn precedence_conflict_functions() {
+        expr_formats_same(indoc!(
+            r#"
+            when f x == g y == h z is
+                True ->
+                    Ok 1
+
+                False ->
+                    Err 2
+            "#
+        ));
+    }
+
+    #[test]
+    fn precedence_conflict_exponents() {
+        expr_formats_same(indoc!(
+            r#"
+            if 4 == (6 ^ 6 ^ 7 ^ 8) then
+                "Hard to believe"
+            else
+                "Naturally"
+            "#
+        ));
+    }
+
+    #[test]
+    fn precedence_conflict_greater_than() {
+        expr_formats_same(indoc!(
+            r#"
+            3 > 4 > 10
+            "#
+        ));
+    }
+
+    #[test]
+    fn precedence_conflict_greater_than_and_less_than() {
+        expr_formats_same(indoc!(
+            r#"
+            1 < 4 > 1
+            "#
+        ));
+    }
+
     // UNARY OP
 
     #[test]
@@ -1677,7 +1902,10 @@ mod test_format {
             1 == 1
             "#
         ));
+    }
 
+    #[test]
+    fn binary_op_with_spaces() {
         expr_formats_to(
             indoc!(
                 r#"
@@ -1690,7 +1918,10 @@ mod test_format {
                 "#
             ),
         );
+    }
 
+    #[test]
+    fn multi_line_binary_op_1() {
         expr_formats_same(indoc!(
             r#"
             isLast
@@ -1698,7 +1929,22 @@ mod test_format {
                 && isLoaded
             "#
         ));
+    }
 
+    #[test]
+    fn multi_line_binary_op_2() {
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                < 2
+
+            f x
+            "#
+        ));
+    }
+
+    #[test]
+    fn multi_line_binary_op_with_comments() {
         expr_formats_to(
             indoc!(
                 r#"
@@ -1717,7 +1963,10 @@ mod test_format {
                 "#
             ),
         );
+    }
 
+    #[test]
+    fn partial_multi_line_binary_op_1() {
         expr_formats_to(
             indoc!(
                 r#"
@@ -1735,7 +1984,10 @@ mod test_format {
                 "#
             ),
         );
+    }
 
+    #[test]
+    fn partial_multi_line_binary_op_2() {
         expr_formats_to(
             indoc!(
                 r#"
