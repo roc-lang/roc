@@ -1076,7 +1076,10 @@ mod test_format {
                 identity
             "#
         ));
+    }
 
+    #[test]
+    fn multi_line_if_condition_with_spaces() {
         expr_formats_to(
             indoc!(
                 r#"
@@ -1104,6 +1107,37 @@ mod test_format {
                 "#
             ),
         );
+    }
+
+    #[test]
+    fn multi_line_if_condition_with_multi_line_expr_1() {
+        expr_formats_same(indoc!(
+            r#"
+            if
+                snowWillFall
+                    pressure
+                    temperature
+            then
+                bundleUp
+            else
+                identity
+            "#
+        ));
+    }
+
+    #[test]
+    fn multi_line_if_condition_with_multi_line_expr_2() {
+        expr_formats_same(indoc!(
+            r#"
+            if
+                1
+                    == 2
+            then
+                "yes"
+            else
+                "no"
+            "#
+        ));
     }
 
     #[test]
@@ -1697,56 +1731,117 @@ mod test_format {
     }
 
     // PRECEDENCE CONFLICT
-    //
-    // All of these tests pass, but only because
-    // they are not being parsed as a precedence
-    // conflicts
-    //
-    // #[test]
-    // fn precedence_conflict() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         True == False == True
-    //         "#
-    //     ));
-    // }
-    //
-    // #[test]
-    // fn precedence_conflict_functions() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         f x == g y == h z
-    //         "#
-    //     ));
-    // }
-    //
-    // #[test]
-    // fn precedence_conflict_exponents() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         6 ^ 6 ^ 7 ^ 8
-    //         "#
-    //     ));
-    // }
-    //
-    //
-    // #[test]
-    // fn precedence_conflict_greater_than() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         3 > 4 > 10
-    //         "#
-    //     ));
-    // }
-    //
-    // #[test]
-    // fn precedence_conflict_greater_than_and_less_than() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         1 < 4 > 1
-    //         "#
-    //     ));
-    // }
+
+    #[test]
+    fn precedence_conflict() {
+        expr_formats_same(indoc!(
+            r#"
+            if True == False == True then
+                False
+            else
+                True
+            "#
+        ));
+    }
+
+    #[test]
+    fn multi_line_precedence_conflict_1() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            if True
+                == False == True
+            then
+                False
+            else
+                True
+            "#
+            ),
+            indoc!(
+                r#"
+            if
+                True
+                    == False
+                    == True
+            then
+                False
+            else
+                True
+            "#
+            ),
+        );
+    }
+
+    #[test]
+    fn multi_line_precedence_conflict_2() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            if False
+                == False == False then
+                "true"
+            else
+                "false"
+            "#
+            ),
+            indoc!(
+                r#"
+            if
+                False
+                    == False
+                    == False
+            then
+                "true"
+            else
+                "false"
+            "#
+            ),
+        );
+    }
+
+    #[test]
+    fn precedence_conflict_functions() {
+        expr_formats_same(indoc!(
+            r#"
+            when f x == g y == h z is
+                True ->
+                    Ok 1
+
+                False ->
+                    Err 2
+            "#
+        ));
+    }
+
+    #[test]
+    fn precedence_conflict_exponents() {
+        expr_formats_same(indoc!(
+            r#"
+            if 4 == (6 ^ 6 ^ 7 ^ 8) then
+                "Hard to believe"
+            else
+                "Naturally"
+            "#
+        ));
+    }
+
+    #[test]
+    fn precedence_conflict_greater_than() {
+        expr_formats_same(indoc!(
+            r#"
+            3 > 4 > 10
+            "#
+        ));
+    }
+
+    #[test]
+    fn precedence_conflict_greater_than_and_less_than() {
+        expr_formats_same(indoc!(
+            r#"
+            1 < 4 > 1
+            "#
+        ));
+    }
 
     // UNARY OP
 
@@ -1770,7 +1865,10 @@ mod test_format {
             1 == 1
             "#
         ));
+    }
 
+    #[test]
+    fn binary_op_with_spaces() {
         expr_formats_to(
             indoc!(
                 r#"
@@ -1783,7 +1881,10 @@ mod test_format {
                 "#
             ),
         );
+    }
 
+    #[test]
+    fn multi_line_binary_op_1() {
         expr_formats_same(indoc!(
             r#"
             isLast
@@ -1791,7 +1892,22 @@ mod test_format {
                 && isLoaded
             "#
         ));
+    }
 
+    #[test]
+    fn multi_line_binary_op_2() {
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                < 2
+
+            f x
+            "#
+        ));
+    }
+
+    #[test]
+    fn multi_line_binary_op_with_comments() {
         expr_formats_to(
             indoc!(
                 r#"
@@ -1810,7 +1926,10 @@ mod test_format {
                 "#
             ),
         );
+    }
 
+    #[test]
+    fn partial_multi_line_binary_op_1() {
         expr_formats_to(
             indoc!(
                 r#"
@@ -1828,7 +1947,10 @@ mod test_format {
                 "#
             ),
         );
+    }
 
+    #[test]
+    fn partial_multi_line_binary_op_2() {
         expr_formats_to(
             indoc!(
                 r#"
