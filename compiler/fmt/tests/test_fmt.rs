@@ -1527,7 +1527,7 @@ mod test_format {
     }
 
     #[test]
-    fn multi_line_when_condition() {
+    fn multi_line_when_condition_1() {
         expr_formats_same(indoc!(
             r#"
             when
@@ -1540,7 +1540,10 @@ mod test_format {
                     Just True
             "#
         ));
+    }
 
+    #[test]
+    fn multi_line_when_condition_2() {
         expr_formats_same(indoc!(
             r#"
             when
@@ -1555,6 +1558,42 @@ mod test_format {
                     z
             "#
         ));
+    }
+
+    #[test]
+    fn multi_line_when_condition_3() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            x = 2
+            y = 3
+
+            when 1
+                + 1 is
+                2 ->
+                    x
+
+                _ ->
+                    y
+            "#
+            ),
+            indoc!(
+                r#"
+            x = 2
+            y = 3
+
+            when
+                1
+                    + 1
+            is
+                2 ->
+                    x
+
+                _ ->
+                    y
+            "#
+            ),
+        );
     }
 
     // NEWLINES

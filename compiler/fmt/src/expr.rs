@@ -560,7 +560,9 @@ fn fmt_when<'a>(
                 }
             }
             _ => {
+                newline(buf, condition_indent);
                 fmt_expr(buf, &loc_condition.value, condition_indent, false, false);
+                newline(buf, indent);
             }
         }
     } else {
