@@ -28,6 +28,16 @@ mod gen_builtins {
     use roc_types::subs::Subs;
 
     #[test]
+    fn f64_sqrt() {
+        assert_evals_to!("Float.sqrt 144", 12.0, f64);
+    }
+
+    #[test]
+    fn f64_round() {
+        assert_evals_to!("Float.round 3.6", 4, i64);
+    }
+
+    #[test]
     fn empty_list_literal() {
         assert_evals_to!("[]", &[], &'static [i64]);
     }
