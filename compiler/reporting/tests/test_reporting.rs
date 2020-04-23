@@ -2299,7 +2299,7 @@ mod test_reporting {
 
                 Other possibilities include:
 
-                    #Record Just _ _
+                    #Record (Just _) _
 
                 I would have to crash if I saw one of those! Add branches for them!
                 "#
@@ -2329,7 +2329,7 @@ mod test_reporting {
 
                 Other possibilities include:
 
-                    Record Just _ _
+                    Record (Just _) _
 
                 I would have to crash if I saw one of those! Add branches for them!
                 "#
