@@ -2,7 +2,6 @@ use crate::layout::{Builtin, Layout};
 use crate::pattern::{Ctor, Guard, RenderAs, TagId};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_can;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};

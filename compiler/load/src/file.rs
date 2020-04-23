@@ -1,7 +1,6 @@
 use bumpalo::Bump;
 use roc_builtins::std::Mode;
 use roc_builtins::std::StdLib;
-use roc_can;
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, ModuleOutput};
