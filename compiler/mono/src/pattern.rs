@@ -346,6 +346,7 @@ fn is_useful(matrix: &PatternMatrix, vector: &Row) -> bool {
         // rows that match the same things. This is not a useful vector!
         false
     } else {
+        // NOTE: if there are bugs in this code, look at the ordering of the row/matrix
         let mut vector = vector.clone();
         let first_pattern = vector.remove(0);
         let patterns = vector;
@@ -359,8 +360,8 @@ fn is_useful(matrix: &PatternMatrix, vector: &Row) -> bool {
                     .collect();
 
                 let mut new_row = Vec::new();
-                new_row.extend(args);
                 new_row.extend(patterns);
+                new_row.extend(args);
 
                 is_useful(&new_matrix, &new_row)
             }
@@ -450,13 +451,21 @@ fn specialize_row_by_literal(literal: &Literal, row: &Row) -> Option<Row> {
     let patterns = row;
 
     match head {
-        Some(Literal(lit)) => if &lit == literal { Some(patterns) } else{  None } ,
+        Some(Literal(lit)) => {
+            if &lit == literal {
+                Some(patterns)
+            } else {
+                None
+            }
+        }
         Some(Anything) => Some(patterns),
 
-      Some(Ctor(_,_,_)) => panic!( "Compiler bug! After type checking, constructors and literals should never align in pattern match exhaustiveness checks."),
+        Some(Ctor(_, _, _)) => panic!(
+            r#"Compiler bug! After type checking, constructors and literals should never align in pattern match exhaustiveness checks."#
+        ),
 
-      None => panic!("Compiler error! Empty matrices should not get specialized."),
-        }
+        None => panic!("Compiler error! Empty matrices should not get specialized."),
+    }
 }
 
 /// INVARIANT: (length row == N) ==> (length result == N-1)
