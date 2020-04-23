@@ -5,7 +5,7 @@ use inkwell::context::Context;
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
-use inkwell::types::{BasicTypeEnum, IntType, StructType};
+use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{FloatPredicate, IntPredicate, OptimizationLevel};
@@ -26,10 +26,6 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
 
 #[cfg(not(debug_assertions))]
 const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
-
-// 0 is the C calling convention - see https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
-// TODO: experiment with different internal calling conventions, e.g. "fast"
-const DEFAULT_CALLING_CONVENTION: u32 = 0;
 
 pub enum OptLevel {
     Normal,
@@ -57,8 +53,48 @@ pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Modu
     let memory_buffer =
         MemoryBuffer::create_from_memory_range(include_bytes!("builtins.bc"), module_name);
 
-    Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
-        .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err))
+    let module = Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
+        .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err));
+
+    // Add LLVM intrinsics.
+    add_intrinsics(ctx, &module);
+
+    module
+}
+
+fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
+    // List of all supported LLVM intrinsics:
+    //
+    // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
+    let i64_type = ctx.i64_type();
+    let f64_type = ctx.f64_type();
+
+    add_intrinsic(
+        module,
+        LLVM_SQRT_F64,
+        f64_type.fn_type(&[f64_type.into()], false),
+    );
+
+    add_intrinsic(
+        module,
+        LLVM_LROUND_I64_F64,
+        i64_type.fn_type(&[f64_type.into()], false),
+    );
+}
+
+static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
+static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
+
+fn add_intrinsic<'ctx>(
+    module: &Module<'ctx>,
+    intrinsic_name: &'static str,
+    fn_type: FunctionType<'ctx>,
+) -> FunctionValue<'ctx> {
+    let fn_val = module.add_function(intrinsic_name, fn_type, None);
+
+    fn_val.set_call_conventions(C_CALL_CONV);
+
+    fn_val
 }
 
 pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>, opt_level: OptLevel) {
@@ -268,7 +304,11 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 }
             };
 
-            call.set_call_convention(DEFAULT_CALLING_CONVENTION);
+            // TODO FIXME this should not be hardcoded!
+            // Need to look up what calling convention is the right one for that function.
+            // If this is an external-facing function, it'll use the C calling convention.
+            // If it's an internal-only function, it should (someday) use the fast calling conention.
+            call.set_call_convention(C_CALL_CONV);
 
             call.try_as_basic_value()
                 .left()
@@ -924,7 +964,7 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
         Some(Linkage::Private),
     );
 
-    fn_val.set_call_conventions(DEFAULT_CALLING_CONVENTION);
+    fn_val.set_call_conventions(fn_val.get_call_conventions());
 
     (fn_val, arg_basic_types)
 }
@@ -1131,7 +1171,7 @@ fn call_with_args<'a, 'ctx, 'env>(
                 .builder
                 .build_call(fn_val, arg_vals.into_bump_slice(), "call_builtin");
 
-            call.set_call_convention(DEFAULT_CALLING_CONVENTION);
+            call.set_call_convention(fn_val.get_call_conventions());
 
             call.try_as_basic_value()
                 .left()
@@ -1182,6 +1222,8 @@ fn call_with_args<'a, 'ctx, 'env>(
                 }
             }
         }
+        Symbol::FLOAT_SQRT => call_intrinsic(LLVM_SQRT_F64, env, args),
+        Symbol::FLOAT_ROUND => call_intrinsic(LLVM_LROUND_I64_F64, env, args),
         Symbol::LIST_SET => list_set(parent, args, env, InPlace::Clone),
         Symbol::LIST_SET_IN_PLACE => list_set(parent, args, env, InPlace::InPlace),
         _ => {
@@ -1200,13 +1242,43 @@ fn call_with_args<'a, 'ctx, 'env>(
                 .builder
                 .build_call(fn_val, arg_vals.into_bump_slice(), "call");
 
-            call.set_call_convention(DEFAULT_CALLING_CONVENTION);
+            call.set_call_convention(fn_val.get_call_conventions());
 
             call.try_as_basic_value()
                 .left()
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
         }
     }
+}
+
+fn call_intrinsic<'a, 'ctx, 'env>(
+    intrinsic_name: &'static str,
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
+) -> BasicValueEnum<'ctx> {
+    let fn_val = env
+        .module
+        .get_function(intrinsic_name)
+        .unwrap_or_else(|| panic!("Unrecognized intrinsic function: {}", intrinsic_name));
+
+    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
+
+    for (arg, _layout) in args.iter() {
+        arg_vals.push(*arg);
+    }
+
+    let call = env
+        .builder
+        .build_call(fn_val, arg_vals.into_bump_slice(), "call");
+
+    call.set_call_convention(fn_val.get_call_conventions());
+
+    call.try_as_basic_value().left().unwrap_or_else(|| {
+        panic!(
+            "LLVM error: Invalid call by name for intrinsic {}",
+            intrinsic_name
+        )
+    })
 }
 
 fn load_list_len<'ctx>(
@@ -1371,8 +1443,12 @@ pub fn get_call_conventions(cc: CallingConvention) -> u32 {
     // For now, we're returning 0 for the C calling convention on all of these.
     // Not sure if we should be picking something more specific!
     match cc {
-        SystemV => 0,
-        WasmBasicCAbi => 0,
-        WindowsFastcall => 0,
+        SystemV => C_CALL_CONV,
+        WasmBasicCAbi => C_CALL_CONV,
+        WindowsFastcall => C_CALL_CONV,
     }
 }
+
+/// Source: https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
+pub static C_CALL_CONV: u32 = 0;
+pub static COLD_CALL_CONV: u32 = 9;

@@ -386,6 +386,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![float_type(UVAR1)], float_type(UVAR2)),
     );
 
+    // round : Float -> Int
+    add_type(
+        Symbol::FLOAT_ROUND,
+        unique_function(vec![float_type(UVAR1)], int_type(UVAR2)),
+    );
+
     // highest : Float
     add_type(Symbol::FLOAT_HIGHEST, float_type(UVAR1));
 
