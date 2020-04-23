@@ -936,10 +936,7 @@ fn path_to_expr_help<'a>(
     layout: Layout<'a>,
 ) -> (Expr<'a>, Layout<'a>) {
     match path {
-        Path::Unbox(ref unboxed) => match **unboxed {
-            _ => (Expr::Load(symbol), layout),
-        },
-
+        Path::Unbox(unboxed) => path_to_expr_help(env, symbol, unboxed, layout),
         Path::Empty => (Expr::Load(symbol), layout),
 
         Path::Index {
