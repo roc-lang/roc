@@ -1109,7 +1109,6 @@ fn problems_to_hint<'b>(
 
 pub mod suggest {
     use core::convert::AsRef;
-    use distance;
     use inlinable_string::InlinableString;
     use roc_module::ident::Lowercase;
 
