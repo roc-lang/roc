@@ -123,6 +123,14 @@ fn pattern_to_doc<'b>(
     alloc: &'b RocDocAllocator<'b>,
     pattern: roc_mono::pattern::Pattern,
 ) -> RocDocBuilder<'b> {
+    pattern_to_doc_help(alloc, pattern, false)
+}
+
+fn pattern_to_doc_help<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    pattern: roc_mono::pattern::Pattern,
+    in_type_param: bool,
+) -> RocDocBuilder<'b> {
     use roc_mono::pattern::Literal::*;
     use roc_mono::pattern::Pattern::*;
 
@@ -137,7 +145,10 @@ fn pattern_to_doc<'b>(
             Str(s) => alloc.string(s.into()),
         },
         Ctor(union, tag_id, args) => {
-            let arg_docs = args.into_iter().map(|v| pattern_to_doc(alloc, v));
+            let has_args = !args.is_empty();
+            let arg_docs = args
+                .into_iter()
+                .map(|v| pattern_to_doc_help(alloc, v, true));
 
             let tag = &union.alternatives[tag_id.0 as usize];
             let tag_name = tag.name.clone();
@@ -147,7 +158,14 @@ fn pattern_to_doc<'b>(
 
             let docs = std::iter::once(alloc.tag_name(tag_name)).chain(arg_docs);
 
-            alloc.intersperse(docs, alloc.space())
+            if in_type_param && has_args {
+                alloc
+                    .text("(")
+                    .append(alloc.intersperse(docs, alloc.space()))
+                    .append(")")
+            } else {
+                alloc.intersperse(docs, alloc.space())
+            }
         }
     }
 }
