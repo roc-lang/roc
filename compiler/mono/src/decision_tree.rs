@@ -9,7 +9,7 @@ use roc_module::symbol::Symbol;
 use crate::expr::specialize_equality;
 use crate::layout::Builtin;
 use crate::layout::Layout;
-use crate::pattern::{Ctor, Union};
+use crate::pattern::{Ctor, RenderAs, TagId, Union};
 
 /// COMPILE CASES
 
@@ -381,8 +381,11 @@ fn test_at_path<'a>(selected_path: &Path, branch: Branch<'a>, all_tests: &mut Ve
                 }
 
                 RecordDestructure(destructs, _) => {
+                    // not rendered, so pick the easiest
                     let union = Union {
+                        render_as: RenderAs::Tag,
                         alternatives: vec![Ctor {
+                            tag_id: TagId(0),
                             name: TagName::Global("#Record".into()),
                             arity: destructs.len(),
                         }],
@@ -933,10 +936,7 @@ fn path_to_expr_help<'a>(
     layout: Layout<'a>,
 ) -> (Expr<'a>, Layout<'a>) {
     match path {
-        Path::Unbox(ref unboxed) => match **unboxed {
-            _ => todo!(),
-        },
-
+        Path::Unbox(unboxed) => path_to_expr_help(env, symbol, unboxed, layout),
         Path::Empty => (Expr::Load(symbol), layout),
 
         Path::Index {
