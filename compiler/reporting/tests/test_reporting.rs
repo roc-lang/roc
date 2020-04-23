@@ -2244,6 +2244,100 @@ mod test_reporting {
     }
 
     #[test]
+    fn patterns_record_not_exhaustive() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x = { a: 3 }
+
+                when x is
+                    { a: 4 } -> 4
+                "#
+            ),
+            indoc!(
+                r#"
+                -- UNSAFE PATTERN --------------------------------------------------------------
+
+                This `when` does not cover all the possibilities:
+
+                3 ┆>  when x is
+                4 ┆>      { a: 4 } -> 4
+
+                Other possibilities include:
+
+                    #Record _
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn patterns_record_guard_not_exhaustive() {
+        report_problem_as(
+            indoc!(
+                r#"
+                y : [ Nothing, Just Int ]
+                y = Just 4
+                x = { a: y, b: 42}
+
+                when x is
+                    { a: Nothing } -> 4
+                    { a: Just 3 } -> 4
+                "#
+            ),
+            indoc!(
+                r#"
+                -- UNSAFE PATTERN --------------------------------------------------------------
+
+                This `when` does not cover all the possibilities:
+
+                5 ┆>  when x is
+                6 ┆>      { a: Nothing } -> 4
+                7 ┆>      { a: Just 3 } -> 4
+
+                Other possibilities include:
+
+                    #Record Just _ _
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn patterns_nested_tag_not_exhaustive() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when Record Nothing 1 is
+                    Record (Nothing) b -> b
+                    Record (Just 3) b -> b
+                "#
+            ),
+            indoc!(
+                r#"
+                -- UNSAFE PATTERN --------------------------------------------------------------
+
+                This `when` does not cover all the possibilities:
+
+                1 ┆>  when Record Nothing 1 is
+                2 ┆>      Record (Nothing) b -> b
+                3 ┆>      Record (Just 3) b -> b
+
+                Other possibilities include:
+
+                    Record Just _ _
+
+                I would have to crash if I saw one of those! Add branches for them!
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn patterns_int_redundant() {
         report_problem_as(
             indoc!(

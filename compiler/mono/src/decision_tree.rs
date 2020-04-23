@@ -935,7 +935,7 @@ fn path_to_expr_help<'a>(
 ) -> (Expr<'a>, Layout<'a>) {
     match path {
         Path::Unbox(ref unboxed) => match **unboxed {
-            _ => todo!(),
+            _ => (Expr::Load(symbol), layout),
         },
 
         Path::Empty => (Expr::Load(symbol), layout),
