@@ -27,10 +27,6 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
 #[cfg(not(debug_assertions))]
 const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 
-// 0 is the C calling convention - see https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
-// TODO: experiment with different internal calling conventions, e.g. "fast"
-const DEFAULT_CALLING_CONVENTION: u32 = 0;
-
 pub enum OptLevel {
     Normal,
     Optimize,
@@ -308,7 +304,11 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 }
             };
 
-            call.set_call_convention(DEFAULT_CALLING_CONVENTION);
+            // TODO FIXME this should not be hardcoded!
+            // Need to look up what calling convention is the right one for that function.
+            // If this is an external-facing function, it'll use the C calling convention.
+            // If it's an internal-only function, it should (someday) use the fast calling conention.
+            call.set_call_convention(C_CALL_CONV);
 
             call.try_as_basic_value()
                 .left()
@@ -964,7 +964,7 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
         Some(Linkage::Private),
     );
 
-    fn_val.set_call_conventions(DEFAULT_CALLING_CONVENTION);
+    fn_val.set_call_conventions(fn_val.get_call_conventions());
 
     (fn_val, arg_basic_types)
 }
@@ -1171,7 +1171,7 @@ fn call_with_args<'a, 'ctx, 'env>(
                 .builder
                 .build_call(fn_val, arg_vals.into_bump_slice(), "call_builtin");
 
-            call.set_call_convention(DEFAULT_CALLING_CONVENTION);
+            call.set_call_convention(fn_val.get_call_conventions());
 
             call.try_as_basic_value()
                 .left()
@@ -1242,7 +1242,7 @@ fn call_with_args<'a, 'ctx, 'env>(
                 .builder
                 .build_call(fn_val, arg_vals.into_bump_slice(), "call");
 
-            call.set_call_convention(DEFAULT_CALLING_CONVENTION);
+            call.set_call_convention(fn_val.get_call_conventions());
 
             call.try_as_basic_value()
                 .left()
@@ -1443,8 +1443,12 @@ pub fn get_call_conventions(cc: CallingConvention) -> u32 {
     // For now, we're returning 0 for the C calling convention on all of these.
     // Not sure if we should be picking something more specific!
     match cc {
-        SystemV => 0,
-        WasmBasicCAbi => 0,
-        WindowsFastcall => 0,
+        SystemV => C_CALL_CONV,
+        WasmBasicCAbi => C_CALL_CONV,
+        WindowsFastcall => C_CALL_CONV,
     }
 }
+
+/// Source: https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
+pub static C_CALL_CONV: u32 = 0;
+pub static COLD_CALL_CONV: u32 = 9;
