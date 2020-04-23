@@ -1,5 +1,5 @@
 use roc_collections::all::{Index, MutMap};
-use roc_module::ident::TagName;
+use roc_module::ident::{Lowercase, TagName};
 use roc_region::all::{Located, Region};
 
 use self::Pattern::*;
@@ -7,6 +7,14 @@ use self::Pattern::*;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Union {
     pub alternatives: Vec<Ctor>,
+    pub render_as: RenderAs,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RenderAs {
+    Tag,
+    Record(Vec<Lowercase>),
+    Guard,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
@@ -52,22 +60,26 @@ fn simplify<'a>(pattern: &crate::expr::Pattern<'a>) -> Pattern {
         Identifier(_) => Anything,
         RecordDestructure(destructures, _) => {
             let tag_id = TagId(0);
+            let mut patterns = std::vec::Vec::with_capacity(destructures.len());
+            let mut field_names = std::vec::Vec::with_capacity(destructures.len());
+
+            for destruct in destructures {
+                field_names.push(destruct.label.clone());
+
+                match &destruct.guard {
+                    None => patterns.push(Anything),
+                    Some(guard) => patterns.push(simplify(guard)),
+                }
+            }
+
             let union = Union {
+                render_as: RenderAs::Record(field_names),
                 alternatives: vec![Ctor {
                     name: TagName::Global("#Record".into()),
                     tag_id,
                     arity: destructures.len(),
                 }],
             };
-
-            let mut patterns = std::vec::Vec::with_capacity(destructures.len());
-
-            for destruct in destructures {
-                match &destruct.guard {
-                    None => patterns.push(Anything),
-                    Some(guard) => patterns.push(simplify(guard)),
-                }
-            }
 
             Ctor(union, tag_id, patterns)
         }
@@ -306,6 +318,7 @@ fn to_nonredundant_rows<'a>(
             let tag_id = TagId(0);
 
             let union = Union {
+                render_as: RenderAs::Guard,
                 alternatives: vec![Ctor {
                     tag_id,
                     name: TagName::Global("#Guard".into()),

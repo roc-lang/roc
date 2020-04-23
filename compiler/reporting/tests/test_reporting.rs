@@ -2254,6 +2254,7 @@ mod test_reporting {
                     { a: 4 } -> 4
                 "#
             ),
+            // Hint: Looks like a record field guard is not exhaustive. Learn more about record pattern matches at TODO.
             indoc!(
                 r#"
                 -- UNSAFE PATTERN --------------------------------------------------------------
@@ -2265,7 +2266,7 @@ mod test_reporting {
 
                 Other possibilities include:
 
-                    #Record _
+                    { a }
 
                 I would have to crash if I saw one of those! Add branches for them!
                 "#
@@ -2299,7 +2300,7 @@ mod test_reporting {
 
                 Other possibilities include:
 
-                    #Record (Just _) _
+                    { a: Just _, b }
 
                 I would have to crash if I saw one of those! Add branches for them!
                 "#

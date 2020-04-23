@@ -133,6 +133,7 @@ fn pattern_to_doc_help<'b>(
 ) -> RocDocBuilder<'b> {
     use roc_mono::pattern::Literal::*;
     use roc_mono::pattern::Pattern::*;
+    use roc_mono::pattern::RenderAs;
 
     match pattern {
         Anything => alloc.text("_"),
@@ -145,26 +146,55 @@ fn pattern_to_doc_help<'b>(
             Str(s) => alloc.string(s.into()),
         },
         Ctor(union, tag_id, args) => {
-            let has_args = !args.is_empty();
-            let arg_docs = args
-                .into_iter()
-                .map(|v| pattern_to_doc_help(alloc, v, true));
+            match union.render_as {
+                RenderAs::Guard => panic!("can this happen? inform Folkert"),
+                RenderAs::Record(field_names) => {
+                    let mut arg_docs = Vec::with_capacity(args.len());
 
-            let tag = &union.alternatives[tag_id.0 as usize];
-            let tag_name = tag.name.clone();
+                    for (label, v) in field_names.into_iter().zip(args.into_iter()) {
+                        match &v {
+                            Anything => {
+                                arg_docs.push(alloc.text(label.to_string()));
+                            }
+                            Literal(_) | Ctor(_, _, _) => {
+                                arg_docs.push(
+                                    alloc
+                                        .text(label.to_string())
+                                        .append(alloc.reflow(": "))
+                                        .append(pattern_to_doc_help(alloc, v, false)),
+                                );
+                            }
+                        }
+                    }
 
-            // We assume the alternatives are sorted. If not, this assert will trigger
-            debug_assert!(tag_id == tag.tag_id);
+                    alloc
+                        .text("{ ")
+                        .append(alloc.intersperse(arg_docs, alloc.reflow(", ")))
+                        .append(" }")
+                }
+                RenderAs::Tag => {
+                    let has_args = !args.is_empty();
+                    let arg_docs = args
+                        .into_iter()
+                        .map(|v| pattern_to_doc_help(alloc, v, true));
 
-            let docs = std::iter::once(alloc.tag_name(tag_name)).chain(arg_docs);
+                    let tag = &union.alternatives[tag_id.0 as usize];
+                    let tag_name = tag.name.clone();
 
-            if in_type_param && has_args {
-                alloc
-                    .text("(")
-                    .append(alloc.intersperse(docs, alloc.space()))
-                    .append(")")
-            } else {
-                alloc.intersperse(docs, alloc.space())
+                    // We assume the alternatives are sorted. If not, this assert will trigger
+                    debug_assert!(tag_id == tag.tag_id);
+
+                    let docs = std::iter::once(alloc.tag_name(tag_name)).chain(arg_docs);
+
+                    if in_type_param && has_args {
+                        alloc
+                            .text("(")
+                            .append(alloc.intersperse(docs, alloc.space()))
+                            .append(")")
+                    } else {
+                        alloc.intersperse(docs, alloc.space())
+                    }
+                }
             }
         }
     }

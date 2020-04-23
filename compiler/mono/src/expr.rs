@@ -1,5 +1,5 @@
 use crate::layout::{Builtin, Layout};
-use crate::pattern::{Ctor, Guard, TagId};
+use crate::pattern::{Ctor, Guard, RenderAs, TagId};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_can;
@@ -1496,6 +1496,7 @@ fn from_can_pattern<'a>(
                     tag_id: 0,
                     tag_name: tag_name.clone(),
                     union: Union {
+                        render_as: RenderAs::Tag,
                         alternatives: vec![Ctor {
                             tag_id: TagId(0),
                             name: tag_name.clone(),
@@ -1507,6 +1508,7 @@ fn from_can_pattern<'a>(
                     value: tag_name == &ttrue,
                     tag_name: tag_name.clone(),
                     union: Union {
+                        render_as: RenderAs::Tag,
                         alternatives: vec![
                             Ctor {
                                 tag_id: TagId(0),
@@ -1537,6 +1539,7 @@ fn from_can_pattern<'a>(
                     }
 
                     let union = crate::pattern::Union {
+                        render_as: RenderAs::Tag,
                         alternatives: ctors,
                     };
 
@@ -1548,6 +1551,7 @@ fn from_can_pattern<'a>(
                 }
                 Unwrapped(field_layouts) => {
                     let union = crate::pattern::Union {
+                        render_as: RenderAs::Tag,
                         alternatives: vec![Ctor {
                             tag_id: TagId(0),
                             name: tag_name.clone(),
@@ -1582,6 +1586,7 @@ fn from_can_pattern<'a>(
                     }
 
                     let union = crate::pattern::Union {
+                        render_as: RenderAs::Tag,
                         alternatives: ctors,
                     };
 
