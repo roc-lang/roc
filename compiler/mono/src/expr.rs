@@ -6,6 +6,7 @@ use roc_can;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_parse::operator::CalledVia;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, ContentHash, FlatType, Subs, Variable};
 use std::hash::Hash;
@@ -26,17 +27,96 @@ pub struct Proc<'a> {
     pub ret_layout: Layout<'a>,
 }
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Procs<'a> {
-    user_defined: MutMap<Symbol, PartialProc<'a>>,
+    unspecialized: MutMap<Symbol, PartialProc<'a>>,
     anonymous: MutMap<Symbol, Option<Proc<'a>>>,
     specializations: MutMap<ContentHash, (Symbol, Option<Proc<'a>>)>,
     builtin: MutSet<Symbol>,
 }
 
 impl<'a> Procs<'a> {
-    fn insert_user_defined(&mut self, symbol: Symbol, partial_proc: PartialProc<'a>) {
-        self.user_defined.insert(symbol, partial_proc);
+    fn new(arena: &'a Bump, var_store: &VarStore) -> Self {
+        use roc_can::expr::Expr::*;
+
+        let mut unspecialized = MutMap::default();
+
+        // Insert an unspecialized version of List.get which does a bounds check.
+        unspecialized.insert(
+            Symbol::LIST_GET,
+            PartialProc {
+                annotation: var_store.fresh(),
+                patterns: bumpalo::vec![in arena; Symbol::LIST_GET_ARG_LIST, Symbol::LIST_GET_ARG_INDEX],
+                body: If {
+                    cond_var: var_store.fresh(),
+                    branch_var: var_store.fresh(),
+                    branches: vec![(
+                        // if-condition
+                        Located {
+                            region: Region::zero(),
+                            value:
+                            Call(
+                                Box::new((var_store.fresh(), Located{
+                                    region: Region::zero(),
+                                    value: Var(Symbol::LIST_IS_EMPTY) // TODO actually check if (index < List.len list)
+                                }, var_store.fresh())
+                                ),
+                                vec![ (var_store.fresh(), Located {
+                                    region: Region::zero(),
+                                    value: Var(Symbol::LIST_GET_ARG_LIST)
+                                }) ],
+                                CalledVia::Space,
+                            )},
+                        // then-branch
+                        Located {
+                            region: Region::zero(),
+                            value:
+                                // List.getUnsafe list index
+                                Call(
+                                    Box::new((var_store.fresh(), Located{
+                                        region: Region::zero(),
+                                        value: Var(Symbol::LIST_GET_UNSAFE)
+                                    }, var_store.fresh())
+                                    ),
+                                    vec![ (var_store.fresh(), Located {
+                                        region: Region::zero(),
+                                        value: Var(Symbol::LIST_GET_ARG_LIST)
+                                    }),
+                                    (var_store.fresh(), Located {
+                                        region: Region::zero(),
+                                        value: Var(Symbol::LIST_GET_ARG_INDEX)
+                                    }),
+
+                                    ],
+                                    CalledVia::Space,
+                                )}),
+                    ],
+                    final_else: Box::new(
+                        // else-branch
+                        Located {
+                            region: Region::zero(),
+                            value:
+                                Tag {
+                                    variant_var: var_store.fresh(),
+                                    ext_var: var_store.fresh(),
+                                    name: TagName::Global("OutOfBounds".into()),
+                                    arguments: std::vec::Vec::new()
+                                }
+                        }
+                    )
+                },
+            },
+        );
+
+        Procs {
+            unspecialized,
+            anonymous: MutMap::default(),
+            specializations: MutMap::default(),
+            builtin: MutSet::default(),
+        }
+    }
+    fn insert_unspecialized(&mut self, symbol: Symbol, partial_proc: PartialProc<'a>) {
+        self.unspecialized.insert(symbol, partial_proc);
     }
 
     fn insert_anonymous(&mut self, symbol: Symbol, proc: Option<Proc<'a>>) {
@@ -52,15 +132,15 @@ impl<'a> Procs<'a> {
         self.specializations.insert(hash, (spec_name, proc));
     }
 
-    fn get_user_defined(&self, symbol: Symbol) -> Option<&PartialProc<'a>> {
-        self.user_defined.get(&symbol)
+    fn get_unspecialized(&self, symbol: Symbol) -> Option<&PartialProc<'a>> {
+        self.unspecialized.get(&symbol)
     }
 
     pub fn len(&self) -> usize {
         let anonymous: usize = self.anonymous.len();
-        let user_defined: usize = self.specializations.len();
+        let unspecialized: usize = self.specializations.len();
 
-        anonymous + user_defined
+        anonymous + unspecialized
     }
 
     pub fn is_empty(&self) -> bool {
@@ -443,7 +523,7 @@ fn from_can<'a>(
             let symbol = match name {
                 Some(symbol) => {
                     // a named closure
-                    procs.insert_user_defined(
+                    procs.insert_unspecialized(
                         symbol,
                         PartialProc {
                             annotation,
@@ -1278,7 +1358,7 @@ fn call_by_name<'a>(
     // create specialized procedure to call
 
     // If we need to specialize the body, this will get populated with the info
-    // we need to do that. This is defined outside the procs.get_user_defined(...) call
+    // we need to do that. This is defined outside the procs.get_unspecialized(...) call
     // because if we tried to specialize the body inside that match, we would
     // get a borrow checker error about trying to borrow `procs` as mutable
     // while there is still an active immutable borrow.
@@ -1290,7 +1370,7 @@ fn call_by_name<'a>(
         Vec<'a, Symbol>,
     )>;
 
-    let specialized_proc_name = match procs.get_user_defined(proc_name) {
+    let specialized_proc_name = match procs.get_unspecialized(proc_name) {
         Some(partial_proc) => {
             let content_hash = ContentHash::from_var(fn_var, env.subs);
 
