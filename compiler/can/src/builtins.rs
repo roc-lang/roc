@@ -123,7 +123,7 @@ fn list_get(var_store: &VarStore) -> Def {
     }
 }
 
-/// List.first : List elem -> Result elem [ OutOfBounds ]*
+/// List.first : List elem -> Result elem [ ListWasEmpty ]*
 fn list_first(var_store: &VarStore) -> Def {
     use crate::expr::Expr::*;
     use crate::pattern::Pattern::*;
@@ -149,18 +149,18 @@ fn list_first(var_store: &VarStore) -> Def {
                     var_store,
                 ),
             ),
-            // then-branch
+            // list was empty
             no_region(
-                // Err OutOfBounds
+                // Err ListWasEmpty
                 tag(
                     "Err",
-                    vec![tag("OutOfBounds", Vec::new(), var_store)],
+                    vec![tag("ListWasEmpty", Vec::new(), var_store)],
                     var_store,
                 ),
             ),
         )],
         final_else: Box::new(
-            // default branch
+            // list was not empty
             no_region(
                 // Ok (List.#getUnsafe list 0)
                 tag(
