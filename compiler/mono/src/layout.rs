@@ -420,10 +420,10 @@ fn union_sorted_tags_help<'a>(
             let mut result = Vec::with_capacity_in(tags_vec.len(), arena);
 
             for (tag_name, arguments) in tags_vec {
-                // resverse space for the tag discriminant
+                // +1 to reserve space for the discriminant
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
 
-                // add the tag discriminant
+                // add the discriminant
                 arg_layouts.push(Layout::Builtin(Builtin::Int64));
 
                 for var in arguments {
@@ -434,6 +434,7 @@ fn union_sorted_tags_help<'a>(
 
                 result.push((tag_name, arg_layouts.into_bump_slice()));
             }
+
             UnionVariant::Wrapped(result)
         }
     }
