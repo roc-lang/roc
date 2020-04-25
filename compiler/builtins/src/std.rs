@@ -371,22 +371,9 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // List module
 
-    // get : List elem, Int -> Result elem [ OutOfBounds ]*
-    let index_out_of_bounds = SolvedType::TagUnion(
-        vec![(TagName::Global("OutOfBounds".into()), vec![])],
-        Box::new(SolvedType::Wildcard),
-    );
-
+    // #getUnsafe : List elem, Int -> elem
     add_type(
-        Symbol::LIST_GET,
-        SolvedType::Func(
-            vec![list_type(flex(TVAR1)), int_type()],
-            Box::new(result_type(flex(TVAR1), index_out_of_bounds)),
-        ),
-    );
-
-    add_type(
-        Symbol::LIST_GET_UNSAFE, // TODO remove this once we can code gen Result
+        Symbol::LIST_GET_UNSAFE,
         SolvedType::Func(
             vec![list_type(flex(TVAR1)), int_type()],
             Box::new(flex(TVAR1)),
