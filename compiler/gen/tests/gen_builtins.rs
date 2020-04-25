@@ -302,8 +302,13 @@ mod gen_builtins {
     }
 
     #[test]
-    fn head_int_list() {
+    fn get_0_int_list() {
         assert_evals_to!("List.get [ 12, 9, 6, 3 ] 0", (1, 12), (u64, i64));
+    }
+
+    #[test]
+    fn head_int_list() {
+        assert_evals_to!("List.first [ 12, 9, 6, 3 ]", (1, 12), (u64, i64));
     }
 
     #[test]
