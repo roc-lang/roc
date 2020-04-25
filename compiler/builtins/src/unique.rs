@@ -444,7 +444,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![list_type(UVAR1, TVAR1)], bool_type(UVAR2)),
     );
 
-    // len : List * -> Int
+    // len : Attr u (List *) -> Attr v Int
     add_type(
         Symbol::LIST_LEN,
         unique_function(vec![list_type(UVAR1, TVAR1)], int_type(UVAR2)),
