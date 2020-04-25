@@ -423,4 +423,14 @@ mod gen_builtins {
             f64
         );
     }
+
+    #[test]
+    fn ok_with_payload() {
+        assert_evals_to!("if True then Ok 42 else Err False", (1, 42), (u64, i64));
+    }
+
+    #[test]
+    fn err_with_payload() {
+        assert_evals_to!("if True then Err 42 else Ok 7", (0, 42), (u64, i64));
+    }
 }
