@@ -495,7 +495,13 @@ impl FieldAccess {
     }
 
     pub fn list_seen() -> Self {
-        Self::default()
+        use Mark::*;
+        use Usage::*;
+
+        let mut result = Self::default();
+        result.fields.insert(LIST_ELEM.into(), Simple(Seen));
+
+        result
     }
 
     pub fn list_update() -> Self {
