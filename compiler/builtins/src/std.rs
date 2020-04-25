@@ -371,18 +371,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // List module
 
-    // isEmpty : List * -> Bool
-    add_type(
-        Symbol::LIST_IS_EMPTY,
-        SolvedType::Func(
-            vec![SolvedType::Apply(
-                Symbol::LIST_LIST,
-                vec![SolvedType::Wildcard],
-            )],
-            Box::new(bool_type()),
-        ),
-    );
-
     // get : List elem, Int -> Result elem [ OutOfBounds ]*
     let index_out_of_bounds = SolvedType::TagUnion(
         vec![(TagName::Global("OutOfBounds".into()), vec![])],
@@ -461,6 +449,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::LIST_LEN,
         SolvedType::Func(vec![list_type(flex(TVAR1))], Box::new(int_type())),
+    );
+
+    // isEmpty : List * -> Bool
+    add_type(
+        Symbol::LIST_IS_EMPTY,
+        SolvedType::Func(vec![list_type(flex(TVAR1))], Box::new(bool_type())),
     );
 
     // Map module
