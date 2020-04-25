@@ -642,7 +642,7 @@ define_builtins! {
         10 LIST_LEN: "len"
         11 LIST_FOLDL: "foldl"
         12 LIST_FOLDR: "foldr"
-        13 LIST_GET_UNSAFE: "#getUnsafe"
+        13 LIST_GET_UNSAFE: "getUnsafe"
         14 LIST_CONCAT: "concat"
         15 LIST_FIRST: "first"
         16 LIST_FIRST_ARG: "first#list"

@@ -301,14 +301,19 @@ mod gen_builtins {
         assert_evals_to!("List.isEmpty []", true, bool);
     }
 
-    #[test]
-    fn get_0_int_list() {
-        assert_evals_to!("List.get [ 12, 9, 6, 3 ] 0", (1, 12), (u64, i64));
-    }
+    // #[test]
+    // fn get_0_int_list() {
+    //     assert_evals_to!("List.get [ 12, 9, 6, 3 ] 0", (1, 12), (u64, i64));
+    // }
 
     #[test]
     fn head_int_list() {
         assert_evals_to!("List.first [ 12, 9, 6, 3 ]", (1, 12), (u64, i64));
+    }
+
+    #[test]
+    fn head_empty_list() {
+        assert_evals_to!("List.first []", (0, 0), (u64, i64));
     }
 
     #[test]
@@ -401,5 +406,10 @@ mod gen_builtins {
             9.0,
             f64
         );
+    }
+
+    #[test]
+    fn err_with_payload() {
+        assert_evals_to!("if True then Err 42 else Ok False", (0, 42), (u64, i64));
     }
 }
