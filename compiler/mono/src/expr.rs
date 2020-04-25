@@ -480,7 +480,7 @@ fn from_can<'a>(
             Expr::FunctionPointer(symbol)
         }
 
-        Call(boxed, mut loc_args, _) => {
+        Call(boxed, loc_args, _) => {
             use IntOrFloat::*;
 
             let (fn_var, loc_expr, ret_var) = *boxed;
@@ -555,106 +555,6 @@ fn from_can<'a>(
             };
 
             match from_can(env, loc_expr.value, procs, None) {
-                Expr::Load(Symbol::LIST_GET) => {
-                    // Expand to a bounds check around List.getUnsafe.
-                    //
-                    // We do this during monomorphization instead of code gen
-                    // because it returns an open union around `Err` and
-                    // we discard tag names prior to code gen. This means that
-                    // (for example) if this `Err` ends up unifying to
-                    // [ Foo, OutOfBounds ], then code gen won't know what
-                    // integer discriminant OutOfBounds corresponds to anymore,
-                    // so it won't know what integer to return.
-                    //
-                    // At this stage we still have tag names to work with,
-                    // so we can return Err OutOfBounds and let the subsequent
-                    // stages turn it into the appropriate integer discriminant.
-
-                    let arena = env.arena;
-                    let list_symbol = env.fresh_symbol();
-
-                    // We need owned versions of the arguments' Expr values
-                    // for later. We obtain them using .drain() because the
-                    // alternative of calling .remove(0) twice would result in
-                    // wasted work shifting around the remaining Vec elements.
-                    let ((list_expr, list_layout), (index_expr, index_layout)) = {
-                        let mut opt_arg0 = None;
-                        let mut opt_arg1 = None;
-
-                        for (index, (var, loc_expr)) in loc_args.drain(..).enumerate() {
-                            let mono_expr = from_can(env, loc_expr.value, procs, None);
-                            let layout =
-                                Layout::from_var(env.arena, var, env.subs, env.pointer_size)
-                                    .expect("invalid arg layout when converting List.get");
-
-                            match index {
-                                0 => opt_arg0 = Some((mono_expr, layout)),
-                                1 => opt_arg1 = Some((mono_expr, layout)),
-                                _ => unreachable!(),
-                            }
-                        }
-
-                        (opt_arg0.unwrap(), opt_arg1.unwrap())
-                    };
-                    let ret_layout =
-                        Layout::from_var(env.arena, ret_var, env.subs, env.pointer_size)
-                            .expect("invalid ret_layout");
-                    let cond = Expr::CallByName(
-                        Symbol::LIST_IS_EMPTY, // TODO FIXME proper bounds check instead of just isEmpty
-                        bumpalo::vec![in arena; (Expr::Load(list_symbol), list_layout.clone())]
-                            .into_bump_slice(),
-                    );
-
-                    let (ok_layout, err_layout) = match ret_layout {
-                        // Err comes before Ok because they're sorted alphabetically
-                        Layout::Union([[_err_discrim, err_layout], [_ok_discrim, ok_layout]]) => {
-                            (ok_layout, err_layout)
-                        }
-                        _ => {
-                            unreachable!("Invalid ret_layout for Result");
-                        }
-                    };
-
-                    let then_branch = {
-                        let payload_expr = Expr::CallByName(
-                            Symbol::LIST_GET_UNSAFE,
-                            bumpalo::vec![in arena;
-                                (Expr::Load(list_symbol), list_layout.clone()),
-                                (index_expr, index_layout),
-                            ]
-                            .into_bump_slice(),
-                        );
-
-                        build_ok(arena, ret_layout.clone(), payload_expr, ok_layout.clone())
-                    };
-
-                    let else_branch = {
-                        // OutOfBounds is zero-sized
-                        // TODO FIXME this isn't always zero-sized! Could be an int if union is nonempty.
-                        let payload_expr = Expr::Struct(&[]);
-
-                        build_err(arena, ret_layout.clone(), payload_expr, err_layout.clone())
-                    };
-
-                    let branch_symbol = env.fresh_symbol();
-                    let cond_expr = Expr::Cond {
-                        cond_symbol: branch_symbol,
-                        branch_symbol,
-                        cond_layout: Layout::Builtin(Builtin::Bool),
-                        pass: (&[], arena.alloc(then_branch)),
-                        fail: (&[], arena.alloc(else_branch)),
-                        ret_layout,
-                    };
-
-                    Expr::Store(
-                        bumpalo::vec![in &arena;
-                            (list_symbol, list_layout, list_expr),
-                            (branch_symbol, Layout::Builtin(Builtin::Bool), cond)
-                        ]
-                        .into_bump_slice(),
-                        env.arena.alloc(cond_expr),
-                    )
-                }
                 Expr::Load(proc_name) => {
                     // Some functions can potentially mutate in-place.
                     // If we have one of those, switch to the in-place version if appropriate.
@@ -733,7 +633,8 @@ fn from_can<'a>(
                 };
 
                 expr = Expr::Store(
-                    bumpalo::vec![in env.arena; (branch_symbol, Layout::Builtin(Builtin::Bool), cond)].into_bump_slice(),
+                    env.arena
+                        .alloc(vec![(branch_symbol, Layout::Builtin(Builtin::Bool), cond)]),
                     env.arena.alloc(cond_expr),
                 );
             }
@@ -1799,46 +1700,4 @@ pub fn specialize_equality<'a>(
         symbol,
         arena.alloc([(lhs, layout.clone()), (rhs, layout.clone())]),
     )
-}
-
-// Discriminant is always 0, and Err is alphabetically before Ok
-const ERR_TAG_ID: u8 = 1;
-const OK_TAG_ID: u8 = 2;
-
-fn build_ok<'a>(
-    arena: &'a Bump,
-    result_layout: Layout<'a>,
-    payload_expr: Expr<'a>,
-    payload_layout: Layout<'a>,
-) -> Expr<'a> {
-    let mut arguments = Vec::with_capacity_in(1, arena);
-
-    arguments.push((payload_expr, payload_layout));
-
-    Expr::Tag {
-        tag_layout: result_layout,
-        tag_name: TagName::Global("Ok".into()),
-        tag_id: OK_TAG_ID,
-        union_size: 2,
-        arguments: arguments.into_bump_slice(),
-    }
-}
-
-fn build_err<'a>(
-    arena: &'a Bump,
-    result_layout: Layout<'a>,
-    payload_expr: Expr<'a>,
-    payload_layout: Layout<'a>,
-) -> Expr<'a> {
-    let mut arguments = Vec::with_capacity_in(1, arena);
-
-    arguments.push((payload_expr, payload_layout));
-
-    Expr::Tag {
-        tag_layout: result_layout,
-        tag_name: TagName::Global("Err".into()),
-        tag_id: ERR_TAG_ID,
-        union_size: 2,
-        arguments: arguments.into_bump_slice(),
-    }
 }
