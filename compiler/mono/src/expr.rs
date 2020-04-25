@@ -486,37 +486,52 @@ fn from_can<'a>(
 
             let specialize_builtin_functions = {
                 |env: &mut Env<'a, '_>, symbol: Symbol| {
-                    match symbol {
-                        Symbol::NUM_ADD => match to_int_or_float(env.subs, ret_var) {
-                            FloatType => Symbol::FLOAT_ADD,
-                            IntType => Symbol::INT_ADD,
-                        },
-                        Symbol::NUM_SUB => match to_int_or_float(env.subs, ret_var) {
-                            FloatType => Symbol::FLOAT_SUB,
-                            IntType => Symbol::INT_SUB,
-                        },
-                        // TODO make this work for more than just int/float
-                        Symbol::BOOL_EQ => {
-                            match Layout::from_var(
-                                env.arena,
-                                loc_args[0].0,
-                                env.subs,
-                                env.pointer_size,
-                            ) {
-                                Ok(Layout::Builtin(builtin)) => match builtin {
-                                    Builtin::Int64 => Symbol::INT_EQ_I64,
-                                    Builtin::Float64 => Symbol::FLOAT_EQ,
-                                    Builtin::Bool => Symbol::INT_EQ_I1,
-                                    Builtin::Byte => Symbol::INT_EQ_I8,
-                                    _ => panic!("Equality not implemented for {:?}", builtin),
-                                },
-                                Ok(complex) => panic!(
-                                    "TODO support equality on complex layouts like {:?}",
-                                    complex
-                                ),
-                                Err(()) => panic!("Invalid layout"),
+                    if !symbol.module_id().is_builtin() {
+                        // return unchanged
+                        symbol
+                    } else {
+                        match symbol {
+                            Symbol::NUM_ADD => match to_int_or_float(env.subs, ret_var) {
+                                FloatType => Symbol::FLOAT_ADD,
+                                IntType => Symbol::INT_ADD,
+                            },
+                            Symbol::NUM_SUB => match to_int_or_float(env.subs, ret_var) {
+                                FloatType => Symbol::FLOAT_SUB,
+                                IntType => Symbol::INT_SUB,
+                            },
+                            // TODO make this work for more than just int/float
+                            Symbol::BOOL_EQ => {
+                                match Layout::from_var(
+                                    env.arena,
+                                    loc_args[0].0,
+                                    env.subs,
+                                    env.pointer_size,
+                                ) {
+                                    Ok(Layout::Builtin(builtin)) => match builtin {
+                                        Builtin::Int64 => Symbol::INT_EQ_I64,
+                                        Builtin::Float64 => Symbol::FLOAT_EQ,
+                                        Builtin::Bool => Symbol::INT_EQ_I1,
+                                        Builtin::Byte => Symbol::INT_EQ_I8,
+                                        _ => panic!("Equality not implemented for {:?}", builtin),
+                                    },
+                                    Ok(complex) => panic!(
+                                        "TODO support equality on complex layouts like {:?}",
+                                        complex
+                                    ),
+                                    Err(()) => panic!("Invalid layout"),
+                                }
                             }
+                            _ => symbol,
                         }
+                    }
+                }
+            };
+
+            match from_can(env, loc_expr.value, procs, None) {
+                Expr::Load(proc_name) => {
+                    // Some functions can potentially mutate in-place.
+                    // If we have one of those, switch to the in-place version if appropriate.
+                    match specialize_builtin_functions(env, proc_name) {
                         Symbol::LIST_SET => {
                             let subs = &env.subs;
                             // The first arg is the one with the List in it.
@@ -543,30 +558,20 @@ fn from_can<'a>(
                                         Symbol::LIST_SET
                                     };
 
-                                    new_name
+                                    call_by_name(env, procs, fn_var, ret_var, new_name, loc_args)
                                 }
-                                _ => symbol,
+                                _ => call_by_name(env, procs, fn_var, ret_var, proc_name, loc_args),
                             }
                         }
-                        _ => symbol,
+                        specialized_proc_symbol => call_by_name(
+                            env,
+                            procs,
+                            fn_var,
+                            ret_var,
+                            specialized_proc_symbol,
+                            loc_args,
+                        ),
                     }
-                }
-            };
-
-            match from_can(env, loc_expr.value, procs, None) {
-                Expr::Load(proc_name) => {
-                    // Some functions can potentially mutate in-place.
-                    // If we have one of those, switch to the in-place version if appropriate.
-                    let specialized_proc_symbol = specialize_builtin_functions(env, proc_name);
-
-                    call_by_name(
-                        env,
-                        procs,
-                        fn_var,
-                        ret_var,
-                        specialized_proc_symbol,
-                        loc_args,
-                    )
                 }
                 ptr => {
                     // Call by pointer - the closure was anonymous, e.g.
