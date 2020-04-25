@@ -935,17 +935,6 @@ fn num_type(u: VarId, a: VarId) -> SolvedType {
 }
 
 #[inline(always)]
-fn result_type(u: VarId, a: SolvedType, e: SolvedType) -> SolvedType {
-    SolvedType::Apply(
-        Symbol::ATTR_ATTR,
-        vec![
-            flex(u),
-            SolvedType::Apply(Symbol::RESULT_RESULT, vec![a, e]),
-        ],
-    )
-}
-
-#[inline(always)]
 fn list_type(u: VarId, a: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
