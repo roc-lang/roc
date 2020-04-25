@@ -78,7 +78,7 @@ fn list_get(var_store: &VarStore) -> Def {
                 // Ok
                 Tag {
                     variant_var: var_store.fresh(),
-                    ext_var: var_store.fresh(),
+                    ext_var: var_store.fresh(), // TODO Variable::EMPTY_TAG_UNION should work here
                     name: TagName::Global("Ok".into()),
                     arguments: vec![(
                         var_store.fresh(),
