@@ -181,14 +181,14 @@ fn list_first(var_store: &VarStore) -> Def {
 
     let expr = Closure(
         var_store.fresh(),
-        Symbol::LIST_GET,
+        Symbol::LIST_FIRST,
         Recursive::NotRecursive,
         args,
         Box::new((no_region(body), var_store.fresh())),
     );
 
     Def {
-        loc_pattern: no_region(Identifier(Symbol::LIST_GET)),
+        loc_pattern: no_region(Identifier(Symbol::LIST_FIRST)),
         loc_expr: no_region(expr),
         expr_var: var_store.fresh(),
         pattern_vars: SendMap::default(),
