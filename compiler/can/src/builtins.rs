@@ -1,6 +1,7 @@
 use crate::def::Def;
 use crate::expr::Expr;
 use crate::expr::Recursive;
+use crate::procedure::References;
 use roc_collections::all::SendMap;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
@@ -25,8 +26,21 @@ use roc_types::subs::{VarStore, Variable};
 /// delegates to the compiler-internal List.getUnsafe function to do the actual
 /// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
 /// which works fine because it doesn't involve any open tag unions.
-pub fn builtin_defs(var_store: &VarStore) -> Vec<Def> {
-    vec![/*list_get(var_store),*/ list_first(var_store)]
+pub fn builtin_defs(var_store: &VarStore, refs: &References) -> Vec<Def> {
+    let is_used = |symbol| refs.calls.contains(&symbol) || refs.lookups.contains(&symbol);
+
+    //
+    let mut builtins = Vec::with_capacity(20);
+
+    if is_used(Symbol::LIST_GET) {
+        builtins.push(list_get(var_store));
+    }
+
+    if is_used(Symbol::LIST_FIRST) {
+        builtins.push(list_first(var_store));
+    }
+
+    builtins
 }
 
 /// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
