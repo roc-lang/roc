@@ -1,3 +1,6 @@
+use crate::llvm::convert::{
+    basic_type_from_layout, collection, collection_wrapper, get_fn_type, get_ptr_type, ptr_int,
+};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inkwell::builder::Builder;
@@ -8,11 +11,8 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::AddressSpace;
 use inkwell::{FloatPredicate, IntPredicate, OptimizationLevel};
-
-use crate::llvm::convert::{
-    basic_type_from_layout, collection_wrapper, empty_collection, get_fn_type, ptr_int,
-};
 use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc, Procs};
@@ -360,7 +360,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let builder = env.builder;
 
             if elems.is_empty() {
-                let struct_type = empty_collection(ctx, env.ptr_bytes);
+                let struct_type = collection(ctx, env.ptr_bytes);
 
                 // THe pointer should be null (aka zero) and the length should be zero,
                 // so the whole struct should be a const_zero
@@ -392,7 +392,8 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 }
 
                 let ptr_val = BasicValueEnum::PointerValue(ptr);
-                let struct_type = collection_wrapper(ctx, ptr.get_type(), env.ptr_bytes);
+                let ptr_bytes = env.ptr_bytes;
+                let struct_type = collection_wrapper(ctx, ptr.get_type(), ptr_bytes);
                 let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
                 let mut struct_val;
 
@@ -411,7 +412,12 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
                     .unwrap();
 
-                BasicValueEnum::StructValue(struct_val.into_struct_value())
+                //
+                builder.build_bitcast(
+                    struct_val.into_struct_value(),
+                    collection(ctx, ptr_bytes),
+                    "cast_collection",
+                )
             }
         }
 
@@ -667,7 +673,7 @@ fn cast_basic_basic<'ctx>(
     let to_type_pointer = builder
         .build_bitcast(
             argument_pointer,
-            to_type.ptr_type(inkwell::AddressSpace::Generic),
+            to_type.ptr_type(AddressSpace::Generic),
             "",
         )
         .into_pointer_value();
@@ -1103,14 +1109,28 @@ fn call_with_args<'a, 'ctx, 'env>(
         Symbol::LIST_LEN => {
             debug_assert!(args.len() == 1);
 
-            BasicValueEnum::IntValue(load_list_len(env.builder, args[0].0.into_struct_value()))
+            let ctx = env.context;
+            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+            let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+            let wrapper_type = collection_wrapper(ctx, ptr_type, env.ptr_bytes);
+
+            BasicValueEnum::IntValue(load_list_len(
+                env.builder,
+                args[0].0.into_struct_value(),
+                wrapper_type,
+            ))
         }
         Symbol::LIST_IS_EMPTY => {
             debug_assert!(args.len() == 1);
 
             let list_struct = args[0].0.into_struct_value();
+
+            let ctx = env.context;
+            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+            let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+            let wrapper_type = collection_wrapper(ctx, ptr_type, env.ptr_bytes);
             let builder = env.builder;
-            let list_len = load_list_len(builder, list_struct);
+            let list_len = load_list_len(builder, list_struct, wrapper_type);
             let zero = env.ptr_int().const_zero();
             let answer = builder.build_int_compare(IntPredicate::EQ, list_len, zero, "is_zero");
 
@@ -1200,17 +1220,19 @@ fn call_with_args<'a, 'ctx, 'env>(
             let wrapper_struct = args[0].0.into_struct_value();
             let elem_index = args[1].0.into_int_value();
 
-            // Get the usize length from the wrapper struct
-            let _list_len = load_list_len(builder, wrapper_struct);
-
-            // TODO here, check to see if the requested index exceeds the length of the array.
-
             match list_layout {
-                Layout::Builtin(Builtin::List(_)) => {
-                    // Load the pointer to the array data
-                    let array_data_ptr = load_list_ptr(builder, wrapper_struct);
+                Layout::Builtin(Builtin::List(elem_layout)) => {
+                    let ctx = env.context;
+                    let elem_type =
+                        basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+                    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+                    let wrapper_type = collection_wrapper(ctx, ptr_type, env.ptr_bytes);
 
-                    // We already checked the bounds earlier.
+                    // Load the pointer to the array data
+                    let array_data_ptr = load_list_ptr(builder, wrapper_struct, wrapper_type);
+
+                    // Assume the bounds have already been checked earlier
+                    // (e.g. by List.get or List.first, which wrap List.#getUnsafe)
                     let elem_ptr = unsafe {
                         builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem")
                     };
@@ -1295,7 +1317,12 @@ fn call_intrinsic<'a, 'ctx, 'env>(
 fn load_list_len<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
+    struct_type: StructType<'ctx>,
 ) -> IntValue<'ctx> {
+    let wrapper_struct = builder
+        .build_bitcast(wrapper_struct, struct_type, "cast_collection")
+        .into_struct_value();
+
     builder
         .build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "list_len")
         .unwrap()
@@ -1305,14 +1332,19 @@ fn load_list_len<'ctx>(
 fn load_list_ptr<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
+    struct_type: StructType<'ctx>,
 ) -> PointerValue<'ctx> {
+    let wrapper_struct = builder
+        .build_bitcast(wrapper_struct, struct_type, "cast_collection")
+        .into_struct_value();
+
     builder
         .build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "list_ptr")
         .unwrap()
         .into_pointer_value()
 }
 
-fn clone_list<'a, 'ctx, 'env>(
+fn clone_nonempty_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     list_len: IntValue<'ctx>,
     elems_ptr: PointerValue<'ctx>,
@@ -1368,7 +1400,15 @@ fn clone_list<'a, 'ctx, 'env>(
         .build_insert_value(struct_val, list_len, Builtin::WRAPPER_LEN, "insert_len")
         .unwrap();
 
-    (struct_val.into_struct_value(), clone_ptr)
+    let answer = builder
+        .build_bitcast(
+            struct_val.into_struct_value(),
+            collection(ctx, ptr_bytes),
+            "cast_collection",
+        )
+        .into_struct_value();
+
+    (answer, clone_ptr)
 }
 
 enum InPlace {
@@ -1402,8 +1442,13 @@ fn list_set<'a, 'ctx, 'env>(
     let original_wrapper = args[0].0.into_struct_value();
     let elem_index = args[1].0.into_int_value();
 
+    let ctx = env.context;
+    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+    let wrapper_type = collection_wrapper(ctx, ptr_type, env.ptr_bytes);
+
     // Load the usize length from the wrapper. We need it for bounds checking.
-    let list_len = load_list_len(builder, original_wrapper);
+    let list_len = load_list_len(builder, original_wrapper, wrapper_type);
 
     // Bounds check: only proceed if index < length.
     // Otherwise, return the list unaltered.
@@ -1412,12 +1457,19 @@ fn list_set<'a, 'ctx, 'env>(
     // If the index is in bounds, clone and mutate in place.
     let build_then = || {
         let (elem, elem_layout) = args[2];
+        let ctx = env.context;
+        let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+        let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+        let wrapper_type = collection_wrapper(ctx, ptr_type, env.ptr_bytes);
         let (new_wrapper, array_data_ptr) = match in_place {
-            InPlace::InPlace => (original_wrapper, load_list_ptr(builder, original_wrapper)),
-            InPlace::Clone => clone_list(
+            InPlace::InPlace => (
+                original_wrapper,
+                load_list_ptr(builder, original_wrapper, wrapper_type),
+            ),
+            InPlace::Clone => clone_nonempty_list(
                 env,
                 list_len,
-                load_list_ptr(builder, original_wrapper),
+                load_list_ptr(builder, original_wrapper, wrapper_type),
                 elem_layout,
             ),
         };

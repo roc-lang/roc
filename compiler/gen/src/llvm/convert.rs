@@ -8,6 +8,21 @@ use inkwell::AddressSpace;
 use roc_mono::layout::{Builtin, Layout};
 
 /// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
+pub fn get_ptr_type<'ctx>(
+    bt_enum: &BasicTypeEnum<'ctx>,
+    address_space: AddressSpace,
+) -> PointerType<'ctx> {
+    match bt_enum {
+        ArrayType(typ) => typ.ptr_type(address_space),
+        IntType(typ) => typ.ptr_type(address_space),
+        FloatType(typ) => typ.ptr_type(address_space),
+        PointerType(typ) => typ.ptr_type(address_space),
+        StructType(typ) => typ.ptr_type(address_space),
+        VectorType(typ) => typ.ptr_type(address_space),
+    }
+}
+
+/// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
 pub fn get_fn_type<'ctx>(
     bt_enum: &BasicTypeEnum<'ctx>,
     arg_types: &[BasicTypeEnum<'ctx>],
@@ -117,27 +132,20 @@ pub fn basic_type_from_layout<'ctx>(
                 .as_basic_type_enum(),
             Map(_, _) | EmptyMap => panic!("TODO layout_to_basic_type for Builtin::Map"),
             Set(_) | EmptySet => panic!("TODO layout_to_basic_type for Builtin::Set"),
-            List(elem_layout) => {
-                let ptr_type = basic_type_from_layout(arena, context, elem_layout, ptr_bytes)
-                    .ptr_type(AddressSpace::Generic);
-
-                collection_wrapper(context, ptr_type, ptr_bytes).into()
-            }
-            EmptyList => BasicTypeEnum::StructType(empty_collection(context, ptr_bytes)),
+            List(_) => collection(context, ptr_bytes).into(),
+            EmptyList => BasicTypeEnum::StructType(collection(context, ptr_bytes)),
         },
     }
 }
 
 /// A length usize and a pointer to some elements.
 /// Could be a wrapper for a List or a Str.
-///
-/// The order of these doesn't matter, since they should be initialized
-/// to zero anyway for an empty collection; as such, we return a
-/// (usize, usize) struct layout no matter what.
-pub fn empty_collection(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
-    let usize_type = BasicTypeEnum::IntType(ptr_int(ctx, ptr_bytes));
+pub fn collection(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
+    let num_fields = 2;
+    let total_bytes = ptr_bytes * num_fields;
+    let array_type = ctx.i8_type().array_type(total_bytes).as_basic_type_enum();
 
-    ctx.struct_type(&[usize_type, usize_type], false)
+    ctx.struct_type(&[array_type], false).into()
 }
 
 /// A length usize and a pointer to some elements.
