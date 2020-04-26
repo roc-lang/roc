@@ -315,7 +315,7 @@ mod gen_builtins {
     }
 
     #[test]
-    fn head_int_list() {
+    fn first_int_list() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -329,21 +329,20 @@ mod gen_builtins {
         );
     }
 
-    // TODO FIXME this should work, but doesn't!
-    // #[test]
-    // fn head_empty_list() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 when List.first [] is
-    //                     Ok val -> val
-    //                     Err _ -> -1
-    //             "#
-    //         ),
-    //         -1,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn first_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when List.first [] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
 
     #[test]
     fn get_int_list() {
