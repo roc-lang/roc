@@ -450,7 +450,20 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![list_type(UVAR1, TVAR1)], int_type(UVAR2)),
     );
 
-    // #getUnsafe : List elem, Int -> elem
+    // get : List a, Int -> Result a [ OutOfBounds ]*
+    let index_out_of_bounds = SolvedType::TagUnion(
+        vec![(TagName::Global("OutOfBounds".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    add_type(
+        Symbol::LIST_GET,
+        unique_function(
+            vec![list_type(UVAR1, TVAR1), int_type(UVAR2)],
+            result_type(UVAR3, flex(TVAR1), lift(UVAR4, index_out_of_bounds)),
+        ),
+    );
+
     add_type(
         Symbol::LIST_GET_UNSAFE,
         unique_function(vec![list_type(UVAR1, TVAR1), int_type(UVAR2)], flex(TVAR1)),
@@ -931,6 +944,17 @@ fn num_type(u: VarId, a: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
         vec![flex(u), SolvedType::Apply(Symbol::NUM_NUM, vec![flex(a)])],
+    )
+}
+
+#[inline(always)]
+fn result_type(u: VarId, a: SolvedType, e: SolvedType) -> SolvedType {
+    SolvedType::Apply(
+        Symbol::ATTR_ATTR,
+        vec![
+            flex(u),
+            SolvedType::Apply(Symbol::RESULT_RESULT, vec![a, e]),
+        ],
     )
 }
 

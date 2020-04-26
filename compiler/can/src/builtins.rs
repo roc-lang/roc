@@ -26,102 +26,102 @@ use roc_types::subs::{VarStore, Variable};
 /// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
 /// which works fine because it doesn't involve any open tag unions.
 pub fn builtin_defs(var_store: &VarStore) -> Vec<Def> {
-    vec![list_get(var_store), list_first(var_store)]
+    vec![/*list_get(var_store),*/ list_first(var_store)]
 }
 
 /// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
-fn list_get(var_store: &VarStore) -> Def {
-    use crate::expr::Expr::*;
-    use crate::pattern::Pattern::*;
+// fn list_get(var_store: &VarStore) -> Def {
+//     use crate::expr::Expr::*;
+//     use crate::pattern::Pattern::*;
 
-    let args = vec![
-        (
-            var_store.fresh(),
-            no_region(Identifier(Symbol::LIST_GET_ARG_LIST)),
-        ),
-        (
-            var_store.fresh(),
-            no_region(Identifier(Symbol::LIST_GET_ARG_INDEX)),
-        ),
-    ];
+//     let args = vec![
+//         (
+//             var_store.fresh(),
+//             no_region(Identifier(Symbol::LIST_GET_ARG_LIST)),
+//         ),
+//         (
+//             var_store.fresh(),
+//             no_region(Identifier(Symbol::LIST_GET_ARG_INDEX)),
+//         ),
+//     ];
 
-    // Perform a bounds check. If it passes, delegate to List.#getUnsafe
-    let body = If {
-        cond_var: var_store.fresh(),
-        branch_var: var_store.fresh(),
-        branches: vec![(
-            // if-condition
-            no_region(
-                // index < List.len list
-                call(
-                    Symbol::NUM_LT,
-                    vec![
-                        Var(Symbol::LIST_GET_ARG_INDEX),
-                        call(
-                            Symbol::LIST_LEN,
-                            vec![Var(Symbol::LIST_GET_ARG_LIST)],
-                            var_store,
-                        ),
-                    ],
-                    var_store,
-                ),
-            ),
-            // then-branch
-            no_region(
-                // Ok
-                tag(
-                    "Ok",
-                    vec![
-                        // List.getUnsafe list index
-                        Call(
-                            Box::new((
-                                var_store.fresh(),
-                                no_region(Var(Symbol::LIST_GET_UNSAFE)),
-                                var_store.fresh(),
-                            )),
-                            vec![
-                                (var_store.fresh(), no_region(Var(Symbol::LIST_GET_ARG_LIST))),
-                                (
-                                    var_store.fresh(),
-                                    no_region(Var(Symbol::LIST_GET_ARG_INDEX)),
-                                ),
-                            ],
-                            CalledVia::Space,
-                        ),
-                    ],
-                    var_store,
-                ),
-            ),
-        )],
-        final_else: Box::new(
-            // else-branch
-            no_region(
-                // Err
-                tag(
-                    "Err",
-                    vec![tag("OutOfBounds", Vec::new(), var_store)],
-                    var_store,
-                ),
-            ),
-        ),
-    };
+//     // Perform a bounds check. If it passes, delegate to List.#getUnsafe
+//     let body = If {
+//         cond_var: var_store.fresh(),
+//         branch_var: var_store.fresh(),
+//         branches: vec![(
+//             // if-condition
+//             no_region(
+//                 // index < List.len list
+//                 call(
+//                     Symbol::NUM_LT,
+//                     vec![
+//                         Var(Symbol::LIST_GET_ARG_INDEX),
+//                         call(
+//                             Symbol::LIST_LEN,
+//                             vec![Var(Symbol::LIST_GET_ARG_LIST)],
+//                             var_store,
+//                         ),
+//                     ],
+//                     var_store,
+//                 ),
+//             ),
+//             // then-branch
+//             no_region(
+//                 // Ok
+//                 tag(
+//                     "Ok",
+//                     vec![
+//                         // List.getUnsafe list index
+//                         Call(
+//                             Box::new((
+//                                 var_store.fresh(),
+//                                 no_region(Var(Symbol::LIST_GET_UNSAFE)),
+//                                 var_store.fresh(),
+//                             )),
+//                             vec![
+//                                 (var_store.fresh(), no_region(Var(Symbol::LIST_GET_ARG_LIST))),
+//                                 (
+//                                     var_store.fresh(),
+//                                     no_region(Var(Symbol::LIST_GET_ARG_INDEX)),
+//                                 ),
+//                             ],
+//                             CalledVia::Space,
+//                         ),
+//                     ],
+//                     var_store,
+//                 ),
+//             ),
+//         )],
+//         final_else: Box::new(
+//             // else-branch
+//             no_region(
+//                 // Err
+//                 tag(
+//                     "Err",
+//                     vec![tag("OutOfBounds", Vec::new(), var_store)],
+//                     var_store,
+//                 ),
+//             ),
+//         ),
+//     };
 
-    let expr = Closure(
-        var_store.fresh(),
-        Symbol::LIST_GET,
-        Recursive::NotRecursive,
-        args,
-        Box::new((no_region(body), var_store.fresh())),
-    );
+//     let expr = Closure(
+//         var_store.fresh(),
+//         Symbol::LIST_GET,
+//         Recursive::NotRecursive,
+//         args,
+//         Box::new((no_region(body), var_store.fresh())),
+//     );
 
-    Def {
-        loc_pattern: no_region(Identifier(Symbol::LIST_GET)),
-        loc_expr: no_region(expr),
-        expr_var: var_store.fresh(),
-        pattern_vars: SendMap::default(),
-        annotation: None,
-    }
-}
+//     Def {
+//         loc_pattern: no_region(Identifier(Symbol::LIST_GET)),
+//         loc_expr: no_region(expr),
+//         expr_var: var_store.fresh(),
+//         pattern_vars: SendMap::default(),
+//         annotation: None,
+//     }
+// }
 
 /// List.first : List elem -> Result elem [ ListWasEmpty ]*
 fn list_first(var_store: &VarStore) -> Def {
