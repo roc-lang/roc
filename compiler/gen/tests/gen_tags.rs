@@ -659,8 +659,8 @@ mod gen_tags {
                     answer
                 "#
             ),
-            std::mem::transmute::<(u64, i64), [i8; 16]>((0, 42)),
-            [i8; 16]
+            std::mem::transmute::<(u64, i64), [u8; 16]>((0, 42)),
+            [u8; 16]
         );
     }
 
