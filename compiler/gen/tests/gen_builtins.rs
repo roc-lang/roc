@@ -349,7 +349,17 @@ mod gen_builtins {
 
     #[test]
     fn get_set_unique_int_list() {
-        assert_evals_to!("List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1", 42, i64);
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when List.get (List.set [ 12, 9, 7, 3 ] 1 42) 1 is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            42,
+            i64
+        );
     }
 
     #[test]
@@ -378,9 +388,17 @@ mod gen_builtins {
                     shared = [ 2.1, 4.3 ]
 
                     # This should not mutate the original
-                    x = List.getUnsafe (List.set shared 1 7.7) 1
+                    x =
+                        when List.get (List.set shared 1 7.7) 1 is
+                            Ok val -> val
+                            Err _ -> -1
 
-                    { x, y: List.getUnsafe shared 1 }
+                    y =
+                        when List.get shared 1 is
+                            Ok val -> val
+                            Err _ -> -1
+
+                    { x, y }
                 "#
             ),
             (7.7, 4.3),
@@ -396,9 +414,17 @@ mod gen_builtins {
                     shared = [ 2, 4 ]
 
                     # This List.set is out of bounds, and should have no effect
-                    x = List.getUnsafe (List.set shared 422 0) 1
+                    x =
+                        when List.get (List.set shared 422 0) 1 is
+                            Ok val -> val
+                            Err _ -> -1
 
-                    { x, y: List.getUnsafe shared 1 }
+                    y =
+                        when List.get shared 1 is
+                            Ok val -> val
+                            Err _ -> -1
+
+                    { x, y }
                 "#
             ),
             (4, 4),
@@ -411,9 +437,11 @@ mod gen_builtins {
         assert_evals_to!(
             indoc!(
                 r#"
-                    shared = [ 2, 4 ]
+                    unshared = [ 2, 4 ]
 
-                    List.getUnsafe shared 1
+                    when List.get unshared 1 is
+                        Ok val -> val
+                        Err _ -> -1
                 "#
             ),
             4,
