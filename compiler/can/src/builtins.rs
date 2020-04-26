@@ -26,7 +26,7 @@ use roc_types::subs::{VarStore, Variable};
 /// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
 /// which works fine because it doesn't involve any open tag unions.
 pub fn builtin_defs(var_store: &VarStore) -> Vec<Def> {
-    vec![/*list_get(var_store),*/ list_first(var_store)]
+    vec![list_get(var_store), list_first(var_store)]
 }
 
 /// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
