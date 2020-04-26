@@ -401,7 +401,7 @@ pub fn variable_usage(con: &Constraint) -> (SeenVariables, Vec<Variable>) {
     variable_usage_help(con, &mut declared, &mut used);
 
     // ..= because there is an extra undeclared variable that contains the type of the full expression
-    for i in 0..=Variable::RESERVED {
+    for i in 0..=Variable::NUM_RESERVED_VARS {
         used.remove(unsafe { &Variable::unsafe_test_debug_variable(i as u32) });
     }
 

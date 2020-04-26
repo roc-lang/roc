@@ -316,8 +316,34 @@ mod gen_builtins {
 
     #[test]
     fn head_int_list() {
-        assert_evals_to!("List.getUnsafe [ 12, 9, 6, 3 ] 0", 12, i64);
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when List.first [ 12, 9, 6, 3 ] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            12,
+            i64
+        );
     }
+
+    // TODO FIXME this should work, but doesn't!
+    // #[test]
+    // fn head_empty_list() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 when List.first [] is
+    //                     Ok val -> val
+    //                     Err _ -> -1
+    //             "#
+    //         ),
+    //         -1,
+    //         i64
+    //     );
+    // }
 
     #[test]
     fn get_int_list() {

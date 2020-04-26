@@ -2195,6 +2195,18 @@ mod test_solve {
     }
 
     #[test]
+    fn solve_list_get() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    List.get [ "a" ] 0
+                "#
+            ),
+            "Result Str [ OutOfBounds ]*",
+        );
+    }
+
+    #[test]
     fn type_more_general_than_signature() {
         infer_eq_without_problem(
             indoc!(
@@ -2292,7 +2304,7 @@ mod test_solve {
                     List.get [ 10, 9, 8, 7 ] 1
                 "#
             ),
-            "Result (Num *) [ IndexOutOfBounds ]*",
+            "Result (Num *) [ OutOfBounds ]*",
         );
     }
 
