@@ -1896,7 +1896,7 @@ mod test_uniq_solve {
                         |> List.get 2
                "#
             ),
-            "Attr * (Result (Attr * (Num (Attr * *))) (Attr * [ IndexOutOfBounds ]*))",
+            "Attr * (Result (Attr * (Num (Attr * *))) (Attr * [ OutOfBounds ]*))",
         );
     }
 
@@ -1984,7 +1984,7 @@ mod test_uniq_solve {
                     { p, q }
                "#
             ),
-            "Attr * (Attr * (List (Attr Shared a)) -> Attr * { p : (Attr * (Result (Attr Shared a) (Attr * [ IndexOutOfBounds ]*))), q : (Attr * (Result (Attr Shared a) (Attr * [ IndexOutOfBounds ]*))) })"
+            "Attr * (Attr * (List (Attr Shared a)) -> Attr * { p : (Attr * (Result (Attr Shared a) (Attr * [ OutOfBounds ]*))), q : (Attr * (Result (Attr Shared a) (Attr * [ OutOfBounds ]*))) })"
         );
     }
 
@@ -2097,8 +2097,8 @@ mod test_uniq_solve {
                     reverse
                 "#
             ),
-            "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr b c)))",
-            //"Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr a c)))",
+            // "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr b c)))",
+            "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr a c)))",
         );
     }
 
