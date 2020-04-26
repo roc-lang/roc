@@ -433,9 +433,4 @@ mod gen_builtins {
             f64
         );
     }
-
-    #[test]
-    fn err_with_payload() {
-        assert_evals_to!("if True then Err 42 else Ok False", (0, 42), (u64, i64));
-    }
 }
