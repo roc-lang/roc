@@ -550,7 +550,9 @@ pub fn build_expr<'a, 'ctx, 'env>(
             // through some hoops using store and load to get this to work: the array is put into a
             // one-element struct, which can be cast to the desired type.
             //
-            // This tricks comes from
+            // More details on this technique: https://mapping-high-level-constructs-to-llvm-ir.readthedocs.io/en/latest/basic-constructs/unions.html
+            //
+            // For an Inkwell-specific example, see:
             // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
 
             let array_type = ctx.i8_type().array_type(whole_size);
