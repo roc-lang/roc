@@ -104,7 +104,7 @@ macro_rules! assert_llvm_evals_to {
         main_fn.set_call_conventions(cc);
 
         // Add main's body
-        let basic_block = context.append_basic_block(main_fn, "entry");
+        let basic_block = context.append_basic_block(main_fn, "main_entry");
 
         builder.position_at_end(basic_block);
 
@@ -119,7 +119,7 @@ macro_rules! assert_llvm_evals_to {
         builder.build_return(Some(&ret));
 
         // Uncomment this to see the module's un-optimized LLVM instruction output:
-        // env.module.print_to_stderr();
+        env.module.print_to_stderr();
 
         if main_fn.verify(true) {
             fpm.run_on(&main_fn);
@@ -256,7 +256,7 @@ macro_rules! assert_opt_evals_to {
         main_fn.set_call_conventions(cc);
 
         // Add main's body
-        let basic_block = context.append_basic_block(main_fn, "entry");
+        let basic_block = context.append_basic_block(main_fn, "main_entry");
 
         builder.position_at_end(basic_block);
 
@@ -401,7 +401,7 @@ macro_rules! emit_expr {
         main_fn.set_call_conventions($crate::helpers::eval::MAIN_CALLING_CONVENTION);
 
         // Add main's body
-        let basic_block = context.append_basic_block(main_fn, "entry");
+        let basic_block = context.append_basic_block(main_fn, "main_entry");
 
         builder.position_at_end(basic_block);
 

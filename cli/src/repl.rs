@@ -299,7 +299,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
     main_fn.set_call_conventions(cc);
 
     // Add main's body
-    let basic_block = context.append_basic_block(main_fn, "entry");
+    let basic_block = context.append_basic_block(main_fn, "main_entry");
 
     builder.position_at_end(basic_block);
 

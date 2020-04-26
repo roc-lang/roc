@@ -621,4 +621,142 @@ mod gen_tags {
             i64
         );
     }
+
+    #[test]
+    fn either_with_payload() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    if True then
+                        Left 42
+                    else
+                        Right 7
+                "#
+            ),
+            (0, 42),
+            (u64, i64)
+        );
+    }
+
+    #[test]
+    fn maybe_just() {
+        assert_evals_to!(
+            indoc!(
+                // r#"
+                //     Maybe a : [ Just a, Nothing ]
+
+                //     answer : Maybe Int
+                //     answer = Just 42
+
+                //     answer
+                // "#
+                r#"
+                    Maybe a : [ Just a, Nothing ]
+
+                    answer : Maybe Int
+                    answer = Just 42
+
+                    answer
+                "#
+            ),
+            std::mem::transmute::<(u64, i64), [i8; 16]>((0, 42)),
+            [i8; 16]
+        );
+    }
+
+    // define { [16 x i8] } @"$Test.main"() {
+    // main_entry:
+    // %answer = alloca { [16 x i8] }
+    // %0 = alloca { i64, i64 }
+    // store { i64, i64 } { i64 0, i64 42 }, { i64, i64 }* %0
+    // %1 = bitcast { i64, i64 }* %0 to [16 x i8]*
+    // %2 = load [16 x i8], [16 x i8]* %1
+    // %insert_field = insertvalue { [16 x i8] } zeroinitializer, [16 x i8] %2, 0
+    // store { [16 x i8] } %insert_field, { [16 x i8] }* %answer
+    // %answer1 = load { [16 x i8] }, { [16 x i8] }* %answer
+    // ret { [16 x i8] } %answer1
+    // }
+    //
+    //
+    //
+    // define { i64, i64 } @"$Test.main"() {
+    // main_entry:
+    //   %answer = alloca { i64, i64 }
+    //   store { i64, i64 } { i64 0, i64 42 }, { i64, i64 }* %answer
+    //   %answer1 = load { i64, i64 }, { i64, i64 }* %answer
+    //   ret { i64, i64 } %answer1
+    // }
+    //
+    //
+    // define i64 @"$Test.main"() {
+    // main_entry:
+    //   %x = alloca i64
+    //   %_1 = alloca i1
+    //   %_0 = alloca { [16 x i8] }
+    //   %answer = alloca { [16 x i8] }
+    //   %0 = alloca { i64, i64 }
+    //   store { i64, i64 } { i64 0, i64 42 }, { i64, i64 }* %0
+    //   %1 = bitcast { i64, i64 }* %0 to [16 x i8]*
+    //   %2 = load [16 x i8], [16 x i8]* %1
+    //   %insert_field = insertvalue { [16 x i8] } zeroinitializer, [16 x i8] %2, 0
+    //   store { [16 x i8] } %insert_field, { [16 x i8] }* %answer
+    //   %answer1 = load { [16 x i8] }, { [16 x i8] }* %answer
+    //   store { [16 x i8] } %answer1, { [16 x i8] }* %_0
+    //   %_02 = load { [16 x i8] }, { [16 x i8] }* %_0
+    //   %3 = alloca { [16 x i8] }
+    //   store { [16 x i8] } %_02, { [16 x i8] }* %3
+    //   %4 = bitcast { [16 x i8] }* %3 to { i64, i64 }*
+    //   %5 = load { i64, i64 }, { i64, i64 }* %4
+    //   %6 = extractvalue { i64, i64 } %5, 0
+    //   %cmp_i64 = icmp eq i64 0, %6
+    //   br i1 %cmp_i64, label %then, label %else
+
+    // then:                                             ; preds = %main_entry
+    //   br label %branchcont
+
+    // else:                                             ; preds = %main_entry
+    //   br label %branchcont
+
+    // branchcont:                                       ; preds = %else, %then
+    //   %branch = phi i1 [ true, %then ], [ false, %else ]
+    //   store i1 %branch, i1* %_1
+    //   %_13 = load i1, i1* %_1
+    //   br i1 %_13, label %then4, label %else5
+
+    // then4:                                            ; preds = %branchcont
+    //   %_07 = load { [16 x i8] }, { [16 x i8] }* %_0
+    //   %7 = alloca { [16 x i8] }
+    //   store { [16 x i8] } %_07, { [16 x i8] }* %7
+    //   %8 = bitcast { [16 x i8] }* %7 to { i64, i64 }*
+    //   %9 = load { i64, i64 }, { i64, i64 }* %8
+    //   %10 = extractvalue { i64, i64 } %9, 1
+    //   store i64 %10, i64* %x
+    //   %x8 = load i64, i64* %x
+    //   br label %branchcont6
+
+    // else5:                                            ; preds = %branchcont
+    //   br label %branchcont6
+
+    // branchcont6:                                      ; preds = %else5, %then4
+    //   %branch9 = phi i64 [ %x8, %then4 ], [ 0, %else5 ]
+    //   ret i64 %branch9
+    // }
+
+    #[test]
+    fn maybe_nothing() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Maybe a : [ Just a, Nothing ]
+
+                    answer : Maybe Int
+                    answer = Nothing
+
+                    answer
+                "#
+            ),
+            (1, 0),
+            (u64, i64)
+        );
+    }
 }

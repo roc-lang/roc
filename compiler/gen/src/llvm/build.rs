@@ -980,7 +980,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
     let context = &env.context;
 
     // Add a basic block for the entry point
-    let entry = context.append_basic_block(fn_val, "entry");
+    let entry = context.append_basic_block(fn_val, "proc_entry");
     let builder = env.builder;
 
     builder.position_at_end(entry);
