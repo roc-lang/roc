@@ -1944,7 +1944,7 @@ mod test_uniq_solve {
                 Int.highest // Int.highest
                "#
             ),
-            "Attr * Int",
+            "Attr * (Result (Attr * Int) (Attr * [ DivByZero ]*))",
         );
     }
 
@@ -1956,7 +1956,7 @@ mod test_uniq_solve {
                 3 // 4
                "#
             ),
-            "Attr * Int",
+            "Attr * (Result (Attr * Int) (Attr * [ DivByZero ]*))",
         );
     }
 
@@ -1968,7 +1968,7 @@ mod test_uniq_solve {
                 3 // Int.highest
                "#
             ),
-            "Attr * Int",
+            "Attr * (Result (Attr * Int) (Attr * [ DivByZero ]*))",
         );
     }
 
@@ -2097,7 +2097,8 @@ mod test_uniq_solve {
                     reverse
                 "#
             ),
-            "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr b c)))",
+            "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr a c)))",
+            // "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr b c)))",
             //"Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr a c)))",
         );
     }

@@ -164,7 +164,7 @@ mod gen_builtins {
         assert_evals_to!(
             indoc!(
                 r#"
-                    1000 // 100
+                    Int.divUnsafe 1000 100
                 "#
             ),
             10,

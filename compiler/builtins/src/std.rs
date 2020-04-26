@@ -285,18 +285,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(SolvedType::Wildcard),
     );
 
-    // // div : Int, Int -> Result Int [ DivByZero ]*
-    // add_type(
-    //     Symbol::INT_DIV,
-    //     SolvedType::Func(
-    //         vec![int_type(), int_type()],
-    //         Box::new(result_type(flex(TVAR1), div_by_zero.clone())),
-    //     ),
-    // );
+    // div : Int, Int -> Result Int [ DivByZero ]*
+    add_type(
+        Symbol::INT_DIV,
+        SolvedType::Func(
+            vec![int_type(), int_type()],
+            Box::new(result_type(flex(TVAR1), div_by_zero.clone())),
+        ),
+    );
 
     // div : Int, Int -> Int
     add_type(
-        Symbol::INT_DIV,
+        Symbol::INT_DIV_UNSAFE,
         SolvedType::Func(vec![int_type(), int_type()], Box::new(int_type())),
     );
 
