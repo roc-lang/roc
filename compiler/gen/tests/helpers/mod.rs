@@ -207,7 +207,6 @@ pub struct CanExprOut {
     pub constraint: Constraint,
 }
 
-#[allow(dead_code)]
 pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut {
     let loc_expr = parse_loc_with(&arena, expr_str).unwrap_or_else(|e| {
         panic!(
@@ -240,6 +239,29 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         Region::zero(),
         &loc_expr.value,
     );
+
+    let mut with_builtins = loc_expr.value;
+
+    // Add builtin defs (e.g. List.get) directly to the canonical Expr,
+    // since we aren't using modules here.
+    let builtin_defs = roc_can::builtins::builtin_defs(&var_store);
+
+    for def in builtin_defs {
+        with_builtins = Expr::LetNonRec(
+            Box::new(def),
+            Box::new(Located {
+                region: Region::zero(),
+                value: with_builtins,
+            }),
+            var_store.fresh(),
+            SendMap::default(),
+        );
+    }
+
+    let loc_expr = Located {
+        region: loc_expr.region,
+        value: with_builtins,
+    };
 
     let constraint = constrain_expr(
         &roc_constrain::expr::Env {

@@ -564,7 +564,7 @@ macro_rules! define_builtins {
     };
 }
 
-// NOTE: Some of these builtins have a # at the beginning of their names.
+// NOTE: Some of these builtins have a # in their names.
 // This is because they are for compiler use only, and should not cause
 // namespace conflicts with userspace!
 define_builtins! {
@@ -634,15 +634,19 @@ define_builtins! {
         1 LIST_AT_LIST: "@List" // the List.@List private tag
         2 LIST_IS_EMPTY: "isEmpty"
         3 LIST_GET: "get"
-        4 LIST_SET: "set"
-        5 LIST_SET_IN_PLACE: "#setInPlace"
-        6 LIST_PUSH: "push"
-        7 LIST_MAP: "map"
-        8 LIST_LEN: "len"
-        9 LIST_FOLDL: "foldl"
-        10 LIST_FOLDR: "foldr"
-        11 LIST_GET_UNSAFE: "getUnsafe" // TODO remove once we can code gen Result
-        12 LIST_CONCAT: "concat"
+        4 LIST_GET_ARG_LIST: "get#list"
+        5 LIST_GET_ARG_INDEX: "get#index"
+        6 LIST_SET: "set"
+        7 LIST_SET_IN_PLACE: "#setInPlace"
+        8 LIST_PUSH: "push"
+        9 LIST_MAP: "map"
+        10 LIST_LEN: "len"
+        11 LIST_FOLDL: "foldl"
+        12 LIST_FOLDR: "foldr"
+        13 LIST_GET_UNSAFE: "getUnsafe"
+        14 LIST_CONCAT: "concat"
+        15 LIST_FIRST: "first"
+        16 LIST_FIRST_ARG: "first#list"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
