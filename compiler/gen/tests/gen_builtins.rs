@@ -239,7 +239,7 @@ mod gen_builtins {
             indoc!(
                 r#"
                     always42 : Num.Num Int.Integer -> Num.Num Int.Integer
-                    always42 = \_ -> 42
+                    always42 = \num -> 42
 
                     always42 5
                 "#

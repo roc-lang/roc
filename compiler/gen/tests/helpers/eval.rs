@@ -5,8 +5,17 @@ macro_rules! assert_llvm_evals_to {
         let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
         let arena = Bump::new();
         let CanExprOut { loc_expr, var_store, var, constraint, home, interns, problems, .. } = can_expr($src);
+        let errors = problems.into_iter().filter(|problem| {
+            use roc_problem::can::Problem::*;
 
-        assert_eq!(problems, Vec::new(), "Encountered problems: {:?}", problems);
+            // Ignore "unused" problems
+            match problem {
+                UnusedDef(_, _) | UnusedArgument(_, _, _) | UnusedImport(_, _) => false,
+                _ => true,
+            }
+        }).collect::<Vec<roc_problem::can::Problem>>();
+
+        assert_eq!(errors, Vec::new(), "Encountered errors: {:?}", errors);
 
         let subs = Subs::new(var_store.into());
         let mut unify_problems = Vec::new();
@@ -148,8 +157,17 @@ macro_rules! assert_opt_evals_to {
         let target = target_lexicon::Triple::host();
         let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
         let (loc_expr, _output, problems, subs, var, constraint, home, interns) = uniq_expr($src);
+        let errors = problems.into_iter().filter(|problem| {
+            use roc_problem::can::Problem::*;
 
-        assert_eq!(problems, Vec::new(), "Encountered problems: {:?}", problems);
+            // Ignore "unused" problems
+            match problem {
+                UnusedDef(_, _) | UnusedArgument(_, _, _) | UnusedImport(_, _) => false,
+                _ => true,
+            }
+        }).collect::<Vec<roc_problem::can::Problem>>();
+
+        assert_eq!(errors, Vec::new(), "Encountered errors: {:?}", errors);
 
         let mut unify_problems = Vec::new();
         let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
@@ -286,8 +304,17 @@ macro_rules! emit_expr {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         let arena = Bump::new();
         let (loc_expr, _output, problems, subs, var, constraint, home, interns) = uniq_expr($src);
+        let errors = problems.into_iter().filter(|problem| {
+            use roc_problem::can::Problem::*;
 
-        assert_eq!(problems, Vec::new(), "Encountered problems: {:?}", problems);
+            // Ignore "unused" problems
+            match problem {
+                UnusedDef(_, _) | UnusedArgument(_, _, _) | UnusedImport(_, _) => false,
+                _ => true,
+            }
+        }).collect::<Vec<roc_problem::can::Problem>>();
+
+        assert_eq!(errors, Vec::new(), "Encountered errors: {:?}", errors);
 
         let mut unify_problems = Vec::new();
         let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
