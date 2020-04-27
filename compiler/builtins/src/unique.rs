@@ -348,9 +348,23 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // lowest : Int
     add_type(Symbol::INT_LOWEST, int_type(UVAR1));
 
-    // div or (//) : Int, Int -> Int
+    // div or (//) : Int, Int -> Result Int [ DivByZero ]*
+    let div_by_zero = SolvedType::TagUnion(
+        vec![(TagName::Global("DivByZero".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
     add_type(
         Symbol::INT_DIV,
+        unique_function(
+            vec![int_type(UVAR1), int_type(UVAR2)],
+            result_type(UVAR3, int_type(UVAR4), lift(UVAR5, div_by_zero)),
+        ),
+    );
+
+    // div or (//) : Int, Int -> Int
+    add_type(
+        Symbol::INT_DIV_UNSAFE,
         unique_function(vec![int_type(UVAR1), int_type(UVAR2)], int_type(UVAR3)),
     );
 

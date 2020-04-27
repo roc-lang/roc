@@ -599,6 +599,7 @@ define_builtins! {
         9 INT_EQ_I64: "#eqi64" // Equality on 64-bit integers, the standard in Roc
         10 INT_EQ_I1: "#eqi1" // Equality on boolean (theoretically i1) values
         11 INT_EQ_I8: "#eqi8" // Equality on byte (theoretically i8) values
+        12 INT_DIV_UNSAFE: "divUnsafe" // TODO remove once we can code gen Result
     }
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" imported // the Float.Float type alias

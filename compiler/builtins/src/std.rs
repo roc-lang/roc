@@ -294,6 +294,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // div : Int, Int -> Int
+    add_type(
+        Symbol::INT_DIV_UNSAFE,
+        SolvedType::Func(vec![int_type(), int_type()], Box::new(int_type())),
+    );
+
     // mod : Int, Int -> Result Int [ DivByZero ]*
     add_type(
         Symbol::INT_MOD,

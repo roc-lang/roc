@@ -1226,6 +1226,17 @@ fn call_with_args<'a, 'ctx, 'env>(
         Symbol::FLOAT_ROUND => call_intrinsic(LLVM_LROUND_I64_F64, env, args),
         Symbol::LIST_SET => list_set(parent, args, env, InPlace::Clone),
         Symbol::LIST_SET_IN_PLACE => list_set(parent, args, env, InPlace::InPlace),
+        Symbol::INT_DIV_UNSAFE => {
+            debug_assert!(args.len() == 2);
+
+            let int_val = env.builder.build_int_signed_div(
+                args[0].0.into_int_value(),
+                args[1].0.into_int_value(),
+                "div_i64",
+            );
+
+            BasicValueEnum::IntValue(int_val)
+        }
         _ => {
             let fn_val = env
                 .module

@@ -160,6 +160,19 @@ mod gen_builtins {
     }
 
     #[test]
+    fn gen_div_i64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Int.divUnsafe 1000 100
+                "#
+            ),
+            10,
+            i64
+        );
+    }
+
+    #[test]
     fn gen_order_of_arithmetic_ops() {
         assert_evals_to!(
             indoc!(
