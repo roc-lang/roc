@@ -4,8 +4,22 @@ use inkwell::context::Context;
 use inkwell::types::BasicTypeEnum::{self, *};
 use inkwell::types::{ArrayType, BasicType, FunctionType, IntType, PointerType, StructType};
 use inkwell::AddressSpace;
+use roc_mono::layout::Layout;
 
-use roc_mono::layout::{Builtin, Layout};
+/// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
+pub fn get_ptr_type<'ctx>(
+    bt_enum: &BasicTypeEnum<'ctx>,
+    address_space: AddressSpace,
+) -> PointerType<'ctx> {
+    match bt_enum {
+        ArrayType(typ) => typ.ptr_type(address_space),
+        IntType(typ) => typ.ptr_type(address_space),
+        FloatType(typ) => typ.ptr_type(address_space),
+        PointerType(typ) => typ.ptr_type(address_space),
+        StructType(typ) => typ.ptr_type(address_space),
+        VectorType(typ) => typ.ptr_type(address_space),
+    }
+}
 
 /// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
 pub fn get_fn_type<'ctx>(
@@ -117,48 +131,34 @@ pub fn basic_type_from_layout<'ctx>(
                 .as_basic_type_enum(),
             Map(_, _) | EmptyMap => panic!("TODO layout_to_basic_type for Builtin::Map"),
             Set(_) | EmptySet => panic!("TODO layout_to_basic_type for Builtin::Set"),
-            List(elem_layout) => {
-                let ptr_type = basic_type_from_layout(arena, context, elem_layout, ptr_bytes)
-                    .ptr_type(AddressSpace::Generic);
-
-                collection_wrapper(context, ptr_type, ptr_bytes).into()
-            }
-            EmptyList => BasicTypeEnum::StructType(empty_collection(context, ptr_bytes)),
+            List(_) => collection(context, ptr_bytes).into(),
+            EmptyList => BasicTypeEnum::StructType(collection(context, ptr_bytes)),
         },
     }
 }
 
-/// A length usize and a pointer to some elements.
-/// Could be a wrapper for a List or a Str.
+/// Two usize values. Could be a wrapper for a List or a Str.
 ///
-/// The order of these doesn't matter, since they should be initialized
-/// to zero anyway for an empty collection; as such, we return a
-/// (usize, usize) struct layout no matter what.
-pub fn empty_collection(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
+/// It would be nicer if we could store this as a tuple containing one usize
+/// and one pointer. However, if we do that, we run into a problem with the
+/// empty list: it doesn't know what pointer type it should initailize to,
+/// so it can only create an empty (usize, usize) struct.
+///
+/// This way, we always initialize it to (usize, usize), and then if there's
+/// actually a pointer, we use build_int_to_ptr and build_ptr_to_int to convert
+/// the field when necessary. (It's not allowed to cast the entire struct from
+/// (usize, usize) to (usize, ptr) or vice versa.)
+pub fn collection(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
+    let int_type = BasicTypeEnum::IntType(ptr_int(ctx, ptr_bytes));
+
+    ctx.struct_type(&[int_type, int_type], false)
+}
+
+/// Two usize values.
+pub fn collection_int_wrapper(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
     let usize_type = BasicTypeEnum::IntType(ptr_int(ctx, ptr_bytes));
 
     ctx.struct_type(&[usize_type, usize_type], false)
-}
-
-/// A length usize and a pointer to some elements.
-///
-/// Could be a wrapper for a List or a Str.
-pub fn collection_wrapper<'ctx>(
-    ctx: &'ctx Context,
-    ptr_type: PointerType<'ctx>,
-    ptr_bytes: u32,
-) -> StructType<'ctx> {
-    let ptr_type_enum = BasicTypeEnum::PointerType(ptr_type);
-    let len_type = BasicTypeEnum::IntType(ptr_int(ctx, ptr_bytes));
-
-    // This conditional is based on a constant, so the branch should be optimized away.
-    // The reason for keeping the conditional here is so we can flip the order
-    // of the fields (by changing the constants) without breaking this code.
-    if Builtin::WRAPPER_PTR == 0 {
-        ctx.struct_type(&[ptr_type_enum, len_type], false)
-    } else {
-        ctx.struct_type(&[len_type, ptr_type_enum], false)
-    }
 }
 
 pub fn ptr_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {
