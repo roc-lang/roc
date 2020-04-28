@@ -1060,10 +1060,21 @@ fn call_with_args<'a, 'ctx, 'env>(
             let int_val = env.builder.build_int_sub(
                 args[0].0.into_int_value(),
                 args[1].0.into_int_value(),
-                "sub_I64",
+                "sub_i64",
             );
 
             BasicValueEnum::IntValue(int_val)
+        }
+        Symbol::FLOAT_DIV => {
+            debug_assert!(args.len() == 2);
+
+            let float_val = env.builder.build_float_div(
+                args[0].0.into_float_value(),
+                args[1].0.into_float_value(),
+                "div_f64",
+            );
+
+            BasicValueEnum::FloatValue(float_val)
         }
         Symbol::FLOAT_SUB => {
             debug_assert!(args.len() == 2);
@@ -1076,16 +1087,101 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::FloatValue(float_val)
         }
-        Symbol::FLOAT_DIV => {
+        Symbol::INT_GTE | Symbol::NUM_GTE => {
             debug_assert!(args.len() == 2);
 
-            let float_val = env.builder.build_float_div(
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "div_f64",
+            let bool_val = env.builder.build_int_compare(
+                IntPredicate::SGE,
+                args[0].0.into_int_value(),
+                args[1].0.into_int_value(),
+                "gte_i64",
             );
 
-            BasicValueEnum::FloatValue(float_val)
+            BasicValueEnum::IntValue(bool_val)
+        }
+        Symbol::FLOAT_GTE => {
+            debug_assert!(args.len() == 2);
+
+            let bool_val = env.builder.build_float_compare(
+                FloatPredicate::OGE,
+                args[0].0.into_float_value(),
+                args[1].0.into_float_value(),
+                "gte_F64",
+            );
+
+            BasicValueEnum::IntValue(bool_val)
+        }
+        Symbol::INT_GT | Symbol::NUM_GT => {
+            debug_assert!(args.len() == 2);
+
+            let bool_val = env.builder.build_int_compare(
+                IntPredicate::SGT,
+                args[0].0.into_int_value(),
+                args[1].0.into_int_value(),
+                "gt_i64",
+            );
+
+            BasicValueEnum::IntValue(bool_val)
+        }
+        Symbol::FLOAT_GT => {
+            debug_assert!(args.len() == 2);
+
+            let bool_val = env.builder.build_float_compare(
+                FloatPredicate::OGT,
+                args[0].0.into_float_value(),
+                args[1].0.into_float_value(),
+                "gt_f64",
+            );
+
+            BasicValueEnum::IntValue(bool_val)
+        }
+        Symbol::INT_LTE | Symbol::NUM_LTE => {
+            debug_assert!(args.len() == 2);
+
+            let bool_val = env.builder.build_int_compare(
+                IntPredicate::SLE,
+                args[0].0.into_int_value(),
+                args[1].0.into_int_value(),
+                "lte_i64",
+            );
+
+            BasicValueEnum::IntValue(bool_val)
+        }
+        Symbol::FLOAT_LTE => {
+            debug_assert!(args.len() == 2);
+
+            let bool_val = env.builder.build_float_compare(
+                FloatPredicate::OLE,
+                args[0].0.into_float_value(),
+                args[1].0.into_float_value(),
+                "lte_f64",
+            );
+
+            BasicValueEnum::IntValue(bool_val)
+        }
+        Symbol::INT_LT | Symbol::NUM_LT => {
+            debug_assert!(args.len() == 2);
+
+            let bool_val = env.builder.build_int_compare(
+                IntPredicate::SLT,
+                args[0].0.into_int_value(),
+                args[1].0.into_int_value(),
+                "lt_i64",
+            );
+
+            BasicValueEnum::IntValue(bool_val)
+        }
+        Symbol::FLOAT_LT => {
+            debug_assert!(args.len() == 2);
+
+            let bool_val = env.builder.build_float_compare(
+                FloatPredicate::OLT,
+                args[0].0.into_float_value(),
+                args[1].0.into_float_value(),
+                "lt_f64",
+            );
+
+            BasicValueEnum::IntValue(bool_val)
         }
         Symbol::NUM_MUL => {
             debug_assert!(args.len() == 2);

@@ -173,6 +173,70 @@ mod gen_builtins {
     }
 
     #[test]
+    fn lt_i64() {
+        assert_evals_to!("1 < 2", true, bool);
+        assert_evals_to!("1 < 1", false, bool);
+        assert_evals_to!("2 < 1", false, bool);
+        assert_evals_to!("0 < 0", false, bool);
+    }
+
+    #[test]
+    fn lte_i64() {
+        assert_evals_to!("1 <= 1", true, bool);
+        assert_evals_to!("2 <= 1", false, bool);
+        assert_evals_to!("1 <= 2", true, bool);
+        assert_evals_to!("0 <= 0", true, bool);
+    }
+
+    #[test]
+    fn gt_i64() {
+        assert_evals_to!("2 > 1", true, bool);
+        assert_evals_to!("2 > 2", false, bool);
+        assert_evals_to!("1 > 1", false, bool);
+        assert_evals_to!("0 > 0", false, bool);
+    }
+
+    #[test]
+    fn gte_i64() {
+        assert_evals_to!("1 >= 1", true, bool);
+        assert_evals_to!("1 >= 2", false, bool);
+        assert_evals_to!("2 >= 1", true, bool);
+        assert_evals_to!("0 >= 0", true, bool);
+    }
+
+    #[test]
+    fn lt_f64() {
+        assert_evals_to!("1.1 < 1.2", true, bool);
+        assert_evals_to!("1.1 < 1.1", false, bool);
+        assert_evals_to!("1.2 < 1.1", false, bool);
+        assert_evals_to!("0.0 < 0.0", false, bool);
+    }
+
+    #[test]
+    fn lte_f64() {
+        assert_evals_to!("1.1 <= 1.1", true, bool);
+        assert_evals_to!("1.2 <= 1.1", false, bool);
+        assert_evals_to!("1.1 <= 1.2", true, bool);
+        assert_evals_to!("0.0 <= 0.0", true, bool);
+    }
+
+    #[test]
+    fn gt_f64() {
+        assert_evals_to!("2.2 > 1.1", true, bool);
+        assert_evals_to!("2.2 > 2.2", false, bool);
+        assert_evals_to!("1.1 > 2.2", false, bool);
+        assert_evals_to!("0.0 > 0.0", false, bool);
+    }
+
+    #[test]
+    fn gte_f64() {
+        assert_evals_to!("1.1 >= 1.1", true, bool);
+        assert_evals_to!("1.1 >= 1.2", false, bool);
+        assert_evals_to!("1.2 >= 1.1", true, bool);
+        assert_evals_to!("0.0 >= 0.0", true, bool);
+    }
+
+    #[test]
     fn gen_order_of_arithmetic_ops() {
         assert_evals_to!(
             indoc!(

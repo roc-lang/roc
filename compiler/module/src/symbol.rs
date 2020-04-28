@@ -581,9 +581,9 @@ define_builtins! {
         5 NUM_SUB: "sub"
         6 NUM_MUL: "mul"
         7 NUM_LT: "isLt"
-        8 NUM_LE: "isLte"
+        8 NUM_LTE: "isLte"
         9 NUM_GT: "isGt"
-        10 NUM_GE: "isGte"
+        10 NUM_GTE: "isGte"
         11 NUM_TO_FLOAT: "toFloat"
     }
     2 INT: "Int" => {
@@ -600,6 +600,10 @@ define_builtins! {
         10 INT_EQ_I1: "#eqi1" // Equality on boolean (theoretically i1) values
         11 INT_EQ_I8: "#eqi8" // Equality on byte (theoretically i8) values
         12 INT_DIV_UNSAFE: "divUnsafe" // TODO remove once we can code gen Result
+        13 INT_LT: "#lt"
+        14 INT_LTE: "#lte"
+        15 INT_GT: "#gt"
+        16 INT_GTE: "#gte"
     }
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" imported // the Float.Float type alias
@@ -614,6 +618,10 @@ define_builtins! {
         9 FLOAT_SUB: "#sub"
         10 FLOAT_EQ: "#eq"
         11 FLOAT_ROUND: "round"
+        12 FLOAT_LT: "#lt"
+        13 FLOAT_LTE: "#lte"
+        14 FLOAT_GT: "#gt"
+        15 FLOAT_GTE: "#gte"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias

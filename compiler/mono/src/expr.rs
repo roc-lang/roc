@@ -499,6 +499,22 @@ fn from_can<'a>(
                                 FloatType => Symbol::FLOAT_SUB,
                                 IntType => Symbol::INT_SUB,
                             },
+                            Symbol::NUM_LTE => match to_int_or_float(env.subs, loc_args[0].0) {
+                                FloatType => Symbol::FLOAT_LTE,
+                                IntType => Symbol::INT_LTE,
+                            },
+                            Symbol::NUM_LT => match to_int_or_float(env.subs, loc_args[0].0) {
+                                FloatType => Symbol::FLOAT_LT,
+                                IntType => Symbol::INT_LT,
+                            },
+                            Symbol::NUM_GTE => match to_int_or_float(env.subs, loc_args[0].0) {
+                                FloatType => Symbol::FLOAT_GTE,
+                                IntType => Symbol::INT_GTE,
+                            },
+                            Symbol::NUM_GT => match to_int_or_float(env.subs, loc_args[0].0) {
+                                FloatType => Symbol::FLOAT_GT,
+                                IntType => Symbol::INT_GT,
+                            },
                             // TODO make this work for more than just int/float
                             Symbol::BOOL_EQ => {
                                 match Layout::from_var(
