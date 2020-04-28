@@ -409,8 +409,33 @@ mod gen_builtins {
     }
 
     #[test]
-    fn get_int_list() {
-        assert_evals_to!("List.getUnsafe [ 12, 9, 6 ] 1", 9, i64);
+    fn get_int_list_ok() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when List.get [ 12, 9, 6 ] 1 is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            9,
+            i64
+        );
+    }
+
+    #[test]
+    fn get_int_list_oob() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when List.get [ 12, 9, 6 ] 1000 is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            -1,
+            i64
+        );
     }
 
     #[test]
