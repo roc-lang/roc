@@ -4,8 +4,7 @@ use inkwell::context::Context;
 use inkwell::types::BasicTypeEnum::{self, *};
 use inkwell::types::{ArrayType, BasicType, FunctionType, IntType, PointerType, StructType};
 use inkwell::AddressSpace;
-
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::Layout;
 
 /// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
 pub fn get_ptr_type<'ctx>(
@@ -138,35 +137,28 @@ pub fn basic_type_from_layout<'ctx>(
     }
 }
 
-/// A length usize and a pointer to some elements.
-/// Could be a wrapper for a List or a Str.
+/// Two usize values. Could be a wrapper for a List or a Str.
+///
+/// It would be nicer if we could store this as a tuple containing one usize
+/// and one pointer. However, if we do that, we run into a problem with the
+/// empty list: it doesn't know what pointer type it should initailize to,
+/// so it can only create an empty (usize, usize) struct.
+///
+/// This way, we always initialize it to (usize, usize), and then if there's
+/// actually a pointer, we use build_int_to_ptr and build_ptr_to_int to convert
+/// the field when necessary. (It's not allowed to cast the entire struct from
+/// (usize, usize) to (usize, ptr) or vice versa.)
 pub fn collection(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
-    let num_fields = 2;
-    let total_bytes = ptr_bytes * num_fields;
-    let array_type = ctx.i8_type().array_type(total_bytes).as_basic_type_enum();
+    let int_type = BasicTypeEnum::IntType(ptr_int(ctx, ptr_bytes));
 
-    ctx.struct_type(&[array_type], false).into()
+    ctx.struct_type(&[int_type, int_type], false)
 }
 
-/// A length usize and a pointer to some elements.
-///
-/// Could be a wrapper for a List or a Str.
-pub fn collection_wrapper<'ctx>(
-    ctx: &'ctx Context,
-    ptr_type: PointerType<'ctx>,
-    ptr_bytes: u32,
-) -> StructType<'ctx> {
-    let ptr_type_enum = BasicTypeEnum::PointerType(ptr_type);
-    let len_type = BasicTypeEnum::IntType(ptr_int(ctx, ptr_bytes));
+/// Two usize values.
+pub fn collection_int_wrapper<'ctx>(ctx: &'ctx Context, ptr_bytes: u32) -> StructType<'ctx> {
+    let usize_type = BasicTypeEnum::IntType(ptr_int(ctx, ptr_bytes));
 
-    // This conditional is based on a constant, so the branch should be optimized away.
-    // The reason for keeping the conditional here is so we can flip the order
-    // of the fields (by changing the constants) without breaking this code.
-    if Builtin::WRAPPER_PTR == 0 {
-        ctx.struct_type(&[ptr_type_enum, len_type], false)
-    } else {
-        ctx.struct_type(&[len_type, ptr_type_enum], false)
-    }
+    ctx.struct_type(&[usize_type, usize_type], false)
 }
 
 pub fn ptr_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {
