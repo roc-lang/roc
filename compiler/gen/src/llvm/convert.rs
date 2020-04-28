@@ -155,7 +155,7 @@ pub fn collection(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
 }
 
 /// Two usize values.
-pub fn collection_int_wrapper<'ctx>(ctx: &'ctx Context, ptr_bytes: u32) -> StructType<'ctx> {
+pub fn collection_int_wrapper(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
     let usize_type = BasicTypeEnum::IntType(ptr_int(ctx, ptr_bytes));
 
     ctx.struct_type(&[usize_type, usize_type], false)
