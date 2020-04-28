@@ -241,7 +241,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // isLte or (<=) : Num a, Num a -> Bool
     add_type(
-        Symbol::NUM_LE,
+        Symbol::NUM_LTE,
         SolvedType::Func(
             vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
             Box::new(bool_type()),
@@ -259,7 +259,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // isGte or (>=) : Num a, Num a -> Bool
     add_type(
-        Symbol::NUM_GE,
+        Symbol::NUM_GTE,
         SolvedType::Func(
             vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
             Box::new(bool_type()),

@@ -309,7 +309,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // isLte or (<=) : Num a, Num a -> Bool
     add_type(
-        Symbol::NUM_LE,
+        Symbol::NUM_LTE,
         unique_function(
             vec![num_type(UVAR1, TVAR1), num_type(UVAR2, TVAR1)],
             bool_type(UVAR3),
@@ -327,7 +327,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // isGte or (>=) : Num a, Num a -> Bool
     add_type(
-        Symbol::NUM_GE,
+        Symbol::NUM_GTE,
         unique_function(
             vec![num_type(UVAR1, TVAR1), num_type(UVAR2, TVAR1)],
             bool_type(UVAR3),
