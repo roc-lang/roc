@@ -74,7 +74,6 @@ where
 /// In --release builds, don't increase the stack size. Run the test normally.
 /// This way, we find out if any of our tests are blowing the stack even after
 /// optimizations in release builds.
-#[allow(dead_code)]
 #[cfg(not(debug_assertions))]
 #[inline(always)]
 pub fn with_larger_debug_stack<F>(run_test: F)
