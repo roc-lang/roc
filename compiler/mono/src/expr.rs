@@ -232,7 +232,8 @@ enum IntOrFloat {
     FloatType,
 }
 
-fn to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
+/// Given the `a` in `Num a`, determines whether it's an int or a float
+fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
     match subs.get_without_compacting(var).content {
         Content::Alias(Symbol::INT_INTEGER, args, _) => {
             debug_assert!(args.is_empty());
@@ -246,41 +247,46 @@ fn to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
             debug_assert!(args.is_empty());
             IntOrFloat::FloatType
         }
-        Content::Alias(Symbol::NUM_NUM, args, _) => {
-            debug_assert!(args.len() == 1);
-
-            match subs.get_without_compacting(args[0].1).content {
-                Content::Alias(Symbol::INT_INTEGER, args, _) => {
-                    debug_assert!(args.is_empty());
-                    IntOrFloat::IntType
-                }
-                Content::FlexVar(_) => {
-                    // If this was still a (Num *), assume compiling it to an Int
-                    IntOrFloat::IntType
-                }
-                Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
-                    debug_assert!(args.is_empty());
-                    IntOrFloat::FloatType
-                }
-                Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
-                    debug_assert!(attr_args.len() == 2);
-
-                    // Recurse on the second argument
-                    to_int_or_float(subs, attr_args[1])
-                }
-                other => panic!(
-                    "Unrecognized Num.Num alias type argument Content: {:?}",
-                    other
-                ),
-            }
-        }
         Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
             debug_assert!(attr_args.len() == 2);
 
             // Recurse on the second argument
-            to_int_or_float(subs, attr_args[1])
+            num_argument_to_int_or_float(subs, attr_args[1])
         }
-        other => panic!("Unrecognized Num type argument Content: {:?}", other),
+        other => {
+            panic!(
+                "Unrecognized Num type argument for var {:?} with Content: {:?}",
+                var, other
+            );
+        }
+    }
+}
+
+/// Given a `Num a`, determines whether it's an int or a float
+fn num_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
+    match subs.get_without_compacting(var).content {
+        Content::Alias(Symbol::NUM_NUM, args, _) => {
+            debug_assert!(args.len() == 1);
+
+            num_argument_to_int_or_float(subs, args[0].1)
+        }
+
+        Content::Alias(Symbol::INT_INT, _, _) => IntOrFloat::IntType,
+        Content::Alias(Symbol::FLOAT_FLOAT, _, _) => IntOrFloat::FloatType,
+
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
+            debug_assert!(attr_args.len() == 2);
+
+            // Recurse on the second argument
+            num_to_int_or_float(subs, attr_args[1])
+        }
+
+        other => {
+            panic!(
+                "Input variable is not a Num, but {:?} is a {:?}",
+                var, other
+            );
+        }
     }
 }
 
@@ -413,7 +419,7 @@ fn from_can<'a>(
     use roc_can::expr::Expr::*;
 
     match can_expr {
-        Num(var, num) => match to_int_or_float(env.subs, var) {
+        Num(var, num) => match num_argument_to_int_or_float(env.subs, var) {
             IntOrFloat::IntType => Expr::Int(num),
             IntOrFloat::FloatType => Expr::Float(num as f64),
         },
@@ -491,27 +497,27 @@ fn from_can<'a>(
                         symbol
                     } else {
                         match symbol {
-                            Symbol::NUM_ADD => match to_int_or_float(env.subs, ret_var) {
+                            Symbol::NUM_ADD => match num_to_int_or_float(env.subs, ret_var) {
                                 FloatType => Symbol::FLOAT_ADD,
                                 IntType => Symbol::INT_ADD,
                             },
-                            Symbol::NUM_SUB => match to_int_or_float(env.subs, ret_var) {
+                            Symbol::NUM_SUB => match num_to_int_or_float(env.subs, ret_var) {
                                 FloatType => Symbol::FLOAT_SUB,
                                 IntType => Symbol::INT_SUB,
                             },
-                            Symbol::NUM_LTE => match to_int_or_float(env.subs, loc_args[0].0) {
+                            Symbol::NUM_LTE => match num_to_int_or_float(env.subs, loc_args[0].0) {
                                 FloatType => Symbol::FLOAT_LTE,
                                 IntType => Symbol::INT_LTE,
                             },
-                            Symbol::NUM_LT => match to_int_or_float(env.subs, loc_args[0].0) {
+                            Symbol::NUM_LT => match num_to_int_or_float(env.subs, loc_args[0].0) {
                                 FloatType => Symbol::FLOAT_LT,
                                 IntType => Symbol::INT_LT,
                             },
-                            Symbol::NUM_GTE => match to_int_or_float(env.subs, loc_args[0].0) {
+                            Symbol::NUM_GTE => match num_to_int_or_float(env.subs, loc_args[0].0) {
                                 FloatType => Symbol::FLOAT_GTE,
                                 IntType => Symbol::INT_GTE,
                             },
-                            Symbol::NUM_GT => match to_int_or_float(env.subs, loc_args[0].0) {
+                            Symbol::NUM_GT => match num_to_int_or_float(env.subs, loc_args[0].0) {
                                 FloatType => Symbol::FLOAT_GT,
                                 IntType => Symbol::INT_GT,
                             },
@@ -1484,7 +1490,7 @@ fn from_can_pattern<'a>(
         Shadowed(region, ident) => Pattern::Shadowed(*region, ident.clone()),
         UnsupportedPattern(region) => Pattern::UnsupportedPattern(*region),
 
-        NumLiteral(var, num) => match to_int_or_float(env.subs, *var) {
+        NumLiteral(var, num) => match num_argument_to_int_or_float(env.subs, *var) {
             IntOrFloat::IntType => Pattern::IntLiteral(*num),
             IntOrFloat::FloatType => Pattern::FloatLiteral(*num as u64),
         },
