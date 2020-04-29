@@ -274,6 +274,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Int module
 
+    // equals : Int, Int -> Bool
+    add_type(
+        Symbol::INT_EQ_I64,
+        SolvedType::Func(vec![int_type(), int_type()], Box::new(bool_type())),
+    );
+
     // highest : Int
     add_type(Symbol::INT_HIGHEST, int_type());
 
@@ -284,7 +290,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         vec![(TagName::Global("DivByZero".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
-
     // div : Int, Int -> Result Int [ DivByZero ]*
     add_type(
         Symbol::INT_DIV,

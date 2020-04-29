@@ -604,6 +604,8 @@ define_builtins! {
         14 INT_LTE: "#lte"
         15 INT_GT: "#gt"
         16 INT_GTE: "#gte"
+        17 INT_DIV_ARG_NUMERATOR: "div#numerator" // The first argument to `//`, the numerator
+        18 INT_DIV_ARG_DENOMINATOR: "div#denominator" // The first argument to `//`, the denominator
     }
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" imported // the Float.Float type alias

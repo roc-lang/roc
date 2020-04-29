@@ -26,7 +26,11 @@ use roc_types::subs::{VarStore, Variable};
 /// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
 /// which works fine because it doesn't involve any open tag unions.
 pub fn builtin_defs(var_store: &VarStore) -> Vec<Def> {
-    vec![/*list_get(var_store),*/ list_first(var_store)]
+    vec![
+        /*list_get(var_store),*/
+        list_first(var_store),
+        int_div(var_store),
+    ]
 }
 
 /// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
@@ -122,6 +126,85 @@ pub fn builtin_defs(var_store: &VarStore) -> Vec<Def> {
 //         annotation: None,
 //     }
 // }
+
+/// Int.div : Int, Int -> Result Int [ DivByZero ]*
+fn int_div(var_store: &VarStore) -> Def {
+    use crate::expr::Expr::*;
+    use crate::pattern::Pattern::*;
+
+    let args = vec![
+        (
+            var_store.fresh(),
+            no_region(Identifier(Symbol::INT_DIV_ARG_NUMERATOR)),
+        ),
+        (
+            var_store.fresh(),
+            no_region(Identifier(Symbol::INT_DIV_ARG_DENOMINATOR)),
+        ),
+    ];
+
+    let body = If {
+        branch_var: var_store.fresh(),
+        cond_var: var_store.fresh(),
+        branches: vec![(
+            // if-condition
+            no_region(
+                // Int.eq denominator 0
+                call(
+                    Symbol::INT_EQ_I64,
+                    vec![
+                        Var(Symbol::INT_DIV_ARG_DENOMINATOR),
+                        (Int(var_store.fresh(), 0)),
+                    ],
+                    var_store,
+                ),
+            ),
+            // Denominator is zero
+            no_region(tag(
+                "Err",
+                vec![tag("DivByZero", Vec::new(), var_store)],
+                var_store,
+            )),
+        )],
+        final_else: Box::new(
+            // denominator was not zero
+            no_region(
+                // Ok (Int.#divUnsafe numerator denominator)
+                tag(
+                    "Ok",
+                    vec![
+                        // Int.#divUnsafe numerator denominator
+                        call(
+                            Symbol::INT_DIV_UNSAFE,
+                            vec![
+                                (Var(Symbol::INT_DIV_ARG_NUMERATOR)),
+                                (Var(Symbol::INT_DIV_ARG_DENOMINATOR)),
+                            ],
+                            var_store,
+                        ),
+                    ],
+                    var_store,
+                ),
+            ),
+        ),
+    };
+
+    let expr = Closure(
+        var_store.fresh(),
+        Symbol::INT_DIV,
+        Recursive::NotRecursive,
+        args,
+        Box::new((no_region(body), var_store.fresh())),
+    );
+
+    Def {
+        loc_pattern: no_region(Identifier(Symbol::INT_DIV)),
+        loc_expr: no_region(expr),
+        expr_var: var_store.fresh(),
+        pattern_vars: SendMap::default(),
+        annotation: None,
+    }
+}
 
 /// List.first : List elem -> Result elem [ ListWasEmpty ]*
 fn list_first(var_store: &VarStore) -> Def {
