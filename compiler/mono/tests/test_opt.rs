@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate pretty_assertions;
-// #[macro_use]
-// extern crate indoc;
+#[macro_use]
+extern crate indoc;
 
 extern crate bumpalo;
 extern crate roc_mono;
@@ -254,14 +254,16 @@ mod test_opt {
     fn set_shared_int_list() {
         // This should *NOT* optimize List.set to List.set_in_place
         contains_named_calls(
-            r#"
-                shared = [ 2, 4 ]
+            indoc!(
+                r#"
+                    shared = [ 2, 4 ]
 
-                # This should not mutate the original
-                x = List.set shared 1 0
+                    # This should not mutate the original
+                    x = List.set shared 1 0
 
-                { x, y: List.getUnsafe shared 1 }
-            "#,
+                    { x, y: List.getUnsafe shared 1 }
+                "#
+            ),
             vec![Symbol::LIST_SET, Symbol::LIST_GET_UNSAFE],
         );
     }

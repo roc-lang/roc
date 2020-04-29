@@ -31,7 +31,6 @@ pub fn test_home() -> ModuleId {
     ModuleIds::default().get_or_insert(&"Test".into())
 }
 
-#[allow(dead_code)]
 pub fn infer_expr(
     subs: Subs,
     problems: &mut Vec<roc_solve::solve::TypeError>,
