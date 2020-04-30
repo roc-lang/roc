@@ -342,6 +342,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Int module
 
+    // equals : Int, Int -> Bool
+    add_type(
+        Symbol::INT_EQ_I64,
+        unique_function(vec![int_type(UVAR1), int_type(UVAR2)], bool_type(UVAR3)),
+    );
+
     // highest : Int
     add_type(Symbol::INT_HIGHEST, int_type(UVAR1));
 

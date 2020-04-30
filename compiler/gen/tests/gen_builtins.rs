@@ -164,13 +164,30 @@ mod gen_builtins {
         assert_evals_to!(
             indoc!(
                 r#"
-                    Int.divUnsafe 1000 100
+                    when 1000 // 10 is
+                        Ok val -> val
+                        Err _ -> -1
                 "#
             ),
-            10,
+            100,
             i64
         );
     }
+
+    // #[test]
+    // fn gen_div_by_zero_i64() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 when 1000 // 0 is
+    //                     Err DivByZero -> 99
+    //                     _ -> -24
+    //             "#
+    //         ),
+    //         99,
+    //         i64
+    //     );
+    // }
 
     #[test]
     fn lt_i64() {
