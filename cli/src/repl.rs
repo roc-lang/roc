@@ -246,16 +246,17 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
 
     // Populate Procs and get the low-level Expr from the canonical Expr
     let mut mono_problems = Vec::new();
-    let main_body = roc_mono::expr::Expr::new(
-        &arena,
-        &mut subs,
-        &mut mono_problems,
-        loc_expr.value,
-        &mut procs,
+    let mut mono_env = roc_mono::expr::Env {
+        arena: &arena,
+        subs: &mut subs,
+        problems: &mut mono_problems,
         home,
-        &mut ident_ids,
-        ptr_bytes,
-    );
+        ident_ids: &mut ident_ids,
+        pointer_size: ptr_bytes,
+        symbol_counter: 0,
+        jump_counter: arena.alloc(0),
+    };
+    let main_body = roc_mono::expr::Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
     // Put this module's ident_ids back in the interns, so we can use them in Env.
     env.interns.all_ident_ids.insert(home, ident_ids);
