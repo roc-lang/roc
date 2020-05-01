@@ -280,6 +280,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         SolvedType::Func(vec![int_type(), int_type()], Box::new(bool_type())),
     );
 
+    // notEquals : Int, Int -> Bool
+    add_type(
+        Symbol::INT_NEQ_I64,
+        SolvedType::Func(vec![int_type(), int_type()], Box::new(bool_type())),
+    );
+
     // highest : Int
     add_type(Symbol::INT_HIGHEST, int_type());
 

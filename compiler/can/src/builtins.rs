@@ -128,7 +128,7 @@ fn int_div(var_store: &VarStore) -> Def {
             no_region(
                 // Int.eq denominator 0
                 call(
-                    Symbol::INT_EQ_I64,
+                    Symbol::INT_NEQ_I64,
                     vec![
                         Var(Symbol::INT_DIV_ARG_DENOMINATOR),
                         (Int(var_store.fresh(), 0)),
@@ -136,14 +136,6 @@ fn int_div(var_store: &VarStore) -> Def {
                     var_store,
                 ),
             ),
-            // Denominator is zero
-            no_region(tag(
-                "Err",
-                vec![tag("DivByZero", Vec::new(), var_store)],
-                var_store,
-            )),
-        )],
-        final_else: Box::new(
             // denominator was not zero
             no_region(
                 // Ok (Int.#divUnsafe numerator denominator)
@@ -163,6 +155,14 @@ fn int_div(var_store: &VarStore) -> Def {
                     var_store,
                 ),
             ),
+        )],
+        final_else: Box::new(
+            // denominator was zero
+            no_region(tag(
+                "Err",
+                vec![tag("DivByZero", Vec::new(), var_store)],
+                var_store,
+            )),
         ),
     };
 

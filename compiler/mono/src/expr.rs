@@ -543,6 +543,28 @@ fn from_can<'a>(
                                     Err(()) => panic!("Invalid layout"),
                                 }
                             }
+                            Symbol::BOOL_NEQ => {
+                                match Layout::from_var(
+                                    env.arena,
+                                    loc_args[0].0,
+                                    env.subs,
+                                    env.pointer_size,
+                                ) {
+                                    Ok(Layout::Builtin(builtin)) => match builtin {
+                                        Builtin::Int64 => Symbol::INT_NEQ_I64,
+                                        Builtin::Bool => Symbol::INT_NEQ_I1,
+                                        Builtin::Byte => Symbol::INT_NEQ_I8,
+                                        _ => {
+                                            panic!("Not-Equality not implemented for {:?}", builtin)
+                                        }
+                                    },
+                                    Ok(complex) => panic!(
+                                        "TODO support equality on complex layouts like {:?}",
+                                        complex
+                                    ),
+                                    Err(()) => panic!("Invalid layout"),
+                                }
+                            }
                             _ => symbol,
                         }
                     }
