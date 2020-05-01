@@ -367,11 +367,9 @@ fn gen(
         jump_counter: arena.alloc(0),
     };
 
-    // TODO remove this
-    decls_by_id.insert(loaded.module_id, home_decls);
 
-    // Populate Procs from decls
-    for (_, mut decls) in decls_by_id.drain() {
+    // Add modules' decls to Procs
+    for (_, mut decls) in decls_by_id.drain().chain(std::iter::once((loaded.module_id, home_decls))) {
         for decl in decls.drain(..) {
             use roc_can::def::Declaration::*;
             use roc_can::expr::Expr::*;
