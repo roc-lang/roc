@@ -27,7 +27,8 @@ pub struct Proc<'a> {
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Procs<'a> {
-    user_defined: MutMap<Symbol, PartialProc<'a>>,
+    pub user_defined: MutMap<Symbol, PartialProc<'a>>,
+    pub module_decls: MutSet<Symbol>,
     anonymous: MutMap<Symbol, Option<Proc<'a>>>,
     specializations: MutMap<ContentHash, (Symbol, Option<Proc<'a>>)>,
     builtin: MutSet<Symbol>,
@@ -426,7 +427,18 @@ fn from_can<'a>(
         Int(_, num) => Expr::Int(num),
         Float(_, num) => Expr::Float(num),
         Str(string) | BlockStr(string) => Expr::Str(env.arena.alloc(string)),
-        Var(symbol) => Expr::Load(symbol),
+        Var(symbol) => {
+            if procs.module_decls.contains(&symbol) {
+                let partial_proc = procs.get_user_defined(symbol).unwrap();
+                let fn_var = partial_proc.annotation;
+                let ret_var = partial_proc.annotation;
+
+                // This is a top-level declaration, which will code gen to a 0-arity thunk.
+                call_by_name(env, procs, fn_var, ret_var, symbol, std::vec::Vec::new())
+            } else {
+                Expr::Load(symbol)
+            }
+        }
         LetRec(defs, ret_expr, _, _) => from_can_defs(env, defs, *ret_expr, procs),
         LetNonRec(def, ret_expr, _, _) => from_can_defs(env, vec![*def], *ret_expr, procs),
 
