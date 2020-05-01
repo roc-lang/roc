@@ -108,6 +108,32 @@ mod gen_builtins {
     }
 
     #[test]
+    fn gen_int_eq() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                4 == 4
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn gen_int_neq() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                4 != 5
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
     fn gen_add_i64() {
         assert_evals_to!(
             indoc!(

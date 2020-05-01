@@ -1231,6 +1231,18 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(int_val)
         }
+        Symbol::INT_NEQ_I64 => {
+            debug_assert!(args.len() == 2);
+
+            let int_val = env.builder.build_int_compare(
+                IntPredicate::NE,
+                args[0].0.into_int_value(),
+                args[1].0.into_int_value(),
+                "cmp_i64",
+            );
+
+            BasicValueEnum::IntValue(int_val)
+        }
         Symbol::INT_EQ_I1 => {
             debug_assert!(args.len() == 2);
 
