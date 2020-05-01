@@ -552,6 +552,8 @@ fn from_can<'a>(
                                 ) {
                                     Ok(Layout::Builtin(builtin)) => match builtin {
                                         Builtin::Int64 => Symbol::INT_NEQ_I64,
+                                        Builtin::Bool => Symbol::INT_NEQ_I1,
+                                        Builtin::Byte => Symbol::INT_NEQ_I8,
                                         _ => {
                                             panic!("Not-Equality not implemented for {:?}", builtin)
                                         }

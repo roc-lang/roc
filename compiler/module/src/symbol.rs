@@ -607,6 +607,8 @@ define_builtins! {
         17 INT_DIV_ARG_NUMERATOR: "div#numerator" // The first argument to `//`, the numerator
         18 INT_DIV_ARG_DENOMINATOR: "div#denominator" // The first argument to `//`, the denominator
         19 INT_NEQ_I64: "#neqi64"
+        20 INT_NEQ_I1: "#neqi1"
+        21 INT_NEQ_I8: "#neqi8"
     }
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" imported // the Float.Float type alias
