@@ -193,8 +193,7 @@ pub async fn load<'a>(
     loading_started.insert(root_id);
 
     // The declarations we'll ultimately be returning
-    let mut declarations_by_id: MutMap<ModuleId, Vec<Declaration>> = MutMap::default();
-
+    let mut declarations_by_id: MutMap<ModuleId, Vec<Declaration>> = roc_can::builtins::declarations_by_id();
     let mut exposed_symbols_by_module: MutMap<ModuleId, MutSet<Symbol>> = MutMap::default();
 
     // Modules which are waiting for certain headers to be parsed
@@ -469,8 +468,11 @@ pub async fn load<'a>(
                                     stdlib,
                                 );
 
-                                for _unused_module_id in unused_modules.iter() {
-                                    panic!("TODO gracefully report unused imports for {:?}, namely {:?}", home, unused_modules);
+                                for unused_module_id in unused_modules.iter() {
+                                    // Never report builtin modules as unused
+                                    if !unused_module_id.is_builtin() {
+                                        todo!("TODO gracefully report unused imports for {:?}, namely {:?}", home, unused_modules);
+                                    }
                                 }
                             }
                         }
@@ -581,7 +583,7 @@ fn send_header<'a>(
     // If it isn't, report a problem!
 
     let mut imported: Vec<(ModuleName, Vec<Ident>, Region)> = Vec::with_capacity(imports.len());
-    let mut imported_modules: MutSet<ModuleId> = MutSet::default();
+    let mut imported_modules: MutSet<ModuleId> = ModuleId::default_imports();
     let mut scope_size = 0;
 
     for loc_entry in imports {

@@ -1,8 +1,8 @@
 use crate::ident::Ident;
 use inlinable_string::InlinableString;
-use roc_collections::all::{default_hasher, ImMap, MutMap};
+use roc_collections::all::{default_hasher, ImMap, MutMap, MutSet};
 use roc_region::all::Region;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::{fmt, u32};
 
 // TODO: benchmark this as { ident_id: u32, module_id: u32 } and see if perf stays the same
@@ -494,6 +494,16 @@ macro_rules! define_builtins {
                 // total number of builtin modules, since they
                 // take up the first $total ModuleId numbers.
                 self.0 < $total
+            }
+
+            pub fn default_imports() -> MutSet<ModuleId> {
+                let mut all = HashSet::with_capacity_and_hasher($total, default_hasher());
+
+                $(
+                    all.insert(ModuleId($module_id));
+                )+
+
+                all
             }
 
             $(

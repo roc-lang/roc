@@ -1,12 +1,26 @@
-use crate::def::Def;
-use crate::expr::Expr;
-use crate::expr::Recursive;
-use roc_collections::all::SendMap;
+use crate::def::{Declaration, Def};
+use crate::expr::{Expr, Recursive};
+use roc_collections::all::{MutMap, MutSet, SendMap};
 use roc_module::ident::TagName;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_parse::operator::CalledVia;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
+
+fn exposed_symbols() -> MutMap<ModuleId, MutSet<Symbol>> {
+    let mut all = MutMap::default(); // TODO use with_capacity_and_hasher here
+
+    all.insert(ModuleId::LIST, {
+        let mut set = MutSet::default(); // TODO use with_capacity_and_hasher here
+
+        set.insert(Symbol::LIST_GET);
+        set.insert(Symbol::LIST_FIRST);
+
+        set
+    });
+
+    all
+}
 
 /// Some builtins cannot be constructed in code gen alone, and need to be defined
 /// as separate Roc defs. For example, List.get has this type:
@@ -25,16 +39,24 @@ use roc_types::subs::{VarStore, Variable};
 /// delegates to the compiler-internal List.getUnsafe function to do the actual
 /// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
 /// which works fine because it doesn't involve any open tag unions.
-pub fn builtin_defs(var_store: &VarStore) -> Vec<Def> {
-    vec![
-        list_get(var_store),
-        list_first(var_store),
-        int_div(var_store),
-    ]
+pub fn declarations_by_id() -> MutMap<ModuleId, Vec<Declaration>> {
+    let var_store = VarStore::default();
+    let mut decls = MutMap::default(); // TODO use with_capacity_and_hasher here
+
+    decls.insert(
+        ModuleId::LIST,
+        vec![
+            list_get(&var_store),
+            list_first(&var_store),
+            int_div(&var_store),
+        ],
+    );
+
+    decls
 }
 
 /// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
-fn list_get(var_store: &VarStore) -> Def {
+fn list_get(var_store: &VarStore) -> Declaration {
     use crate::expr::Expr::*;
 
     defn(
@@ -105,7 +127,7 @@ fn list_get(var_store: &VarStore) -> Def {
 }
 
 /// Int.div : Int, Int -> Result Int [ DivByZero ]*
-fn int_div(var_store: &VarStore) -> Def {
+fn int_div(var_store: &VarStore) -> Declaration {
     use crate::expr::Expr::*;
     use crate::pattern::Pattern::*;
 
@@ -174,17 +196,17 @@ fn int_div(var_store: &VarStore) -> Def {
         Box::new((no_region(body), var_store.fresh())),
     );
 
-    Def {
+    Declare(Def {
         loc_pattern: no_region(Identifier(Symbol::INT_DIV)),
         loc_expr: no_region(expr),
         expr_var: var_store.fresh(),
         pattern_vars: SendMap::default(),
         annotation: None,
-    }
+    })
 }
 
 /// List.first : List elem -> Result elem [ ListWasEmpty ]*
-fn list_first(var_store: &VarStore) -> Def {
+fn list_first(var_store: &VarStore) -> Declaration {
     use crate::expr::Expr::*;
 
     defn(
@@ -276,7 +298,7 @@ fn call(symbol: Symbol, args: Vec<Expr>, var_store: &VarStore) -> Expr {
 }
 
 #[inline(always)]
-fn defn(fn_name: Symbol, args: Vec<Symbol>, var_store: &VarStore, body: Expr) -> Def {
+fn defn(fn_name: Symbol, args: Vec<Symbol>, var_store: &VarStore, body: Expr) -> Declaration {
     use crate::expr::Expr::*;
     use crate::pattern::Pattern::*;
 
@@ -293,11 +315,11 @@ fn defn(fn_name: Symbol, args: Vec<Symbol>, var_store: &VarStore, body: Expr) ->
         Box::new((no_region(body), var_store.fresh())),
     );
 
-    Def {
+    Declaration::Declare(Def {
         loc_pattern: no_region(Identifier(fn_name)),
         loc_expr: no_region(expr),
         expr_var: var_store.fresh(),
         pattern_vars: SendMap::default(),
         annotation: None,
-    }
+    })
 }
