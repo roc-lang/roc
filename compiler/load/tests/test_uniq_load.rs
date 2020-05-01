@@ -76,7 +76,7 @@ mod test_uniq_load {
         }
     }
 
-    fn expect_types(loaded_module: LoadedModule, expected_types: HashMap<&str, &str>) {
+    fn expect_types(mut loaded_module: LoadedModule, expected_types: HashMap<&str, &str>) {
         let home = loaded_module.module_id;
         let mut subs = loaded_module.solved.into_inner();
 
@@ -85,34 +85,32 @@ mod test_uniq_load {
 
         let mut num_decls = 0;
 
-        for decls in loaded_module.declarations_by_id.values() {
-            for decl in decls {
-                num_decls += 1;
+        for decl in loaded_module.declarations_by_id.remove(&home).unwrap() {
+            num_decls += 1;
 
-                match decl {
-                    Declare(def) => expect_def(
-                        &loaded_module.interns,
-                        &mut subs,
-                        home,
-                        &def,
-                        &expected_types,
-                    ),
-                    DeclareRec(defs) => {
-                        for def in defs {
-                            expect_def(
-                                &loaded_module.interns,
-                                &mut subs,
-                                home,
-                                &def,
-                                &expected_types,
-                            );
-                        }
+            match decl {
+                Declare(def) => expect_def(
+                    &loaded_module.interns,
+                    &mut subs,
+                    home,
+                    &def,
+                    &expected_types,
+                ),
+                DeclareRec(defs) => {
+                    for def in defs {
+                        expect_def(
+                            &loaded_module.interns,
+                            &mut subs,
+                            home,
+                            &def,
+                            &expected_types,
+                        );
                     }
-                    cycle @ InvalidCycle(_, _) => {
-                        panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
-                    }
-                };
-            }
+                }
+                cycle @ InvalidCycle(_, _) => {
+                    panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
+                }
+            };
         }
 
         assert_eq!(expected_types.len(), num_decls);
@@ -134,15 +132,18 @@ mod test_uniq_load {
                 subs_by_module,
             )
             .await;
-            let loaded_module = loaded.expect("Test module failed to load");
+
+            let mut loaded_module = loaded.expect("Test module failed to load");
 
             assert_eq!(loaded_module.can_problems, Vec::new());
             assert_eq!(loaded_module.type_problems, Vec::new());
 
             let def_count: usize = loaded_module
                 .declarations_by_id
-                .values()
-                .map(|decls| decls.iter().fold(0, |sum, decl| sum + decl.def_count()))
+                .remove(&loaded_module.module_id)
+                .unwrap()
+                .into_iter()
+                .map(|decl| decl.def_count())
                 .sum();
 
             let expected_name = loaded_module
