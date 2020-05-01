@@ -307,14 +307,11 @@ fn gen(
     let loc_expr = main_expr.unwrap_or_else(|| {
         panic!("TODO gracefully handle the case where `main` was declared but not exposed")
     });
-
     let mut subs = loaded.solved.into_inner();
     let content = match main_var {
         Some(var) => subs.get_without_compacting(var).content,
         None => todo!("TODO gracefully handle the case where `main` was declared but not exposed"),
     };
-
-    todo!("step 1. mono-module, step 2. actually have main here use the loaded builtin modules!");
 
     // Generate the binary
 
