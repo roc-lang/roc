@@ -220,6 +220,8 @@ async fn build_file(
     Ok(binary_path)
 }
 
+// TODO this should probably use more helper functions
+#[allow(clippy::cognitive_complexity)]
 fn gen(
     arena: &Bump,
     loaded: LoadedModule,
