@@ -299,7 +299,7 @@ impl<'a> RocDocAllocator<'a> {
 
     pub fn binop(
         &'a self,
-        content: roc_parse::operator::BinOp,
+        content: roc_module::operator::BinOp,
     ) -> DocBuilder<'a, Self, Annotation> {
         self.text(content.to_string()).annotate(Annotation::BinOp)
     }

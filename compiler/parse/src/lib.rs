@@ -21,7 +21,6 @@ pub mod ident;
 pub mod keyword;
 pub mod module;
 pub mod number_literal;
-pub mod operator;
 pub mod pattern;
 pub mod problems;
 pub mod string_literal;

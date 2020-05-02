@@ -4,9 +4,8 @@ use crate::spaces::{
     add_spaces, fmt_comments_only, fmt_condition_spaces, fmt_spaces, is_comment, newline, INDENT,
 };
 use bumpalo::collections::{String, Vec};
+use roc_module::operator::{self, BinOp};
 use roc_parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern, WhenBranch};
-use roc_parse::operator;
-use roc_parse::operator::BinOp;
 use roc_region::all::Located;
 
 pub fn fmt_expr<'a>(

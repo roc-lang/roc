@@ -367,9 +367,11 @@ fn gen(
         jump_counter: arena.alloc(0),
     };
 
-
     // Add modules' decls to Procs
-    for (_, mut decls) in decls_by_id.drain().chain(std::iter::once((loaded.module_id, home_decls))) {
+    for (_, mut decls) in decls_by_id
+        .drain()
+        .chain(std::iter::once((loaded.module_id, home_decls)))
+    {
         for decl in decls.drain(..) {
             use roc_can::def::Declaration::*;
             use roc_can::expr::Expr::*;

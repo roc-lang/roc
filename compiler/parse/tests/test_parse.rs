@@ -18,6 +18,8 @@ mod test_parse {
     use crate::helpers::parse_with;
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
+    use roc_module::operator::BinOp::*;
+    use roc_module::operator::{CalledVia, UnaryOp};
     use roc_parse::ast::AssignedField::*;
     use roc_parse::ast::CommentOrNewline::*;
     use roc_parse::ast::Expr::{self, *};
@@ -27,9 +29,6 @@ mod test_parse {
     };
     use roc_parse::header::ModuleName;
     use roc_parse::module::{interface_header, module_defs};
-    use roc_parse::operator::BinOp::*;
-    use roc_parse::operator::CalledVia;
-    use roc_parse::operator::UnaryOp;
     use roc_parse::parser::{Fail, FailReason, Parser, State};
     use roc_region::all::{Located, Region};
     use std::{f64, i64};

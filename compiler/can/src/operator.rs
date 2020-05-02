@@ -1,10 +1,10 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::ident::ModuleName;
+use roc_module::operator::BinOp::Pizza;
+use roc_module::operator::{BinOp, CalledVia};
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{AssignedField, Def, Pattern, WhenBranch};
-use roc_parse::operator::BinOp::Pizza;
-use roc_parse::operator::{BinOp, CalledVia};
 use roc_region::all::{Located, Region};
 
 // BinOp precedence logic adapted from Gluon by Markus Westerlind, MIT licensed
@@ -201,7 +201,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             })
         }
         UnaryOp(loc_arg, loc_op) | Nested(UnaryOp(loc_arg, loc_op)) => {
-            use roc_parse::operator::UnaryOp::*;
+            use roc_module::operator::UnaryOp::*;
 
             let region = loc_op.region;
             let op = loc_op.value;
@@ -327,7 +327,7 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
 }
 
 fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a Located<Expr<'a>> {
-    use roc_parse::operator::Associativity::*;
+    use roc_module::operator::Associativity::*;
     use std::cmp::Ordering;
 
     let mut infixes = Infixes::new(loc_expr);

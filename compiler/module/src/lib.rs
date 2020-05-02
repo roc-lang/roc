@@ -12,6 +12,7 @@
 #![allow(clippy::large_enum_variant)]
 
 pub mod ident;
+pub mod operator;
 pub mod symbol;
 
 #[macro_use]
