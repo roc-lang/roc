@@ -3,16 +3,11 @@ extern crate roc_reporting;
 #[macro_use]
 extern crate clap;
 use bumpalo::Bump;
-use clap::{App, Arg, ArgMatches};
 use inkwell::context::Context;
 use inkwell::module::Linkage;
 use inkwell::passes::PassManager;
-use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
-};
 use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
-use roc_can::def::Def;
 use roc_collections::all::ImMap;
 use roc_collections::all::MutMap;
 use roc_gen::llvm::build::{
@@ -23,10 +18,15 @@ use roc_load::file::{LoadedModule, LoadingProblem};
 use roc_module::symbol::Symbol;
 use roc_mono::expr::{Env, Expr, PartialProc, Procs};
 use roc_mono::layout::Layout;
+use std::time::SystemTime;
+
+use clap::{App, Arg, ArgMatches};
+use inkwell::targets::{
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
+};
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::time::SystemTime;
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
 use tokio::process::Command;
 use tokio::runtime::Builder;
@@ -367,49 +367,6 @@ fn gen(
         jump_counter: arena.alloc(0),
     };
 
-    let add_def_to_procs = |def: Def| {
-        use roc_can::expr::Expr::*;
-        use roc_can::pattern::Pattern::*;
-
-        match def.loc_pattern.value {
-            Identifier(symbol) => {
-                match def.loc_expr.value {
-                    Closure(annotation, _, _, loc_args, boxed_body) => {
-                        let (loc_body, ret_var) = *boxed_body;
-
-                        procs.insert_closure(
-                            &mut mono_env,
-                            Some(symbol),
-                            annotation,
-                            loc_args,
-                            loc_body,
-                            ret_var,
-                        );
-                    }
-                    body => {
-                        let proc = PartialProc {
-                            annotation: def.expr_var,
-                            // This is a 0-arity thunk, so it has no arguments.
-                            patterns: bumpalo::collections::Vec::new_in(arena),
-                            body,
-                        };
-
-                        procs.user_defined.insert(symbol, proc);
-                        procs.module_thunks.insert(symbol);
-                    }
-                };
-            }
-            other => {
-                todo!("TODO gracefully handle Declare({:?})", other);
-            }
-        }
-    };
-
-    // Initialize Procs from builtins
-    for def in roc_can::builtins::builtin_defs() {
-        add_def_to_procs(def);
-    }
-
     // Add modules' decls to Procs
     for (_, mut decls) in decls_by_id
         .drain()
@@ -417,9 +374,42 @@ fn gen(
     {
         for decl in decls.drain(..) {
             use roc_can::def::Declaration::*;
+            use roc_can::expr::Expr::*;
+            use roc_can::pattern::Pattern::*;
 
             match decl {
-                Declare(def) => add_def_to_procs(def),
+                Declare(def) => match def.loc_pattern.value {
+                    Identifier(symbol) => {
+                        match def.loc_expr.value {
+                            Closure(annotation, _, _, loc_args, boxed_body) => {
+                                let (loc_body, ret_var) = *boxed_body;
+
+                                procs.insert_closure(
+                                    &mut mono_env,
+                                    Some(symbol),
+                                    annotation,
+                                    loc_args,
+                                    loc_body,
+                                    ret_var,
+                                );
+                            }
+                            body => {
+                                let proc = PartialProc {
+                                    annotation: def.expr_var,
+                                    // This is a 0-arity thunk, so it has no arguments.
+                                    patterns: bumpalo::collections::Vec::new_in(arena),
+                                    body,
+                                };
+
+                                procs.user_defined.insert(symbol, proc);
+                                procs.module_thunks.insert(symbol);
+                            }
+                        };
+                    }
+                    other => {
+                        todo!("TODO gracefully handle Declare({:?})", other);
+                    }
+                },
                 DeclareRec(_defs) => {
                     todo!("TODO support DeclareRec");
                 }
