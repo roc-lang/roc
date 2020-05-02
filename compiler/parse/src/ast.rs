@@ -1,10 +1,9 @@
 use crate::header::ModuleName;
 use crate::ident::Ident;
-use crate::operator::CalledVia;
-use crate::operator::{BinOp, UnaryOp};
 use bumpalo::collections::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_module::operator::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Region};
 
 #[derive(Clone, Debug, PartialEq)]

@@ -3,8 +3,8 @@ use crate::expr::Expr;
 use crate::expr::Recursive;
 use roc_collections::all::SendMap;
 use roc_module::ident::TagName;
+use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
-use roc_parse::operator::CalledVia;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 

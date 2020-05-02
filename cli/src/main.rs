@@ -16,7 +16,7 @@ use roc_gen::llvm::build::{
 use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_load::file::{LoadedModule, LoadingProblem};
 use roc_module::symbol::Symbol;
-use roc_mono::expr::{Expr, Procs};
+use roc_mono::expr::{Env, Expr, PartialProc, Procs};
 use roc_mono::layout::Layout;
 use std::time::SystemTime;
 
@@ -220,6 +220,8 @@ async fn build_file(
     Ok(binary_path)
 }
 
+// TODO this should probably use more helper functions
+#[allow(clippy::cognitive_complexity)]
 fn gen(
     arena: &Bump,
     loaded: LoadedModule,
@@ -275,17 +277,22 @@ fn gen(
         }
     }
 
+    let mut decls_by_id = loaded.declarations_by_id;
+    let home_decls = decls_by_id
+        .remove(&loaded.module_id)
+        .expect("Root module ID not found in loaded declarations_by_id");
+
     // We use a loop label here so we can break all the way out of a nested
     // loop inside DeclareRec if we find the expr there.
     //
     // https://doc.rust-lang.org/1.30.0/book/first-edition/loops.html#loop-labels
-    'find_expr: for decl in loaded.declarations {
+    'find_expr: for decl in home_decls.iter() {
         use roc_can::def::Declaration::*;
 
         match decl {
             Declare(def) => {
                 if def.pattern_vars.contains_key(&main_symbol) {
-                    main_expr = Some(def.loc_expr);
+                    main_expr = Some(def.loc_expr.clone());
 
                     break 'find_expr;
                 }
@@ -294,7 +301,7 @@ fn gen(
             DeclareRec(defs) => {
                 for def in defs {
                     if def.pattern_vars.contains_key(&main_symbol) {
-                        main_expr = Some(def.loc_expr);
+                        main_expr = Some(def.loc_expr.clone());
 
                         break 'find_expr;
                     }
@@ -347,20 +354,74 @@ fn gen(
         ptr_bytes,
     };
     let mut procs = Procs::default();
-    let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
-
-    // Populate Procs and get the low-level Expr from the canonical Expr
     let mut mono_problems = std::vec::Vec::new();
-    let main_body = Expr::new(
-        &arena,
-        &mut subs,
-        &mut mono_problems,
-        loc_expr.value,
-        &mut procs,
+    let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
+    let mut mono_env = Env {
+        arena,
+        subs: &mut subs,
+        problems: &mut mono_problems,
         home,
-        &mut ident_ids,
-        ptr_bytes,
-    );
+        ident_ids: &mut ident_ids,
+        pointer_size: ptr_bytes,
+        symbol_counter: 0,
+        jump_counter: arena.alloc(0),
+    };
+
+    // Add modules' decls to Procs
+    for (_, mut decls) in decls_by_id
+        .drain()
+        .chain(std::iter::once((loaded.module_id, home_decls)))
+    {
+        for decl in decls.drain(..) {
+            use roc_can::def::Declaration::*;
+            use roc_can::expr::Expr::*;
+            use roc_can::pattern::Pattern::*;
+
+            match decl {
+                Declare(def) => match def.loc_pattern.value {
+                    Identifier(symbol) => {
+                        match def.loc_expr.value {
+                            Closure(annotation, _, _, loc_args, boxed_body) => {
+                                let (loc_body, ret_var) = *boxed_body;
+
+                                procs.insert_closure(
+                                    &mut mono_env,
+                                    Some(symbol),
+                                    annotation,
+                                    loc_args,
+                                    loc_body,
+                                    ret_var,
+                                );
+                            }
+                            body => {
+                                let proc = PartialProc {
+                                    annotation: def.expr_var,
+                                    // This is a 0-arity thunk, so it has no arguments.
+                                    patterns: bumpalo::collections::Vec::new_in(arena),
+                                    body,
+                                };
+
+                                procs.user_defined.insert(symbol, proc);
+                                procs.module_thunks.insert(symbol);
+                            }
+                        };
+                    }
+                    other => {
+                        todo!("TODO gracefully handle Declare({:?})", other);
+                    }
+                },
+                DeclareRec(_defs) => {
+                    todo!("TODO support DeclareRec");
+                }
+                InvalidCycle(_loc_idents, _regions) => {
+                    todo!("TODO handle InvalidCycle");
+                }
+            }
+        }
+    }
+
+    // Populate Procs further and get the low-level Expr from the canonical Expr
+    let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
     // Put this module's ident_ids back in the interns, so we can use them in env.
     env.interns.all_ident_ids.insert(home, ident_ids);

@@ -35,8 +35,7 @@ pub fn standard_stdlib() -> StdLib {
     }
 }
 
-/// Keep this up to date by hand!
-///
+/// Keep this up to date by hand! It's the number of builtin aliases that are imported by default.
 const NUM_BUILTIN_IMPORTS: usize = 7;
 
 /// These can be shared between definitions, they will get instantiated when converted to Type

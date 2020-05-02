@@ -53,7 +53,7 @@ pub struct LoadedModule {
     pub solved: Solved<Subs>,
     pub can_problems: Vec<roc_problem::can::Problem>,
     pub type_problems: Vec<solve::TypeError>,
-    pub declarations: Vec<Declaration>,
+    pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub src: Box<str>,
 }
@@ -417,10 +417,6 @@ pub async fn load<'a>(
                         .into_inner()
                         .expect("Unwrapping mutex for module_ids");
 
-                    let declarations = declarations_by_id
-                        .remove(&module_id)
-                        .expect("declarations_by_id was missing root module_id entry");
-
                     let interns = Interns {
                         module_ids,
                         all_ident_ids: constrained_ident_ids,
@@ -432,7 +428,7 @@ pub async fn load<'a>(
                         solved,
                         can_problems,
                         type_problems,
-                        declarations,
+                        declarations_by_id,
                         exposed_vars_by_symbol,
                         src,
                     });

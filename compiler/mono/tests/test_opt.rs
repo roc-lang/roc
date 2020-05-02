@@ -42,16 +42,17 @@ mod test_opt {
 
         // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
         let mut mono_problems = Vec::new();
-        let mono_expr = Expr::new(
-            &arena,
-            &mut subs,
-            &mut mono_problems,
-            loc_expr.value,
-            &mut procs,
+        let mut mono_env = roc_mono::expr::Env {
+            arena: &arena,
+            subs: &mut subs,
+            problems: &mut mono_problems,
             home,
-            &mut ident_ids,
+            ident_ids: &mut ident_ids,
             pointer_size,
-        );
+            symbol_counter: 0,
+            jump_counter: arena.alloc(0),
+        };
+        let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
         let unexpected_calls = extract_named_calls(&mono_expr, &mut calls);
         let expected = CallProblems::default();
@@ -193,16 +194,17 @@ mod test_opt {
 
         // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
         let mut mono_problems = Vec::new();
-        let mono_expr = Expr::new(
-            &arena,
-            &mut subs,
-            &mut mono_problems,
-            loc_expr.value,
-            &mut procs,
+        let mut mono_env = roc_mono::expr::Env {
+            arena: &arena,
+            subs: &mut subs,
+            problems: &mut mono_problems,
             home,
-            &mut ident_ids,
+            ident_ids: &mut ident_ids,
             pointer_size,
-        );
+            symbol_counter: 0,
+            jump_counter: arena.alloc(0),
+        };
+        let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
         assert_eq!(mono_expr, expected);
     }

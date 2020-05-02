@@ -27,7 +27,8 @@ pub struct Proc<'a> {
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Procs<'a> {
-    user_defined: MutMap<Symbol, PartialProc<'a>>,
+    pub user_defined: MutMap<Symbol, PartialProc<'a>>,
+    pub module_thunks: MutSet<Symbol>,
     anonymous: MutMap<Symbol, Option<Proc<'a>>>,
     specializations: MutMap<ContentHash, (Symbol, Option<Proc<'a>>)>,
     builtin: MutSet<Symbol>,
@@ -40,6 +41,66 @@ impl<'a> Procs<'a> {
 
     fn insert_anonymous(&mut self, symbol: Symbol, proc: Option<Proc<'a>>) {
         self.anonymous.insert(symbol, proc);
+    }
+
+    pub fn insert_closure(
+        &mut self,
+        env: &mut Env<'a, '_>,
+        name: Option<Symbol>,
+        annotation: Variable,
+        loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
+        loc_body: Located<roc_can::expr::Expr>,
+        ret_var: Variable,
+    ) -> Symbol {
+        // turn record/tag patterns into a when expression, e.g.
+        //
+        // foo = \{ x } -> body
+        //
+        // becomes
+        //
+        // foo = \r -> when r is { x } -> body
+        //
+        // conversion of one-pattern when expressions will do the most optimal thing
+
+        let (arg_vars, arg_symbols, body) = patterns_to_when(env, loc_args, ret_var, loc_body);
+
+        match name {
+            Some(symbol) => {
+                // a named closure
+                self.insert_user_defined(
+                    symbol,
+                    PartialProc {
+                        annotation,
+                        patterns: arg_symbols,
+                        body: body.value,
+                    },
+                );
+
+                symbol
+            }
+            None => {
+                // an anonymous closure. These will always be specialized already
+                // by the surrounding context
+                let symbol = env.fresh_symbol();
+
+                let opt_proc = specialize_proc_body(
+                    env,
+                    self,
+                    annotation,
+                    ret_var,
+                    symbol,
+                    &arg_vars,
+                    &arg_symbols,
+                    annotation,
+                    body.value,
+                )
+                .ok();
+
+                self.insert_anonymous(symbol, opt_proc);
+
+                symbol
+            }
+        }
     }
 
     fn insert_specialization(
@@ -96,8 +157,8 @@ pub struct Env<'a, 'i> {
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub pointer_size: u32,
-    symbol_counter: usize,
     pub jump_counter: &'a mut u64,
+    pub symbol_counter: usize,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -203,27 +264,11 @@ pub enum MonoProblem {
 #[allow(clippy::too_many_arguments)]
 impl<'a> Expr<'a> {
     pub fn new(
-        arena: &'a Bump,
-        subs: &'a mut Subs,
-        problems: &mut std::vec::Vec<MonoProblem>,
+        env: &mut Env<'a, '_>,
         can_expr: roc_can::expr::Expr,
         procs: &mut Procs<'a>,
-        home: ModuleId,
-        ident_ids: &mut IdentIds,
-        pointer_size: u32,
     ) -> Self {
-        let mut env = Env {
-            arena,
-            subs,
-            problems,
-            home,
-            ident_ids,
-            pointer_size,
-            symbol_counter: 0,
-            jump_counter: arena.alloc(0),
-        };
-
-        from_can(&mut env, can_expr, procs, None)
+        from_can(env, can_expr, procs, None)
     }
 }
 
@@ -426,61 +471,24 @@ fn from_can<'a>(
         Int(_, num) => Expr::Int(num),
         Float(_, num) => Expr::Float(num),
         Str(string) | BlockStr(string) => Expr::Str(env.arena.alloc(string)),
-        Var(symbol) => Expr::Load(symbol),
+        Var(symbol) => {
+            if procs.module_thunks.contains(&symbol) {
+                let partial_proc = procs.get_user_defined(symbol).unwrap();
+                let fn_var = partial_proc.annotation;
+                let ret_var = partial_proc.annotation;
+
+                // This is a top-level declaration, which will code gen to a 0-arity thunk.
+                call_by_name(env, procs, fn_var, ret_var, symbol, std::vec::Vec::new())
+            } else {
+                Expr::Load(symbol)
+            }
+        }
         LetRec(defs, ret_expr, _, _) => from_can_defs(env, defs, *ret_expr, procs),
         LetNonRec(def, ret_expr, _, _) => from_can_defs(env, vec![*def], *ret_expr, procs),
 
         Closure(annotation, _, _, loc_args, boxed_body) => {
             let (loc_body, ret_var) = *boxed_body;
-
-            // turn record/tag patterns into a when expression, e.g.
-            //
-            // foo = \{ x } -> body
-            //
-            // becomes
-            //
-            // foo = \r -> when r is { x } -> body
-            //
-            // conversion of one-pattern when expressions will do the most optimal thing
-
-            let (arg_vars, arg_symbols, body) = patterns_to_when(env, loc_args, ret_var, loc_body);
-
-            let symbol = match name {
-                Some(symbol) => {
-                    // a named closure
-                    procs.insert_user_defined(
-                        symbol,
-                        PartialProc {
-                            annotation,
-                            patterns: arg_symbols,
-                            body: body.value,
-                        },
-                    );
-                    symbol
-                }
-                None => {
-                    // an anonymous closure. These will always be specialized already
-                    // by the surrounding context
-                    let symbol = env.fresh_symbol();
-
-                    let opt_proc = specialize_proc_body(
-                        env,
-                        procs,
-                        annotation,
-                        ret_var,
-                        symbol,
-                        &arg_vars,
-                        &arg_symbols,
-                        annotation,
-                        body.value,
-                    )
-                    .ok();
-
-                    procs.insert_anonymous(symbol, opt_proc);
-
-                    symbol
-                }
-            };
+            let symbol = procs.insert_closure(env, name, annotation, loc_args, loc_body, ret_var);
 
             Expr::FunctionPointer(symbol)
         }

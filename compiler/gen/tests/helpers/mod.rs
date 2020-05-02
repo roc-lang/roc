@@ -282,7 +282,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         })
         .collect();
 
-    //load builtin values
+    // load builtin values
     let (_introduced_rigids, constraint) =
         constrain_imported_values(imports, constraint, &var_store);
 

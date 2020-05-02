@@ -7,7 +7,6 @@ use crate::blankspace::{
 use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::keyword;
 use crate::number_literal::number_literal;
-use crate::operator::{BinOp, CalledVia, UnaryOp};
 use crate::parser::{
     self, allocated, char, fail, not, not_followed_by, optional, sep_by1, string, then, unexpected,
     unexpected_eof, Either, Fail, FailReason, ParseResult, Parser, State,
@@ -16,6 +15,7 @@ use crate::type_annotation;
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_module::operator::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Located, Region};
 
 pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {

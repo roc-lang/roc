@@ -1,3 +1,8 @@
 app Hello provides [ main ] imports []
 
-main = "Hello, World!"
+greeting =
+    hi = "Hello, World!"
+
+    hi
+
+main = greeting
