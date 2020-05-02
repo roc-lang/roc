@@ -566,6 +566,9 @@ pub enum FlatType {
 pub struct ContentHash(u64);
 
 impl ContentHash {
+    /// The NULL ContentHash is used for builtins.
+    pub const NULL: ContentHash = ContentHash(0);
+
     pub fn from_var(var: Variable, subs: &mut Subs) -> Self {
         use std::hash::Hasher;
 

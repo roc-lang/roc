@@ -25,16 +25,28 @@ pub struct Proc<'a> {
     pub ret_layout: Layout<'a>,
 }
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Procs<'a> {
     pub user_defined: MutMap<Symbol, PartialProc<'a>>,
     pub module_thunks: MutSet<Symbol>,
+    pub pending_specializations: Vec<'a, (Symbol, ContentHash)>,
     anonymous: MutMap<Symbol, Option<Proc<'a>>>,
     specializations: MutMap<ContentHash, (Symbol, Option<Proc<'a>>)>,
     builtin: MutSet<Symbol>,
 }
 
 impl<'a> Procs<'a> {
+    pub fn with_capacity_in(specializations_capacity: usize, arena: &'a Bump) -> Self {
+        Procs {
+            user_defined: MutMap::default(),
+            module_thunks: MutSet::default(),
+            pending_specializations: Vec::with_capacity_in(specializations_capacity, arena),
+            anonymous: MutMap::default(),
+            specializations: MutMap::default(),
+            builtin: MutSet::default(),
+        }
+    }
+
     fn insert_user_defined(&mut self, symbol: Symbol, partial_proc: PartialProc<'a>) {
         self.user_defined.insert(symbol, partial_proc);
     }
@@ -198,7 +210,7 @@ pub enum Expr<'a> {
 
     // Functions
     FunctionPointer(Symbol),
-    CallByName(Symbol, &'a [(Expr<'a>, Layout<'a>)]),
+    CallByName(Symbol, ContentHash, &'a [(Expr<'a>, Layout<'a>)]),
     CallByPointer(&'a Expr<'a>, &'a [Expr<'a>], Layout<'a>),
 
     // Exactly two conditional branches, e.g. if/else
@@ -1323,6 +1335,8 @@ fn from_can_when<'a>(
     }
 }
 
+type Specializations<'a> = Vec<'a, (Symbol, ContentHash)>;
+
 fn call_by_name<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
@@ -1331,75 +1345,13 @@ fn call_by_name<'a>(
     proc_name: Symbol,
     loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
 ) -> Expr<'a> {
-    // create specialized procedure to call
+    let content_hash = ContentHash::from_var(fn_var, env.subs);
 
-    // If we need to specialize the body, this will get populated with the info
-    // we need to do that. This is defined outside the procs.get_user_defined(...) call
-    // because if we tried to specialize the body inside that match, we would
-    // get a borrow checker error about trying to borrow `procs` as mutable
-    // while there is still an active immutable borrow.
-    #[allow(clippy::type_complexity)]
-    let opt_specialize_body: Option<(
-        ContentHash,
-        Variable,
-        roc_can::expr::Expr,
-        Vec<'a, Symbol>,
-    )>;
-
-    let specialized_proc_name = match procs.get_user_defined(proc_name) {
-        Some(partial_proc) => {
-            let content_hash = ContentHash::from_var(fn_var, env.subs);
-
-            match procs.specializations.get(&content_hash) {
-                Some(specialization) => {
-                    opt_specialize_body = None;
-
-                    // a specialization with this type hash already exists, so use its symbol
-                    specialization.0
-                }
-                None => {
-                    opt_specialize_body = Some((
-                        content_hash,
-                        partial_proc.annotation,
-                        partial_proc.body.clone(),
-                        partial_proc.patterns.clone(),
-                    ));
-
-                    // generate a symbol for this specialization
-                    env.fresh_symbol()
-                }
-            }
-        }
-        None => {
-            opt_specialize_body = None;
-
-            // This happens for built-in symbols (they are never defined as a Closure)
-            procs.insert_builtin(proc_name);
-            proc_name
-        }
-    };
-
-    if let Some((content_hash, annotation, body, loc_patterns)) = opt_specialize_body {
-        // register proc, so specialization doesn't loop infinitely
-        procs.insert_specialization(content_hash, specialized_proc_name, None);
-
-        let arg_vars = loc_args.iter().map(|v| v.0).collect::<std::vec::Vec<_>>();
-
-        let proc = specialize_proc_body(
-            env,
-            procs,
-            fn_var,
-            ret_var,
-            specialized_proc_name,
-            &arg_vars,
-            &loc_patterns,
-            annotation,
-            body,
-        )
-        .ok();
-
-        procs.insert_specialization(content_hash, specialized_proc_name, proc);
-    }
+    // We'll need a specialization for this function, but that will happen
+    // in a later step.
+    procs
+        .pending_specializations
+        .push((proc_name, content_hash));
 
     // generate actual call
     let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
@@ -1411,7 +1363,79 @@ fn call_by_name<'a>(
         args.push((from_can(env, loc_arg.value, procs, None), layout));
     }
 
-    Expr::CallByName(specialized_proc_name, args.into_bump_slice())
+    Expr::CallByName(proc_name, content_hash, args.into_bump_slice())
+}
+
+fn specialize() {
+    // create specialized procedure to call
+
+    // If we need to specialize the body, this will get populated with the info
+    // we need to do that. This is defined outside the procs.get_user_defined(...) call
+    // because if we tried to specialize the body inside that match, we would
+    // get a borrow checker error about trying to borrow `procs` as mutable
+    // while there is still an active immutable borrow.
+    // #[allow(clippy::type_complexity)]
+    // let opt_specialize_body: Option<(
+    //     ContentHash,
+    //     Variable,
+    //     roc_can::expr::Expr,
+    //     Vec<'a, Symbol>,
+    // )>;
+
+    // let specialized_proc_name = match procs.get_user_defined(proc_name) {
+    //     Some(partial_proc) => {
+    //         let content_hash = ContentHash::from_var(fn_var, env.subs);
+
+    //         match procs.specializations.get(&content_hash) {
+    //             Some(specialization) => {
+    //                 opt_specialize_body = None;
+
+    //                 // a specialization with this type hash already exists, so use its symbol
+    //                 specialization.0
+    //             }
+    //             None => {
+    //                 opt_specialize_body = Some((
+    //                     content_hash,
+    //                     partial_proc.annotation,
+    //                     partial_proc.body.clone(),
+    //                     partial_proc.patterns.clone(),
+    //                 ));
+
+    //                 // generate a symbol for this specialization
+    //                 env.fresh_symbol()
+    //             }
+    //         }
+    //     }
+    //     None => {
+    //         opt_specialize_body = None;
+
+    //         // This happens for built-in symbols (they are never defined as a Closure)
+    //         procs.insert_builtin(proc_name);
+    //         proc_name
+    //     }
+    // };
+
+    // if let Some((content_hash, annotation, body, loc_patterns)) = opt_specialize_body {
+    //     // register proc, so specialization doesn't loop infinitely
+    //     procs.insert_specialization(content_hash, specialized_proc_name, None);
+
+    //     let arg_vars = loc_args.iter().map(|v| v.0).collect::<std::vec::Vec<_>>();
+
+    //     let proc = specialize_proc_body(
+    //         env,
+    //         procs,
+    //         fn_var,
+    //         ret_var,
+    //         specialized_proc_name,
+    //         &arg_vars,
+    //         &loc_patterns,
+    //         annotation,
+    //         body,
+    //     )
+    //     .ok();
+
+    //     procs.insert_specialization(content_hash, specialized_proc_name, proc);
+    // }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1765,6 +1789,7 @@ pub fn specialize_equality<'a>(
 
     Expr::CallByName(
         symbol,
+        ContentHash::NULL,
         arena.alloc([(lhs, layout.clone()), (rhs, layout.clone())]),
     )
 }

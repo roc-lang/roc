@@ -353,7 +353,8 @@ fn gen(
         module: arena.alloc(module),
         ptr_bytes,
     };
-    let mut procs = Procs::default();
+    let specializations_capacity = 16; // TODO pick this number more intelligently; this is a random guess.
+    let mut procs = Procs::with_capacity_in(specializations_capacity, arena);
     let mut mono_problems = std::vec::Vec::new();
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
     let mut mono_env = Env {
@@ -366,6 +367,8 @@ fn gen(
         symbol_counter: 0,
         jump_counter: arena.alloc(0),
     };
+
+    // todo!("next, need to try verifying code gen between modules when importing from another module. I suspect this will be messed up because they're using different Subs. Need to make that work, and then later can make a thing where the builtin modules all get canonicalized immediately from builtin_defs, and then constrained, solved, etc as normal. I'll list everyt module as having them as dependencies I guess. Also make sure all of those get loaded in parallel with the main module - right up front! In fact, can start solving those while waiting for main's file to open! So kick off main first - to make sure file load is in progress - and then solve builtins in the background while it's opening and parsing. Let's also try to monomorphize and then code gen a module for each dep as soon as it's done being solved; that way, by the time we get back to main, we can potentially have a different LLVM module for each dep ready to go, and can merge them all together. To do this, will need to have monomorphization have a notion of 'my subs' vs 'foreign subs' - if it's going to specialize a Proc, needs to look up the module_id where that Proc was defined, and specialize it using that mdule's Subs. If we do this, though, need some form of coordination to prevent duplicate Proc defs on a per hashcode specialization basis. Most likely how that will work is that whenever something finishes monomorphizing, we immediately update the central source of truth of all the Proc specializations, so at least no future modules duplicate work. There may be some duplicated work on the part of the ones that already went, though. That's fine.");
 
     // Add modules' decls to Procs
     for (_, mut decls) in decls_by_id
@@ -474,7 +477,7 @@ fn gen(
         &ImMap::default(),
         main_fn,
         &main_body,
-        &Procs::default(),
+        &Procs::with_capacity_in(specializations_capacity, arena),
     );
 
     builder.build_return(Some(&ret));

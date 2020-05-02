@@ -1,15 +1,15 @@
+use crate::expr::specialize_equality;
 use crate::expr::Env;
 use crate::expr::Expr;
 use crate::expr::Pattern;
+use crate::layout::Builtin;
+use crate::layout::Layout;
+use crate::pattern::{Ctor, RenderAs, TagId, Union};
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
-
-use crate::expr::specialize_equality;
-use crate::layout::Builtin;
-use crate::layout::Layout;
-use crate::pattern::{Ctor, RenderAs, TagId, Union};
+use roc_types::subs::ContentHash;
 
 /// COMPILE CASES
 
@@ -1206,6 +1206,7 @@ fn boolean_all<'a>(arena: &'a Bump, tests: Vec<(Expr<'a>, Expr<'a>, Layout<'a>)>
         let test = specialize_equality(arena, lhs, rhs, layout);
         expr = Expr::CallByName(
             Symbol::BOOL_AND,
+            ContentHash::NULL,
             arena.alloc([
                 (test, Layout::Builtin(Builtin::Bool)),
                 (expr, Layout::Builtin(Builtin::Bool)),

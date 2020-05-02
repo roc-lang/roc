@@ -232,6 +232,9 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
         basic_type_from_layout(&arena, &context, &layout, ptr_bytes).fn_type(&[], false);
     let main_fn_name = "$Test.main";
 
+    let specializations_capacity = 16; // TODO pick this number more intelligently; this is a random guess.
+    let mut procs = Procs::with_capacity_in(specializations_capacity, &arena);
+
     // Compile and add all the Procs before adding main
     let mut env = roc_gen::llvm::build::Env {
         arena: &arena,
@@ -241,7 +244,6 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
         module: arena.alloc(module),
         ptr_bytes,
     };
-    let mut procs = Procs::default();
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
 
     // Populate Procs and get the low-level Expr from the canonical Expr
@@ -309,7 +311,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
         &ImMap::default(),
         main_fn,
         &main_body,
-        &Procs::default(),
+        &Procs::with_capacity_in(specializations_capacity, &arena),
     );
 
     builder.build_return(Some(&ret));
