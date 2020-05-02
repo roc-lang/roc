@@ -11,7 +11,6 @@
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
 pub mod annotation;
-pub mod builtins;
 pub mod constraint;
 pub mod def;
 pub mod env;
