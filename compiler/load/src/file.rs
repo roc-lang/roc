@@ -17,7 +17,7 @@ use roc_parse::parser::{Fail, Parser, State};
 use roc_region::all::{Located, Region};
 use roc_solve::solve::{self, ExposedModuleTypes, SubsByModule};
 use roc_types::solved_types::{Solved, SolvedType};
-use roc_types::subs::{Subs, VarStore, Variable};
+use roc_types::subs::{Subs, VarStore, Variable, ContentHash};
 use roc_types::types::{self, Alias};
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
@@ -80,6 +80,13 @@ struct ModuleHeader {
     src: Box<str>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProcHeader {
+    pub annotation: Variable,
+    pub arg_patterns: Vec<Symbol>,
+}
+
+
 #[derive(Debug)]
 enum Msg {
     Header(ModuleHeader),
@@ -90,6 +97,7 @@ enum Msg {
         problems: Vec<roc_problem::can::Problem>,
         var_store: VarStore,
     },
+    /// Type solving for the module has completed; here are the results.
     Solved {
         src: Box<str>,
         module_id: ModuleId,
@@ -98,6 +106,35 @@ enum Msg {
         subs: Arc<Solved<Subs>>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         problems: Vec<solve::TypeError>,
+    },
+    /// We recieved some ProcHeader entries for the module.
+    /// These will be used to create specializations in a future pass, once all
+    /// ProcHeader entries have been collected.
+    ProcHeaders {
+        /// The procs' headers, and also their can::expr::Expr bodies,
+        /// stored by the symbol that names them. In a future pass, we'll
+        /// convert these to specializations.
+        pending_procs: MutMap<Symbol, (ProcHeader, roc_can::expr::Expr)>,
+
+        /// These will be enqueued immediately, and will be processed once all
+        /// ProcHeaders have been received. The Symbol will be used to look
+        /// up an entry in pending_procs, and the PendingSpecialization contains
+        /// all the other information necessary to perform the specialization.
+        pending_specializations: Vec<(Symbol, PendingSpecialization)>,
+
+        /// These are top-level module declarations which weren't defined as
+        /// functions, but which will be treated as thunks in code gen because
+        /// we always code gen top-level nonfunction declarations as thunks.
+        module_thunks: MutSet<Symbol>,
+    },
+    Specializations {
+        /// The fully specialized Procs, keyed by (Symbol, ContentHash) because
+        /// that's how they get looked up in CallByName in mono::expr::Expr.
+        procs: MutMap<(Symbol, ContentHash), Proc>,
+
+        /// The builtins used in this specialization. This is useful for DCE,
+        /// to tell us which builtins actually require code generation.
+        builtins: MutSet<Symbol>,
     },
 }
 
@@ -241,6 +278,9 @@ pub async fn load<'a>(
     let mut solve_listeners: MutMap<ModuleId, Vec<ModuleId>> = MutMap::default();
 
     let mut unsolved_modules: MutMap<ModuleId, (Module, Constraint, VarStore)> = MutMap::default();
+
+    // Specializations that need to happen as a result of monomorphization.
+    let mut pending_specializations: Vec<(Symbol, ContentHash)>;
 
     // Parse and canonicalize the module's deps
     while let Some(msg) = msg_rx.recv().await {

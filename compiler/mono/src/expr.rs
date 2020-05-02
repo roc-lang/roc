@@ -31,7 +31,6 @@ pub struct Procs<'a> {
     pub module_thunks: MutSet<Symbol>,
     pub pending_specializations: Vec<'a, (Symbol, ContentHash)>,
     anonymous: MutMap<Symbol, Option<Proc<'a>>>,
-    specializations: MutMap<ContentHash, (Symbol, Option<Proc<'a>>)>,
     builtin: MutSet<Symbol>,
 }
 
@@ -42,7 +41,6 @@ impl<'a> Procs<'a> {
             module_thunks: MutSet::default(),
             pending_specializations: Vec::with_capacity_in(specializations_capacity, arena),
             anonymous: MutMap::default(),
-            specializations: MutMap::default(),
             builtin: MutSet::default(),
         }
     }
@@ -95,6 +93,8 @@ impl<'a> Procs<'a> {
                 // by the surrounding context
                 let symbol = env.fresh_symbol();
 
+                todo!("Any reason we couldn't just insert these into user_defined and pending_specializations and let them get specialized later?");
+
                 let opt_proc = specialize_proc_body(
                     env,
                     self,
@@ -115,14 +115,14 @@ impl<'a> Procs<'a> {
         }
     }
 
-    fn insert_specialization(
-        &mut self,
-        hash: ContentHash,
-        spec_name: Symbol,
-        proc: Option<Proc<'a>>,
-    ) {
-        self.specializations.insert(hash, (spec_name, proc));
-    }
+    // fn insert_specialization(
+    //     &mut self,
+    //     hash: ContentHash,
+    //     spec_name: Symbol,
+    //     proc: Option<Proc<'a>>,
+    // ) {
+    //     self.specializations.insert(hash, (spec_name, proc));
+    // }
 
     fn get_user_defined(&self, symbol: Symbol) -> Option<&PartialProc<'a>> {
         self.user_defined.get(&symbol)
@@ -130,7 +130,7 @@ impl<'a> Procs<'a> {
 
     pub fn len(&self) -> usize {
         let anonymous: usize = self.anonymous.len();
-        let user_defined: usize = self.specializations.len();
+        let user_defined: usize = self.pending_specializations.len();
 
         anonymous + user_defined
     }
@@ -143,23 +143,23 @@ impl<'a> Procs<'a> {
         self.builtin.insert(symbol);
     }
 
-    pub fn as_map(&self) -> MutMap<Symbol, Option<Proc<'a>>> {
-        let mut result = MutMap::default();
+    // pub fn as_map(&self) -> MutMap<Symbol, Option<Proc<'a>>> {
+    //     let mut result = MutMap::default();
 
-        for (symbol, opt_proc) in self.specializations.values() {
-            result.insert(*symbol, opt_proc.clone());
-        }
+    //     for (symbol, opt_proc) in self.specializations.values() {
+    //         result.insert(*symbol, opt_proc.clone());
+    //     }
 
-        for (symbol, proc) in self.anonymous.clone().into_iter() {
-            result.insert(symbol, proc);
-        }
+    //     for (symbol, proc) in self.anonymous.clone().into_iter() {
+    //         result.insert(symbol, proc);
+    //     }
 
-        for symbol in self.builtin.iter() {
-            result.insert(*symbol, None);
-        }
+    //     for symbol in self.builtin.iter() {
+    //         result.insert(*symbol, None);
+    //     }
 
-        result
-    }
+    //     result
+    // }
 }
 
 pub struct Env<'a, 'i> {
@@ -1335,8 +1335,6 @@ fn from_can_when<'a>(
     }
 }
 
-type Specializations<'a> = Vec<'a, (Symbol, ContentHash)>;
-
 fn call_by_name<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
@@ -1366,9 +1364,8 @@ fn call_by_name<'a>(
     Expr::CallByName(proc_name, content_hash, args.into_bump_slice())
 }
 
+/// create specialized procedure to call
 fn specialize() {
-    // create specialized procedure to call
-
     // If we need to specialize the body, this will get populated with the info
     // we need to do that. This is defined outside the procs.get_user_defined(...) call
     // because if we tried to specialize the body inside that match, we would
@@ -1382,36 +1379,36 @@ fn specialize() {
     //     Vec<'a, Symbol>,
     // )>;
 
-    // let specialized_proc_name = match procs.get_user_defined(proc_name) {
-    //     Some(partial_proc) => {
-    //         let content_hash = ContentHash::from_var(fn_var, env.subs);
+    // let specialized_proc_name = if proc_name.is_builtin() {
+    //     opt_specialize_body = None;
 
-    //         match procs.specializations.get(&content_hash) {
-    //             Some(specialization) => {
-    //                 opt_specialize_body = None;
+    //     // This happens for built-in symbols (they are never defined as a Closure)
+    //     procs.insert_builtin(proc_name);
+    //     proc_name
+    // } else {
+    //     let partial_proc = procs
+    //         .get_user_defined(proc_name)
+    //         .expect("TODO gracefully handle non-builtin missing from user_defined");
+    //     let content_hash = ContentHash::from_var(fn_var, env.subs);
 
-    //                 // a specialization with this type hash already exists, so use its symbol
-    //                 specialization.0
-    //             }
-    //             None => {
-    //                 opt_specialize_body = Some((
-    //                     content_hash,
-    //                     partial_proc.annotation,
-    //                     partial_proc.body.clone(),
-    //                     partial_proc.patterns.clone(),
-    //                 ));
+    //     match procs.specializations.get(&content_hash) {
+    //         Some(specialization) => {
+    //             opt_specialize_body = None;
 
-    //                 // generate a symbol for this specialization
-    //                 env.fresh_symbol()
-    //             }
+    //             // a specialization with this type hash already exists, so use its symbol
+    //             specialization.0
     //         }
-    //     }
-    //     None => {
-    //         opt_specialize_body = None;
+    //         None => {
+    //             opt_specialize_body = Some((
+    //                 content_hash,
+    //                 partial_proc.annotation,
+    //                 partial_proc.body.clone(),
+    //                 partial_proc.patterns.clone(),
+    //             ));
 
-    //         // This happens for built-in symbols (they are never defined as a Closure)
-    //         procs.insert_builtin(proc_name);
-    //         proc_name
+    //             // generate a symbol for this specialization
+    //             env.fresh_symbol()
+    //         }
     //     }
     // };
 

@@ -265,16 +265,18 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
 
     let mut headers = Vec::with_capacity(procs.len());
 
+    todo!("restore this");
+
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    for (symbol, opt_proc) in procs.as_map().into_iter() {
-        if let Some(proc) = opt_proc {
-            let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
+    // for (symbol, opt_proc) in procs.as_map().into_iter() {
+    //     if let Some(proc) = opt_proc {
+    //         let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
 
-            headers.push((proc, fn_val, arg_basic_types));
-        }
-    }
+    //         headers.push((proc, fn_val, arg_basic_types));
+    //     }
+    // }
 
     // Build each proc using its header info.
     for (proc, fn_val, arg_basic_types) in headers {
