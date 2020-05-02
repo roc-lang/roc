@@ -144,6 +144,31 @@ type MsgReceiver = mpsc::Receiver<Msg>;
 /// The loaded_modules argument specifies which modules have already been loaded.
 /// It typically contains *at least* the standard modules, but is empty when loading
 /// the standard modules themselves.
+///
+/// If we're just type-checking everything (e.g. running `roc check` at the command line),
+/// we can stop there. However, if we're generating code, then there are additional steps.
+///
+/// 10. After reporting the completed type annotation, we have all the information necessary
+///     to monomorphize. However, since we want to monomorphize in parallel without
+///     duplicating work, we do monomorphization in two steps. First, we go through and
+///     determine all the specializations this module *wants*. We compute the hashes
+///     and report them to the coordinator thread, along with the mono::expr::Expr values of
+///     the current function's body. At this point, we have not yet begun to assemble Procs;
+///     all we've done is send a list of requetsted specializations to the coordinator.
+/// 11. The coordinator works through the specialization requests in parallel, adding them
+///     to a global map once they're finished. Performing one specialization may result
+///     in requests for others; these are added to the queue and worked through as normal.
+///     This process continues until *both* all modules have reported that they've finished
+///     adding specialization requests to the queue, *and* the queue is empty (including
+///     of any requestss that were added in the course of completing other requests). Now
+///     we have a map of specializations, and everything was assembled in parallel with
+///     no unique specialization ever getting assembled twice (meanaing no wasted effort).
+/// 12. Now that we have our final map of specializations, we can proceed to code gen!
+///     As long as the specializations are stored in a per-ModuleId map, we can also
+///     parallelize this code gen. (e.g. in dev builds, building separate LLVM modules
+///     and then linking them together, and possibly caching them by the hash of their
+///     specializations, so if none of their specializations changed, we don't even need
+///     to rebuild the module and can link in the cached one directly.)
 #[allow(clippy::cognitive_complexity)]
 pub async fn load<'a>(
     stdlib: &StdLib,
