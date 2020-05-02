@@ -1350,7 +1350,7 @@ fn call_by_name<'a>(
                 Some(specialization) => {
                     opt_specialize_body = None;
 
-                    // a specialization with this type hash already exists, use its symbol
+                    // a specialization with this type hash already exists, so use its symbol
                     specialization.0
                 }
                 None => {
