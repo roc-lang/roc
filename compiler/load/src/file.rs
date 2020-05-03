@@ -128,13 +128,9 @@ enum Msg {
         pending_specializations: Vec<(Symbol, PendingSpecialization)>,
     },
     Specializations {
-        /// The fully specialized Procs, keyed by (Symbol, ContentHash) because
+        /// Some fully specialized Procs, keyed by (Symbol, ContentHash) because
         /// that's how they get looked up in CallByName in mono::expr::Expr.
         procs: MutMap<(Symbol, ContentHash), Proc>,
-
-        /// The builtins referenced in this specialization. This is useful for DCE,
-        /// to tell us which builtins actually require code generation.
-        builtins_referenced: MutSet<Symbol>,
     },
 }
 

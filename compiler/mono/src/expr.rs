@@ -2,11 +2,12 @@ use crate::layout::{Builtin, Layout};
 use crate::pattern::{Ctor, Guard, RenderAs, TagId};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, ContentHash, FlatType, Subs, Variable};
+use std::collections::HashSet;
 use std::hash::Hash;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -28,20 +29,21 @@ pub struct Proc<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Procs<'a> {
     pub module_thunks: MutSet<Symbol>,
-    pub pending_specializations: Vec<'a, (Symbol, ContentHash)>,
+    pub pending_specializations: MutSet<(Symbol, ContentHash)>,
     pub user_defined: MutMap<Symbol, PartialProc<'a>>,
     anonymous: MutMap<Symbol, Option<Proc<'a>>>,
-    builtins_referenced: MutSet<Symbol>,
 }
 
 impl<'a> Procs<'a> {
     pub fn with_capacity_in(specializations_capacity: usize, arena: &'a Bump) -> Self {
         Procs {
             module_thunks: MutSet::default(),
-            pending_specializations: Vec::with_capacity_in(specializations_capacity, arena),
+            pending_specializations: HashSet::with_capacity_and_hasher(
+                specializations_capacity,
+                default_hasher(),
+            ),
             user_defined: MutMap::default(),
             anonymous: MutMap::default(),
-            builtins_referenced: MutSet::default(),
         }
     }
 
@@ -139,10 +141,6 @@ impl<'a> Procs<'a> {
         self.len() == 0
     }
 
-    fn insert_builtin_reference(&mut self, symbol: Symbol) {
-        self.builtins_referenced.insert(symbol);
-    }
-
     // pub fn as_map(&self) -> MutMap<Symbol, Option<Proc<'a>>> {
     //     let mut result = MutMap::default();
 
@@ -152,10 +150,6 @@ impl<'a> Procs<'a> {
 
     //     for (symbol, proc) in self.anonymous.clone().into_iter() {
     //         result.insert(symbol, proc);
-    //     }
-
-    //     for symbol in self.builtin.iter() {
-    //         result.insert(*symbol, None);
     //     }
 
     //     result
@@ -1349,7 +1343,7 @@ fn call_by_name<'a>(
     // in a later step.
     procs
         .pending_specializations
-        .push((proc_name, content_hash));
+        .insert((proc_name, content_hash));
 
     // generate actual call
     let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
@@ -1365,74 +1359,50 @@ fn call_by_name<'a>(
 }
 
 /// create specialized procedure to call
-fn specialize() {
-    // If we need to specialize the body, this will get populated with the info
-    // we need to do that. This is defined outside the procs.get_user_defined(...) call
-    // because if we tried to specialize the body inside that match, we would
-    // get a borrow checker error about trying to borrow `procs` as mutable
-    // while there is still an active immutable borrow.
-    // #[allow(clippy::type_complexity)]
-    // let opt_specialize_body: Option<(
-    //     ContentHash,
-    //     Variable,
-    //     roc_can::expr::Expr,
-    //     Vec<'a, Symbol>,
-    // )>;
+fn specialize(
+    proc_name: Symbol,
+    subs: &mut Subs,
+    fn_var: Variable,
+    ret_var: Variable,
+    procs: &mut Procs<'_>,
+) {
+    if !proc_name.module_id().is_builtin() {
+        let partial_proc = procs
+            .get_user_defined(proc_name)
+            .expect("TODO gracefully handle non-builtin missing from user_defined");
+        let content_hash = ContentHash::from_var(fn_var, subs);
 
-    // let specialized_proc_name = if proc_name.is_builtin() {
-    //     opt_specialize_body = None;
+        if !procs
+            .pending_specializations
+            .contains(&(proc_name, content_hash))
+        {
+            let annotation = partial_proc.annotation;
+            let body = partial_proc.body.clone();
+            let loc_patterns = partial_proc.patterns.clone();
 
-    //     // This happens for built-in symbols (they are never defined as a Closure)
-    //     procs.insert_builtin_reference(proc_name);
-    //     proc_name
-    // } else {
-    //     let partial_proc = procs
-    //         .get_user_defined(proc_name)
-    //         .expect("TODO gracefully handle non-builtin missing from user_defined");
-    //     let content_hash = ContentHash::from_var(fn_var, env.subs);
+            // register proc, so specialization doesn't loop infinitely
+            procs
+                .pending_specializations
+                .insert((proc_name, content_hash));
 
-    //     match procs.specializations.get(&content_hash) {
-    //         Some(specialization) => {
-    //             opt_specialize_body = None;
+            let arg_vars = loc_args.iter().map(|v| v.0).collect::<std::vec::Vec<_>>();
 
-    //             // a specialization with this type hash already exists, so use its symbol
-    //             specialization.0
-    //         }
-    //         None => {
-    //             opt_specialize_body = Some((
-    //                 content_hash,
-    //                 partial_proc.annotation,
-    //                 partial_proc.body.clone(),
-    //                 partial_proc.patterns.clone(),
-    //             ));
+            let proc = specialize_proc_body(
+                env,
+                procs,
+                fn_var,
+                ret_var,
+                proc_name,
+                &arg_vars,
+                &loc_patterns,
+                annotation,
+                body,
+            )
+            .ok();
 
-    //             // generate a symbol for this specialization
-    //             env.fresh_symbol()
-    //         }
-    //     }
-    // };
-
-    // if let Some((content_hash, annotation, body, loc_patterns)) = opt_specialize_body {
-    //     // register proc, so specialization doesn't loop infinitely
-    //     procs.insert_specialization(content_hash, specialized_proc_name, None);
-
-    //     let arg_vars = loc_args.iter().map(|v| v.0).collect::<std::vec::Vec<_>>();
-
-    //     let proc = specialize_proc_body(
-    //         env,
-    //         procs,
-    //         fn_var,
-    //         ret_var,
-    //         specialized_proc_name,
-    //         &arg_vars,
-    //         &loc_patterns,
-    //         annotation,
-    //         body,
-    //     )
-    //     .ok();
-
-    //     procs.insert_specialization(content_hash, specialized_proc_name, proc);
-    // }
+            procs.insert_specialization(content_hash, proc_name, proc);
+        }
+    };
 }
 
 #[allow(clippy::too_many_arguments)]
