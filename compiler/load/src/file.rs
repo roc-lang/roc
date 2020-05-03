@@ -116,25 +116,25 @@ enum Msg {
         /// convert these to specializations.
         pending_procs: MutMap<Symbol, (ProcHeader, roc_can::expr::Expr)>,
 
+        /// These are top-level module declarations which weren't defined as
+        /// functions, but which will be treated as thunks in code gen because
+        /// we always code gen top-level nonfunction declarations as thunks.
+        module_thunks: MutSet<Symbol>,
+
         /// These will be enqueued immediately, and will be processed once all
         /// ProcHeaders have been received. The Symbol will be used to look
         /// up an entry in pending_procs, and the PendingSpecialization contains
         /// all the other information necessary to perform the specialization.
         pending_specializations: Vec<(Symbol, PendingSpecialization)>,
-
-        /// These are top-level module declarations which weren't defined as
-        /// functions, but which will be treated as thunks in code gen because
-        /// we always code gen top-level nonfunction declarations as thunks.
-        module_thunks: MutSet<Symbol>,
     },
     Specializations {
         /// The fully specialized Procs, keyed by (Symbol, ContentHash) because
         /// that's how they get looked up in CallByName in mono::expr::Expr.
         procs: MutMap<(Symbol, ContentHash), Proc>,
 
-        /// The builtins used in this specialization. This is useful for DCE,
+        /// The builtins referenced in this specialization. This is useful for DCE,
         /// to tell us which builtins actually require code generation.
-        builtins: MutSet<Symbol>,
+        builtins_referenced: MutSet<Symbol>,
     },
 }
 
@@ -279,8 +279,43 @@ pub async fn load<'a>(
 
     let mut unsolved_modules: MutMap<ModuleId, (Module, Constraint, VarStore)> = MutMap::default();
 
+    // Modules which still need to be specialized. Once a module has been solved,
+    // it gets immediately added to this set. A separate task will be spawned
+    // off to specialize it, but
+    let mut needs_specialization: MutSet<ModuleId> = MutSet::default();
+
     // Specializations that need to happen as a result of monomorphization.
-    let mut pending_specializations: Vec<(Symbol, ContentHash)>;
+    // Once a given module is removed from this map, we can begin code generation
+    let mut pending_specializations: MutMap<ModuleId, Vec<(Symbol, PendingSpecialization)>> = Vec::with_capacity(128);
+
+    // The canonicalized procs that have yet to be specialized. Whenever a module
+    // finishes getting solved, it kicks off a task to populate this.
+    // We can't start specializing a module until all of its' dependencies
+    // have had their proc headers recorded here.
+    let mut proc_headers: MutMap<ModuleId, Vec<Symbol, (ProcHeader, roc_can::expr::Expr)>> = MutMap::default();
+
+    // Modules which are waiting for certain dependencies' proc headers to be reported.
+    // Once all its dependencies' proc headers are available, a module's
+    // functions are ready to be specialized.
+    let mut waiting_for_proc_headers: MutMap<ModuleId, MutSet<ModuleId>> = MutMap::default();
+
+    // Modules which are waiting for their dependencies' procs to be specialized.
+    // Once no modules are still waiting for dependencies to be specialized,
+    // we have all the information necessary to code gen all of them in parallel.
+    let mut waiting_for_procs: MutMap<ModuleId, MutSet<ModuleId>> = MutMap::default();
+
+    // Top-level declarations that weren't functions, but which will be
+    // code-genned as thunks.
+    let mut module_thunks: MutSet<Symbol> = MutSet::default();
+
+    // The fully specialized Procs, keyed by (Symbol, ContentHash) because
+    // that's how they get looked up in CallByName in mono::expr::Expr.
+    let mut procs: MutMap<(Symbol, ContentHash), Proc>;
+
+    // The builtins used in this specialization. This is useful for DCE,
+    // to tell us which builtins actually require code generation.
+    // It also tells us which modules need which builtin procedures declared.
+    let mut builtins_referenced: MutMap<ModuleId, Symbol> = MutMap::default();
 
     // Parse and canonicalize the module's deps
     while let Some(msg) = msg_rx.recv().await {
@@ -465,6 +500,8 @@ pub async fn load<'a>(
                 aliases,
                 src,
             } => {
+                needs_specialization.insert(module_id);
+
                 type_problems.extend(problems);
 
                 if module_id == root_id {
