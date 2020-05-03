@@ -2186,6 +2186,35 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    #[test]
+    fn newline_after_equals() {
+        // Regression test for https://github.com/rtfeldman/roc/issues/51
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let num = arena.alloc(Num("5"));
+        let def = Def::Body(
+            arena.alloc(Located::new(0, 0, 0, 1, Identifier("x"))),
+            arena.alloc(Located::new(1, 1, 4, 5, Expr::SpaceBefore(num, &[Newline]))),
+        );
+        let loc_def = &*arena.alloc(Located::new(0, 0, 0, 1, def));
+        let defs = bumpalo::vec![in &arena; loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(3, 3, 0, 2, ret);
+        let expected = Defs(defs, arena.alloc(loc_ret));
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                x =
+                    5
+
+                42
+                "#
+            ),
+            expected,
+        );
+    }
+
     // PARSE ERROR
 
     // TODO this should be parse error, but isn't!

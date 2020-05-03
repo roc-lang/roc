@@ -356,7 +356,6 @@ mod test_can {
     //     } = can_expr_with(&arena, test_home(), src);
 
     //     // There should be two UnusedDef problems: one for h, and one for p
-    //     dbg!(&problems);
     //     assert_eq!(problems.len(), 2);
     //     assert!(problems.iter().all(|problem| match problem {
     //         Problem::UnusedDef(_, _) => true,

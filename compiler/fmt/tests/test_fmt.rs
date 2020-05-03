@@ -8,7 +8,7 @@ extern crate roc_fmt;
 extern crate roc_parse;
 
 #[cfg(test)]
-mod test_format {
+mod test_fmt {
     use bumpalo::collections::String;
     use bumpalo::Bump;
     use roc_fmt::def::fmt_def;
@@ -358,29 +358,32 @@ mod test_format {
         );
     }
 
-    //    #[test]
-    //    fn defs_with_defs() {
-    //        expr_formats_to(indoc!(
-    //            r#"
-    //            x =
-    //                y = 4
-    //                z = 8
-    //                w
-    //
-    //            x
-    //            "#
-    //        ), indoc!(
-    //            r#"
-    //            x =
-    //                y = 4
-    //                z = 8
-    //
-    //                w
-    //
-    //            x
-    //            "#
-    //        ));
-    //    }
+    // #[test]
+    // fn defs_with_defs() {
+    //     expr_formats_to(
+    //         indoc!(
+    //             r#"
+    //             x =
+    //                 y = 4
+    //                 z = 8
+    //                 w
+
+    //             x
+    //             "#
+    //         ),
+    //         indoc!(
+    //             r#"
+    //             x =
+    //                 y = 4
+    //                 z = 8
+
+    //                 w
+
+    //             x
+    //             "#
+    //         ),
+    //     );
+    // }
 
     #[test]
     fn comment_between_two_defs() {
@@ -541,15 +544,15 @@ mod test_format {
         ));
     }
 
-    //     #[test]
-    //     fn record_field_destructuring() {
-    //         expr_formats_same(indoc!(
-    //             r#"
+    // #[test]
+    // fn record_field_destructuring() {
+    //     expr_formats_same(indoc!(
+    //         r#"
     //             when foo is
     //                 { x: 5 } -> 42
-    //             "#
-    //         ));
-    //     }
+    //         "#
+    //     ));
+    // }
 
     #[test]
     fn record_updating() {
@@ -641,21 +644,24 @@ mod test_format {
             "#
         ));
 
-        //        expr_formats_to(indoc!(
-        //            r#"
-        //            identity = \a
-        //                -> a
-        //
-        //            identity 41
-        //            "#
-        //        ), indoc!(
-        //            r#"
-        //            identity = \a ->
-        //                a
-        //
-        //            identity 41
-        //            "#
-        //        ));
+        // expr_formats_to(
+        //     indoc!(
+        //         r#"
+        //             identity = \a
+        //                 -> a
+
+        //             identity 41
+        //         "#
+        //     ),
+        //     indoc!(
+        //         r#"
+        //             identity = \a ->
+        //                 a
+
+        //             identity 41
+        //         "#
+        //     ),
+        // );
 
         expr_formats_same(indoc!(
             r#"
@@ -883,18 +889,17 @@ mod test_format {
 
     #[test]
     fn multi_line_list_def() {
-        //        expr_formats_same(indoc!(
-        //            r#"
-        //            r =
-        //                [
-        //                    1,
-        //                    2
-        //                ]
-        //
-        //            r
-        //            "#
-        //            )
-        //        );
+        // expr_formats_same(indoc!(
+        //     r#"
+        //         l =
+        //             [
+        //                 1,
+        //                 2
+        //             ]
+
+        //         l
+        //     "#
+        // ));
 
         expr_formats_to(
             indoc!(
@@ -920,30 +925,32 @@ mod test_format {
             ),
         );
 
-        //        expr_formats_to(indoc!(
-        //                r#"
-        //                results =
-        //                    # Lets count past 6
-        //                    [
-        //                    Ok 6,
-        //                    Err CountError
-        //                    ]
-        //
-        //                allOks results
-        //                "#
-        //            ), indoc!(
-        //                r#"
-        //                results =
-        //                    # Lets count past 6
-        //                    [
-        //                        Ok 6,
-        //                        Err CountError
-        //                    ]
-        //
-        //                allOks results
-        //                "#
-        //            )
-        //        );
+        // expr_formats_to(
+        //     indoc!(
+        //         r#"
+        //             results =
+        //                 # Let's count past 6
+        //                 [
+        //                 Ok 6,
+        //                 Err CountError
+        //                 ]
+
+        //             allOks results
+        //         "#
+        //     ),
+        //     indoc!(
+        //         r#"
+        //             results =
+        //                 # Let's count past 6
+        //                 [
+        //                     Ok 6,
+        //                     Err CountError
+        //                 ]
+
+        //             allOks results
+        //         "#
+        //     ),
+        // );
     }
 
     // RECORD LITERALS
@@ -977,18 +984,18 @@ mod test_format {
 
     #[test]
     fn multi_line_record_def() {
-        //        expr_formats_same(indoc!(
-        //            r#"
-        //            pos =
-        //                {
-        //                    x: 4,
-        //                    y: 11,
-        //                    z: 16
-        //                }
-        //
-        //            pos
-        //            "#
-        //        ));
+        // expr_formats_same(indoc!(
+        //     r#"
+        //         pos =
+        //             {
+        //                 x: 4,
+        //                 y: 11,
+        //                 z: 16
+        //             }
+
+        //         pos
+        //     "#
+        // ));
 
         expr_formats_to(
             indoc!(
