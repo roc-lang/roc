@@ -64,12 +64,7 @@ macro_rules! loc_parenthetical_expr {
                 )
             ))
         )),
-        move |arena, state, loc_expr_with_extras: Located<(Located<Expr<'a>>, Option<Either<
-            Vec<'a, Located<Expr<'a>>>
-            , Either<Vec<'a, &'a str>, (&'a [CommentOrNewline<'a>], u16)>>>)>
-
-
-            | {
+        move |arena, state, loc_expr_with_extras: Located<(Located<Expr<'a>>, Option<Either<Vec<'a, Located<Expr<'a>>>, Either<Vec<'a, &'a str>, (&'a [CommentOrNewline<'a>], u16)>>>)> | {
             // We parse the parenthetical expression *and* the arguments after it
             // in one region, so that (for example) the region for Apply includes its args.
             let (loc_expr, opt_extras) = loc_expr_with_extras.value;
@@ -609,7 +604,7 @@ fn parse_def_expr<'a>(
         ))
     // `<` because '=' should be same indent or greater
     } else if equals_sign_indent < original_indent {
-        panic!("TODO the = in this declaration seems outdented");
+        todo!("TODO the = in this declaration seems outdented. equals_sign_indent was {} and original_indent was {}", equals_sign_indent, original_indent);
     } else {
         // Indented more beyond the original indent.
         let indented_more = original_indent + 1;
