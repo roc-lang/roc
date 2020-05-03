@@ -27,21 +27,21 @@ pub struct Proc<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Procs<'a> {
-    pub user_defined: MutMap<Symbol, PartialProc<'a>>,
     pub module_thunks: MutSet<Symbol>,
     pub pending_specializations: Vec<'a, (Symbol, ContentHash)>,
+    pub user_defined: MutMap<Symbol, PartialProc<'a>>,
     anonymous: MutMap<Symbol, Option<Proc<'a>>>,
-    builtin: MutSet<Symbol>,
+    builtins_referenced: MutSet<Symbol>,
 }
 
 impl<'a> Procs<'a> {
     pub fn with_capacity_in(specializations_capacity: usize, arena: &'a Bump) -> Self {
         Procs {
-            user_defined: MutMap::default(),
             module_thunks: MutSet::default(),
             pending_specializations: Vec::with_capacity_in(specializations_capacity, arena),
+            user_defined: MutMap::default(),
             anonymous: MutMap::default(),
-            builtin: MutSet::default(),
+            builtins_referenced: MutSet::default(),
         }
     }
 
@@ -139,8 +139,8 @@ impl<'a> Procs<'a> {
         self.len() == 0
     }
 
-    fn insert_builtin(&mut self, symbol: Symbol) {
-        self.builtin.insert(symbol);
+    fn insert_builtin_reference(&mut self, symbol: Symbol) {
+        self.builtins_referenced.insert(symbol);
     }
 
     // pub fn as_map(&self) -> MutMap<Symbol, Option<Proc<'a>>> {
@@ -1383,7 +1383,7 @@ fn specialize() {
     //     opt_specialize_body = None;
 
     //     // This happens for built-in symbols (they are never defined as a Closure)
-    //     procs.insert_builtin(proc_name);
+    //     procs.insert_builtin_reference(proc_name);
     //     proc_name
     // } else {
     //     let partial_proc = procs
