@@ -1,10 +1,8 @@
 [package]
 name = "roc-cli"
 version = "0.1.0"
-authors = ["Richard Feldman <richard.t.feldman@gmail.com>"]
+authors = ["Richard Feldman <oss@rtfeldman.com>"]
 repository = "https://github.com/rtfeldman/roc"
-readme = "README.md"
-keywords = ["roc", "gui"]
 edition = "2018"
 description = "A CLI for Roc"
 license = "Apache-2.0"
@@ -46,10 +44,11 @@ roc_uniq = { path = "../compiler/uniq" }
 roc_unify = { path = "../compiler/unify" }
 roc_solve = { path = "../compiler/solve" }
 roc_mono = { path = "../compiler/mono" }
-roc_load = { path = "../compiler/load", version = "0.1.0" }
-roc_gen = { path = "../compiler/gen", version = "0.1.0" }
-roc_reporting = { path = "../compiler/reporting", version = "0.1.0" }
- # TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
+roc_load = { path = "../compiler/load" }
+roc_gen = { path = "../compiler/gen" }
+roc_reporting = { path = "../compiler/reporting" }
+roc_editor = { path = "../editor" }
+# TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
 clap = { git = "https://github.com/rtfeldman/clap", branch = "master" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!

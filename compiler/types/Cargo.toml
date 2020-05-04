@@ -3,6 +3,7 @@ name = "roc_types"
 version = "0.1.0"
 authors = ["Richard Feldman <oss@rtfeldman.com>"]
 edition = "2018"
+license = "Apache-2.0"
 
 [dependencies]
 roc_collections = { path = "../collections" }
