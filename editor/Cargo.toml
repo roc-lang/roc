@@ -1,34 +1,10 @@
 [package]
-name = "roc-cli"
+name = "roc_editor"
 version = "0.1.0"
 authors = ["Richard Feldman <oss@rtfeldman.com>"]
-repository = "https://github.com/rtfeldman/roc"
 edition = "2018"
-description = "A CLI for Roc"
+description = "An editor for Roc"
 license = "Apache-2.0"
-default-run = "roc"
-
-[[bin]]
-name = "roc"
-path = "src/main.rs"
-test = false
-bench = false
-
-[features]
-default = ["target-x86"]
-
-target-x86 = []
-
-# arm and wasm give linker errors on some platforms
-target-arm = []
-target-webassembly = []
-
-target-all = [
-    "target-x86",
-    "target-arm",
-    "target-webassembly"
-]
-
 
 [dependencies]
 roc_collections = { path = "../compiler/collections" }
@@ -47,9 +23,7 @@ roc_mono = { path = "../compiler/mono" }
 roc_load = { path = "../compiler/load" }
 roc_gen = { path = "../compiler/gen" }
 roc_reporting = { path = "../compiler/reporting" }
-roc_editor = { path = "../editor" }
-# TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
-clap = { git = "https://github.com/rtfeldman/clap", branch = "master" }
+ # TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }

@@ -3,4 +3,5 @@ name = "roc_region"
 version = "0.1.0"
 authors = ["Richard Feldman <oss@rtfeldman.com>"]
 edition = "2018"
+license = "Apache-2.0"
 
