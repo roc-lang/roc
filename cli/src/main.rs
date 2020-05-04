@@ -1,5 +1,3 @@
-extern crate roc_gen;
-extern crate roc_reporting;
 #[macro_use]
 extern crate clap;
 use bumpalo::Bump;
@@ -76,6 +74,7 @@ fn main() -> io::Result<()> {
     let matches = build_app().get_matches();
 
     match matches.subcommand_name() {
+        None => roc_editor::launch(),
         Some("build") => build(matches.subcommand_matches("build").unwrap(), false),
         Some("run") => build(matches.subcommand_matches("run").unwrap(), true),
         Some("repl") => repl::main(),
