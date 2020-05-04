@@ -1065,6 +1065,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_editor",
  "roc_gen",
  "roc_load",
  "roc_module",
@@ -1150,6 +1151,40 @@ dependencies = [
  "roc_region",
  "roc_types",
  "roc_uniq",
+]
+
+[[package]]
+name = "roc_editor"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "im",
+ "im-rc",
+ "indoc",
+ "inkwell",
+ "inlinable_string",
+ "maplit",
+ "pretty_assertions",
+ "quickcheck",
+ "quickcheck_macros",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_constrain",
+ "roc_gen",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve",
+ "roc_types",
+ "roc_unify",
+ "roc_uniq",
+ "target-lexicon",
+ "tokio",
 ]
 
 [[package]]
