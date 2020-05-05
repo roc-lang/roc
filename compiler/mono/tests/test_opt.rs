@@ -49,7 +49,6 @@ mod test_opt {
             home,
             ident_ids: &mut ident_ids,
             pointer_size,
-            symbol_counter: 0,
             jump_counter: arena.alloc(0),
         };
         let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
@@ -201,7 +200,6 @@ mod test_opt {
             home,
             ident_ids: &mut ident_ids,
             pointer_size,
-            symbol_counter: 0,
             jump_counter: arena.alloc(0),
         };
         let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);

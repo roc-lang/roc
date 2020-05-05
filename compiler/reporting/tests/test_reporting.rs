@@ -97,7 +97,6 @@ mod test_reporting {
                 home,
                 ident_ids: &mut ident_ids,
                 pointer_size,
-                symbol_counter: 0,
                 jump_counter: arena.alloc(0),
             };
             let _mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);

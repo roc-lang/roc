@@ -362,7 +362,6 @@ fn gen(
         home,
         ident_ids: &mut ident_ids,
         pointer_size: ptr_bytes,
-        symbol_counter: 0,
         jump_counter: arena.alloc(0),
     };
 

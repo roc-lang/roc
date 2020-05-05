@@ -158,7 +158,6 @@ pub struct Env<'a, 'i> {
     pub ident_ids: &'i mut IdentIds,
     pub pointer_size: u32,
     pub jump_counter: &'a mut u64,
-    pub symbol_counter: usize,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
