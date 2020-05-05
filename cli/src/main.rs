@@ -33,6 +33,7 @@ pub mod repl;
 
 pub static FLAG_OPTIMIZE: &str = "optimize";
 pub static FLAG_ROC_FILE: &str = "ROC_FILE";
+pub static DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 
 pub fn build_app<'a>() -> App<'a> {
     App::new("roc")
@@ -68,16 +69,41 @@ pub fn build_app<'a>() -> App<'a> {
         .subcommand(App::new("repl")
             .about("Launch the interactive Read Eval Print Loop (REPL)")
         )
+        .subcommand(App::new("edit")
+            .about("Launch the Roc editor")
+            .arg(Arg::with_name(DIRECTORY_OR_FILES)
+                .index(1)
+                .multiple(true)
+                .required(false)
+                .help("(optional) The directory or files to open on launch.")
+            )
+        )
 }
 
 fn main() -> io::Result<()> {
     let matches = build_app().get_matches();
 
     match matches.subcommand_name() {
-        None => roc_editor::launch(),
+        None => roc_editor::launch(&[]),
         Some("build") => build(matches.subcommand_matches("build").unwrap(), false),
         Some("run") => build(matches.subcommand_matches("run").unwrap(), true),
         Some("repl") => repl::main(),
+        Some("edit") => {
+            match matches
+                .subcommand_matches("edit")
+                .unwrap()
+                .values_of_os(DIRECTORY_OR_FILES)
+            {
+                None => roc_editor::launch(&[]),
+                Some(values) => {
+                    let paths = values
+                        .map(|os_str| Path::new(os_str))
+                        .collect::<Vec<&Path>>();
+
+                    roc_editor::launch(&paths)
+                }
+            }
+        }
         _ => unreachable!(),
     }
 }
