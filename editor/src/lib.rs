@@ -33,7 +33,7 @@ fn run_event_loop() {
                 event: WindowEvent::CloseRequested,
                 ..
             } => {
-                println!("Thank you for flying Roc Airlines!");
+                println!("✈️ Thank you for flying Roc Airlines!");
                 *control_flow = ControlFlow::Exit
             }
             Event::MainEventsCleared => window.request_redraw(),
