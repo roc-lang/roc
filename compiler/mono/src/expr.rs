@@ -1359,14 +1359,18 @@ fn call_by_name<'a>(
 }
 
 /// create specialized procedure to call
-fn specialize(
+fn specialize<'a>(
+    env: &mut Env<'a, '_>,
     proc_name: Symbol,
     subs: &mut Subs,
     fn_var: Variable,
     ret_var: Variable,
-    procs: &mut Procs<'_>,
-) {
-    if !proc_name.module_id().is_builtin() {
+    arg_vars: &[Variable],
+    procs: &mut Procs<'a>,
+) -> Option<(ContentHash, Proc<'a>)> {
+    if proc_name.module_id().is_builtin() {
+        None
+    } else {
         let partial_proc = procs
             .get_user_defined(proc_name)
             .expect("TODO gracefully handle non-builtin missing from user_defined");
@@ -1385,9 +1389,7 @@ fn specialize(
                 .pending_specializations
                 .insert((proc_name, content_hash));
 
-            let arg_vars = loc_args.iter().map(|v| v.0).collect::<std::vec::Vec<_>>();
-
-            let proc = specialize_proc_body(
+            specialize_proc_body(
                 env,
                 procs,
                 fn_var,
@@ -1398,11 +1400,12 @@ fn specialize(
                 annotation,
                 body,
             )
-            .ok();
-
-            procs.insert_specialization(content_hash, proc_name, proc);
+            .ok()
+            .map(|proc| (content_hash, proc))
+        } else {
+            None
         }
-    };
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
