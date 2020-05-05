@@ -1121,7 +1121,7 @@ fn decide_to_branching<'a>(
 
             let condition = boolean_all(env.arena, tests);
 
-            let branch_symbol = env.fresh_symbol();
+            let branch_symbol = env.unique_symbol();
             let stores = [(branch_symbol, Layout::Builtin(Builtin::Bool), condition)];
 
             let cond_layout = Layout::Builtin(Builtin::Bool);

@@ -81,7 +81,7 @@ impl<'a> Procs<'a> {
             None => {
                 // an anonymous closure. These will always be specialized already
                 // by the surrounding context
-                let symbol = env.fresh_symbol();
+                let symbol = env.unique_symbol();
 
                 let opt_proc = specialize_proc_body(
                     env,
@@ -158,15 +158,11 @@ pub struct Env<'a, 'i> {
     pub ident_ids: &'i mut IdentIds,
     pub pointer_size: u32,
     pub jump_counter: &'a mut u64,
-    pub symbol_counter: usize,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
-    pub fn fresh_symbol(&mut self) -> Symbol {
-        let ident_id = self
-            .ident_ids
-            .add(format!("_{}", self.symbol_counter).into());
-        self.symbol_counter += 1;
+    pub fn unique_symbol(&mut self) -> Symbol {
+        let ident_id = self.ident_ids.gen_unique();
 
         self.home.register_debug_idents(&self.ident_ids);
 
@@ -411,25 +407,25 @@ fn pattern_to_when<'a>(
         Identifier(symbol) => (*symbol, body),
         Underscore => {
             // for underscore we generate a dummy Symbol
-            (env.fresh_symbol(), body)
+            (env.unique_symbol(), body)
         }
         Shadowed(region, loc_ident) => {
             let error = roc_problem::can::RuntimeError::Shadowing {
                 original_region: *region,
                 shadow: loc_ident.clone(),
             };
-            (env.fresh_symbol(), Located::at_zero(RuntimeError(error)))
+            (env.unique_symbol(), Located::at_zero(RuntimeError(error)))
         }
 
         UnsupportedPattern(region) => {
             // create the runtime error here, instead of delegating to When.
             // UnsupportedPattern should then never occcur in When
             let error = roc_problem::can::RuntimeError::UnsupportedPattern(*region);
-            (env.fresh_symbol(), Located::at_zero(RuntimeError(error)))
+            (env.unique_symbol(), Located::at_zero(RuntimeError(error)))
         }
 
         AppliedTag { .. } | RecordDestructure { .. } => {
-            let symbol = env.fresh_symbol();
+            let symbol = env.unique_symbol();
 
             let wrapped_body = When {
                 cond_var: pattern_var,
@@ -677,7 +673,7 @@ fn from_can<'a>(
                 let cond = from_can(env, loc_cond.value, procs, None);
                 let then = from_can(env, loc_then.value, procs, None);
 
-                let branch_symbol = env.fresh_symbol();
+                let branch_symbol = env.unique_symbol();
 
                 let cond_expr = Expr::Cond {
                     cond_symbol: branch_symbol,
@@ -931,7 +927,7 @@ fn store_pattern<'a>(
                     IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral { .. } => {}
                     _ => {
                         // store the field in a symbol, and continue matching on it
-                        let symbol = env.fresh_symbol();
+                        let symbol = env.unique_symbol();
                         stored.push((symbol, arg_layout.clone(), load));
 
                         store_pattern(env, argument, symbol, arg_layout.clone(), stored)?;
@@ -1007,7 +1003,7 @@ fn store_record_destruct<'a>(
             }
             IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral { .. } => {}
             _ => {
-                let symbol = env.fresh_symbol();
+                let symbol = env.unique_symbol();
                 stored.push((symbol, destruct.layout.clone(), load));
 
                 store_pattern(env, guard_pattern, symbol, destruct.layout.clone(), stored)?;
@@ -1089,7 +1085,7 @@ fn from_can_defs<'a>(
                     }
                 }
 
-                let symbol = env.fresh_symbol();
+                let symbol = env.unique_symbol();
                 stored.push((
                     symbol,
                     layout.clone(),
@@ -1170,7 +1166,7 @@ fn from_can_when<'a>(
 
         let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
             .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
-        let cond_symbol = env.fresh_symbol();
+        let cond_symbol = env.unique_symbol();
         let cond = from_can(env, loc_cond.value, procs, None);
         stored.push((cond_symbol, cond_layout.clone(), cond));
 
@@ -1187,7 +1183,7 @@ fn from_can_when<'a>(
             .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
 
         let cond = from_can(env, loc_cond.value, procs, None);
-        let cond_symbol = env.fresh_symbol();
+        let cond_symbol = env.unique_symbol();
 
         let mut loc_branches = std::vec::Vec::new();
         let mut opt_branches = std::vec::Vec::new();
@@ -1366,7 +1362,7 @@ fn call_by_name<'a>(
                     ));
 
                     // generate a symbol for this specialization
-                    env.fresh_symbol()
+                    env.unique_symbol()
                 }
             }
         }
@@ -1705,7 +1701,7 @@ fn from_can_pattern<'a>(
                         // insert underscore pattern
                         mono_destructs.push(RecordDestruct {
                             label: label.clone(),
-                            symbol: env.fresh_symbol(),
+                            symbol: env.unique_symbol(),
                             layout: field_layout.clone(),
                             guard: Some(Pattern::Underscore),
                         });
@@ -1714,7 +1710,7 @@ fn from_can_pattern<'a>(
                     // insert underscore pattern
                     mono_destructs.push(RecordDestruct {
                         label: label.clone(),
-                        symbol: env.fresh_symbol(),
+                        symbol: env.unique_symbol(),
                         layout: field_layout.clone(),
                         guard: Some(Pattern::Underscore),
                     });
