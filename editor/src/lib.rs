@@ -1,7 +1,9 @@
 use std::io;
+use std::path::Path;
 
-/// The editor is actually launched from the CLI if you pass it zero arguments.
-pub fn launch() -> io::Result<()> {
+/// The editor is actually launched from the CLI if you pass it zero arguments,
+/// or if you provide it 1 or more files or directories to open on launch.
+pub fn launch(_filepaths: &[&Path]) -> io::Result<()> {
     // TODO do any initialization here
 
     run_event_loop();
