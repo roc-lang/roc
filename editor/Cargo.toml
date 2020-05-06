@@ -65,6 +65,7 @@ version = "0.5"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies.backend]
 package = "gfx-backend-vulkan"
+features = ["x11"]
 version = "0.5"
 
 [build-dependencies]

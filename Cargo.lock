@@ -730,6 +730,7 @@ dependencies = [
  "raw-window-handle",
  "smallvec",
  "winapi 0.3.8",
+ "x11",
 ]
 
 [[package]]
@@ -2765,6 +2766,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "782a50f48ac4336916227cd199c61c7b42f38d0ad705421b49eb12c74c53ae00"
 dependencies = [
  "rand_core 0.4.2",
+]
+
+[[package]]
+name = "x11"
+version = "2.18.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ecd092546cb16f25783a5451538e73afc8d32e242648d54f4ae5459ba1e773"
+dependencies = [
+ "libc",
+ "pkg-config",
 ]
 
 [[package]]
