@@ -17,7 +17,7 @@ use roc_parse::parser::{Fail, Parser, State};
 use roc_region::all::{Located, Region};
 use roc_solve::solve::{self, ExposedModuleTypes, SubsByModule};
 use roc_types::solved_types::{Solved, SolvedType};
-use roc_types::subs::{Subs, VarStore, Variable, ContentHash};
+use roc_types::subs::{ContentHash, Subs, VarStore, Variable};
 use roc_types::types::{self, Alias};
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
@@ -86,7 +86,6 @@ pub struct ProcHeader {
     pub arg_patterns: Vec<Symbol>,
 }
 
-
 #[derive(Debug)]
 enum Msg {
     Header(ModuleHeader),
@@ -111,10 +110,12 @@ enum Msg {
     /// These will be used to create specializations in a future pass, once all
     /// ProcHeader entries have been collected.
     ProcHeaders {
+        module_id: ModuleId,
+
         /// The procs' headers, and also their can::expr::Expr bodies,
         /// stored by the symbol that names them. In a future pass, we'll
         /// convert these to specializations.
-        pending_procs: MutMap<Symbol, (ProcHeader, roc_can::expr::Expr)>,
+        proc_headers: MutMap<Symbol, (ProcHeader, roc_can::expr::Expr)>,
 
         /// These are top-level module declarations which weren't defined as
         /// functions, but which will be treated as thunks in code gen because
@@ -280,15 +281,17 @@ pub async fn load<'a>(
     // off to specialize it, but
     let mut needs_specialization: MutSet<ModuleId> = MutSet::default();
 
-    // Specializations that need to happen as a result of monomorphization.
-    // Once a given module is removed from this map, we can begin code generation
-    let mut pending_specializations: MutMap<ModuleId, Vec<(Symbol, PendingSpecialization)>> = Vec::with_capacity(128);
-
     // The canonicalized procs that have yet to be specialized. Whenever a module
     // finishes getting solved, it kicks off a task to populate this.
     // We can't start specializing a module until all of its' dependencies
     // have had their proc headers recorded here.
-    let mut proc_headers: MutMap<ModuleId, Vec<Symbol, (ProcHeader, roc_can::expr::Expr)>> = MutMap::default();
+    let mut proc_headers: MutMap<ModuleId, MutMap<Symbol, (ProcHeader, roc_can::expr::Expr)>> =
+        MutMap::default();
+
+    // Specializations that need to happen as a result of monomorphization.
+    // Once a given module is removed from this map, we can begin code gen for it
+    let mut pending_specializations: MutMap<ModuleId, Vec<(Symbol, PendingSpecialization)>> =
+        Vec::with_capacity(128);
 
     // Modules which are waiting for certain dependencies' proc headers to be reported.
     // Once all its dependencies' proc headers are available, a module's
@@ -373,6 +376,8 @@ pub async fn load<'a>(
                                 &exposed_types,
                                 exposed_symbols.clone(),
                                 &mut waiting_for_solve,
+                                &mut waiting_for_proc_headers,
+                                &mut waiting_for_procs,
                                 msg_tx.clone(),
                             )
                         }
@@ -413,6 +418,8 @@ pub async fn load<'a>(
                         &exposed_types,
                         exposed_symbols,
                         &mut waiting_for_solve,
+                        &mut waiting_for_proc_headers,
+                        &mut waiting_for_procs,
                         msg_tx.clone(),
                     )
                 } else {
@@ -487,6 +494,23 @@ pub async fn load<'a>(
                     }
                 }
             }
+
+            /// We recieved some ProcHeader entries for the module.
+            /// These will be used to create specializations in a future pass, once all
+            /// ProcHeader entries have been collected.
+            ProcHeaders {
+                module_id,
+                proc_headers: new_headers,
+                module_thunks: new_thunks,
+                pending_specializations: new_specs
+            } => {
+                pending_specializations.extend(new_specs);
+                proc_headers.insert(module_id, new_headers);
+                module_thunks.extend(new_thunks);
+
+                todo!("Use a tokio work-stealing queue to start a job to work through pending_specializations until it's both empty and so is needs_specialization");
+            }
+
             Solved {
                 module_id,
                 solved_types,
@@ -570,6 +594,19 @@ pub async fn load<'a>(
                         }
                     }
                 }
+
+                // In a separate thread, determine the proc headers for each
+                // of this module's top-level declarations.
+                spawn_make_proc_headers(
+                    msg_tx.clone()
+                )
+
+                // The canonicalized procs that have yet to be specialized. Whenever a module
+                // finishes getting solved, it kicks off a task to populate this.
+                // We can't start specializing a module until all of its' dependencies
+                // have had their proc headers recorded here.
+                let mut proc_headers: MutMap<ModuleId, Vec<Symbol, (ProcHeader, roc_can::expr::Expr)>> =
+                    MutMap::default();
             }
         }
     }
@@ -1061,6 +1098,8 @@ fn spawn_parse_and_constrain(
     exposed_types: &SubsByModule,
     exposed_symbols: MutSet<Symbol>,
     waiting_for_solve: &mut MutMap<ModuleId, MutSet<ModuleId>>,
+    waiting_for_proc_headers: &mut MutMap<ModuleId, MutSet<ModuleId>>,
+    waiting_for_procs: &mut MutMap<ModuleId, MutSet<ModuleId>>,
     msg_tx: MsgSender,
 ) {
     let module_id = header.module_id;
@@ -1102,6 +1141,8 @@ fn spawn_parse_and_constrain(
     }
 
     waiting_for_solve.insert(module_id, solve_needed);
+    waiting_for_proc_headers.insert(module_id, solve_needed);
+    waiting_for_procs.insert(module_id, solve_needed);
 
     let module_ids = {
         (*module_ids).lock().expect(
