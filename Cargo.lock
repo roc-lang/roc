@@ -104,6 +104,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 
 [[package]]
+name = "bincode"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5753e2a71534719bf3f4e57006c3a4f0d2c672a4b676eec84161f763eca87dbf"
+dependencies = [
+ "byteorder",
+ "serde",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1812,6 +1822,7 @@ dependencies = [
 name = "roc_editor"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "bumpalo",
  "gfx-backend-dx12",
  "gfx-backend-metal",
@@ -1844,6 +1855,7 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "roc_uniq",
+ "serde",
  "target-lexicon",
  "tokio",
  "winit",
@@ -2183,6 +2195,9 @@ name = "serde"
 version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36df6ac6412072f67cf767ebbde4133a5b2e88e76dc6187fa7104cd16f783399"
+dependencies = [
+ "serde_derive",
+]
 
 [[package]]
 name = "serde_derive"
