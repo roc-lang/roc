@@ -67,6 +67,14 @@ impl<B: gfx_hal::Backend> Drop for ResourceHolder<B> {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct PushConstants {
+    color: [f32; 4],
+    pos: [f32; 2],
+    scale: [f32; 2],
+}
+
 fn run_event_loop() {
     // TODO do a better window size
     const WINDOW_SIZE: [u32; 2] = [512, 512];
@@ -191,8 +199,12 @@ fn run_event_loop() {
     };
 
     let pipeline_layout = unsafe {
+        use gfx_hal::pso::ShaderStageFlags;
+
+        let push_constant_bytes = std::mem::size_of::<PushConstants>() as u32;
+
         device
-            .create_pipeline_layout(&[], &[])
+            .create_pipeline_layout(&[], &[(ShaderStageFlags::VERTEX, 0..push_constant_bytes)])
             .expect("Out of memory")
     };
 
@@ -295,6 +307,7 @@ fn run_event_loop() {
             submission_complete_fence,
             rendering_complete_semaphore,
         }));
+    let start_time = std::time::Instant::now();
 
     event_loop.run(move |event, _, control_flow| {
         use winit::event::{Event, WindowEvent};
@@ -304,7 +317,7 @@ fn run_event_loop() {
         // Otherwise, this seems like a better default for minimizing idle
         // CPU usage and battry drain. (Might want to switch to Poll whenever
         // there are animations in progress though.)
-        *control_flow = ControlFlow::Wait;
+        *control_flow = ControlFlow::Poll;
 
         match event {
             Event::WindowEvent {
@@ -335,7 +348,53 @@ fn run_event_loop() {
             Event::RedrawRequested(_) => {
                 let res: &mut Resources<_> = &mut resource_holder.0;
                 let render_pass = &res.render_passes[0];
+                let pipeline_layout = &res.pipeline_layouts[0];
                 let pipeline = &res.pipelines[0];
+
+                // This `anim` will be a number that oscillates smoothly
+                // between 0.0 and 1.0.
+                let anim = start_time.elapsed().as_secs_f32().sin() * 0.5 + 0.5;
+
+                let small = [0.33, 0.33];
+
+                let triangles = &[
+                    // Red triangle
+                    PushConstants {
+                        color: [1.0, 0.0, 0.0, 1.0],
+                        pos: [-0.5, -0.5],
+                        scale: small,
+                    },
+                    // Green triangle
+                    PushConstants {
+                        color: [0.0, 1.0, 0.0, 1.0],
+                        pos: [0.0, -0.5],
+                        scale: small,
+                    },
+                    // Blue triangle
+                    PushConstants {
+                        color: [0.0, 0.0, 1.0, 1.0],
+                        pos: [0.5, -0.5],
+                        scale: small,
+                    },
+                    // Blue <-> cyan animated triangle
+                    PushConstants {
+                        color: [0.0, anim, 1.0, 1.0],
+                        pos: [-0.5, 0.5],
+                        scale: small,
+                    },
+                    // Down <-> up animated triangle
+                    PushConstants {
+                        color: [1.0, 1.0, 1.0, 1.0],
+                        pos: [0.0, 0.5 - anim * 0.5],
+                        scale: small,
+                    },
+                    // Small <-> big animated triangle
+                    PushConstants {
+                        color: [1.0, 1.0, 1.0, 1.0],
+                        pos: [0.5, 0.5],
+                        scale: [0.33 + anim * 0.33, 0.33 + anim * 0.33],
+                    },
+                ];
 
                 unsafe {
                     use gfx_hal::pool::CommandPool;
@@ -444,7 +503,20 @@ fn run_event_loop() {
                         SubpassContents::Inline,
                     );
                     command_buffer.bind_graphics_pipeline(pipeline);
-                    command_buffer.draw(0..3, 0..1);
+
+                    for triangle in triangles {
+                        use gfx_hal::pso::ShaderStageFlags;
+
+                        command_buffer.push_graphics_constants(
+                            pipeline_layout,
+                            ShaderStageFlags::VERTEX,
+                            0,
+                            push_constant_bytes(triangle),
+                        );
+
+                        command_buffer.draw(0..3, 0..1);
+                    }
+
                     command_buffer.end_render_pass();
                     command_buffer.finish();
                 }
@@ -487,4 +559,12 @@ fn compile_shader(glsl: &str, shader_type: ShaderType) -> Vec<u32> {
     compiled_file.read_to_end(&mut spirv_bytes).unwrap();
 
     gfx_hal::pso::read_spirv(Cursor::new(&spirv_bytes)).expect("Invalid SPIR-V")
+}
+
+/// Returns a view of a struct as a slice of `u32`s.
+unsafe fn push_constant_bytes<T>(push_constants: &T) -> &[u32] {
+    let size_in_bytes = std::mem::size_of::<T>();
+    let size_in_u32s = size_in_bytes / std::mem::size_of::<u32>();
+    let start_ptr = push_constants as *const T as *const u32;
+    std::slice::from_raw_parts(start_ptr, size_in_u32s)
 }
