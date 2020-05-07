@@ -7,6 +7,7 @@ use glsl_to_spirv::ShaderType;
 use std::io;
 use std::mem::ManuallyDrop;
 use std::path::Path;
+use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
@@ -79,6 +80,11 @@ fn run_event_loop() {
     // TODO do a better window size
     const WINDOW_SIZE: [u32; 2] = [512, 512];
 
+    // TODO try configuring the swapchain explicitly, in particular in order
+    // to experiment with different PresentMode settings to see how they
+    // affect input latency.
+    //
+    // https://rust-tutorials.github.io/learn-gfx-hal/03_clear_the_window.html
     let event_loop = EventLoop::new();
 
     let (logical_window_size, physical_window_size) = {
@@ -308,16 +314,21 @@ fn run_event_loop() {
             rendering_complete_semaphore,
         }));
     let start_time = std::time::Instant::now();
+    let is_animating = true;
+    let mut text_state = String::new();
+    let mut keyboard_modifiers = ModifiersState::empty();
 
     event_loop.run(move |event, _, control_flow| {
         use winit::event::{Event, WindowEvent};
         use winit::event_loop::ControlFlow;
 
-        // TODO try ControlFlow::Poll and see if it affects input latency.
-        // Otherwise, this seems like a better default for minimizing idle
-        // CPU usage and battry drain. (Might want to switch to Poll whenever
-        // there are animations in progress though.)
-        *control_flow = ControlFlow::Poll;
+        // TODO dynamically switch this on/off depending on whether any
+        // animations are running. Should conserve CPU usage and battery life!
+        if is_animating {
+            *control_flow = ControlFlow::Poll;
+        } else {
+            *control_flow = ControlFlow::Wait;
+        }
 
         match event {
             Event::WindowEvent {
@@ -335,12 +346,25 @@ fn run_event_loop() {
                     };
                     should_configure_swapchain = true;
                 }
+                WindowEvent::KeyboardInput { input, .. } => {
+                    if let Some(virtual_keycode) = input.virtual_keycode {
+                        handle_text_input(
+                            &mut text_state,
+                            input.state,
+                            virtual_keycode,
+                            keyboard_modifiers,
+                        );
+                    }
+                }
                 WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
                     surface_extent = Extent2D {
                         width: new_inner_size.width,
                         height: new_inner_size.height,
                     };
                     should_configure_swapchain = true;
+                }
+                WindowEvent::ModifiersChanged(modifiers) => {
+                    keyboard_modifiers = modifiers;
                 }
                 _ => (),
             },
@@ -395,6 +419,22 @@ fn run_event_loop() {
                         scale: [0.33 + anim * 0.33, 0.33 + anim * 0.33],
                     },
                 ];
+
+                let triangles = text_state.chars().enumerate().map(|(index, char)| {
+                    if char == ' ' {
+                        PushConstants {
+                            color: [0.0, 0.0, 0.0, 0.0],
+                            pos: [0.0, 0.0],
+                            scale: [0.00, 0.00],
+                        }
+                    } else {
+                        PushConstants {
+                            color: [1.0, 1.0, 1.0, 1.0],
+                            pos: [0.06 * index as f32, 0.0],
+                            scale: [0.05, 0.05],
+                        }
+                    }
+                });
 
                 unsafe {
                     use gfx_hal::pool::CommandPool;
@@ -511,7 +551,7 @@ fn run_event_loop() {
                             pipeline_layout,
                             ShaderStageFlags::VERTEX,
                             0,
-                            push_constant_bytes(triangle),
+                            push_constant_bytes(&triangle),
                         );
 
                         command_buffer.draw(0..3, 0..1);
@@ -567,4 +607,132 @@ unsafe fn push_constant_bytes<T>(push_constants: &T) -> &[u32] {
     let size_in_u32s = size_in_bytes / std::mem::size_of::<u32>();
     let start_ptr = push_constants as *const T as *const u32;
     std::slice::from_raw_parts(start_ptr, size_in_u32s)
+}
+
+fn handle_text_input(
+    text_state: &mut String,
+    elem_state: ElementState,
+    virtual_keycode: VirtualKeyCode,
+    modifiers: ModifiersState,
+) {
+    use winit::event::VirtualKeyCode::*;
+
+    if let ElementState::Released = elem_state {
+        return;
+    }
+
+    match virtual_keycode {
+        Key1 | Numpad1 => text_state.push_str("1"),
+        Key2 | Numpad2 => text_state.push_str("2"),
+        Key3 | Numpad3 => text_state.push_str("3"),
+        Key4 | Numpad4 => text_state.push_str("4"),
+        Key5 | Numpad5 => text_state.push_str("5"),
+        Key6 | Numpad6 => text_state.push_str("6"),
+        Key7 | Numpad7 => text_state.push_str("7"),
+        Key8 | Numpad8 => text_state.push_str("8"),
+        Key9 | Numpad9 => text_state.push_str("9"),
+        Key0 | Numpad0 => text_state.push_str("0"),
+        A => text_state.push_str("a"),
+        B => text_state.push_str("b"),
+        C => text_state.push_str("c"),
+        D => text_state.push_str("d"),
+        E => text_state.push_str("e"),
+        F => text_state.push_str("f"),
+        G => text_state.push_str("g"),
+        H => text_state.push_str("h"),
+        I => text_state.push_str("i"),
+        J => text_state.push_str("j"),
+        K => text_state.push_str("k"),
+        L => text_state.push_str("l"),
+        M => text_state.push_str("m"),
+        N => text_state.push_str("n"),
+        O => text_state.push_str("o"),
+        P => text_state.push_str("p"),
+        Q => text_state.push_str("q"),
+        R => text_state.push_str("r"),
+        S => text_state.push_str("s"),
+        T => text_state.push_str("t"),
+        U => text_state.push_str("u"),
+        V => text_state.push_str("v"),
+        W => text_state.push_str("w"),
+        X => text_state.push_str("x"),
+        Y => text_state.push_str("y"),
+        Z => text_state.push_str("z"),
+        Escape | F1 | F2 | F3 | F4 | F5 | F6 | F7 | F8 | F9 | F10 | F11 | F12 | F13 | F14 | F15
+        | F16 | F17 | F18 | F19 | F20 | F21 | F22 | F23 | F24 | Snapshot | Scroll | Pause
+        | Insert | Home | Delete | End | PageDown | PageUp | Left | Up | Right | Down | Compose
+        | Caret | Numlock | AbntC1 | AbntC2 | Ax | Calculator | Capital | Convert | Kana
+        | Kanji | LAlt | LBracket | LControl | LShift | LWin | Mail | MediaSelect | PlayPause
+        | Power | PrevTrack | MediaStop | Mute | MyComputer | NavigateForward
+        | NavigateBackward | NextTrack | NoConvert | OEM102 | RAlt | Sysrq | RBracket
+        | RControl | RShift | RWin | Sleep | Stop | Unlabeled | VolumeDown | VolumeUp | Wake
+        | WebBack | WebFavorites | WebForward | WebHome | WebRefresh | WebSearch | Apps | Tab
+        | WebStop => {
+            // TODO handle
+            dbg!(virtual_keycode);
+        }
+        Back => {
+            text_state.pop();
+        }
+        Return | NumpadEnter => {
+            text_state.push_str("\n");
+        }
+        Space => {
+            text_state.push_str(" ");
+        }
+        Comma | NumpadComma => {
+            text_state.push_str(",");
+        }
+        Add => {
+            text_state.push_str("+");
+        }
+        Apostrophe => {
+            text_state.push_str("'");
+        }
+        At => {
+            text_state.push_str("@");
+        }
+        Backslash => {
+            text_state.push_str("\\");
+        }
+        Colon => {
+            text_state.push_str(":");
+        }
+        Period | Decimal => {
+            text_state.push_str(".");
+        }
+        Equals | NumpadEquals => {
+            text_state.push_str("=");
+        }
+        Grave => {
+            text_state.push_str("`");
+        }
+        Minus | Subtract => {
+            text_state.push_str("-");
+        }
+        Multiply => {
+            text_state.push_str("*");
+        }
+        Semicolon => {
+            text_state.push_str(";");
+        }
+        Slash | Divide => {
+            text_state.push_str("/");
+        }
+        Underline => {
+            text_state.push_str("_");
+        }
+        Yen => {
+            text_state.push_str("¥");
+        }
+        Copy => {
+            todo!("copy");
+        }
+        Paste => {
+            todo!("paste");
+        }
+        Cut => {
+            todo!("cut");
+        }
+    }
 }
