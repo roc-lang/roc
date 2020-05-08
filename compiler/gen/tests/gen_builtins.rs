@@ -38,6 +38,12 @@ mod gen_builtins {
     }
 
     #[test]
+    fn f64_abs() {
+        assert_evals_to!("Float.abs -4.7", 4.7, f64);
+        assert_evals_to!("Float.abs 5.8", 5.8, f64);
+    }
+
+    #[test]
     fn empty_list_literal() {
         assert_evals_to!("[]", &[], &'static [i64]);
     }

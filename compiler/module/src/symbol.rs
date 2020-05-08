@@ -609,6 +609,7 @@ define_builtins! {
         19 INT_NEQ_I64: "#neqi64"
         20 INT_NEQ_I1: "#neqi1"
         21 INT_NEQ_I8: "#neqi8"
+        22 INT_ABS: "abs"
     }
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" imported // the Float.Float type alias
@@ -627,6 +628,7 @@ define_builtins! {
         13 FLOAT_LTE: "#lte"
         14 FLOAT_GT: "#gt"
         15 FLOAT_GTE: "#gte"
+        16 FLOAT_ABS: "abs"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias

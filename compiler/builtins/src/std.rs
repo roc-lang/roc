@@ -285,6 +285,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         SolvedType::Func(vec![int_type(), int_type()], Box::new(bool_type())),
     );
 
+    // abs : Int -> Int
+    add_type(
+        Symbol::INT_ABS,
+        SolvedType::Func(vec![int_type()], Box::new(int_type())),
+    );
+
     // highest : Int
     add_type(Symbol::INT_HIGHEST, int_type());
 
@@ -334,6 +340,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::FLOAT_ROUND,
         SolvedType::Func(vec![float_type()], Box::new(int_type())),
+    );
+
+    // abs : Float -> Float
+    add_type(
+        Symbol::FLOAT_ABS,
+        SolvedType::Func(vec![float_type()], Box::new(float_type())),
     );
 
     // highest : Float
