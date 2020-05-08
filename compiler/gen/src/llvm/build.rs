@@ -1094,9 +1094,7 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::FloatValue(float_val)
         }
-        Symbol::NUM_ABS | Symbol::INT_ABS => {
-            todo!("implement intrinsic for int_abs")
-        },
+        Symbol::NUM_ABS | Symbol::INT_ABS => todo!("implement intrinsic for int_abs"),
         Symbol::FLOAT_ABS => call_intrinsic(LLVM_FABS_F64, env, args),
         Symbol::INT_GTE | Symbol::NUM_GTE => {
             debug_assert!(args.len() == 2);
