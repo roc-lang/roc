@@ -80,10 +80,17 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         LLVM_LROUND_I64_F64,
         i64_type.fn_type(&[f64_type.into()], false),
     );
+
+    add_intrinsic(
+        module,
+        LLVM_FABS_F64,
+        f64_type.fn_type(&[f64_type.into()], false),
+    );
 }
 
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
 static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
+static LLVM_FABS_F64: &str = "llvm.fabs.f64";
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -1087,6 +1094,8 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::FloatValue(float_val)
         }
+        Symbol::NUM_ABS | Symbol::INT_ABS => todo!("implement intrinsic for int_abs"),
+        Symbol::FLOAT_ABS => call_intrinsic(LLVM_FABS_F64, env, args),
         Symbol::INT_GTE | Symbol::NUM_GTE => {
             debug_assert!(args.len() == 2);
 
