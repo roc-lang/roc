@@ -137,6 +137,29 @@ impl<'a> Layout<'a> {
     }
 }
 
+/// Avoid recomputing Layout from Variable multiple times.
+#[derive(Default)]
+struct LayoutCache<'a> {
+    layouts: MutMap<Variable, Result<Layout<'a>, ()>>,
+}
+
+impl<'a> LayoutCache<'a> {
+    /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
+    /// Panics if given a FlexVar or RigidVar, since those should have been
+    /// monomorphized away already!
+    pub fn from_var(
+        &mut self,
+        arena: &'a Bump,
+        var: Variable,
+        subs: &Subs,
+        pointer_size: u32,
+    ) -> &Result<Layout<'a>, ()> {
+        self.layouts
+            .entry(var)
+            .or_insert_with(|| Layout::from_var(arena, var, subs, pointer_size))
+    }
+}
+
 impl<'a> Builtin<'a> {
     const I64_SIZE: u32 = std::mem::size_of::<i64>() as u32;
     const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
