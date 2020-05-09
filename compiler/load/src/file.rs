@@ -276,11 +276,6 @@ pub async fn load<'a>(
 
     let mut unsolved_modules: MutMap<ModuleId, (Module, Constraint, VarStore)> = MutMap::default();
 
-    // Modules which still need to be specialized. Once a module has been solved,
-    // it gets immediately added to this set. A separate task will be spawned
-    // off to specialize it, but
-    let mut needs_specialization: MutSet<ModuleId> = MutSet::default();
-
     // The canonicalized procs that have yet to be specialized. Whenever a module
     // finishes getting solved, it kicks off a task to populate this.
     // We can't start specializing a module until all of its' dependencies
@@ -288,10 +283,18 @@ pub async fn load<'a>(
     let mut proc_headers: MutMap<ModuleId, MutMap<Symbol, (ProcHeader, roc_can::expr::Expr)>> =
         MutMap::default();
 
-    // Specializations that need to happen as a result of monomorphization.
-    // Once a given module is removed from this map, we can begin code gen for it
+    // Modules which still need to be specialized. Once a module has been solved,
+    // it gets immediately added as a key in this map, with the value being
+    // specializations that need to happen as a result of monomorphizing the module.
+    // Once a module is removed from this map, we can begin code gen for it.
     let mut pending_specializations: MutMap<ModuleId, Vec<(Symbol, PendingSpecialization)>> =
         Vec::with_capacity(128);
+
+    // When the key ModuleId gets solved, iterate through each of the given modules
+    // and remove that ModuleId from the appropriate waiting_for_proc_headers entry.
+    // If the relevant module's waiting_for_proc_headers entry is now empty,
+    // go through that module's pending_specializations and code gen them.
+    let mut proc_header_listeners: MutMap<ModuleId, Vec<ModuleId>> = MutMap::default();
 
     // Modules which are waiting for certain dependencies' proc headers to be reported.
     // Once all its dependencies' proc headers are available, a module's
@@ -495,20 +498,49 @@ pub async fn load<'a>(
                 }
             }
 
-            /// We recieved some ProcHeader entries for the module.
-            /// These will be used to create specializations in a future pass, once all
-            /// ProcHeader entries have been collected.
             ProcHeaders {
                 module_id,
                 proc_headers: new_headers,
                 module_thunks: new_thunks,
                 pending_specializations: new_specs
             } => {
-                pending_specializations.extend(new_specs);
+                // We recieved some ProcHeader entries for the module.
+                // These will be used to create specializations in a future pass, once all
+                // ProcHeader entries have been collected.
                 proc_headers.insert(module_id, new_headers);
+
+                // Some of the declarations were top-level values which weren't
+                // functions. Record these as module thunks.
                 module_thunks.extend(new_thunks);
 
-                todo!("Use a tokio work-stealing queue to start a job to work through pending_specializations until it's both empty and so is needs_specialization");
+                // Notify listeners that proc_headers are now available for this module.
+                if let Some(listeners) = proc_header_listeners.remove(&module_id) {
+                    for listener_id in listeners {
+                        // This listener is longer waiting for this module,
+                        // because this module's proc_headers are now available!
+                        let waiting_for = waiting_for_proc_headers
+                            .get_mut(&listener_id)
+                            .expect("Unable to find module ID in waiting_for_proc_headers");
+
+                        waiting_for.remove(&module_id);
+
+                        // pending_specializations should not have a key for this
+                        // module at this point, since we've just now recieved
+                        // its pending_specializations!
+                        debug_assert!(!pending_specializations.contains_key(&module_id));
+
+                        // If it's no longer waiting for any other modules,
+                        // proceed with specialization.
+                        if waiting_for.is_empty() {
+                            todo!("spawn a task to run through all the pending_specializations in order.");
+                        } else {
+                            // This module is still waitin for other modules'
+                            // proc_headers before it can be specialized. 
+                            // Record its pending_specializations and keep waiting.
+                            pending_specializations.insert(module_id, new_specs);
+                        }
+                    }
+                }
             }
 
             Solved {
