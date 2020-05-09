@@ -108,134 +108,97 @@ fn list_get(var_store: &VarStore) -> Def {
 /// Int.abs : Int -> Int
 fn int_abs(var_store: &VarStore) -> Def {
     use crate::expr::Expr::*;
-    use crate::pattern::Pattern::*;
 
-    let args = vec![(
-        var_store.fresh(),
-        no_region(Identifier(Symbol::INT_ABS_ARG)),
-    )];
-
-    let body = If {
-        branch_var: var_store.fresh(),
-        cond_var: var_store.fresh(),
-        branches: vec![(
-            // if-condition
-            no_region(
-                // Int.isLt 0 n
-                // 0 < n
-                call(
-                    Symbol::INT_LT,
-                    vec![Int(var_store.fresh(), 0), Var(Symbol::INT_ABS_ARG)],
-                    var_store,
-                ),
-            ),
-            // int is at least 0, so just pass it along
-            no_region(Var(Symbol::INT_ABS_ARG)),
-        )],
-        final_else: Box::new(
-            // int is below 0, so multiply it by -1
-            no_region(call(
-                Symbol::NUM_MUL,
-                vec![Var(Symbol::INT_ABS_ARG), Int(var_store.fresh(), -1)],
-                var_store,
-            )),
-        ),
-    };
-
-    let expr = Closure(
-        var_store.fresh(),
+    defn(
         Symbol::INT_ABS,
-        Recursive::NotRecursive,
-        args,
-        Box::new((no_region(body), var_store.fresh())),
-    );
-
-    Def {
-        loc_pattern: no_region(Identifier(Symbol::INT_ABS)),
-        loc_expr: no_region(expr),
-        expr_var: var_store.fresh(),
-        pattern_vars: SendMap::default(),
-        annotation: None,
-    }
+        vec![Symbol::INT_ABS_ARG],
+        var_store,
+        If {
+            branch_var: var_store.fresh(),
+            cond_var: var_store.fresh(),
+            branches: vec![(
+                // if-condition
+                no_region(
+                    // Int.isLt 0 n
+                    // 0 < n
+                    call(
+                        Symbol::INT_LT,
+                        vec![Int(var_store.fresh(), 0), Var(Symbol::INT_ABS_ARG)],
+                        var_store,
+                    ),
+                ),
+                // int is at least 0, so just pass it along
+                no_region(Var(Symbol::INT_ABS_ARG)),
+            )],
+            final_else: Box::new(
+                // int is below 0, so multiply it by -1
+                no_region(call(
+                    Symbol::NUM_MUL,
+                    vec![Var(Symbol::INT_ABS_ARG), Int(var_store.fresh(), -1)],
+                    var_store,
+                )),
+            ),
+        },
+    )
 }
 
 /// Int.div : Int, Int -> Result Int [ DivByZero ]*
 fn int_div(var_store: &VarStore) -> Def {
     use crate::expr::Expr::*;
-    use crate::pattern::Pattern::*;
 
-    let args = vec![
-        (
-            var_store.fresh(),
-            no_region(Identifier(Symbol::INT_DIV_ARG_NUMERATOR)),
-        ),
-        (
-            var_store.fresh(),
-            no_region(Identifier(Symbol::INT_DIV_ARG_DENOMINATOR)),
-        ),
-    ];
-
-    let body = If {
-        branch_var: var_store.fresh(),
-        cond_var: var_store.fresh(),
-        branches: vec![(
-            // if-condition
-            no_region(
-                // Int.eq denominator 0
-                call(
-                    Symbol::INT_NEQ_I64,
-                    vec![
-                        Var(Symbol::INT_DIV_ARG_DENOMINATOR),
-                        (Int(var_store.fresh(), 0)),
-                    ],
-                    var_store,
-                ),
-            ),
-            // denominator was not zero
-            no_region(
-                // Ok (Int.#divUnsafe numerator denominator)
-                tag(
-                    "Ok",
-                    vec![
-                        // Int.#divUnsafe numerator denominator
-                        call(
-                            Symbol::INT_DIV_UNSAFE,
-                            vec![
-                                Var(Symbol::INT_DIV_ARG_NUMERATOR),
-                                Var(Symbol::INT_DIV_ARG_DENOMINATOR),
-                            ],
-                            var_store,
-                        ),
-                    ],
-                    var_store,
-                ),
-            ),
-        )],
-        final_else: Box::new(
-            // denominator was zero
-            no_region(tag(
-                "Err",
-                vec![tag("DivByZero", Vec::new(), var_store)],
-                var_store,
-            )),
-        ),
-    };
-
-    let expr = Closure(
-        var_store.fresh(),
+    defn(
         Symbol::INT_DIV,
-        Recursive::NotRecursive,
-        args,
-        Box::new((no_region(body), var_store.fresh())),
-    );
-
-    Def {
-        loc_pattern: no_region(Identifier(Symbol::INT_DIV)),
-        loc_expr: no_region(expr),
-        expr_var: var_store.fresh(),
-        pattern_vars: SendMap::default(),
-        annotation: None,
-    }
+        vec![
+            Symbol::INT_DIV_ARG_NUMERATOR,
+            Symbol::INT_DIV_ARG_DENOMINATOR,
+        ],
+        var_store,
+        If {
+            branch_var: var_store.fresh(),
+            cond_var: var_store.fresh(),
+            branches: vec![(
+                // if-condition
+                no_region(
+                    // Int.eq denominator 0
+                    call(
+                        Symbol::INT_NEQ_I64,
+                        vec![
+                            Var(Symbol::INT_DIV_ARG_DENOMINATOR),
+                            (Int(var_store.fresh(), 0)),
+                        ],
+                        var_store,
+                    ),
+                ),
+                // denominator was not zero
+                no_region(
+                    // Ok (Int.#divUnsafe numerator denominator)
+                    tag(
+                        "Ok",
+                        vec![
+                            // Int.#divUnsafe numerator denominator
+                            call(
+                                Symbol::INT_DIV_UNSAFE,
+                                vec![
+                                    Var(Symbol::INT_DIV_ARG_NUMERATOR),
+                                    Var(Symbol::INT_DIV_ARG_DENOMINATOR),
+                                ],
+                                var_store,
+                            ),
+                        ],
+                        var_store,
+                    ),
+                ),
+            )],
+            final_else: Box::new(
+                // denominator was zero
+                no_region(tag(
+                    "Err",
+                    vec![tag("DivByZero", Vec::new(), var_store)],
+                    var_store,
+                )),
+            ),
+        },
+    )
 }
 
 /// List.first : List elem -> Result elem [ ListWasEmpty ]*
