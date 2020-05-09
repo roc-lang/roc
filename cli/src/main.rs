@@ -408,9 +408,9 @@ fn gen(
                             Closure(annotation, _, _, loc_args, boxed_body) => {
                                 let (loc_body, ret_var) = *boxed_body;
 
-                                procs.insert_closure(
+                                procs.insert_named(
                                     &mut mono_env,
-                                    Some(symbol),
+                                    symbol,
                                     annotation,
                                     loc_args,
                                     loc_body,
