@@ -44,6 +44,12 @@ mod gen_builtins {
     }
 
     #[test]
+    fn i64_abs() {
+        assert_evals_to!("Int.abs -6", 6, i64);
+        assert_evals_to!("Int.abs 7", 7, i64);
+    }
+
+    #[test]
     fn empty_list_literal() {
         assert_evals_to!("[]", &[], &'static [i64]);
     }
@@ -574,7 +580,7 @@ mod gen_builtins {
         );
     }
 
-    #[test]
+    // #[test]
     fn gen_quicksort() {
         assert_evals_to!(
             indoc!(

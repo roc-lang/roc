@@ -342,6 +342,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Int module
 
+    // isLt or (<) : Num a, Num a -> Bool
+    add_type(
+        Symbol::INT_LT,
+        unique_function(vec![int_type(UVAR1), int_type(UVAR2)], bool_type(UVAR3)),
+    );
+
     // equals or (==) : Int, Int -> Bool
     add_type(
         Symbol::INT_EQ_I64,
@@ -354,7 +360,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![int_type(UVAR1), int_type(UVAR2)], bool_type(UVAR3)),
     );
 
-    // abs :: Int -> Int
+    // abs : Int -> Int
     add_type(
         Symbol::INT_ABS,
         unique_function(vec![int_type(UVAR1)], int_type(UVAR2)),
