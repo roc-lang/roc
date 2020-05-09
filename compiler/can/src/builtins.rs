@@ -121,7 +121,8 @@ fn int_abs(var_store: &VarStore) -> Def {
         branches: vec![(
             // if-condition
             no_region(
-                // Int.isLt
+                // Int.isLt 0 n
+                // 0 < n
                 call(
                     Symbol::INT_LT,
                     vec![Int(var_store.fresh(), 0), Var(Symbol::INT_ABS_ARG)],
