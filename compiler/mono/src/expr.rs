@@ -68,7 +68,7 @@ impl<'a> Procs<'a> {
         loc_body: Located<roc_can::expr::Expr>,
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
-    ) {
+    ) -> Result<Layout<'a>, ()> {
         let (arg_vars, arg_symbols, body) = patterns_to_when(env, loc_args, ret_var, loc_body);
 
         // an anonymous closure. These will always be specialized already
@@ -91,10 +91,14 @@ impl<'a> Procs<'a> {
                     .from_var(env.arena, annotation, env.subs, env.pointer_size)
                     .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-                self.insert_specialization(symbol, layout, proc);
+                self.insert_specialization(symbol, layout.clone(), proc);
+
+                Ok(layout)
             }
             Err(()) => {
                 self.runtime_errors.insert(symbol);
+
+                Err(())
             }
         }
     }
@@ -193,7 +197,9 @@ pub enum Expr<'a> {
     Store(&'a [(Symbol, Layout<'a>, Expr<'a>)], &'a Expr<'a>),
 
     // Functions
-    FunctionPointer(Symbol),
+    NamedFunctionPointer(Symbol),
+    AnonymousFunctionPointer(Symbol, Layout<'a>),
+    RuntimeErrorFunction(String),
     CallByName {
         name: Symbol,
         layout: Layout<'a>,
@@ -510,14 +516,15 @@ fn from_can<'a>(
 
         Closure(ann, original_name, _, loc_args, boxed_body) => {
             let (loc_body, ret_var) = *boxed_body;
-            let symbol = match name {
+
+            match name {
                 Some(symbol) => {
                     procs.insert_named(env, symbol, ann, loc_args, loc_body, ret_var);
 
-                    symbol
+                    Expr::NamedFunctionPointer(symbol)
                 }
                 None => {
-                    procs.insert_anonymous(
+                    match procs.insert_anonymous(
                         env,
                         original_name,
                         ann,
@@ -525,13 +532,12 @@ fn from_can<'a>(
                         loc_body,
                         ret_var,
                         layout_cache,
-                    );
-
-                    original_name
+                    ) {
+                        Ok(layout) => Expr::AnonymousFunctionPointer(original_name, layout),
+                        Err(()) => Expr::RuntimeErrorFunction("TODO runtime error".to_string()),
+                    }
                 }
-            };
-
-            Expr::FunctionPointer(symbol)
+            }
         }
 
         Call(boxed, loc_args, _) => {
