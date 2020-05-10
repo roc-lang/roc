@@ -78,12 +78,15 @@ macro_rules! assert_llvm_evals_to {
         env.interns.all_ident_ids.insert(home, ident_ids);
 
         let mut headers = Vec::with_capacity(procs.len());
+        let (mut proc_map, runtime_errors) = procs.into_map();
+
+        assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
 
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
-        for (symbol, opt_proc) in procs.as_map().into_iter() {
-            if let Some(proc) = opt_proc {
+        for (symbol, mut procs_by_layout) in proc_map.drain() {
+            for (_, proc) in procs_by_layout.drain() {
                 let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
 
                 headers.push((proc, fn_val, arg_basic_types));
@@ -239,12 +242,15 @@ macro_rules! assert_opt_evals_to {
         env.interns.all_ident_ids.insert(home, ident_ids);
 
         let mut headers = Vec::with_capacity(procs.len());
+        let (mut proc_map, runtime_errors) = procs.into_map();
+
+        assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
 
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
-        for (symbol, opt_proc) in procs.as_map().into_iter() {
-            if let Some(proc) = opt_proc {
+        for (symbol, mut procs_by_layout) in proc_map.drain() {
+            for (_, proc) in procs_by_layout.drain() {
                 let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
 
                 headers.push((proc, fn_val, arg_basic_types));

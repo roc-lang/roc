@@ -231,7 +231,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             build_expr(env, &scope, parent, ret, procs)
         }
-        CallByName(symbol, args) => match *symbol {
+        CallByName { name, layout, args } => match *name {
             Symbol::BOOL_OR => {
                 // The (||) operator
                 debug_assert!(args.len() == 2);

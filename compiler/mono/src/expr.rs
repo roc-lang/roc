@@ -2,11 +2,12 @@ use crate::layout::{Builtin, Layout, LayoutCache};
 use crate::pattern::{Ctor, Guard, RenderAs, TagId};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, ContentHash, FlatType, Subs, Variable};
+use std::collections::HashMap;
 use std::hash::Hash;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -29,8 +30,8 @@ pub struct Proc<'a> {
 pub struct Procs<'a> {
     pub user_defined: MutMap<Symbol, PartialProc<'a>>,
     pub module_thunks: MutSet<Symbol>,
-    anonymous: MutMap<Symbol, Option<Proc<'a>>>,
-    specializations: MutMap<ContentHash, (Symbol, Option<Proc<'a>>)>,
+    runtime_errors: MutSet<Symbol>,
+    specializations: MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>,
     builtin: MutSet<Symbol>,
 }
 
@@ -72,7 +73,7 @@ impl<'a> Procs<'a> {
         // an anonymous closure. These will always be specialized already
         // by the surrounding context
 
-        let opt_proc = specialize_proc_body(
+        match specialize_proc_body(
             env,
             self,
             annotation,
@@ -83,19 +84,33 @@ impl<'a> Procs<'a> {
             annotation,
             body.value,
             layout_cache,
-        )
-        .ok();
+        ) {
+            Ok(proc) => {
+                let layout = layout_cache
+                    .from_var(env.arena, annotation, env.subs, env.pointer_size)
+                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-        self.anonymous.insert(symbol, opt_proc);
+                self.insert_specialization(symbol, layout, proc);
+            }
+            Err(()) => {
+                self.runtime_errors.insert(symbol);
+            }
+        }
     }
 
-    fn insert_specialization(
-        &mut self,
-        hash: ContentHash,
-        spec_name: Symbol,
-        proc: Option<Proc<'a>>,
-    ) {
-        self.specializations.insert(hash, (spec_name, proc));
+    fn insert_specialization(&mut self, symbol: Symbol, layout: Layout<'a>, proc: Proc<'a>) {
+        let procs_by_layout = self
+            .specializations
+            .entry(symbol)
+            .or_insert_with(|| HashMap::with_capacity_and_hasher(1, default_hasher()));
+
+        // If we already have an entry for this, it should be no different
+        // from what we're about to insert.
+        debug_assert!(
+            !procs_by_layout.contains_key(&layout) || procs_by_layout.get(&layout) == Some(&proc)
+        );
+
+        procs_by_layout.insert(layout, proc);
     }
 
     fn get_user_defined(&self, symbol: Symbol) -> Option<&PartialProc<'a>> {
@@ -103,10 +118,10 @@ impl<'a> Procs<'a> {
     }
 
     pub fn len(&self) -> usize {
-        let anonymous: usize = self.anonymous.len();
-        let user_defined: usize = self.specializations.len();
+        let runtime_errors: usize = self.runtime_errors.len();
+        let specializations: usize = self.specializations.len();
 
-        anonymous + user_defined
+        runtime_errors + specializations
     }
 
     pub fn is_empty(&self) -> bool {
@@ -117,22 +132,20 @@ impl<'a> Procs<'a> {
         self.builtin.insert(symbol);
     }
 
-    pub fn as_map(&self) -> MutMap<Symbol, Option<Proc<'a>>> {
-        let mut result = MutMap::default();
-
-        for (symbol, opt_proc) in self.specializations.values() {
-            result.insert(*symbol, opt_proc.clone());
-        }
-
-        for (symbol, proc) in self.anonymous.clone().into_iter() {
-            result.insert(symbol, proc);
-        }
+    pub fn into_map(self) -> (MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>, MutSet<Symbol>) {
+        let mut specializations = self.specializations;
 
         for symbol in self.builtin.iter() {
-            result.insert(*symbol, None);
+            // Builtins should only ever be stored as empty maps.
+            debug_assert!(
+                !specializations.contains_key(&symbol)
+                    || specializations.get(&symbol).unwrap().is_empty()
+            );
+
+            specializations.insert(*symbol, MutMap::default());
         }
 
-        result
+        (specializations, self.runtime_errors)
     }
 }
 
@@ -180,7 +193,11 @@ pub enum Expr<'a> {
 
     // Functions
     FunctionPointer(Symbol),
-    CallByName(Symbol, &'a [(Expr<'a>, Layout<'a>)]),
+    CallByName {
+        name: Symbol,
+        layout: Layout<'a>,
+        args: &'a [(Expr<'a>, Layout<'a>)],
+    },
     CallByPointer(&'a Expr<'a>, &'a [Expr<'a>], Layout<'a>),
 
     // Exactly two conditional branches, e.g. if/else
@@ -1328,77 +1345,94 @@ fn call_by_name<'a>(
         Vec<'a, Symbol>,
     )>;
 
-    let specialized_proc_name = match procs.get_user_defined(proc_name) {
-        Some(partial_proc) => {
-            let content_hash = ContentHash::from_var(fn_var, env.subs);
+    match layout_cache.from_var(env.arena, fn_var, env.subs, env.pointer_size) {
+        Ok(layout) => {
+            match procs.get_user_defined(proc_name) {
+                Some(partial_proc) => {
+                    let content_hash = ContentHash::from_var(fn_var, env.subs);
 
-            match procs.specializations.get(&content_hash) {
-                Some(specialization) => {
-                    opt_specialize_body = None;
-
-                    // a specialization with this type hash already exists, so use its symbol
-                    specialization.0
+                    match procs
+                        .specializations
+                        .get(&proc_name)
+                        .and_then(|procs_by_layout| procs_by_layout.get(&layout))
+                    {
+                        Some(_) => {
+                            // a specialization with this layout already exists.
+                            opt_specialize_body = None;
+                        }
+                        None => {
+                            opt_specialize_body = Some((
+                                content_hash,
+                                partial_proc.annotation,
+                                partial_proc.body.clone(),
+                                partial_proc.patterns.clone(),
+                            ));
+                        }
+                    }
                 }
                 None => {
-                    opt_specialize_body = Some((
-                        content_hash,
-                        partial_proc.annotation,
-                        partial_proc.body.clone(),
-                        partial_proc.patterns.clone(),
-                    ));
+                    opt_specialize_body = None;
 
-                    // generate a symbol for this specialization
-                    env.unique_symbol()
+                    // This happens for built-in symbols (they are never defined as a Closure)
+                    procs.insert_builtin(proc_name);
+                }
+            };
+
+            if let Some((content_hash, annotation, body, loc_patterns)) = opt_specialize_body {
+                // register proc, so specialization doesn't loop infinitely
+                if true {
+                    todo!("this is where we would call procs.insert_specialization(content_hash, specialized_proc_name, None);");
+                }
+
+                let arg_vars = loc_args.iter().map(|v| v.0).collect::<std::vec::Vec<_>>();
+
+                match specialize_proc_body(
+                    env,
+                    procs,
+                    fn_var,
+                    ret_var,
+                    proc_name,
+                    &arg_vars,
+                    &loc_patterns,
+                    annotation,
+                    body,
+                    layout_cache,
+                ) {
+                    Ok(proc) => {
+                        procs.insert_specialization(proc_name, layout, proc);
+                    }
+                    Err(()) => {
+                        procs.runtime_errors.insert(proc_name);
+                    }
                 }
             }
+
+            // generate actual call
+            let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
+
+            for (var, loc_arg) in loc_args {
+                let layout = layout_cache
+                    .from_var(&env.arena, var, &env.subs, env.pointer_size)
+                    .unwrap_or_else(|err| panic!("TODO gracefully handle bad layout: {:?}", err));
+
+                args.push((
+                    from_can(env, loc_arg.value, procs, layout_cache, None),
+                    layout,
+                ));
+            }
+
+            Expr::CallByName {
+                name: proc_name,
+                layout,
+                args: args.into_bump_slice(),
+            }
         }
-        None => {
-            opt_specialize_body = None;
-
-            // This happens for built-in symbols (they are never defined as a Closure)
-            procs.insert_builtin(proc_name);
-            proc_name
+        Err(()) => {
+            // This function code gens to a runtime error,
+            // so attempting to call it will immediately crash.
+            Expr::RuntimeError("")
         }
-    };
-
-    if let Some((content_hash, annotation, body, loc_patterns)) = opt_specialize_body {
-        // register proc, so specialization doesn't loop infinitely
-        procs.insert_specialization(content_hash, specialized_proc_name, None);
-
-        let arg_vars = loc_args.iter().map(|v| v.0).collect::<std::vec::Vec<_>>();
-
-        let proc = specialize_proc_body(
-            env,
-            procs,
-            fn_var,
-            ret_var,
-            specialized_proc_name,
-            &arg_vars,
-            &loc_patterns,
-            annotation,
-            body,
-            layout_cache,
-        )
-        .ok();
-
-        procs.insert_specialization(content_hash, specialized_proc_name, proc);
     }
-
-    // generate actual call
-    let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
-
-    for (var, loc_arg) in loc_args {
-        let layout = layout_cache
-            .from_var(&env.arena, var, &env.subs, env.pointer_size)
-            .unwrap_or_else(|err| panic!("TODO gracefully handle bad layout: {:?}", err));
-
-        args.push((
-            from_can(env, loc_arg.value, procs, layout_cache, None),
-            layout,
-        ));
-    }
-
-    Expr::CallByName(specialized_proc_name, args.into_bump_slice())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1742,7 +1776,7 @@ pub fn specialize_equality<'a>(
     rhs: Expr<'a>,
     layout: Layout<'a>,
 ) -> Expr<'a> {
-    let symbol = match &layout {
+    let name = match &layout {
         Layout::Builtin(builtin) => match builtin {
             Builtin::Int64 => Symbol::INT_EQ_I64,
             Builtin::Float64 => Symbol::FLOAT_EQ,
@@ -1753,10 +1787,11 @@ pub fn specialize_equality<'a>(
         other => todo!("Cannot yet compare for equality {:?}", other),
     };
 
-    Expr::CallByName(
-        symbol,
-        arena.alloc([(lhs, layout.clone()), (rhs, layout.clone())]),
-    )
+    Expr::CallByName {
+        name,
+        layout: layout.clone(),
+        args: arena.alloc([(lhs, layout.clone()), (rhs, layout)]),
+    }
 }
 
 fn specialize_builtin_functions<'a>(

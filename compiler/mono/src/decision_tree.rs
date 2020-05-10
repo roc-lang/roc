@@ -1203,14 +1203,16 @@ fn boolean_all<'a>(arena: &'a Bump, tests: Vec<(Expr<'a>, Expr<'a>, Layout<'a>)>
     let mut expr = Expr::Bool(true);
 
     for (lhs, rhs, layout) in tests.into_iter().rev() {
-        let test = specialize_equality(arena, lhs, rhs, layout);
-        expr = Expr::CallByName(
-            Symbol::BOOL_AND,
-            arena.alloc([
+        let test = specialize_equality(arena, lhs, rhs, layout.clone());
+
+        expr = Expr::CallByName {
+            name: Symbol::BOOL_AND,
+            layout,
+            args: arena.alloc([
                 (test, Layout::Builtin(Builtin::Bool)),
                 (expr, Layout::Builtin(Builtin::Bool)),
             ]),
-        );
+        };
     }
 
     expr
