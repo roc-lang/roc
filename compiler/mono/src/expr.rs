@@ -32,6 +32,7 @@ pub struct Procs<'a> {
     pub module_thunks: MutSet<Symbol>,
     runtime_errors: MutSet<Symbol>,
     specializations: MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>,
+    pending_specializations: MutMap<Symbol, Layout<'a>>,
     builtin: MutSet<Symbol>,
 }
 
@@ -1354,11 +1355,17 @@ fn call_by_name<'a>(
                             opt_specialize_body = None;
                         }
                         None => {
-                            opt_specialize_body = Some((
-                                partial_proc.annotation,
-                                partial_proc.body.clone(),
-                                partial_proc.patterns.clone(),
-                            ));
+                            if procs.pending_specializations.get(&proc_name) == Some(&layout) {
+                                // If we're already in the process of specializing this, don't
+                                // try to specialize it further; otherwise, we'll loop forever.
+                                opt_specialize_body = None;
+                            } else {
+                                opt_specialize_body = Some((
+                                    partial_proc.annotation,
+                                    partial_proc.body.clone(),
+                                    partial_proc.patterns.clone(),
+                                ));
+                            }
                         }
                     }
                 }
@@ -1372,9 +1379,9 @@ fn call_by_name<'a>(
 
             if let Some((annotation, body, loc_patterns)) = opt_specialize_body {
                 // register proc, so specialization doesn't loop infinitely
-                if true {
-                    todo!("this is where we would call procs.insert_specialization(content_hash, specialized_proc_name, None);");
-                }
+                procs
+                    .pending_specializations
+                    .insert(proc_name, layout.clone());
 
                 let arg_vars = loc_args.iter().map(|v| v.0).collect::<std::vec::Vec<_>>();
 
