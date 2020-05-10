@@ -131,10 +131,10 @@ fn int_abs(var_store: &VarStore) -> Def {
                 no_region(Var(Symbol::INT_ABS_ARG)),
             )],
             final_else: Box::new(
-                // int is below 0, so multiply it by -1
+                // int is below 0, so negate it.
                 no_region(call(
-                    Symbol::NUM_MUL,
-                    vec![Var(Symbol::INT_ABS_ARG), Int(var_store.fresh(), -1)],
+                    Symbol::NUM_NEG,
+                    vec![Var(Symbol::INT_ABS_ARG)],
                     var_store,
                 )),
             ),
