@@ -331,7 +331,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 )
             }
         },
-        AnonymousFunctionPointer(symbol, layout) => {
+        FunctionPointer(symbol, layout) => {
             let fn_name = layout_ids
                 .get(*symbol, layout)
                 .to_symbol_string(*symbol, &env.interns);
@@ -343,11 +343,6 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .as_pointer_value();
 
             BasicValueEnum::PointerValue(ptr)
-        }
-        NamedFunctionPointer(_) => {
-            unreachable!(
-                "Tried to build a NamedFunctionPointer that was never resolved into a CallByName."
-            );
         }
         CallByPointer(sub_expr, args, _var) => {
             let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);

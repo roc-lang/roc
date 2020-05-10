@@ -197,9 +197,8 @@ pub enum Expr<'a> {
     Store(&'a [(Symbol, Layout<'a>, Expr<'a>)], &'a Expr<'a>),
 
     // Functions
-    NamedFunctionPointer(Symbol),
-    AnonymousFunctionPointer(Symbol, Layout<'a>),
-    RuntimeErrorFunction(String),
+    FunctionPointer(Symbol, Layout<'a>),
+    RuntimeErrorFunction(&'a str),
     CallByName {
         name: Symbol,
         layout: Layout<'a>,
@@ -276,7 +275,7 @@ impl<'a> Expr<'a> {
     ) -> Self {
         let mut layout_cache = LayoutCache::default();
 
-        from_can(env, can_expr, procs, &mut layout_cache, None)
+        from_can(env, can_expr, procs, &mut layout_cache)
     }
 }
 
@@ -477,7 +476,6 @@ fn from_can<'a>(
     can_expr: roc_can::expr::Expr,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
-    name: Option<Symbol>,
 ) -> Expr<'a> {
     use roc_can::expr::Expr::*;
 
@@ -514,28 +512,15 @@ fn from_can<'a>(
             from_can_defs(env, vec![*def], *ret_expr, layout_cache, procs)
         }
 
-        Closure(ann, original_name, _, loc_args, boxed_body) => {
+        Closure(ann, name, _, loc_args, boxed_body) => {
             let (loc_body, ret_var) = *boxed_body;
 
-            match name {
-                Some(symbol) => {
-                    procs.insert_named(env, symbol, ann, loc_args, loc_body, ret_var);
-
-                    Expr::NamedFunctionPointer(symbol)
-                }
-                None => {
-                    match procs.insert_anonymous(
-                        env,
-                        original_name,
-                        ann,
-                        loc_args,
-                        loc_body,
-                        ret_var,
-                        layout_cache,
-                    ) {
-                        Ok(layout) => Expr::AnonymousFunctionPointer(original_name, layout),
-                        Err(()) => Expr::RuntimeErrorFunction("TODO runtime error".to_string()),
-                    }
+            match procs.insert_anonymous(env, name, ann, loc_args, loc_body, ret_var, layout_cache)
+            {
+                Ok(layout) => Expr::FunctionPointer(name, layout),
+                Err(()) => {
+                    // TODO make this message better
+                    Expr::RuntimeErrorFunction("This function threw a runtime error.")
                 }
             }
         }
@@ -543,7 +528,7 @@ fn from_can<'a>(
         Call(boxed, loc_args, _) => {
             let (fn_var, loc_expr, ret_var) = *boxed;
 
-            match from_can(env, loc_expr.value, procs, layout_cache, None) {
+            match from_can(env, loc_expr.value, procs, layout_cache) {
                 Expr::Load(proc_name) => {
                     // Some functions can potentially mutate in-place.
                     // If we have one of those, switch to the in-place version if appropriate.
@@ -627,7 +612,7 @@ fn from_can<'a>(
                     let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
 
                     for (_, loc_arg) in loc_args {
-                        args.push(from_can(env, loc_arg.value, procs, layout_cache, None));
+                        args.push(from_can(env, loc_arg.value, procs, layout_cache));
                     }
 
                     let layout = layout_cache
@@ -663,7 +648,7 @@ fn from_can<'a>(
             branches,
             final_else,
         } => {
-            let mut expr = from_can(env, final_else.value, procs, layout_cache, None);
+            let mut expr = from_can(env, final_else.value, procs, layout_cache);
 
             let ret_layout = layout_cache
                 .from_var(env.arena, branch_var, env.subs, env.pointer_size)
@@ -673,8 +658,8 @@ fn from_can<'a>(
                 .expect("invalid cond_layout");
 
             for (loc_cond, loc_then) in branches.into_iter().rev() {
-                let cond = from_can(env, loc_cond.value, procs, layout_cache, None);
-                let then = from_can(env, loc_then.value, procs, layout_cache, None);
+                let cond = from_can(env, loc_cond.value, procs, layout_cache);
+                let then = from_can(env, loc_then.value, procs, layout_cache);
 
                 let branch_symbol = env.unique_symbol();
 
@@ -715,7 +700,7 @@ fn from_can<'a>(
 
             for (label, layout) in btree {
                 let field = fields.remove(&label).unwrap();
-                let expr = from_can(env, field.loc_expr.value, procs, layout_cache, None);
+                let expr = from_can(env, field.loc_expr.value, procs, layout_cache);
 
                 field_tuples.push((expr, layout));
             }
@@ -756,7 +741,7 @@ fn from_can<'a>(
                 Unwrapped(field_layouts) => {
                     let field_exprs = args
                         .into_iter()
-                        .map(|(_, arg)| from_can(env, arg.value, procs, layout_cache, None));
+                        .map(|(_, arg)| from_can(env, arg.value, procs, layout_cache));
 
                     let mut field_tuples = Vec::with_capacity_in(field_layouts.len(), arena);
 
@@ -778,7 +763,7 @@ fn from_can<'a>(
 
                     let it = std::iter::once(Expr::Int(tag_id as i64)).chain(
                         args.into_iter()
-                            .map(|(_, arg)| from_can(env, arg.value, procs, layout_cache, None)),
+                            .map(|(_, arg)| from_can(env, arg.value, procs, layout_cache)),
                     );
 
                     for (arg_layout, arg_expr) in argument_layouts.iter().zip(it) {
@@ -831,7 +816,7 @@ fn from_can<'a>(
                 }
             }
 
-            let record = arena.alloc(from_can(env, loc_expr.value, procs, layout_cache, None));
+            let record = arena.alloc(from_can(env, loc_expr.value, procs, layout_cache));
 
             Expr::AccessAtIndex {
                 index: index.expect("field not in its own type") as u64,
@@ -863,7 +848,7 @@ fn from_can<'a>(
             let mut elems = Vec::with_capacity_in(loc_elems.len(), arena);
 
             for loc_elem in loc_elems {
-                elems.push(from_can(env, loc_elem.value, procs, layout_cache, None));
+                elems.push(from_can(env, loc_elem.value, procs, layout_cache));
             }
 
             Expr::Array {
@@ -1029,6 +1014,7 @@ fn from_can_defs<'a>(
 
     let arena = env.arena;
     let mut stored = Vec::with_capacity_in(defs.len(), arena);
+
     for def in defs {
         let loc_pattern = def.loc_pattern;
         let loc_expr = def.loc_expr;
@@ -1047,11 +1033,21 @@ fn from_can_defs<'a>(
         //
         if let Identifier(symbol) = &loc_pattern.value {
             if let Closure(_, _, _, _, _) = &loc_expr.value {
-                // Extract Procs, but discard the resulting Expr::Load.
-                // That Load looks up the pointer, which we won't use here!
-                from_can(env, loc_expr.value, procs, layout_cache, Some(*symbol));
+                // Now that we know for sure it's a closure, get an owned
+                // version of these variant args so we can use them properly.
+                match loc_expr.value {
+                    Closure(ann, _, _, loc_args, boxed_body) => {
+                        // Extract Procs, but discard the resulting Expr::Load.
+                        // That Load looks up the pointer, which we won't use here!
 
-                continue;
+                        let (loc_body, ret_var) = *boxed_body;
+
+                        procs.insert_named(env, *symbol, ann, loc_args, loc_body, ret_var);
+
+                        continue;
+                    }
+                    _ => unreachable!(),
+                }
             }
         }
 
@@ -1067,7 +1063,7 @@ fn from_can_defs<'a>(
                 stored.push((
                     *symbol,
                     layout.clone(),
-                    from_can(env, loc_expr.value, procs, layout_cache, None),
+                    from_can(env, loc_expr.value, procs, layout_cache),
                 ));
             }
             _ => {
@@ -1094,7 +1090,7 @@ fn from_can_defs<'a>(
                 stored.push((
                     symbol,
                     layout.clone(),
-                    from_can(env, loc_expr.value, procs, layout_cache, None),
+                    from_can(env, loc_expr.value, procs, layout_cache),
                 ));
 
                 match store_pattern(env, &mono_pattern, symbol, layout, &mut stored) {
@@ -1109,7 +1105,7 @@ fn from_can_defs<'a>(
     }
     // At this point, it's safe to assume we aren't assigning a Closure to a def.
     // Extract Procs from the def body and the ret expression, and return the result!
-    let ret = from_can(env, ret_expr.value, procs, layout_cache, None);
+    let ret = from_can(env, ret_expr.value, procs, layout_cache);
 
     if stored.is_empty() {
         ret
@@ -1174,13 +1170,13 @@ fn from_can_when<'a>(
             .from_var(env.arena, cond_var, env.subs, env.pointer_size)
             .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
         let cond_symbol = env.unique_symbol();
-        let cond = from_can(env, loc_cond.value, procs, layout_cache, None);
+        let cond = from_can(env, loc_cond.value, procs, layout_cache);
         stored.push((cond_symbol, cond_layout.clone(), cond));
 
         // NOTE this will still store shadowed names.
         // that's fine: the branch throws a runtime error anyway
         let ret = match store_pattern(env, &mono_pattern, cond_symbol, cond_layout, &mut stored) {
-            Ok(_) => from_can(env, first.value.value, procs, layout_cache, None),
+            Ok(_) => from_can(env, first.value.value, procs, layout_cache),
             Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
         };
 
@@ -1190,14 +1186,14 @@ fn from_can_when<'a>(
             .from_var(env.arena, cond_var, env.subs, env.pointer_size)
             .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
 
-        let cond = from_can(env, loc_cond.value, procs, layout_cache, None);
+        let cond = from_can(env, loc_cond.value, procs, layout_cache);
         let cond_symbol = env.unique_symbol();
 
         let mut loc_branches = std::vec::Vec::new();
         let mut opt_branches = std::vec::Vec::new();
 
         for when_branch in branches {
-            let mono_expr = from_can(env, when_branch.value.value, procs, layout_cache, None);
+            let mono_expr = from_can(env, when_branch.value.value, procs, layout_cache);
 
             let exhaustive_guard = if when_branch.guard.is_some() {
                 Guard::HasGuard
@@ -1230,7 +1226,7 @@ fn from_can_when<'a>(
                         //
                         // otherwise, we modify the branch's expression to include the stores
                         if let Some(loc_guard) = when_branch.guard.clone() {
-                            let expr = from_can(env, loc_guard.value, procs, layout_cache, None);
+                            let expr = from_can(env, loc_guard.value, procs, layout_cache);
                             (
                                 crate::decision_tree::Guard::Guard {
                                     stores: stores.into_bump_slice(),
@@ -1420,10 +1416,7 @@ fn call_by_name<'a>(
                     .from_var(&env.arena, var, &env.subs, env.pointer_size)
                     .unwrap_or_else(|err| panic!("TODO gracefully handle bad layout: {:?}", err));
 
-                args.push((
-                    from_can(env, loc_arg.value, procs, layout_cache, None),
-                    layout,
-                ));
+                args.push((from_can(env, loc_arg.value, procs, layout_cache), layout));
             }
 
             Expr::CallByName {
@@ -1457,7 +1450,7 @@ fn specialize_proc_body<'a>(
     let snapshot = env.subs.snapshot();
     let unified = roc_unify::unify::unify(env.subs, annotation, fn_var);
     debug_assert!(matches!(unified, roc_unify::unify::Unified::Success(_)));
-    let specialized_body = from_can(env, body, procs, layout_cache, None);
+    let specialized_body = from_can(env, body, procs, layout_cache);
     // reset subs, so we don't get type errors when specializing for a different signature
     env.subs.rollback_to(snapshot);
 
