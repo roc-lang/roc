@@ -849,28 +849,6 @@ fn build_switch<'a, 'ctx, 'env>(
     phi.as_basic_value()
 }
 
-// TODO trim down these arguments
-#[allow(dead_code)]
-#[allow(clippy::too_many_arguments)]
-fn build_expr_phi2<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    parent: FunctionValue<'ctx>,
-    comparison: IntValue<'ctx>,
-    pass: &'a Expr<'a>,
-    fail: &'a Expr<'a>,
-    ret_type: BasicTypeEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    build_basic_phi2(
-        env,
-        parent,
-        comparison,
-        || build_expr(env, scope, parent, pass),
-        || build_expr(env, scope, parent, fail),
-        ret_type,
-    )
-}
-
 fn build_basic_phi2<'a, 'ctx, 'env, PassFn, FailFn>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
