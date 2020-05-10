@@ -1,3 +1,4 @@
+use crate::layout_id::LayoutIds;
 use crate::llvm::convert::{
     basic_type_from_layout, collection, get_fn_type, get_ptr_type, ptr_int,
 };
@@ -17,7 +18,6 @@ use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc};
 use roc_mono::layout::{Builtin, Layout};
-use roc_mono::layout_id::LayoutIds;
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification

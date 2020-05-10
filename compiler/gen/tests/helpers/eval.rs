@@ -60,7 +60,7 @@ macro_rules! assert_llvm_evals_to {
         };
         let mut procs = Procs::default();
         let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
-        let mut layout_ids = roc_mono::layout_id::LayoutIds::default();
+        let mut layout_ids = roc_gen::layout_id::LayoutIds::default();
 
         // Populate Procs and get the low-level Expr from the canonical Expr
         let mut mono_problems = Vec::new();
@@ -225,7 +225,7 @@ macro_rules! assert_opt_evals_to {
         };
         let mut procs = Procs::default();
         let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
-        let mut layout_ids = roc_mono::layout_id::LayoutIds::default();
+        let mut layout_ids = roc_gen::layout_id::LayoutIds::default();
 
         // Populate Procs and get the low-level Expr from the canonical Expr
         let mut mono_problems = Vec::new();

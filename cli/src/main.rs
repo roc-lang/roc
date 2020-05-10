@@ -17,7 +17,7 @@ use roc_load::file::{LoadedModule, LoadingProblem};
 use roc_module::symbol::Symbol;
 use roc_mono::expr::{Env, Expr, PartialProc, Procs};
 use roc_mono::layout::Layout;
-use roc_mono::layout_id::LayoutIds;
+use roc_gen::layout_id::LayoutIds;
 use std::time::SystemTime;
 
 use clap::{App, Arg, ArgMatches};

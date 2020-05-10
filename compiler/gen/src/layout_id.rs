@@ -1,6 +1,6 @@
-use crate::layout::Layout;
 use roc_collections::all::{default_hasher, MutMap};
 use roc_module::symbol::{Interns, Symbol};
+use roc_mono::layout::Layout;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
