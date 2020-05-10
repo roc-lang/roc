@@ -265,6 +265,12 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
     let mut headers = Vec::with_capacity(procs.len());
     let (mut proc_map, runtime_errors) = procs.into_map();
 
+    assert_eq!(
+        runtime_errors,
+        roc_collections::all::MutSet::default(),
+        "TODO code gen runtime exception functions"
+    );
+
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
