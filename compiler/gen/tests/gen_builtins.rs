@@ -13,7 +13,7 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_builtins {
-    use crate::helpers::{can_expr, infer_expr, uniq_expr, CanExprOut};
+    use crate::helpers::{can_expr, infer_expr, uniq_expr, with_larger_debug_stack, CanExprOut};
     use bumpalo::Bump;
     use inkwell::context::Context;
     use inkwell::execution_engine::JitFunction;
@@ -580,11 +580,12 @@ mod gen_builtins {
         );
     }
 
-    // #[test]
+    #[test]
     fn gen_quicksort() {
-        assert_evals_to!(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
                     quicksort : List (Num a) -> List (Num a)
                     quicksort = \list ->
                         quicksortHelp list 0 (List.len list - 1)
@@ -644,9 +645,10 @@ mod gen_builtins {
 
                     quicksort [ 7, 4, 21, 19 ]
                 "#
-            ),
-            &[4, 7, 19, 21],
-            &'static [i64]
-        );
+                ),
+                &[4, 7, 19, 21],
+                &'static [i64]
+            );
+        })
     }
 }
