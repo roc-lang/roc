@@ -59,6 +59,8 @@ impl<'a> Procs<'a> {
         );
     }
 
+    // TODO trim these down
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_anonymous(
         &mut self,
         env: &mut Env<'a, '_>,
@@ -1114,6 +1116,8 @@ fn from_can_defs<'a>(
     }
 }
 
+// TODO trim these down
+#[allow(clippy::too_many_arguments)]
 fn from_can_when<'a>(
     env: &mut Env<'a, '_>,
     cond_var: Variable,

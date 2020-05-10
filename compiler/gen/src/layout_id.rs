@@ -36,7 +36,7 @@ impl<'a> LayoutIds<'a> {
         });
 
         // Get the id associated with this layout, or default to next_id.
-        let answer = ids.by_id.get(layout).map(|id| *id).unwrap_or(ids.next_id);
+        let answer = ids.by_id.get(layout).copied().unwrap_or(ids.next_id);
 
         // If we had to default to next_id, it must not have been found;
         // store the ID we're going to return and increment next_id.

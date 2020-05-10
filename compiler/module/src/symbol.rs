@@ -48,7 +48,7 @@ impl Symbol {
         IdentId((self.0 >> 32) as u32)
     }
 
-    pub fn is_builtin(&self) -> bool {
+    pub fn is_builtin(self) -> bool {
         self.module_id().is_builtin()
     }
 
