@@ -99,7 +99,7 @@ macro_rules! assert_llvm_evals_to {
             // (This approach means we don't have to defensively clone name here.)
             //
             // println!("\n\nBuilding and then verifying function {}\n\n", name);
-            build_proc(&env, proc, &procs, fn_val, arg_basic_types);
+            build_proc(&env, proc, fn_val, arg_basic_types);
 
             if fn_val.verify(true) {
                 fpm.run_on(&fn_val);
@@ -125,7 +125,6 @@ macro_rules! assert_llvm_evals_to {
             &ImMap::default(),
             main_fn,
             &main_body,
-            &mut Procs::default(),
         );
 
         builder.build_return(Some(&ret));
@@ -263,7 +262,7 @@ macro_rules! assert_opt_evals_to {
             // (This approach means we don't have to defensively clone name here.)
             //
             // println!("\n\nBuilding and then verifying function {}\n\n", name);
-            build_proc(&env, proc, &procs, fn_val, arg_basic_types);
+            build_proc(&env, proc, fn_val, arg_basic_types);
 
             if fn_val.verify(true) {
                 fpm.run_on(&fn_val);
@@ -289,7 +288,6 @@ macro_rules! assert_opt_evals_to {
             &ImMap::default(),
             main_fn,
             &main_body,
-            &mut Procs::default(),
         );
 
         builder.build_return(Some(&ret));

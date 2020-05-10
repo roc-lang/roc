@@ -1399,7 +1399,7 @@ fn call_by_name<'a>(
                     layout_cache,
                 ) {
                     Ok(proc) => {
-                        procs.insert_specialization(proc_name, layout, proc);
+                        procs.insert_specialization(proc_name, layout.clone(), proc);
                     }
                     Err(()) => {
                         procs.runtime_errors.insert(proc_name);

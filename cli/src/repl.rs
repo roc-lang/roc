@@ -280,7 +280,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
         // (This approach means we don't have to defensively clone name here.)
         //
         // println!("\n\nBuilding and then verifying function {}\n\n", name);
-        build_proc(&env, proc, &procs, fn_val, arg_basic_types);
+        build_proc(&env, proc, fn_val, arg_basic_types);
 
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);
@@ -304,13 +304,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
 
     builder.position_at_end(basic_block);
 
-    let ret = roc_gen::llvm::build::build_expr(
-        &env,
-        &ImMap::default(),
-        main_fn,
-        &main_body,
-        &Procs::default(),
-    );
+    let ret = roc_gen::llvm::build::build_expr(&env, &ImMap::default(), main_fn, &main_body);
 
     builder.build_return(Some(&ret));
 
