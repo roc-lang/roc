@@ -9,6 +9,7 @@ use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_collections::all::ImMap;
 use roc_collections::all::MutMap;
+use roc_gen::layout_id::LayoutIds;
 use roc_gen::llvm::build::{
     build_proc, build_proc_header, get_call_conventions, module_from_builtins, OptLevel,
 };
@@ -17,7 +18,6 @@ use roc_load::file::{LoadedModule, LoadingProblem};
 use roc_module::symbol::Symbol;
 use roc_mono::expr::{Env, Expr, PartialProc, Procs};
 use roc_mono::layout::Layout;
-use roc_gen::layout_id::LayoutIds;
 use std::time::SystemTime;
 
 use clap::{App, Arg, ArgMatches};
@@ -463,7 +463,8 @@ fn gen(
     // because their bodies may reference each other.
     for (symbol, mut procs_by_layout) in proc_map.drain() {
         for (layout, proc) in procs_by_layout.drain() {
-            let (fn_val, arg_basic_types) = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+            let (fn_val, arg_basic_types) =
+                build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
             headers.push((proc, fn_val, arg_basic_types));
         }
