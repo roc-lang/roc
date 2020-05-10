@@ -17,6 +17,7 @@ use roc_collections::all::ImMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc};
 use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout_id::LayoutIds;
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -144,9 +145,10 @@ pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>, opt_level: OptLevel) {
 #[allow(clippy::cognitive_complexity)]
 pub fn build_expr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
-    expr: &'a Expr<'a>,
+    expr: &Expr<'a>,
 ) -> BasicValueEnum<'ctx> {
     use roc_mono::expr::Expr::*;
 
@@ -165,14 +167,53 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let pass = env.arena.alloc(Expr::Store(pass_stores, pass_expr));
             let fail = env.arena.alloc(Expr::Store(fail_stores, fail_expr));
 
-            let conditional = Branch2 {
-                cond: branch_symbol,
-                pass,
-                fail,
-                ret_layout: ret_layout.clone(),
-            };
+            let ret_type =
+                basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
 
-            build_branch2(env, scope, parent, conditional)
+            let cond_expr = load_symbol(env, scope, branch_symbol);
+
+            match cond_expr {
+                IntValue(value) => {
+                    // This is a call tobuild_basic_phi2, except inlined to prevent
+                    // problems with lifetimes and closures involving layout_ids.
+                    let builder = env.builder;
+                    let context = env.context;
+
+                    // build blocks
+                    let then_block = context.append_basic_block(parent, "then");
+                    let else_block = context.append_basic_block(parent, "else");
+                    let cont_block = context.append_basic_block(parent, "branchcont");
+
+                    builder.build_conditional_branch(value, then_block, else_block);
+
+                    // build then block
+                    builder.position_at_end(then_block);
+                    let then_val = build_expr(env, layout_ids, scope, parent, pass);
+                    builder.build_unconditional_branch(cont_block);
+
+                    let then_block = builder.get_insert_block().unwrap();
+
+                    // build else block
+                    builder.position_at_end(else_block);
+                    let else_val = build_expr(env, layout_ids, scope, parent, fail);
+                    builder.build_unconditional_branch(cont_block);
+
+                    let else_block = builder.get_insert_block().unwrap();
+
+                    // emit merge block
+                    builder.position_at_end(cont_block);
+
+                    let phi = builder.build_phi(ret_type, "branch");
+
+                    phi.add_incoming(&[(&then_val, then_block), (&else_val, else_block)]);
+
+                    phi.as_basic_value()
+                }
+                _ => panic!(
+                    "Tried to make a branch out of an invalid condition: cond_expr = {:?}",
+                    cond_expr,
+                ),
+            }
         }
         Switch {
             cond,
@@ -200,14 +241,14 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 ret_type,
             };
 
-            build_switch(env, scope, parent, switch_args)
+            build_switch(env, layout_ids, scope, parent, switch_args)
         }
         Store(stores, ret) => {
             let mut scope = im_rc::HashMap::clone(scope);
             let context = &env.context;
 
             for (symbol, layout, expr) in stores.iter() {
-                let val = build_expr(env, &scope, parent, &expr);
+                let val = build_expr(env, layout_ids, &scope, parent, &expr);
                 let expr_bt = basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes);
                 let alloca = create_entry_block_alloca(
                     env,
@@ -228,16 +269,17 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 scope.insert(*symbol, (layout.clone(), alloca));
             }
 
-            build_expr(env, &scope, parent, ret)
+            build_expr(env, layout_ids, &scope, parent, ret)
         }
         CallByName { name, layout, args } => match *name {
             Symbol::BOOL_OR => {
                 // The (||) operator
                 debug_assert!(args.len() == 2);
 
-                let comparison = build_expr(env, scope, parent, &args[0].0).into_int_value();
+                let comparison =
+                    build_expr(env, layout_ids, scope, parent, &args[0].0).into_int_value();
                 let build_then = || env.context.bool_type().const_int(true as u64, false).into();
-                let build_else = || build_expr(env, scope, parent, &args[1].0);
+                let build_else = || build_expr(env, layout_ids, scope, parent, &args[1].0);
 
                 let ret_type = env.context.bool_type().into();
 
@@ -247,8 +289,9 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 // The (&&) operator
                 debug_assert!(args.len() == 2);
 
-                let comparison = build_expr(env, scope, parent, &args[0].0).into_int_value();
-                let build_then = || build_expr(env, scope, parent, &args[1].0);
+                let comparison =
+                    build_expr(env, layout_ids, scope, parent, &args[0].0).into_int_value();
+                let build_then = || build_expr(env, layout_ids, scope, parent, &args[1].0);
                 let build_else = || {
                     env.context
                         .bool_type()
@@ -264,7 +307,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 // The (!) operator
                 debug_assert!(args.len() == 1);
 
-                let arg = build_expr(env, scope, parent, &args[0].0);
+                let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
 
                 let int_val = env.builder.build_not(arg.into_int_value(), "bool_not");
 
@@ -275,10 +318,17 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     Vec::with_capacity_in(args.len(), env.arena);
 
                 for (arg, arg_layout) in args.iter() {
-                    arg_tuples.push((build_expr(env, scope, parent, arg), arg_layout));
+                    arg_tuples.push((build_expr(env, layout_ids, scope, parent, arg), arg_layout));
                 }
 
-                call_with_args(*name, parent, arg_tuples.into_bump_slice(), env)
+                call_with_args(
+                    env,
+                    layout_ids,
+                    layout,
+                    *name,
+                    parent,
+                    arg_tuples.into_bump_slice(),
+                )
             }
         },
         FunctionPointer(symbol) => {
@@ -295,10 +345,10 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
 
             for arg in args.iter() {
-                arg_vals.push(build_expr(env, scope, parent, arg));
+                arg_vals.push(build_expr(env, layout_ids, scope, parent, arg));
             }
 
-            let call = match build_expr(env, scope, parent, sub_expr) {
+            let call = match build_expr(env, layout_ids, scope, parent, sub_expr) {
                 BasicValueEnum::PointerValue(ptr) => {
                     env.builder.build_call(ptr, arg_vals.as_slice(), "tmp")
                 }
@@ -392,7 +442,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     let index_val = ctx.i32_type().const_int(index as u64, false);
                     let elem_ptr =
                         unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
-                    let val = build_expr(env, &scope, parent, &elem);
+                    let val = build_expr(env, layout_ids, &scope, parent, &elem);
 
                     builder.build_store(elem_ptr, val);
                 }
@@ -438,7 +488,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
             for (field_expr, field_layout) in sorted_fields.iter() {
-                let val = build_expr(env, &scope, parent, field_expr);
+                let val = build_expr(env, layout_ids, &scope, parent, field_expr);
                 let field_type =
                     basic_type_from_layout(env.arena, env.context, &field_layout, env.ptr_bytes);
 
@@ -475,7 +525,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
             for (field_expr, field_layout) in it {
-                let val = build_expr(env, &scope, parent, field_expr);
+                let val = build_expr(env, layout_ids, &scope, parent, field_expr);
                 let field_type =
                     basic_type_from_layout(env.arena, env.context, &field_layout, env.ptr_bytes);
 
@@ -515,7 +565,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
             for (field_expr, field_layout) in arguments.iter() {
-                let val = build_expr(env, &scope, parent, field_expr);
+                let val = build_expr(env, layout_ids, &scope, parent, field_expr);
                 let field_type =
                     basic_type_from_layout(env.arena, env.context, &field_layout, ptr_size);
 
@@ -593,7 +643,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             // Get Struct val
             // Since this is a one-element tag union, we get the correct struct immediately
-            let argument = build_expr(env, &scope, parent, expr).into_struct_value();
+            let argument = build_expr(env, layout_ids, &scope, parent, expr).into_struct_value();
 
             builder
                 .build_extract_value(
@@ -629,7 +679,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .struct_type(field_types.into_bump_slice(), false);
 
             // cast the argument bytes into the desired shape for this tag
-            let argument = build_expr(env, &scope, parent, expr).into_struct_value();
+            let argument = build_expr(env, layout_ids, &scope, parent, expr).into_struct_value();
 
             let struct_value = cast_struct_struct(builder, argument, struct_type);
 
@@ -704,40 +754,6 @@ fn extract_tag_discriminant<'a, 'ctx, 'env>(
         .into_int_value()
 }
 
-struct Branch2<'a> {
-    cond: &'a Symbol,
-    pass: &'a Expr<'a>,
-    fail: &'a Expr<'a>,
-    ret_layout: Layout<'a>,
-}
-
-fn build_branch2<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    parent: FunctionValue<'ctx>,
-    cond: Branch2<'a>,
-) -> BasicValueEnum<'ctx> {
-    let ret_layout = cond.ret_layout;
-    let pass = cond.pass;
-    let fail = cond.fail;
-    let ret_type = basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
-
-    let cond_expr = load_symbol(env, scope, cond.cond);
-
-    match cond_expr {
-        IntValue(value) => {
-            let build_then = || build_expr(env, scope, parent, pass);
-            let build_else = || build_expr(env, scope, parent, fail);
-
-            build_basic_phi2(env, parent, value, build_then, build_else, ret_type)
-        }
-        _ => panic!(
-            "Tried to make a branch out of an invalid condition: cond_expr = {:?}",
-            cond_expr,
-        ),
-    }
-}
-
 struct SwitchArgs<'a, 'ctx> {
     pub cond_expr: &'a Expr<'a>,
     pub cond_layout: Layout<'a>,
@@ -748,6 +764,7 @@ struct SwitchArgs<'a, 'ctx> {
 
 fn build_switch<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     switch_args: SwitchArgs<'a, 'ctx>,
@@ -771,7 +788,7 @@ fn build_switch<'a, 'ctx, 'env>(
         Layout::Builtin(Builtin::Float64) => {
             // float matches are done on the bit pattern
             cond_layout = Layout::Builtin(Builtin::Int64);
-            let full_cond = build_expr(env, scope, parent, cond_expr);
+            let full_cond = build_expr(env, layout_ids, scope, parent, cond_expr);
 
             builder
                 .build_bitcast(full_cond, env.context.i64_type(), "")
@@ -780,11 +797,14 @@ fn build_switch<'a, 'ctx, 'env>(
         Layout::Union(_) => {
             // we match on the discriminant, not the whole Tag
             cond_layout = Layout::Builtin(Builtin::Int64);
-            let full_cond = build_expr(env, scope, parent, cond_expr).into_struct_value();
+            let full_cond =
+                build_expr(env, layout_ids, scope, parent, cond_expr).into_struct_value();
 
             extract_tag_discriminant(env, full_cond)
         }
-        Layout::Builtin(_) => build_expr(env, scope, parent, cond_expr).into_int_value(),
+        Layout::Builtin(_) => {
+            build_expr(env, layout_ids, scope, parent, cond_expr).into_int_value()
+        }
         other => todo!("Build switch value from layout: {:?}", other),
     };
 
@@ -821,7 +841,7 @@ fn build_switch<'a, 'ctx, 'env>(
     for ((_, branch_expr), (_, block)) in branches.iter().zip(cases) {
         builder.position_at_end(block);
 
-        let branch_val = build_expr(env, scope, parent, branch_expr);
+        let branch_val = build_expr(env, layout_ids, scope, parent, branch_expr);
 
         builder.build_unconditional_branch(cont_block);
 
@@ -831,7 +851,7 @@ fn build_switch<'a, 'ctx, 'env>(
     // The block for the conditional's default branch.
     builder.position_at_end(default_block);
 
-    let default_val = build_expr(env, scope, parent, default_branch);
+    let default_val = build_expr(env, layout_ids, scope, parent, default_branch);
 
     builder.build_unconditional_branch(cont_block);
 
@@ -853,13 +873,13 @@ fn build_basic_phi2<'a, 'ctx, 'env, PassFn, FailFn>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     comparison: IntValue<'ctx>,
-    build_pass: PassFn,
-    build_fail: FailFn,
+    mut build_pass: PassFn,
+    mut build_fail: FailFn,
     ret_type: BasicTypeEnum<'ctx>,
 ) -> BasicValueEnum<'ctx>
 where
-    PassFn: Fn() -> BasicValueEnum<'ctx>,
-    FailFn: Fn() -> BasicValueEnum<'ctx>,
+    PassFn: FnMut() -> BasicValueEnum<'ctx>,
+    FailFn: FnMut() -> BasicValueEnum<'ctx>,
 {
     let builder = env.builder;
     let context = env.context;
@@ -927,7 +947,9 @@ pub fn create_entry_block_alloca<'a, 'ctx>(
 
 pub fn build_proc_header<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     symbol: Symbol,
+    layout: &Layout<'a>,
     proc: &Proc<'a>,
 ) -> (FunctionValue<'ctx>, Vec<'a, BasicTypeEnum<'ctx>>) {
     let args = proc.args;
@@ -946,11 +968,12 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
 
     let fn_type = get_fn_type(&ret_type, &arg_basic_types);
 
-    let fn_val = env.module.add_function(
-        symbol.ident_string(&env.interns),
-        fn_type,
-        Some(Linkage::Private),
-    );
+    let fn_name = layout_ids
+        .get(symbol, layout)
+        .to_symbol_string(symbol, &env.interns);
+    let fn_val = env
+        .module
+        .add_function(fn_name.as_str(), fn_type, Some(Linkage::Private));
 
     fn_val.set_call_conventions(fn_val.get_call_conventions());
 
@@ -959,6 +982,7 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
 
 pub fn build_proc<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     proc: Proc<'a>,
     fn_val: FunctionValue<'ctx>,
     arg_basic_types: Vec<'a, BasicTypeEnum<'ctx>>,
@@ -988,7 +1012,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
         scope.insert(*arg_symbol, (layout.clone(), alloca));
     }
 
-    let body = build_expr(env, &scope, fn_val, &proc.body);
+    let body = build_expr(env, layout_ids, &scope, fn_val, &proc.body);
 
     builder.build_return(Some(&body));
 }
@@ -1006,10 +1030,12 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
 #[inline(always)]
 #[allow(clippy::cognitive_complexity)]
 fn call_with_args<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
     symbol: Symbol,
     parent: FunctionValue<'ctx>,
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
-    env: &Env<'a, 'ctx, 'env>,
 ) -> BasicValueEnum<'ctx> {
     match symbol {
         Symbol::INT_ADD | Symbol::NUM_ADD => {
@@ -1358,9 +1384,12 @@ fn call_with_args<'a, 'ctx, 'env>(
             BasicValueEnum::IntValue(int_val)
         }
         _ => {
+            let fn_name = layout_ids
+                .get(symbol, layout)
+                .to_symbol_string(symbol, &env.interns);
             let fn_val = env
                 .module
-                .get_function(symbol.ident_string(&env.interns))
+                .get_function(fn_name.as_str())
                 .unwrap_or_else(|| panic!("Unrecognized function: {:?}", symbol));
 
             let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);

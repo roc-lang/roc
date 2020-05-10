@@ -60,6 +60,7 @@ macro_rules! assert_llvm_evals_to {
         };
         let mut procs = Procs::default();
         let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
+        let mut layout_ids = roc_mono::layout_id::LayoutIds::default();
 
         // Populate Procs and get the low-level Expr from the canonical Expr
         let mut mono_problems = Vec::new();
@@ -86,8 +87,8 @@ macro_rules! assert_llvm_evals_to {
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
         for (symbol, mut procs_by_layout) in proc_map.drain() {
-            for (_, proc) in procs_by_layout.drain() {
-                let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
+            for (layout, proc) in procs_by_layout.drain() {
+                let (fn_val, arg_basic_types) = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
                 headers.push((proc, fn_val, arg_basic_types));
             }
@@ -99,7 +100,7 @@ macro_rules! assert_llvm_evals_to {
             // (This approach means we don't have to defensively clone name here.)
             //
             // println!("\n\nBuilding and then verifying function {}\n\n", name);
-            build_proc(&env, proc, fn_val, arg_basic_types);
+            build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
 
             if fn_val.verify(true) {
                 fpm.run_on(&fn_val);
@@ -122,6 +123,7 @@ macro_rules! assert_llvm_evals_to {
 
         let ret = roc_gen::llvm::build::build_expr(
             &env,
+            &mut layout_ids,
             &ImMap::default(),
             main_fn,
             &main_body,
@@ -223,6 +225,7 @@ macro_rules! assert_opt_evals_to {
         };
         let mut procs = Procs::default();
         let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
+        let mut layout_ids = roc_mono::layout_id::LayoutIds::default();
 
         // Populate Procs and get the low-level Expr from the canonical Expr
         let mut mono_problems = Vec::new();
@@ -249,8 +252,8 @@ macro_rules! assert_opt_evals_to {
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
         for (symbol, mut procs_by_layout) in proc_map.drain() {
-            for (_, proc) in procs_by_layout.drain() {
-                let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
+            for (layout, proc) in procs_by_layout.drain() {
+                let (fn_val, arg_basic_types) = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
                 headers.push((proc, fn_val, arg_basic_types));
             }
@@ -262,7 +265,7 @@ macro_rules! assert_opt_evals_to {
             // (This approach means we don't have to defensively clone name here.)
             //
             // println!("\n\nBuilding and then verifying function {}\n\n", name);
-            build_proc(&env, proc, fn_val, arg_basic_types);
+            build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
 
             if fn_val.verify(true) {
                 fpm.run_on(&fn_val);
@@ -285,6 +288,7 @@ macro_rules! assert_opt_evals_to {
 
         let ret = roc_gen::llvm::build::build_expr(
             &env,
+            &mut layout_ids,
             &ImMap::default(),
             main_fn,
             &main_body,

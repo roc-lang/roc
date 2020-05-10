@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate clap;
+
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
@@ -16,6 +17,7 @@ use roc_load::file::{LoadedModule, LoadingProblem};
 use roc_module::symbol::Symbol;
 use roc_mono::expr::{Env, Expr, PartialProc, Procs};
 use roc_mono::layout::Layout;
+use roc_mono::layout_id::LayoutIds;
 use std::time::SystemTime;
 
 use clap::{App, Arg, ArgMatches};
@@ -378,9 +380,10 @@ fn gen(
         module: arena.alloc(module),
         ptr_bytes,
     };
+    let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
+    let mut layout_ids = LayoutIds::default();
     let mut procs = Procs::default();
     let mut mono_problems = std::vec::Vec::new();
-    let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
     let mut mono_env = Env {
         arena,
         subs: &mut subs,
@@ -457,8 +460,8 @@ fn gen(
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
     for (symbol, mut procs_by_layout) in proc_map.drain() {
-        for (_, proc) in procs_by_layout.drain() {
-            let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
+        for (layout, proc) in procs_by_layout.drain() {
+            let (fn_val, arg_basic_types) = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
             headers.push((proc, fn_val, arg_basic_types));
         }
@@ -470,7 +473,7 @@ fn gen(
         // (This approach means we don't have to defensively clone name here.)
         //
         // println!("\n\nBuilding and then verifying function {}\n\n", name);
-        build_proc(&env, proc, fn_val, arg_basic_types);
+        build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
 
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);
@@ -496,6 +499,7 @@ fn gen(
 
     let ret = roc_gen::llvm::build::build_expr(
         &env,
+        &mut layout_ids,
         &ImMap::default(),
         main_fn,
         &main_body,

@@ -20,6 +20,7 @@ use roc_module::ident::Ident;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::expr::Procs;
 use roc_mono::layout::Layout;
+use roc_mono::layout_id::LayoutIds;
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::parser::{loc, Fail, FailReason, Parser, State};
@@ -243,6 +244,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
     };
     let mut procs = Procs::default();
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
+    let mut layout_ids = LayoutIds::default();
 
     // Populate Procs and get the low-level Expr from the canonical Expr
     let mut mono_problems = Vec::new();
@@ -267,8 +269,9 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
     for (symbol, mut procs_by_layout) in proc_map.drain() {
-        for (_, proc) in procs_by_layout.drain() {
-            let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
+        for (layout, proc) in procs_by_layout.drain() {
+            let (fn_val, arg_basic_types) =
+                build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
             headers.push((proc, fn_val, arg_basic_types));
         }
@@ -280,7 +283,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
         // (This approach means we don't have to defensively clone name here.)
         //
         // println!("\n\nBuilding and then verifying function {}\n\n", name);
-        build_proc(&env, proc, fn_val, arg_basic_types);
+        build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
 
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);
@@ -304,7 +307,13 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
 
     builder.position_at_end(basic_block);
 
-    let ret = roc_gen::llvm::build::build_expr(&env, &ImMap::default(), main_fn, &main_body);
+    let ret = roc_gen::llvm::build::build_expr(
+        &env,
+        &mut layout_ids,
+        &ImMap::default(),
+        main_fn,
+        &main_body,
+    );
 
     builder.build_return(Some(&ret));
 

@@ -10,8 +10,10 @@
 // and encouraging shortcuts here creates bad incentives. I would rather temporarily
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
+
 pub mod expr;
 pub mod layout;
+pub mod layout_id;
 
 // Temporary, while we can build up test cases and optimize the exhaustiveness checking.
 // For now, following this warning's advice will lead to nasty type inference errors.
