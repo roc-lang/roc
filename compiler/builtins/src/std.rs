@@ -273,6 +273,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Int module
 
+    // isLt or (<) : Num a, Num a -> Bool
+    add_type(
+        Symbol::INT_LT,
+        SolvedType::Func(vec![int_type(), int_type()], Box::new(bool_type())),
+    );
+
     // equals : Int, Int -> Bool
     add_type(
         Symbol::INT_EQ_I64,
