@@ -38,7 +38,7 @@ macro_rules! assert_llvm_evals_to {
         fpm.initialize();
 
         // Compute main_fn_type before moving subs to Env
-        let layout = Layout::from_content(&arena, content, &subs, ptr_bytes)
+        let layout = Layout::new(&arena, content, &subs, ptr_bytes)
     .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
         let execution_engine =
             module
@@ -198,7 +198,7 @@ macro_rules! assert_opt_evals_to {
         fpm.initialize();
 
         // Compute main_fn_type before moving subs to Env
-        let layout = Layout::from_content(&arena, content, &subs, ptr_bytes)
+        let layout = Layout::new(&arena, content, &subs, ptr_bytes)
     .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
 
         let execution_engine =
@@ -354,7 +354,7 @@ macro_rules! emit_expr {
         fpm.initialize();
 
         // Compute main_fn_type before moving subs to Env
-        let layout = Layout::from_content(&arena, content, &subs, ptr_bytes)
+        let layout = Layout::new(&arena, content, &subs, ptr_bytes)
     .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
 
         let execution_engine =
