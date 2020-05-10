@@ -36,21 +36,7 @@ pub enum Builtin<'a> {
 }
 
 impl<'a> Layout<'a> {
-    /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
-    /// Panics if given a FlexVar or RigidVar, since those should have been
-    /// monomorphized away already!
-    pub fn from_var(
-        arena: &'a Bump,
-        var: Variable,
-        subs: &Subs,
-        pointer_size: u32,
-    ) -> Result<Self, ()> {
-        let content = subs.get_without_compacting(var).content;
-
-        Self::from_content(arena, content, subs, pointer_size)
-    }
-
-    pub fn from_content(
+    pub fn new(
         arena: &'a Bump,
         content: Content,
         subs: &Subs,
@@ -61,7 +47,7 @@ impl<'a> Layout<'a> {
         match content {
             var @ FlexVar(_) | var @ RigidVar(_) => {
                 panic!(
-                    "Layout::from_content encountered an unresolved {:?} - subs was {:?}",
+                    "Layout::new encountered an unresolved {:?} - subs was {:?}",
                     var, subs
                 );
             }
@@ -75,7 +61,7 @@ impl<'a> Layout<'a> {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Float64))
             }
-            Alias(_, _, var) => Self::from_content(
+            Alias(_, _, var) => Self::new(
                 arena,
                 subs.get_without_compacting(var).content,
                 subs,
@@ -83,6 +69,20 @@ impl<'a> Layout<'a> {
             ),
             Error => Err(()),
         }
+    }
+
+    /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
+    /// Panics if given a FlexVar or RigidVar, since those should have been
+    /// monomorphized away already!
+    fn from_var(
+        arena: &'a Bump,
+        var: Variable,
+        subs: &Subs,
+        pointer_size: u32,
+    ) -> Result<Self, ()> {
+        let content = subs.get_without_compacting(var).content;
+
+        Self::new(arena, content, subs, pointer_size)
     }
 
     pub fn safe_to_memcpy(&self) -> bool {
@@ -134,6 +134,37 @@ impl<'a> Layout<'a> {
             FunctionPointer(_, _) => pointer_size,
             Pointer(_) => pointer_size,
         }
+    }
+}
+
+/// Avoid recomputing Layout from Variable multiple times.
+#[derive(Default)]
+pub struct LayoutCache<'a> {
+    layouts: MutMap<Variable, Result<Layout<'a>, ()>>,
+}
+
+impl<'a> LayoutCache<'a> {
+    /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
+    /// Panics if given a FlexVar or RigidVar, since those should have been
+    /// monomorphized away already!
+    pub fn from_var(
+        &mut self,
+        arena: &'a Bump,
+        var: Variable,
+        subs: &Subs,
+        pointer_size: u32,
+    ) -> Result<Layout<'a>, ()> {
+        // Store things according to the root Variable, to avoid duplicate work.
+        let var = subs.get_root_key_without_compacting(var);
+
+        self.layouts
+            .entry(var)
+            .or_insert_with(|| {
+                let content = subs.get_without_compacting(var).content;
+
+                Layout::new(arena, content, subs, pointer_size)
+            })
+            .clone()
     }
 }
 
@@ -216,8 +247,7 @@ fn layout_from_flat_type<'a>(
                     match subs.get_without_compacting(args[0]).content {
                         FlexVar(_) | RigidVar(_) => Ok(Layout::Builtin(Builtin::EmptyList)),
                         content => {
-                            let elem_layout =
-                                Layout::from_content(arena, content, subs, pointer_size)?;
+                            let elem_layout = Layout::new(arena, content, subs, pointer_size)?;
 
                             Ok(Layout::Builtin(Builtin::List(arena.alloc(elem_layout))))
                         }
@@ -246,16 +276,11 @@ fn layout_from_flat_type<'a>(
             for arg_var in args {
                 let arg_content = subs.get_without_compacting(arg_var).content;
 
-                fn_args.push(Layout::from_content(
-                    arena,
-                    arg_content,
-                    subs,
-                    pointer_size,
-                )?);
+                fn_args.push(Layout::new(arena, arg_content, subs, pointer_size)?);
             }
 
             let ret_content = subs.get_without_compacting(ret_var).content;
-            let ret = Layout::from_content(arena, ret_content, subs, pointer_size)?;
+            let ret = Layout::new(arena, ret_content, subs, pointer_size)?;
 
             Ok(Layout::FunctionPointer(
                 fn_args.into_bump_slice(),
@@ -273,14 +298,13 @@ fn layout_from_flat_type<'a>(
 
             for (_, field_var) in btree {
                 let field_content = subs.get_without_compacting(field_var).content;
-                let field_layout =
-                    match Layout::from_content(arena, field_content, subs, pointer_size) {
-                        Ok(layout) => layout,
-                        Err(()) => {
-                            // Invalid field!
-                            panic!("TODO gracefully handle record with invalid field.var");
-                        }
-                    };
+                let field_layout = match Layout::new(arena, field_content, subs, pointer_size) {
+                    Ok(layout) => layout,
+                    Err(()) => {
+                        // Invalid field!
+                        panic!("TODO gracefully handle record with invalid field.var");
+                    }
+                };
 
                 layouts.push(field_layout);
             }

@@ -38,7 +38,7 @@ macro_rules! assert_llvm_evals_to {
         fpm.initialize();
 
         // Compute main_fn_type before moving subs to Env
-        let layout = Layout::from_content(&arena, content, &subs, ptr_bytes)
+        let layout = Layout::new(&arena, content, &subs, ptr_bytes)
     .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
         let execution_engine =
             module
@@ -60,6 +60,7 @@ macro_rules! assert_llvm_evals_to {
         };
         let mut procs = Procs::default();
         let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
+        let mut layout_ids = roc_gen::layout_id::LayoutIds::default();
 
         // Populate Procs and get the low-level Expr from the canonical Expr
         let mut mono_problems = Vec::new();
@@ -78,13 +79,16 @@ macro_rules! assert_llvm_evals_to {
         env.interns.all_ident_ids.insert(home, ident_ids);
 
         let mut headers = Vec::with_capacity(procs.len());
+        let (mut proc_map, runtime_errors) = procs.into_map();
+
+        assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
 
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
-        for (symbol, opt_proc) in procs.as_map().into_iter() {
-            if let Some(proc) = opt_proc {
-                let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
+        for (symbol, mut procs_by_layout) in proc_map.drain() {
+            for (layout, proc) in procs_by_layout.drain() {
+                let (fn_val, arg_basic_types) = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
                 headers.push((proc, fn_val, arg_basic_types));
             }
@@ -96,7 +100,7 @@ macro_rules! assert_llvm_evals_to {
             // (This approach means we don't have to defensively clone name here.)
             //
             // println!("\n\nBuilding and then verifying function {}\n\n", name);
-            build_proc(&env, proc, &procs, fn_val, arg_basic_types);
+            build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
 
             if fn_val.verify(true) {
                 fpm.run_on(&fn_val);
@@ -119,10 +123,10 @@ macro_rules! assert_llvm_evals_to {
 
         let ret = roc_gen::llvm::build::build_expr(
             &env,
+            &mut layout_ids,
             &ImMap::default(),
             main_fn,
             &main_body,
-            &mut Procs::default(),
         );
 
         builder.build_return(Some(&ret));
@@ -198,7 +202,7 @@ macro_rules! assert_opt_evals_to {
         fpm.initialize();
 
         // Compute main_fn_type before moving subs to Env
-        let layout = Layout::from_content(&arena, content, &subs, ptr_bytes)
+        let layout = Layout::new(&arena, content, &subs, ptr_bytes)
     .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
 
         let execution_engine =
@@ -221,6 +225,7 @@ macro_rules! assert_opt_evals_to {
         };
         let mut procs = Procs::default();
         let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
+        let mut layout_ids = roc_gen::layout_id::LayoutIds::default();
 
         // Populate Procs and get the low-level Expr from the canonical Expr
         let mut mono_problems = Vec::new();
@@ -239,13 +244,16 @@ macro_rules! assert_opt_evals_to {
         env.interns.all_ident_ids.insert(home, ident_ids);
 
         let mut headers = Vec::with_capacity(procs.len());
+        let (mut proc_map, runtime_errors) = procs.into_map();
+
+        assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
 
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
-        for (symbol, opt_proc) in procs.as_map().into_iter() {
-            if let Some(proc) = opt_proc {
-                let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
+        for (symbol, mut procs_by_layout) in proc_map.drain() {
+            for (layout, proc) in procs_by_layout.drain() {
+                let (fn_val, arg_basic_types) = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
                 headers.push((proc, fn_val, arg_basic_types));
             }
@@ -257,7 +265,7 @@ macro_rules! assert_opt_evals_to {
             // (This approach means we don't have to defensively clone name here.)
             //
             // println!("\n\nBuilding and then verifying function {}\n\n", name);
-            build_proc(&env, proc, &procs, fn_val, arg_basic_types);
+            build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
 
             if fn_val.verify(true) {
                 fpm.run_on(&fn_val);
@@ -280,10 +288,10 @@ macro_rules! assert_opt_evals_to {
 
         let ret = roc_gen::llvm::build::build_expr(
             &env,
+            &mut layout_ids,
             &ImMap::default(),
             main_fn,
             &main_body,
-            &mut Procs::default(),
         );
 
         builder.build_return(Some(&ret));
@@ -354,7 +362,7 @@ macro_rules! emit_expr {
         fpm.initialize();
 
         // Compute main_fn_type before moving subs to Env
-        let layout = Layout::from_content(&arena, content, &subs, ptr_bytes)
+        let layout = Layout::new(&arena, content, &subs, ptr_bytes)
     .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}", err, subs));
 
         let execution_engine =

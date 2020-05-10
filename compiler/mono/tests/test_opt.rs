@@ -79,8 +79,15 @@ mod test_opt {
         unexpected_calls: &mut Vec<Symbol>,
     ) {
         match expr {
-            Int(_) | Float(_) | Str(_) | Bool(_) | Byte(_) | Load(_) | FunctionPointer(_)
-            | RuntimeError(_) => (),
+            Int(_)
+            | Float(_)
+            | Str(_)
+            | Bool(_)
+            | Byte(_)
+            | Load(_)
+            | FunctionPointer(_, _)
+            | RuntimeError(_)
+            | RuntimeErrorFunction(_) => (),
 
             Store(paths, sub_expr) => {
                 for (_, _, path_expr) in paths.iter() {
@@ -98,15 +105,19 @@ mod test_opt {
                 }
             }
 
-            CallByName(symbol, args) => {
+            CallByName {
+                name,
+                layout: _,
+                args,
+            } => {
                 // Search for the symbol. If we found it, check it off the list.
                 // If we didn't find it, add it to the list of unexpected calls.
-                match calls.binary_search(symbol) {
+                match calls.binary_search(name) {
                     Ok(index) => {
                         calls.remove(index);
                     }
                     Err(_) => {
-                        unexpected_calls.push(*symbol);
+                        unexpected_calls.push(*name);
                     }
                 }
 
@@ -222,13 +233,30 @@ mod test_opt {
         // This should optimize List.set to List.set_in_place
         compiles_to(
             "List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1",
-            CallByName(
-                Symbol::LIST_GET_UNSAFE,
-                &vec![
+            CallByName {
+                name: Symbol::LIST_GET_UNSAFE,
+                layout: Layout::FunctionPointer(
+                    &[
+                        Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
+                        Layout::Builtin(Builtin::Int64),
+                    ],
+                    &Layout::Builtin(Builtin::Int64),
+                ),
+                args: &vec![
                     (
-                        CallByName(
-                            Symbol::LIST_SET_IN_PLACE,
-                            &vec![
+                        CallByName {
+                            name: Symbol::LIST_SET_IN_PLACE,
+                            layout: Layout::FunctionPointer(
+                                &[
+                                    Layout::Builtin(Builtin::List(&Layout::Builtin(
+                                        Builtin::Int64,
+                                    ))),
+                                    Layout::Builtin(Builtin::Int64),
+                                    Layout::Builtin(Builtin::Int64),
+                                ],
+                                &Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
+                            ),
+                            args: &vec![
                                 (
                                     Array {
                                         elem_layout: Layout::Builtin(Builtin::Int64),
@@ -241,12 +269,12 @@ mod test_opt {
                                 (Int(1), Layout::Builtin(Builtin::Int64)),
                                 (Int(42), Layout::Builtin(Builtin::Int64)),
                             ],
-                        ),
+                        },
                         Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
                     ),
                     (Int(1), Layout::Builtin(Builtin::Int64)),
                 ],
-            ),
+            },
         );
     }
 

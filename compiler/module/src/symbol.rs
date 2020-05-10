@@ -48,6 +48,10 @@ impl Symbol {
         IdentId((self.0 >> 32) as u32)
     }
 
+    pub fn is_builtin(self) -> bool {
+        self.module_id().is_builtin()
+    }
+
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a InlinableString {
         interns
             .module_ids

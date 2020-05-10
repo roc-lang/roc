@@ -1,12 +1,13 @@
-use crate::layout::{Builtin, Layout};
+use crate::layout::{Builtin, Layout, LayoutCache};
 use crate::pattern::{Ctor, Guard, RenderAs, TagId};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
-use roc_types::subs::{Content, ContentHash, FlatType, Subs, Variable};
+use roc_types::subs::{Content, FlatType, Subs, Variable};
+use std::collections::HashMap;
 use std::hash::Hash;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -29,8 +30,9 @@ pub struct Proc<'a> {
 pub struct Procs<'a> {
     pub user_defined: MutMap<Symbol, PartialProc<'a>>,
     pub module_thunks: MutSet<Symbol>,
-    anonymous: MutMap<Symbol, Option<Proc<'a>>>,
-    specializations: MutMap<ContentHash, (Symbol, Option<Proc<'a>>)>,
+    runtime_errors: MutSet<Symbol>,
+    specializations: MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>,
+    pending_specializations: MutMap<Symbol, Layout<'a>>,
     builtin: MutSet<Symbol>,
 }
 
@@ -57,6 +59,8 @@ impl<'a> Procs<'a> {
         );
     }
 
+    // TODO trim these down
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_anonymous(
         &mut self,
         env: &mut Env<'a, '_>,
@@ -65,13 +69,14 @@ impl<'a> Procs<'a> {
         loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
         loc_body: Located<roc_can::expr::Expr>,
         ret_var: Variable,
-    ) {
+        layout_cache: &mut LayoutCache<'a>,
+    ) -> Result<Layout<'a>, ()> {
         let (arg_vars, arg_symbols, body) = patterns_to_when(env, loc_args, ret_var, loc_body);
 
         // an anonymous closure. These will always be specialized already
         // by the surrounding context
 
-        let opt_proc = specialize_proc_body(
+        match specialize_proc_body(
             env,
             self,
             annotation,
@@ -81,19 +86,38 @@ impl<'a> Procs<'a> {
             &arg_symbols,
             annotation,
             body.value,
-        )
-        .ok();
+            layout_cache,
+        ) {
+            Ok(proc) => {
+                let layout = layout_cache
+                    .from_var(env.arena, annotation, env.subs, env.pointer_size)
+                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-        self.anonymous.insert(symbol, opt_proc);
+                self.insert_specialization(symbol, layout.clone(), proc);
+
+                Ok(layout)
+            }
+            Err(()) => {
+                self.runtime_errors.insert(symbol);
+
+                Err(())
+            }
+        }
     }
 
-    fn insert_specialization(
-        &mut self,
-        hash: ContentHash,
-        spec_name: Symbol,
-        proc: Option<Proc<'a>>,
-    ) {
-        self.specializations.insert(hash, (spec_name, proc));
+    fn insert_specialization(&mut self, symbol: Symbol, layout: Layout<'a>, proc: Proc<'a>) {
+        let procs_by_layout = self
+            .specializations
+            .entry(symbol)
+            .or_insert_with(|| HashMap::with_capacity_and_hasher(1, default_hasher()));
+
+        // If we already have an entry for this, it should be no different
+        // from what we're about to insert.
+        debug_assert!(
+            !procs_by_layout.contains_key(&layout) || procs_by_layout.get(&layout) == Some(&proc)
+        );
+
+        procs_by_layout.insert(layout, proc);
     }
 
     fn get_user_defined(&self, symbol: Symbol) -> Option<&PartialProc<'a>> {
@@ -101,10 +125,10 @@ impl<'a> Procs<'a> {
     }
 
     pub fn len(&self) -> usize {
-        let anonymous: usize = self.anonymous.len();
-        let user_defined: usize = self.specializations.len();
+        let runtime_errors: usize = self.runtime_errors.len();
+        let specializations: usize = self.specializations.len();
 
-        anonymous + user_defined
+        runtime_errors + specializations
     }
 
     pub fn is_empty(&self) -> bool {
@@ -115,22 +139,20 @@ impl<'a> Procs<'a> {
         self.builtin.insert(symbol);
     }
 
-    pub fn as_map(&self) -> MutMap<Symbol, Option<Proc<'a>>> {
-        let mut result = MutMap::default();
-
-        for (symbol, opt_proc) in self.specializations.values() {
-            result.insert(*symbol, opt_proc.clone());
-        }
-
-        for (symbol, proc) in self.anonymous.clone().into_iter() {
-            result.insert(symbol, proc);
-        }
+    pub fn into_map(self) -> (MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>, MutSet<Symbol>) {
+        let mut specializations = self.specializations;
 
         for symbol in self.builtin.iter() {
-            result.insert(*symbol, None);
+            // Builtins should only ever be stored as empty maps.
+            debug_assert!(
+                !specializations.contains_key(&symbol)
+                    || specializations.get(&symbol).unwrap().is_empty()
+            );
+
+            specializations.insert(*symbol, MutMap::default());
         }
 
-        result
+        (specializations, self.runtime_errors)
     }
 }
 
@@ -177,8 +199,13 @@ pub enum Expr<'a> {
     Store(&'a [(Symbol, Layout<'a>, Expr<'a>)], &'a Expr<'a>),
 
     // Functions
-    FunctionPointer(Symbol),
-    CallByName(Symbol, &'a [(Expr<'a>, Layout<'a>)]),
+    FunctionPointer(Symbol, Layout<'a>),
+    RuntimeErrorFunction(&'a str),
+    CallByName {
+        name: Symbol,
+        layout: Layout<'a>,
+        args: &'a [(Expr<'a>, Layout<'a>)],
+    },
     CallByPointer(&'a Expr<'a>, &'a [Expr<'a>], Layout<'a>),
 
     // Exactly two conditional branches, e.g. if/else
@@ -248,7 +275,9 @@ impl<'a> Expr<'a> {
         can_expr: roc_can::expr::Expr,
         procs: &mut Procs<'a>,
     ) -> Self {
-        from_can(env, can_expr, procs, None)
+        let mut layout_cache = LayoutCache::default();
+
+        from_can(env, can_expr, procs, &mut layout_cache)
     }
 }
 
@@ -448,7 +477,7 @@ fn from_can<'a>(
     env: &mut Env<'a, '_>,
     can_expr: roc_can::expr::Expr,
     procs: &mut Procs<'a>,
-    name: Option<Symbol>,
+    layout_cache: &mut LayoutCache<'a>,
 ) -> Expr<'a> {
     use roc_can::expr::Expr::*;
 
@@ -467,123 +496,51 @@ fn from_can<'a>(
                 let ret_var = partial_proc.annotation;
 
                 // This is a top-level declaration, which will code gen to a 0-arity thunk.
-                call_by_name(env, procs, fn_var, ret_var, symbol, std::vec::Vec::new())
+                call_by_name(
+                    env,
+                    procs,
+                    fn_var,
+                    ret_var,
+                    symbol,
+                    std::vec::Vec::new(),
+                    layout_cache,
+                )
             } else {
                 Expr::Load(symbol)
             }
         }
-        LetRec(defs, ret_expr, _, _) => from_can_defs(env, defs, *ret_expr, procs),
-        LetNonRec(def, ret_expr, _, _) => from_can_defs(env, vec![*def], *ret_expr, procs),
+        LetRec(defs, ret_expr, _, _) => from_can_defs(env, defs, *ret_expr, layout_cache, procs),
+        LetNonRec(def, ret_expr, _, _) => {
+            from_can_defs(env, vec![*def], *ret_expr, layout_cache, procs)
+        }
 
-        Closure(ann, original_name, _, loc_args, boxed_body) => {
+        Closure(ann, name, _, loc_args, boxed_body) => {
             let (loc_body, ret_var) = *boxed_body;
-            let symbol = match name {
-                Some(symbol) => {
-                    procs.insert_named(env, symbol, ann, loc_args, loc_body, ret_var);
 
-                    symbol
+            match procs.insert_anonymous(env, name, ann, loc_args, loc_body, ret_var, layout_cache)
+            {
+                Ok(layout) => Expr::FunctionPointer(name, layout),
+                Err(()) => {
+                    // TODO make this message better
+                    Expr::RuntimeErrorFunction("This function threw a runtime error.")
                 }
-                None => {
-                    procs.insert_anonymous(env, original_name, ann, loc_args, loc_body, ret_var);
-
-                    original_name
-                }
-            };
-
-            Expr::FunctionPointer(symbol)
+            }
         }
 
         Call(boxed, loc_args, _) => {
-            use IntOrFloat::*;
-
             let (fn_var, loc_expr, ret_var) = *boxed;
 
-            let specialize_builtin_functions = {
-                |env: &mut Env<'a, '_>, symbol: Symbol| {
-                    if !symbol.module_id().is_builtin() {
-                        // return unchanged
-                        symbol
-                    } else {
-                        match symbol {
-                            Symbol::NUM_ADD => match num_to_int_or_float(env.subs, ret_var) {
-                                FloatType => Symbol::FLOAT_ADD,
-                                IntType => Symbol::INT_ADD,
-                            },
-                            Symbol::NUM_SUB => match num_to_int_or_float(env.subs, ret_var) {
-                                FloatType => Symbol::FLOAT_SUB,
-                                IntType => Symbol::INT_SUB,
-                            },
-                            Symbol::NUM_LTE => match num_to_int_or_float(env.subs, loc_args[0].0) {
-                                FloatType => Symbol::FLOAT_LTE,
-                                IntType => Symbol::INT_LTE,
-                            },
-                            Symbol::NUM_LT => match num_to_int_or_float(env.subs, loc_args[0].0) {
-                                FloatType => Symbol::FLOAT_LT,
-                                IntType => Symbol::INT_LT,
-                            },
-                            Symbol::NUM_GTE => match num_to_int_or_float(env.subs, loc_args[0].0) {
-                                FloatType => Symbol::FLOAT_GTE,
-                                IntType => Symbol::INT_GTE,
-                            },
-                            Symbol::NUM_GT => match num_to_int_or_float(env.subs, loc_args[0].0) {
-                                FloatType => Symbol::FLOAT_GT,
-                                IntType => Symbol::INT_GT,
-                            },
-                            // TODO make this work for more than just int/float
-                            Symbol::BOOL_EQ => {
-                                match Layout::from_var(
-                                    env.arena,
-                                    loc_args[0].0,
-                                    env.subs,
-                                    env.pointer_size,
-                                ) {
-                                    Ok(Layout::Builtin(builtin)) => match builtin {
-                                        Builtin::Int64 => Symbol::INT_EQ_I64,
-                                        Builtin::Float64 => Symbol::FLOAT_EQ,
-                                        Builtin::Bool => Symbol::INT_EQ_I1,
-                                        Builtin::Byte => Symbol::INT_EQ_I8,
-                                        _ => panic!("Equality not implemented for {:?}", builtin),
-                                    },
-                                    Ok(complex) => panic!(
-                                        "TODO support equality on complex layouts like {:?}",
-                                        complex
-                                    ),
-                                    Err(()) => panic!("Invalid layout"),
-                                }
-                            }
-                            Symbol::BOOL_NEQ => {
-                                match Layout::from_var(
-                                    env.arena,
-                                    loc_args[0].0,
-                                    env.subs,
-                                    env.pointer_size,
-                                ) {
-                                    Ok(Layout::Builtin(builtin)) => match builtin {
-                                        Builtin::Int64 => Symbol::INT_NEQ_I64,
-                                        Builtin::Bool => Symbol::INT_NEQ_I1,
-                                        Builtin::Byte => Symbol::INT_NEQ_I8,
-                                        _ => {
-                                            panic!("Not-Equality not implemented for {:?}", builtin)
-                                        }
-                                    },
-                                    Ok(complex) => panic!(
-                                        "TODO support equality on complex layouts like {:?}",
-                                        complex
-                                    ),
-                                    Err(()) => panic!("Invalid layout"),
-                                }
-                            }
-                            _ => symbol,
-                        }
-                    }
-                }
-            };
-
-            match from_can(env, loc_expr.value, procs, None) {
+            match from_can(env, loc_expr.value, procs, layout_cache) {
                 Expr::Load(proc_name) => {
                     // Some functions can potentially mutate in-place.
                     // If we have one of those, switch to the in-place version if appropriate.
-                    match specialize_builtin_functions(env, proc_name) {
+                    match specialize_builtin_functions(
+                        env,
+                        proc_name,
+                        loc_args.as_slice(),
+                        ret_var,
+                        layout_cache,
+                    ) {
                         Symbol::LIST_SET => {
                             let subs = &env.subs;
                             // The first arg is the one with the List in it.
@@ -610,9 +567,25 @@ fn from_can<'a>(
                                         Symbol::LIST_SET
                                     };
 
-                                    call_by_name(env, procs, fn_var, ret_var, new_name, loc_args)
+                                    call_by_name(
+                                        env,
+                                        procs,
+                                        fn_var,
+                                        ret_var,
+                                        new_name,
+                                        loc_args,
+                                        layout_cache,
+                                    )
                                 }
-                                _ => call_by_name(env, procs, fn_var, ret_var, proc_name, loc_args),
+                                _ => call_by_name(
+                                    env,
+                                    procs,
+                                    fn_var,
+                                    ret_var,
+                                    proc_name,
+                                    loc_args,
+                                    layout_cache,
+                                ),
                             }
                         }
                         specialized_proc_symbol => call_by_name(
@@ -622,6 +595,7 @@ fn from_can<'a>(
                             ret_var,
                             specialized_proc_symbol,
                             loc_args,
+                            layout_cache,
                         ),
                     }
                 }
@@ -640,10 +614,11 @@ fn from_can<'a>(
                     let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
 
                     for (_, loc_arg) in loc_args {
-                        args.push(from_can(env, loc_arg.value, procs, None));
+                        args.push(from_can(env, loc_arg.value, procs, layout_cache));
                     }
 
-                    let layout = Layout::from_var(env.arena, fn_var, env.subs, env.pointer_size)
+                    let layout = layout_cache
+                        .from_var(env.arena, fn_var, env.subs, env.pointer_size)
                         .unwrap_or_else(|err| {
                             panic!("TODO turn fn_var into a RuntimeError {:?}", err)
                         });
@@ -658,7 +633,16 @@ fn from_can<'a>(
             region,
             loc_cond,
             branches,
-        } => from_can_when(env, cond_var, expr_var, region, *loc_cond, branches, procs),
+        } => from_can_when(
+            env,
+            cond_var,
+            expr_var,
+            region,
+            *loc_cond,
+            branches,
+            layout_cache,
+            procs,
+        ),
 
         If {
             cond_var,
@@ -666,16 +650,18 @@ fn from_can<'a>(
             branches,
             final_else,
         } => {
-            let mut expr = from_can(env, final_else.value, procs, None);
+            let mut expr = from_can(env, final_else.value, procs, layout_cache);
 
-            let ret_layout = Layout::from_var(env.arena, branch_var, env.subs, env.pointer_size)
+            let ret_layout = layout_cache
+                .from_var(env.arena, branch_var, env.subs, env.pointer_size)
                 .expect("invalid ret_layout");
-            let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+            let cond_layout = layout_cache
+                .from_var(env.arena, cond_var, env.subs, env.pointer_size)
                 .expect("invalid cond_layout");
 
             for (loc_cond, loc_then) in branches.into_iter().rev() {
-                let cond = from_can(env, loc_cond.value, procs, None);
-                let then = from_can(env, loc_then.value, procs, None);
+                let cond = from_can(env, loc_cond.value, procs, layout_cache);
+                let then = from_can(env, loc_then.value, procs, layout_cache);
 
                 let branch_symbol = env.unique_symbol();
 
@@ -716,7 +702,7 @@ fn from_can<'a>(
 
             for (label, layout) in btree {
                 let field = fields.remove(&label).unwrap();
-                let expr = from_can(env, field.loc_expr.value, procs, None);
+                let expr = from_can(env, field.loc_expr.value, procs, layout_cache);
 
                 field_tuples.push((expr, layout));
             }
@@ -757,7 +743,7 @@ fn from_can<'a>(
                 Unwrapped(field_layouts) => {
                     let field_exprs = args
                         .into_iter()
-                        .map(|(_, arg)| from_can(env, arg.value, procs, None));
+                        .map(|(_, arg)| from_can(env, arg.value, procs, layout_cache));
 
                     let mut field_tuples = Vec::with_capacity_in(field_layouts.len(), arena);
 
@@ -779,7 +765,7 @@ fn from_can<'a>(
 
                     let it = std::iter::once(Expr::Int(tag_id as i64)).chain(
                         args.into_iter()
-                            .map(|(_, arg)| from_can(env, arg.value, procs, None)),
+                            .map(|(_, arg)| from_can(env, arg.value, procs, layout_cache)),
                     );
 
                     for (arg_layout, arg_expr) in argument_layouts.iter().zip(it) {
@@ -832,7 +818,7 @@ fn from_can<'a>(
                 }
             }
 
-            let record = arena.alloc(from_can(env, loc_expr.value, procs, None));
+            let record = arena.alloc(from_can(env, loc_expr.value, procs, layout_cache));
 
             Expr::AccessAtIndex {
                 index: index.expect("field not in its own type") as u64,
@@ -853,8 +839,8 @@ fn from_can<'a>(
                 // We have to special-case the empty list, because trying to
                 // compute a layout for an unbound var won't work.
                 Content::FlexVar(_) => Layout::Builtin(Builtin::EmptyList),
-                content => match Layout::from_content(arena, content, env.subs, env.pointer_size) {
-                    Ok(layout) => layout,
+                _ => match layout_cache.from_var(arena, elem_var, env.subs, env.pointer_size) {
+                    Ok(layout) => layout.clone(),
                     Err(()) => {
                         panic!("TODO gracefully handle List with invalid element layout");
                     }
@@ -864,7 +850,7 @@ fn from_can<'a>(
             let mut elems = Vec::with_capacity_in(loc_elems.len(), arena);
 
             for loc_elem in loc_elems {
-                elems.push(from_can(env, loc_elem.value, procs, None));
+                elems.push(from_can(env, loc_elem.value, procs, layout_cache));
             }
 
             Expr::Array {
@@ -1022,6 +1008,7 @@ fn from_can_defs<'a>(
     env: &mut Env<'a, '_>,
     defs: std::vec::Vec<roc_can::def::Def>,
     ret_expr: Located<roc_can::expr::Expr>,
+    layout_cache: &mut LayoutCache<'a>,
     procs: &mut Procs<'a>,
 ) -> Expr<'a> {
     use roc_can::expr::Expr::*;
@@ -1029,6 +1016,7 @@ fn from_can_defs<'a>(
 
     let arena = env.arena;
     let mut stored = Vec::with_capacity_in(defs.len(), arena);
+
     for def in defs {
         let loc_pattern = def.loc_pattern;
         let loc_expr = def.loc_expr;
@@ -1047,18 +1035,29 @@ fn from_can_defs<'a>(
         //
         if let Identifier(symbol) = &loc_pattern.value {
             if let Closure(_, _, _, _, _) = &loc_expr.value {
-                // Extract Procs, but discard the resulting Expr::Load.
-                // That Load looks up the pointer, which we won't use here!
-                from_can(env, loc_expr.value, procs, Some(*symbol));
+                // Now that we know for sure it's a closure, get an owned
+                // version of these variant args so we can use them properly.
+                match loc_expr.value {
+                    Closure(ann, _, _, loc_args, boxed_body) => {
+                        // Extract Procs, but discard the resulting Expr::Load.
+                        // That Load looks up the pointer, which we won't use here!
 
-                continue;
+                        let (loc_body, ret_var) = *boxed_body;
+
+                        procs.insert_named(env, *symbol, ann, loc_args, loc_body, ret_var);
+
+                        continue;
+                    }
+                    _ => unreachable!(),
+                }
             }
         }
 
         // If it wasn't specifically an Identifier & Closure, proceed as normal.
         let mono_pattern = from_can_pattern(env, &loc_pattern.value);
 
-        let layout = Layout::from_var(env.arena, def.expr_var, env.subs, env.pointer_size)
+        let layout = layout_cache
+            .from_var(env.arena, def.expr_var, env.subs, env.pointer_size)
             .expect("invalid layout");
 
         match &mono_pattern {
@@ -1066,7 +1065,7 @@ fn from_can_defs<'a>(
                 stored.push((
                     *symbol,
                     layout.clone(),
-                    from_can(env, loc_expr.value, procs, None),
+                    from_can(env, loc_expr.value, procs, layout_cache),
                 ));
             }
             _ => {
@@ -1093,7 +1092,7 @@ fn from_can_defs<'a>(
                 stored.push((
                     symbol,
                     layout.clone(),
-                    from_can(env, loc_expr.value, procs, None),
+                    from_can(env, loc_expr.value, procs, layout_cache),
                 ));
 
                 match store_pattern(env, &mono_pattern, symbol, layout, &mut stored) {
@@ -1108,7 +1107,7 @@ fn from_can_defs<'a>(
     }
     // At this point, it's safe to assume we aren't assigning a Closure to a def.
     // Extract Procs from the def body and the ret expression, and return the result!
-    let ret = from_can(env, ret_expr.value, procs, None);
+    let ret = from_can(env, ret_expr.value, procs, layout_cache);
 
     if stored.is_empty() {
         ret
@@ -1117,6 +1116,8 @@ fn from_can_defs<'a>(
     }
 }
 
+// TODO trim these down
+#[allow(clippy::too_many_arguments)]
 fn from_can_when<'a>(
     env: &mut Env<'a, '_>,
     cond_var: Variable,
@@ -1124,6 +1125,7 @@ fn from_can_when<'a>(
     region: Region,
     loc_cond: Located<roc_can::expr::Expr>,
     mut branches: std::vec::Vec<roc_can::expr::WhenBranch>,
+    layout_cache: &mut LayoutCache<'a>,
     procs: &mut Procs<'a>,
 ) -> Expr<'a> {
     if branches.is_empty() {
@@ -1168,32 +1170,34 @@ fn from_can_when<'a>(
             }
         }
 
-        let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+        let cond_layout = layout_cache
+            .from_var(env.arena, cond_var, env.subs, env.pointer_size)
             .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
         let cond_symbol = env.unique_symbol();
-        let cond = from_can(env, loc_cond.value, procs, None);
+        let cond = from_can(env, loc_cond.value, procs, layout_cache);
         stored.push((cond_symbol, cond_layout.clone(), cond));
 
         // NOTE this will still store shadowed names.
         // that's fine: the branch throws a runtime error anyway
         let ret = match store_pattern(env, &mono_pattern, cond_symbol, cond_layout, &mut stored) {
-            Ok(_) => from_can(env, first.value.value, procs, None),
+            Ok(_) => from_can(env, first.value.value, procs, layout_cache),
             Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
         };
 
         Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
     } else {
-        let cond_layout = Layout::from_var(env.arena, cond_var, env.subs, env.pointer_size)
+        let cond_layout = layout_cache
+            .from_var(env.arena, cond_var, env.subs, env.pointer_size)
             .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
 
-        let cond = from_can(env, loc_cond.value, procs, None);
+        let cond = from_can(env, loc_cond.value, procs, layout_cache);
         let cond_symbol = env.unique_symbol();
 
         let mut loc_branches = std::vec::Vec::new();
         let mut opt_branches = std::vec::Vec::new();
 
         for when_branch in branches {
-            let mono_expr = from_can(env, when_branch.value.value, procs, None);
+            let mono_expr = from_can(env, when_branch.value.value, procs, layout_cache);
 
             let exhaustive_guard = if when_branch.guard.is_some() {
                 Guard::HasGuard
@@ -1226,7 +1230,7 @@ fn from_can_when<'a>(
                         //
                         // otherwise, we modify the branch's expression to include the stores
                         if let Some(loc_guard) = when_branch.guard.clone() {
-                            let expr = from_can(env, loc_guard.value, procs, None);
+                            let expr = from_can(env, loc_guard.value, procs, layout_cache);
                             (
                                 crate::decision_tree::Guard::Guard {
                                     stores: stores.into_bump_slice(),
@@ -1306,7 +1310,8 @@ fn from_can_when<'a>(
             }
         }
 
-        let ret_layout = Layout::from_var(env.arena, expr_var, env.subs, env.pointer_size)
+        let ret_layout = layout_cache
+            .from_var(env.arena, expr_var, env.subs, env.pointer_size)
             .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
 
         let branching = crate::decision_tree::optimize_when(
@@ -1330,6 +1335,7 @@ fn call_by_name<'a>(
     ret_var: Variable,
     proc_name: Symbol,
     loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+    layout_cache: &mut LayoutCache<'a>,
 ) -> Expr<'a> {
     // create specialized procedure to call
 
@@ -1339,79 +1345,96 @@ fn call_by_name<'a>(
     // get a borrow checker error about trying to borrow `procs` as mutable
     // while there is still an active immutable borrow.
     #[allow(clippy::type_complexity)]
-    let opt_specialize_body: Option<(
-        ContentHash,
-        Variable,
-        roc_can::expr::Expr,
-        Vec<'a, Symbol>,
-    )>;
+    let opt_specialize_body: Option<(Variable, roc_can::expr::Expr, Vec<'a, Symbol>)>;
 
-    let specialized_proc_name = match procs.get_user_defined(proc_name) {
-        Some(partial_proc) => {
-            let content_hash = ContentHash::from_var(fn_var, env.subs);
-
-            match procs.specializations.get(&content_hash) {
-                Some(specialization) => {
-                    opt_specialize_body = None;
-
-                    // a specialization with this type hash already exists, so use its symbol
-                    specialization.0
+    match layout_cache.from_var(env.arena, fn_var, env.subs, env.pointer_size) {
+        Ok(layout) => {
+            match procs.get_user_defined(proc_name) {
+                Some(partial_proc) => {
+                    match procs
+                        .specializations
+                        .get(&proc_name)
+                        .and_then(|procs_by_layout| procs_by_layout.get(&layout))
+                    {
+                        Some(_) => {
+                            // a specialization with this layout already exists.
+                            opt_specialize_body = None;
+                        }
+                        None => {
+                            if procs.pending_specializations.get(&proc_name) == Some(&layout) {
+                                // If we're already in the process of specializing this, don't
+                                // try to specialize it further; otherwise, we'll loop forever.
+                                opt_specialize_body = None;
+                            } else {
+                                opt_specialize_body = Some((
+                                    partial_proc.annotation,
+                                    partial_proc.body.clone(),
+                                    partial_proc.patterns.clone(),
+                                ));
+                            }
+                        }
+                    }
                 }
                 None => {
-                    opt_specialize_body = Some((
-                        content_hash,
-                        partial_proc.annotation,
-                        partial_proc.body.clone(),
-                        partial_proc.patterns.clone(),
-                    ));
+                    opt_specialize_body = None;
 
-                    // generate a symbol for this specialization
-                    env.unique_symbol()
+                    // This happens for built-in symbols (they are never defined as a Closure)
+                    procs.insert_builtin(proc_name);
+                }
+            };
+
+            if let Some((annotation, body, loc_patterns)) = opt_specialize_body {
+                // register proc, so specialization doesn't loop infinitely
+                procs
+                    .pending_specializations
+                    .insert(proc_name, layout.clone());
+
+                let arg_vars = loc_args.iter().map(|v| v.0).collect::<std::vec::Vec<_>>();
+
+                match specialize_proc_body(
+                    env,
+                    procs,
+                    fn_var,
+                    ret_var,
+                    proc_name,
+                    &arg_vars,
+                    &loc_patterns,
+                    annotation,
+                    body,
+                    layout_cache,
+                ) {
+                    Ok(proc) => {
+                        procs.insert_specialization(proc_name, layout.clone(), proc);
+                    }
+                    Err(()) => {
+                        procs.runtime_errors.insert(proc_name);
+                    }
                 }
             }
+
+            // generate actual call
+            let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
+
+            for (var, loc_arg) in loc_args {
+                let layout = layout_cache
+                    .from_var(&env.arena, var, &env.subs, env.pointer_size)
+                    .unwrap_or_else(|err| panic!("TODO gracefully handle bad layout: {:?}", err));
+
+                args.push((from_can(env, loc_arg.value, procs, layout_cache), layout));
+            }
+
+            Expr::CallByName {
+                name: proc_name,
+                layout,
+                args: args.into_bump_slice(),
+            }
         }
-        None => {
-            opt_specialize_body = None;
-
-            // This happens for built-in symbols (they are never defined as a Closure)
-            procs.insert_builtin(proc_name);
-            proc_name
+        Err(()) => {
+            // This function code gens to a runtime error,
+            // so attempting to call it will immediately crash.
+            Expr::RuntimeError("")
         }
-    };
-
-    if let Some((content_hash, annotation, body, loc_patterns)) = opt_specialize_body {
-        // register proc, so specialization doesn't loop infinitely
-        procs.insert_specialization(content_hash, specialized_proc_name, None);
-
-        let arg_vars = loc_args.iter().map(|v| v.0).collect::<std::vec::Vec<_>>();
-
-        let proc = specialize_proc_body(
-            env,
-            procs,
-            fn_var,
-            ret_var,
-            specialized_proc_name,
-            &arg_vars,
-            &loc_patterns,
-            annotation,
-            body,
-        )
-        .ok();
-
-        procs.insert_specialization(content_hash, specialized_proc_name, proc);
     }
-
-    // generate actual call
-    let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
-
-    for (var, loc_arg) in loc_args {
-        let layout = Layout::from_var(&env.arena, var, &env.subs, env.pointer_size)
-            .unwrap_or_else(|err| panic!("TODO gracefully handle bad layout: {:?}", err));
-
-        args.push((from_can(env, loc_arg.value, procs, None), layout));
-    }
-
-    Expr::CallByName(specialized_proc_name, args.into_bump_slice())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1425,23 +1448,26 @@ fn specialize_proc_body<'a>(
     pattern_symbols: &[Symbol],
     annotation: Variable,
     body: roc_can::expr::Expr,
+    layout_cache: &mut LayoutCache<'a>,
 ) -> Result<Proc<'a>, ()> {
     // unify the called function with the specialized signature, then specialize the function body
     let snapshot = env.subs.snapshot();
     let unified = roc_unify::unify::unify(env.subs, annotation, fn_var);
     debug_assert!(matches!(unified, roc_unify::unify::Unified::Success(_)));
-    let specialized_body = from_can(env, body, procs, None);
+    let specialized_body = from_can(env, body, procs, layout_cache);
     // reset subs, so we don't get type errors when specializing for a different signature
     env.subs.rollback_to(snapshot);
 
     let mut proc_args = Vec::with_capacity_in(loc_args.len(), &env.arena);
 
     for (arg_var, arg_name) in loc_args.iter().zip(pattern_symbols.iter()) {
-        let layout = Layout::from_var(&env.arena, *arg_var, env.subs, env.pointer_size)?;
+        let layout = layout_cache.from_var(&env.arena, *arg_var, env.subs, env.pointer_size)?;
+
         proc_args.push((layout, *arg_name));
     }
 
-    let ret_layout = Layout::from_var(&env.arena, ret_var, env.subs, env.pointer_size)
+    let ret_layout = layout_cache
+        .from_var(&env.arena, ret_var, env.subs, env.pointer_size)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
     let proc = Proc {
@@ -1752,7 +1778,7 @@ pub fn specialize_equality<'a>(
     rhs: Expr<'a>,
     layout: Layout<'a>,
 ) -> Expr<'a> {
-    let symbol = match &layout {
+    let name = match &layout {
         Layout::Builtin(builtin) => match builtin {
             Builtin::Int64 => Symbol::INT_EQ_I64,
             Builtin::Float64 => Symbol::FLOAT_EQ,
@@ -1763,8 +1789,84 @@ pub fn specialize_equality<'a>(
         other => todo!("Cannot yet compare for equality {:?}", other),
     };
 
-    Expr::CallByName(
-        symbol,
-        arena.alloc([(lhs, layout.clone()), (rhs, layout.clone())]),
-    )
+    Expr::CallByName {
+        name,
+        layout: layout.clone(),
+        args: arena.alloc([(lhs, layout.clone()), (rhs, layout)]),
+    }
+}
+
+fn specialize_builtin_functions<'a>(
+    env: &mut Env<'a, '_>,
+    symbol: Symbol,
+    loc_args: &[(Variable, Located<roc_can::expr::Expr>)],
+    ret_var: Variable,
+    layout_cache: &mut LayoutCache<'a>,
+) -> Symbol {
+    use IntOrFloat::*;
+
+    if !symbol.is_builtin() {
+        // return unchanged
+        symbol
+    } else {
+        match symbol {
+            Symbol::NUM_ADD => match num_to_int_or_float(env.subs, ret_var) {
+                FloatType => Symbol::FLOAT_ADD,
+                IntType => Symbol::INT_ADD,
+            },
+            Symbol::NUM_SUB => match num_to_int_or_float(env.subs, ret_var) {
+                FloatType => Symbol::FLOAT_SUB,
+                IntType => Symbol::INT_SUB,
+            },
+            Symbol::NUM_LTE => match num_to_int_or_float(env.subs, loc_args[0].0) {
+                FloatType => Symbol::FLOAT_LTE,
+                IntType => Symbol::INT_LTE,
+            },
+            Symbol::NUM_LT => match num_to_int_or_float(env.subs, loc_args[0].0) {
+                FloatType => Symbol::FLOAT_LT,
+                IntType => Symbol::INT_LT,
+            },
+            Symbol::NUM_GTE => match num_to_int_or_float(env.subs, loc_args[0].0) {
+                FloatType => Symbol::FLOAT_GTE,
+                IntType => Symbol::INT_GTE,
+            },
+            Symbol::NUM_GT => match num_to_int_or_float(env.subs, loc_args[0].0) {
+                FloatType => Symbol::FLOAT_GT,
+                IntType => Symbol::INT_GT,
+            },
+            // TODO make this work for more than just int/float
+            Symbol::BOOL_EQ => {
+                match layout_cache.from_var(env.arena, loc_args[0].0, env.subs, env.pointer_size) {
+                    Ok(Layout::Builtin(builtin)) => match builtin {
+                        Builtin::Int64 => Symbol::INT_EQ_I64,
+                        Builtin::Float64 => Symbol::FLOAT_EQ,
+                        Builtin::Bool => Symbol::INT_EQ_I1,
+                        Builtin::Byte => Symbol::INT_EQ_I8,
+                        _ => panic!("Equality not implemented for {:?}", builtin),
+                    },
+                    Ok(complex) => panic!(
+                        "TODO support equality on complex layouts like {:?}",
+                        complex
+                    ),
+                    Err(()) => panic!("Invalid layout"),
+                }
+            }
+            Symbol::BOOL_NEQ => {
+                match layout_cache.from_var(env.arena, loc_args[0].0, env.subs, env.pointer_size) {
+                    Ok(Layout::Builtin(builtin)) => match builtin {
+                        Builtin::Int64 => Symbol::INT_NEQ_I64,
+                        Builtin::Bool => Symbol::INT_NEQ_I1,
+                        Builtin::Byte => Symbol::INT_NEQ_I8,
+                        _ => panic!("Not-Equality not implemented for {:?}", builtin),
+                    },
+                    Ok(complex) => panic!(
+                        "TODO support equality on complex layouts like {:?}",
+                        complex
+                    ),
+                    Err(()) => panic!("Invalid layout"),
+                }
+            }
+            _ => symbol,
+        }
+    }
 }

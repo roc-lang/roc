@@ -14,6 +14,7 @@ use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, ImSet, MutMap, SendMap, SendSet};
 use roc_constrain::expr::constrain_expr;
 use roc_constrain::module::{constrain_imported_values, load_builtin_aliases, Import};
+use roc_gen::layout_id::LayoutIds;
 use roc_gen::llvm::build::{build_proc, build_proc_header, OptLevel};
 use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_module::ident::Ident;
@@ -218,7 +219,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
     let expr_type_str = content_to_string(content.clone(), &subs, home, &interns);
 
     // Compute main_fn_type before moving subs to Env
-    let layout = Layout::from_content(&arena, content, &subs, ptr_bytes).unwrap_or_else(|err| {
+    let layout = Layout::new(&arena, content, &subs, ptr_bytes).unwrap_or_else(|err| {
         panic!(
             "Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}",
             err, subs
@@ -243,6 +244,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
     };
     let mut procs = Procs::default();
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
+    let mut layout_ids = LayoutIds::default();
 
     // Populate Procs and get the low-level Expr from the canonical Expr
     let mut mono_problems = Vec::new();
@@ -261,13 +263,21 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
     env.interns.all_ident_ids.insert(home, ident_ids);
 
     let mut headers = Vec::with_capacity(procs.len());
+    let (mut proc_map, runtime_errors) = procs.into_map();
+
+    assert_eq!(
+        runtime_errors,
+        roc_collections::all::MutSet::default(),
+        "TODO code gen runtime exception functions"
+    );
 
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    for (symbol, opt_proc) in procs.as_map().into_iter() {
-        if let Some(proc) = opt_proc {
-            let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
+    for (symbol, mut procs_by_layout) in proc_map.drain() {
+        for (layout, proc) in procs_by_layout.drain() {
+            let (fn_val, arg_basic_types) =
+                build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
             headers.push((proc, fn_val, arg_basic_types));
         }
@@ -279,7 +289,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
         // (This approach means we don't have to defensively clone name here.)
         //
         // println!("\n\nBuilding and then verifying function {}\n\n", name);
-        build_proc(&env, proc, &procs, fn_val, arg_basic_types);
+        build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
 
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);
@@ -305,10 +315,10 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
 
     let ret = roc_gen::llvm::build::build_expr(
         &env,
+        &mut layout_ids,
         &ImMap::default(),
         main_fn,
         &main_body,
-        &Procs::default(),
     );
 
     builder.build_return(Some(&ret));
