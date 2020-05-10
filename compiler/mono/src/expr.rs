@@ -6,7 +6,7 @@ use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
-use roc_types::subs::{Content, ContentHash, FlatType, Subs, Variable};
+use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -1338,19 +1338,12 @@ fn call_by_name<'a>(
     // get a borrow checker error about trying to borrow `procs` as mutable
     // while there is still an active immutable borrow.
     #[allow(clippy::type_complexity)]
-    let opt_specialize_body: Option<(
-        ContentHash,
-        Variable,
-        roc_can::expr::Expr,
-        Vec<'a, Symbol>,
-    )>;
+    let opt_specialize_body: Option<(Variable, roc_can::expr::Expr, Vec<'a, Symbol>)>;
 
     match layout_cache.from_var(env.arena, fn_var, env.subs, env.pointer_size) {
         Ok(layout) => {
             match procs.get_user_defined(proc_name) {
                 Some(partial_proc) => {
-                    let content_hash = ContentHash::from_var(fn_var, env.subs);
-
                     match procs
                         .specializations
                         .get(&proc_name)
@@ -1362,7 +1355,6 @@ fn call_by_name<'a>(
                         }
                         None => {
                             opt_specialize_body = Some((
-                                content_hash,
                                 partial_proc.annotation,
                                 partial_proc.body.clone(),
                                 partial_proc.patterns.clone(),
@@ -1378,7 +1370,7 @@ fn call_by_name<'a>(
                 }
             };
 
-            if let Some((content_hash, annotation, body, loc_patterns)) = opt_specialize_body {
+            if let Some((annotation, body, loc_patterns)) = opt_specialize_body {
                 // register proc, so specialization doesn't loop infinitely
                 if true {
                     todo!("this is where we would call procs.insert_specialization(content_hash, specialized_proc_name, None);");
