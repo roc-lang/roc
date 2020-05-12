@@ -1,12 +1,9 @@
 interface Bool
-    exposes [ Bool, not, equal, notEqual ]
+    exposes [ not, isEq, isNe ]
     imports []
 
-## Either #True or #False.
-Bool : [ False, True ]
-
 ## Returns #False when given #True, and vice versa.
-not : Bool -> Bool
+not : [True, False] -> [True, False]
 
 ## Returns #True when given #True and #True, and #False when either argument is #False.
 ##
@@ -60,7 +57,7 @@ not : Bool -> Bool
 ## That said, in practice the `&& Str.isEmpty str` approach will typically run
 ## faster than the `&& emptyStr` approach - both for `Str.isEmpty` in particular
 ## as well as for most functions in general.
-and : Bool, Bool -> Bool
+and : [True, False], [True, False] -> [True, False]
 
 
 ## Returns #True when given #True for either argument, and #False only when given #False and #False.
@@ -82,7 +79,10 @@ and : Bool, Bool -> Bool
 ## #True (causing it to immediately returns #True).
 ##
 ## See the performance notes for #Bool.and for details.
-or : Bool, Bool -> Bool
+or : [True, False], [True, False] -> [True, False]
+
+## Exclusive or
+xor : [True, False], [True, False] -> [True, False]
 
 ## Returns #True if the two values are *structurally equal*, and #False otherwise.
 ##
@@ -95,12 +95,16 @@ or : Bool, Bool -> Bool
 ## 5. Collections (#String, #List, #Map, #Set, and #Bytes) are equal if they are the same length, and also all their corresponding elements are equal.
 ## 6. All functions are considered equal. (So `Bool.not == Bool.not` will return #True, as you might expect, but also `Num.abs == Num.negate` will return #True, as you might not. This design is because function equality has been formally proven to be undecidable in the general case, and returning #True in all cases turns out to be mostly harmless - especially compared to alternative designs like crashing, making #equal inconvenient to use, and so on.)
 ##
+## This function always crashes when given two functions, or an erroneous
+## #Float value (see #Float.isErroneous)
+##
 ## This is the same as the #== operator.
-eq : val, val -> Bool
+isEq : val, val -> [True, False]
 
 ## Calls #eq on the given values, then calls #not on the result.
 ##
-## This is the same as the #=/= operator.
-notEq : val, val -> Bool
-notEq = \left, right ->
+## This is the same as the #!= operator.
+isNe : val, val -> [True, False]
+isNe = \left, right ->
     not (equal left right)
+

@@ -63,14 +63,9 @@ Str : [ @Str ]
 ## Since #Float values are imprecise, it's usually best to limit this to the lowest
 ## number you can choose that will make sense for what you want to display.
 ##
-## If you want to kep all the digits, passing #Int.highestSupported will accomplish this,
-## but it's recommended to pass much smaller numbers instead.
-##
-## Passing a negative number for decimal places is equivalent to passing 0.
-decimal : Float *, ULen -> Str
-
-## Convert an #Int to a string.
-int : Int * -> Str
+## If you want to keep all the digits, passing the same float to #Str.num
+## will do that.
+decimal : Float *, Ulen -> Str
 
 ## Split a string around a separator.
 ##
