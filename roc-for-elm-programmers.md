@@ -718,29 +718,53 @@ However, it cannot involve record field access. So this would *not* compile:
 { Foo.defaults.config & timeZone: utc }
 ```
 
-## Collections
+## Standard Data Structures
 
 Elm has `List`, `Array`, `Set`, and `Dict` in the standard library.
 
-Roc has `List` in the standard library, and other collections in the `roc/collections` package.
+Roc has `List`, `Bytes`, `Set`, and `Map` in the standard library.
 
-`List` in Roc uses the term "list" the way Python does: to mean an unordered sequence of elements. At runtime, it is a record consisting of two values: a length integer, and a pointer to a flat array of memory. This means it has essentially the performance characteristics of a C array: very fast when mutated in-place, but no node sharing when copying. This takes better advantage of Roc's in-place mutation optimizations; the ceiling on how fast something can be is very high (practically as fast as C), and if something is slow in practice, there are techniques you can use to optimize it.
+Here are the differences:
 
-Because essentially all other collections (e.g. hash maps, trees, stacks) can be efficiently implemented using some combination of C arrays (provided by `List`) and algebraic data types (provided by tags), all of Roc's other standard collections are in the `roc/collections` package. Roc doesn't have a concept like Elm's `Kernel`, so everything in `roc/collections` uses plain Roc code.
-
-An upside of this is that if someone wants a specialized version of a particular standard collection, they can copy/paste the impementation out of `roc/colections` and tweak it as desired. A downside is that Roc can't customize how `==` works on these `roc/collections` data structures the way Elm can. This means, for example, it's possible to create two `Set` values that have the same contents, but which will not be `==` because `==` only knows how to recursively compare the internal structure, and it's possible for two `Set` values to have different internal structures depending on insertion order. In short, `==` doesn't give useful answers for collections, and as such should never be used on them.
-
-A silver lining is that using `==` on collections ought to be discouraged regardless becasue it's expensive (even hand-optimized implementations can't be better than O(n) for any collection, and checking equality on an individual element is potentially also O(n) or worse), so separately discouraging it because it doesn't do what you want makes for an even stronger argument against using it.
-
-Of note, although Roc does not have a built-in [`Bytes` type like in `elm/bytes`](https://package.elm-lang.org/packages/elm/bytes/latest/Bytes), it does have ways to (for example) turn a `Str` into a `List U8`, which gives you access to the raw bytes behind that string.
-
-. It's in the standard library because Roc does not have a concept analogous to Elm's `Kernel`, so if `Bytes` weren't in the standard library, it could not exist as a separate package (and thus operating on raw byte streams would not be supported in Roc).
+* `List` in Roc uses the term "list" the way Python does: to mean an unordered sequence of elements. Roc's `List` is more like Elm's `Array`; under the hood it is a RRB tree - specifically, [this one](https://docs.rs/im/14.0.0/im/vector/index.html). It still uses the `[` `]` syntax for values. Also there is no `::` operator because "cons" is not a notably efficient operation on a RRB tree like it is in a linked list; adding an element to either the beginning or end of a Roc `List` is an amortized constant time operation.
+* `Bytes` in Roc works like [`Bytes` in `elm/bytes`](https://package.elm-lang.org/packages/elm/bytes/latest/Bytes). It's in the standard library because Roc does not have a concept analogous to Elm's `Kernel`, so if `Bytes` weren't in the standard library, it could not exist as a separate package (and thus operating on raw byte streams would not be supported in Roc).
 * `Map` in Roc is like `Dict` in Elm, except it's backed by hashing rather than ordering. Like `List`, it uses [one of Bodil Stokke's `im-rs` persistent data structures](https://docs.rs/im/14.0.0/im/hashmap/index.html) under the hood. Roc also silently computes hash values for any value that can be used with `==`, so there is no `comparable` (or similar) constraint on `Map` keys in Roc.
 * `Set` in Roc is like `Set` in Elm: it's shorthand for a `Map` with keys but no value, and it has a slightly different API. Like with `Map`, there is no `comparable` (or similar) constraint on the values that can go in a Roc `Set`.
 
 > The main reason it's called `Map` instead of `Dict` is that it's annoying to have a conversation about `Dict` out loud, let alone to teach it in a workshop, because you have to be so careful to enunciate. `Map` is one letter shorter, doesn't have this problem, is widely used, and never seems to be confused with the `map` function in practice (in e.g. JavaScript and Rust, both of which have both `Map` and `map`) even though it seems like it would in theory.
 
+Roc also has a special literal syntax for maps and sets. Here's how to write a `Map` literal:
 
+```elm
+{{ "Sam" => 1, "Ali" => 2, firstName => 3 }}
+```
+
+This expression has the type `Map Str Int`, and the `firstName` variable would
+necessarily be a `Str` as well.
+
+The `Map` literal syntax is for two reasons. First, Roc doesn't have tuples; without tuples, initializing the above `Map` would involve an API that looked something like one of these:
+
+```elm
+Map.fromList [ { k: "Sam", v: 1 }, { k: "Ali", v: 2 }, { k: firstName, v: 3 } ]
+
+Map.fromList [ KV "Sam" 1, KV "Ali" 2, KV firstName 3 ]
+```
+
+This works, but is not nearly as nice to read.
+
+Additionally, map literals can compile direcly to efficient initialization code without needing to (hopefully be able to) optimize away the intermediate `List` involved in  `fromList`.
+
+`{{}}` is an empty `Map`.
+
+You can write a `Set` literal like this:
+
+```elm
+{[ "Sam", "Ali", firstName ]}
+```
+The `Set` literal syntax is partly for the initialization benefit, and also for symmetry
+with the `Map` literal syntax.
+
+`{[]}` is an empty `Set`.
 
 Roc does not have syntax for pattern matching on data structures - not even `[` `]` like Elm does.
 
@@ -779,7 +803,7 @@ Either way, you get `+` being able to work on both `Int` and `Float`!
 These don't exist in Roc.
 
 * `appendable` is only used in Elm for the `(++)` operator, and Roc doesn't have that operator.
-* `comparable` is used for comparison operators (like `<` and such), plus `List.sort`, `Dict`, and `Set`. Roc's `List.sort` accepts a `Sorter` argument which specifies how to sort the elements. Roc's comparison operators (like `<`) only accept numbers; `"foo" < "bar"` is valid Elm, but will not compile in Roc. Roc's dictionaries and sets are have no visible restrictions.
+* `comparable` is used for comparison operators (like `<` and such), plus `List.sort`, `Dict`, and `Set`. Roc's `List.sort` accepts a `Sorter` argument which specifies how to sort the elements. Roc's comparison operators (like `<`) only accept numbers; `"foo" < "bar"` is valid Elm, but will not compile in Roc. Roc's dictionaries and sets are hashmaps behind the scenes (rather than ordered trees), and their keys have no visible type restrictions.
 * `number` is replaced by `Num`, as described earlier.
 
 Like in Elm, number literals with decimal points are `Float`. However, number
@@ -977,56 +1001,27 @@ possible to ship Roc's standard library as a separate package!)
 Roc's standard library has these modules:
 
 * `Bool`
-* `Str`
-* `Float`
-* `Int`
 * `Num`
+* `Int`
+* `Float`
 * `List`
+* `Map`
+* `Set`
+* `Bytes`
+* `Str`
+* `Result`
 
 Some differences to note:
 
-* All these standard modules are imported by default into every module. They also expose all their types (e.g. `Bool`, `Int`, `Str`) but they do not expose any values - not even `negate` or `not`. (`True`, `False`, `Ok`, and `Err` are all global tags, so they do not need to be exposed; they are globally available regardless!)
+* All these standard modules are imported by default into every module. They also expose all their types (e.g. `Bool`, `Int`, `Result`) but they do not expose any values - not even `negate` or `not`. (`True`, `False`, `Ok`, and `Err` are all global tags, so they do not need to be exposed; they are globally available regardless!)
 * In Roc it's called `Str` instead of `String`.
-* No `Char`. This is by design. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have a string be the smallest indivisible unit. If you want to iterate over grapheme clusters, use a `Str -> List Str` function which breaks the string down on grapheme boundaries. For this reason there also isn't a `Str.length` function; in the context of strings, "length" is ambiguous. (Does it refer to number of bytes? Number of Unicode code points? Number of grapheme clusters?)
+* No `Char`. This is by design. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have `String` be the smallest indivisible unit. If you want to iterate over grapheme clusters, use a `Str -> List Str` function which breaks the string down on grapheme boundaries. For this reason there also isn't a `Str.length` function; in the context of strings, "length" is ambiguous. (Does it refer to number of bytes? Number of Unicode code points? Number of graphemes?)
 * No `Basics`. You use everything from the standard library fully-qualified; e.g. `Bool.isEq` or `Num.add` or `Float.ceiling`. There is no `Never` because `[]` already serves that purpose. (Roc's standard library doesn't include an equivalent of `Basics.never`, but it's one line of code and anyone can implmement it: `never = \a -> never a`.)
+* No `Tuple`. Roc doesn't have tuple syntax. As a convention, `Tup` can be used to represent tuples (e.g. `List.zip : List a, List b -> List [ Tup a b ]*`), but this comes up infrequently compared to languages that have dedicated syntax for it.
 * No `Task`. By design, platform authors implement `Task` (or don't; it's up to them) - it's not something that really *could* be usefully present in Roc's standard library.
 * No `Process`, `Platform`, `Cmd`, or `Sub` - similarly to `Task`, these are things platform authors would include, or not.
-* No `Result` or `Maybe`. Instead, we use a more self-decriptive inline type, like so: `List.first : List elem -> [Ok elem, ListWasEmpty]*` - this way, it's clear from the type what the error condition was (the list was empty). If a type isn't representing potential failre (meaning `Ok` wouldn't make sense), use a more desriptive inline tag instead of `Maybe`. For example: `nullable : Decoder a -> Decoder [Null, NonNull a]*`. The `roc/collections` package does have an `Ok` module with functions like `Ok.map : [Ok a]x, (a -> b) -> [Ok b]x` which is a bit like a `Result` replacement, but by design there is no `Maybe` replacement.
-* `List` refers to something closer to Elm's `Array`, as noted earlier.
-* No `Tuple`. Roc doesn't have tuple syntax, but it does have a `=>` operator. The expression `a => b` desugars to `Pair a b`, with `Pair` being an ordinary global tag. By convention, `=>` is intended to describe "key-value pairs" (e.g. `Map.fromPairs [ "a" => 1, "b" => 2 ]`) as opposed to pairs where the elements have no particular key-value relationship. `roc/collections` has a `Pair` module with functions like `Pair.first : Pair a * -> a` and `Pair.mapSecond : Pair a b, (b -> c) -> Pair a c`. If you want a larger tuple, you can make one up on the spot using a tag - e.g. `T4 "a" "b" "c" "d"`.
-
-The separate `roc/collections` package contains these modules, each written in pure Roc:
-
-* `Ok` (similar to Elm's `Result` - offers `Ok.map` etc.)
-* `Pair` (similar to Elm's `Tuple`)
-* `Buf` (like a `List`, but optimized for growing in place - at the expense of taking up slightly more memory)
-* `StrBuf` (like `Buf` but for strings)
-* `Map` (hash map, implemented using `Int.hash64 : a, a -> U64` - meaning no `comparable` or `hashable` restriction)
-* `Set` (hash set, essentially `Set a : [@Set (Map a {}`)])
-* `Sort` (similar to [`elm-sorter-experiment`](https://package.elm-lang.org/packages/rtfeldman/elm-sorter-experiment))
-* `SortedMap` (b-tree map based on `Sort`; usually slower than `Map`, but faster at converting to a sorted `List`)
-* `SortedSet` (b-tree set, essentially `SortedSet a : [@SortedSet (SortedMap a {})]`)
-
-Since these are all necessarily implemented in pure Roc, they might not turn out to be
-quite as efficient as if they were implemented in a systems language. That said,
-fast data structures are generally built by mutating C arrays and trees.
-Between `List`, recursive tags, and in-place mutation optimizations, Roc
-has all of those primitives - so the performance gap should be small (if not zero) in practice.
-(If someone has a use case where it's important to squeeze that last drop of
-performance out of a specialized basic collection, they can still do that through the host.)
-
-One cultural benefit to having all collections (other than the primitive `List`)
-implemented in an ordinary package is that it encourages creating and using
-data structures specific to the problem at hand. This can benefit not only
-data modeling, but also performance.
-
-Another benefit is that it can motivate performance optimizations. For example,
-the process for making `Map.fromPairs [ "a" => 1, "b" => 2 ]` run as efficiently
-as if you'd done two `insert` calls on an empty `Map` (without having instantiated
-an intermediate `List`) would involve optimizing `List.fold` to avoid unnecessarily
-allocating a list in the specific case where it gets passed a list literal, plus
-inlining (and potentially constant propagation) so the optimization could trigger
-on `Map.fromPairs`. That optimization would benefit all Roc code, not just `roc/collections`.
+* No `Maybe`. This is by design. If a function returns a potential error, use `Result` with an error type that uses a zero-arg tag to describe what went wrong. (For example, `List.first : List a -> Result a [ ListWasEmpty ]*` instead of `List.first : List a -> Maybe a`.) If you want to have a record field be optional, use an Optional Record Field directly (see earlier). If you want to describe something that's neither an operation that can fail nor an optional field, use a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, make a self-documenting API like `nullable : Decoder a -> Decoder [ Null, NonNull a ]*`.
+* `List` refers to something more like Elm's `Array`, as noted earlier.
 
 ## Operator Desugaring Table
 
@@ -1034,7 +1029,6 @@ Here are various Roc expressions involving operators, and what they desugar to.
 
 | Expression      | Desugars to      |
 | --------------- | ---------------- |
-| `a => b`          | `Pair a b`         |
 | `a + b`           | `Num.add a b`      |
 | `a - b`           | `Num.sub a b`      |
 | `a * b`           | `Num.mul a b`      |
