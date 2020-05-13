@@ -4,10 +4,6 @@ use gfx_hal::{
     Instance,
 };
 use glsl_to_spirv::ShaderType;
-use glyph_brush::rusttype::Scale;
-use glyph_brush::{
-    BrushAction, BrushError, GlyphBrushBuilder, HorizontalAlign, Layout, Section, VerticalAlign,
-};
 use std::io;
 use std::mem::ManuallyDrop;
 use std::path::Path;
@@ -81,6 +77,9 @@ struct PushConstants {
 }
 
 fn run_event_loop() {
+    // TODO do a better window size
+    const WINDOW_SIZE: [u32; 2] = [512, 512];
+
     // TODO try configuring the swapchain explicitly, in particular in order
     // to experiment with different PresentMode settings to see how they
     // affect input latency.
@@ -88,18 +87,11 @@ fn run_event_loop() {
     // https://rust-tutorials.github.io/learn-gfx-hal/03_clear_the_window.html
     let event_loop = EventLoop::new();
 
-    let window = WindowBuilder::new()
-        .with_title("roc")
-        .build(&event_loop)
-        .unwrap();
-
-    let font_size = 16.0;
-    let scale_factor = 1.0f32; // TODO very unsure if this is being used correctly! Audit each of its uses.
     let (logical_window_size, physical_window_size) = {
         use winit::dpi::{LogicalSize, PhysicalSize};
 
         let dpi = event_loop.primary_monitor().scale_factor();
-        let logical: LogicalSize<u32> = window.inner_size().to_logical(scale_factor as f64);
+        let logical: LogicalSize<u32> = WINDOW_SIZE.into();
         let physical: PhysicalSize<u32> = logical.to_physical(dpi);
 
         (logical, physical)
@@ -109,6 +101,12 @@ fn run_event_loop() {
         width: physical_window_size.width,
         height: physical_window_size.height,
     };
+
+    let window = WindowBuilder::new()
+        .with_title("roc")
+        .with_inner_size(logical_window_size)
+        .build(&event_loop)
+        .unwrap();
 
     let mut should_configure_swapchain = true;
 
@@ -218,20 +216,6 @@ fn run_event_loop() {
 
     let vertex_shader = include_str!("../shaders/triangle.vert");
     let fragment_shader = include_str!("../shaders/triangle.frag");
-    let dejavu: &[u8] = include_bytes!("../fonts/OpenSans-Light.ttf");
-    let mut glyph_brush = GlyphBrushBuilder::using_font_bytes(dejavu).build();
-
-    let max_image_dimension = {
-        let mut value = 0 as gl::types::GLint;
-        unsafe { gl::GetIntegerv(gl::MAX_TEXTURE_SIZE, &mut value) };
-        value as u32
-    };
-
-    let mut vao = 0;
-    let mut vbo = 0;
-    let mut texture = GlyphTexture::new(glyph_brush.texture_dimensions());
-
-    let mut dimensions = logical_window_size;
 
     /// Create a pipeline with the given layout and shaders.
     unsafe fn make_pipeline<B: gfx_hal::Backend>(
@@ -395,6 +379,47 @@ fn run_event_loop() {
                 // between 0.0 and 1.0.
                 let anim = start_time.elapsed().as_secs_f32().sin() * 0.5 + 0.5;
 
+                let small = [0.33, 0.33];
+
+                let triangles = &[
+                    // Red triangle
+                    PushConstants {
+                        color: [1.0, 0.0, 0.0, 1.0],
+                        pos: [-0.5, -0.5],
+                        scale: small,
+                    },
+                    // Green triangle
+                    PushConstants {
+                        color: [0.0, 1.0, 0.0, 1.0],
+                        pos: [0.0, -0.5],
+                        scale: small,
+                    },
+                    // Blue triangle
+                    PushConstants {
+                        color: [0.0, 0.0, 1.0, 1.0],
+                        pos: [0.5, -0.5],
+                        scale: small,
+                    },
+                    // Blue <-> cyan animated triangle
+                    PushConstants {
+                        color: [0.0, anim, 1.0, 1.0],
+                        pos: [-0.5, 0.5],
+                        scale: small,
+                    },
+                    // Down <-> up animated triangle
+                    PushConstants {
+                        color: [1.0, 1.0, 1.0, 1.0],
+                        pos: [0.0, 0.5 - anim * 0.5],
+                        scale: small,
+                    },
+                    // Small <-> big animated triangle
+                    PushConstants {
+                        color: [1.0, 1.0, 1.0, 1.0],
+                        pos: [0.5, 0.5],
+                        scale: [0.33 + anim * 0.33, 0.33 + anim * 0.33],
+                    },
+                ];
+
                 let triangles = text_state.chars().enumerate().map(|(index, char)| {
                     if char == ' ' {
                         PushConstants {
@@ -410,118 +435,6 @@ fn run_event_loop() {
                         }
                     }
                 });
-
-                // Render font glyphs
-                // see https://github.com/alexheretic/glyph-brush/blob/b18161533321cbdf85cf31729517d0a336394e80/glyph-brush/examples/opengl.rs
-
-                let dimensions = window.inner_size();
-                let width = dimensions.width as f32;
-                let height = dimensions.height as _;
-                let scale = Scale::uniform((font_size * scale_factor).round());
-
-                glyph_brush.queue(Section {
-                    text: &text_state,
-                    scale,
-                    screen_position: (0.0, 0.0),
-                    bounds: (width / 3.15, height),
-                    color: [0.9, 0.3, 0.3, 1.0],
-                    ..Section::default()
-                });
-
-                glyph_brush.queue(Section {
-                    text: &text_state,
-                    scale,
-                    screen_position: (width / 2.0, height / 2.0),
-                    bounds: (width / 3.15, height),
-                    color: [0.3, 0.9, 0.3, 1.0],
-                    layout: Layout::default()
-                        .h_align(HorizontalAlign::Center)
-                        .v_align(VerticalAlign::Center),
-                    ..Section::default()
-                });
-
-                glyph_brush.queue(Section {
-                    text: &text_state,
-                    scale,
-                    screen_position: (width, height),
-                    bounds: (width / 3.15, height),
-                    color: [0.3, 0.3, 0.9, 1.0],
-                    layout: Layout::default()
-                        .h_align(HorizontalAlign::Right)
-                        .v_align(VerticalAlign::Bottom),
-                    ..Section::default()
-                });
-
-                let mut brush_action;
-                loop {
-                    brush_action = glyph_brush.process_queued(
-                        |rect, tex_data| unsafe {
-                            // Update part of gpu texture with new glyph alpha values
-                            gl::BindTexture(gl::TEXTURE_2D, texture.name);
-                            gl::TexSubImage2D(
-                                gl::TEXTURE_2D,
-                                0,
-                                rect.min.x as _,
-                                rect.min.y as _,
-                                rect.width() as _,
-                                rect.height() as _,
-                                gl::RED,
-                                gl::UNSIGNED_BYTE,
-                                tex_data.as_ptr() as _,
-                            );
-                            gl_assert_ok!();
-                        },
-                        to_vertex,
-                    );
-
-                    match brush_action {
-                        Ok(_) => break,
-                        Err(BrushError::TextureTooSmall { suggested, .. }) => {
-                            let (new_width, new_height) = if (suggested.0 > max_image_dimension
-                                || suggested.1 > max_image_dimension)
-                                && (glyph_brush.texture_dimensions().0 < max_image_dimension
-                                    || glyph_brush.texture_dimensions().1 < max_image_dimension)
-                            {
-                                (max_image_dimension, max_image_dimension)
-                            } else {
-                                suggested
-                            };
-                            eprint!("\r                            \r");
-                            eprintln!("Resizing glyph texture -> {}x{}", new_width, new_height);
-
-                            // Recreate texture as a larger size to fit more
-                            texture = GlyphTexture::new((new_width, new_height));
-
-                            glyph_brush.resize_texture(new_width, new_height);
-                        }
-                    }
-                }
-
-                match brush_action.unwrap() {
-                    BrushAction::Draw(vertices) => {
-                        // Draw new vertices
-                        vertex_count = vertices.len();
-                        unsafe {
-                            if vertex_max < vertex_count {
-                                gl::BufferData(
-                                    gl::ARRAY_BUFFER,
-                                    (vertex_count * mem::size_of::<Vertex>()) as GLsizeiptr,
-                                    vertices.as_ptr() as _,
-                                    gl::DYNAMIC_DRAW,
-                                );
-                            } else {
-                                gl::BufferSubData(
-                                    gl::ARRAY_BUFFER,
-                                    0,
-                                    (vertex_count * mem::size_of::<Vertex>()) as GLsizeiptr,
-                                    vertices.as_ptr() as _,
-                                );
-                            }
-                        }
-                        vertex_max = vertex_max.max(vertex_count);
-                    }
-                    BrushAction::ReDraw => {}
-                }
 
                 unsafe {
                     use gfx_hal::pool::CommandPool;
@@ -820,49 +733,6 @@ fn handle_text_input(
         }
         Cut => {
             todo!("cut");
-        }
-    }
-}
-
-struct GlyphTexture {
-    name: GLuint,
-}
-
-impl GlyphTexture {
-    fn new((width, height): (u32, u32)) -> Self {
-        let mut name = 0;
-        unsafe {
-            // Create a texture for the glyphs
-            // The texture holds 1 byte per pixel as alpha data
-            gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
-            gl::GenTextures(1, &mut name);
-            gl::BindTexture(gl::TEXTURE_2D, name);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as _);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as _);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as _);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as _);
-            gl::TexImage2D(
-                gl::TEXTURE_2D,
-                0,
-                gl::RED as _,
-                width as _,
-                height as _,
-                0,
-                gl::RED,
-                gl::UNSIGNED_BYTE,
-                ptr::null(),
-            );
-            gl_assert_ok!();
-
-            Self { name }
-        }
-    }
-}
-
-impl Drop for GlyphTexture {
-    fn drop(&mut self) {
-        unsafe {
-            gl::DeleteTextures(1, &self.name);
         }
     }
 }

@@ -51,7 +51,6 @@ target-lexicon = "0.10"
 winit = "0.22"
 image = "0.23"
 gfx-hal = "0.5"
-glyph_brush = "0.6"
 glsl-to-spirv = "0.1"
 bincode = "1.2"
 serde = { version = "1.0", features = ["derive"] }
