@@ -32,7 +32,55 @@ pub fn builtin_defs(var_store: &VarStore) -> Vec<Def> {
         int_div(var_store),
         int_abs(var_store),
         int_rem(var_store),
+        int_is_odd(var_store),
+        int_is_even(var_store),
     ]
+}
+
+/// Int.isOdd : Int -> Bool
+fn int_is_odd(var_store: &VarStore) -> Def {
+    use crate::expr::Expr::*;
+
+    defn(
+        Symbol::INT_IS_ODD,
+        vec![Symbol::INT_IS_ODD_ARG],
+        var_store,
+        call(
+            Symbol::INT_EQ_I64,
+            vec![
+                call(
+                    Symbol::INT_REM_UNSAFE,
+                    vec![Var(Symbol::INT_IS_ODD_ARG), Int(var_store.fresh(), 2)],
+                    var_store,
+                ),
+                Int(var_store.fresh(), 1),
+            ],
+            var_store,
+        ),
+    )
+}
+
+/// Int.isEven : Int -> Bool
+fn int_is_even(var_store: &VarStore) -> Def {
+    use crate::expr::Expr::*;
+
+    defn(
+        Symbol::INT_IS_EVEN,
+        vec![Symbol::INT_IS_EVEN_ARG],
+        var_store,
+        call(
+            Symbol::INT_EQ_I64,
+            vec![
+                call(
+                    Symbol::INT_REM_UNSAFE,
+                    vec![Var(Symbol::INT_IS_EVEN_ARG), Int(var_store.fresh(), 2)],
+                    var_store,
+                ),
+                Int(var_store.fresh(), 0),
+            ],
+            var_store,
+        ),
+    )
 }
 
 /// List.get : List elem, Int -> Result elem [ OutOfBounds ]*

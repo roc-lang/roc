@@ -615,6 +615,10 @@ define_builtins! {
         25 INT_REM: "rem"
         26 INT_REM_ARG_0: "rem#arg0"
         27 INT_REM_ARG_1: "rem#arg1"
+        28 INT_IS_ODD: "isOdd"
+        29 INT_IS_ODD_ARG: "isOdd#arg"
+        30 INT_IS_EVEN: "isEven"
+        31 INT_IS_EVEN_ARG: "isEven#arg"
     }
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" imported // the Float.Float type alias

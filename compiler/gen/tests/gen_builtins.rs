@@ -258,6 +258,18 @@ mod gen_builtins {
     }
 
     #[test]
+    fn gen_is_odd() {
+        assert_evals_to!("Int.isOdd 4", false, bool);
+        assert_evals_to!("Int.isOdd 5", true, bool);
+    }
+
+    #[test]
+    fn gen_is_even() {
+        assert_evals_to!("Int.isEven 6", true, bool);
+        assert_evals_to!("Int.isEven 7", false, bool);
+    }
+
+    #[test]
     fn lt_i64() {
         assert_evals_to!("1 < 2", true, bool);
         assert_evals_to!("1 < 1", false, bool);
