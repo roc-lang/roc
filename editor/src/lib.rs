@@ -313,7 +313,6 @@ fn run_event_loop() {
             submission_complete_fence,
             rendering_complete_semaphore,
         }));
-    let start_time = std::time::Instant::now();
     let is_animating = true;
     let mut text_state = String::new();
     let mut keyboard_modifiers = ModifiersState::empty();
@@ -374,51 +373,6 @@ fn run_event_loop() {
                 let render_pass = &res.render_passes[0];
                 let pipeline_layout = &res.pipeline_layouts[0];
                 let pipeline = &res.pipelines[0];
-
-                // This `anim` will be a number that oscillates smoothly
-                // between 0.0 and 1.0.
-                let anim = start_time.elapsed().as_secs_f32().sin() * 0.5 + 0.5;
-
-                let small = [0.33, 0.33];
-
-                let triangles = &[
-                    // Red triangle
-                    PushConstants {
-                        color: [1.0, 0.0, 0.0, 1.0],
-                        pos: [-0.5, -0.5],
-                        scale: small,
-                    },
-                    // Green triangle
-                    PushConstants {
-                        color: [0.0, 1.0, 0.0, 1.0],
-                        pos: [0.0, -0.5],
-                        scale: small,
-                    },
-                    // Blue triangle
-                    PushConstants {
-                        color: [0.0, 0.0, 1.0, 1.0],
-                        pos: [0.5, -0.5],
-                        scale: small,
-                    },
-                    // Blue <-> cyan animated triangle
-                    PushConstants {
-                        color: [0.0, anim, 1.0, 1.0],
-                        pos: [-0.5, 0.5],
-                        scale: small,
-                    },
-                    // Down <-> up animated triangle
-                    PushConstants {
-                        color: [1.0, 1.0, 1.0, 1.0],
-                        pos: [0.0, 0.5 - anim * 0.5],
-                        scale: small,
-                    },
-                    // Small <-> big animated triangle
-                    PushConstants {
-                        color: [1.0, 1.0, 1.0, 1.0],
-                        pos: [0.5, 0.5],
-                        scale: [0.33 + anim * 0.33, 0.33 + anim * 0.33],
-                    },
-                ];
 
                 let triangles = text_state.chars().enumerate().map(|(index, char)| {
                     if char == ' ' {
@@ -613,7 +567,7 @@ fn handle_text_input(
     text_state: &mut String,
     elem_state: ElementState,
     virtual_keycode: VirtualKeyCode,
-    modifiers: ModifiersState,
+    _modifiers: ModifiersState,
 ) {
     use winit::event::VirtualKeyCode::*;
 
