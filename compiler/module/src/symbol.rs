@@ -611,6 +611,10 @@ define_builtins! {
         21 INT_NEQ_I8: "#neqi8"
         22 INT_ABS: "abs"
         23 INT_ABS_ARG: "abs#arg"
+        24 INT_REM_UNSAFE: "remUnsafe"
+        25 INT_REM: "rem"
+        26 INT_REM_ARG_0: "rem#arg0"
+        27 INT_REM_ARG_1: "rem#arg1"
     }
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" imported // the Float.Float type alias

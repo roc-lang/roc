@@ -31,6 +31,7 @@ pub fn builtin_defs(var_store: &VarStore) -> Vec<Def> {
         list_first(var_store),
         int_div(var_store),
         int_abs(var_store),
+        int_rem(var_store),
     ]
 }
 
@@ -105,6 +106,53 @@ fn list_get(var_store: &VarStore) -> Def {
     )
 }
 
+/// Int.rem : Int, Int -> Int
+fn int_rem(var_store: &VarStore) -> Def {
+    use crate::expr::Expr::*;
+
+    defn(
+        Symbol::INT_REM,
+        vec![Symbol::INT_REM_ARG_0, Symbol::INT_REM_ARG_1],
+        var_store,
+        If {
+            branch_var: var_store.fresh(),
+            cond_var: var_store.fresh(),
+            branches: vec![(
+                // if condition
+                no_region(
+                    // Int.neq arg1 0
+                    call(
+                        Symbol::INT_NEQ_I64,
+                        vec![Var(Symbol::INT_REM_ARG_1), (Int(var_store.fresh(), 0))],
+                        var_store,
+                    ),
+                ),
+                // arg1 was not zero
+                no_region(
+                    // Ok (Int.#remUnsafe arg0 arg1)
+                    tag(
+                        "Ok",
+                        vec![
+                            // Int.#remUnsafe arg0 arg1
+                            call(
+                                Symbol::INT_REM_UNSAFE,
+                                vec![Var(Symbol::INT_REM_ARG_0), Var(Symbol::INT_REM_ARG_1)],
+                                var_store,
+                            ),
+                        ],
+                        var_store,
+                    ),
+                ),
+            )],
+            final_else: Box::new(no_region(tag(
+                "Err",
+                vec![tag("DivByZero", Vec::new(), var_store)],
+                var_store,
+            ))),
+        },
+    )
+}
+
 /// Int.abs : Int -> Int
 fn int_abs(var_store: &VarStore) -> Def {
     use crate::expr::Expr::*;
@@ -159,7 +207,7 @@ fn int_div(var_store: &VarStore) -> Def {
             branches: vec![(
                 // if-condition
                 no_region(
-                    // Int.eq denominator 0
+                    // Int.neq denominator 0
                     call(
                         Symbol::INT_NEQ_I64,
                         vec![

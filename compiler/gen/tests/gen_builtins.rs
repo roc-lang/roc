@@ -228,6 +228,36 @@ mod gen_builtins {
     }
 
     #[test]
+    fn gen_rem_i64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Int.rem 8 3 is
+                        Ok val -> val
+                        _ -> -1
+                "#
+            ),
+            2,
+            i64
+        );
+    }
+
+    #[test]
+    fn gen_rem_div_by_zero_i64() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Int.rem 8 0 is
+                        Err DivByZero -> 4
+                        _ -> -23
+                "#
+            ),
+            4,
+            i64
+        );
+    }
+
+    #[test]
     fn lt_i64() {
         assert_evals_to!("1 < 2", true, bool);
         assert_evals_to!("1 < 1", false, bool);

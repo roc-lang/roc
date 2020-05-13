@@ -257,6 +257,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         types.insert(symbol, (typ, Region::zero()));
     };
 
+    fn div_by_zero() -> SolvedType {
+        SolvedType::TagUnion(
+            vec![(TagName::Global("DivByZero".into()), vec![])],
+            Box::new(SolvedType::Wildcard),
+        )
+    }
+
     // Num module
 
     // add or (+) : Attr u1 (Num a), Attr u2 (Num a) -> Attr u3 (Num a)
@@ -366,6 +373,20 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![int_type(UVAR1)], int_type(UVAR2)),
     );
 
+    // rem : Int, Int -> Result Int [ DivByZero ]*
+    add_type(
+        Symbol::INT_REM,
+        unique_function(
+            vec![int_type(UVAR1), int_type(UVAR2)],
+            result_type(UVAR3, int_type(UVAR4), lift(UVAR5, div_by_zero())),
+        ),
+    );
+
+    add_type(
+        Symbol::INT_REM_UNSAFE,
+        unique_function(vec![int_type(UVAR1), int_type(UVAR2)], int_type(UVAR3)),
+    );
+
     // highest : Int
     add_type(Symbol::INT_HIGHEST, int_type(UVAR1));
 
@@ -373,20 +394,14 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(Symbol::INT_LOWEST, int_type(UVAR1));
 
     // div or (//) : Int, Int -> Result Int [ DivByZero ]*
-    let div_by_zero = SolvedType::TagUnion(
-        vec![(TagName::Global("DivByZero".into()), vec![])],
-        Box::new(SolvedType::Wildcard),
-    );
-
     add_type(
         Symbol::INT_DIV,
         unique_function(
             vec![int_type(UVAR1), int_type(UVAR2)],
-            result_type(UVAR3, int_type(UVAR4), lift(UVAR5, div_by_zero)),
+            result_type(UVAR3, int_type(UVAR4), lift(UVAR5, div_by_zero())),
         ),
     );
 
-    // div or (//) : Int, Int -> Int
     add_type(
         Symbol::INT_DIV_UNSAFE,
         unique_function(vec![int_type(UVAR1), int_type(UVAR2)], int_type(UVAR3)),
