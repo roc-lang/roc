@@ -1,56 +1,27 @@
 [package]
-name = "roc-cli"
+name = "roc_build"
 version = "0.1.0"
 authors = ["Richard Feldman <oss@rtfeldman.com>"]
-repository = "https://github.com/rtfeldman/roc"
 edition = "2018"
-description = "A CLI for Roc"
 license = "Apache-2.0"
-default-run = "roc"
-
-[[bin]]
-name = "roc"
-path = "src/main.rs"
-test = false
-bench = false
-
-[features]
-default = ["target-x86"]
-
-target-x86 = []
-
-# arm and wasm give linker errors on some platforms
-target-arm = []
-target-webassembly = []
-
-target-all = [
-    "target-x86",
-    "target-arm",
-    "target-webassembly"
-]
-
 
 [dependencies]
-roc_collections = { path = "../compiler/collections" }
-roc_can = { path = "../compiler/can" }
-roc_parse = { path = "../compiler/parse" }
-roc_region = { path = "../compiler/region" }
-roc_module = { path = "../compiler/module" }
-roc_problem = { path = "../compiler/problem" }
-roc_types = { path = "../compiler/types" }
-roc_builtins = { path = "../compiler/builtins" }
-roc_constrain = { path = "../compiler/constrain" }
-roc_uniq = { path = "../compiler/uniq" }
-roc_unify = { path = "../compiler/unify" }
-roc_solve = { path = "../compiler/solve" }
-roc_mono = { path = "../compiler/mono" }
-roc_load = { path = "../compiler/load" }
-roc_gen = { path = "../compiler/gen" }
-roc_build = { path = "../compiler/build" }
-roc_reporting = { path = "../compiler/reporting" }
-roc_editor = { path = "../editor" }
-# TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
-clap = { git = "https://github.com/rtfeldman/clap", branch = "master" }
+roc_collections = { path = "../collections" }
+roc_can = { path = "../can" }
+roc_parse = { path = "../parse" }
+roc_region = { path = "../region" }
+roc_module = { path = "../module" }
+roc_problem = { path = "../problem" }
+roc_types = { path = "../types" }
+roc_builtins = { path = "../builtins" }
+roc_constrain = { path = "../constrain" }
+roc_uniq = { path = "../uniq" }
+roc_unify = { path = "../unify" }
+roc_solve = { path = "../solve" }
+roc_mono = { path = "../mono" }
+roc_load = { path = "../load" }
+roc_gen = { path = "../gen" }
+roc_reporting = { path = "../reporting" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }

@@ -13,8 +13,15 @@ use std::hash::Hash;
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartialProc<'a> {
     pub annotation: Variable,
-    pub patterns: Vec<'a, Symbol>,
+    pub pattern_symbols: Vec<'a, Symbol>,
     pub body: roc_can::expr::Expr,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingSpecialization<'a> {
+    pub fn_var: Variable,
+    pub ret_var: Variable,
+    pub pattern_vars: Vec<'a, Variable>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -28,12 +35,10 @@ pub struct Proc<'a> {
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Procs<'a> {
-    pub user_defined: MutMap<Symbol, PartialProc<'a>>,
+    pub partial_procs: MutMap<Symbol, PartialProc<'a>>,
     pub module_thunks: MutSet<Symbol>,
-    runtime_errors: MutSet<Symbol>,
-    specializations: MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>,
-    pending_specializations: MutMap<Symbol, Layout<'a>>,
-    builtin: MutSet<Symbol>,
+    pub builtins_referenced: MutSet<Symbol>,
+    pub pending_specializations: MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>,
 }
 
 impl<'a> Procs<'a> {
@@ -46,14 +51,14 @@ impl<'a> Procs<'a> {
         loc_body: Located<roc_can::expr::Expr>,
         ret_var: Variable,
     ) {
-        let (_, arg_symbols, body) = patterns_to_when(env, loc_args, ret_var, loc_body);
+        let (_, pattern_symbols, body) = patterns_to_when(env, loc_args, ret_var, loc_body);
 
         // a named closure
-        self.user_defined.insert(
+        self.partial_procs.insert(
             name,
             PartialProc {
                 annotation,
-                patterns: arg_symbols,
+                pattern_symbols,
                 body: body.value,
             },
         );
@@ -70,44 +75,86 @@ impl<'a> Procs<'a> {
         loc_body: Located<roc_can::expr::Expr>,
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
-    ) -> Result<Layout<'a>, ()> {
-        let (arg_vars, arg_symbols, body) = patterns_to_when(env, loc_args, ret_var, loc_body);
+    ) -> Layout<'a> {
+        let (pattern_vars, pattern_symbols, body) =
+            patterns_to_when(env, loc_args, ret_var, loc_body);
 
-        // an anonymous closure. These will always be specialized already
-        // by the surrounding context
+        let layout = layout_cache
+            .from_var(env.arena, annotation, env.subs, env.pointer_size)
+            .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-        match specialize_proc_body(
-            env,
-            self,
-            annotation,
+        let pending = PendingSpecialization {
             ret_var,
+            fn_var: annotation,
+            pattern_vars,
+        };
+
+        self.add_pending_specialization(symbol, layout.clone(), pending);
+
+        self.partial_procs.insert(
             symbol,
-            &arg_vars,
-            &arg_symbols,
-            annotation,
-            body.value,
-            layout_cache,
-        ) {
-            Ok(proc) => {
-                let layout = layout_cache
-                    .from_var(env.arena, annotation, env.subs, env.pointer_size)
-                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+            PartialProc {
+                annotation,
+                pattern_symbols,
+                body: body.value,
+            },
+        );
 
-                self.insert_specialization(symbol, layout.clone(), proc);
-
-                Ok(layout)
-            }
-            Err(()) => {
-                self.runtime_errors.insert(symbol);
-
-                Err(())
-            }
-        }
+        layout
     }
 
-    fn insert_specialization(&mut self, symbol: Symbol, layout: Layout<'a>, proc: Proc<'a>) {
+    fn builtin_referenced(&mut self, symbol: Symbol) {
+        self.builtins_referenced.insert(symbol);
+    }
+
+    fn add_pending_specialization(
+        &mut self,
+        symbol: Symbol,
+        layout: Layout<'a>,
+        pending: PendingSpecialization<'a>,
+    ) {
+        let all_pending = self
+            .pending_specializations
+            .entry(symbol)
+            .or_insert_with(|| HashMap::with_capacity_and_hasher(1, default_hasher()));
+
+        // If we already have an entry for this, it should be no different
+        // from what we're about to insert.
+        debug_assert!(
+            !all_pending.contains_key(&layout) || all_pending.get(&layout) == Some(&pending)
+        );
+
+        all_pending.insert(layout, pending);
+    }
+}
+
+//     pub fn into_map(self) -> (MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>, MutSet<Symbol>) {
+//         let mut specializations = self.specializations;
+
+//         for symbol in self.builtin.iter() {
+//             // Builtins should only ever be stored as empty maps.
+//             debug_assert!(
+//                 !specializations.contains_key(&symbol)
+//                     || specializations.get(&symbol).unwrap().is_empty()
+//             );
+
+//             specializations.insert(*symbol, MutMap::default());
+//         }
+
+//         (specializations, self.runtime_errors)
+//     }
+// }
+
+#[derive(Default)]
+pub struct Specializations<'a> {
+    by_symbol: MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>,
+    runtime_errors: MutSet<Symbol>,
+}
+
+impl<'a> Specializations<'a> {
+    pub fn insert(&mut self, symbol: Symbol, layout: Layout<'a>, proc: Proc<'a>) {
         let procs_by_layout = self
-            .specializations
+            .by_symbol
             .entry(symbol)
             .or_insert_with(|| HashMap::with_capacity_and_hasher(1, default_hasher()));
 
@@ -117,42 +164,32 @@ impl<'a> Procs<'a> {
             !procs_by_layout.contains_key(&layout) || procs_by_layout.get(&layout) == Some(&proc)
         );
 
+        // We shouldn't already have a runtime error recorded for this symbol
+        debug_assert!(!self.runtime_errors.contains(&symbol));
+
         procs_by_layout.insert(layout, proc);
     }
 
-    fn get_user_defined(&self, symbol: Symbol) -> Option<&PartialProc<'a>> {
-        self.user_defined.get(&symbol)
+    pub fn runtime_error(&mut self, symbol: Symbol) {
+        // We shouldn't already have a normal proc recorded for this symbol
+        debug_assert!(!self.by_symbol.contains_key(&symbol));
+
+        self.runtime_errors.insert(symbol);
+    }
+
+    pub fn to_owned(self) -> (MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>, MutSet<Symbol>) {
+        (self.by_symbol, self.runtime_errors)
     }
 
     pub fn len(&self) -> usize {
         let runtime_errors: usize = self.runtime_errors.len();
-        let specializations: usize = self.specializations.len();
+        let specializations: usize = self.by_symbol.len();
 
         runtime_errors + specializations
     }
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-
-    fn insert_builtin(&mut self, symbol: Symbol) {
-        self.builtin.insert(symbol);
-    }
-
-    pub fn into_map(self) -> (MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>, MutSet<Symbol>) {
-        let mut specializations = self.specializations;
-
-        for symbol in self.builtin.iter() {
-            // Builtins should only ever be stored as empty maps.
-            debug_assert!(
-                !specializations.contains_key(&symbol)
-                    || specializations.get(&symbol).unwrap().is_empty()
-            );
-
-            specializations.insert(*symbol, MutMap::default());
-        }
-
-        (specializations, self.runtime_errors)
     }
 }
 
@@ -491,9 +528,9 @@ fn from_can<'a>(
         Str(string) | BlockStr(string) => Expr::Str(env.arena.alloc(string)),
         Var(symbol) => {
             if procs.module_thunks.contains(&symbol) {
-                let partial_proc = procs.get_user_defined(symbol).unwrap();
+                let partial_proc = procs.partial_procs.get(&symbol).unwrap();
                 let fn_var = partial_proc.annotation;
-                let ret_var = partial_proc.annotation;
+                let ret_var = fn_var; // These are the same for a thunk.
 
                 // This is a top-level declaration, which will code gen to a 0-arity thunk.
                 call_by_name(
@@ -506,6 +543,10 @@ fn from_can<'a>(
                     layout_cache,
                 )
             } else {
+                if symbol.is_builtin() {
+                    procs.builtin_referenced(symbol);
+                }
+
                 Expr::Load(symbol)
             }
         }
@@ -516,15 +557,10 @@ fn from_can<'a>(
 
         Closure(ann, name, _, loc_args, boxed_body) => {
             let (loc_body, ret_var) = *boxed_body;
+            let layout =
+                procs.insert_anonymous(env, name, ann, loc_args, loc_body, ret_var, layout_cache);
 
-            match procs.insert_anonymous(env, name, ann, loc_args, loc_body, ret_var, layout_cache)
-            {
-                Ok(layout) => Expr::FunctionPointer(name, layout),
-                Err(()) => {
-                    // TODO make this message better
-                    Expr::RuntimeErrorFunction("This function threw a runtime error.")
-                }
-            }
+            Expr::FunctionPointer(name, layout)
         }
 
         Call(boxed, loc_args, _) => {
@@ -1337,90 +1373,45 @@ fn call_by_name<'a>(
     loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Expr<'a> {
-    // create specialized procedure to call
-
-    // If we need to specialize the body, this will get populated with the info
-    // we need to do that. This is defined outside the procs.get_user_defined(...) call
-    // because if we tried to specialize the body inside that match, we would
-    // get a borrow checker error about trying to borrow `procs` as mutable
-    // while there is still an active immutable borrow.
-    #[allow(clippy::type_complexity)]
-    let opt_specialize_body: Option<(Variable, roc_can::expr::Expr, Vec<'a, Symbol>)>;
-
+    // Register a pending_specialization for this function
     match layout_cache.from_var(env.arena, fn_var, env.subs, env.pointer_size) {
         Ok(layout) => {
-            match procs.get_user_defined(proc_name) {
-                Some(partial_proc) => {
-                    match procs
-                        .specializations
-                        .get(&proc_name)
-                        .and_then(|procs_by_layout| procs_by_layout.get(&layout))
-                    {
-                        Some(_) => {
-                            // a specialization with this layout already exists.
-                            opt_specialize_body = None;
-                        }
-                        None => {
-                            if procs.pending_specializations.get(&proc_name) == Some(&layout) {
-                                // If we're already in the process of specializing this, don't
-                                // try to specialize it further; otherwise, we'll loop forever.
-                                opt_specialize_body = None;
-                            } else {
-                                opt_specialize_body = Some((
-                                    partial_proc.annotation,
-                                    partial_proc.body.clone(),
-                                    partial_proc.patterns.clone(),
-                                ));
-                            }
-                        }
-                    }
+            // Build the CallByName node
+            let arena = env.arena;
+            let mut args = Vec::with_capacity_in(loc_args.len(), arena);
+            let mut arg_vars = Vec::with_capacity_in(loc_args.len(), arena);
+
+            for (var, loc_arg) in loc_args {
+                // Don't bother building up arg_vars if this is a builtin
+                if !proc_name.is_builtin() {
+                    arg_vars.push(var);
                 }
-                None => {
-                    opt_specialize_body = None;
 
-                    // This happens for built-in symbols (they are never defined as a Closure)
-                    procs.insert_builtin(proc_name);
-                }
-            };
-
-            if let Some((annotation, body, loc_patterns)) = opt_specialize_body {
-                // register proc, so specialization doesn't loop infinitely
-                procs
-                    .pending_specializations
-                    .insert(proc_name, layout.clone());
-
-                let arg_vars = loc_args.iter().map(|v| v.0).collect::<std::vec::Vec<_>>();
-
-                match specialize_proc_body(
-                    env,
-                    procs,
-                    fn_var,
-                    ret_var,
-                    proc_name,
-                    &arg_vars,
-                    &loc_patterns,
-                    annotation,
-                    body,
-                    layout_cache,
-                ) {
-                    Ok(proc) => {
-                        procs.insert_specialization(proc_name, layout.clone(), proc);
+                match layout_cache.from_var(&env.arena, var, &env.subs, env.pointer_size) {
+                    Ok(layout) => {
+                        args.push((from_can(env, loc_arg.value, procs, layout_cache), layout));
                     }
                     Err(()) => {
-                        procs.runtime_errors.insert(proc_name);
+                        // One of this function's arguments code gens to a runtime error,
+                        // so attempting to call it will immediately crash.
+                        return Expr::RuntimeError("");
                     }
                 }
             }
 
-            // generate actual call
-            let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
+            if proc_name.is_builtin() {
+                // record that we've called this builtin, meaning it needs
+                // to be code-genned
+                procs.builtin_referenced(proc_name);
+            } else {
+                let pending = PendingSpecialization {
+                    pattern_vars: arg_vars,
+                    ret_var,
+                    fn_var,
+                };
 
-            for (var, loc_arg) in loc_args {
-                let layout = layout_cache
-                    .from_var(&env.arena, var, &env.subs, env.pointer_size)
-                    .unwrap_or_else(|err| panic!("TODO gracefully handle bad layout: {:?}", err));
-
-                args.push((from_can(env, loc_arg.value, procs, layout_cache), layout));
+                // register the pending specialization, so this gets code genned later
+                procs.add_pending_specialization(proc_name, layout.clone(), pending);
             }
 
             Expr::CallByName {
@@ -1437,30 +1428,83 @@ fn call_by_name<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn specialize_proc_body<'a>(
+pub fn specialize_all<'a>(
+    env: &mut Env<'a, '_>,
+    mut procs: Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+) {
+    let mut is_finished = procs.pending_specializations.is_empty();
+
+    while !is_finished {
+        let Procs {
+            partial_procs,
+            module_thunks,
+            builtins_referenced,
+            mut pending_specializations,
+        } = procs;
+
+        procs = Procs {
+            partial_procs,
+            module_thunks,
+            builtins_referenced,
+            pending_specializations: MutMap::default(),
+        };
+
+        for (name, mut by_layout) in pending_specializations.drain() {
+            for (layout, pending) in by_layout.drain() {
+                // TODO should pending_procs hold a Rc<Proc>?
+                let partial_proc = procs.partial_procs.get(&name).unwrap().clone();
+
+                match specialize(env, &mut procs, name, layout_cache, pending, partial_proc) {
+                    Ok(proc) => {
+                        // TODO stuff
+                    }
+                    Err(()) => {
+                        // TODO runtime error
+                    }
+                }
+            }
+        }
+
+        is_finished = procs.pending_specializations.is_empty();
+    }
+}
+
+fn specialize<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
-    fn_var: Variable,
-    ret_var: Variable,
     proc_name: Symbol,
-    loc_args: &[Variable],
-    pattern_symbols: &[Symbol],
-    annotation: Variable,
-    body: roc_can::expr::Expr,
     layout_cache: &mut LayoutCache<'a>,
+    pending: PendingSpecialization<'a>,
+    partial_proc: PartialProc<'a>,
 ) -> Result<Proc<'a>, ()> {
+    let PendingSpecialization {
+        ret_var,
+        fn_var,
+        pattern_vars,
+    } = pending;
+
+    let PartialProc {
+        annotation,
+        pattern_symbols,
+        body,
+    } = partial_proc;
+
     // unify the called function with the specialized signature, then specialize the function body
     let snapshot = env.subs.snapshot();
-    let unified = roc_unify::unify::unify(env.subs, annotation, fn_var);
-    debug_assert!(matches!(unified, roc_unify::unify::Unified::Success(_)));
+
+    debug_assert!(matches!(
+        roc_unify::unify::unify(env.subs, annotation, fn_var),
+        roc_unify::unify::Unified::Success(_)
+    ));
+
     let specialized_body = from_can(env, body, procs, layout_cache);
     // reset subs, so we don't get type errors when specializing for a different signature
     env.subs.rollback_to(snapshot);
 
-    let mut proc_args = Vec::with_capacity_in(loc_args.len(), &env.arena);
+    let mut proc_args = Vec::with_capacity_in(pattern_vars.len(), &env.arena);
 
-    for (arg_var, arg_name) in loc_args.iter().zip(pattern_symbols.iter()) {
+    for (arg_var, arg_name) in pattern_vars.iter().zip(pattern_symbols.iter()) {
         let layout = layout_cache.from_var(&env.arena, *arg_var, env.subs, env.pointer_size)?;
 
         proc_args.push((layout, *arg_name));

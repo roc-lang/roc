@@ -19,6 +19,7 @@ members = [
     "compiler/mono",
     "compiler/load",
     "compiler/gen",
+    "compiler/build",
     "vendor/ena",
     "vendor/pathfinding",
     "vendor/pretty",
