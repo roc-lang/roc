@@ -1,4 +1,4 @@
-api Str provides Str, isEmpty, join
+interface Str exposes [ Str, isEmpty, join ] imports []
 
 ## Types
 
@@ -6,8 +6,8 @@ api Str provides Str, isEmpty, join
 ##
 ## Dealing with text is deep topic, so by design, Roc's `Str` module sticks
 ## to the basics. For more advanced use cases like working with raw [code points](https://unicode.org/glossary/#code_point),
-## see the [roc/unicode](roc/unicode) package, and for locale-specific text
-## functions (including capitalization, as capitalization rules vary by locale)
+## see the [roc/unicode](roc/unicode) package. For locale-specific text
+## functions (including capitalizing a string, as capitalization rules vary by locale)
 ## see the [roc/locale](roc/locale) package.
 ##
 ## ### Unicode
@@ -20,10 +20,10 @@ api Str provides Str, isEmpty, join
 ## * "🐦"
 ##
 ## Every Unicode string is a sequence of [grapheme clusters](https://unicode.org/glossary/#grapheme_cluster).
-## A grapheme cluster corresponds to what a person reading a string might call
-## a "character", but because the term "character" is used to mean many different
-## concepts across different programming languages, we intentionally avoid it in Roc.
-## Instead, we use the term "clusters" as a shorthand for "grapheme clusters."
+## A grapheme cluster corresponds to what a person reading a string might call a "character",
+## but because the term "character" is used to mean many different concepts across
+## different programming languages, the documentation for Roc strings intentionally
+## avoids it. Instead, we use the term "clusters" as a shorthand for "grapheme clusters."
 ##
 ## You can get the number of grapheme clusters in a string by calling `Str.countClusters` on it:
 ##
@@ -33,13 +33,53 @@ api Str provides Str, isEmpty, join
 ##
 ## >>> Str.countClusters "👍"
 ##
-## > The `countClusters` function traverses the entire string to calculate its answer,
-## > so it's much better for performance to use `Str.isEmpty` instead of
-## > calling `Str.countClusters` and checking whether the count was `0`.
+## > The `countClusters` function walks through the entire string to get its answer,
+## > so if you want to check whether a string is empty, you'll get much better performance
+## > by calling `Str.isEmpty myStr` instead of `Str.countClusters myStr == 0`.
 ##
-## ### Escape characters
+## ### Escape sequences
 ##
-## ### String interpolation
+## If you put a `\` in a Roc string literal, it begins an *escape sequence*.
+## An escape sequence is a convenient way to insert certain strings into other strings.
+## For example, suppose you write this Roc string:
+##
+##     "I took the one less traveled by,\nAnd that has made all the difference."
+##
+## The `"\n"` in the middle will insert a line break into this string. There are
+## other ways of getting a line break in there, but `"\n"` is the most common.
+##
+## Another way you could insert a newlines is by writing `\u{0x0A}` instead of `\n`.
+## That would result in the same string, because the `\u` escape sequence inserts
+## [Unicode code points](https://unicode.org/glossary/#code_point) directly into
+## the string. The Unicode code point 10 is a newline, and 10 is `0A` in hexadecimal.
+## `0x0A` is a Roc hexadecimal literal, and `\u` escape sequences are always
+## followed by a hexadecimal literal inside `{` and `}` like this.
+##
+## As another example, `"R\u{0x6F}c"` is the same string as `"Roc"`, because
+## `"\u{0x6F}"` corresponds to the Unicode code point for lowercase `o`. If you
+## want to [spice things up a bit](https://en.wikipedia.org/wiki/Metal_umlaut),
+## you can write `"R\u{0xF6}c"` as an alternative way to get the string `"Röc"\.
+##
+## Roc strings also support these escape sequences:
+##
+## * `\\` - an actual backslash (writing a single `\` always begins an escape sequence!)
+## * `\"` - an actual quotation mark (writing a `"` without a `\` ends the string)
+## * `\r` - [carriage return](https://en.wikipedia.org/wiki/Carriage_Return)
+## * `\t` - [horizontal tab](https://en.wikipedia.org/wiki/Tab_key#Tab_characters)
+## * `\v` - [vertical tab](https://en.wikipedia.org/wiki/Tab_key#Tab_characters)
+##
+## You can also use escape sequences to insert named strings into other strings, like so:
+##
+##     name = "Lee"
+##     city = "Roctown"
+##
+##     greeting = "Hello there, \(name)! Welcome to \(city)."
+##
+## Here, `greeting` will become the string `"Hello there, Lee! Welcome to Roctown."`.
+## This is known as [string interpolation](https://en.wikipedia.org/wiki/String_interpolation),
+## and you can use it as many times as you like inside a string. The name
+## between the parentheses must refer to a `Str` value that is currently in
+## scope, and it must be a name - it can't be an arbitrary expression like a function call.
 ##
 ## ### Encoding
 ##
@@ -47,7 +87,8 @@ api Str provides Str, isEmpty, join
 ## [encoding](https://en.wikipedia.org/wiki/Character_encoding). As it happens,
 ## they are currently encoded in UTF-8, but this module is intentionally designed
 ## not to rely on that implementation detail so that a future release of Roc can
-## potentially change it without breaking existing Roc applications.
+## potentially change it without breaking existing Roc applications. (UTF-8
+## seems pretty great today, but so did UTF-16 at an earlier point in history.)
 ##
 ## This module has functions to can convert a #Str to a #List of raw [code unit](https://unicode.org/glossary/#code_unit)
 ## integers (not to be confused with the [code points](https://unicode.org/glossary/#code_point)
@@ -63,29 +104,29 @@ Str : [ @Str ]
 ## Since #Float values are imprecise, it's usually best to limit this to the lowest
 ## number you can choose that will make sense for what you want to display.
 ##
-## If you want to kep all the digits, passing #Int.highestSupported will accomplish this,
-## but it's recommended to pass much smaller numbers instead.
-##
-## Passing a negative number for decimal places is equivalent to passing 0.
-decimal : Float *, ULen -> Str
-
-## Convert an #Int to a string.
-int : Int * -> Str
+## If you want to keep all the digits, passing the same float to #Str.num
+## will do that.
+decimal : Float *, Ulen -> Str
 
 ## Split a string around a separator.
 ##
-## >>> Str.splitClusters "1,2,3" ","
+## >>> Str.split "1,2,3" ","
 ##
 ## Passing `""` for the separator is not useful; it returns the original string
 ## wrapped in a list.
 ##
-## >>> Str.splitClusters "1,2,3" ""
+## >>> Str.split "1,2,3" ""
 ##
-## To split a string into its grapheme clusters, use #Str.clusters
+## To split a string into its individual grapheme clusters, use #Str.clusters
 split : Str, Str -> List Str
 
 ## Check
 
+## Returns #True if the string is empty, and #False otherwise.
+##
+## >>> Str.isEmpty "hi!"
+##
+## >>> Str.isEmpty ""
 isEmpty : Str -> Bool
 
 startsWith : Str, Str -> Bool
@@ -94,9 +135,9 @@ endsWith : Str, Str -> Bool
 
 contains : Str, Str -> Bool
 
-any : Str, Str -> Bool
+anyClusters : Str, (Str -> Bool) -> Bool
 
-all : Str, Str -> Bool
+allClusters : Str, (Str -> Bool) -> Bool
 
 ## Combine
 
@@ -111,14 +152,33 @@ join : List Str -> Str
 ## >>> Str.joinWith [ "one", "two", "three" ] ", "
 joinWith : List Str, Str -> Str
 
+## Add to the start of a string until it has at least the given number of
+## grapheme clusters.
+##
+## >>> Str.padClustersStart "0" 5 "36"
+##
+## >>> Str.padClustersStart "0" 1 "36"
+##
+## >>> Str.padClustersStart "0" 5 "12345"
+##
+## >>> Str.padClustersStart "✈️"" 5 "👩‍👩‍👦‍👦👩‍👩‍👦‍👦👩‍👩‍👦‍👦"
+padClustersStart : Str, Int, Str -> Str
 
-padStart : Str, Int, Str -> Str
-
-padEnd : Str, Int, Str -> Str
+## Add to the end of a string until it has at least the given number of
+## grapheme clusters.
+##
+## >>> Str.padClustersStart "0" 5 "36"
+##
+## >>> Str.padClustersStart "0" 1 "36"
+##
+## >>> Str.padClustersStart "0" 5 "12345"
+##
+## >>> Str.padClustersStart "✈️"" 5 "👩‍👩‍👦‍👦👩‍👩‍👦‍👦👩‍👩‍👦‍👦"
+padClustersEnd : Str, Int, Str -> Str
 
 ## Grapheme Clusters
 
-## Split a string into its grapheme clusters.
+## Split a string into its individual grapheme clusters.
 ##
 ## >>> Str.clusters "1,2,3"
 ##
@@ -126,6 +186,11 @@ padEnd : Str, Int, Str -> Str
 ##
 clusters : Str -> List Str
 
+## Reverse the order of the string's individual grapheme clusters.
+##
+## >>> Str.reverseClusters "1-2-3"
+##
+## >>> Str.reverseClusters  "🐦✈️"👩‍👩‍👦‍👦"
 reverseClusters : Str -> Str
 
 foldClusters : Str, { start: state, step: (state, Str -> state) } -> state
@@ -306,6 +371,3 @@ foldRevUtf16 : Str, { start: state, step: (state, U16 -> state) } -> state
 ##
 ## To convert a #Str into a plain `List U32` of UTF-32 code units, see #Str.toUtf32.
 foldRevUtf32 : Str, { start: state, step: (state, U32 -> state) } -> state
-
-
-

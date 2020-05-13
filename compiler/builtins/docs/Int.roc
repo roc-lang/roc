@@ -16,7 +16,7 @@ interface Int
 ## #U8 is an an example of an integer. It is an unsigned #Int that takes up 8 bits
 ## (aka 1 byte) in memory. The `U` is for Unsigned and the 8 is for 8 bits.
 ## Because it has 8 bits to work with, it can store 256 numbers (2^8),
-## and because it is unsigned, its lowest value is 0. This means the 256 numbers
+## and because it is unsigned, its min value is 0. This means the 256 numbers
 ## it can store range from 0 to 255.
 ##
 ## #I8 is a signed integer that takes up 8 bits. The `I` is for Integer, since
@@ -52,7 +52,7 @@ interface Int
 ##
 ## * Start by deciding if this integer should allow negative numbers, and choose signed or unsigned accordingly.
 ## * Next, think about the range of numbers you expect this number to hold. Choose the smallest size you will never expect to overflow, no matter the inputs your program receives. (Validating inputs for size, and presenting the user with an error if they are too big, can help guard against overflow.)
-## * Finally, if a particular operation is too slow at runtime, and you know the native machine word size on which it will be running (most often either 64-bit or 32-bit), try switching to an integer of that size and see if it makes a meaningful difference. (The difference is typically extremely small.)
+## * Finally, if a particular numeric calculation is running too slowly, you can try experimenting with other number sizes. This rarely makes a meaningful difference, but some processors can operate on different number sizes at different speeds.
 Int size : Num (@Int size)
 
 ## A signed 8-bit integer, ranging from -128 to 127
@@ -66,8 +66,8 @@ I64 : Int @I64
 U64 : Int @U64
 I128 : Int @I128
 U128 : Int @U128
-ILen : Int @ILen
-ULen : Int @ULen
+Ilen : Int @Ilen
+Ulen : Int @Ulen
 
 ## A 64-bit signed integer. All number literals without decimal points are compatible with #Int values.
 ##
@@ -91,7 +91,7 @@ ULen : Int @ULen
 ##
 ## * Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
 ## * Smaller integer sizes take up less memory. This savings rarely matters in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can be a performance bottleneck.
-## * CPUs typically work fastest on their native [word size](https://en.wikipedia.org/wiki/Word_(computer_architecture)). For example, 64-bit CPUs tend to work fastest on 64-bit integers. Especially if your performance profiling shows that you are CPU bound rather than memory bound, consider #ILen or #ULen.
+## * Certain CPUs work faster on some numeric sizes than others. If the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
 ##
 ## Here are the different fixed size integer types:
 ##
@@ -127,24 +127,19 @@ ULen : Int @ULen
 ## | ` (over 340 undecillion)                            0` | #U128 | 16 Bytes |
 ## | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 ##
-## There are also two variable-size integer types: #Iword and #Uword.
-## Their sizes are determined by the machine word size for the system you're
-## compiling for. For example, on a 64-bit system, #Iword is the same as #I64,
-## and #Uword is the same as #U64.
+## There are also two variable-size integer types: #Ulen and #Ilen. Their sizes
+## are determined by the [machine word length](https://en.wikipedia.org/wiki/Word_(computer_architecture))
+## of the system you're compiling for. (The "len" in their names is short for "length of a machine word.")
+## For example, when compiling for a 64-bit target, #Ulen is the same as #U64,
+## and #Ilen is the same as #I64. When compiling for a 32-bit target, #Ulen is the same as #U32,
+## and #Ilen is the same as #I32. In practice, #Ulen sees much more use than #Ilen.
 ##
 ## If any operation would result in an #Int that is either too big
-## or too small to fit in that range (e.g. calling `Int.highest32 + 1`),
-## then the operation will *overflow* or *underflow*, respectively.
-##
-## When this happens:
-##
-## * In a development build, you'll get an assertion failure.
-## * In a release build, you'll get [wrapping overflow](https://en.wikipedia.org/wiki/Integer_overflow), which is almost always a mathematically incorrect outcome for the requested operation. (If you actually want wrapping, because you're writing something like a hash function, use functions like #Int.addWrapping.)
+## or too small to fit in that range (e.g. calling `Int.maxI32 + 1`),
+## then the operation will *overflow*. When an overflow occurs, the program will crash.
 ##
 ## As such, it's very important to design your code not to exceed these bounds!
-## If you need to do math outside these bounds, consider using
-## a different representation other than #Int. The reason #Int has these
-## bounds is for performance reasons.
+## If you need to do math outside these bounds, consider using a larger numeric size.
 # Int size : Num [ @Int size ]
 
 ## Arithmetic
@@ -217,6 +212,11 @@ desc : Int a, Int a -> [ Eq, Lt, Gt ]
 
 ## TODO should we offer hash32 etc even if someday it has to do a hash64 and truncate?
 ##
+## This function can crash under these circumstances:
+##
+## * It receives a function, or any type that contains a function (for example a record, tag, or #List containing a function)
+## * It receives an erroneous #Float (`NaN`, `Infinity`, or `-Infinity` - these values can only originate from hosts)
+##
 ## CAUTION: This function may give different answers in future releases of Roc,
 ## so be aware that if you rely on the exact answer this gives today, your
 ## code may break in a future Roc release.
@@ -227,13 +227,13 @@ hash64 : a -> U64
 ## The highest number that can be stored in an #I32 without overflowing its
 ## available memory and crashing.
 ##
-## Note that this is smaller than the positive version of #Int.lowestI32
-## which means if you call #Num.abs on #Int.lowestI32, it will overflow and crash!
-highestI32 : I32
+## Note that this is smaller than the positive version of #Int.minI32
+## which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
+maxI32 : I32
 
-## The lowest number that can be stored in an #I32 without overflowing its
+## The min number that can be stored in an #I32 without overflowing its
 ## available memory and crashing.
 ##
 ## Note that the positive version of this number is this is larger than
-## #Int.highestI32, which means if you call #Num.abs on #Int.lowestI32, it will overflow and crash!
-lowest : I32
+## #Int.maxI32, which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
+minI32 : I32

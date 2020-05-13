@@ -4,9 +4,9 @@ interface List
 
 ## Types
 
-## A list of values.
+## A sequential list of values.
 ##
-## >>> [ 1, 2, 3 ] # a list of ints
+## >>> [ 1, 2, 3 ] # a list of numbers
 ##
 ## >>> [ "a", "b", "c" ] # a list of strings
 ##
@@ -20,29 +20,43 @@ interface List
 ## mixedList = [ IntElem 1, IntElem 2, StrElem "a", StrElem "b" ]
 ## ```
 ##
-## Lists are persistent data structures, meaning they are designed for fast copying.
+## The maximum size of a #List is limited by the amount of heap memory available
+## to the current process. If there is not enough memory available, attempting to
+## create the list could crash. (On Linux, where [overcommit](https://www.etalabs.net/overcommit.html)
+## is normally enabled, not having enough memory could result in the list appearing
+## to be created just fine, but then crashing later.)
 ##
-## > Under the hood, large lists are Reduced Radix Balanced Trees.
-## > Small lists are stored as flat arrays. This "small list optimization"
-## > applies to lists that take up 8 machine words in memory or fewer, so
-## > for example on a 64-bit system, a list of 8 #Int values will be
-## > stored as a flat array instead of as an RRBT.
+## > The theoretical maximum length for a list created in Roc is
+## > #Int.highestUlen divided by 2. Attempting to create a list bigger than that
+## > in Roc code will always fail, although in practice it is likely to fail
+## > at much smaller lengths due to insufficient memory being available.
 ##
-## One #List can store up to 2,147,483,648 elements (just over 2 billion). If you need to store more
-## elements than that, you can split them into smaller lists and operate
-## on those instead of on one large #List. This often runs faster in practice,
-## even for strings much smaller than 2 gigabytes.
+## ## Performance notes
+##
+## Under the hood, a list is a record containing a `len : Ulen` field as well
+## as a pointer to a flat list of bytes.
+##
+## This is not a [persistent data structure](https://en.wikipedia.org/wiki/Persistent_data_structure),
+## so copying it is not cheap! The reason #List is designed this way is because:
+##
+## * Copying small lists is typically slightly faster than copying small persistent data structures. This is because, at small sizes, persistent data structures are usually thin wrappers around flat lists anyway. They don't start conferring copying advantages until crossing a certain minimum size threshold.
+## Many list operations are no faster with persistent data structures. For example, even if it were a persistent data structure, #List.map, #List.fold, and #List.keepIf would all need to traverse every element in the list and build up the result from scratch.
+## * Roc's compiler optimizes many list operations into in-place mutations behind the scenes, depending on how the list is being used. For example, #List.map, #List.keepIf, and #List.set can all be optimized to perform in-place mutations.
+## * If possible, it is usually best for performance to use large lists in a way where the optimizer can turn them into in-place mutations. If this is not possible, a persistent data structure might be faster - but this is a rare enough scenario that it would not be good for the average Roc program's performance if this were the way #List worked by default. Instead, you can look outside Roc's standard modules for an implementation of a persistent data structure - likely built using #List under the hood!
 List elem : @List elem
 
 ## Initialize
 
 single : elem -> List elem
 
-## If given any number less than 1, returns #[].
-repeat : elem, Int -> List elem
+empty : List *
 
-range : Int, Int -> List Int
+repeat : elem, Ulen -> List elem
 
+range : Int a, Int a -> List (Int a)
+
+## TODO I don't think we should have this after all. *Maybe* have an Ok.toList instead?
+##
 ## When given an #Err, returns #[], and when given #Ok, returns a list containing
 ## only that value.
 ##
@@ -59,8 +73,7 @@ fromResult : Result elem * -> List elem
 
 reverse : List elem -> List elem
 
-sort : List elem, (elem, elem -> [ Eq, Lt, Gt ]) -> List elem
-sortBy : List elem, (elem -> field), (field, field -> [ Eq, Lt, Gt ]) -> List elem
+sort : List elem, Sorter elem -> List elem
 
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
@@ -123,7 +136,7 @@ joinMap : List before, (before -> List after) -> List after
 ## >>>     |> List.joinOks
 joinOks : List (Result elem *) -> List elem
 
-## Iterates over the shortest of the given lists and returns a list of `Tuple`
+## Iterates over the shortest of the given lists and returns a list of `Pair`
 ## tags, each wrapping one of the elements in that list, along with the elements
 ## in the same position in # the other lists.
 ##
@@ -131,12 +144,12 @@ joinOks : List (Result elem *) -> List elem
 ##
 ## Accepts up to 8 lists.
 ##
-## > For a generalized version that returns whatever you like, instead of a `Tup`,
+## > For a generalized version that returns whatever you like, instead of a `Pair`,
 ## > see `zipMap`.
 zip :
-    List a, List b, -> List [ Tup a b ]*
-    List a, List b, List c, -> List [ Tup a b c ]*
-    List a, List b, List c, List d  -> List [ Tup a b c d ]*
+    List a, List b, -> List [ Pair a b ]*
+    List a, List b, List c, -> List [ Pair a b c ]*
+    List a, List b, List c, List d  -> List [ Pair a b c d ]*
 
 ## Like `zip` but you can specify what to do with each element.
 ##
@@ -157,13 +170,35 @@ zipMap :
 ## elements for which the function returned `True`.
 ##
 ## >>> List.keepIf [ 1, 2, 3, 4 ] (\num -> num > 2)
-keepIf : List elem, (elem -> Bool) -> List elem
+##
+## ## Performance Notes
+##
+## #List.keepIf always returns a list that takes up exactly the same amount
+## of memory as the original, even if its length decreases. This is becase it
+## can't know in advance exactly how much space it will need, and if it guesses a
+## length that's too low, it would have to re-allocate.
+##
+## (If you want to do an operation like this which reduces the memory footprint
+## of the resulting list, you can do two passes over the lis with #List.fold - one
+## to calculate the precise new size, and another to populate the new list.)
+##
+## If given a unique list, #List.keepIf will mutate it in place to assemble the appropriate list.
+## If that happens, this function will not allocate any new memory on the heap.
+## If all elements in the list end up being kept, Roc will return the original
+## list unaltered.
+##
+keepIf : List elem, (elem -> [True, False]) -> List elem
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `False`.
 ##
 ## >>> List.dropIf [ 1, 2, 3, 4 ] (\num -> num > 2)
-dropIf : List elem, (elem -> Bool) -> List elem
+##
+## ## Performance Notes
+##
+## #List.dropIf has the same performance characteristics as #List.keepIf.
+## See its documentation for details on those characteristics!
+dropIf : List elem, (elem -> [True, False]) -> List elem
 
 ## Takes the requested number of elements from the front of a list
 ## and returns them.
@@ -187,6 +222,22 @@ take : List elem, Int -> List elem
 ## >>> drop 5 [ 1, 2 ]
 drop : List elem, Int -> List elem
 
+## Access
+
+first : List elem -> [Ok elem, ListWasEmpty]*
+
+last : List elem -> [Ok elem, ListWasEmpty]*
+
+get : List elem, Ulen -> [Ok elem, OutOfBounds]*
+
+max : List (Num a) -> [Ok (Num a), ListWasEmpty]*
+
+min : List (Num a) -> [Ok (Num a), ListWasEmpty]*
+
+## Modify
+
+set : List elem, Ulen, elem -> List elem
+
 ## Deconstruct
 
 split : List elem, Int -> { before: List elem, remainder: List elem }
@@ -202,7 +253,7 @@ walkBackwards : List elem, { start : state, step : (state, elem -> state) } -> s
 ## One #List can store up to 2,147,483,648 elements (just over 2 billion), which
 ## is exactly equal to the highest valid #I32 value. This means the #U32 this function
 ## returns can always be safely converted to an #I32 without losing any data.
-len : List * -> U32
+len : List * -> Ulen
 
 isEmpty : List * -> Bool
 
@@ -211,4 +262,3 @@ contains : List elem, elem -> Bool
 all : List elem, (elem -> Bool) -> Bool
 
 any : List elem, (elem -> Bool) -> Bool
-

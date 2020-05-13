@@ -1,4 +1,6 @@
-api Num provides Num, DivByZero..., neg, abs, add, sub, mul, isOdd, isEven, isPositive, isNegative, isZero
+interface Num
+    exposes [ Num, neg, abs, add, sub, mul, isOdd, isEven, isPositive, isNegative, isZero ]
+    imports []
 
 ## Types
 
@@ -12,13 +14,43 @@ api Num provides Num, DivByZero..., neg, abs, add, sub, mul, isOdd, isEven, isPo
 ##
 ## The number 1.5 technically has the type `Num FloatingPoint`, so when you pass two of them to `Num.add`, the answer you get is `3.0 : Num FloatingPoint`.
 ##
-## The type #Float is defined to be an alias for `Num FloatingPoint`, so `3.0 : Num FloatingPoint` is the same answer as `3.0 : Float`.
-##
-## Similarly, the number 1 technically has the type `Num Integer`, so when you pass two of them to `Num.add`, the answer you get is `2 : Num Integer`.
-##
-## The type #Int is defined to be an alias for `Num Integer`, so `2 : Num Integer` is the same answer as `2 : Int`.
-##
+## The type #Float is defined to be an alias for `Num FloatingPoint`, so `3.0 : Num FloatingPoint` is the same answer as `3.0 : Float`.  # # Similarly, the number 1 technically has the type `Num Integer`, so when you pass two of them to `Num.add`, the answer you get is `2 : Num Integer`.  # # The type #Int is defined to be an alias for `Num Integer`, so `2 : Num Integer` is the same answer as `2 : Int`.  #
 ## In this way, the `Num` type makes it possible to have `1 + 1` return `2 : Int` and `1.5 + 1.5` return `3.0 : Float`.
+##
+## ## Number Literals
+##
+## Number literals without decimal points (like `0`, `4` or `360`)
+## have the type `Num *` at first, but usually end up taking on
+## a more specific type based on how they're used.
+##
+## For example, in `(1 + List.len myList)`, the `1` has the type `Num *` at first,
+## but because `List.len` returns a `Ulen`, the `1` ends up changing from
+## `Num *` to the more specific `Ulen`, and the expression as a whole
+## ends up having the type `Ulen`.
+##
+## Sometimes number literals don't become more specific. For example,
+## the #Num.toStr function has the type `Num * -> Str`. This means that
+## when calling `Num.toStr (5 + 6)`, the expression `(5 + 6)`
+## still has the type `Num *`. When this happens, `Num *` defaults to
+## being an #I32 - so this addition expression would overflow
+## if either 5 or 6 were replaced with a number big enough to cause
+## addition overflow on an #I32.
+##
+## If this default of #I32 is not big enough for your purposes,
+## you can add an `i64` to the end of the number literal, like so:
+##
+## >>> Num.toStr 5_000_000_000i64
+##
+## This `i64` suffix specifies that you want this number literal to be
+## an #I64 instead of a `Num *`. All the other numeric types have
+## suffixes just like `i64`; here are some other examples:
+##
+## * `215u8` is a `215` value of type #U8
+## * `76.4f32` is a `76.4` value of type #F32
+## * `12345ulen` is a `12345` value of type `#Ulen`
+##
+## In practice, these are rarely needed. It's most common to write
+## number literals without any suffix.
 Num range : @Num range
 
 ## Convert
@@ -137,3 +169,19 @@ sub : Num range, Num range -> Num range
 ## >>> Float.pi
 ## >>>     |> Num.mul 2.0
 mul : Num range, Num range -> Num range
+
+## Convert
+
+## Convert a number to a string, formatted as the traditional base 10 (decimal).
+##
+## >>> Num.toStr 42
+##
+## Only #Float values will show a decimal point, and they will always have one.
+##
+## >>> Num.toStr 4.2
+##
+## >>> Num.toStr 4.0
+##
+## For other bases see #toHexStr, #toOctalStr, and #toBinaryStr.
+toStr : Num * -> Str
+
