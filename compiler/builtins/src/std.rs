@@ -309,11 +309,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         SolvedType::Func(vec![int_type(), int_type()], Box::new(int_type())),
     );
 
+    // rem : Int, Int -> Int
+    add_type(
+        Symbol::INT_REM_UNSAFE,
+        SolvedType::Func(vec![int_type(), int_type()], Box::new(int_type())),
+    );
+
+    // mod : Int, Int -> Result Int [ DivByZero ]*
     let div_by_zero = SolvedType::TagUnion(
         vec![(TagName::Global("DivByZero".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
-    // mod : Int, Int -> Result Int [ DivByZero ]*
+
     add_type(
         Symbol::INT_MOD,
         SolvedType::Func(
