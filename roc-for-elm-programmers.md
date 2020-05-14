@@ -225,7 +225,95 @@ when color is
 
 ## Custom Types
 
-This is the biggest difference between Roc and Elm.
+This is the biggest semantic difference between Roc and Elm.
+
+Let's start with the motivation. Suppose I'm using a platform for making a
+web server, and I want to:
+
+* Read some data from a file
+* Send a HTTP request containing some of the data from the file
+* Write some data to a file containing some of the data from the HTTP response
+
+Assuming I'm writing this on a Roc platform which has a `Task`-based API,
+here's how that code might look:
+
+```elm
+doStuff = \filename ->
+    Task.after (File.read filename) \fileData ->
+    Task.after (Http.get (urlFromData fileData)) \response ->
+    File.write filename (responseToData response)
+```
+
+A few things to note before getting into how this relates to custom types:
+
+1. This is written in a style designed for chained effects. It's kinda like [`do` notation](https://en.wikibooks.org/wiki/Haskell/do_notation), but implemented as a formatting convention instead of special syntax.
+2. In Elm you'd need to add a `<|` before the anonymous functions (e.g. `<| \response ->`) but in Roc you don't. (That parsing design decision was partly motivated by supporting this style of chained effects.)
+3. `Task.after` is `Task.andThen` with its arguments flipped.
+
+What would the type of the above expression be? Let's say these function calls
+have the following types:
+
+```elm
+File.read : Filename -> Task File.Data File.ReadErr
+File.write : Filename, File.Data -> Task File.Data File.WriteErr
+Http.get : Url -> Task Http.Response Http.Err
+
+after : Task a err, (a -> Task b err) -> Task b err
+```
+
+If these are the types, the result would be a type mismatch. Those `Task` values
+have incompatible error types, so `after` won't be able to chain them together.
+
+This situation is one of the motivations behind Roc's *tags* feature. Using tags,
+not only will this type-check, but at the end we get a combined error type which
+has the union of all the possible errors that could have occurred in this sequence.
+We can then handle those errors using a single `when`, like so:
+
+```elm
+when error is
+    # Http.Err possibilities
+    PageNotFound -> ...
+    Timeout -> ...
+    BadPayload -> ...
+
+    # File.ReadErr possibilities
+    FileNotFound -> ...
+    ReadAcessDenied -> ...
+    FileCorrupted -> ...
+
+    # File.WriteErr possibilities
+    DirectoryNotFound -> ...
+    WriteAcessDenied -> ...
+    DiskFull -> ...
+```
+
+
+
+Here is a set
+of slightly different types that would make the above expression compile.
+(`after` is unchanged.)
+
+```elm
+File.read : Filename -> Task File.Data (File.ReadErr *)
+File.write : Filename, File.Data -> Task File.Data (File.WriteErr *)
+Http.get : Url -> Task Http.Response (Http.Err *)
+
+after : Task a err, (a -> Task b err) -> Task b err
+```
+
+The key is that each of the error types expands to a Roc *tag union*. Here's how
+they look:
+
+```elm
+Http.Err a : [PageNotFound, Timeout, BadPayload]a
+File.ReadErr a : [FileNotFound, Corrupted, BadFormat]a
+File.WriteErr a : [FileNotFound, DiskFull]a
+```
+
+
+```elm
+first : List elem -> [Ok elem, ListWasEmpty]*
+```
 
 > It's motivated primarily by error handling in chained effects
 > (e.g. multiple consecutive `Task.andThen`s between tasks with incompatible error types),

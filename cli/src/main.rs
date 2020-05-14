@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate clap;
+
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
@@ -8,6 +9,7 @@ use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_collections::all::ImMap;
 use roc_collections::all::MutMap;
+use roc_gen::layout_id::LayoutIds;
 use roc_gen::llvm::build::{
     build_proc, build_proc_header, get_call_conventions, module_from_builtins, OptLevel,
 };
@@ -358,7 +360,7 @@ fn gen(
 
     // Compute main_fn_type before moving subs to Env
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
-    let layout = Layout::from_content(&arena, content, &subs, ptr_bytes).unwrap_or_else(|err| {
+    let layout = Layout::new(&arena, content, &subs, ptr_bytes).unwrap_or_else(|err| {
         panic!(
             "Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}",
             err, subs
@@ -378,9 +380,10 @@ fn gen(
         module: arena.alloc(module),
         ptr_bytes,
     };
+    let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
+    let mut layout_ids = LayoutIds::default();
     let mut procs = Procs::default();
     let mut mono_problems = std::vec::Vec::new();
-    let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
     let mut mono_env = Env {
         arena,
         subs: &mut subs,
@@ -451,13 +454,17 @@ fn gen(
     env.interns.all_ident_ids.insert(home, ident_ids);
 
     let mut headers = Vec::with_capacity(procs.len());
+    let (mut proc_map, runtime_errors) = procs.into_map();
+
+    assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
 
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    for (symbol, opt_proc) in procs.as_map().into_iter() {
-        if let Some(proc) = opt_proc {
-            let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
+    for (symbol, mut procs_by_layout) in proc_map.drain() {
+        for (layout, proc) in procs_by_layout.drain() {
+            let (fn_val, arg_basic_types) =
+                build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
             headers.push((proc, fn_val, arg_basic_types));
         }
@@ -469,7 +476,7 @@ fn gen(
         // (This approach means we don't have to defensively clone name here.)
         //
         // println!("\n\nBuilding and then verifying function {}\n\n", name);
-        build_proc(&env, proc, &procs, fn_val, arg_basic_types);
+        build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
 
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);
@@ -495,10 +502,10 @@ fn gen(
 
     let ret = roc_gen::llvm::build::build_expr(
         &env,
+        &mut layout_ids,
         &ImMap::default(),
         main_fn,
         &main_body,
-        &Procs::default(),
     );
 
     builder.build_return(Some(&ret));

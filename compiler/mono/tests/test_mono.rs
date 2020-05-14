@@ -67,7 +67,7 @@ mod test_mono {
         // Put this module's ident_ids back in the interns
         interns.all_ident_ids.insert(home, ident_ids);
 
-        assert_eq!(mono_expr, get_expected(interns));
+        assert_eq!(get_expected(interns), mono_expr);
     }
 
     #[test]
@@ -84,13 +84,20 @@ mod test_mono {
     fn float_addition() {
         compiles_to(
             "3.0 + 4",
-            CallByName(
-                Symbol::FLOAT_ADD,
-                &[
+            CallByName {
+                name: Symbol::FLOAT_ADD,
+                layout: Layout::FunctionPointer(
+                    &[
+                        Layout::Builtin(Builtin::Float64),
+                        Layout::Builtin(Builtin::Float64),
+                    ],
+                    &Layout::Builtin(Builtin::Float64),
+                ),
+                args: &[
                     (Float(3.0), Layout::Builtin(Builtin::Float64)),
                     (Float(4.0), Layout::Builtin(Builtin::Float64)),
                 ],
-            ),
+            },
         );
     }
 
@@ -98,13 +105,20 @@ mod test_mono {
     fn int_addition() {
         compiles_to(
             "0xDEADBEEF + 4",
-            CallByName(
-                Symbol::INT_ADD,
-                &[
+            CallByName {
+                name: Symbol::INT_ADD,
+                layout: Layout::FunctionPointer(
+                    &[
+                        Layout::Builtin(Builtin::Int64),
+                        Layout::Builtin(Builtin::Int64),
+                    ],
+                    &Layout::Builtin(Builtin::Int64),
+                ),
+                args: &[
                     (Int(3735928559), Layout::Builtin(Builtin::Int64)),
                     (Int(4), Layout::Builtin(Builtin::Int64)),
                 ],
-            ),
+            },
         );
     }
 
@@ -113,13 +127,20 @@ mod test_mono {
         // Default to Int for `Num *`
         compiles_to(
             "3 + 5",
-            CallByName(
-                Symbol::INT_ADD,
-                &[
+            CallByName {
+                name: Symbol::INT_ADD,
+                layout: Layout::FunctionPointer(
+                    &[
+                        Layout::Builtin(Builtin::Int64),
+                        Layout::Builtin(Builtin::Int64),
+                    ],
+                    &Layout::Builtin(Builtin::Int64),
+                ),
+                args: &[
                     (Int(3), Layout::Builtin(Builtin::Int64)),
                     (Int(5), Layout::Builtin(Builtin::Int64)),
                 ],
-            ),
+            },
         );
     }
 
@@ -133,20 +154,31 @@ mod test_mono {
             "#,
             {
                 use self::Builtin::*;
-                use Layout::Builtin;
                 let home = test_home();
-
-                let gen_symbol_3 = Interns::from_index(home, 3);
-                let gen_symbol_4 = Interns::from_index(home, 4);
+                let gen_symbol_0 = Interns::from_index(home, 0);
 
                 Struct(&[
                     (
-                        CallByName(gen_symbol_3, &[(Int(4), Builtin(Int64))]),
-                        Builtin(Int64),
+                        CallByName {
+                            name: gen_symbol_0,
+                            layout: Layout::FunctionPointer(
+                                &[Layout::Builtin(Builtin::Int64)],
+                                &Layout::Builtin(Builtin::Int64),
+                            ),
+                            args: &[(Int(4), Layout::Builtin(Int64))],
+                        },
+                        Layout::Builtin(Int64),
                     ),
                     (
-                        CallByName(gen_symbol_4, &[(Float(3.14), Builtin(Float64))]),
-                        Builtin(Float64),
+                        CallByName {
+                            name: gen_symbol_0,
+                            layout: Layout::FunctionPointer(
+                                &[Layout::Builtin(Builtin::Float64)],
+                                &Layout::Builtin(Builtin::Float64),
+                            ),
+                            args: &[(Float(3.14), Layout::Builtin(Float64))],
+                        },
+                        Layout::Builtin(Float64),
                     ),
                 ])
             },
@@ -314,22 +346,31 @@ mod test_mono {
             "#,
             {
                 use self::Builtin::*;
-                use Layout::Builtin;
                 let home = test_home();
 
-                let gen_symbol_3 = Interns::from_index(home, 3);
-                let gen_symbol_4 = Interns::from_index(home, 4);
+                let gen_symbol_0 = Interns::from_index(home, 0);
 
-                CallByName(
-                    gen_symbol_3,
-                    &[(
+                CallByName {
+                    name: gen_symbol_0,
+                    layout: Layout::FunctionPointer(
+                        &[Layout::Struct(&[Layout::Builtin(Builtin::Int64)])],
+                        &Layout::Struct(&[Layout::Builtin(Builtin::Int64)]),
+                    ),
+                    args: &[(
                         Struct(&[(
-                            CallByName(gen_symbol_4, &[(Int(4), Builtin(Int64))]),
-                            Builtin(Int64),
+                            CallByName {
+                                name: gen_symbol_0,
+                                layout: Layout::FunctionPointer(
+                                    &[Layout::Builtin(Builtin::Int64)],
+                                    &Layout::Builtin(Builtin::Int64),
+                                ),
+                                args: &[(Int(4), Layout::Builtin(Int64))],
+                            },
+                            Layout::Builtin(Int64),
                         )]),
-                        Layout::Struct(&[Builtin(Int64)]),
+                        Layout::Struct(&[Layout::Builtin(Int64)]),
                     )],
-                )
+                }
             },
         )
     }
@@ -464,13 +505,30 @@ mod test_mono {
     #[test]
     fn set_unique_int_list() {
         compiles_to("List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1", {
-            CallByName(
-                Symbol::LIST_GET_UNSAFE,
-                &vec![
+            CallByName {
+                name: Symbol::LIST_GET_UNSAFE,
+                layout: Layout::FunctionPointer(
+                    &[
+                        Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
+                        Layout::Builtin(Builtin::Int64),
+                    ],
+                    &Layout::Builtin(Builtin::Int64),
+                ),
+                args: &vec![
                     (
-                        CallByName(
-                            Symbol::LIST_SET,
-                            &vec![
+                        CallByName {
+                            name: Symbol::LIST_SET,
+                            layout: Layout::FunctionPointer(
+                                &[
+                                    Layout::Builtin(Builtin::List(&Layout::Builtin(
+                                        Builtin::Int64,
+                                    ))),
+                                    Layout::Builtin(Builtin::Int64),
+                                    Layout::Builtin(Builtin::Int64),
+                                ],
+                                &Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
+                            ),
+                            args: &vec![
                                 (
                                     Array {
                                         elem_layout: Layout::Builtin(Builtin::Int64),
@@ -483,12 +541,12 @@ mod test_mono {
                                 (Int(1), Layout::Builtin(Builtin::Int64)),
                                 (Int(42), Layout::Builtin(Builtin::Int64)),
                             ],
-                        ),
+                        },
                         Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
                     ),
                     (Int(1), Layout::Builtin(Builtin::Int64)),
                 ],
-            )
+            }
         });
     }
 
