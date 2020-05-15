@@ -469,8 +469,35 @@ mul : Num range, Num range -> Num range
 ## For other bases see #toHexStr, #toOctalStr, and #toBinaryStr.
 toStr : Num * -> Str
 
+## Round off the given float to the nearest integer.
+round : Float * -> Int *
+ceil : Float * -> Int *
+floor : Float * -> Int *
+trunc : Float * -> Int *
+
+## Convert an #Int to an #I8. If the given number doesn't fit in #I8, it will be truncated.
+##
+## To convert a #Float to an #I8, first call either #Num.round, #Num.ceil, or #Num.floor
+## on it, then call this on the resulting #Int.
+toI8 : Int * -> I8
+toI16 : Int * -> I16
+toI32 : Int * -> I32
+toI64 : Int * -> I64
+toI128 : Int * -> I128
+## Convert an #Int to an #U8. If the given number doesn't fit in #U8, it will be truncated.
+## Crashes if the given number is negative.
+toU8 : Int * -> U8
+toU16 : Int * -> U16
+toU32 : Int * -> U32
+toU64 : Int * -> U64
+toU128 : Int * -> U128
+
+## Convert a #Num to a #F16. If the given number can't be precisely represented in a #F16,
+## there will be a loss of precision.
+toF16 : Num * -> F16
 toF32 : Num * -> F32
 toF64 : Num * -> F64
+toF128 : Num * -> F128
 
 ## Divide two integers and #Num.round  the resulut.
 ##
