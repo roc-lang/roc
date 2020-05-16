@@ -1,0 +1,238 @@
+:root {
+  /* --link-color: #208848; */
+  --link-color: #5C0BFF;
+  /* --link-color: #952294; */
+  --text-color: #333333;
+  --main-bg-color: #fdfdfd;
+  --border-bg-color: #eeeeee;
+  --logo-primary: #9d9d9d;
+  --logo-secondary: #bababa;
+}
+
+a {
+  color: #972395;
+}
+
+.top-header {
+  box-sizing: border-box;
+  flex-direction: row;
+  align-items: center;
+  display: flex;
+  margin: 0 auto;
+  height: 72px;
+  width: 960px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", serif;
+  font-size: 24px;
+}
+
+.main-nav {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-grow: 1;
+  box-sizing: border-box;
+  padding: 6px 0;
+}
+
+.logo {
+  display: inline-block;
+  height: 40px;
+  color: #fefefe;
+}
+
+.logo:hover {
+  text-decoration: none;
+}
+
+.logo-primary {
+  fill: var(--logo-primary);
+}
+
+.logo-secondary {
+  fill: var(--logo-secondary);
+}
+
+.nav-elem {
+  display: inline-block;
+  font-size: 32px;
+}
+
+.pkg-name {
+  color: var(--text-color);
+  display: inline-block;
+  margin: 0 24px;
+  font-weight: normal;
+}
+
+.pkg-name a {
+  color: inherit;
+}
+
+a {
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.version {
+  margin-top: 8px;
+  font-size: 24px;
+  font-weight: bold;
+  color: var(--text-color);
+  opacity: 0.5;
+}
+
+body {
+  box-sizing: border-box;
+  margin: 0;
+  font-family: Georgia, serif;
+  min-width: 960px;
+  color: var(--text-color);
+  background-color: var(--border-bg-color);
+}
+
+p {
+    overflow-wrap: break-word;
+}
+
+.content {
+  display: flex;
+  width: 960px;
+  box-sizing: border-box;
+  margin: 0 auto;
+  justify-content: space-between;
+}
+
+main {
+  font-size: 18px;
+  line-height: 32px;
+  padding: 24px 32px;
+  width: 720px;
+  box-sizing: border-box;
+  position: relative;
+  background-color: var(--main-bg-color);
+}
+
+.sidebar {
+  box-sizing: border-box;
+  padding-left: 20px;
+  width: 240px;
+}
+
+.sidebar-heading {
+  width: 240px;
+  font-size: 32px;
+  font-weight: normal;
+  padding-left: 36px;
+  box-sizing: border-box;
+  opacity: 0.75;
+}
+
+.module-name {
+  font-size: 56px;
+  line-height: 56px;
+  font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  font-weight: normal;
+  padding: 0 0 18px 0;
+  color: var(--faded-color);
+}
+
+.sidebar-link {
+  font-size: 24px;
+  font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  font-weight: normal;
+  color: var(--text-color);
+  opacity: 0.5;
+  display: block;
+  width: 100%;
+  padding: 8px 16px;
+}
+
+.sidebar-link:hover {
+  text-decoration: none;
+}
+
+p a {
+  color: var(--link-color);
+}
+
+h3 {
+  font-size: 32px;
+  font-weight: normal;
+  margin: 32px 0 24px 0;
+}
+
+h4 {
+  font-size: 24px;
+  font-weight: normal;
+  margin: 32px 0 24px 0;
+}
+
+.type-def {
+  font-size: 24px;
+  color: var(--link-color);
+}
+
+.code-snippet {
+  padding: 12px 16px;
+  display: block;
+  box-sizing: border-box;
+  font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  background-color: var(--border-bg-color);
+}
+
+.module-search {
+  width: 100%;
+  font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  display: block;
+  box-sizing: border-box;
+  font-size: 18px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background-color: #eeeeee;
+  border: 1px solid #444444;
+  color: #111111;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --main-bg-color: #080808;
+    --border-bg-color: #202020;
+    --text-color: #fefefe;
+    --faded-color: #777777;
+    /* --link-color: #69dc9e; */
+    --link-color: #AB82FF;
+    /* --link-color: #C87CDE; */
+    /* --link-color: #11b5e4; */
+    /* --link-color: #34d1bf; */
+    /* --link-color: #16C6D0; */
+    /* --link-color: #0C7489; */
+    /* --link-color: #0affff; */
+    /* --link-color: #00EBEB; */
+    /* --link-color: #00e6e6; */
+    --logo-primary: #ffffffee;
+    --logo-secondary: #ffffffaa;
+  }
+
+  html {
+    scrollbar-color: #444444 #2f2f2f;
+  }
+
+  .module-search {
+    background-color: #1b1d23;
+    border: 1px solid #444444;
+    color: #fefefefe;
+  }
+
+  .sidebar-link:hover {
+    color: #fefefe;
+    background-color: #229156;
+  }
+
+  .sidebar-heading {
+    color: #aaaaaa;
+  }
+}

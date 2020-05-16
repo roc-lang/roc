@@ -1,0 +1,130 @@
+<!doctype html>
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+
+    <title>The Roc Programming Language</title>
+    <meta name="description" content="A language for building fast, reliable software.">
+
+    <link rel="stylesheet" href="styles.css">
+  </head>
+
+  <body>
+    <header class="top-header">
+      <nav class="main-nav">
+        <a class="nav-elem logo" href="/">
+          <svg width="40" height="40" viewBox="0 0 52 53" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <polygon points="23.6751,22.7086 17.655,53 27.4527,45.2132 26.4673,39.3424" class="logo-primary"/>
+            <polygon points="37.2438,19.0101 44.0315,26.3689 45.1065,20.9598 45.9665,16.6324" class="logo-secondary"/>
+            <polygon points="23.8834,3.21052 0,0 23.6751,22.7086" class="logo-secondary"/>
+            <polygon points="44.0315,26.3689 23.6751,22.7086 26.4673,39.3424" class="logo-secondary"/>
+            <polygon points="52,23.1736 45.9665,16.6324 45.1065,20.9598" class="logo-primary"/>
+            <polygon points="23.6751,22.7086 44.0315,26.3689 37.2438,19.0101 23.8834,3.21052" class="logo-primary"/>
+          </svg>
+        </a>
+        <h1 class="pkg-name">
+          <a class="nav-elem" href="/roc">roc</a><span class="nav-elem">/</span><a class="nav-elem" href="/roc/unicode">unicode</a>
+       </h1>
+        <a class="nav-elem version" href="/roc/unicode/1.0.0">1.0.0</a>
+      </nav>
+      <h2 class="sidebar-heading">modules</h2>
+    </header>
+    <div class="content">
+      <main>
+        <h2 class="module-name">Str</h2>
+        <h3 id="types">Types</h3>
+        <code class="code-snippet"><a id="Str.Str" class="type-def" href="#Str.Str">Str</a></code>
+        <p>A <a href="https://unicode.org">Unicode</a> text value.</p>
+        <p>Dealing with text is deep topic, so by design, Roc&#39;s <code>Str</code> module sticks
+        to the basics. For more advanced use cases like working with raw <a href="https://unicode.org/glossary/#code_point">code points</a>,
+        see the <a href="roc/unicode">roc/unicode</a> package. For locale-specific text
+        functions (including capitalizing a strin, as capitalization rules vary by locale)
+        see the <a href="roc/locale">roc/locale</a> package.</p>
+        <h4 id="unicode">Unicode</h4>
+        <p>Unicode can represent text values which span multiple languages, symbols, and emoji.
+        Here are some valid Roc strings:</p>
+        <ul>
+          <li>&quot;Roc&quot;</li>
+          <li>&quot;鹏&quot;</li>
+          <li>&quot;🐦&quot;</li>
+        </ul>
+        <p>Every Unicode string is a sequence of <a href="https://unicode.org/glossary/#grapheme_cluster">grapheme clusters</a>.
+        A grapheme cluster corresponds to what a person reading a string might call a &quot;character&quot;,
+        but because the term &quot;character&quot; is used to mean many different concepts across
+        different programming languages, the documentation for Roc strings intentionally
+        avoids it. Instead, we use the term &quot;clusters&quot; as a shorthand for &quot;grapheme clusters.&quot;</p>
+        <p>You can get the number of grapheme clusters in a string by calling <code>Str.countClusters</code> on it:</p>
+        <blockquote>
+        <blockquote>
+        <blockquote>
+        <p>Str.countClusters &quot;Roc&quot;</p>
+        <p>Str.countClusters &quot;音乐&quot;</p>
+        <p>Str.countClusters &quot;👍&quot;</p>
+        </blockquote>
+        </blockquote>
+        <p>The <code>countClusters</code> function walks through the entire string to get its answer,
+        so if you want to check whether a string is empty, you&#39;ll get much better performance
+        by calling <code>Str.isEmpty myStr</code> instead of <code>Str.countClusters myStr == 0</code>.</p>
+        </blockquote>
+        <h4 id="escape-sequences">Escape sequences</h4>
+        <p>If you put a <code>\</code> in a Roc string literal, it begins an <em>escape sequence</em>.
+        An escape sequence is a convenient way to insert certain strings into other strings.
+        For example, suppose you write this Roc string:</p>
+        <pre><code><span class="hljs-comment">"I took the one less traveled by,\nAnd that has made all the difference."</span>
+        </code></pre><p>The <code>&quot;\n&quot;</code> in the middle will insert a line break into this string. There are
+        other ways of getting a line break in there, but <code>&quot;\n&quot;</code> is the most common.</p>
+        <p>Another way you could insert a newlines is by writing <code>\u{0x0A}</code> instead of <code>\n</code>.
+        That would result in the same string, because the <code>\u</code> escape sequence inserts
+        <a href="https://unicode.org/glossary/#code_point">Unicode code points</a> directly into
+        the string. The Unicode code point 10 is a newline, and 10 is <code>0A</code> in hexadecimal.
+        <code>0x0A</code> is a Roc hexadecimal literal, and <code>\u</code> escape sequences are always
+        followed by a hexadecimal literal inside <code>{</code> and <code>}</code> like this.</p>
+        <p>As another example, <code>&quot;R\u{0x6F}c&quot;</code> is the same string as <code>&quot;Roc&quot;</code>, because
+        <code>&quot;\u{0x6F}&quot;</code> corresponds to the Unicode code point for lowercase <code>o</code>. If you
+        want to <a href="https://en.wikipedia.org/wiki/Metal_umlaut">spice things up a bit</a>,
+        you can write <code>&quot;R\u{0xF6}c&quot;</code> as an alternative way to get the string `&quot;Röc&quot;.</p>
+        <p>Roc strings also support these escape sequences:</p>
+        <ul>
+        <li><code>\\</code> - an actual backslash (writing a single <code>\</code> always begins an escape sequence!)</li>
+        <li><code>\&quot;</code> - an actual quotation mark (writing a <code>&quot;</code> without a <code>\</code> ends the string)</li>
+        <li><code>\r</code> - <a href="https://en.wikipedia.org/wiki/Carriage_Return">carriage return</a></li>
+        <li><code>\t</code> - <a href="https://en.wikipedia.org/wiki/Tab_key#Tab_characters">horizontal tab</a></li>
+        <li><code>\v</code> - <a href="https://en.wikipedia.org/wiki/Tab_key#Tab_characters">vertical tab</a></li>
+        </ul>
+        <p>You can also use escape sequences to insert named strings into other strings, like so:</p>
+        <pre><code><span class="hljs-attr">name</span> = <span class="hljs-string">"Lee"</span>
+        <span class="hljs-attr">city</span> = <span class="hljs-string">"Roctown"</span>
+
+        <span class="hljs-attr">greeting</span> = <span class="hljs-string">"Hello there, \(name)! Welcome to \(city)."</span>
+        </code></pre><p>Here, <code>greeting</code> will become the string <code>&quot;Hello there, Lee! Welcome to Roctown.&quot;</code>.
+        This is known as <a href="https://en.wikipedia.org/wiki/String_interpolation">string interpolation</a>,
+        and you can use it as many times as you like inside a string. The name
+        between the parentheses must refer to a <code>Str</code> value that is currently in
+        scope, and it must be a name - it can&#39;t be an arbitrary expression like a function call.</p>
+        <h4 id="encoding">Encoding</h4>
+        <p>Roc strings are not coupled to any particular
+        <a href="https://en.wikipedia.org/wiki/Character_encoding">encoding</a>. As it happens,
+        they are currently encoded in UTF-8, but this module is intentionally designed
+        not to rely on that implementation detail so that a future release of Roc can
+        potentially change it without breaking existing Roc applications. (UTF-8
+        seems pretty great today, but so did UTF-16 at an earlier point in history.)</p>
+        <p>This module has functions to can convert a #Str to a #List of raw <a href="https://unicode.org/glossary/#code_unit">code unit</a>
+        integers (not to be confused with the <a href="https://unicode.org/glossary/#code_point">code points</a>
+        mentioned earlier) in a particular encoding. If you need encoding-specific functions,
+        you should take a look at the <a href="roc/unicode">roc/unicode</a> package.
+        It has many more tools than this module does!
+      </main>
+      <nav class="sidebar">
+        <input class="module-search" type="text" placeholder="Search"/>
+        <a class="sidebar-link" href="#Bool">Bool</a>
+        <a class="sidebar-link" href="#Num">Num</a>
+        <a class="sidebar-link" href="#Str">Str</a>
+        <a class="sidebar-link" href="#List">List</a>
+        <a class="sidebar-link" href="#Set">Set</a>
+        <a class="sidebar-link" href="#Map">Map</a>
+        <a class="sidebar-link" href="#Result">Result</a>
+      </nav>
+    </div>
+  </body>
+</html>
