@@ -24,7 +24,6 @@
        </h1>
         <a class="nav-elem version" href="/roc/unicode/1.0.0">1.0.0</a>
       </nav>
-      <h2 class="sidebar-heading">modules</h2>
     </header>
     <div class="content">
       <main>
@@ -102,7 +101,7 @@
         <p>Roc strings are not coupled to any particular
         <a href="https://en.wikipedia.org/wiki/Character_encoding">encoding</a>. As it happens,
         they are currently encoded in UTF-8, but this module is intentionally designed
-        not to rely on that implementation detail so that a future release of Roc can
+        not to rely on that implementation detail sO THAT A future release of Roc can
         potentially change it without breaking existing Roc applications. (UTF-8
         seems pretty great today, but so did UTF-16 at an earlier point in history.)</p>
         <p>This module has functions to can convert a #Str to a #List of raw <a href="https://unicode.org/glossary/#code_unit">code unit</a>
@@ -112,7 +111,8 @@
         It has many more tools than this module does!
       </main>
       <nav class="sidebar">
-        <input class="module-search" type="text" placeholder="Search"/>
+        <h2 class="sidebar-heading">modules</h2>
+        <input class="module-search" type="text" placeholder="Search" tabindex=1 />
         <a class="sidebar-link" href="#Bool">Bool</a>
         <a class="sidebar-link" href="#Num">Num</a>
         <a class="sidebar-link" href="#Str">Str</a>
