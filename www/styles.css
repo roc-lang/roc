@@ -138,8 +138,8 @@ main {
   line-height: 56px;
   font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
   font-weight: normal;
-  margin: 0;
-  padding-bottom: 18px;
+  margin-top: 18px;
+  margin-bottom: 48px;
   color: var(--faded-color);
 }
 
