@@ -3,6 +3,7 @@
   --link-color: #5C0BFF;
   /* --link-color: #952294; */
   --text-color: #333333;
+  --logo-solid: #333333;
   --main-bg-color: #fdfdfd;
   --border-bg-color: #eeeeee;
   --logo-primary: #9d9d9d;
@@ -42,6 +43,10 @@ a {
 
 .logo:hover {
   text-decoration: none;
+}
+
+.logo-solid {
+  fill: var(--logo-solid);
 }
 
 .logo-primary {
@@ -202,6 +207,7 @@ h4 {
     --main-bg-color: #080808;
     --border-bg-color: #202020;
     --text-color: #fefefe;
+    --logo-solid: #fefefe;
     --faded-color: #777777;
     /* --link-color: #69dc9e; */
     --link-color: #AB82FF;
