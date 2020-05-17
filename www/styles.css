@@ -1,14 +1,13 @@
 :root {
-  /* --link-color: #208848; */
-  --link-color: #5C0BFF;
-  /* --link-color: #952294; */
+  --link-color: #5c0bff;
   --text-color: #333333;
   --logo-solid: #aaaaaa;
   --main-bg-color: #fdfdfd;
-  --border-bg-color: #eeeeee;
+  --border-bg-color: #dddddd;
   --logo-primary: #9d9d9d;
   --logo-secondary: #bababa;
   --faded-color: #777777;
+  --main-width: 720px;
 }
 
 a {
@@ -86,8 +85,7 @@ a:hover {
   margin-top: 8px;
   font-size: 24px;
   font-weight: bold;
-  color: var(--text-color);
-  opacity: 0.5;
+  color: var(--faded-color);
 }
 
 body {
@@ -114,11 +112,13 @@ p {
 main {
   font-size: 18px;
   line-height: 32px;
-  padding: 24px 32px;
-  width: 720px;
+  padding: 32px;
+  width: var(--main-width);
   box-sizing: border-box;
   position: relative;
   background-color: var(--main-bg-color);
+  position: relative;
+  clip-path: polygon(0 100%, 100% 100%, 100% 48px, 668px 0, 0px 0px);
 }
 
 .sidebar {
@@ -133,7 +133,7 @@ main {
   font-weight: normal;
   padding-left: 36px;
   box-sizing: border-box;
-  opacity: 0.75;
+  color: var(--faded-color);
 }
 
 .module-name {
@@ -141,7 +141,8 @@ main {
   line-height: 56px;
   font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
   font-weight: normal;
-  padding: 0 0 18px 0;
+  margin: 0;
+  padding-bottom: 18px;
   color: var(--faded-color);
 }
 
@@ -149,8 +150,7 @@ main {
   font-size: 24px;
   font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
   font-weight: normal;
-  color: var(--text-color);
-  opacity: 0.5;
+  color: var(--faded-color);
   display: block;
   width: 100%;
   padding: 8px 16px;
@@ -197,10 +197,13 @@ h4 {
   font-size: 18px;
   margin-bottom: 16px;
   padding: 12px 16px;
-  border-radius: 16px;
-  background-color: #eeeeee;
-  border: 1px solid #444444;
-  color: #111111;
+  border: 1px solid var(--faded-color);
+  color: var(--faded-color);
+  background: none;
+}
+
+.module-search:focus {
+  background-color: var(--main-bg-color);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -209,17 +212,8 @@ h4 {
     --border-bg-color: #202020;
     --text-color: #fefefe;
     --logo-solid: #777777;
-    --faded-color: #777777;
-    /* --link-color: #69dc9e; */
-    --link-color: #AB82FF;
-    /* --link-color: #C87CDE; */
-    /* --link-color: #11b5e4; */
-    /* --link-color: #34d1bf; */
-    /* --link-color: #16C6D0; */
-    /* --link-color: #0C7489; */
-    /* --link-color: #0affff; */
-    /* --link-color: #00EBEB; */
-    /* --link-color: #00e6e6; */
+    --faded-color: #bbbbbb;
+    --link-color: #ab82ff;
     --logo-primary: #ffffffee;
     --logo-secondary: #ffffffaa;
   }
@@ -228,18 +222,8 @@ h4 {
     scrollbar-color: #444444 #2f2f2f;
   }
 
-  .module-search {
-    background-color: #1b1d23;
-    border: 1px solid #444444;
-    color: #fefefefe;
-  }
-
   .sidebar-link:hover {
     color: #fefefe;
     background-color: #229156;
-  }
-
-  .sidebar-heading {
-    color: #aaaaaa;
   }
 }
