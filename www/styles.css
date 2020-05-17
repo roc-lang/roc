@@ -3,11 +3,12 @@
   --link-color: #5C0BFF;
   /* --link-color: #952294; */
   --text-color: #333333;
-  --logo-solid: #333333;
+  --logo-solid: #aaaaaa;
   --main-bg-color: #fdfdfd;
   --border-bg-color: #eeeeee;
   --logo-primary: #9d9d9d;
   --logo-secondary: #bababa;
+  --faded-color: #777777;
 }
 
 a {
@@ -207,7 +208,7 @@ h4 {
     --main-bg-color: #080808;
     --border-bg-color: #202020;
     --text-color: #fefefe;
-    --logo-solid: #fefefe;
+    --logo-solid: #777777;
     --faded-color: #777777;
     /* --link-color: #69dc9e; */
     --link-color: #AB82FF;
