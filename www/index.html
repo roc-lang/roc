@@ -38,27 +38,23 @@
         <p>Dealing with text is deep topic, so by design, Roc&#39;s <code>Str</code> module sticks
         to the basics. For more advanced use cases like working with raw <a href="https://unicode.org/glossary/#code_point">code points</a>,
         see the <a href="roc/unicode">roc/unicode</a> package. For locale-specific text
-        functions (including capitalizing a strin, as capitalization rules vary by locale)
+        functions (including capitalizing a string, as capitalization rules vary by locale)
         see the <a href="roc/locale">roc/locale</a> package.</p>
         <h3 id="unicode">Unicode</h3>
         <p>Unicode can represent text values which span multiple languages, symbols, and emoji.
         Here are some valid Roc strings:</p>
-        <code>
-          <pre>&quot;Roc&quot;
+          <pre><code>&quot;Roc&quot;
 &quot;鹏&quot;
-&quot;🦓&quot;</pre>
-        </code>
+&quot;🦓&quot;</code></pre>
         <p>Every Unicode string is a sequence of <a href="https://unicode.org/glossary/#grapheme_cluster">grapheme clusters</a>.
         A grapheme cluster corresponds to what a person reading a string might call a &quot;character&quot;,
         but because the term &quot;character&quot; is used to mean many different concepts across
         different programming languages, the documentation for Roc strings intentionally
         avoids it. Instead, we use the term &quot;clusters&quot; as a shorthand for &quot;grapheme clusters.&quot;</p>
-        <p>You can get the number of grapheme clusters in a string by calling <code>Str.countClusters</code> on it:</p>
-        <code>
-          <pre>Str.countClusters &quot;Roc&quot;
-Str.countClusters &quot;音乐&quot;
-Str.countClusters &quot;🦓&quot;</pre>
-        </code>
+        <p>You can get the number of grapheme clusters in a string by calling <code><a href="#Str.countClusters">Str.countClusters</a></code> on it:</p>
+          <pre><code>Str.countClusters &quot;Roc!&quot;   # 4
+Str.countClusters &quot;折り紙&quot;  # 3
+Str.countClusters &quot;🦓&quot;     # 1</code></pre>
         <p>The <code>countClusters</code> function walks through the entire string to get its answer,
         so if you want to check whether a string is empty, you&#39;ll get much better performance
         by calling <code>Str.isEmpty myStr</code> instead of <code>Str.countClusters myStr == 0</code>.</p>
@@ -66,7 +62,7 @@ Str.countClusters &quot;🦓&quot;</pre>
         <p>If you put a <code>\</code> in a Roc string literal, it begins an <em>escape sequence</em>.
         An escape sequence is a convenient way to insert certain strings into other strings.
         For example, suppose you write this Roc string:</p>
-        <code><pre>"It wasn't a rock\nIt was a rock lobster!"</pre></code></code>
+        <pre><code>"It wasn't a rock\nIt was a rock lobster!"</code></pre>
         <p>The <code>&quot;\n&quot;</code> in the middle will insert a line break into this string. There are
         other ways of getting a line break in there, but <code>&quot;\n&quot;</code> is the most common.</p>
         <p>Another way you could insert a newline is by writing <code>\u{0x0A}</code> instead of <code>\n</code>.
@@ -88,12 +84,12 @@ Str.countClusters &quot;🦓&quot;</pre>
         <li><code>\v</code> - <a href="https://en.wikipedia.org/wiki/Tab_key#Tab_characters">vertical tab</a></li>
         </ul>
         <p>You can also use escape sequences to insert named strings into other strings, like so:</p>
-        <code><pre>name = "Lee"
+        <pre><code>name = "Lee"
 city = "Roctown"
 
-greeting = "Hello there, \(name)! Welcome to \(city)."</pre></code>
+greeting = "Hello, \(name)! Welcome to \(city)."</code></pre>
 
-        <p>Here, <code>greeting</code> will become the string <code>&quot;Hello there, Lee! Welcome to Roctown.&quot;</code>.
+        <p>Here, <code>greeting</code> will become the string <code>&quot;Hello, Lee! Welcome to Roctown.&quot;</code>.
         This is known as <a href="https://en.wikipedia.org/wiki/String_interpolation">string interpolation</a>,
         and you can use it as many times as you like inside a string. The name
         between the parentheses must refer to a <code>Str</code> value that is currently in
@@ -102,10 +98,10 @@ greeting = "Hello there, \(name)! Welcome to \(city)."</pre></code>
         <p>Roc strings are not coupled to any particular
         <a href="https://en.wikipedia.org/wiki/Character_encoding">encoding</a>. As it happens,
         they are currently encoded in UTF-8, but this module is intentionally designed
-        not to rely on that implementation detail sO THAT A future release of Roc can
+        not to rely on that implementation detail so that a future release of Roc can
         potentially change it without breaking existing Roc applications. (UTF-8
         seems pretty great today, but so did UTF-16 at an earlier point in history.)</p>
-        <p>This module has functions to can convert a #Str to a #List of raw <a href="https://unicode.org/glossary/#code_unit">code unit</a>
+        <p>This module has functions to can convert a <code><a href="#Str">Str</a></code> to a <code><a href="#List">List</a></code> of raw <a href="https://unicode.org/glossary/#code_unit">code unit</a>
         integers (not to be confused with the <a href="https://unicode.org/glossary/#code_point">code points</a>
         mentioned earlier) in a particular encoding. If you need encoding-specific functions,
         you should take a look at the <a href="roc/unicode">roc/unicode</a> package.
