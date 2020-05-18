@@ -34,7 +34,58 @@ pub fn builtin_defs(var_store: &VarStore) -> Vec<Def> {
         int_rem(var_store),
         int_is_odd(var_store),
         int_is_even(var_store),
+        int_is_zero(var_store),
+        int_is_positive(var_store),
+        int_is_negative(var_store),
     ]
+}
+
+/// Int.isNegative : Int -> Bool
+fn int_is_negative(var_store: &VarStore) -> Def {
+    use crate::expr::Expr::*;
+
+    defn(
+        Symbol::INT_IS_NEGATIVE,
+        vec![Symbol::INT_IS_NEGATIVE_ARG],
+        var_store,
+        call(
+            Symbol::NUM_LT,
+            vec![Var(Symbol::INT_IS_NEGATIVE_ARG), Int(var_store.fresh(), 0)],
+            var_store,
+        ),
+    )
+}
+
+/// Int.isPositive : Int -> Bool
+fn int_is_positive(var_store: &VarStore) -> Def {
+    use crate::expr::Expr::*;
+
+    defn(
+        Symbol::INT_IS_POSITIVE,
+        vec![Symbol::INT_IS_POSITIVE_ARG],
+        var_store,
+        call(
+            Symbol::NUM_GT,
+            vec![Var(Symbol::INT_IS_POSITIVE_ARG), Int(var_store.fresh(), 0)],
+            var_store,
+        ),
+    )
+}
+
+/// Int.isZero : Int -> Bool
+fn int_is_zero(var_store: &VarStore) -> Def {
+    use crate::expr::Expr::*;
+
+    defn(
+        Symbol::INT_IS_ZERO,
+        vec![Symbol::INT_IS_ZERO_ARG],
+        var_store,
+        call(
+            Symbol::INT_EQ_I64,
+            vec![Var(Symbol::INT_IS_ZERO_ARG), Int(var_store.fresh(), 0)],
+            var_store,
+        ),
+    )
 }
 
 /// Int.isOdd : Int -> Bool

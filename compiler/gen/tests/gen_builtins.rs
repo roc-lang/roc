@@ -29,18 +29,24 @@ mod gen_builtins {
 
     #[test]
     fn f64_sqrt() {
-        assert_evals_to!("Float.sqrt 144", 12.0, f64);
+        with_larger_debug_stack(|| {
+            assert_evals_to!("Float.sqrt 144", 12.0, f64);
+        })
     }
 
     #[test]
     fn f64_round() {
-        assert_evals_to!("Float.round 3.6", 4, i64);
+        with_larger_debug_stack(|| {
+            assert_evals_to!("Float.round 3.6", 4, i64);
+        })
     }
 
     #[test]
     fn f64_abs() {
-        assert_evals_to!("Float.abs -4.7", 4.7, f64);
-        assert_evals_to!("Float.abs 5.8", 5.8, f64);
+        with_larger_debug_stack(|| {
+            assert_evals_to!("Float.abs -4.7", 4.7, f64);
+            assert_evals_to!("Float.abs 5.8", 5.8, f64);
+        })
     }
 
     #[test]
@@ -51,7 +57,9 @@ mod gen_builtins {
 
     #[test]
     fn empty_list_literal() {
-        assert_evals_to!("[]", &[], &'static [i64]);
+        with_larger_debug_stack(|| {
+            assert_evals_to!("[]", &[], &'static [i64]);
+        })
     }
 
     #[test]
@@ -61,9 +69,10 @@ mod gen_builtins {
 
     #[test]
     fn gen_if_fn() {
-        assert_evals_to!(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
                     limitedNegate = \num ->
                         if num == 1 then
                             -1
@@ -74,10 +83,11 @@ mod gen_builtins {
 
                     limitedNegate 1
                 "#
-            ),
-            -1,
-            i64
-        );
+                ),
+                -1,
+                i64
+            );
+        })
     }
 
     #[test]
@@ -95,15 +105,17 @@ mod gen_builtins {
 
     #[test]
     fn gen_add_f64() {
-        assert_evals_to!(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
                     1.1 + 2.4 + 3
                 "#
-            ),
-            6.5,
-            f64
-        );
+                ),
+                6.5,
+                f64
+            );
+        })
     }
 
     #[test]
@@ -147,15 +159,17 @@ mod gen_builtins {
 
     #[test]
     fn gen_add_i64() {
-        assert_evals_to!(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
                     1 + 2 + 3
                 "#
-            ),
-            6,
-            i64
-        );
+                ),
+                6,
+                i64
+            );
+        })
     }
 
     #[test]
@@ -255,6 +269,26 @@ mod gen_builtins {
             4,
             i64
         );
+    }
+
+    #[test]
+    fn gen_is_zero() {
+        assert_evals_to!("Int.isZero 0", true, bool);
+        assert_evals_to!("Int.isZero 1", false, bool);
+    }
+
+    #[test]
+    fn gen_is_positive() {
+        assert_evals_to!("Int.isPositive 0", false, bool);
+        assert_evals_to!("Int.isPositive 1", true, bool);
+        assert_evals_to!("Int.isPositive -5", false, bool);
+    }
+
+    #[test]
+    fn gen_is_negative() {
+        assert_evals_to!("Int.isNegative 0", false, bool);
+        assert_evals_to!("Int.isNegative 3", false, bool);
+        assert_evals_to!("Int.isNegative -2", false, bool);
     }
 
     #[test]
@@ -387,9 +421,10 @@ mod gen_builtins {
     }
     #[test]
     fn tail_call_elimination() {
-        assert_evals_to!(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
                 sum = \n, accum ->
                     when n is
                         0 -> accum
@@ -397,10 +432,11 @@ mod gen_builtins {
 
                 sum 1_000_000 0
                 "#
-            ),
-            500000500000,
-            i64
-        );
+                ),
+                500000500000,
+                i64
+            );
+        })
     }
     #[test]
     fn int_negate() {
@@ -425,12 +461,16 @@ mod gen_builtins {
 
     #[test]
     fn empty_list_len() {
-        assert_evals_to!("List.len []", 0, usize);
+        with_larger_debug_stack(|| {
+            assert_evals_to!("List.len []", 0, usize);
+        })
     }
 
     #[test]
     fn basic_int_list_len() {
-        assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, usize);
+        with_larger_debug_stack(|| {
+            assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, usize);
+        })
     }
 
     #[test]
@@ -472,37 +512,43 @@ mod gen_builtins {
 
     #[test]
     fn empty_list_is_empty() {
-        assert_evals_to!("List.isEmpty []", true, bool);
+        with_larger_debug_stack(|| {
+            assert_evals_to!("List.isEmpty []", true, bool);
+        })
     }
 
     #[test]
     fn first_int_list() {
-        assert_evals_to!(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
                     when List.first [ 12, 9, 6, 3 ] is
                         Ok val -> val
                         Err _ -> -1
                 "#
-            ),
-            12,
-            i64
-        );
+                ),
+                12,
+                i64
+            );
+        })
     }
 
     #[test]
     fn first_empty_list() {
-        assert_evals_to!(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
                     when List.first [] is
                         Ok val -> val
                         Err _ -> -1
                 "#
-            ),
-            -1,
-            i64
-        );
+                ),
+                -1,
+                i64
+            );
+        })
     }
 
     #[test]

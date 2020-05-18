@@ -623,6 +623,12 @@ define_builtins! {
         29 INT_IS_ODD_ARG: "isOdd#arg"
         30 INT_IS_EVEN: "isEven"
         31 INT_IS_EVEN_ARG: "isEven#arg"
+        32 INT_IS_ZERO: "isZero"
+        33 INT_IS_ZERO_ARG: "isZero#arg"
+        34 INT_IS_POSITIVE: "isPositive"
+        35 INT_IS_POSITIVE_ARG: "isPositive#arg"
+        36 INT_IS_NEGATIVE: "isNegative"
+        37 INT_IS_NEGATIVE_ARG: "isNegative#arg"
     }
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" imported // the Float.Float type alias

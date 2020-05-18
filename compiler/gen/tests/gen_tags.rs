@@ -13,7 +13,7 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_tags {
-    use crate::helpers::{can_expr, infer_expr, uniq_expr, CanExprOut};
+    use crate::helpers::{can_expr, infer_expr, uniq_expr, with_larger_debug_stack, CanExprOut};
     use bumpalo::Bump;
     use inkwell::context::Context;
     use inkwell::execution_engine::JitFunction;
@@ -213,9 +213,10 @@ mod gen_tags {
 
     #[test]
     fn even_odd() {
-        assert_evals_to!(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
                 even = \n ->
                     when n is
                         0 -> True
@@ -230,10 +231,11 @@ mod gen_tags {
 
                 odd 5 && even 42
                 "#
-            ),
-            true,
-            bool
-        );
+                ),
+                true,
+                bool
+            );
+        })
     }
 
     #[test]
