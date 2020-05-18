@@ -45,7 +45,7 @@ a {
 .logo {
   display: inline-block;
   height: 40px;
-  color: #fefefe;
+  padding: 8px 8px 8px 0;
 }
 
 .logo:hover {
@@ -54,6 +54,10 @@ a {
 
 .logo-solid {
   fill: url("#logo-gradient")
+}
+
+.logo:hover .logo-solid {
+  fill: var(--link-color);
 }
 
 .nav-elem {
@@ -82,8 +86,17 @@ a:hover {
 
 .version {
   margin-top: 8px;
-  font-size: 24px;
-  font-weight: bold;
+  font-size: 18px;
+  padding: 8px;
+  margin-left: 8px;
+  color: var(--faded-color);
+}
+
+.source {
+  margin-left: 24px;
+  margin-top: 8px;
+  padding: 8px;
+  font-size: 18px;
   color: var(--faded-color);
 }
 
