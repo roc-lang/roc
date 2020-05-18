@@ -145,7 +145,7 @@ main {
   position: relative;
   box-sizing: border-box;
   padding-left: 20px;
-  width: 200px;
+  width: 240px;
   flex-shrink: 0;
 }
 
