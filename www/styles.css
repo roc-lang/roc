@@ -10,7 +10,6 @@
   --logo-gradient-mid: #777777;
   --logo-gradient-end: #333333;
   --faded-color: #777777;
-  --main-width: 720px;
   --monospace-font;
   --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
   --font-serif: Georgia, serif;
@@ -26,9 +25,7 @@ a {
   flex-direction: row;
   align-items: center;
   display: flex;
-  margin: 0 auto;
   height: 72px;
-  width: 960px;
   font-family: var(--font-sans);
   font-size: 24px;
 }
@@ -100,11 +97,20 @@ a:hover {
   color: var(--faded-color);
 }
 
+.container {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  margin: 0 auto;
+  min-width: 780px;
+  max-width: 1280px;
+}
+
 body {
   box-sizing: border-box;
   margin: 0;
+  padding: 0;
   font-family: var(--font-serif);
-  min-width: 960px;
   color: var(--text-color);
   background-color: var(--border-bg-color);
 }
@@ -114,29 +120,33 @@ p {
     margin: 24px 0;
 }
 
-.content {
-  display: flex;
-  width: 960px;
+footer {
   box-sizing: border-box;
-  margin: 0 auto;
+  padding: 36px 24px;
+}
+
+.content {
+  box-sizing: border-box;
+  display: flex;
   justify-content: space-between;
 }
 
 main {
+  box-sizing: border-box;
   position: relative;
   font-size: 18px;
   line-height: 32px;
   padding: 32px;
-  width: var(--main-width);
-  box-sizing: border-box;
   background-color: var(--main-bg-color);
-  clip-path: polygon(0 100%, 100% 100%, 100% 48px, 668px 0, 0px 0px);
+  clip-path: polygon(0 100%, 100% 100%, 100% 48px, calc(100% - 48px) 0, 0px 0px);
 }
 
 .sidebar {
+  position: relative;
   box-sizing: border-box;
   padding-left: 20px;
-  width: 240px;
+  width: 200px;
+  flex-shrink: 0;
 }
 
 .sidebar-heading {
@@ -159,6 +169,7 @@ main {
 }
 
 .sidebar-link {
+  box-sizing: border-box;
   font-size: 18px;
   font-family: var(--font-mono);
   font-weight: bold;
