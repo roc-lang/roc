@@ -4,15 +4,14 @@
   --logo-solid: #aaaaaa;
   --code-color: #222222;
   --main-bg-color: #fdfdfd;
-  --border-bg-color: #dddddd;
+  --border-bg-color: #E9E9E9;
   --code-bg-color: #eeeeee;
   --logo-gradient-start: #aaaaaa;
   --logo-gradient-mid: #777777;
   --logo-gradient-end: #333333;
-  --faded-color: #777777;
+  --faded-color: #4C4C4C;
   --monospace-font;
   --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
-  --font-serif: Georgia, serif;
   --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
   --sidebar-width: 240px;
 }
@@ -94,23 +93,22 @@ a:hover {
   height: 55px;
 }
 
-.version-and-source {
-  flex-shrink: 0; /* always shrink the package name before these; they have a relatively constrained length */
-  font-size: 18px;
-  display: flex;
-  height: 55px;
-  align-items: flex-end;
+.main-container {
+  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
 }
 
-.version, .source {
+.search-button {
+  flex-shrink: 0; /* always shrink the package name before these; they have a relatively constrained length */
+  padding: 12px 18px;
+  margin-right: 32px;
+  display: none; /* only show this in the mobile view */
+}
+
+.version {
   font-weight: bold;
-  padding: 12px;
+  padding: 10px;
   margin-right: 8px;
   color: var(--faded-color);
-}
-
-.source {
-  padding-left: 8px;
 }
 
 .container {
@@ -126,7 +124,7 @@ body {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   color: var(--text-color);
   background-color: var(--border-bg-color);
 }
@@ -170,11 +168,11 @@ main {
   box-sizing: border-box;
   padding-left: 20px;
   width: var(--sidebar-width);
-  margin-top: 108px;
+  margin-top: 128px;
   flex-shrink: 0;
 }
 
-.sidebar-heading {
+#sidebar-heading {
   font-size: 32px;
   font-weight: normal;
   margin: 0;
@@ -188,10 +186,13 @@ main {
   font-size: 56px;
   line-height: 1em;
   font-family: var(--font-mono);
-  font-weight: normal;
+  font-weight: bold;
   margin-top: 18px;
   margin-bottom: 48px;
-  color: var(--faded-color);
+}
+
+.module-name a:visited {
+  color: var(--link-color);
 }
 
 .sidebar-link {
@@ -262,7 +263,7 @@ pre {
   overflow-x: auto;
 }
 
-.module-search {
+#module-search {
   width: 100%;
   font-family: var(--font-mono);
   display: block;
@@ -275,16 +276,16 @@ pre {
   background: none;
 }
 
-.module-search::placeholder {
+#module-search::placeholder {
   color: var(--faded-color);
   opacity: 1;
 }
 
-.module-search:hover {
+#module-search:hover {
   background-color: var(--main-bg-color);
 }
 
-.module-search:focus {
+#module-search:focus {
   background-color: var(--main-bg-color);
 }
 
@@ -309,13 +310,19 @@ pre {
 }
 
 @media only screen and (max-device-width: 480px) {
+  .search-button {
+    display: block; /* This is only visible in mobile. */
+  }
+
   .top-header {
     width: auto;
   }
 
   .pkg-full-name {
-    margin: 0;
+    margin-left: 8px;
+    margin-right: 12px;
     font-size: 24px;
+    padding-bottom: 14px;
   }
 
   .pkg-full-name a {
@@ -329,21 +336,11 @@ pre {
     height: 54px;
   }
 
-  .version, .source {
+  .version {
     margin: 0;
     font-weight: normal;
-  }
-
-  .version-and-source {
-    padding-top: 0;
-  }
-
-  .version {
-    margin-left: 8px;
-  }
-
-  .source {
-    margin-right: 8px;
+    font-size: 18px;
+    padding-bottom: 16px;
   }
 
   .module-name {
@@ -376,7 +373,7 @@ pre {
     width: auto;
   }
 
-  .sidebar-heading {
+  #sidebar-heading {
     font-size: 24px;
     margin: 16px;
   }

@@ -17,7 +17,7 @@
       <div class="content">
         <nav class="sidebar">
           <h2 id="sidebar-heading">modules</h2>
-          <input class="module-search" aria-labelledby="sidebar-heading" type="text" placeholder="Search" tabindex=0 />
+          <input id="module-search" aria-labelledby="sidebar-heading" type="text" placeholder="Search" tabindex=0 />
           <a class="sidebar-link" href="#Bool">Bool</a>
           <a class="sidebar-link" href="#Num">Num</a>
           <a class="sidebar-link" href="#Str">Str</a>
@@ -46,16 +46,19 @@
                 <h1 class="pkg-full-name">
                   <a href="/roc/builtins">roc/builtins</a>
                 </h1>
-              </div>
-              <div class="version-and-source">
                 <a class="version" href="/roc/builtins/1.0.0">1.0.0</a>
-                <a class="source" href="https://github.com/roc-lang/builtins">src</a>
               </div>
+              <label class="search-button" for="module-search">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480" width="18" height="18" aria-labelledby="magnifying-glass">
+                  <title id="magnifying-glass">Search modules</title>
+                  <path role="presentation" fill="none" stroke="var(--faded-color)" stroke-width="48" stroke-linecap="round" d="m280,278a153,153 0 1,0-2,2l170,170m-91-117 110,110-26,26-110-110"/>
+                </svg>
+              </label>
             </nav>
           </header>
           <main>
-            <h2 class="module-name">Str</h2>
-            <p>Dealing with text is a deep topic, so by design, Roc&#39;s <code>Str</code> module sticks
+            <h2 class="module-name"><a href="#">Str</a></h2>
+            <p>Dealing with text is a deep topic, so by design, Roc&#39;s <code><a href="#">Str</a></code> module sticks
               to the basics.
             </p>
             <p><i>For more advanced use cases like working with raw <a href="https://unicode.org/glossary/#code_point">code points</a>,
@@ -67,7 +70,7 @@
             Here are some valid Roc strings:</p>
               <pre><code>&quot;Roc&quot;
 &quot;鹏&quot;
-&quot;🕊&quot;</code></pre>
+&quot;🐼&quot;</code></pre>
             <p>Every Unicode string is a sequence of <a href="https://unicode.org/glossary/#grapheme_cluster">grapheme clusters</a>.
             A grapheme cluster corresponds to what a person reading a string might call a &quot;character&quot;,
             but because the term &quot;character&quot; is used to mean many different concepts across
@@ -76,7 +79,7 @@
             <p>You can get the number of grapheme clusters in a string by calling <code><a href="#Str.countClusters">Str.countClusters</a></code> on it:</p>
               <pre><code>Str.countClusters &quot;Roc!&quot;   # 4
 Str.countClusters &quot;折り紙&quot;  # 3
-Str.countClusters &quot;🕊&quot;     # 1</code></pre>
+Str.countClusters &quot;🐼&quot;     # 1</code></pre>
             <p>The <code>countClusters</code> function walks through the entire string to get its answer,
             so if you want to check whether a string is empty, you&#39;ll get much better performance
             by calling <code>Str.isEmpty myStr</code> instead of <code>Str.countClusters myStr == 0</code>.</p>
