@@ -14,6 +14,7 @@
   --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
   --font-serif: Georgia, serif;
   --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  --sidebar-width: 240px;
 }
 
 a {
@@ -25,7 +26,6 @@ a {
   flex-direction: row;
   align-items: center;
   display: flex;
-  height: 72px;
   font-family: var(--font-sans);
   font-size: 24px;
 }
@@ -34,15 +34,21 @@ a {
   display: flex;
   flex-direction: row;
   align-items: center;
+  flex-wrap: nowrap;
   flex-grow: 1;
   box-sizing: border-box;
   padding: 6px 0;
+  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
 }
 
 .logo {
-  display: inline-block;
-  height: 40px;
-  padding: 8px 8px 8px 0;
+  padding-left: 16px;
+  padding-right: 8px;
+}
+
+.logo svg {
+  height: 48px;
+  width: 48px;
 }
 
 .logo:hover {
@@ -57,19 +63,19 @@ a {
   fill: var(--link-color);
 }
 
-.nav-elem {
-  display: inline-block;
-  font-size: 32px;
-}
-
-.pkg-name {
+.pkg-full-name {
   color: var(--text-color);
   display: inline-block;
-  margin: 0 24px;
+  font-size: 32px;
+  margin: 0 18px;
   font-weight: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-bottom: 8px;
 }
 
-.pkg-name a {
+.pkg-full-name a {
   color: inherit;
 }
 
@@ -81,20 +87,30 @@ a:hover {
   text-decoration: underline;
 }
 
-.version {
-  margin-top: 8px;
+.pkg-and-logo {
+  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
+  display: flex;
+  align-items: flex-end;
+  height: 55px;
+}
+
+.version-and-source {
+  flex-shrink: 0; /* always shrink the package name before these; they have a relatively constrained length */
   font-size: 18px;
-  padding: 8px;
-  margin-left: 8px;
+  display: flex;
+  height: 55px;
+  align-items: flex-end;
+}
+
+.version, .source {
+  font-weight: bold;
+  padding: 12px;
+  margin-right: 8px;
   color: var(--faded-color);
 }
 
 .source {
-  margin-left: 24px;
-  margin-top: 8px;
-  padding: 8px;
-  font-size: 18px;
-  color: var(--faded-color);
+  padding-left: 8px;
 }
 
 .container {
@@ -121,13 +137,21 @@ p {
 }
 
 footer {
+  font-size: 14px;
   box-sizing: border-box;
-  padding: 36px 24px;
+  padding: 16px;
+}
+
+footer p {
+  display: inline-block;
+  margin-top: 0;
+  margin-bottom: 8px;
 }
 
 .content {
   box-sizing: border-box;
   display: flex;
+  flex-direction: row-reverse; /* We want the sidebar in the DOM first for tab ordering, but it should render on the right. */
   justify-content: space-between;
 }
 
@@ -135,7 +159,7 @@ main {
   box-sizing: border-box;
   position: relative;
   font-size: 18px;
-  line-height: 32px;
+  line-height: 1.85em;
   padding: 32px;
   background-color: var(--main-bg-color);
   clip-path: polygon(0 100%, 100% 100%, 100% 48px, calc(100% - 48px) 0, 0px 0px);
@@ -145,7 +169,8 @@ main {
   position: relative;
   box-sizing: border-box;
   padding-left: 20px;
-  width: 240px;
+  width: var(--sidebar-width);
+  margin-top: 108px;
   flex-shrink: 0;
 }
 
@@ -153,6 +178,7 @@ main {
   font-size: 32px;
   font-weight: normal;
   margin: 0;
+  padding: 0;
   color: var(--faded-color);
   font-family: var(--font-sans);
   cursor: default;
@@ -160,7 +186,7 @@ main {
 
 .module-name {
   font-size: 56px;
-  line-height: 56px;
+  line-height: 1em;
   font-family: var(--font-mono);
   font-weight: normal;
   margin-top: 18px;
@@ -177,15 +203,9 @@ main {
   display: block;
   width: 100%;
   padding: 8px 16px;
-}
-
-.sidebar-link:visited {
-  color: var(--faded-color);
-}
-
-.sidebar-link:hover {
-  text-decoration: none;
-  color: var(--link-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 a {
@@ -193,7 +213,7 @@ a {
 }
 
 a:visited {
-  color: var(--link-color);
+  color: inherit;
 }
 
 h3 {
@@ -285,5 +305,98 @@ pre {
 
   html {
     scrollbar-color: #444444 #2f2f2f;
+  }
+}
+
+@media only screen and (max-device-width: 480px) {
+  .top-header {
+    width: auto;
+  }
+
+  .pkg-full-name {
+    margin: 0;
+    font-size: 24px;
+  }
+
+  .pkg-full-name a {
+    vertical-align: middle;
+    padding: 18px 0;
+  }
+
+  .logo {
+    padding-left: 2px;
+    width: 50px;
+    height: 54px;
+  }
+
+  .version, .source {
+    margin: 0;
+    font-weight: normal;
+  }
+
+  .version-and-source {
+    padding-top: 0;
+  }
+
+  .version {
+    margin-left: 8px;
+  }
+
+  .source {
+    margin-right: 8px;
+  }
+
+  .module-name {
+    font-size: 24px;
+    margin-top: 8px;
+    margin-bottom: 8px;
+    max-width: calc(100% - 18px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  main {
+    padding: 18px;
+    font-size: 16px;
+  }
+
+  .container {
+    margin: 0;
+    min-width: 320px;
+    max-width: 100%;
+  }
+
+  .content {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    margin-top: 0;
+    padding-left: 0;
+    width: auto;
+  }
+
+  .sidebar-heading {
+    font-size: 24px;
+    margin: 16px;
+  }
+
+  h3 {
+    font-size: 18px;
+    margin: 0;
+    padding: 0;
+  }
+
+  h4 {
+    font-size: 16px;
+  }
+
+  .main-nav {
+    justify-content: space-between;
+  }
+
+  .content {
+    /* Display the sidebar below <main> without affecting tab index */
+    flex-direction: column-reverse;
   }
 }
