@@ -1,13 +1,8 @@
-<svg version="1.1" viewBox="0 0 100.61662 106.82547" xmlns="http://www.w3.org/2000/svg" xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-svg version="1.1" viewBox="0 0 100.61662 106.82547" xmlns="http://www.w3.org/2000/svg" xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-<g transform="translate(-18.481 -66.788)">
-<g transform="rotate(-12.575 82.513 117.39)">
-<path d="m31.035 54.061 43.048 18.354-10.345 38.71z" class="logo-dark"/>
-<path d="m74.083 72.415 27.364 56.73-37.709-18.02z" class="logo-light"/>
-<path d="m63.738 111.12 37.709 18.02-41.38 16.352z" class="logo-dark"/>
-<path d="m63.738 111.12-4.8269 45.35-21.87 8.3773z" class="logo-light"/>
-<path d="m91.615 108.75 18.543 0.93821-8.7102 19.453z" class="logo-dark"/>
-<path d="m110.16 109.69 7.739 17.117-13.269-4.7895z" class="logo-light"/>
-</g>
-</g>
+<svg width="240" height="240" viewBox="0 0 51 53" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M23.6751 22.7086L17.655 53L27.4527 45.2132L26.4673 39.3424L23.6751 22.7086Z" fill="#b894ff"/>
+  <path d="M37.2438 19.0101L44.0315 26.3689L45 22L45.9665 16.6324L37.2438 19.0101Z" fill="#7733ff"/>
+  <path d="M23.8834 3.21052L0 0L23.6751 22.7086L23.8834 3.21052Z" fill="#7733ff"/>
+  <path d="M44.0315 26.3689L23.6751 22.7086L26.4673 39.3424L44.0315 26.3689Z" fill="#7733ff"/>
+  <path d="M50.5 22L45.9665 16.6324L45 22H50.5Z" fill="#b894ff"/>
+  <path d="M23.6751 22.7086L44.0315 26.3689L37.2438 19.0101L23.8834 3.21052L23.6751 22.7086Z" fill="#b894ff"/>
 </svg>
