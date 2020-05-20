@@ -100,7 +100,7 @@ a:hover {
 .search-button {
   flex-shrink: 0; /* always shrink the package name before these; they have a relatively constrained length */
   padding: 12px 18px;
-  margin-right: 32px;
+  margin-right: 42px;
   display: none; /* only show this in the mobile view */
 }
 
