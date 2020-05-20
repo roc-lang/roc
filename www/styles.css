@@ -261,7 +261,6 @@ pre {
   box-sizing: border-box;
   background-color: var(--code-bg-color);
   overflow-x: auto;
-  clip-path: polygon(0 100%, 100% 100%, 100% 18px, calc(100% - 18px) 0, 0px 0px);
 }
 
 #module-search {
@@ -396,9 +395,5 @@ pre {
   .content {
     /* Display the sidebar below <main> without affecting tab index */
     flex-direction: column-reverse;
-  }
-
-  pre {
-    clip-path: polygon(0 100%, 100% 100%, 100% 16px, calc(100% - 16px) 0, 0px 0px);
   }
 }
