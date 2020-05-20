@@ -261,7 +261,7 @@ pre {
   box-sizing: border-box;
   background-color: var(--code-bg-color);
   overflow-x: auto;
-  clip-path: polygon(0 100%, 0 calc(100% - 16px), 16px 100%, calc(100% - 16px) 100%, 100% calc(100% - 16px), 100% 16px, calc(100% - 16px) 0, 0 0, 16px 0, 0 16px);
+  clip-path: polygon(0 100%, 100% 100%, 100% 18px, calc(100% - 18px) 0, 0px 0px);
 }
 
 #module-search {
@@ -399,6 +399,6 @@ pre {
   }
 
   pre {
-    clip-path: polygon(0 100%, 0 calc(100% - 12px), 12px 100%, calc(100% - 12px) 100%, 100% calc(100% - 12px), 100% 12px, calc(100% - 12px) 0, 0 0, 12px 0, 0 12px);
+    clip-path: polygon(0 100%, 100% 100%, 100% 16px, calc(100% - 16px) 0, 0px 0px);
   }
 }
