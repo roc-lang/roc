@@ -2,22 +2,22 @@ interface Str exposes [ Str, isEmpty, join ] imports []
 
 ## Types
 
-## A [Unicode](https://unicode.org) text value.
+## Dealing with text is a deep topic, so by design, Roc's `Str` module sticks
+## to the basics.
 ##
-## Dealing with text is deep topic, so by design, Roc's `Str` module sticks
-## to the basics. For more advanced use cases like working with raw [code points](https://unicode.org/glossary/#code_point),
+## _For more advanced use cases like working with raw [code points](https://unicode.org/glossary/#code_point),
 ## see the [roc/unicode](roc/unicode) package. For locale-specific text
 ## functions (including capitalizing a string, as capitalization rules vary by locale)
-## see the [roc/locale](roc/locale) package.
+## see the [roc/locale](roc/locale) package._
 ##
 ## ### Unicode
 ##
 ## Unicode can represent text values which span multiple languages, symbols, and emoji.
 ## Here are some valid Roc strings:
 ##
-## * "Roc"
-## * "鹏"
-## * "🐦"
+## "Roc"
+## "鹏"
+## "🕊"
 ##
 ## Every Unicode string is a sequence of [grapheme clusters](https://unicode.org/glossary/#grapheme_cluster).
 ## A grapheme cluster corresponds to what a person reading a string might call a "character",
@@ -25,13 +25,11 @@ interface Str exposes [ Str, isEmpty, join ] imports []
 ## different programming languages, the documentation for Roc strings intentionally
 ## avoids it. Instead, we use the term "clusters" as a shorthand for "grapheme clusters."
 ##
-## You can get the number of grapheme clusters in a string by calling `Str.countClusters` on it:
+## You can get the number of grapheme clusters in a string by calling #Str.countClusters on it:
 ##
-## >>> Str.countClusters "Roc"
-##
-## >>> Str.countClusters "音乐"
-##
-## >>> Str.countClusters "👍"
+##     Str.countClusters "Roc!"
+##     Str.countClusters "折り紙"
+##     Str.countClusters "🕊"
 ##
 ## > The `countClusters` function walks through the entire string to get its answer,
 ## > so if you want to check whether a string is empty, you'll get much better performance
@@ -95,6 +93,9 @@ interface Str exposes [ Str, isEmpty, join ] imports []
 ## mentioned earlier) in a particular encoding. If you need encoding-specific functions,
 ## you should take a look at the [roc/unicode](roc/unicode) package.
 ## It has many more tools than this module does!
+
+## A [Unicode](https://unicode.org) text value.
+##
 Str : [ @Str ]
 
 ## Convert
@@ -185,6 +186,10 @@ padClustersEnd : Str, Int, Str -> Str
 ## >>> Str.clusters  "👍👍👍"
 ##
 clusters : Str -> List Str
+
+##     Str.countClusters "Roc!"   # 4
+##     Str.countClusters "七巧板" # 3
+##     Str.countClusters "🕊"     # 1
 
 ## Reverse the order of the string's individual grapheme clusters.
 ##
