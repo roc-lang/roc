@@ -58,7 +58,7 @@ impl Symbol {
             .get_name(self.module_id())
             .unwrap_or_else(|| {
                 panic!(
-                    "module_string could not find IdentIds for {:?} in interns {:?}",
+                    "module_string could not find IdentIds for module {:?} in {:?}",
                     self.module_id(),
                     interns
                 )
@@ -71,7 +71,7 @@ impl Symbol {
             .get(&self.module_id())
             .unwrap_or_else(|| {
                 panic!(
-                    "ident_string could not find IdentIds for {:?} in interns {:?}",
+                    "ident_string could not find IdentIds for module {:?} in {:?}",
                     self.module_id(),
                     interns
                 )

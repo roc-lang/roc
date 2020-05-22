@@ -1432,9 +1432,17 @@ pub fn specialize_all<'a>(
     env: &mut Env<'a, '_>,
     mut procs: Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
-) {
+) -> (Vec<'a, (Symbol, Layout<'a>, Proc<'a>)>, MutSet<Symbol>) {
+    let mut answer = Vec::with_capacity_in(procs.pending_specializations.len(), env.arena);
+    let mut runtime_errors = MutSet::default();
     let mut is_finished = procs.pending_specializations.is_empty();
 
+    // TODO replace this synchronous loop with a work-stealing queue which
+    // processes each entry in pending_specializations in parallel, one
+    // module at a time (because the &mut env will need exclusive access to
+    // that module's IdentIds; the only reason Env is &mut in specialize is
+    // that we need to generate unique symbols and register them in them module's
+    // IdentIds).
     while !is_finished {
         let Procs {
             partial_procs,
@@ -1457,10 +1465,10 @@ pub fn specialize_all<'a>(
 
                 match specialize(env, &mut procs, name, layout_cache, pending, partial_proc) {
                     Ok(proc) => {
-                        // TODO stuff
+                        answer.push((name, layout, proc));
                     }
                     Err(()) => {
-                        // TODO runtime error
+                        runtime_errors.insert(name);
                     }
                 }
             }
@@ -1468,6 +1476,8 @@ pub fn specialize_all<'a>(
 
         is_finished = procs.pending_specializations.is_empty();
     }
+
+    (answer, runtime_errors)
 }
 
 fn specialize<'a>(

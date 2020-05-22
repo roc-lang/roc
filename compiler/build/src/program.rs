@@ -5,7 +5,6 @@ use inkwell::passes::PassManager;
 use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_collections::all::ImMap;
-use roc_collections::all::MutMap;
 use roc_gen::layout_id::LayoutIds;
 use roc_gen::llvm::build::{
     build_proc, build_proc_header, get_call_conventions, module_from_builtins, OptLevel,
@@ -14,7 +13,7 @@ use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_load::file::LoadedModule;
 use roc_module::symbol::Symbol;
 use roc_mono::expr::{Env, Expr, PartialProc, Procs};
-use roc_mono::layout::Layout;
+use roc_mono::layout::{Layout, LayoutCache};
 
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
@@ -23,6 +22,7 @@ use std::path::{Path, PathBuf};
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
 
 // TODO this should probably use more helper functions
+// TODO make this polymorphic in the llvm functions so it can be reused for another backend.
 #[allow(clippy::cognitive_complexity)]
 pub fn build(
     arena: &Bump,
@@ -225,24 +225,27 @@ pub fn build(
     // Populate Procs further and get the low-level Expr from the canonical Expr
     let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
-    // Put this module's ident_ids back in the interns, so we can use them in env.
-    env.interns.all_ident_ids.insert(home, ident_ids);
+    let mut headers = Vec::with_capacity(procs.pending_specializations.len());
+    let mut layout_cache = LayoutCache::default();
 
-    let mut headers = Vec::with_capacity(procs.len());
-    let (mut proc_map, runtime_errors) = procs.into_map();
+    let (mut specializations, runtime_errors) =
+        roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
     assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
+
+    // Put this module's ident_ids back in the interns, so we can use them in env.
+    // This must happen *after* building the headers, because otherwise there's
+    // a conflicting mutable borrow on ident_ids.
+    env.interns.all_ident_ids.insert(home, ident_ids);
 
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    for (symbol, mut procs_by_layout) in proc_map.drain() {
-        for (layout, proc) in procs_by_layout.drain() {
-            let (fn_val, arg_basic_types) =
-                build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+    for (symbol, layout, proc) in specializations.drain(..) {
+        let (fn_val, arg_basic_types) =
+            build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-            headers.push((proc, fn_val, arg_basic_types));
-        }
+        headers.push((proc, fn_val, arg_basic_types));
     }
 
     // Build each proc using its header info.

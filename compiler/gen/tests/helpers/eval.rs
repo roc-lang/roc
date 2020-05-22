@@ -75,23 +75,27 @@ macro_rules! assert_llvm_evals_to {
         };
         let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
-        // Put this module's ident_ids back in the interns, so we can use them in Env.
-        env.interns.all_ident_ids.insert(home, ident_ids);
+        let mut headers = Vec::with_capacity(procs.pending_specializations.len());
+        let mut layout_cache = roc_mono::layout::LayoutCache::default();
 
-        let mut headers = Vec::with_capacity(procs.len());
-        let (mut proc_map, runtime_errors) = procs.into_map();
+        let (mut specializations, runtime_errors) =
+            roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
         assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
+
+        // Put this module's ident_ids back in the interns, so we can use them in env.
+        // This must happen *after* building the headers, because otherwise there's
+        // a conflicting mutable borrow on ident_ids.
+        env.interns.all_ident_ids.insert(home, ident_ids);
 
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
-        for (symbol, mut procs_by_layout) in proc_map.drain() {
-            for (layout, proc) in procs_by_layout.drain() {
-                let (fn_val, arg_basic_types) = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+        for (symbol, layout, proc) in specializations.drain(..) {
+            let (fn_val, arg_basic_types) =
+                build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-                headers.push((proc, fn_val, arg_basic_types));
-            }
+            headers.push((proc, fn_val, arg_basic_types));
         }
 
         // Build each proc using its header info.
@@ -106,7 +110,9 @@ macro_rules! assert_llvm_evals_to {
                 fpm.run_on(&fn_val);
             } else {
                 // NOTE: If this fails, uncomment the above println to debug.
-                panic!("Non-main function failed LLVM verification. Uncomment the above println to debug!");
+                panic!(
+                    "Non-main function failed LLVM verification. Uncomment the above println to debug!"
+                );
             }
         }
 
@@ -240,23 +246,27 @@ macro_rules! assert_opt_evals_to {
         };
         let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
-        // Put this module's ident_ids back in the interns, so we can use them in Env.
-        env.interns.all_ident_ids.insert(home, ident_ids);
+        let mut headers = Vec::with_capacity(procs.pending_specializations.len());
+        let mut layout_cache = roc_mono::layout::LayoutCache::default();
 
-        let mut headers = Vec::with_capacity(procs.len());
-        let (mut proc_map, runtime_errors) = procs.into_map();
+        let (mut specializations, runtime_errors) =
+            roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
         assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
+
+        // Put this module's ident_ids back in the interns, so we can use them in env.
+        // This must happen *after* building the headers, because otherwise there's
+        // a conflicting mutable borrow on ident_ids.
+        env.interns.all_ident_ids.insert(home, ident_ids);
 
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
-        for (symbol, mut procs_by_layout) in proc_map.drain() {
-            for (layout, proc) in procs_by_layout.drain() {
-                let (fn_val, arg_basic_types) = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+        for (symbol, layout, proc) in specializations.drain(..) {
+            let (fn_val, arg_basic_types) =
+                build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-                headers.push((proc, fn_val, arg_basic_types));
-            }
+            headers.push((proc, fn_val, arg_basic_types));
         }
 
         // Build each proc using its header info.
@@ -271,7 +281,9 @@ macro_rules! assert_opt_evals_to {
                 fpm.run_on(&fn_val);
             } else {
                 // NOTE: If this fails, uncomment the above println to debug.
-                panic!("Non-main function failed LLVM verification. Uncomment the above println to debug!");
+                panic!(
+                    "Non-main function failed LLVM verification. Uncomment the above println to debug!"
+                );
             }
         }
 
@@ -398,20 +410,27 @@ macro_rules! emit_expr {
         };
         let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
-        // Put this module's ident_ids back in the interns, so we can use them in Env.
-        env.interns.all_ident_ids.insert(home, ident_ids);
+        let mut headers = Vec::with_capacity(procs.pending_specializations.len());
+        let mut layout_cache = roc_mono::layout::LayoutCache::default();
 
-        let mut headers = Vec::with_capacity(procs.len());
+        let (mut specializations, runtime_errors) =
+            roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
+
+        assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
+
+        // Put this module's ident_ids back in the interns, so we can use them in env.
+        // This must happen *after* building the headers, because otherwise there's
+        // a conflicting mutable borrow on ident_ids.
+        env.interns.all_ident_ids.insert(home, ident_ids);
 
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
-        for (symbol, opt_proc) in procs.as_map().into_iter() {
-            if let Some(proc) = opt_proc {
-                let (fn_val, arg_basic_types) = build_proc_header(&env, symbol, &proc);
+        for (symbol, layout, proc) in specializations.drain(..) {
+            let (fn_val, arg_basic_types) =
+                build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-                headers.push((proc, fn_val, arg_basic_types));
-            }
+            headers.push((proc, fn_val, arg_basic_types));
         }
 
         // Build each proc using its header info.
@@ -420,13 +439,15 @@ macro_rules! emit_expr {
             // (This approach means we don't have to defensively clone name here.)
             //
             // println!("\n\nBuilding and then verifying function {}\n\n", name);
-            build_proc(&env, proc, &procs, fn_val, arg_basic_types);
+            build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
 
             if fn_val.verify(true) {
                 fpm.run_on(&fn_val);
             } else {
                 // NOTE: If this fails, uncomment the above println to debug.
-                panic!("Non-main function failed LLVM verification. Uncomment the above println to debug!");
+                panic!(
+                    "Non-main function failed LLVM verification. Uncomment the above println to debug!"
+                );
             }
         }
 
