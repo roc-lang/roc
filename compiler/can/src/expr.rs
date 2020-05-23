@@ -10,6 +10,7 @@ use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
+use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
@@ -89,6 +90,7 @@ pub enum Expr {
         Vec<(Variable, Located<Expr>)>,
         CalledVia,
     ),
+    RunLowLevel(LowLevel),
 
     Closure(
         Variable,

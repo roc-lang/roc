@@ -4,6 +4,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
@@ -37,7 +38,6 @@ pub struct Proc<'a> {
 pub struct Procs<'a> {
     pub partial_procs: MutMap<Symbol, PartialProc<'a>>,
     pub module_thunks: MutSet<Symbol>,
-    pub builtins_referenced: MutSet<Symbol>,
     pub pending_specializations: MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>,
 }
 
@@ -101,10 +101,6 @@ impl<'a> Procs<'a> {
         );
 
         layout
-    }
-
-    fn builtin_referenced(&mut self, symbol: Symbol) {
-        self.builtins_referenced.insert(symbol);
     }
 
     fn add_pending_specialization(
@@ -244,6 +240,7 @@ pub enum Expr<'a> {
         args: &'a [(Expr<'a>, Layout<'a>)],
     },
     CallByPointer(&'a Expr<'a>, &'a [Expr<'a>], Layout<'a>),
+    RunLowLevel(LowLevel),
 
     // Exactly two conditional branches, e.g. if/else
     Cond {
@@ -543,10 +540,6 @@ fn from_can<'a>(
                     layout_cache,
                 )
             } else {
-                if symbol.is_builtin() {
-                    procs.builtin_referenced(symbol);
-                }
-
                 Expr::Load(symbol)
             }
         }
@@ -562,6 +555,8 @@ fn from_can<'a>(
 
             Expr::FunctionPointer(name, layout)
         }
+
+        RunLowLevel(op) => Expr::RunLowLevel(op),
 
         Call(boxed, loc_args, _) => {
             let (fn_var, loc_expr, ret_var) = *boxed;
@@ -1399,20 +1394,14 @@ fn call_by_name<'a>(
                 }
             }
 
-            if proc_name.is_builtin() {
-                // record that we've called this builtin, meaning it needs
-                // to be code-genned
-                procs.builtin_referenced(proc_name);
-            } else {
-                let pending = PendingSpecialization {
-                    pattern_vars: arg_vars,
-                    ret_var,
-                    fn_var,
-                };
+            let pending = PendingSpecialization {
+                pattern_vars: arg_vars,
+                ret_var,
+                fn_var,
+            };
 
-                // register the pending specialization, so this gets code genned later
-                procs.add_pending_specialization(proc_name, layout.clone(), pending);
-            }
+            // register the pending specialization, so this gets code genned later
+            procs.add_pending_specialization(proc_name, layout.clone(), pending);
 
             Expr::CallByName {
                 name: proc_name,
@@ -1447,21 +1436,23 @@ pub fn specialize_all<'a>(
         let Procs {
             partial_procs,
             module_thunks,
-            builtins_referenced,
             mut pending_specializations,
         } = procs;
 
         procs = Procs {
             partial_procs,
             module_thunks,
-            builtins_referenced,
             pending_specializations: MutMap::default(),
         };
 
         for (name, mut by_layout) in pending_specializations.drain() {
             for (layout, pending) in by_layout.drain() {
                 // TODO should pending_procs hold a Rc<Proc>?
-                let partial_proc = procs.partial_procs.get(&name).unwrap().clone();
+                let partial_proc = procs
+                    .partial_procs
+                    .get(&name)
+                    .unwrap_or_else(|| panic!("Could not find partial_proc for {:?}", name))
+                    .clone();
 
                 match specialize(env, &mut procs, name, layout_cache, pending, partial_proc) {
                     Ok(proc) => {

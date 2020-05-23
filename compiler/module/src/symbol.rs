@@ -669,12 +669,13 @@ define_builtins! {
         8 LIST_PUSH: "push"
         9 LIST_MAP: "map"
         10 LIST_LEN: "len"
-        11 LIST_FOLDL: "foldl"
-        12 LIST_FOLDR: "foldr"
-        13 LIST_GET_UNSAFE: "getUnsafe"
-        14 LIST_CONCAT: "concat"
-        15 LIST_FIRST: "first"
-        16 LIST_FIRST_ARG: "first#list"
+        11 LIST_LEN_ARG: "len#list"
+        12 LIST_FOLDL: "foldl"
+        13 LIST_FOLDR: "foldr"
+        14 LIST_GET_UNSAFE: "getUnsafe"
+        15 LIST_CONCAT: "concat"
+        16 LIST_FIRST: "first"
+        17 LIST_FIRST_ARG: "first#list"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

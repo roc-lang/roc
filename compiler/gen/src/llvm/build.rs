@@ -15,6 +15,7 @@ use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
 use inkwell::{FloatPredicate, IntPredicate, OptimizationLevel};
 use roc_collections::all::ImMap;
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc};
 use roc_mono::layout::{Builtin, Layout};
@@ -690,9 +691,18 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .build_extract_value(struct_value, *index as u32, "")
                 .expect("desired field did not decode")
         }
-        _ => {
-            panic!("I don't yet know how to LLVM build {:?}", expr);
+        RuntimeErrorFunction(_) => {
+            todo!("LLVM build runtime error function of {:?}", expr);
         }
+        RuntimeError(_) => {
+            todo!("LLVM build runtime error of {:?}", expr);
+        }
+        RunLowLevel(op) => match op {
+            LowLevel::ListLen { arg_from_scope } => BasicValueEnum::IntValue(load_list_len(
+                env.builder,
+                load_symbol(env, scope, arg_from_scope).into_struct_value(),
+            )),
+        },
     }
 }
 

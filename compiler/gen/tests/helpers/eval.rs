@@ -73,6 +73,7 @@ macro_rules! assert_llvm_evals_to {
             pointer_size: ptr_bytes,
             jump_counter: arena.alloc(0),
         };
+
         let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
         let mut headers = Vec::with_capacity(procs.pending_specializations.len());

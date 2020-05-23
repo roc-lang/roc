@@ -630,6 +630,9 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
                 }
             }
         }
+        RunLowLevel(op) => {
+            todo!("TODO implement UNIQ RunLowLevel for {:?}", op);
+        }
         Closure(_, _, _, _, body) => {
             annotate_usage(&body.0.value, usage);
         }

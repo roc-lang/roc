@@ -778,7 +778,12 @@ pub fn constrain_expr(
 
             exists(vars, And(arg_cons))
         }
-        RuntimeError(_) => True,
+        RuntimeError(_) | RunLowLevel(_) => {
+            // RunLowLevel can only be added by the compiler, so it's safe
+            // to assume its constraints have already been accounted for.
+            // Runtime Errors have no constraints because they're going to crash.
+            True
+        }
     }
 }
 

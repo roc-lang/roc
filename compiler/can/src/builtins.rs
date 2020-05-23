@@ -1,8 +1,8 @@
 use crate::def::Def;
-use crate::expr::Expr;
-use crate::expr::Recursive;
+use crate::expr::{Expr, Recursive};
 use roc_collections::all::SendMap;
 use roc_module::ident::TagName;
+use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
@@ -27,6 +27,7 @@ use roc_types::subs::{VarStore, Variable};
 /// which works fine because it doesn't involve any open tag unions.
 pub fn builtin_defs(var_store: &VarStore) -> Vec<Def> {
     vec![
+        list_len(var_store),
         list_get(var_store),
         list_first(var_store),
         int_div(var_store),
@@ -80,6 +81,21 @@ fn int_is_even(var_store: &VarStore) -> Def {
             ],
             var_store,
         ),
+    )
+}
+
+/// List.len : List * -> Int
+fn list_len(var_store: &VarStore) -> Def {
+    use crate::expr::Expr::*;
+
+    // Polymorphic wrapper around LowLevel::ListGet
+    defn(
+        Symbol::LIST_LEN,
+        vec![Symbol::LIST_LEN_ARG],
+        var_store,
+        RunLowLevel(LowLevel::ListLen {
+            arg_from_scope: Symbol::LIST_LEN_ARG,
+        }),
     )
 }
 
