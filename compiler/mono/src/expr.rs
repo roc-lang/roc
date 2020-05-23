@@ -50,8 +50,22 @@ impl<'a> Procs<'a> {
         loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
         loc_body: Located<roc_can::expr::Expr>,
         ret_var: Variable,
+        layout_cache: &mut LayoutCache<'a>,
     ) {
-        let (_, pattern_symbols, body) = patterns_to_when(env, loc_args, ret_var, loc_body);
+        let (pattern_vars, pattern_symbols, body) =
+            patterns_to_when(env, loc_args, ret_var, loc_body);
+
+        let layout = layout_cache
+            .from_var(env.arena, annotation, env.subs, env.pointer_size)
+            .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+        let pending = PendingSpecialization {
+            ret_var,
+            fn_var: annotation,
+            pattern_vars,
+        };
+
+        self.add_pending_specialization(name, layout.clone(), pending);
 
         // a named closure
         self.partial_procs.insert(
@@ -1075,7 +1089,15 @@ fn from_can_defs<'a>(
 
                         let (loc_body, ret_var) = *boxed_body;
 
-                        procs.insert_named(env, *symbol, ann, loc_args, loc_body, ret_var);
+                        procs.insert_named(
+                            env,
+                            *symbol,
+                            ann,
+                            loc_args,
+                            loc_body,
+                            ret_var,
+                            layout_cache,
+                        );
 
                         continue;
                     }
@@ -1454,8 +1476,15 @@ pub fn specialize_all<'a>(
                     .unwrap_or_else(|| panic!("Could not find partial_proc for {:?}", name))
                     .clone();
 
+                dbg!(
+                    "{:?} is specializing partial_proc {:?}",
+                    &name,
+                    &partial_proc
+                );
+
                 match specialize(env, &mut procs, name, layout_cache, pending, partial_proc) {
                     Ok(proc) => {
+                        dbg!("{:?} specialized to {:?}", &name, &proc);
                         answer.push((name, layout, proc));
                     }
                     Err(()) => {
@@ -1504,6 +1533,8 @@ fn specialize<'a>(
     env.subs.rollback_to(snapshot);
 
     let mut proc_args = Vec::with_capacity_in(pattern_vars.len(), &env.arena);
+
+    debug_assert!(pattern_vars.len() == pattern_symbols.len());
 
     for (arg_var, arg_name) in pattern_vars.iter().zip(pattern_symbols.iter()) {
         let layout = layout_cache.from_var(&env.arena, *arg_var, env.subs, env.pointer_size)?;

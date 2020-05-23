@@ -5,5 +5,5 @@ use crate::symbol::Symbol;
 /// into an Expr when added directly by can::builtins
 #[derive(Clone, Debug, PartialEq)]
 pub enum LowLevel {
-    ListLen { arg_from_scope: Symbol },
+    ListLen { arg: Symbol },
 }

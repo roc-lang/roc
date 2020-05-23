@@ -88,14 +88,14 @@ fn int_is_even(var_store: &VarStore) -> Def {
 fn list_len(var_store: &VarStore) -> Def {
     use crate::expr::Expr::*;
 
-    // Polymorphic wrapper around LowLevel::ListGet
+    // Polymorphic wrapper around LowLevel::ListLen
+    let arg = Symbol::LIST_LEN_ARG;
+
     defn(
         Symbol::LIST_LEN,
-        vec![Symbol::LIST_LEN_ARG],
+        vec![arg],
         var_store,
-        RunLowLevel(LowLevel::ListLen {
-            arg_from_scope: Symbol::LIST_LEN_ARG,
-        }),
+        RunLowLevel(LowLevel::ListLen { arg }),
     )
 }
 
@@ -119,11 +119,9 @@ fn list_get(var_store: &VarStore) -> Def {
                         Symbol::NUM_LT,
                         vec![
                             Var(Symbol::LIST_GET_ARG_INDEX),
-                            call(
-                                Symbol::LIST_LEN,
-                                vec![Var(Symbol::LIST_GET_ARG_LIST)],
-                                var_store,
-                            ),
+                            RunLowLevel(LowLevel::ListLen {
+                                arg: Symbol::LIST_GET_ARG_LIST,
+                            }),
                         ],
                         var_store,
                     ),

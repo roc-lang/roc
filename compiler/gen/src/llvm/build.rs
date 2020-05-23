@@ -698,9 +698,9 @@ pub fn build_expr<'a, 'ctx, 'env>(
             todo!("LLVM build runtime error of {:?}", expr);
         }
         RunLowLevel(op) => match op {
-            LowLevel::ListLen { arg_from_scope } => BasicValueEnum::IntValue(load_list_len(
+            LowLevel::ListLen { arg } => BasicValueEnum::IntValue(load_list_len(
                 env.builder,
-                load_symbol(env, scope, arg_from_scope).into_struct_value(),
+                load_symbol(env, scope, arg).into_struct_value(),
             )),
         },
     }
@@ -715,7 +715,7 @@ fn load_symbol<'a, 'ctx, 'env>(
         Some((_, ptr)) => env
             .builder
             .build_load(*ptr, symbol.ident_string(&env.interns)),
-        None => panic!("Could not find a var for {:?} in scope {:?}", symbol, scope),
+        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
     }
 }
 
