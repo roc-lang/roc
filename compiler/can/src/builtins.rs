@@ -37,7 +37,67 @@ pub fn builtin_defs(var_store: &VarStore) -> Vec<Def> {
         int_is_zero(var_store),
         int_is_positive(var_store),
         int_is_negative(var_store),
+        float_is_positive(var_store),
+        float_is_negative(var_store),
+        float_is_zero(var_store),
     ]
+}
+
+/// Float.isZero : Float -> Bool
+fn float_is_zero(var_store: &VarStore) -> Def {
+    use crate::expr::Expr::*;
+
+    defn(
+        Symbol::FLOAT_IS_ZERO,
+        vec![Symbol::FLOAT_IS_ZERO_ARG],
+        var_store,
+        call(
+            Symbol::FLOAT_EQ,
+            vec![
+                Float(var_store.fresh(), 0.0),
+                Var(Symbol::FLOAT_IS_ZERO_ARG),
+            ],
+            var_store,
+        ),
+    )
+}
+
+/// Float.isNegative : Float -> Bool
+fn float_is_negative(var_store: &VarStore) -> Def {
+    use crate::expr::Expr::*;
+
+    defn(
+        Symbol::FLOAT_IS_NEGATIVE,
+        vec![Symbol::FLOAT_IS_NEGATIVE_ARG],
+        var_store,
+        call(
+            Symbol::FLOAT_GT,
+            vec![
+                Float(var_store.fresh(), 0.0),
+                Var(Symbol::FLOAT_IS_NEGATIVE_ARG),
+            ],
+            var_store,
+        ),
+    )
+}
+
+/// Float.isPositive : Float -> Bool
+fn float_is_positive(var_store: &VarStore) -> Def {
+    use crate::expr::Expr::*;
+
+    defn(
+        Symbol::FLOAT_IS_POSITIVE,
+        vec![Symbol::FLOAT_IS_POSITIVE_ARG],
+        var_store,
+        call(
+            Symbol::FLOAT_GT,
+            vec![
+                Var(Symbol::FLOAT_IS_POSITIVE_ARG),
+                Float(var_store.fresh(), 0.0),
+            ],
+            var_store,
+        ),
+    )
 }
 
 /// Int.isNegative : Int -> Bool

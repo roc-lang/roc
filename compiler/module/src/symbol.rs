@@ -641,13 +641,19 @@ define_builtins! {
         7 FLOAT_LOWEST: "lowest"
         8 FLOAT_ADD: "#add"
         9 FLOAT_SUB: "#sub"
-        10 FLOAT_EQ: "#eq"
+        10 FLOAT_EQ: "eq"
         11 FLOAT_ROUND: "round"
         12 FLOAT_LT: "#lt"
         13 FLOAT_LTE: "#lte"
-        14 FLOAT_GT: "#gt"
+        14 FLOAT_GT: "gt"
         15 FLOAT_GTE: "#gte"
         16 FLOAT_ABS: "abs"
+        17 FLOAT_IS_POSITIVE: "isPositive"
+        18 FLOAT_IS_POSITIVE_ARG: "isPositive#arg"
+        19 FLOAT_IS_NEGATIVE: "isNegative"
+        20 FLOAT_IS_NEGATIVE_ARG: "isNegative#arg"
+        21 FLOAT_IS_ZERO: "isZero"
+        22 FLOAT_IS_ZERO_ARG: "isZero#arg"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias

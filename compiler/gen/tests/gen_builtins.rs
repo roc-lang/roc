@@ -29,24 +29,18 @@ mod gen_builtins {
 
     #[test]
     fn f64_sqrt() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!("Float.sqrt 144", 12.0, f64);
-        })
+        assert_evals_to!("Float.sqrt 144", 12.0, f64);
     }
 
     #[test]
     fn f64_round() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!("Float.round 3.6", 4, i64);
-        })
+        assert_evals_to!("Float.round 3.6", 4, i64);
     }
 
     #[test]
     fn f64_abs() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!("Float.abs -4.7", 4.7, f64);
-            assert_evals_to!("Float.abs 5.8", 5.8, f64);
-        })
+        assert_evals_to!("Float.abs -4.7", 4.7, f64);
+        assert_evals_to!("Float.abs 5.8", 5.8, f64);
     }
 
     #[test]
@@ -57,9 +51,7 @@ mod gen_builtins {
 
     #[test]
     fn empty_list_literal() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!("[]", &[], &'static [i64]);
-        })
+        assert_evals_to!("[]", &[], &'static [i64]);
     }
 
     #[test]
@@ -69,10 +61,9 @@ mod gen_builtins {
 
     #[test]
     fn gen_if_fn() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!(
-                indoc!(
-                    r#"
+        assert_evals_to!(
+            indoc!(
+                r#"
                     limitedNegate = \num ->
                         if num == 1 then
                             -1
@@ -83,11 +74,10 @@ mod gen_builtins {
 
                     limitedNegate 1
                 "#
-                ),
-                -1,
-                i64
-            );
-        })
+            ),
+            -1,
+            i64
+        );
     }
 
     #[test]
@@ -272,23 +262,45 @@ mod gen_builtins {
     }
 
     #[test]
-    fn gen_is_zero() {
+    fn gen_is_zero_i64() {
         assert_evals_to!("Int.isZero 0", true, bool);
         assert_evals_to!("Int.isZero 1", false, bool);
     }
 
     #[test]
-    fn gen_is_positive() {
+    fn gen_is_positive_i64() {
         assert_evals_to!("Int.isPositive 0", false, bool);
         assert_evals_to!("Int.isPositive 1", true, bool);
         assert_evals_to!("Int.isPositive -5", false, bool);
     }
 
     #[test]
-    fn gen_is_negative() {
+    fn gen_is_negative_i64() {
         assert_evals_to!("Int.isNegative 0", false, bool);
         assert_evals_to!("Int.isNegative 3", false, bool);
-        assert_evals_to!("Int.isNegative -2", false, bool);
+        assert_evals_to!("Int.isNegative -2", true, bool);
+    }
+
+    #[test]
+    fn gen_is_positive_f64() {
+        assert_evals_to!("Float.isPositive 0.0", false, bool);
+        assert_evals_to!("Float.isPositive 4.7", true, bool);
+        assert_evals_to!("Float.isPositive -8.5", false, bool);
+    }
+
+    #[test]
+    fn gen_is_negative_f64() {
+        assert_evals_to!("Float.isNegative 0.0", false, bool);
+        assert_evals_to!("Float.isNegative 9.9", false, bool);
+        assert_evals_to!("Float.isNegative -4.4", true, bool);
+    }
+
+    #[test]
+    fn gen_is_zero_f64() {
+        assert_evals_to!("Float.isZero 0", true, bool);
+        assert_evals_to!("Float.isZero 0_0", true, bool);
+        assert_evals_to!("Float.isZero 0.0", true, bool);
+        assert_evals_to!("Float.isZero 1", false, bool);
     }
 
     #[test]
