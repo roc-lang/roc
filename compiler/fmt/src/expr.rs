@@ -423,7 +423,10 @@ pub fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
 pub fn is_multiline_pattern<'a>(pattern: &'a Pattern<'a>) -> bool {
     match pattern {
         Pattern::SpaceBefore(_, spaces) | Pattern::SpaceAfter(_, spaces) => {
-            spaces.iter().any(|space| space.contains_newline())
+            debug_assert!(!spaces.is_empty());
+
+            // "spaces" always contain either a newline or comment, and comments have newlines
+            true
         }
 
         Pattern::Nested(nested_pat) => is_multiline_pattern(nested_pat),
@@ -452,7 +455,10 @@ pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
     match expr {
         // Return whether these spaces contain any Newlines
         SpaceBefore(_, spaces) | SpaceAfter(_, spaces) => {
-            spaces.iter().any(|space| space.contains_newline())
+            debug_assert!(!spaces.is_empty());
+
+            // "spaces" always contain either a newline or comment, and comments have newlines
+            true
         }
 
         // These expressions never have newlines

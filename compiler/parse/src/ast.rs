@@ -296,17 +296,6 @@ pub enum CommentOrNewline<'a> {
     LineComment(&'a str),
 }
 
-impl<'a> CommentOrNewline<'a> {
-    pub fn contains_newline(&self) -> bool {
-        use self::CommentOrNewline::*;
-
-        match self {
-            // Line comments have an implicit newline at the end
-            Newline | LineComment(_) => true,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier
