@@ -285,22 +285,26 @@ fn spaces<'a>(
                             // If we're in a line comment, this won't affect indentation anyway.
                             state = state.advance_without_indenting(1)?;
 
-                            match comment_line_buf.chars().next() {
-                                Some('#') => {
-                                    // This is a comment begining with `## ` - that is,
-                                    // a doc comment.
-                                    //
-                                    // (The space is important; otherwise, this is not
-                                    // a doc comment, but rather something like a
-                                    // big separator block, e.g. ############)
-                                    line_state = LineState::DocComment;
+                            if comment_line_buf.len() == 1 {
+                                match comment_line_buf.chars().next() {
+                                    Some('#') => {
+                                        // This is a comment begining with `## ` - that is,
+                                        // a doc comment.
+                                        //
+                                        // (The space is important; otherwise, this is not
+                                        // a doc comment, but rather something like a
+                                        // big separator block, e.g. ############)
+                                        line_state = LineState::DocComment;
 
-                                    // This is now the beginning of the doc comment.
-                                    comment_line_buf.clear();
+                                        // This is now the beginning of the doc comment.
+                                        comment_line_buf.clear();
+                                    }
+                                    _ => {
+                                        comment_line_buf.push(ch);
+                                    }
                                 }
-                                _ => {
-                                    comment_line_buf.push(ch);
-                                }
+                            } else {
+                                comment_line_buf.push(ch);
                             }
                         }
                         '\n' => {

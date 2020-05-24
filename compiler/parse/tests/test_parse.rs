@@ -2256,6 +2256,84 @@ mod test_parse {
         );
     }
 
+    #[test]
+    fn not_docs() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let def = Def::Body(
+            arena.alloc(Located::new(4, 4, 0, 1, Identifier("x"))),
+            arena.alloc(Located::new(4, 4, 4, 5, Num("5"))),
+        );
+        let loc_def = &*arena.alloc(Located::new(4, 4, 0, 1, def));
+        let defs = bumpalo::vec![in &arena; loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(6, 6, 0, 2, ret);
+        let reset_indentation = bumpalo::vec![in &arena;
+            LineComment("######"),
+            LineComment("## not docs!"),
+            LineComment("#still not docs"),
+            LineComment("#####"),
+        ];
+        let expected = Expr::SpaceBefore(
+            arena.alloc(Defs(defs, arena.alloc(loc_ret))),
+            reset_indentation.into_bump_slice(),
+        );
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                    #######
+                    ### not docs!
+                    ##still not docs
+                    ######
+                    x = 5
+
+                    42
+                "#
+            ),
+            expected,
+        );
+    }
+
+    #[test]
+    fn mixed_docs() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let def = Def::Body(
+            arena.alloc(Located::new(4, 4, 0, 1, Identifier("x"))),
+            arena.alloc(Located::new(4, 4, 4, 5, Num("5"))),
+        );
+        let loc_def = &*arena.alloc(Located::new(4, 4, 0, 1, def));
+        let defs = bumpalo::vec![in &arena; loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(6, 6, 0, 2, ret);
+        let reset_indentation = bumpalo::vec![in &arena;
+            LineComment("## not docs!"),
+            DocComment("docs, but with a problem"),
+            DocComment("(namely that this is a mix of docs and regular comments)"),
+            LineComment(" not docs"),
+        ];
+        let expected = Expr::SpaceBefore(
+            arena.alloc(Defs(defs, arena.alloc(loc_ret))),
+            reset_indentation.into_bump_slice(),
+        );
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                    ### not docs!
+                    ## docs, but with a problem
+                    ## (namely that this is a mix of docs and regular comments)
+                    # not docs
+                    x = 5
+
+                    42
+                "#
+            ),
+            expected,
+        );
+    }
+
     // PARSE ERROR
 
     // TODO this should be parse error, but isn't!
