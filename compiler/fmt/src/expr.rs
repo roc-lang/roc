@@ -407,7 +407,7 @@ pub fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
                             has_at_least_one_newline = true;
                         }
                     }
-                    CommentOrNewline::LineComment(_) => {}
+                    CommentOrNewline::LineComment(_) | CommentOrNewline::DocComment(_) => {}
                 }
             }
 

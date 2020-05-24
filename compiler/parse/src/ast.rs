@@ -294,6 +294,7 @@ pub enum AssignedField<'a, Val> {
 pub enum CommentOrNewline<'a> {
     Newline,
     LineComment(&'a str),
+    DocComment(&'a str),
 }
 
 #[derive(Clone, Debug, PartialEq)]
