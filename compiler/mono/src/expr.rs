@@ -1396,13 +1396,10 @@ fn call_by_name<'a>(
             // Build the CallByName node
             let arena = env.arena;
             let mut args = Vec::with_capacity_in(loc_args.len(), arena);
-            let mut arg_vars = Vec::with_capacity_in(loc_args.len(), arena);
+            let mut pattern_vars = Vec::with_capacity_in(loc_args.len(), arena);
 
             for (var, loc_arg) in loc_args {
-                // Don't bother building up arg_vars if this is a builtin
-                if !proc_name.is_builtin() {
-                    arg_vars.push(var);
-                }
+                pattern_vars.push(var);
 
                 match layout_cache.from_var(&env.arena, var, &env.subs, env.pointer_size) {
                     Ok(layout) => {
@@ -1417,7 +1414,7 @@ fn call_by_name<'a>(
             }
 
             let pending = PendingSpecialization {
-                pattern_vars: arg_vars,
+                pattern_vars,
                 ret_var,
                 fn_var,
             };
