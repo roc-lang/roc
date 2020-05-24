@@ -2215,6 +2215,47 @@ mod test_parse {
         );
     }
 
+    // DOCS
+
+    #[test]
+    fn basic_docs() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let def = Def::Body(
+            arena.alloc(Located::new(4, 4, 0, 1, Identifier("x"))),
+            arena.alloc(Located::new(4, 4, 4, 5, Num("5"))),
+        );
+        let loc_def = &*arena.alloc(Located::new(4, 4, 0, 1, def));
+        let defs = bumpalo::vec![in &arena; loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(6, 6, 0, 2, ret);
+        let reset_indentation = bumpalo::vec![in &arena;
+            DocComment("first line of docs"),
+            DocComment("    second line"),
+            DocComment(" third line"),
+            DocComment("fourth line")
+        ];
+        let expected = Expr::SpaceBefore(
+            arena.alloc(Defs(defs, arena.alloc(loc_ret))),
+            reset_indentation.into_bump_slice(),
+        );
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                    ## first line of docs
+                    ##     second line
+                    ##  third line
+                    ## fourth line
+                    x = 5
+
+                    42
+                "#
+            ),
+            expected,
+        );
+    }
+
     // PARSE ERROR
 
     // TODO this should be parse error, but isn't!
