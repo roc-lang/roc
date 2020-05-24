@@ -294,17 +294,7 @@ pub enum AssignedField<'a, Val> {
 pub enum CommentOrNewline<'a> {
     Newline,
     LineComment(&'a str),
-}
-
-impl<'a> CommentOrNewline<'a> {
-    pub fn contains_newline(&self) -> bool {
-        use self::CommentOrNewline::*;
-
-        match self {
-            // Line comments have an implicit newline at the end
-            Newline | LineComment(_) => true,
-        }
-    }
+    DocComment(&'a str),
 }
 
 #[derive(Clone, Debug, PartialEq)]
