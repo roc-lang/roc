@@ -49,6 +49,11 @@ where
 
                 encountered_comment = true;
             }
+            DocComment(docs) => {
+                fmt_docs(buf, docs, indent);
+
+                encountered_comment = true;
+            }
         }
     }
 }
@@ -70,12 +75,16 @@ where
                 buf.push('#');
                 buf.push_str(comment);
             }
+            DocComment(docs) => {
+                buf.push_str("##");
+                buf.push_str(docs);
+            }
         }
         match iter.peek() {
             None => {}
             Some(next_space) => match next_space {
                 Newline => {}
-                LineComment(_) => {
+                LineComment(_) | DocComment(_) => {
                     newline(buf, indent);
                 }
             },
@@ -96,6 +105,9 @@ where
             LineComment(comment) => {
                 fmt_comment(buf, comment, indent);
             }
+            DocComment(docs) => {
+                fmt_docs(buf, docs, indent);
+            }
         }
     }
 }
@@ -107,9 +119,17 @@ fn fmt_comment<'a>(buf: &mut String<'a>, comment: &'a str, indent: u16) {
     newline(buf, indent);
 }
 
+fn fmt_docs<'a>(buf: &mut String<'a>, docs: &'a str, indent: u16) {
+    buf.push_str("##");
+    buf.push_str(docs);
+
+    newline(buf, indent);
+}
+
 pub fn is_comment<'a>(space: &'a CommentOrNewline<'a>) -> bool {
     match space {
         CommentOrNewline::Newline => false,
         CommentOrNewline::LineComment(_) => true,
+        CommentOrNewline::DocComment(_) => true,
     }
 }
