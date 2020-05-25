@@ -2,13 +2,13 @@ use bumpalo::Bump;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
-use roc_can::module::{canonicalize_module_defs, ModuleOutput};
+use roc_can::module::{Module, canonicalize_module_defs, ModuleOutput};
 use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
 use roc_constrain::module::{
     constrain_imported_aliases, constrain_imported_values, constrain_module, load_builtin_aliases,
     Import,
 };
-use roc_module::ident::{Ident, Lowercase, ModuleName};
+use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use roc_parse::module::module_defs;
@@ -31,19 +31,6 @@ const ROC_FILE_EXTENSION: &str = "roc";
 
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
-
-#[derive(Debug)]
-pub struct Module {
-    pub module_id: ModuleId,
-    pub declarations: Vec<Declaration>,
-    pub exposed_imports: MutMap<Symbol, Variable>,
-    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
-    pub references: MutSet<Symbol>,
-    pub aliases: MutMap<Symbol, Alias>,
-    pub rigid_variables: MutMap<Variable, Lowercase>,
-    pub imported_modules: MutSet<ModuleId>,
-    pub src: Box<str>,
-}
 
 #[derive(Debug)]
 pub struct LoadedModule {
@@ -804,6 +791,8 @@ fn solve_module(
     declarations_by_id: &mut MutMap<ModuleId, Vec<Declaration>>,
     stdlib: &StdLib,
 ) -> MutSet<ModuleId> /* returs a set of unused imports */ {
+    // TODO do all this on a background thread too,
+    // and don't report unused imports until it's all done.
     let home = module.module_id;
     let mut imported_symbols = Vec::with_capacity(module.references.len());
     let mut imported_aliases = MutMap::default();
