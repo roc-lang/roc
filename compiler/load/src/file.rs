@@ -71,6 +71,8 @@ enum Msg {
     Header(ModuleHeader),
     Constrained {
         module: Module,
+        declarations: Vec<Declaration>,
+        src: Box<str>,
         constraint: Constraint,
         ident_ids: IdentIds,
         problems: Vec<roc_problem::can::Problem>,
@@ -226,7 +228,7 @@ pub async fn load<'a>(
     // If the relevant module's waiting_for_solve entry is now empty, solve the module.
     let mut solve_listeners: MutMap<ModuleId, Vec<ModuleId>> = MutMap::default();
 
-    let mut unsolved_modules: MutMap<ModuleId, (Module, Constraint, VarStore)> = MutMap::default();
+    let mut unsolved_modules: MutMap<ModuleId, (Module, Box<str>, Constraint, VarStore)> = MutMap::default();
 
     // Parse and canonicalize the module's deps
     while let Some(msg) = msg_rx.recv().await {
@@ -351,6 +353,8 @@ pub async fn load<'a>(
             }
             Constrained {
                 module,
+                declarations,
+                src,
                 ident_ids,
                 constraint,
                 problems,
@@ -375,22 +379,24 @@ pub async fn load<'a>(
                 // because we no longer need to wait for them!
                 waiting_for.retain(|id| !exposed_types.contains_key(id));
 
+                declarations_by_id.insert(module_id, declarations);
+
                 if waiting_for.is_empty() {
                     // All of our dependencies have already been solved. Great!
                     // That means we can proceed directly to solving.
                     solve_module(
                         module,
+                        src,
                         constraint,
                         var_store,
                         msg_tx.clone(),
                         &mut exposed_types,
-                        &mut declarations_by_id,
                         stdlib,
                     );
                 } else {
                     // We will have to wait for our dependencies to be solved.
                     debug_assert!(!unsolved_modules.contains_key(&module_id));
-                    unsolved_modules.insert(module_id, (module, constraint, var_store));
+                    unsolved_modules.insert(module_id, (module, src, constraint, var_store));
 
                     // Register a listener with each of these.
                     for dep_id in waiting_for.iter() {
@@ -462,17 +468,17 @@ pub async fn load<'a>(
 
                             // If it's no longer waiting for anything else, solve it.
                             if waiting_for.is_empty() {
-                                let (module, constraint, var_store) = unsolved_modules
+                                let (module, src, constraint, var_store) = unsolved_modules
                                     .remove(&listener_id)
                                     .expect("Could not find listener ID in unsolved_modules");
                                 let home = module.module_id;
                                 let unused_modules = solve_module(
                                     module,
+                                    src,
                                     constraint,
                                     var_store,
                                     msg_tx.clone(),
                                     &mut exposed_types,
-                                    &mut declarations_by_id,
                                     stdlib,
                                 );
 
@@ -784,11 +790,11 @@ fn add_exposed_to_scope(
 #[allow(clippy::too_many_arguments)]
 fn solve_module(
     module: Module,
+    src: Box<str>,
     constraint: Constraint,
     var_store: VarStore,
     msg_tx: MsgSender,
     exposed_types: &mut SubsByModule,
-    declarations_by_id: &mut MutMap<ModuleId, Vec<Declaration>>,
     stdlib: &StdLib,
 ) -> MutSet<ModuleId> /* returs a set of unused imports */ {
     // TODO do all this on a background thread too,
@@ -893,15 +899,12 @@ fn solve_module(
     // Turn Apply into Alias
     constraint.instantiate_aliases(&var_store);
 
-    declarations_by_id.insert(home, module.declarations);
-
     let exposed_vars_by_symbol: Vec<(Symbol, Variable)> = module.exposed_vars_by_symbol;
     let env = solve::Env {
         vars_by_symbol: SendMap::default(),
         aliases: module.aliases,
     };
 
-    let src = module.src;
     let mut subs = Subs::new(var_store.into());
 
     for (var, name) in module.rigid_variables {
@@ -1056,7 +1059,7 @@ fn parse_and_constrain(
         .parse(&arena, state)
         .expect("TODO gracefully handle parse error on module defs");
 
-    let (module, ident_ids, constraint, problems) = match canonicalize_module_defs(
+    let (module, declarations, ident_ids, constraint, problems) = match canonicalize_module_defs(
         &arena,
         parsed_defs,
         module_id,
@@ -1081,17 +1084,15 @@ fn parse_and_constrain(
             let constraint = constrain_module(module_id, mode, &declarations, &aliases, &var_store);
             let module = Module {
                 module_id,
-                declarations,
                 exposed_imports,
                 exposed_vars_by_symbol,
                 references,
                 aliases,
                 rigid_variables,
                 imported_modules: header.imported_modules,
-                src: header.src,
             };
 
-            (module, ident_ids, constraint, problems)
+            (module, declarations, ident_ids, constraint, problems)
         }
         Err(runtime_error) => {
             panic!(
@@ -1101,12 +1102,16 @@ fn parse_and_constrain(
         }
     };
 
+    let src = header.src;
+
     tokio::spawn(async move {
         let mut tx = msg_tx;
 
         // Send the constraint to the main thread for processing.
         tx.send(Msg::Constrained {
             module,
+            src,
+            declarations,
             ident_ids,
             constraint,
             problems,

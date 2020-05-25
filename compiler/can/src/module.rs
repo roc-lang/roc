@@ -18,14 +18,12 @@ use roc_types::types::Alias;
 #[derive(Debug)]
 pub struct Module {
     pub module_id: ModuleId,
-    pub declarations: Vec<Declaration>,
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub references: MutSet<Symbol>,
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: MutMap<Variable, Lowercase>,
     pub imported_modules: MutSet<ModuleId>,
-    pub src: Box<str>,
 }
 
 #[derive(Debug)]
