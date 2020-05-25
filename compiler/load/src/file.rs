@@ -2,8 +2,8 @@ use bumpalo::Bump;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
-use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::all::{default_hasher, MutMap, MutSet};
+use roc_can::module::{Module, canonicalize_module_defs, ModuleOutput};
+use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
 use roc_constrain::module::{
     constrain_imported_aliases, constrain_imported_values, load_builtin_aliases, Import,
 };
