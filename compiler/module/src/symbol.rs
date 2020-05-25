@@ -654,6 +654,10 @@ define_builtins! {
         20 FLOAT_IS_NEGATIVE_ARG: "isNegative#arg"
         21 FLOAT_IS_ZERO: "isZero"
         22 FLOAT_IS_ZERO_ARG: "isZero#arg"
+        23 FLOAT_SIN: "sin"
+        24 FLOAT_COS: "cos"
+        25 FLOAT_TAN: "tan"
+        26 FLOAT_TAN_ARG: "tan#arg"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias

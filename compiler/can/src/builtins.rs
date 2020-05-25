@@ -40,7 +40,35 @@ pub fn builtin_defs(var_store: &VarStore) -> Vec<Def> {
         float_is_positive(var_store),
         float_is_negative(var_store),
         float_is_zero(var_store),
+        float_tan(var_store),
     ]
+}
+
+/// Float.tan : Float -> Float
+fn float_tan(var_store: &VarStore) -> Def {
+    use crate::expr::Expr::*;
+
+    defn(
+        Symbol::FLOAT_TAN,
+        vec![Symbol::FLOAT_TAN_ARG],
+        var_store,
+        call(
+            Symbol::FLOAT_DIV,
+            vec![
+                call(
+                    Symbol::FLOAT_SIN,
+                    vec![Var(Symbol::FLOAT_TAN_ARG)],
+                    var_store,
+                ),
+                call(
+                    Symbol::FLOAT_COS,
+                    vec![Var(Symbol::FLOAT_TAN_ARG)],
+                    var_store,
+                ),
+            ],
+            var_store,
+        ),
+    )
 }
 
 /// Float.isZero : Float -> Bool
