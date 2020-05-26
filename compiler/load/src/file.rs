@@ -16,7 +16,7 @@ use roc_parse::parser::{Fail, Parser, State};
 use roc_region::all::{Located, Region};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
-use roc_types::solved_types::{BuiltinAlias, Solved, SolvedType};
+use roc_types::solved_types::{Solved, SolvedType};
 use roc_types::subs::{Subs, VarStore, Variable};
 use roc_types::types;
 use std::collections::{HashMap, HashSet};
@@ -837,19 +837,15 @@ fn spawn_solve_module(
                     });
                 }
                 None => {
-                    if stdlib.applies.contains(&symbol) {
-                        // do nothing
-                    } else {
+                    let is_valid_alias = stdlib.applies.contains(&symbol)
                         // This wasn't a builtin value or Apply; maybe it was a builtin alias.
-                        match stdlib.aliases.get(&symbol) {
-                            Some(_) => {
-                                // do nothing
-                            }
-                            None => panic!(
-                                "Could not find {:?} in builtin types {:?} or aliases {:?}",
-                                symbol, stdlib.types, stdlib.aliases
-                            ),
-                        }
+                        || stdlib.aliases.contains_key(&symbol);
+
+                    if !is_valid_alias {
+                        panic!(
+                            "Could not find {:?} in builtin types {:?} or aliases {:?}",
+                            symbol, stdlib.types, stdlib.aliases
+                        );
                     }
                 }
             }
@@ -906,12 +902,13 @@ fn spawn_solve_module(
         );
     }
 
-    // TODO include only the aliases actually used in this module
-    let aliases = stdlib
-        .aliases
-        .iter()
-        .map(|(symbol, alias)| (*symbol, alias.clone()))
-        .collect::<Vec<(Symbol, BuiltinAlias)>>();
+    let mut aliases = Vec::with_capacity(stdlib.aliases.len());
+
+    // We need to clone these to send them to another thread, but
+    // all the thread does is iterate over them, so use a Vec instead of a Map.
+    for (symbol, alias) in stdlib.aliases.iter() {
+        aliases.push((*symbol, alias.clone()));
+    }
 
     // Start solving this module in the background.
     spawn_blocking(move || {
