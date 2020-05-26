@@ -902,16 +902,18 @@ fn spawn_solve_module(
         );
     }
 
-    let mut aliases = Vec::with_capacity(stdlib.aliases.len());
-
-    // We need to clone these to send them to another thread, but
-    // all the thread does is iterate over them, so use a Vec instead of a Map.
-    for (symbol, alias) in stdlib.aliases.iter() {
-        aliases.push((*symbol, alias.clone()));
-    }
+    // We can't pass the reference to stdlib to the thread, but we can pass mode.
+    let mode = stdlib.mode;
 
     // Start solving this module in the background.
     spawn_blocking(move || {
+        // Rebuild the aliases in this thread, so we don't have to clone all of
+        // stdlib.aliases on the main thread.
+        let aliases = match mode {
+            Mode::Standard => roc_builtins::std::aliases(),
+            Mode::Uniqueness => roc_builtins::unique::aliases(),
+        };
+
         // Finish constraining the module by wrapping the existing Constraint
         // in the ones we just computed. We can do this off the main thread.
         // TODO what to do with the introduced rigids?
