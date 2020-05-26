@@ -3,8 +3,10 @@ use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
-use roc_constrain::module::{constrain_imported_values, load_builtin_aliases, Import, constrain_imported_aliases};
 use roc_collections::all::{default_hasher, MutMap, MutSet};
+use roc_constrain::module::{
+    constrain_imported_aliases, constrain_imported_values, load_builtin_aliases, Import,
+};
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
@@ -12,11 +14,11 @@ use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{Fail, Parser, State};
 use roc_region::all::{Located, Region};
-use roc_solve::solve; 
 use roc_solve::module::SolvedModule;
-use roc_types::types;
-use roc_types::solved_types::{Solved, SolvedType, BuiltinAlias};
+use roc_solve::solve;
+use roc_types::solved_types::{BuiltinAlias, Solved, SolvedType};
 use roc_types::subs::{Subs, VarStore, Variable};
+use roc_types::types;
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::io;
@@ -225,7 +227,10 @@ pub async fn load<'a>(
     // If the relevant module's waiting_for_solve entry is now empty, solve the module.
     let mut solve_listeners: MutMap<ModuleId, Vec<ModuleId>> = MutMap::default();
 
-    let mut unsolved_modules: MutMap<ModuleId, (Module, Box<str>, MutSet<ModuleId>, Constraint, VarStore)> = MutMap::default();
+    let mut unsolved_modules: MutMap<
+        ModuleId,
+        (Module, Box<str>, MutSet<ModuleId>, Constraint, VarStore),
+    > = MutMap::default();
 
     // Parse and canonicalize the module's deps
     while let Some(msg) = msg_rx.recv().await {
@@ -395,7 +400,10 @@ pub async fn load<'a>(
                 } else {
                     // We will have to wait for our dependencies to be solved.
                     debug_assert!(!unsolved_modules.contains_key(&module_id));
-                    unsolved_modules.insert(module_id, (module, src, imported_modules, constraint, var_store));
+                    unsolved_modules.insert(
+                        module_id,
+                        (module, src, imported_modules, constraint, var_store),
+                    );
 
                     // Register a listener with each of these.
                     for dep_id in waiting_for.iter() {
@@ -448,8 +456,13 @@ pub async fn load<'a>(
                 } else {
                     // This was a dependency. Write it down and keep processing messages.
                     debug_assert!(!exposed_types.contains_key(&module_id));
-                    exposed_types
-                        .insert(module_id, ExposedModuleTypes::Valid(solved_module.solved_types, solved_module.aliases));
+                    exposed_types.insert(
+                        module_id,
+                        ExposedModuleTypes::Valid(
+                            solved_module.solved_types,
+                            solved_module.aliases,
+                        ),
+                    );
 
                     // Notify all the listeners that this solved.
                     if let Some(listeners) = solve_listeners.remove(&module_id) {
@@ -464,9 +477,10 @@ pub async fn load<'a>(
 
                             // If it's no longer waiting for anything else, solve it.
                             if waiting_for.is_empty() {
-                                let (module, src, imported_modules, constraint, var_store) = unsolved_modules
-                                    .remove(&listener_id)
-                                    .expect("Could not find listener ID in unsolved_modules");
+                                let (module, src, imported_modules, constraint, var_store) =
+                                    unsolved_modules
+                                        .remove(&listener_id)
+                                        .expect("Could not find listener ID in unsolved_modules");
 
                                 spawn_solve_module(
                                     module,
@@ -884,13 +898,19 @@ fn spawn_solve_module(
     }
 
     for unused_import in unused_imports {
-        todo!("TODO gracefully handle unused import {:?} from module {:?}", unused_import, home);
+        todo!(
+            "TODO gracefully handle unused import {:?} from module {:?}",
+            unused_import,
+            home
+        );
     }
 
     // TODO include only the aliases actually used in this module
-    let aliases = stdlib.aliases.iter().map(|(symbol, alias)| {
-        (*symbol, alias.clone())
-    }).collect::<Vec<(Symbol, BuiltinAlias)>>();
+    let aliases = stdlib
+        .aliases
+        .iter()
+        .map(|(symbol, alias)| (*symbol, alias.clone()))
+        .collect::<Vec<(Symbol, BuiltinAlias)>>();
 
     // Start solving this module in the background.
     spawn_blocking(move || {
@@ -905,11 +925,8 @@ fn spawn_solve_module(
         // Turn Apply into Alias
         constraint.instantiate_aliases(&var_store);
 
-        let (solved_subs, solved_module) = roc_solve::module::solve_module(
-            module,
-            constraint,
-            var_store,
-        );
+        let (solved_subs, solved_module) =
+            roc_solve::module::solve_module(module, constraint, var_store);
 
         tokio::spawn(async move {
             let mut tx = msg_tx;
@@ -919,7 +936,7 @@ fn spawn_solve_module(
                 src,
                 module_id: home,
                 solved_subs: Arc::new(solved_subs),
-                solved_module
+                solved_module,
             })
             .await
             .unwrap_or_else(|_| panic!("Failed to send Solved message"));
@@ -1038,7 +1055,13 @@ fn parse_and_constrain(
                 rigid_variables: module_output.rigid_variables,
             };
 
-            (module, module_output.declarations, module_output.ident_ids, constraint, module_output.problems)
+            (
+                module,
+                module_output.declarations,
+                module_output.ident_ids,
+                constraint,
+                module_output.problems,
+            )
         }
         Err(runtime_error) => {
             panic!(
