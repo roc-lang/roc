@@ -17,6 +17,7 @@ macro_rules! mismatch {
                 column!()
             );
         }
+
         vec![Mismatch::TypeMismatch]
     }};
     ($msg:expr) => {{
@@ -27,9 +28,10 @@ macro_rules! mismatch {
                 line!(),
                 column!()
             );
+            println!($msg);
+            println!("");
         }
-        println!($msg);
-        println!("");
+
         vec![Mismatch::TypeMismatch]
     }};
     ($msg:expr,) => {{
@@ -40,9 +42,10 @@ macro_rules! mismatch {
                 line!(),
                 column!()
             );
+            println!($msg);
+            println!("");
         }
-        println!($msg);
-        println!("");
+
         vec![Mismatch::TypeMismatch]
     }};
     ($msg:expr, $($arg:tt)*) => {{
@@ -53,9 +56,10 @@ macro_rules! mismatch {
                 line!(),
                 column!()
             );
+            println!($msg, $($arg)*);
+            println!("");
         }
-        println!($msg, $($arg)*);
-        println!("");
+
         vec![Mismatch::TypeMismatch]
     }};
 }

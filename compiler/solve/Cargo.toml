@@ -12,6 +12,8 @@ roc_module = { path = "../module" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
 roc_unify = { path = "../unify" }
+roc_constrain = { path = "../constrain" }
+roc_builtins = { path = "../builtins" }
 
 [dev-dependencies]
 roc_constrain = { path = "../constrain" }

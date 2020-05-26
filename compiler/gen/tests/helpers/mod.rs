@@ -170,10 +170,10 @@ pub fn uniq_expr_with(
 
     let types = stdlib.types;
     let imports: Vec<_> = types
-        .iter()
+        .into_iter()
         .map(|(symbol, (solved_type, region))| Import {
-            loc_symbol: Located::at(*region, *symbol),
-            solved_type: solved_type,
+            loc_symbol: Located::at(region, symbol),
+            solved_type,
         })
         .collect();
 
@@ -184,7 +184,7 @@ pub fn uniq_expr_with(
         constrain_imported_values(imports, constraint, &var_store);
 
     // load builtin types
-    let mut constraint = load_builtin_aliases(&stdlib.aliases, constraint, &var_store);
+    let mut constraint = load_builtin_aliases(stdlib.aliases, constraint, &var_store);
 
     constraint.instantiate_aliases(&var_store);
 
@@ -275,10 +275,10 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     let types = roc_builtins::std::types();
 
     let imports: Vec<_> = types
-        .iter()
+        .into_iter()
         .map(|(symbol, (solved_type, region))| Import {
-            loc_symbol: Located::at(*region, *symbol),
-            solved_type: solved_type,
+            loc_symbol: Located::at(region, symbol),
+            solved_type,
         })
         .collect();
 
@@ -292,8 +292,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     //    }
 
     //load builtin types
-    let mut constraint =
-        load_builtin_aliases(&roc_builtins::std::aliases(), constraint, &var_store);
+    let mut constraint = load_builtin_aliases(roc_builtins::std::aliases(), constraint, &var_store);
 
     constraint.instantiate_aliases(&var_store);
 
