@@ -30,23 +30,20 @@ pub fn constrain_module(
     mode: Mode,
     var_store: &VarStore,
 ) -> Constraint {
+    use Mode::*;
+
+    let mut send_aliases = SendMap::default();
+
+    for (symbol, alias) in module.aliases.iter() {
+        send_aliases.insert(*symbol, alias.clone());
+    }
+
     let decls = &module.declarations;
-    let constraint = {
-        use Mode::*;
 
-        let mut send_aliases = SendMap::default();
-
-        for (symbol, alias) in module.aliases.iter() {
-            send_aliases.insert(*symbol, alias.clone());
-        }
-
-        match mode {
-            Standard => constrain_decls(home, decls, send_aliases),
-            Uniqueness => crate::uniq::constrain_decls(home, decls, send_aliases, &var_store),
-        }
-    };
-
-    constraint
+    match mode {
+        Standard => constrain_decls(home, decls, send_aliases),
+        Uniqueness => crate::uniq::constrain_decls(home, decls, send_aliases, &var_store),
+    }
 }
 
 #[derive(Debug, Clone)]

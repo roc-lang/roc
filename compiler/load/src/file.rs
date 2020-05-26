@@ -227,6 +227,7 @@ pub async fn load<'a>(
     // If the relevant module's waiting_for_solve entry is now empty, solve the module.
     let mut solve_listeners: MutMap<ModuleId, Vec<ModuleId>> = MutMap::default();
 
+    #[allow(clippy::type_complexity)]
     let mut unsolved_modules: MutMap<
         ModuleId,
         (Module, Box<str>, MutSet<ModuleId>, Constraint, VarStore),
