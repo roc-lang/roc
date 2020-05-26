@@ -114,15 +114,13 @@ pub fn constrain_imported_values(
     )
 }
 
-pub fn load_builtin_aliases(
-    aliases: &MutMap<Symbol, BuiltinAlias>,
-    body_con: Constraint,
-    var_store: &VarStore,
-) -> Constraint {
+pub fn load_builtin_aliases<I>(aliases: I, body_con: Constraint, var_store: &VarStore) -> Constraint
+where
+    I: IntoIterator<Item = (Symbol, BuiltinAlias)>,
+{
     use Constraint::*;
 
-    // Load all builtin aliases.
-    // TODO load only the ones actually used in this module
+    // Load all the given builtin aliases.
     let mut def_aliases = SendMap::default();
 
     for (symbol, builtin_alias) in aliases {
@@ -154,7 +152,7 @@ pub fn load_builtin_aliases(
             typ: actual,
         };
 
-        def_aliases.insert(*symbol, alias);
+        def_aliases.insert(symbol, alias);
     }
 
     Let(Box::new(LetConstraint {

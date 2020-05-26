@@ -195,8 +195,7 @@ pub fn can_expr_with(
         constrain_imported_values(imports, constraint, &var_store);
 
     //load builtin types
-    let mut constraint =
-        load_builtin_aliases(&roc_builtins::std::aliases(), constraint, &var_store);
+    let mut constraint = load_builtin_aliases(roc_builtins::std::aliases(), constraint, &var_store);
 
     constraint.instantiate_aliases(&var_store);
 

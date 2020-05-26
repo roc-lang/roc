@@ -19,6 +19,7 @@ use roc_parse::parser::{loc, Fail, Parser, State};
 use roc_problem::can::Problem;
 use roc_region::all::{Located, Region};
 use roc_solve::solve;
+use roc_types::solved_types::BuiltinAlias;
 use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
 use std::hash::Hash;
@@ -178,7 +179,7 @@ pub fn uniq_expr_with(
         constrain_imported_values(imports, constraint, &var_store);
 
     // load builtin types
-    let mut constraint = load_builtin_aliases(&stdlib.aliases, constraint, &var_store);
+    let mut constraint = load_builtin_aliases(stdlib.aliases, constraint, &var_store);
 
     constraint.instantiate_aliases(&var_store);
 
@@ -258,9 +259,14 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     let (_introduced_rigids, constraint) =
         constrain_imported_values(imports, constraint, &var_store);
 
+    // TODO include only the aliases actually used in this module
+    let aliases = roc_builtins::std::aliases()
+        .iter()
+        .map(|(symbol, alias)| (*symbol, alias.clone()))
+        .collect::<Vec<(Symbol, BuiltinAlias)>>();
+
     //load builtin types
-    let mut constraint =
-        load_builtin_aliases(&roc_builtins::std::aliases(), constraint, &var_store);
+    let mut constraint = load_builtin_aliases(aliases.into_iter(), constraint, &var_store);
 
     constraint.instantiate_aliases(&var_store);
 

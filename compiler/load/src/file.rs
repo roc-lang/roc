@@ -15,7 +15,7 @@ use roc_region::all::{Located, Region};
 use roc_solve::solve; 
 use roc_solve::module::SolvedModule;
 use roc_types::types;
-use roc_types::solved_types::{Solved, SolvedType};
+use roc_types::solved_types::{Solved, SolvedType, BuiltinAlias};
 use roc_types::subs::{Subs, VarStore, Variable};
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
@@ -883,22 +883,24 @@ fn spawn_solve_module(
         }
     }
 
-    let constraint = load_builtin_aliases(&stdlib.aliases, constraint, &var_store);
-
-
     for unused_import in unused_imports {
         todo!("TODO gracefully handle unused import {:?} from module {:?}", unused_import, home);
     }
+
+    // TODO include only the aliases actually used in this module
+    let aliases = stdlib.aliases.iter().map(|(symbol, alias)| {
+        (*symbol, alias.clone())
+    }).collect::<Vec<(Symbol, BuiltinAlias)>>();
 
     // Start solving this module in the background.
     spawn_blocking(move || {
         // Finish constraining the module by wrapping the existing Constraint
         // in the ones we just computed. We can do this off the main thread.
-        
         // TODO what to do with the introduced rigids?
         let (_introduced_rigids, constraint) =
             constrain_imported_values(imported_symbols, constraint, &var_store);
-        let mut constraint = constrain_imported_aliases(imported_aliases, constraint, &var_store);
+        let constraint = constrain_imported_aliases(imported_aliases, constraint, &var_store);
+        let mut constraint = load_builtin_aliases(aliases, constraint, &var_store);
 
         // Turn Apply into Alias
         constraint.instantiate_aliases(&var_store);
