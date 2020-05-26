@@ -814,7 +814,11 @@ fn spawn_solve_module(
     let mut imported_aliases = MutMap::default();
     let mut unused_imports = imported_modules; // We'll remove these as we encounter them.
 
-    // Translate referenced symbols into constraints
+    // Translate referenced symbols into constraints. We do this on the main
+    // thread because we need exclusive access to the exposed_types map, in order
+    // to get the necessary constraint info for any aliases we imported. We also
+    // resolve builtin types now, so we can use a refernce to stdlib instead of
+    // having to either clone it or recreate it from scratch on the other thread.
     for &symbol in module.references.iter() {
         let module_id = symbol.module_id();
 
