@@ -1,8 +1,8 @@
 use crate::expr::constrain_decls;
 use roc_builtins::std::Mode;
 use roc_can::constraint::{Constraint, LetConstraint};
-use roc_can::def::Declaration;
-use roc_collections::all::{ImMap, MutMap, SendMap};
+use roc_can::module::ModuleOutput;
+use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::Located;
@@ -11,36 +11,52 @@ use roc_types::solved_types::{BuiltinAlias, SolvedAtom, SolvedType};
 use roc_types::subs::{VarId, VarStore, Variable};
 use roc_types::types::{Alias, Type};
 
-#[inline(always)]
+pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
+
+#[derive(Clone, Debug)]
+pub enum ExposedModuleTypes {
+    Invalid,
+    Valid(MutMap<Symbol, SolvedType>, MutMap<Symbol, Alias>),
+}
+
+pub struct ConstrainedModule {
+    pub unused_imports: MutSet<ModuleId>,
+    pub constraint: Constraint,
+}
+
 pub fn constrain_module(
+    module: &ModuleOutput,
     home: ModuleId,
     mode: Mode,
-    decls: &[Declaration],
-    aliases: &MutMap<Symbol, Alias>,
     var_store: &VarStore,
 ) -> Constraint {
-    use Mode::*;
+    let decls = &module.declarations;
+    let constraint = {
+        use Mode::*;
 
-    let mut send_aliases = SendMap::default();
+        let mut send_aliases = SendMap::default();
 
-    for (symbol, alias) in aliases {
-        send_aliases.insert(*symbol, alias.clone());
-    }
+        for (symbol, alias) in module.aliases.iter() {
+            send_aliases.insert(*symbol, alias.clone());
+        }
 
-    match mode {
-        Standard => constrain_decls(home, decls, send_aliases),
-        Uniqueness => crate::uniq::constrain_decls(home, decls, send_aliases, var_store),
-    }
+        match mode {
+            Standard => constrain_decls(home, decls, send_aliases),
+            Uniqueness => crate::uniq::constrain_decls(home, decls, send_aliases, &var_store),
+        }
+    };
+
+    constraint
 }
 
 #[derive(Debug, Clone)]
-pub struct Import<'a> {
+pub struct Import {
     pub loc_symbol: Located<Symbol>,
-    pub solved_type: &'a SolvedType,
+    pub solved_type: SolvedType,
 }
 
 pub fn constrain_imported_values(
-    imports: Vec<Import<'_>>,
+    imports: Vec<Import>,
     body_con: Constraint,
     var_store: &VarStore,
 ) -> (Vec<Variable>, Constraint) {
@@ -54,7 +70,7 @@ pub fn constrain_imported_values(
 
         // an imported symbol can be either an alias or a value
         match import.solved_type {
-            SolvedType::Alias(symbol, _, _) if symbol == &loc_symbol.value => {
+            SolvedType::Alias(symbol, _, _) if symbol == loc_symbol.value => {
                 // do nothing, in the future the alias definitions should not be in the list of imported values
             }
             _ => {

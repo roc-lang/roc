@@ -453,9 +453,9 @@ pub fn uniq_expr_with(
 
     let types = stdlib.types;
     let imports: Vec<_> = types
-        .iter()
+        .into_iter()
         .map(|(symbol, (solved_type, region))| Import {
-            loc_symbol: Located::at(*region, *symbol),
+            loc_symbol: Located::at(region, symbol),
             solved_type,
         })
         .collect();
@@ -529,9 +529,9 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> Result<Can
     let types = roc_builtins::std::types();
 
     let imports: Vec<_> = types
-        .iter()
+        .into_iter()
         .map(|(symbol, (solved_type, region))| Import {
-            loc_symbol: Located::at(*region, *symbol),
+            loc_symbol: Located::at(region, symbol),
             solved_type,
         })
         .collect();

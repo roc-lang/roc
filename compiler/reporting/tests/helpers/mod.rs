@@ -183,10 +183,10 @@ pub fn can_expr_with(
     let types = roc_builtins::std::types();
 
     let imports: Vec<_> = types
-        .iter()
+        .into_iter()
         .map(|(symbol, (solved_type, region))| Import {
-            loc_symbol: Located::at(*region, *symbol),
-            solved_type: solved_type,
+            loc_symbol: Located::at(region, symbol),
+            solved_type,
         })
         .collect();
 

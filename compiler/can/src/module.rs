@@ -23,7 +23,6 @@ pub struct Module {
     pub references: MutSet<Symbol>,
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: MutMap<Variable, Lowercase>,
-    pub imported_modules: MutSet<ModuleId>,
 }
 
 #[derive(Debug)]

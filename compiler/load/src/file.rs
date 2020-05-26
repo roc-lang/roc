@@ -2,22 +2,21 @@ use bumpalo::Bump;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
-use roc_can::module::{Module, canonicalize_module_defs, ModuleOutput};
-use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
-use roc_constrain::module::{
-    constrain_imported_aliases, constrain_imported_values, constrain_module, load_builtin_aliases,
-    Import,
-};
+use roc_can::module::{canonicalize_module_defs, Module};
+use roc_constrain::module::{constrain_imported_values, load_builtin_aliases, Import, constrain_imported_aliases};
+use roc_collections::all::{default_hasher, MutMap, MutSet};
+use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{Fail, Parser, State};
 use roc_region::all::{Located, Region};
-use roc_solve::solve::{self, ExposedModuleTypes, SubsByModule};
+use roc_solve::solve; 
+use roc_solve::module::SolvedModule;
+use roc_types::types;
 use roc_types::solved_types::{Solved, SolvedType};
 use roc_types::subs::{Subs, VarStore, Variable};
-use roc_types::types::{self, Alias};
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::io;
@@ -72,6 +71,7 @@ enum Msg {
     Constrained {
         module: Module,
         declarations: Vec<Declaration>,
+        imported_modules: MutSet<ModuleId>,
         src: Box<str>,
         constraint: Constraint,
         ident_ids: IdentIds,
@@ -81,11 +81,8 @@ enum Msg {
     Solved {
         src: Box<str>,
         module_id: ModuleId,
-        solved_types: MutMap<Symbol, SolvedType>,
-        aliases: MutMap<Symbol, Alias>,
-        subs: Arc<Solved<Subs>>,
-        exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
-        problems: Vec<solve::TypeError>,
+        solved_module: SolvedModule,
+        solved_subs: Arc<Solved<Subs>>,
     },
 }
 
@@ -228,7 +225,7 @@ pub async fn load<'a>(
     // If the relevant module's waiting_for_solve entry is now empty, solve the module.
     let mut solve_listeners: MutMap<ModuleId, Vec<ModuleId>> = MutMap::default();
 
-    let mut unsolved_modules: MutMap<ModuleId, (Module, Box<str>, Constraint, VarStore)> = MutMap::default();
+    let mut unsolved_modules: MutMap<ModuleId, (Module, Box<str>, MutSet<ModuleId>, Constraint, VarStore)> = MutMap::default();
 
     // Parse and canonicalize the module's deps
     while let Some(msg) = msg_rx.recv().await {
@@ -356,6 +353,7 @@ pub async fn load<'a>(
                 declarations,
                 src,
                 ident_ids,
+                imported_modules,
                 constraint,
                 problems,
                 var_store,
@@ -384,11 +382,12 @@ pub async fn load<'a>(
                 if waiting_for.is_empty() {
                     // All of our dependencies have already been solved. Great!
                     // That means we can proceed directly to solving.
-                    solve_module(
+                    spawn_solve_module(
                         module,
                         src,
                         constraint,
                         var_store,
+                        imported_modules,
                         msg_tx.clone(),
                         &mut exposed_types,
                         stdlib,
@@ -396,7 +395,7 @@ pub async fn load<'a>(
                 } else {
                     // We will have to wait for our dependencies to be solved.
                     debug_assert!(!unsolved_modules.contains_key(&module_id));
-                    unsolved_modules.insert(module_id, (module, src, constraint, var_store));
+                    unsolved_modules.insert(module_id, (module, src, imported_modules, constraint, var_store));
 
                     // Register a listener with each of these.
                     for dep_id in waiting_for.iter() {
@@ -409,21 +408,18 @@ pub async fn load<'a>(
                 }
             }
             Solved {
-                module_id,
-                solved_types,
-                subs,
-                problems,
-                exposed_vars_by_symbol,
-                aliases,
                 src,
+                module_id,
+                solved_module,
+                solved_subs,
             } => {
-                type_problems.extend(problems);
+                type_problems.extend(solved_module.problems);
 
                 if module_id == root_id {
                     // Once we've solved the originally requested module, we're done!
                     msg_rx.close();
 
-                    let solved = Arc::try_unwrap(subs).unwrap_or_else(|_| {
+                    let solved = Arc::try_unwrap(solved_subs).unwrap_or_else(|_| {
                         panic!("There were still outstanding Arc references to Solved<Subs>")
                     });
 
@@ -446,14 +442,14 @@ pub async fn load<'a>(
                         can_problems,
                         type_problems,
                         declarations_by_id,
-                        exposed_vars_by_symbol,
+                        exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
                         src,
                     });
                 } else {
                     // This was a dependency. Write it down and keep processing messages.
                     debug_assert!(!exposed_types.contains_key(&module_id));
                     exposed_types
-                        .insert(module_id, ExposedModuleTypes::Valid(solved_types, aliases));
+                        .insert(module_id, ExposedModuleTypes::Valid(solved_module.solved_types, solved_module.aliases));
 
                     // Notify all the listeners that this solved.
                     if let Some(listeners) = solve_listeners.remove(&module_id) {
@@ -468,23 +464,20 @@ pub async fn load<'a>(
 
                             // If it's no longer waiting for anything else, solve it.
                             if waiting_for.is_empty() {
-                                let (module, src, constraint, var_store) = unsolved_modules
+                                let (module, src, imported_modules, constraint, var_store) = unsolved_modules
                                     .remove(&listener_id)
                                     .expect("Could not find listener ID in unsolved_modules");
-                                let home = module.module_id;
-                                let unused_modules = solve_module(
+
+                                spawn_solve_module(
                                     module,
                                     src,
                                     constraint,
                                     var_store,
+                                    imported_modules,
                                     msg_tx.clone(),
                                     &mut exposed_types,
                                     stdlib,
                                 );
-
-                                for _unused_module_id in unused_modules.iter() {
-                                    panic!("TODO gracefully report unused imports for {:?}, namely {:?}", home, unused_modules);
-                                }
                             }
                         }
                     }
@@ -788,21 +781,23 @@ fn add_exposed_to_scope(
 
 // TODO trim down these arguments - possibly by moving Constraint into Module
 #[allow(clippy::too_many_arguments)]
-fn solve_module(
+fn spawn_solve_module(
     module: Module,
     src: Box<str>,
     constraint: Constraint,
     var_store: VarStore,
+    imported_modules: MutSet<ModuleId>,
     msg_tx: MsgSender,
     exposed_types: &mut SubsByModule,
     stdlib: &StdLib,
-) -> MutSet<ModuleId> /* returs a set of unused imports */ {
-    // TODO do all this on a background thread too,
-    // and don't report unused imports until it's all done.
+) {
+    // Get the constriants for this module's imports. We do this on the main thread
+    // to avoid having to lock the map of exposed types, or to clone it
+    // (which would be more expensive for the main thread).
     let home = module.module_id;
     let mut imported_symbols = Vec::with_capacity(module.references.len());
     let mut imported_aliases = MutMap::default();
-    let mut unused_imports = module.imported_modules; // We'll remove these as we encounter them.
+    let mut unused_imports = imported_modules; // We'll remove these as we encounter them.
 
     // Translate referenced symbols into constraints
     for &symbol in module.references.iter() {
@@ -823,7 +818,7 @@ fn solve_module(
 
                     imported_symbols.push(Import {
                         loc_symbol,
-                        solved_type,
+                        solved_type: solved_type.clone(),
                     });
                 }
                 None => {
@@ -867,7 +862,7 @@ fn solve_module(
 
                     imported_symbols.push(Import {
                         loc_symbol,
-                        solved_type,
+                        solved_type: solved_type.clone(),
                     });
                 }
                 Some(ExposedModuleTypes::Invalid) => {
@@ -875,7 +870,7 @@ fn solve_module(
                     // for everything imported from it.
                     imported_symbols.push(Import {
                         loc_symbol,
-                        solved_type: &SolvedType::Erroneous(types::Problem::InvalidModule),
+                        solved_type: SolvedType::Erroneous(types::Problem::InvalidModule),
                     });
                 }
                 None => {
@@ -888,66 +883,31 @@ fn solve_module(
         }
     }
 
-    // Wrap the existing module constraint in these imported constraints.
+    let constraint = load_builtin_aliases(&stdlib.aliases, constraint, &var_store);
 
-    // TODO what to do with the introduced rigids?
-    let (_introduced_rigids, constraint) =
-        constrain_imported_values(imported_symbols, constraint, &var_store);
-    let constraint = constrain_imported_aliases(imported_aliases, constraint, &var_store);
-    let mut constraint = load_builtin_aliases(&stdlib.aliases, constraint, &var_store);
 
-    // Turn Apply into Alias
-    constraint.instantiate_aliases(&var_store);
-
-    let exposed_vars_by_symbol: Vec<(Symbol, Variable)> = module.exposed_vars_by_symbol;
-    let env = solve::Env {
-        vars_by_symbol: SendMap::default(),
-        aliases: module.aliases,
-    };
-
-    let mut subs = Subs::new(var_store.into());
-
-    for (var, name) in module.rigid_variables {
-        subs.rigid_var(var, name);
+    for unused_import in unused_imports {
+        todo!("TODO gracefully handle unused import {:?} from module {:?}", unused_import, home);
     }
 
     // Start solving this module in the background.
     spawn_blocking(move || {
-        // Now that the module is parsed, canonicalized, and constrained,
-        // we need to type check it.
-        let mut problems = Vec::new();
+        // Finish constraining the module by wrapping the existing Constraint
+        // in the ones we just computed. We can do this off the main thread.
+        
+        // TODO what to do with the introduced rigids?
+        let (_introduced_rigids, constraint) =
+            constrain_imported_values(imported_symbols, constraint, &var_store);
+        let mut constraint = constrain_imported_aliases(imported_aliases, constraint, &var_store);
 
-        // Run the solver to populate Subs.
-        let (solved_subs, solved_env) = solve::run(&env, &mut problems, subs, &constraint);
+        // Turn Apply into Alias
+        constraint.instantiate_aliases(&var_store);
 
-        let mut solved_types = MutMap::default();
-
-        for (symbol, alias) in solved_env.aliases.into_iter() {
-            let mut args = Vec::with_capacity(alias.vars.len());
-
-            for Located {
-                value: (name, var), ..
-            } in alias.vars.iter()
-            {
-                args.push((name.clone(), SolvedType::new(&solved_subs, *var)));
-            }
-
-            let solved_type = SolvedType::from_type(&solved_subs, alias.typ);
-            let solved_alias = SolvedType::Alias(symbol, args, Box::new(solved_type));
-
-            solved_types.insert(symbol, solved_alias);
-        }
-
-        // exposed_vars_by_symbol contains the Variables for all the Symbols
-        // this module exposes. We want to convert those into flat SolvedType
-        // annotations which are decoupled from our Subs, because that's how
-        // other modules will generate constraints for imported values
-        // within the context of their own Subs.
-        for (symbol, var) in exposed_vars_by_symbol.iter() {
-            let solved_type = SolvedType::new(&solved_subs, *var);
-
-            solved_types.insert(*symbol, solved_type);
-        }
+        let (solved_subs, solved_module) = roc_solve::module::solve_module(
+            module,
+            constraint,
+            var_store,
+        );
 
         tokio::spawn(async move {
             let mut tx = msg_tx;
@@ -956,18 +916,13 @@ fn solve_module(
             tx.send(Msg::Solved {
                 src,
                 module_id: home,
-                subs: Arc::new(solved_subs),
-                exposed_vars_by_symbol,
-                solved_types,
-                problems,
-                aliases: env.aliases,
+                solved_subs: Arc::new(solved_subs),
+                solved_module
             })
             .await
             .unwrap_or_else(|_| panic!("Failed to send Solved message"));
         });
     });
-
-    unused_imports
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1070,29 +1025,18 @@ fn parse_and_constrain(
         exposed_symbols,
         &var_store,
     ) {
-        Ok(ModuleOutput {
-            declarations,
-            exposed_imports,
-            ident_ids,
-            exposed_vars_by_symbol,
-            references,
-            aliases,
-            rigid_variables,
-            problems,
-            ..
-        }) => {
-            let constraint = constrain_module(module_id, mode, &declarations, &aliases, &var_store);
+        Ok(module_output) => {
+            let constraint = constrain_module(&module_output, module_id, mode, &var_store);
             let module = Module {
                 module_id,
-                exposed_imports,
-                exposed_vars_by_symbol,
-                references,
-                aliases,
-                rigid_variables,
-                imported_modules: header.imported_modules,
+                exposed_imports: module_output.exposed_imports,
+                exposed_vars_by_symbol: module_output.exposed_vars_by_symbol,
+                references: module_output.references,
+                aliases: module_output.aliases,
+                rigid_variables: module_output.rigid_variables,
             };
 
-            (module, declarations, ident_ids, constraint, problems)
+            (module, module_output.declarations, module_output.ident_ids, constraint, module_output.problems)
         }
         Err(runtime_error) => {
             panic!(
@@ -1103,6 +1047,7 @@ fn parse_and_constrain(
     };
 
     let src = header.src;
+    let imported_modules = header.imported_modules;
 
     tokio::spawn(async move {
         let mut tx = msg_tx;
@@ -1112,6 +1057,7 @@ fn parse_and_constrain(
             module,
             src,
             declarations,
+            imported_modules,
             ident_ids,
             constraint,
             problems,
