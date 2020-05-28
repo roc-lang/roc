@@ -307,7 +307,7 @@ fn run_event_loop() {
             submission_complete_fence,
             rendering_complete_semaphore,
         }));
-    let is_animating = true;
+    let is_animating = false;
     let mut text_state = String::new();
     let mut keyboard_modifiers = ModifiersState::empty();
 
@@ -315,7 +315,7 @@ fn run_event_loop() {
         use winit::event::{Event, WindowEvent};
         use winit::event_loop::ControlFlow;
 
-        // TODO dynamically switch this on/off depending on whether any
+        // TODO dynamically switch is_animating on/off depending on whether any
         // animations are running. Should conserve CPU usage and battery life!
         if is_animating {
             *control_flow = ControlFlow::Poll;
