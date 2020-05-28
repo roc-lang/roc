@@ -1,11 +1,12 @@
 :root {
   --link-color: #5c0bff;
+  --code-link-color: #4e00eb;
   --text-color: #333333;
   --logo-solid: #aaaaaa;
   --code-color: #222222;
+  --code-bg-color: #eeeeee;
   --main-bg-color: #fdfdfd;
   --border-bg-color: #E9E9E9;
-  --code-bg-color: #eeeeee;
   --logo-gradient-start: #aaaaaa;
   --logo-gradient-mid: #777777;
   --logo-gradient-end: #333333;
@@ -248,11 +249,11 @@ code {
 }
 
 code a {
-  color: var(--link-color);
+  color: var(--code-link-color);
 }
 
 code a:visited {
-  color: var(--link-color);
+  color: var(--code-link-color);
 }
 
 pre {
@@ -294,11 +295,12 @@ pre {
     --main-bg-color: #363636;
     --border-bg-color: #111111;
     --code-color: #eeeeee;
-    --code-bg-color: #2b2b2b;
+    --code-bg-color: #2a2a2a;
     --text-color: #cccccc;
     --logo-solid: #777777;
     --faded-color: #bbbbbb;
     --link-color: #b894ff;
+    --code-link-color: #c5a8ff;
     --logo-gradient-start: #333333;
     --logo-gradient-mid: #777777;
     --logo-gradient-end: #aaaaaa;

@@ -377,7 +377,7 @@ fn run_event_loop() {
                         }
                     } else {
                         PushConstants {
-                            color: [1.0, 1.0, 1.0, 1.0],
+                            color: [0.77254902, 0.658823529, 1.0, 0.5],
                             pos: [0.06 * index as f32, 0.0],
                             scale: [0.05, 0.05],
                         }
@@ -486,7 +486,7 @@ fn run_event_loop() {
                         viewport.rect,
                         &[ClearValue {
                             color: ClearColor {
-                                float32: [0.0, 0.0, 0.0, 1.0],
+                                float32: [0.01, 0.01, 0.01, 1.0],
                             },
                         }],
                         SubpassContents::Inline,
