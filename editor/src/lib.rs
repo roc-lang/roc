@@ -80,13 +80,7 @@ fn run_event_loop() {
     // TODO do a better window size
     const WINDOW_SIZE: [u32; 2] = [512, 512];
 
-    // TODO try configuring the swapchain explicitly, in particular in order
-    // to experiment with different PresentMode settings to see how they
-    // affect input latency.
-    //
-    // https://rust-tutorials.github.io/learn-gfx-hal/03_clear_the_window.html
     let event_loop = EventLoop::new();
-
     let (logical_window_size, physical_window_size) = {
         use winit::dpi::{LogicalSize, PhysicalSize};
 
