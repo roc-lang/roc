@@ -70,10 +70,29 @@ impl<B: gfx_hal::Backend> Drop for ResourceHolder<B> {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-struct PushConstants {
-    color: [f32; 4],
-    pos: [f32; 2],
-    scale: [f32; 2],
+struct Transform {
+    matrix: Mat4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct Mat4 {
+    m11: f32,
+    m21: f32,
+    m31: f32,
+    m41: f32,
+    m12: f32,
+    m22: f32,
+    m32: f32,
+    m42: f32,
+    m13: f32,
+    m23: f32,
+    m33: f32,
+    m43: f32,
+    m14: f32,
+    m24: f32,
+    m34: f32,
+    m44: f32,
 }
 
 fn run_event_loop() {
@@ -201,15 +220,16 @@ fn run_event_loop() {
     let pipeline_layout = unsafe {
         use gfx_hal::pso::ShaderStageFlags;
 
-        let push_constant_bytes = std::mem::size_of::<PushConstants>() as u32;
+        let push_constant_bytes = std::mem::size_of::<Transform>() as u32;
 
         device
             .create_pipeline_layout(&[], &[(ShaderStageFlags::VERTEX, 0..push_constant_bytes)])
             .expect("Out of memory")
     };
 
-    let vertex_shader = include_str!("../shaders/triangle.vert");
-    let fragment_shader = include_str!("../shaders/triangle.frag");
+    // Vertex and fragment shaders for text
+    let text_vs = include_str!("../shaders/text.vert");
+    let text_fs = include_str!("../shaders/text.frag");
 
     /// Create a pipeline with the given layout and shaders.
     unsafe fn make_pipeline<B: gfx_hal::Backend>(
@@ -284,13 +304,7 @@ fn run_event_loop() {
     };
 
     let pipeline = unsafe {
-        make_pipeline::<backend::Backend>(
-            &device,
-            &render_pass,
-            &pipeline_layout,
-            vertex_shader,
-            fragment_shader,
-        )
+        make_pipeline::<backend::Backend>(&device, &render_pass, &pipeline_layout, text_vs, text_fs)
     };
 
     let submission_complete_fence = device.create_fence(true).expect("Out of memory");
@@ -368,18 +382,48 @@ fn run_event_loop() {
                 let pipeline_layout = &res.pipeline_layouts[0];
                 let pipeline = &res.pipelines[0];
 
-                let triangles = text_state.chars().enumerate().map(|(index, char)| {
+                let triangles = text_state.chars().enumerate().map(|(_index, char)| {
                     if char == ' ' {
-                        PushConstants {
-                            color: [0.0, 0.0, 0.0, 0.0],
-                            pos: [0.0, 0.0],
-                            scale: [0.00, 0.00],
+                        Transform {
+                            matrix: Mat4 {
+                                m11: 0.0,
+                                m21: 0.0,
+                                m31: 0.0,
+                                m41: 0.0,
+                                m12: 0.0,
+                                m22: 0.0,
+                                m32: 0.0,
+                                m42: 0.0,
+                                m13: 0.0,
+                                m23: 0.0,
+                                m33: 0.0,
+                                m43: 0.0,
+                                m14: 0.0,
+                                m24: 0.0,
+                                m34: 0.0,
+                                m44: 0.0,
+                            },
                         }
                     } else {
-                        PushConstants {
-                            color: [1.0, 1.0, 1.0, 1.0],
-                            pos: [0.06 * index as f32, 0.0],
-                            scale: [0.05, 0.05],
+                        Transform {
+                            matrix: Mat4 {
+                                m11: 0.0,
+                                m21: 0.0,
+                                m31: 0.0,
+                                m41: 0.0,
+                                m12: 0.0,
+                                m22: 0.0,
+                                m32: 0.0,
+                                m42: 0.0,
+                                m13: 0.0,
+                                m23: 0.0,
+                                m33: 0.0,
+                                m43: 0.0,
+                                m14: 0.0,
+                                m24: 0.0,
+                                m34: 0.0,
+                                m44: 0.0,
+                            },
                         }
                     }
                 });
