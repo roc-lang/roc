@@ -1,6 +1,6 @@
 use gfx_hal::{
     device::Device,
-    window::{Extent2D, PresentationSurface, Surface},
+    window::{Extent2D, PresentMode, PresentationSurface, Surface},
     Instance,
 };
 use glsl_to_spirv::ShaderType;
@@ -413,7 +413,8 @@ fn run_event_loop() {
                     let caps = res.surface.capabilities(&adapter.physical_device);
 
                     let mut swapchain_config =
-                        SwapchainConfig::from_caps(&caps, surface_color_format, surface_extent);
+                        SwapchainConfig::from_caps(&caps, surface_color_format, surface_extent)
+                            .with_present_mode(PresentMode::IMMEDIATE);
 
                     // This seems to fix some fullscreen slowdown on macOS.
                     if caps.image_count.contains(&3) {
