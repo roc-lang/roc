@@ -50,7 +50,6 @@ inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm10-0.releas
 target-lexicon = "0.10"
 winit = "0.22"
 image = "0.23"
-glyph_brush="0.7"
 gfx-hal = "0.5"
 glsl-to-spirv = "0.1"
 bincode = "1.2"
