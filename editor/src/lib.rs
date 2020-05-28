@@ -368,19 +368,16 @@ fn run_event_loop() {
                 let pipeline_layout = &res.pipeline_layouts[0];
                 let pipeline = &res.pipelines[0];
 
-                let triangles = text_state.chars().enumerate().map(|(index, char)| {
+                let triangles = text_state.chars().enumerate().flat_map(|(index, char)| {
                     if char == ' ' {
-                        PushConstants {
-                            color: [0.0, 0.0, 0.0, 0.0],
-                            pos: [0.0, 0.0],
-                            scale: [0.00, 0.00],
-                        }
+                        // Don't render spaces
+                        None
                     } else {
-                        PushConstants {
+                        Some(PushConstants {
                             color: [0.77254902, 0.658823529, 1.0, 0.5],
                             pos: [0.06 * index as f32, 0.0],
                             scale: [0.05, 0.05],
-                        }
+                        })
                     }
                 });
 
