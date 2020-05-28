@@ -67,6 +67,15 @@ checksum = "a4c527152e37cf757a3f78aae5a06fbeefdb07ccc535c980a3208ee3060dd544"
 
 [[package]]
 name = "arrayvec"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd9fd44efafa8690358b7408d253adf110036b88f55672a933f01d616ad9b1b9"
+dependencies = [
+ "nodrop",
+]
+
+[[package]]
+name = "arrayvec"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cff77d8686867eceff3105329d4698d96c2391c176d5d03adc90c7389162b5b8"
@@ -692,7 +701,7 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfe128c29675b5afc8acdda1dfe096d6abd5e3528059ab0b98bda8215d8beed9"
 dependencies = [
- "arrayvec",
+ "arrayvec 0.5.1",
  "bitflags",
  "block",
  "cocoa 0.20.0",
@@ -719,7 +728,7 @@ version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "45ff36feae801fa23d29acd74082603a0145a697a23595757dd4e78828ab33da"
 dependencies = [
- "arrayvec",
+ "arrayvec 0.5.1",
  "ash",
  "byteorder",
  "core-graphics 0.19.0",
@@ -1201,6 +1210,12 @@ dependencies = [
  "libc",
  "void",
 ]
+
+[[package]]
+name = "nodrop"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72ef4a56884ca558e5ddb05a1d1e7e1bfd9a68d9ed024c21704cc98872dae1bb"
 
 [[package]]
 name = "num-integer"
@@ -1823,6 +1838,7 @@ dependencies = [
 name = "roc_editor"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.4.12",
  "bincode",
  "bumpalo",
  "gfx-backend-dx12",
@@ -2516,7 +2532,7 @@ dependencies = [
 name = "ven_pretty"
 version = "0.9.1-alpha.0"
 dependencies = [
- "arrayvec",
+ "arrayvec 0.5.1",
  "criterion",
  "difference",
  "tempfile",

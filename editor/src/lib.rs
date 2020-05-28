@@ -1,6 +1,7 @@
 use std::{io, path::Path};
 
 pub mod event_loop;
+pub mod gfx;
 pub mod text_state;
 pub mod window;
 
