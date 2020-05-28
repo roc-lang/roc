@@ -1,6 +1,6 @@
 use gfx_hal::{
     device::Device,
-    window::{Extent2D, PresentationSurface, Surface},
+    window::{Extent2D, PresentMode, PresentationSurface, Surface},
     Instance,
 };
 use glsl_to_spirv::ShaderType;
@@ -80,13 +80,7 @@ fn run_event_loop() {
     // TODO do a better window size
     const WINDOW_SIZE: [u32; 2] = [512, 512];
 
-    // TODO try configuring the swapchain explicitly, in particular in order
-    // to experiment with different PresentMode settings to see how they
-    // affect input latency.
-    //
-    // https://rust-tutorials.github.io/learn-gfx-hal/03_clear_the_window.html
     let event_loop = EventLoop::new();
-
     let (logical_window_size, physical_window_size) = {
         use winit::dpi::{LogicalSize, PhysicalSize};
 
@@ -413,7 +407,8 @@ fn run_event_loop() {
                     let caps = res.surface.capabilities(&adapter.physical_device);
 
                     let mut swapchain_config =
-                        SwapchainConfig::from_caps(&caps, surface_color_format, surface_extent);
+                        SwapchainConfig::from_caps(&caps, surface_color_format, surface_extent)
+                            .with_present_mode(PresentMode::IMMEDIATE);
 
                     // This seems to fix some fullscreen slowdown on macOS.
                     if caps.image_count.contains(&3) {
