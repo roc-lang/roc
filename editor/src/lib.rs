@@ -1,12 +1,30 @@
 use crate::text_state::handle_text_input;
+use core::ptr::read;
+use gfx_hal::pso::ShaderStageFlags;
+use gfx_hal::pso::{Rect, Viewport};
 use gfx_hal::{
+    adapter::{Adapter, PhysicalDevice},
+    buffer::Usage as BufferUsage,
+    command::{ClearColor, ClearValue, CommandBuffer, CommandBufferFlags, Level, SubpassContents},
     device::Device,
-    window::{Extent2D, PresentMode, PresentationSurface, Surface},
-    Instance,
+    format::{Aspects, ChannelType, Format},
+    image::{Extent, Layout, SubresourceRange},
+    memory::{Properties, Requirements, Segment},
+    pass::{Attachment, AttachmentLoadOp, AttachmentOps, AttachmentStoreOp, Subpass, SubpassDesc},
+    pool::{CommandPool, CommandPoolCreateFlags},
+    pso::{
+        BlendState, ColorBlendDesc, ColorMask, EntryPoint, Face, GraphicsPipelineDesc,
+        GraphicsShaderSet, PipelineStage, Primitive, Rasterizer, Specialization,
+    },
+    queue::{CommandQueue, QueueFamily, Submission},
+    window::{Extent2D, PresentMode, PresentationSurface, Surface, SwapchainConfig},
+    Backend, Instance, MemoryTypeId,
 };
 use glsl_to_spirv::ShaderType;
+use std::borrow::Borrow;
 use std::io;
-use std::mem::ManuallyDrop;
+use std::marker::PhantomData;
+use std::mem::{size_of, ManuallyDrop};
 use std::path::Path;
 use winit::event::ModifiersState;
 
@@ -17,14 +35,14 @@ pub mod text_state;
 pub fn launch(_filepaths: &[&Path]) -> io::Result<()> {
     // TODO do any initialization here
 
-    run_event_loop();
+    run_event_loop().expect("Error running event loop");
 
     Ok(())
 }
 
 use winit::{event_loop::EventLoop, window::WindowBuilder};
 
-struct Resources<B: gfx_hal::Backend> {
+struct Resources<B: Backend> {
     instance: B::Instance,
     surface: B::Surface,
     device: B::Device,
@@ -34,6 +52,8 @@ struct Resources<B: gfx_hal::Backend> {
     command_pool: B::CommandPool,
     submission_complete_fence: B::Fence,
     rendering_complete_semaphore: B::Semaphore,
+    vertices: BufferBundle<B, B::Device>,
+    indexes: BufferBundle<B, B::Device>,
 }
 
 struct ResourceHolder<B: gfx_hal::Backend>(ManuallyDrop<Resources<B>>);
@@ -49,6 +69,8 @@ impl<B: gfx_hal::Backend> Drop for ResourceHolder<B> {
                 render_passes,
                 pipeline_layouts,
                 pipelines,
+                indexes,
+                vertices,
                 submission_complete_fence,
                 rendering_complete_semaphore,
             } = ManuallyDrop::take(&mut self.0);
@@ -71,6 +93,326 @@ impl<B: gfx_hal::Backend> Drop for ResourceHolder<B> {
     }
 }
 
+pub const VERTEX_SOURCE: &str = "#version 450
+layout (location = 0) in vec2 position;
+layout (location = 1) in vec3 color;
+layout (location = 2) in vec2 vert_uv;
+layout (location = 0) out gl_PerVertex {
+  vec4 gl_Position;
+};
+layout (location = 1) out vec3 frag_color;
+layout (location = 2) out vec2 frag_uv;
+void main()
+{
+  gl_Position = vec4(position, 0.0, 1.0);
+  frag_color = color;
+  frag_uv = vert_uv;
+}";
+
+pub const FRAGMENT_SOURCE: &str = "#version 450
+layout (push_constant) uniform PushConsts {
+  float time;
+} push;
+layout(set = 0, binding = 0) uniform texture2D tex;
+layout(set = 0, binding = 1) uniform sampler samp;
+layout (location = 1) in vec3 frag_color;
+layout (location = 2) in vec2 frag_uv;
+layout (location = 0) out vec4 color;
+void main()
+{
+  float time01 = -0.9 * abs(sin(push.time * 0.7)) + 0.9;
+  vec4 tex_color = texture(sampler2D(tex, samp), frag_uv);
+  color = mix(tex_color, vec4(frag_color, 1.0), time01);
+}";
+
+pub static CREATURE_BYTES: &[u8] = include_bytes!("../creature.png");
+
+#[derive(Debug, Clone, Copy)]
+pub struct Quad {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+impl Quad {
+    pub fn vertex_attributes(self) -> [f32; 4 * (2 + 3 + 2)] {
+        let x = self.x;
+        let y = self.y;
+        let w = self.w;
+        let h = self.h;
+        #[cfg_attr(rustfmt, rustfmt_skip)]
+    [
+    // X    Y    R    G    B                  U    V
+      x  , y+h, 1.0, 0.0, 0.0, /* red     */ 0.0, 1.0, /* bottom left */
+      x  , y  , 0.0, 1.0, 0.0, /* green   */ 0.0, 0.0, /* top left */
+      x+w, y  , 0.0, 0.0, 1.0, /* blue    */ 1.0, 0.0, /* bottom right */
+      x+w, y+h, 1.0, 0.0, 1.0, /* magenta */ 1.0, 1.0, /* top right */
+    ]
+    }
+}
+
+pub struct BufferBundle<B: Backend, D: Device<B>> {
+    pub buffer: ManuallyDrop<B::Buffer>,
+    pub requirements: Requirements,
+    pub memory: ManuallyDrop<B::Memory>,
+    pub phantom: PhantomData<D>,
+}
+impl<B: Backend, D: Device<B>> BufferBundle<B, D> {
+    pub fn new(
+        adapter: &Adapter<B>,
+        device: &D,
+        size: usize,
+        usage: BufferUsage,
+    ) -> Result<Self, &'static str> {
+        unsafe {
+            let mut buffer = device
+                .create_buffer(size as u64, usage)
+                .map_err(|_| "Couldn't create a buffer!")?;
+            let requirements = device.get_buffer_requirements(&buffer);
+            let memory_type_id = adapter
+                .physical_device
+                .memory_properties()
+                .memory_types
+                .iter()
+                .enumerate()
+                .find(|&(id, memory_type)| {
+                    requirements.type_mask & (1 << id) != 0
+                        && memory_type.properties.contains(Properties::CPU_VISIBLE)
+                })
+                .map(|(id, _)| MemoryTypeId(id))
+                .ok_or("Couldn't find a memory type to support the buffer!")?;
+            let memory = device
+                .allocate_memory(memory_type_id, requirements.size)
+                .map_err(|_| "Couldn't allocate buffer memory!")?;
+            device
+                .bind_buffer_memory(&memory, 0, &mut buffer)
+                .map_err(|_| "Couldn't bind the buffer memory!")?;
+            Ok(Self {
+                buffer: ManuallyDrop::new(buffer),
+                requirements,
+                memory: ManuallyDrop::new(memory),
+                phantom: PhantomData,
+            })
+        }
+    }
+
+    pub unsafe fn manually_drop(&self, device: &D) {
+        device.destroy_buffer(ManuallyDrop::into_inner(read(&self.buffer)));
+        device.free_memory(ManuallyDrop::into_inner(read(&self.memory)));
+    }
+}
+
+pub struct LoadedImage<B: Backend> {
+    pub image: ManuallyDrop<B::Image>,
+    pub requirements: Requirements,
+    pub memory: ManuallyDrop<B::Memory>,
+    pub image_view: ManuallyDrop<B::ImageView>,
+    pub sampler: ManuallyDrop<B::Sampler>,
+    pub phantom: PhantomData<B::Device>,
+}
+
+impl<B: Backend> LoadedImage<B> {
+    pub fn new(
+        adapter: &Adapter<B>,
+        device: &B::Device,
+        command_pool: &mut B::CommandPool,
+        command_queue: &mut B::CommandQueue,
+        img: image::RgbaImage,
+    ) -> Result<Self, &'static str> {
+        unsafe {
+            // 0. First we compute some memory related values.
+            let pixel_size = size_of::<image::Rgba<u8>>();
+            let row_size = pixel_size * (img.width() as usize);
+            let limits = adapter.physical_device.limits();
+            let row_alignment_mask = limits.optimal_buffer_copy_pitch_alignment as u32 - 1;
+            let row_pitch = ((row_size as u32 + row_alignment_mask) & !row_alignment_mask) as usize;
+            debug_assert!(row_pitch as usize >= row_size);
+
+            // 1. make a staging buffer with enough memory for the image, and a
+            //    transfer_src usage
+            let required_bytes = row_pitch * img.height() as usize;
+            let staging_bundle =
+                BufferBundle::new(&adapter, device, required_bytes, BufferUsage::TRANSFER_SRC)?;
+
+            // 2. use mapping writer to put the image data into that buffer
+            unsafe {
+                let mapping = device
+                    .map_memory(&staging_bundle.memory, Segment::ALL)
+                    .unwrap();
+
+                for y in 0..img.height() as usize {
+                    let row = &(*img)[y * row_size..(y + 1) * row_size];
+                    let dest_base = y * row_pitch;
+
+                    mapping[dest_base..dest_base + row.len()].copy_from_slice(row);
+                }
+
+                device.unmap_memory(&staging_bundle.memory);
+            }
+
+            // 3. Make an image with transfer_dst and SAMPLED usage
+            let mut the_image = device
+                .create_image(
+                    gfx_hal::image::Kind::D2(img.width(), img.height(), 1, 1),
+                    1,
+                    Format::Rgba8Srgb,
+                    gfx_hal::image::Tiling::Optimal,
+                    gfx_hal::image::Usage::TRANSFER_DST | gfx_hal::image::Usage::SAMPLED,
+                    gfx_hal::image::ViewCapabilities::empty(),
+                )
+                .map_err(|_| "Couldn't create the image!")?;
+
+            // 4. allocate memory for the image and bind it
+            let requirements = device.get_image_requirements(&the_image);
+            let memory_type_id = adapter
+                .physical_device
+                .memory_properties()
+                .memory_types
+                .iter()
+                .enumerate()
+                .find(|&(id, memory_type)| {
+                    // BIG NOTE: THIS IS DEVICE LOCAL NOT CPU VISIBLE
+                    requirements.type_mask & (1 << id) != 0
+                        && memory_type.properties.contains(Properties::DEVICE_LOCAL)
+                })
+                .map(|(id, _)| MemoryTypeId(id))
+                .ok_or("Couldn't find a memory type to support the image!")?;
+            let memory = device
+                .allocate_memory(memory_type_id, requirements.size)
+                .map_err(|_| "Couldn't allocate image memory!")?;
+            device
+                .bind_image_memory(&memory, 0, &mut the_image)
+                .map_err(|_| "Couldn't bind the image memory!")?;
+
+            // 5. create image view and sampler
+            let image_view = device
+                .create_image_view(
+                    &the_image,
+                    gfx_hal::image::ViewKind::D2,
+                    Format::Rgba8Srgb,
+                    gfx_hal::format::Swizzle::NO,
+                    SubresourceRange {
+                        aspects: Aspects::COLOR,
+                        levels: 0..1,
+                        layers: 0..1,
+                    },
+                )
+                .map_err(|_| "Couldn't create the image view!")?;
+            let sampler = device
+                .create_sampler(gfx_hal::image::SamplerInfo::new(
+                    gfx_hal::image::Filter::Nearest,
+                    gfx_hal::image::WrapMode::Tile,
+                ))
+                .map_err(|_| "Couldn't create the sampler!")?;
+
+            // 6. create a command buffer
+            let mut cmd_buffer = command_pool.allocate_one(Level::Primary);
+            cmd_buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
+
+            // 7. Use a pipeline barrier to transition the image from empty/undefined
+            //    to TRANSFER_WRITE/TransferDstOptimal
+            let image_barrier = gfx_hal::memory::Barrier::Image {
+                states: (gfx_hal::image::Access::empty(), Layout::Undefined)
+                    ..(
+                        gfx_hal::image::Access::TRANSFER_WRITE,
+                        Layout::TransferDstOptimal,
+                    ),
+                target: &the_image,
+                families: None,
+                range: SubresourceRange {
+                    aspects: Aspects::COLOR,
+                    levels: 0..1,
+                    layers: 0..1,
+                },
+            };
+            cmd_buffer.pipeline_barrier(
+                PipelineStage::TOP_OF_PIPE..PipelineStage::TRANSFER,
+                gfx_hal::memory::Dependencies::empty(),
+                &[image_barrier],
+            );
+
+            // 8. perform copy from staging buffer to image
+            cmd_buffer.copy_buffer_to_image(
+                &staging_bundle.buffer,
+                &the_image,
+                Layout::TransferDstOptimal,
+                &[gfx_hal::command::BufferImageCopy {
+                    buffer_offset: 0,
+                    buffer_width: (row_pitch / pixel_size) as u32,
+                    buffer_height: img.height(),
+                    image_layers: gfx_hal::image::SubresourceLayers {
+                        aspects: Aspects::COLOR,
+                        level: 0,
+                        layers: 0..1,
+                    },
+                    image_offset: gfx_hal::image::Offset { x: 0, y: 0, z: 0 },
+                    image_extent: gfx_hal::image::Extent {
+                        width: img.width(),
+                        height: img.height(),
+                        depth: 1,
+                    },
+                }],
+            );
+
+            // 9. use pipeline barrier to transition the image to SHADER_READ access/
+            //    ShaderReadOnlyOptimal layout
+            let image_barrier = gfx_hal::memory::Barrier::Image {
+                states: (
+                    gfx_hal::image::Access::TRANSFER_WRITE,
+                    Layout::TransferDstOptimal,
+                )
+                    ..(
+                        gfx_hal::image::Access::SHADER_READ,
+                        Layout::ShaderReadOnlyOptimal,
+                    ),
+                target: &the_image,
+                families: None,
+                range: SubresourceRange {
+                    aspects: Aspects::COLOR,
+                    levels: 0..1,
+                    layers: 0..1,
+                },
+            };
+            cmd_buffer.pipeline_barrier(
+                PipelineStage::TRANSFER..PipelineStage::FRAGMENT_SHADER,
+                gfx_hal::memory::Dependencies::empty(),
+                &[image_barrier],
+            );
+
+            // 10. Submit the cmd buffer to queue and wait for it
+            cmd_buffer.finish();
+            let upload_fence = device
+                .create_fence(false)
+                .map_err(|_| "Couldn't create an upload fence!")?;
+            command_queue.submit_without_semaphores(Some(&cmd_buffer), Some(&upload_fence));
+            device
+                .wait_for_fence(&upload_fence, core::u64::MAX)
+                .map_err(|_| "Couldn't wait for the fence!")?;
+            device.destroy_fence(upload_fence);
+
+            // 11. Destroy the staging bundle and one shot buffer now that we're done
+            staging_bundle.manually_drop(device);
+            command_pool.free(Some(cmd_buffer));
+
+            Ok(Self {
+                image: ManuallyDrop::new(the_image),
+                requirements,
+                memory: ManuallyDrop::new(memory),
+                image_view: ManuallyDrop::new(image_view),
+                sampler: ManuallyDrop::new(sampler),
+                phantom: PhantomData,
+            })
+        }
+    }
+
+    pub unsafe fn manually_drop(&self, device: &B::Device) {
+        device.destroy_sampler(ManuallyDrop::into_inner(read(&self.sampler)));
+        device.destroy_image_view(ManuallyDrop::into_inner(read(&self.image_view)));
+        device.destroy_image(ManuallyDrop::into_inner(read(&self.image)));
+        device.free_memory(ManuallyDrop::into_inner(read(&self.memory)));
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct PushConstants {
@@ -79,7 +421,7 @@ struct PushConstants {
     scale: [f32; 2],
 }
 
-fn run_event_loop() {
+fn run_event_loop() -> Result<(), &'static str> {
     // TODO do a better window size
     const WINDOW_SIZE: [u32; 2] = [512, 512];
 
@@ -122,8 +464,6 @@ fn run_event_loop() {
     };
 
     let (device, mut queue_group) = {
-        use gfx_hal::queue::QueueFamily;
-
         let queue_family = adapter
             .queue_families
             .iter()
@@ -133,8 +473,6 @@ fn run_event_loop() {
             .expect("No compatible queue family found");
 
         let mut gpu = unsafe {
-            use gfx_hal::adapter::PhysicalDevice;
-
             adapter
                 .physical_device
                 .open(&[(queue_family, &[1.0])], gfx_hal::Features::empty())
@@ -145,9 +483,6 @@ fn run_event_loop() {
     };
 
     let (command_pool, mut command_buffer) = unsafe {
-        use gfx_hal::command::Level;
-        use gfx_hal::pool::{CommandPool, CommandPoolCreateFlags};
-
         let mut command_pool = device
             .create_command_pool(queue_group.family, CommandPoolCreateFlags::empty())
             .expect("Out of memory");
@@ -158,8 +493,6 @@ fn run_event_loop() {
     };
 
     let surface_color_format = {
-        use gfx_hal::format::{ChannelType, Format};
-
         let supported_formats = surface
             .supported_formats(&adapter.physical_device)
             .unwrap_or_else(|| vec![]);
@@ -173,11 +506,6 @@ fn run_event_loop() {
     };
 
     let render_pass = {
-        use gfx_hal::image::Layout;
-        use gfx_hal::pass::{
-            Attachment, AttachmentLoadOp, AttachmentOps, AttachmentStoreOp, SubpassDesc,
-        };
-
         let color_attachment = Attachment {
             format: Some(surface_color_format),
             samples: 1,
@@ -202,8 +530,6 @@ fn run_event_loop() {
     };
 
     let pipeline_layout = unsafe {
-        use gfx_hal::pso::ShaderStageFlags;
-
         let push_constant_bytes = std::mem::size_of::<PushConstants>() as u32;
 
         device
@@ -221,13 +547,7 @@ fn run_event_loop() {
         pipeline_layout: &B::PipelineLayout,
         vertex_shader: &str,
         fragment_shader: &str,
-    ) -> B::GraphicsPipeline {
-        use gfx_hal::pass::Subpass;
-        use gfx_hal::pso::{
-            BlendState, ColorBlendDesc, ColorMask, EntryPoint, Face, GraphicsPipelineDesc,
-            GraphicsShaderSet, Primitive, Rasterizer, Specialization,
-        };
-
+    ) -> Result<B::GraphicsPipeline, &'static str> {
         let vertex_shader_module = device
             .create_shader_module(&compile_shader(vertex_shader, ShaderType::Vertex))
             .expect("Failed to create vertex shader module");
@@ -283,7 +603,7 @@ fn run_event_loop() {
         device.destroy_shader_module(vertex_shader_module);
         device.destroy_shader_module(fragment_shader_module);
 
-        pipeline
+        Ok(pipeline)
     };
 
     let pipeline = unsafe {
@@ -294,10 +614,16 @@ fn run_event_loop() {
             vertex_shader,
             fragment_shader,
         )
-    };
+    }?;
 
     let submission_complete_fence = device.create_fence(true).expect("Out of memory");
     let rendering_complete_semaphore = device.create_semaphore().expect("Out of memory");
+
+    const F32_XY_RGB_UV_QUAD: usize = size_of::<f32>() * (2 + 3 + 2) * 4;
+    let vertices = BufferBundle::new(&adapter, &device, F32_XY_RGB_UV_QUAD, BufferUsage::VERTEX)?;
+
+    const U16_QUAD_INDICES: usize = size_of::<u16>() * 2 * 3;
+    let indexes = BufferBundle::new(&adapter, &device, U16_QUAD_INDICES, BufferUsage::INDEX)?;
     let mut resource_holder: ResourceHolder<backend::Backend> =
         ResourceHolder(ManuallyDrop::new(Resources {
             instance,
@@ -309,6 +635,8 @@ fn run_event_loop() {
             pipelines: vec![pipeline],
             submission_complete_fence,
             rendering_complete_semaphore,
+            vertices,
+            indexes,
         }));
     let is_animating = false;
     let mut text_state = String::new();
@@ -372,8 +700,6 @@ fn run_event_loop() {
                 let pipeline = &res.pipelines[0];
 
                 unsafe {
-                    use gfx_hal::pool::CommandPool;
-
                     // We refuse to wait more than a second, to avoid hanging.
                     let render_timeout_ns = 1_000_000_000;
 
@@ -389,8 +715,6 @@ fn run_event_loop() {
                 }
 
                 if should_configure_swapchain {
-                    use gfx_hal::window::SwapchainConfig;
-
                     let caps = res.surface.capabilities(&adapter.physical_device);
 
                     let mut swapchain_config =
@@ -427,10 +751,6 @@ fn run_event_loop() {
                 };
 
                 let framebuffer = unsafe {
-                    use std::borrow::Borrow;
-
-                    use gfx_hal::image::Extent;
-
                     res.device
                         .create_framebuffer(
                             render_pass,
@@ -445,8 +765,6 @@ fn run_event_loop() {
                 };
 
                 let viewport = {
-                    use gfx_hal::pso::{Rect, Viewport};
-
                     Viewport {
                         rect: Rect {
                             x: 0,
@@ -472,10 +790,6 @@ fn run_event_loop() {
                 });
 
                 unsafe {
-                    use gfx_hal::command::{
-                        ClearColor, ClearValue, CommandBuffer, CommandBufferFlags, SubpassContents,
-                    };
-
                     command_buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
 
                     command_buffer.set_viewports(0, &[viewport.clone()]);
@@ -494,8 +808,6 @@ fn run_event_loop() {
                     command_buffer.bind_graphics_pipeline(pipeline);
 
                     for triangle in triangles {
-                        use gfx_hal::pso::ShaderStageFlags;
-
                         command_buffer.push_graphics_constants(
                             pipeline_layout,
                             ShaderStageFlags::VERTEX,
@@ -511,8 +823,6 @@ fn run_event_loop() {
                 }
 
                 unsafe {
-                    use gfx_hal::queue::{CommandQueue, Submission};
-
                     let submission = Submission {
                         command_buffers: vec![&command_buffer],
                         wait_semaphores: None,
