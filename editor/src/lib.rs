@@ -24,7 +24,6 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     let event_loop = winit::event_loop::EventLoop::new();
 
     let window = winit::window::WindowBuilder::new()
-        .with_maximized(true)
         .build(&event_loop)
         .unwrap();
 
