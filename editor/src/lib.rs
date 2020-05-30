@@ -1,32 +1,9 @@
-use crate::text_state::handle_text_input;
-use core::ptr::read;
-use gfx_hal::pso::ShaderStageFlags;
-use gfx_hal::pso::{Rect, Viewport};
-use gfx_hal::{
-    adapter::{Adapter, PhysicalDevice},
-    buffer::Usage as BufferUsage,
-    command::{ClearColor, ClearValue, CommandBuffer, CommandBufferFlags, Level, SubpassContents},
-    device::Device,
-    format::{Aspects, ChannelType, Format},
-    image::{Extent, Layout, SubresourceRange},
-    memory::{Properties, Requirements, Segment},
-    pass::{Attachment, AttachmentLoadOp, AttachmentOps, AttachmentStoreOp, Subpass, SubpassDesc},
-    pool::{CommandPool, CommandPoolCreateFlags},
-    pso::{
-        BlendState, ColorBlendDesc, ColorMask, EntryPoint, Face, GraphicsPipelineDesc,
-        GraphicsShaderSet, PipelineStage, Primitive, Rasterizer, Specialization,
-    },
-    queue::{CommandQueue, QueueFamily, Submission},
-    window::{Extent2D, PresentMode, PresentationSurface, Surface, SwapchainConfig},
-    Backend, Instance, MemoryTypeId,
-};
-use glsl_to_spirv::ShaderType;
-use std::borrow::Borrow;
+use std::error::Error;
 use std::io;
-use std::marker::PhantomData;
-use std::mem::{size_of, ManuallyDrop};
 use std::path::Path;
-use winit::event::ModifiersState;
+use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Section, Text};
+use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
+use winit::event_loop::ControlFlow;
 
 pub mod text_state;
 
@@ -40,613 +17,71 @@ pub fn launch(_filepaths: &[&Path]) -> io::Result<()> {
     Ok(())
 }
 
-use winit::{event_loop::EventLoop, window::WindowBuilder};
+fn run_event_loop() -> Result<(), Box<dyn Error>> {
+    env_logger::init();
 
-struct Resources<B: Backend> {
-    instance: B::Instance,
-    surface: B::Surface,
-    device: B::Device,
-    render_passes: Vec<B::RenderPass>,
-    pipeline_layouts: Vec<B::PipelineLayout>,
-    pipelines: Vec<B::GraphicsPipeline>,
-    command_pool: B::CommandPool,
-    submission_complete_fence: B::Fence,
-    rendering_complete_semaphore: B::Semaphore,
-    vertices: BufferBundle<B, B::Device>,
-    indexes: BufferBundle<B, B::Device>,
-}
+    // Open window and create a surface
+    let event_loop = winit::event_loop::EventLoop::new();
 
-struct ResourceHolder<B: gfx_hal::Backend>(ManuallyDrop<Resources<B>>);
-
-impl<B: gfx_hal::Backend> Drop for ResourceHolder<B> {
-    fn drop(&mut self) {
-        unsafe {
-            let Resources {
-                instance,
-                mut surface,
-                device,
-                command_pool,
-                render_passes,
-                pipeline_layouts,
-                pipelines,
-                indexes,
-                vertices,
-                submission_complete_fence,
-                rendering_complete_semaphore,
-            } = ManuallyDrop::take(&mut self.0);
-
-            device.destroy_semaphore(rendering_complete_semaphore);
-            device.destroy_fence(submission_complete_fence);
-            for pipeline in pipelines {
-                device.destroy_graphics_pipeline(pipeline);
-            }
-            for pipeline_layout in pipeline_layouts {
-                device.destroy_pipeline_layout(pipeline_layout);
-            }
-            for render_pass in render_passes {
-                device.destroy_render_pass(render_pass);
-            }
-            device.destroy_command_pool(command_pool);
-            surface.unconfigure_swapchain(&device);
-            instance.destroy_surface(surface);
-        }
-    }
-}
-
-pub const VERTEX_SOURCE: &str = "#version 450
-layout (location = 0) in vec2 position;
-layout (location = 1) in vec3 color;
-layout (location = 2) in vec2 vert_uv;
-layout (location = 0) out gl_PerVertex {
-  vec4 gl_Position;
-};
-layout (location = 1) out vec3 frag_color;
-layout (location = 2) out vec2 frag_uv;
-void main()
-{
-  gl_Position = vec4(position, 0.0, 1.0);
-  frag_color = color;
-  frag_uv = vert_uv;
-}";
-
-pub const FRAGMENT_SOURCE: &str = "#version 450
-layout (push_constant) uniform PushConsts {
-  float time;
-} push;
-layout(set = 0, binding = 0) uniform texture2D tex;
-layout(set = 0, binding = 1) uniform sampler samp;
-layout (location = 1) in vec3 frag_color;
-layout (location = 2) in vec2 frag_uv;
-layout (location = 0) out vec4 color;
-void main()
-{
-  float time01 = -0.9 * abs(sin(push.time * 0.7)) + 0.9;
-  vec4 tex_color = texture(sampler2D(tex, samp), frag_uv);
-  color = mix(tex_color, vec4(frag_color, 1.0), time01);
-}";
-
-pub static CREATURE_BYTES: &[u8] = include_bytes!("../creature.png");
-
-#[derive(Debug, Clone, Copy)]
-pub struct Quad {
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
-}
-impl Quad {
-    pub fn vertex_attributes(self) -> [f32; 4 * (2 + 3 + 2)] {
-        let x = self.x;
-        let y = self.y;
-        let w = self.w;
-        let h = self.h;
-        #[cfg_attr(rustfmt, rustfmt_skip)]
-    [
-    // X    Y    R    G    B                  U    V
-      x  , y+h, 1.0, 0.0, 0.0, /* red     */ 0.0, 1.0, /* bottom left */
-      x  , y  , 0.0, 1.0, 0.0, /* green   */ 0.0, 0.0, /* top left */
-      x+w, y  , 0.0, 0.0, 1.0, /* blue    */ 1.0, 0.0, /* bottom right */
-      x+w, y+h, 1.0, 0.0, 1.0, /* magenta */ 1.0, 1.0, /* top right */
-    ]
-    }
-}
-
-pub struct BufferBundle<B: Backend, D: Device<B>> {
-    pub buffer: ManuallyDrop<B::Buffer>,
-    pub requirements: Requirements,
-    pub memory: ManuallyDrop<B::Memory>,
-    pub phantom: PhantomData<D>,
-}
-impl<B: Backend, D: Device<B>> BufferBundle<B, D> {
-    pub fn new(
-        adapter: &Adapter<B>,
-        device: &D,
-        size: usize,
-        usage: BufferUsage,
-    ) -> Result<Self, &'static str> {
-        unsafe {
-            let mut buffer = device
-                .create_buffer(size as u64, usage)
-                .map_err(|_| "Couldn't create a buffer!")?;
-            let requirements = device.get_buffer_requirements(&buffer);
-            let memory_type_id = adapter
-                .physical_device
-                .memory_properties()
-                .memory_types
-                .iter()
-                .enumerate()
-                .find(|&(id, memory_type)| {
-                    requirements.type_mask & (1 << id) != 0
-                        && memory_type.properties.contains(Properties::CPU_VISIBLE)
-                })
-                .map(|(id, _)| MemoryTypeId(id))
-                .ok_or("Couldn't find a memory type to support the buffer!")?;
-            let memory = device
-                .allocate_memory(memory_type_id, requirements.size)
-                .map_err(|_| "Couldn't allocate buffer memory!")?;
-            device
-                .bind_buffer_memory(&memory, 0, &mut buffer)
-                .map_err(|_| "Couldn't bind the buffer memory!")?;
-            Ok(Self {
-                buffer: ManuallyDrop::new(buffer),
-                requirements,
-                memory: ManuallyDrop::new(memory),
-                phantom: PhantomData,
-            })
-        }
-    }
-
-    pub unsafe fn manually_drop(&self, device: &D) {
-        device.destroy_buffer(ManuallyDrop::into_inner(read(&self.buffer)));
-        device.free_memory(ManuallyDrop::into_inner(read(&self.memory)));
-    }
-}
-
-pub struct LoadedImage<B: Backend> {
-    pub image: ManuallyDrop<B::Image>,
-    pub requirements: Requirements,
-    pub memory: ManuallyDrop<B::Memory>,
-    pub image_view: ManuallyDrop<B::ImageView>,
-    pub sampler: ManuallyDrop<B::Sampler>,
-    pub phantom: PhantomData<B::Device>,
-}
-
-impl<B: Backend> LoadedImage<B> {
-    pub fn new(
-        adapter: &Adapter<B>,
-        device: &B::Device,
-        command_pool: &mut B::CommandPool,
-        command_queue: &mut B::CommandQueue,
-        img: image::RgbaImage,
-    ) -> Result<Self, &'static str> {
-        unsafe {
-            // 0. First we compute some memory related values.
-            let pixel_size = size_of::<image::Rgba<u8>>();
-            let row_size = pixel_size * (img.width() as usize);
-            let limits = adapter.physical_device.limits();
-            let row_alignment_mask = limits.optimal_buffer_copy_pitch_alignment as u32 - 1;
-            let row_pitch = ((row_size as u32 + row_alignment_mask) & !row_alignment_mask) as usize;
-            debug_assert!(row_pitch as usize >= row_size);
-
-            // 1. make a staging buffer with enough memory for the image, and a
-            //    transfer_src usage
-            let required_bytes = row_pitch * img.height() as usize;
-            let staging_bundle =
-                BufferBundle::new(&adapter, device, required_bytes, BufferUsage::TRANSFER_SRC)?;
-
-            // 2. use mapping writer to put the image data into that buffer
-            unsafe {
-                let mapping = device
-                    .map_memory(&staging_bundle.memory, Segment::ALL)
-                    .unwrap();
-
-                for y in 0..img.height() as usize {
-                    let row = &(*img)[y * row_size..(y + 1) * row_size];
-                    let dest_base = y * row_pitch;
-
-                    mapping[dest_base..dest_base + row.len()].copy_from_slice(row);
-                }
-
-                device.unmap_memory(&staging_bundle.memory);
-            }
-
-            // 3. Make an image with transfer_dst and SAMPLED usage
-            let mut the_image = device
-                .create_image(
-                    gfx_hal::image::Kind::D2(img.width(), img.height(), 1, 1),
-                    1,
-                    Format::Rgba8Srgb,
-                    gfx_hal::image::Tiling::Optimal,
-                    gfx_hal::image::Usage::TRANSFER_DST | gfx_hal::image::Usage::SAMPLED,
-                    gfx_hal::image::ViewCapabilities::empty(),
-                )
-                .map_err(|_| "Couldn't create the image!")?;
-
-            // 4. allocate memory for the image and bind it
-            let requirements = device.get_image_requirements(&the_image);
-            let memory_type_id = adapter
-                .physical_device
-                .memory_properties()
-                .memory_types
-                .iter()
-                .enumerate()
-                .find(|&(id, memory_type)| {
-                    // BIG NOTE: THIS IS DEVICE LOCAL NOT CPU VISIBLE
-                    requirements.type_mask & (1 << id) != 0
-                        && memory_type.properties.contains(Properties::DEVICE_LOCAL)
-                })
-                .map(|(id, _)| MemoryTypeId(id))
-                .ok_or("Couldn't find a memory type to support the image!")?;
-            let memory = device
-                .allocate_memory(memory_type_id, requirements.size)
-                .map_err(|_| "Couldn't allocate image memory!")?;
-            device
-                .bind_image_memory(&memory, 0, &mut the_image)
-                .map_err(|_| "Couldn't bind the image memory!")?;
-
-            // 5. create image view and sampler
-            let image_view = device
-                .create_image_view(
-                    &the_image,
-                    gfx_hal::image::ViewKind::D2,
-                    Format::Rgba8Srgb,
-                    gfx_hal::format::Swizzle::NO,
-                    SubresourceRange {
-                        aspects: Aspects::COLOR,
-                        levels: 0..1,
-                        layers: 0..1,
-                    },
-                )
-                .map_err(|_| "Couldn't create the image view!")?;
-            let sampler = device
-                .create_sampler(gfx_hal::image::SamplerInfo::new(
-                    gfx_hal::image::Filter::Nearest,
-                    gfx_hal::image::WrapMode::Tile,
-                ))
-                .map_err(|_| "Couldn't create the sampler!")?;
-
-            // 6. create a command buffer
-            let mut cmd_buffer = command_pool.allocate_one(Level::Primary);
-            cmd_buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
-
-            // 7. Use a pipeline barrier to transition the image from empty/undefined
-            //    to TRANSFER_WRITE/TransferDstOptimal
-            let image_barrier = gfx_hal::memory::Barrier::Image {
-                states: (gfx_hal::image::Access::empty(), Layout::Undefined)
-                    ..(
-                        gfx_hal::image::Access::TRANSFER_WRITE,
-                        Layout::TransferDstOptimal,
-                    ),
-                target: &the_image,
-                families: None,
-                range: SubresourceRange {
-                    aspects: Aspects::COLOR,
-                    levels: 0..1,
-                    layers: 0..1,
-                },
-            };
-            cmd_buffer.pipeline_barrier(
-                PipelineStage::TOP_OF_PIPE..PipelineStage::TRANSFER,
-                gfx_hal::memory::Dependencies::empty(),
-                &[image_barrier],
-            );
-
-            // 8. perform copy from staging buffer to image
-            cmd_buffer.copy_buffer_to_image(
-                &staging_bundle.buffer,
-                &the_image,
-                Layout::TransferDstOptimal,
-                &[gfx_hal::command::BufferImageCopy {
-                    buffer_offset: 0,
-                    buffer_width: (row_pitch / pixel_size) as u32,
-                    buffer_height: img.height(),
-                    image_layers: gfx_hal::image::SubresourceLayers {
-                        aspects: Aspects::COLOR,
-                        level: 0,
-                        layers: 0..1,
-                    },
-                    image_offset: gfx_hal::image::Offset { x: 0, y: 0, z: 0 },
-                    image_extent: gfx_hal::image::Extent {
-                        width: img.width(),
-                        height: img.height(),
-                        depth: 1,
-                    },
-                }],
-            );
-
-            // 9. use pipeline barrier to transition the image to SHADER_READ access/
-            //    ShaderReadOnlyOptimal layout
-            let image_barrier = gfx_hal::memory::Barrier::Image {
-                states: (
-                    gfx_hal::image::Access::TRANSFER_WRITE,
-                    Layout::TransferDstOptimal,
-                )
-                    ..(
-                        gfx_hal::image::Access::SHADER_READ,
-                        Layout::ShaderReadOnlyOptimal,
-                    ),
-                target: &the_image,
-                families: None,
-                range: SubresourceRange {
-                    aspects: Aspects::COLOR,
-                    levels: 0..1,
-                    layers: 0..1,
-                },
-            };
-            cmd_buffer.pipeline_barrier(
-                PipelineStage::TRANSFER..PipelineStage::FRAGMENT_SHADER,
-                gfx_hal::memory::Dependencies::empty(),
-                &[image_barrier],
-            );
-
-            // 10. Submit the cmd buffer to queue and wait for it
-            cmd_buffer.finish();
-            let upload_fence = device
-                .create_fence(false)
-                .map_err(|_| "Couldn't create an upload fence!")?;
-            command_queue.submit_without_semaphores(Some(&cmd_buffer), Some(&upload_fence));
-            device
-                .wait_for_fence(&upload_fence, core::u64::MAX)
-                .map_err(|_| "Couldn't wait for the fence!")?;
-            device.destroy_fence(upload_fence);
-
-            // 11. Destroy the staging bundle and one shot buffer now that we're done
-            staging_bundle.manually_drop(device);
-            command_pool.free(Some(cmd_buffer));
-
-            Ok(Self {
-                image: ManuallyDrop::new(the_image),
-                requirements,
-                memory: ManuallyDrop::new(memory),
-                image_view: ManuallyDrop::new(image_view),
-                sampler: ManuallyDrop::new(sampler),
-                phantom: PhantomData,
-            })
-        }
-    }
-
-    pub unsafe fn manually_drop(&self, device: &B::Device) {
-        device.destroy_sampler(ManuallyDrop::into_inner(read(&self.sampler)));
-        device.destroy_image_view(ManuallyDrop::into_inner(read(&self.image_view)));
-        device.destroy_image(ManuallyDrop::into_inner(read(&self.image)));
-        device.free_memory(ManuallyDrop::into_inner(read(&self.memory)));
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-struct PushConstants {
-    color: [f32; 4],
-    pos: [f32; 2],
-    scale: [f32; 2],
-}
-
-fn run_event_loop() -> Result<(), &'static str> {
-    // TODO do a better window size
-    const WINDOW_SIZE: [u32; 2] = [512, 512];
-
-    let event_loop = EventLoop::new();
-    let (logical_window_size, physical_window_size) = {
-        use winit::dpi::{LogicalSize, PhysicalSize};
-
-        let dpi = event_loop.primary_monitor().scale_factor();
-        let logical: LogicalSize<u32> = WINDOW_SIZE.into();
-        let physical: PhysicalSize<u32> = logical.to_physical(dpi);
-
-        (logical, physical)
-    };
-
-    let mut surface_extent = Extent2D {
-        width: physical_window_size.width,
-        height: physical_window_size.height,
-    };
-
-    let window = WindowBuilder::new()
-        .with_title("roc")
-        .with_inner_size(logical_window_size)
+    let window = winit::window::WindowBuilder::new()
+        .with_maximized(true)
         .build(&event_loop)
         .unwrap();
 
-    let mut should_configure_swapchain = true;
+    let surface = wgpu::Surface::create(&window);
 
-    let (instance, surface, adapter) = {
-        let instance = backend::Instance::create("roc_editor", 1).expect("Backend not supported");
-
-        let surface = unsafe {
-            instance
-                .create_surface(&window)
-                .expect("Failed to create surface for window")
-        };
-
-        let adapter = instance.enumerate_adapters().remove(0);
-
-        (instance, surface, adapter)
-    };
-
-    let (device, mut queue_group) = {
-        let queue_family = adapter
-            .queue_families
-            .iter()
-            .find(|family| {
-                surface.supports_queue_family(family) && family.queue_type().supports_graphics()
-            })
-            .expect("No compatible queue family found");
-
-        let mut gpu = unsafe {
-            adapter
-                .physical_device
-                .open(&[(queue_family, &[1.0])], gfx_hal::Features::empty())
-                .expect("Failed to open device")
-        };
-
-        (gpu.device, gpu.queue_groups.pop().unwrap())
-    };
-
-    let (command_pool, mut command_buffer) = unsafe {
-        let mut command_pool = device
-            .create_command_pool(queue_group.family, CommandPoolCreateFlags::empty())
-            .expect("Out of memory");
-
-        let command_buffer = command_pool.allocate_one(Level::Primary);
-
-        (command_pool, command_buffer)
-    };
-
-    let surface_color_format = {
-        let supported_formats = surface
-            .supported_formats(&adapter.physical_device)
-            .unwrap_or_else(|| vec![]);
-
-        let default_format = *supported_formats.get(0).unwrap_or(&Format::Rgba8Srgb);
-
-        supported_formats
-            .into_iter()
-            .find(|format| format.base_format().1 == ChannelType::Srgb)
-            .unwrap_or(default_format)
-    };
-
-    let render_pass = {
-        let color_attachment = Attachment {
-            format: Some(surface_color_format),
-            samples: 1,
-            ops: AttachmentOps::new(AttachmentLoadOp::Clear, AttachmentStoreOp::Store),
-            stencil_ops: AttachmentOps::DONT_CARE,
-            layouts: Layout::Undefined..Layout::Present,
-        };
-
-        let subpass = SubpassDesc {
-            colors: &[(0, Layout::ColorAttachmentOptimal)],
-            depth_stencil: None,
-            inputs: &[],
-            resolves: &[],
-            preserves: &[],
-        };
-
-        unsafe {
-            device
-                .create_render_pass(&[color_attachment], &[subpass], &[])
-                .expect("Out of memory")
-        }
-    };
-
-    let pipeline_layout = unsafe {
-        let push_constant_bytes = std::mem::size_of::<PushConstants>() as u32;
-
-        device
-            .create_pipeline_layout(&[], &[(ShaderStageFlags::VERTEX, 0..push_constant_bytes)])
-            .expect("Out of memory")
-    };
-
-    let vertex_shader = include_str!("../shaders/triangle.vert");
-    let fragment_shader = include_str!("../shaders/triangle.frag");
-
-    /// Create a pipeline with the given layout and shaders.
-    unsafe fn make_pipeline<B: gfx_hal::Backend>(
-        device: &B::Device,
-        render_pass: &B::RenderPass,
-        pipeline_layout: &B::PipelineLayout,
-        vertex_shader: &str,
-        fragment_shader: &str,
-    ) -> Result<B::GraphicsPipeline, &'static str> {
-        let vertex_shader_module = device
-            .create_shader_module(&compile_shader(vertex_shader, ShaderType::Vertex))
-            .expect("Failed to create vertex shader module");
-
-        let fragment_shader_module = device
-            .create_shader_module(&compile_shader(fragment_shader, ShaderType::Fragment))
-            .expect("Failed to create fragment shader module");
-
-        let (vs_entry, fs_entry) = (
-            EntryPoint {
-                entry: "main",
-                module: &vertex_shader_module,
-                specialization: Specialization::default(),
+    // Initialize GPU
+    let (device, queue) = futures::executor::block_on(async {
+        let adapter = wgpu::Adapter::request(
+            &wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
             },
-            EntryPoint {
-                entry: "main",
-                module: &fragment_shader_module,
-                specialization: Specialization::default(),
-            },
-        );
-
-        let shader_entries = GraphicsShaderSet {
-            vertex: vs_entry,
-            hull: None,
-            domain: None,
-            geometry: None,
-            fragment: Some(fs_entry),
-        };
-
-        let mut pipeline_desc = GraphicsPipelineDesc::new(
-            shader_entries,
-            Primitive::TriangleList,
-            Rasterizer {
-                cull_face: Face::BACK,
-                ..Rasterizer::FILL
-            },
-            pipeline_layout,
-            Subpass {
-                index: 0,
-                main_pass: render_pass,
-            },
-        );
-
-        pipeline_desc.blender.targets.push(ColorBlendDesc {
-            mask: ColorMask::ALL,
-            blend: Some(BlendState::ALPHA),
-        });
-
-        let pipeline = device
-            .create_graphics_pipeline(&pipeline_desc, None)
-            .expect("Failed to create graphics pipeline");
-
-        device.destroy_shader_module(vertex_shader_module);
-        device.destroy_shader_module(fragment_shader_module);
-
-        Ok(pipeline)
-    };
-
-    let pipeline = unsafe {
-        make_pipeline::<backend::Backend>(
-            &device,
-            &render_pass,
-            &pipeline_layout,
-            vertex_shader,
-            fragment_shader,
+            wgpu::BackendBit::all(),
         )
-    }?;
+        .await
+        .expect("Request adapter");
 
-    let submission_complete_fence = device.create_fence(true).expect("Out of memory");
-    let rendering_complete_semaphore = device.create_semaphore().expect("Out of memory");
+        adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                extensions: wgpu::Extensions {
+                    anisotropic_filtering: false,
+                },
+                limits: wgpu::Limits { max_bind_groups: 1 },
+            })
+            .await
+    });
 
-    const F32_XY_RGB_UV_QUAD: usize = size_of::<f32>() * (2 + 3 + 2) * 4;
-    let vertices = BufferBundle::new(&adapter, &device, F32_XY_RGB_UV_QUAD, BufferUsage::VERTEX)?;
+    // Prepare swap chain
+    let render_format = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let mut size = window.inner_size();
 
-    const U16_QUAD_INDICES: usize = size_of::<u16>() * 2 * 3;
-    let indexes = BufferBundle::new(&adapter, &device, U16_QUAD_INDICES, BufferUsage::INDEX)?;
-    let mut resource_holder: ResourceHolder<backend::Backend> =
-        ResourceHolder(ManuallyDrop::new(Resources {
-            instance,
-            surface,
-            device,
-            command_pool,
-            render_passes: vec![render_pass],
-            pipeline_layouts: vec![pipeline_layout],
-            pipelines: vec![pipeline],
-            submission_complete_fence,
-            rendering_complete_semaphore,
-            vertices,
-            indexes,
-        }));
-    let is_animating = false;
+    let mut swap_chain = device.create_swap_chain(
+        &surface,
+        &wgpu::SwapChainDescriptor {
+            usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
+            format: render_format,
+            width: size.width,
+            height: size.height,
+            present_mode: wgpu::PresentMode::Immediate,
+        },
+    );
+
+    // Prepare glyph_brush
+    let inconsolata =
+        ab_glyph::FontArc::try_from_slice(include_bytes!("../Inconsolata-Regular.ttf"))?;
+
+    let mut glyph_brush = GlyphBrushBuilder::using_font(inconsolata).build(&device, render_format);
+
+    let is_animating = true;
     let mut text_state = String::new();
     let mut keyboard_modifiers = ModifiersState::empty();
 
-    event_loop.run(move |event, _, control_flow| {
-        use winit::event::{Event, WindowEvent};
-        use winit::event_loop::ControlFlow;
+    // Render loop
+    window.request_redraw();
 
-        // TODO dynamically switch is_animating on/off depending on whether any
+    event_loop.run(move |event, _, control_flow| {
+        // TODO dynamically switch this on/off depending on whether any
         // animations are running. Should conserve CPU usage and battery life!
         if is_animating {
             *control_flow = ControlFlow::Poll;
@@ -655,215 +90,231 @@ fn run_event_loop() -> Result<(), &'static str> {
         }
 
         match event {
-            Event::WindowEvent {
-                event: window_event,
+            winit::event::Event::WindowEvent {
+                event: winit::event::WindowEvent::CloseRequested,
                 ..
-            } => match window_event {
-                WindowEvent::CloseRequested => {
-                    println!("✈️ Thank you for flying Roc Airlines!");
-                    *control_flow = ControlFlow::Exit
-                }
-                WindowEvent::Resized(dims) => {
-                    surface_extent = Extent2D {
-                        width: dims.width,
-                        height: dims.height,
-                    };
-                    should_configure_swapchain = true;
-                }
-                WindowEvent::KeyboardInput { input, .. } => {
-                    if let Some(virtual_keycode) = input.virtual_keycode {
-                        handle_text_input(
-                            &mut text_state,
-                            input.state,
-                            virtual_keycode,
-                            keyboard_modifiers,
-                        );
-                    }
-                }
-                WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                    surface_extent = Extent2D {
-                        width: new_inner_size.width,
-                        height: new_inner_size.height,
-                    };
-                    should_configure_swapchain = true;
-                }
-                WindowEvent::ModifiersChanged(modifiers) => {
-                    keyboard_modifiers = modifiers;
-                }
-                _ => (),
-            },
-            Event::MainEventsCleared => window.request_redraw(),
-            Event::RedrawRequested(_) => {
-                let res: &mut Resources<_> = &mut resource_holder.0;
-                let render_pass = &res.render_passes[0];
-                let pipeline_layout = &res.pipeline_layouts[0];
-                let pipeline = &res.pipelines[0];
+            } => *control_flow = winit::event_loop::ControlFlow::Exit,
+            winit::event::Event::WindowEvent {
+                event: winit::event::WindowEvent::Resized(new_size),
+                ..
+            } => {
+                size = new_size;
 
-                unsafe {
-                    // We refuse to wait more than a second, to avoid hanging.
-                    let render_timeout_ns = 1_000_000_000;
-
-                    res.device
-                        .wait_for_fence(&res.submission_complete_fence, render_timeout_ns)
-                        .expect("Out of memory or device lost");
-
-                    res.device
-                        .reset_fence(&res.submission_complete_fence)
-                        .expect("Out of memory");
-
-                    res.command_pool.reset(false);
-                }
-
-                if should_configure_swapchain {
-                    let caps = res.surface.capabilities(&adapter.physical_device);
-
-                    let mut swapchain_config =
-                        SwapchainConfig::from_caps(&caps, surface_color_format, surface_extent)
-                            .with_present_mode(PresentMode::IMMEDIATE);
-
-                    // This seems to fix some fullscreen slowdown on macOS.
-                    if caps.image_count.contains(&3) {
-                        swapchain_config.image_count = 3;
-                    }
-
-                    surface_extent = swapchain_config.extent;
-
-                    unsafe {
-                        res.surface
-                            .configure_swapchain(&res.device, swapchain_config)
-                            .expect("Failed to configure swapchain");
-                    };
-
-                    should_configure_swapchain = false;
-                }
-
-                let surface_image = unsafe {
-                    // We refuse to wait more than a second, to avoid hanging.
-                    let acquire_timeout_ns = 1_000_000_000;
-
-                    match res.surface.acquire_image(acquire_timeout_ns) {
-                        Ok((image, _)) => image,
-                        Err(_) => {
-                            should_configure_swapchain = true;
-                            return;
-                        }
-                    }
-                };
-
-                let framebuffer = unsafe {
-                    res.device
-                        .create_framebuffer(
-                            render_pass,
-                            vec![surface_image.borrow()],
-                            Extent {
-                                width: surface_extent.width,
-                                height: surface_extent.height,
-                                depth: 1,
-                            },
-                        )
-                        .unwrap()
-                };
-
-                let viewport = {
-                    Viewport {
-                        rect: Rect {
-                            x: 0,
-                            y: 0,
-                            w: surface_extent.width as i16,
-                            h: surface_extent.height as i16,
-                        },
-                        depth: 0.0..1.0,
-                    }
-                };
-
-                let triangles = text_state.chars().enumerate().flat_map(|(index, char)| {
-                    if char == ' ' {
-                        // Don't render spaces
-                        None
-                    } else {
-                        Some(PushConstants {
-                            color: [0.77254902, 0.658823529, 1.0, 0.5],
-                            pos: [0.06 * index as f32, 0.0],
-                            scale: [0.05, 0.05],
-                        })
-                    }
-                });
-
-                unsafe {
-                    command_buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
-
-                    command_buffer.set_viewports(0, &[viewport.clone()]);
-                    command_buffer.set_scissors(0, &[viewport.rect]);
-                    command_buffer.begin_render_pass(
-                        render_pass,
-                        &framebuffer,
-                        viewport.rect,
-                        &[ClearValue {
-                            color: ClearColor {
-                                float32: [0.01, 0.01, 0.01, 1.0],
-                            },
-                        }],
-                        SubpassContents::Inline,
+                swap_chain = device.create_swap_chain(
+                    &surface,
+                    &wgpu::SwapChainDescriptor {
+                        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
+                        format: render_format,
+                        width: size.width,
+                        height: size.height,
+                        present_mode: wgpu::PresentMode::Immediate,
+                    },
+                );
+            }
+            winit::event::Event::WindowEvent {
+                event: winit::event::WindowEvent::KeyboardInput { input, .. },
+                ..
+            } => {
+                if let Some(virtual_keycode) = input.virtual_keycode {
+                    handle_text_input(
+                        &mut text_state,
+                        input.state,
+                        virtual_keycode,
+                        keyboard_modifiers,
                     );
-                    command_buffer.bind_graphics_pipeline(pipeline);
-
-                    for triangle in triangles {
-                        command_buffer.push_graphics_constants(
-                            pipeline_layout,
-                            ShaderStageFlags::VERTEX,
-                            0,
-                            push_constant_bytes(&triangle),
-                        );
-
-                        command_buffer.draw(0..3, 0..1);
-                    }
-
-                    command_buffer.end_render_pass();
-                    command_buffer.finish();
-                }
-
-                unsafe {
-                    let submission = Submission {
-                        command_buffers: vec![&command_buffer],
-                        wait_semaphores: None,
-                        signal_semaphores: vec![&res.rendering_complete_semaphore],
-                    };
-
-                    queue_group.queues[0].submit(submission, Some(&res.submission_complete_fence));
-                    let result = queue_group.queues[0].present_surface(
-                        &mut res.surface,
-                        surface_image,
-                        Some(&res.rendering_complete_semaphore),
-                    );
-
-                    should_configure_swapchain |= result.is_err();
-
-                    res.device.destroy_framebuffer(framebuffer);
                 }
             }
-            _ => (),
+            winit::event::Event::WindowEvent {
+                event: winit::event::WindowEvent::ModifiersChanged(modifiers),
+                ..
+            } => {
+                keyboard_modifiers = modifiers;
+            }
+            winit::event::Event::MainEventsCleared => window.request_redraw(),
+            winit::event::Event::RedrawRequested { .. } => {
+                // Get a command encoder for the current frame
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Redraw"),
+                });
+
+                // Get the next frame
+                let frame = swap_chain.get_next_texture().expect("Get next frame");
+
+                // Clear frame
+                {
+                    let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
+                            attachment: &frame.view,
+                            resolve_target: None,
+                            load_op: wgpu::LoadOp::Clear,
+                            store_op: wgpu::StoreOp::Store,
+                            clear_color: wgpu::Color {
+                                r: 0.4,
+                                g: 0.4,
+                                b: 0.4,
+                                a: 1.0,
+                            },
+                        }],
+                        depth_stencil_attachment: None,
+                    });
+                }
+
+                glyph_brush.queue(Section {
+                    screen_position: (30.0, 30.0),
+                    bounds: (size.width as f32, size.height as f32),
+                    text: vec![Text::new(text_state.as_str())
+                        .with_color([0.0, 0.0, 0.0, 1.0])
+                        .with_scale(40.0)],
+                    ..Section::default()
+                });
+
+                glyph_brush.queue(Section {
+                    screen_position: (30.0, 90.0),
+                    bounds: (size.width as f32, size.height as f32),
+                    text: vec![Text::new("Hello wgpu_glyph!")
+                        .with_color([1.0, 1.0, 1.0, 1.0])
+                        .with_scale(40.0)],
+                    ..Section::default()
+                });
+
+                // Draw the text!
+                glyph_brush
+                    .draw_queued(&device, &mut encoder, &frame.view, size.width, size.height)
+                    .expect("Draw queued");
+
+                queue.submit(&[encoder.finish()]);
+            }
+            _ => {
+                *control_flow = winit::event_loop::ControlFlow::Wait;
+            }
         }
-    });
+    })
 }
 
-/// Compile some GLSL shader source to SPIR-V.
-/// TODO do this at build time - possibly in CI only
-fn compile_shader(glsl: &str, shader_type: ShaderType) -> Vec<u32> {
-    use std::io::{Cursor, Read};
+fn handle_text_input(
+    text_state: &mut String,
+    elem_state: ElementState,
+    virtual_keycode: VirtualKeyCode,
+    _modifiers: ModifiersState,
+) {
+    use winit::event::VirtualKeyCode::*;
 
-    let mut compiled_file =
-        glsl_to_spirv::compile(glsl, shader_type).expect("Failed to compile shader");
+    if let ElementState::Released = elem_state {
+        return;
+    }
 
-    let mut spirv_bytes = vec![];
-    compiled_file.read_to_end(&mut spirv_bytes).unwrap();
-
-    gfx_hal::pso::read_spirv(Cursor::new(&spirv_bytes)).expect("Invalid SPIR-V")
-}
-
-/// Returns a view of a struct as a slice of `u32`s.
-unsafe fn push_constant_bytes<T>(push_constants: &T) -> &[u32] {
-    let size_in_bytes = std::mem::size_of::<T>();
-    let size_in_u32s = size_in_bytes / std::mem::size_of::<u32>();
-    let start_ptr = push_constants as *const T as *const u32;
-    std::slice::from_raw_parts(start_ptr, size_in_u32s)
+    match virtual_keycode {
+        Key1 | Numpad1 => text_state.push_str("1"),
+        Key2 | Numpad2 => text_state.push_str("2"),
+        Key3 | Numpad3 => text_state.push_str("3"),
+        Key4 | Numpad4 => text_state.push_str("4"),
+        Key5 | Numpad5 => text_state.push_str("5"),
+        Key6 | Numpad6 => text_state.push_str("6"),
+        Key7 | Numpad7 => text_state.push_str("7"),
+        Key8 | Numpad8 => text_state.push_str("8"),
+        Key9 | Numpad9 => text_state.push_str("9"),
+        Key0 | Numpad0 => text_state.push_str("0"),
+        A => text_state.push_str("a"),
+        B => text_state.push_str("b"),
+        C => text_state.push_str("c"),
+        D => text_state.push_str("d"),
+        E => text_state.push_str("e"),
+        F => text_state.push_str("f"),
+        G => text_state.push_str("g"),
+        H => text_state.push_str("h"),
+        I => text_state.push_str("i"),
+        J => text_state.push_str("j"),
+        K => text_state.push_str("k"),
+        L => text_state.push_str("l"),
+        M => text_state.push_str("m"),
+        N => text_state.push_str("n"),
+        O => text_state.push_str("o"),
+        P => text_state.push_str("p"),
+        Q => text_state.push_str("q"),
+        R => text_state.push_str("r"),
+        S => text_state.push_str("s"),
+        T => text_state.push_str("t"),
+        U => text_state.push_str("u"),
+        V => text_state.push_str("v"),
+        W => text_state.push_str("w"),
+        X => text_state.push_str("x"),
+        Y => text_state.push_str("y"),
+        Z => text_state.push_str("z"),
+        Escape | F1 | F2 | F3 | F4 | F5 | F6 | F7 | F8 | F9 | F10 | F11 | F12 | F13 | F14 | F15
+        | F16 | F17 | F18 | F19 | F20 | F21 | F22 | F23 | F24 | Snapshot | Scroll | Pause
+        | Insert | Home | Delete | End | PageDown | PageUp | Left | Up | Right | Down | Compose
+        | Caret | Numlock | AbntC1 | AbntC2 | Ax | Calculator | Capital | Convert | Kana
+        | Kanji | LAlt | LBracket | LControl | LShift | LWin | Mail | MediaSelect | PlayPause
+        | Power | PrevTrack | MediaStop | Mute | MyComputer | NavigateForward
+        | NavigateBackward | NextTrack | NoConvert | OEM102 | RAlt | Sysrq | RBracket
+        | RControl | RShift | RWin | Sleep | Stop | Unlabeled | VolumeDown | VolumeUp | Wake
+        | WebBack | WebFavorites | WebForward | WebHome | WebRefresh | WebSearch | Apps | Tab
+        | WebStop => {
+            // TODO handle
+            dbg!(virtual_keycode);
+        }
+        Back => {
+            text_state.pop();
+        }
+        Return | NumpadEnter => {
+            text_state.push_str("\n");
+        }
+        Space => {
+            text_state.push_str(" ");
+        }
+        Comma | NumpadComma => {
+            text_state.push_str(",");
+        }
+        Add => {
+            text_state.push_str("+");
+        }
+        Apostrophe => {
+            text_state.push_str("'");
+        }
+        At => {
+            text_state.push_str("@");
+        }
+        Backslash => {
+            text_state.push_str("\\");
+        }
+        Colon => {
+            text_state.push_str(":");
+        }
+        Period | Decimal => {
+            text_state.push_str(".");
+        }
+        Equals | NumpadEquals => {
+            text_state.push_str("=");
+        }
+        Grave => {
+            text_state.push_str("`");
+        }
+        Minus | Subtract => {
+            text_state.push_str("-");
+        }
+        Multiply => {
+            text_state.push_str("*");
+        }
+        Semicolon => {
+            text_state.push_str(";");
+        }
+        Slash | Divide => {
+            text_state.push_str("/");
+        }
+        Underline => {
+            text_state.push_str("_");
+        }
+        Yen => {
+            text_state.push_str("¥");
+        }
+        Copy => {
+            todo!("copy");
+        }
+        Paste => {
+            todo!("paste");
+        }
+        Cut => {
+            todo!("cut");
+        }
+    }
 }
