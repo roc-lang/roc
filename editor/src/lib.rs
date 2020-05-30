@@ -1,7 +1,5 @@
 use crate::text_state::handle_text_input;
 use core::ptr::read;
-use gfx_hal::pso::ShaderStageFlags;
-use gfx_hal::pso::{Rect, Viewport};
 use gfx_hal::{
     adapter::{Adapter, PhysicalDevice},
     buffer::Usage as BufferUsage,
@@ -14,13 +12,15 @@ use gfx_hal::{
     pool::{CommandPool, CommandPoolCreateFlags},
     pso::{
         BlendState, ColorBlendDesc, ColorMask, EntryPoint, Face, GraphicsPipelineDesc,
-        GraphicsShaderSet, PipelineStage, Primitive, Rasterizer, Specialization,
+        GraphicsShaderSet, PipelineStage, Primitive, Rasterizer, ShaderStageFlags, Specialization,
+        Viewport,
     },
     queue::{CommandQueue, QueueFamily, Submission},
     window::{Extent2D, PresentMode, PresentationSurface, Surface, SwapchainConfig},
     Backend, Instance, MemoryTypeId,
 };
 use glsl_to_spirv::ShaderType;
+use glyph_brush::ab_glyph::{point, Rect};
 use std::borrow::Borrow;
 use std::io;
 use std::marker::PhantomData;
@@ -421,6 +421,63 @@ struct PushConstants {
     scale: [f32; 2],
 }
 
+pub type Vertex = [f32; 13];
+
+#[inline]
+pub fn to_vertex(
+    glyph_brush::GlyphVertex {
+        mut tex_coords,
+        pixel_coords,
+        bounds,
+        extra,
+    }: glyph_brush::GlyphVertex,
+) -> Vertex {
+    let gl_bounds = bounds;
+
+    let mut gl_rect = Rect {
+        min: point(pixel_coords.min.x as f32, pixel_coords.min.y as f32),
+        max: point(pixel_coords.max.x as f32, pixel_coords.max.y as f32),
+    };
+
+    // handle overlapping bounds, modify uv_rect to preserve texture aspect
+    if gl_rect.max.x > gl_bounds.max.x {
+        let old_width = gl_rect.width();
+        gl_rect.max.x = gl_bounds.max.x;
+        tex_coords.max.x = tex_coords.min.x + tex_coords.width() * gl_rect.width() / old_width;
+    }
+    if gl_rect.min.x < gl_bounds.min.x {
+        let old_width = gl_rect.width();
+        gl_rect.min.x = gl_bounds.min.x;
+        tex_coords.min.x = tex_coords.max.x - tex_coords.width() * gl_rect.width() / old_width;
+    }
+    if gl_rect.max.y > gl_bounds.max.y {
+        let old_height = gl_rect.height();
+        gl_rect.max.y = gl_bounds.max.y;
+        tex_coords.max.y = tex_coords.min.y + tex_coords.height() * gl_rect.height() / old_height;
+    }
+    if gl_rect.min.y < gl_bounds.min.y {
+        let old_height = gl_rect.height();
+        gl_rect.min.y = gl_bounds.min.y;
+        tex_coords.min.y = tex_coords.max.y - tex_coords.height() * gl_rect.height() / old_height;
+    }
+
+    [
+        gl_rect.min.x,
+        gl_rect.max.y,
+        extra.z,
+        gl_rect.max.x,
+        gl_rect.min.y,
+        tex_coords.min.x,
+        tex_coords.max.y,
+        tex_coords.max.x,
+        tex_coords.min.y,
+        extra.color[0],
+        extra.color[1],
+        extra.color[2],
+        extra.color[3],
+    ]
+}
+
 fn run_event_loop() -> Result<(), &'static str> {
     // TODO do a better window size
     const WINDOW_SIZE: [u32; 2] = [512, 512];
@@ -766,7 +823,7 @@ fn run_event_loop() -> Result<(), &'static str> {
 
                 let viewport = {
                     Viewport {
-                        rect: Rect {
+                        rect: gfx_hal::pso::Rect {
                             x: 0,
                             y: 0,
                             w: surface_extent.width as i16,
@@ -866,4 +923,243 @@ unsafe fn push_constant_bytes<T>(push_constants: &T) -> &[u32] {
     let size_in_u32s = size_in_bytes / std::mem::size_of::<u32>();
     let start_ptr = push_constants as *const T as *const u32;
     std::slice::from_raw_parts(start_ptr, size_in_u32s)
+}
+
+// TEXT
+
+pub fn compile_shader(src: &str, ty: GLenum) -> Res<GLuint> {
+    let shader;
+    unsafe {
+        shader = gl::CreateShader(ty);
+        // Attempt to compile the shader
+        let c_str = CString::new(src.as_bytes())?;
+        gl::ShaderSource(shader, 1, &c_str.as_ptr(), ptr::null());
+        gl::CompileShader(shader);
+
+        // Get the compile status
+        let mut status = GLint::from(gl::FALSE);
+        gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut status);
+
+        // Fail on error
+        if status != GLint::from(gl::TRUE) {
+            let mut len = 0;
+            gl::GetShaderiv(shader, gl::INFO_LOG_LENGTH, &mut len);
+            let mut buf = Vec::with_capacity(len as usize);
+            buf.set_len((len as usize) - 1); // subtract 1 to skip the trailing null character
+            gl::GetShaderInfoLog(
+                shader,
+                len,
+                ptr::null_mut(),
+                buf.as_mut_ptr() as *mut GLchar,
+            );
+            return Err(str::from_utf8(&buf)?.into());
+        }
+    }
+    Ok(shader)
+}
+
+pub struct GlGlyphTexture {
+    pub name: usize,
+}
+
+impl GlGlyphTexture {
+    pub fn new((width, height): (u32, u32)) -> Self {
+        let mut name = 0;
+        unsafe {
+            // Create a texture for the glyphs
+            // The texture holds 1 byte per pixel as alpha data
+            gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+            gl::GenTextures(1, &mut name);
+            gl::BindTexture(gl::TEXTURE_2D, name);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as _);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as _);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as _);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as _);
+            gl::TexImage2D(
+                gl::TEXTURE_2D,
+                0,
+                gl::RED as _,
+                width as _,
+                height as _,
+                0,
+                gl::RED,
+                gl::UNSIGNED_BYTE,
+                ptr::null(),
+            );
+            gl_assert_ok!();
+
+            Self { name }
+        }
+    }
+
+    pub fn clear(&self) {
+        unsafe {
+            gl::BindTexture(gl::TEXTURE_2D, self.name);
+            gl::ClearTexImage(
+                self.name,
+                0,
+                gl::RED,
+                gl::UNSIGNED_BYTE,
+                [12_u8].as_ptr() as _,
+            );
+            gl_assert_ok!();
+        }
+    }
+}
+
+impl Drop for GlGlyphTexture {
+    fn drop(&mut self) {
+        unsafe {
+            gl::DeleteTextures(1, &self.name);
+        }
+    }
+}
+
+pub struct GlTextPipe {
+    shaders: [GLuint; 2],
+    program: GLuint,
+    vao: GLuint,
+    vbo: GLuint,
+    transform_uniform: GLint,
+    vertex_count: usize,
+    vertex_buffer_len: usize,
+}
+
+impl GlTextPipe {
+    pub fn new(window_size: glutin::dpi::PhysicalSize<u32>) -> Res<Self> {
+        let (w, h) = (window_size.width as f32, window_size.height as f32);
+
+        let vs = compile_shader(include_str!("shader/text.vs"), gl::VERTEX_SHADER)?;
+        let fs = compile_shader(include_str!("shader/text.fs"), gl::FRAGMENT_SHADER)?;
+        let program = link_program(vs, fs)?;
+
+        let mut vao = 0;
+        let mut vbo = 0;
+
+        let transform_uniform = unsafe {
+            // Create Vertex Array Object
+            gl::GenVertexArrays(1, &mut vao);
+            gl::BindVertexArray(vao);
+
+            // Create a Vertex Buffer Object
+            gl::GenBuffers(1, &mut vbo);
+            gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+
+            // Use shader program
+            gl::UseProgram(program);
+            gl::BindFragDataLocation(program, 0, CString::new("out_color")?.as_ptr());
+
+            // Specify the layout of the vertex data
+            let uniform = gl::GetUniformLocation(program, CString::new("transform")?.as_ptr());
+            if uniform < 0 {
+                return Err(format!("GetUniformLocation(\"transform\") -> {}", uniform).into());
+            }
+            let transform = ortho(0.0, w, 0.0, h, 1.0, -1.0);
+            gl::UniformMatrix4fv(uniform, 1, 0, transform.as_ptr());
+
+            let mut offset = 0;
+            for (v_field, float_count) in &[
+                ("left_top", 3),
+                ("right_bottom", 2),
+                ("tex_left_top", 2),
+                ("tex_right_bottom", 2),
+                ("color", 4),
+            ] {
+                let attr = gl::GetAttribLocation(program, CString::new(*v_field)?.as_ptr());
+                if attr < 0 {
+                    return Err(format!("{} GetAttribLocation -> {}", v_field, attr).into());
+                }
+                gl::VertexAttribPointer(
+                    attr as _,
+                    *float_count,
+                    gl::FLOAT,
+                    gl::FALSE as _,
+                    mem::size_of::<Vertex>() as _,
+                    offset as _,
+                );
+                gl::EnableVertexAttribArray(attr as _);
+                gl::VertexAttribDivisor(attr as _, 1);
+
+                offset += float_count * 4;
+            }
+
+            // Enabled alpha blending
+            gl::Enable(gl::BLEND);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+            // Use srgb for consistency with other examples
+            gl::Enable(gl::FRAMEBUFFER_SRGB);
+            gl::ClearColor(0.02, 0.02, 0.02, 1.0);
+            gl_assert_ok!();
+
+            uniform
+        };
+
+        Ok(Self {
+            shaders: [vs, fs],
+            program,
+            vao,
+            vbo,
+            transform_uniform,
+            vertex_count: 0,
+            vertex_buffer_len: 0,
+        })
+    }
+
+    pub fn upload_vertices(&mut self, vertices: &[Vertex]) {
+        // Draw new vertices
+        self.vertex_count = vertices.len();
+
+        unsafe {
+            gl::BindVertexArray(self.vao);
+            gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo);
+            if self.vertex_buffer_len < self.vertex_count {
+                gl::BufferData(
+                    gl::ARRAY_BUFFER,
+                    (self.vertex_count * mem::size_of::<Vertex>()) as GLsizeiptr,
+                    vertices.as_ptr() as _,
+                    gl::DYNAMIC_DRAW,
+                );
+                self.vertex_buffer_len = self.vertex_count;
+            } else {
+                gl::BufferSubData(
+                    gl::ARRAY_BUFFER,
+                    0,
+                    (self.vertex_count * mem::size_of::<Vertex>()) as GLsizeiptr,
+                    vertices.as_ptr() as _,
+                );
+            }
+            gl_assert_ok!();
+        }
+    }
+
+    pub fn update_geometry(&self, window_size: glutin::dpi::PhysicalSize<u32>) {
+        let (w, h) = (window_size.width as f32, window_size.height as f32);
+        let transform = ortho(0.0, w, 0.0, h, 1.0, -1.0);
+
+        unsafe {
+            gl::UseProgram(self.program);
+            gl::UniformMatrix4fv(self.transform_uniform, 1, 0, transform.as_ptr());
+            gl_assert_ok!();
+        }
+    }
+
+    pub fn draw(&self) {
+        unsafe {
+            gl::UseProgram(self.program);
+            gl::BindVertexArray(self.vao);
+            gl::DrawArraysInstanced(gl::TRIANGLE_STRIP, 0, 4, self.vertex_count as _);
+            gl_assert_ok!();
+        }
+    }
+}
+
+impl Drop for GlTextPipe {
+    fn drop(&mut self) {
+        unsafe {
+            gl::DeleteProgram(self.program);
+            self.shaders.iter().for_each(|s| gl::DeleteShader(*s));
+            gl::DeleteBuffers(1, &self.vbo);
+            gl::DeleteVertexArrays(1, &self.vao);
+        }
+    }
 }
