@@ -9,6 +9,9 @@ To see which version of LLVM you need, take a look at `Cargo.toml`, in particula
 
 For Ubuntu, I used the `Automatic installation script` at [apt.llvm.org](https://apt.llvm.org) - but there are plenty of alternative options at http://releases.llvm.org/download.html
 
+> On some Linux systems we've seen the error "failed to run custom build command for x11".
+> On Ubuntu, running `sudo apt-get install cmake libx11-dev` fixed this.
+
 ## Use LLD for the linker
 
 Using [`lld` for Rust's linker](https://github.com/rust-lang/rust/issues/39915#issuecomment-538049306)
