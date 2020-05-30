@@ -149,9 +149,9 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                             load_op: wgpu::LoadOp::Clear,
                             store_op: wgpu::StoreOp::Store,
                             clear_color: wgpu::Color {
-                                r: 0.4,
-                                g: 0.4,
-                                b: 0.4,
+                                r: 0.007,
+                                g: 0.007,
+                                b: 0.007,
                                 a: 1.0,
                             },
                         }],
@@ -162,8 +162,8 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 glyph_brush.queue(Section {
                     screen_position: (30.0, 30.0),
                     bounds: (size.width as f32, size.height as f32),
-                    text: vec![Text::new(text_state.as_str())
-                        .with_color([0.0, 0.0, 0.0, 1.0])
+                    text: vec![Text::new("Enter some text:")
+                        .with_color([0.4666, 0.2, 1.0, 1.0])
                         .with_scale(40.0)],
                     ..Section::default()
                 });
@@ -171,7 +171,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 glyph_brush.queue(Section {
                     screen_position: (30.0, 90.0),
                     bounds: (size.width as f32, size.height as f32),
-                    text: vec![Text::new("Hello wgpu_glyph!")
+                    text: vec![Text::new(text_state.as_str())
                         .with_color([1.0, 1.0, 1.0, 1.0])
                         .with_scale(40.0)],
                     ..Section::default()
