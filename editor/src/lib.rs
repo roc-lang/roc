@@ -33,10 +33,10 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     let (device, queue) = futures::executor::block_on(async {
         let adapter = wgpu::Adapter::request(
             &wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::Default,
+                power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
             },
-            wgpu::BackendBit::PRIMARY,
+            wgpu::BackendBit::all(),
         )
         .await
         .expect("Request adapter");
