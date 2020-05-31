@@ -6,6 +6,7 @@ use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 use winit::event_loop::ControlFlow;
 
 pub mod text_state;
+pub mod ast;
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
