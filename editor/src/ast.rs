@@ -1,4 +1,5 @@
 use roc_types::subs::Variable;
+use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Problem {
@@ -10,7 +11,7 @@ pub type Res<T> = Result<T, Problem>;
 /// The index into a decl's array of nodes.
 /// This is a u32 index because no decl is allowed to hold more than 2^32 entries,
 /// and it saves space on 64-bit systems compared to a pointer.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NodeId(u32);
 
 impl NodeId {
@@ -18,6 +19,16 @@ impl NodeId {
 
     pub fn as_index(self) -> usize {
         self.0 as usize
+    }
+}
+
+impl fmt::Debug for NodeId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self == &NodeId::NONE {
+            write!(f, "none")
+        } else {
+            write!(f, "#{}", self.0)
+        }
     }
 }
 
