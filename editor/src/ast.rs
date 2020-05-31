@@ -198,8 +198,17 @@ pub enum NodeContent {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Expr {
+    /// An integer literal (without a dot)
     Int { text: String, var: Variable },
+    /// An floating-point literal (with a dot)
     Float { text: String, var: Variable },
+    // /// A partial lookup that has not yet been completed, e.g.
+    // /// `Foo.` or `pkg.Foo.Bar`
+    // PartialLookup {
+    //     /// dot-separated sections, e.g. `Foo.Bar.` would be ["Foo", "Bar", ""]
+    //     sections: Vec<String>,
+    //     var: Variable,
+    // },
     // Lookup {
     //     name: String,
     //     var: Variable,
