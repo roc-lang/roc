@@ -49,27 +49,13 @@ tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded", 
 inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm10-0.release1" }
 target-lexicon = "0.10"
 winit = "0.22"
-image = "0.23"
-gfx-hal = "0.5"
-glsl-to-spirv = "0.1"
-bincode = "1.2"
-serde = { version = "1.0", features = ["derive"] }
-
-[target.'cfg(target_os = "macos")'.dependencies.backend]
-package = "gfx-backend-metal"
-version = "0.5"
-
-[target.'cfg(windows)'.dependencies.backend]
-package = "gfx-backend-dx12"
-version = "0.5"
-
-[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies.backend]
-package = "gfx-backend-vulkan"
-features = ["x11"]
-version = "0.5"
-
-[build-dependencies]
-glsl-to-spirv = "0.1"
+wgpu = "0.5"
+glyph_brush = "0.7"
+log = "0.4"
+zerocopy = "0.3"
+env_logger = "0.7"
+futures = "0.3"
+wgpu_glyph = "0.9"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
