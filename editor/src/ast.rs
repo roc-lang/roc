@@ -1,3 +1,5 @@
+use inlinable_string::string_ext::StringExt;
+use inlinable_string::InlinableString;
 use roc_types::subs::Variable;
 use std::fmt;
 
@@ -199,18 +201,24 @@ pub enum NodeContent {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Expr {
     /// An integer literal (without a dot)
-    Int { text: String, var: Variable },
+    Int {
+        text: InlinableString,
+        var: Variable,
+    },
     /// An floating-point literal (with a dot)
-    Float { text: String, var: Variable },
+    Float {
+        text: InlinableString,
+        var: Variable,
+    },
     // /// A partial lookup that has not yet been completed, e.g.
     // /// `Foo.` or `pkg.Foo.Bar`
     // PartialLookup {
     //     /// dot-separated sections, e.g. `Foo.Bar.` would be ["Foo", "Bar", ""]
-    //     sections: Vec<String>,
+    //     sections: Vec<InlinableString>,
     //     var: Variable,
     // },
     // Lookup {
-    //     name: String,
+    //     name: InlinableString,
     //     var: Variable,
     // },
     // If {
