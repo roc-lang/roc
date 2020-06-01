@@ -38,6 +38,7 @@ pub fn build(
     let home = loaded.module_id;
     let src_lines: Vec<&str> = src.split('\n').collect();
     let palette = DEFAULT_PALETTE;
+    let mut layout_cache = LayoutCache::default();
 
     // Report parsing and canonicalization problems
     let alloc = RocDocAllocator::new(&src_lines, home, &loaded.interns);
@@ -193,6 +194,7 @@ pub fn build(
                                     loc_args,
                                     loc_body,
                                     ret_var,
+                                    &mut layout_cache,
                                 );
                             }
                             body => {
