@@ -60,7 +60,6 @@ pub fn handle_text_input(
         | WebBack | WebFavorites | WebForward | WebHome | WebRefresh | WebSearch | Apps | Tab
         | WebStop => {
             // TODO handle
-            dbg!(virtual_keycode);
         }
         Back => {
             text_state.pop();

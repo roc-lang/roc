@@ -34,7 +34,32 @@ impl fmt::Debug for NodeId {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UndoAction {
+    UndoEdit {
+        caret_id: NodeId,
+        caret_parent_id: NodeId,
+        caret_child_id: NodeId,
+        caret_offset: u16,
+        child: Node,
+        redo_action: Action,
+    },
+    /// Used in undo logs to mean "the next N undo actions in the log should
+    /// be replayed together in a batch."
+    Multiple(u16),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    Backspace,
+    Paste,
+
+    /// Used in redo logs to mean "the next N redo actions in the log should
+    /// be replayed together in a batch."
+    Multiple(u16),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Nodes {
     nodes: Vec<Node>,
 }
@@ -138,6 +163,17 @@ impl Nodes {
         }
     }
 
+    pub fn replace(&mut self, node_id: NodeId, node: Node) {
+        let elem = self.nodes.get_mut(node_id.as_index()).unwrap_or_else(|| {
+            panic!(
+                "Tried to replace element at nonexistant NodeId {:?} with {:?}",
+                node_id, node
+            )
+        });
+
+        *elem = node;
+    }
+
     pub fn wrap_with_caret(&mut self, target_id: NodeId, offset: u16) -> Res<NodeId> {
         let parent_id = self.get(target_id).parent_id;
         let caret_id = {
@@ -182,13 +218,13 @@ impl Nodes {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Node {
     parent_id: NodeId,
     content: NodeContent,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeContent {
     Expr(Expr /* TODO should Node have a Variable? */),
     // Pattern(Pattern),
@@ -198,7 +234,7 @@ pub enum NodeContent {
     Removed,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     /// An integer literal (without a dot)
     Int {
@@ -237,28 +273,35 @@ pub enum Expr {
     // },
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pattern {
     Identifier { text: String, var: Variable },
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decl {
     Def(Def),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Def {
     Body { pattern: NodeId, expr: NodeId },
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Module {
     pub nodes: Nodes,
     pub decls: Vec<Decl>,
     // Use a Vec over a Set because it'll always be of small length
     pub carets: Vec<NodeId>,
     pub selections: Vec<(NodeId, NodeId)>,
+
+    /// Because these actions store NodeId values, it's critically important
+    /// that when we take an action and then redo it, everything (including Nodes)
+    /// ends up back in the same state, including NodeId values.
+    pub undo_log: Vec<UndoAction>,
+
+    pub redos: Vec<Action>,
 }
 
 impl Node {
@@ -329,11 +372,107 @@ impl Node {
 }
 
 impl Module {
-    pub fn backspace(&mut self) {
-        if self.nodes.is_empty() {
-            return;
-        }
+    pub fn undo(&mut self) {
+        let mut iterations_remaining: u16 = 0;
 
+        loop {
+            match self.undo_log.pop() {
+                Some(action) => {
+                    iterations_remaining += self.apply_undo_action(action);
+                }
+                None => {
+                    if iterations_remaining > 0 {
+                        panic!("Expected to be able to do {} more Undo iterations, but ran out of actions to undo.", iterations_remaining);
+                    }
+                }
+            }
+
+            if iterations_remaining == 0 {
+                return;
+            } else {
+                iterations_remaining -= 1;
+            }
+        }
+    }
+
+    pub fn redo(&mut self) {
+        let mut iterations_remaining: u16 = 0;
+
+        loop {
+            match self.redos.pop() {
+                Some(action) => {
+                    iterations_remaining += self.apply_action(action);
+                }
+                None => {
+                    if iterations_remaining > 0 {
+                        panic!("Expected to be able to do {} more Redo iterations, but ran out of actions to redo.", iterations_remaining);
+                    }
+                }
+            }
+
+            if iterations_remaining == 0 {
+                return;
+            } else {
+                iterations_remaining -= 1;
+            }
+        }
+    }
+
+    fn apply_action(&mut self, action: Action) -> u16 {
+        use Action::*;
+
+        match action {
+            Backspace => {
+                self.backspace();
+
+                0
+            }
+            Paste => {
+                todo!("TODO support Paste action");
+            }
+            Multiple(iterations) => iterations,
+        }
+    }
+
+    fn apply_undo_action(&mut self, action: UndoAction) -> u16 {
+        use UndoAction::*;
+
+        match action {
+            UndoEdit {
+                caret_id,
+                caret_parent_id,
+                caret_child_id,
+                caret_offset,
+                child,
+                redo_action,
+            } => {
+                self.redos.push(redo_action);
+                self.nodes.replace(caret_child_id, child);
+
+                let caret = Node {
+                    parent_id: caret_parent_id,
+                    content: NodeContent::Caret {
+                        child_id: caret_child_id,
+                        offset: caret_offset,
+                    },
+                };
+
+                self.nodes.replace(caret_id, caret);
+
+                0
+            }
+            Multiple(iterations) => iterations,
+        }
+    }
+
+    pub fn paste(&mut self, text: &str) {
+        todo!(
+            "TODO paste this string, taking carets and selections into account: {:?}",
+            text
+        );
+    }
+
+    pub fn backspace(&mut self) {
         for &caret_node_id in self.carets.iter() {
             debug_assert!(caret_node_id.as_index() <= self.nodes.len());
 
@@ -341,7 +480,6 @@ impl Module {
             // child node. Without these slices we'd need multiple simultaneous
             // mutable references to self.nodes, which is never allowed.
             let (before_caret, caret_and_after) = self.nodes.split_at_mut(caret_node_id);
-            dbg!(&caret_node_id, &before_caret, &caret_and_after);
             let (caret_only, after_caret) = caret_and_after.split_at_mut(1);
 
             let caret = caret_only.first_mut().unwrap();
@@ -369,6 +507,16 @@ impl Module {
                         }
                         .unwrap_or_else(|| {
                             panic!("Could not get child node for caret {:?}", caret_node_id)
+                        });
+
+                        // Add an entry to the undo log to undo this edit.
+                        self.undo_log.push(UndoAction::UndoEdit {
+                            caret_id: caret_node_id,
+                            caret_parent_id: parent_id,
+                            caret_offset: offset_index,
+                            caret_child_id: child_id,
+                            child: child_node.clone(),
+                            redo_action: Action::Backspace,
                         });
 
                         // Mutate the child node to apply the backspace operation.
@@ -449,11 +597,31 @@ fn single_backspace_1_caret() {
         decls: Vec::new(),
         carets: vec![caret_node_id],
         selections: Vec::new(),
+        undo_log: Vec::new(),
+        redos: Vec::new(),
     };
+
+    let original_module = module.clone();
 
     module.backspace();
 
+    let altered_module = module.clone();
+
     assert_eq!(expected, module.nodes);
+
+    module.undo();
+
+    let stashed_redos = module.redos;
+
+    module.redos = Vec::new();
+
+    assert_eq!(original_module, module);
+
+    module.redos = stashed_redos;
+
+    module.redo();
+
+    assert_eq!(altered_module, module);
 }
 
 #[test]
@@ -484,7 +652,6 @@ fn double_backspace_1_caret() {
 
     let actual = {
         let mut nodes = Nodes::default();
-
         let actual_node_id = nodes
             .push_expr(
                 NodeId::NONE,
@@ -496,10 +663,7 @@ fn double_backspace_1_caret() {
             .unwrap();
 
         assert!(int_node_id == actual_node_id);
-
-        let actual_node_id = nodes.wrap_with_caret(int_node_id, 3).unwrap();
-
-        assert!(caret_node_id == actual_node_id);
+        assert!(caret_node_id == nodes.wrap_with_caret(int_node_id, 3).unwrap());
 
         nodes
     };
@@ -509,10 +673,32 @@ fn double_backspace_1_caret() {
         decls: Vec::new(),
         carets: vec![caret_node_id],
         selections: Vec::new(),
+        undo_log: Vec::new(),
+        redos: Vec::new(),
     };
 
+    let original_module = module.clone();
+
     module.backspace();
     module.backspace();
 
+    let altered_module = module.clone();
+
     assert_eq!(expected, module.nodes);
+
+    module.undo();
+    module.undo();
+
+    let stashed_redos = module.redos;
+
+    module.redos = Vec::new();
+
+    assert_eq!(original_module, module);
+
+    module.redos = stashed_redos;
+
+    module.redo();
+    module.redo();
+
+    assert_eq!(altered_module, module);
 }
