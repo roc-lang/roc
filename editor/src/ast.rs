@@ -1,7 +1,9 @@
 use inlinable_string::string_ext::StringExt;
 use inlinable_string::InlinableString;
+use roc_module::symbol::Symbol;
 use roc_types::subs::Variable;
 use std::fmt;
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Problem {
@@ -44,6 +46,16 @@ pub enum UndoAction {
         child: Node,
         redo_action: Action,
     },
+    /// Restores modules that were backed up to disk (using something like `cp`),
+    /// and then rebuilds the module state for any modules that are currently
+    /// open in the editor.
+    ///
+    /// This expensive operation is necessary when undoing an operation that
+    /// cannot be incrementally reversed, such as a find/replace across files
+    /// (in case the original replacement text was already present in some files).
+    Restore {
+        backed_up_files: Vec<(Box<Path>, Box<Path>)>,
+    },
     /// Used in undo logs to mean "the next N undo actions in the log should
     /// be replayed together in a batch."
     Multiple(u16),
@@ -51,8 +63,12 @@ pub enum UndoAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    // Incrementally reversible actions
     Backspace,
     Paste,
+
+    // Actions that cannot be incrementally reversed, which require backups.
+    Rename(Symbol, InlinableString),
 
     /// Used in redo logs to mean "the next N redo actions in the log should
     /// be replayed together in a batch."
