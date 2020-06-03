@@ -2,10 +2,10 @@ use roc_can::constraint::Constraint::{self, *};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{ImMap, MutMap, SendMap};
 use roc_module::ident::TagName;
-use roc_module::symbol::{ModuleId, Symbol};
+use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::boolean_algebra::{self, Atom};
-use roc_types::solved_types::{Solved, SolvedType};
+use roc_types::solved_types::Solved;
 use roc_types::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{Alias, Category, ErrorType, PatternCategory};
@@ -22,14 +22,6 @@ pub enum TypeError {
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
     CircularType(Region, Symbol, ErrorType),
     BadType(roc_types::types::Problem),
-}
-
-pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
-
-#[derive(Clone, Debug)]
-pub enum ExposedModuleTypes {
-    Invalid,
-    Valid(MutMap<Symbol, SolvedType>, MutMap<Symbol, Alias>),
 }
 
 #[derive(Clone, Debug)]

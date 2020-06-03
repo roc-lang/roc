@@ -16,6 +16,16 @@ use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;
 
 #[derive(Debug)]
+pub struct Module {
+    pub module_id: ModuleId,
+    pub exposed_imports: MutMap<Symbol, Variable>,
+    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub references: MutSet<Symbol>,
+    pub aliases: MutMap<Symbol, Alias>,
+    pub rigid_variables: MutMap<Variable, Lowercase>,
+}
+
+#[derive(Debug)]
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: MutMap<Variable, Lowercase>,

@@ -15,7 +15,7 @@ roc_types = { path = "../types" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }
-inlinable_string = "0.1.0"
+inlinable_string = "0.1"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
