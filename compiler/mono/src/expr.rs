@@ -201,7 +201,7 @@ pub enum Expr<'a> {
     Inc(&'a Expr<'a>),
     Dec {
         ret: &'a Expr<'a>,
-        others: &'a [Expr<'a>],
+        others: &'a [Symbol],
     },
 
     // Functions
@@ -512,7 +512,7 @@ fn from_can<'a>(
                     layout_cache,
                 )
             } else {
-                Expr::Load(symbol)
+                Expr::Inc(env.arena.alloc(Expr::Load(symbol)))
             }
         }
         LetRec(defs, ret_expr, _, _) => from_can_defs(env, defs, *ret_expr, layout_cache, procs),
@@ -1118,7 +1118,20 @@ fn from_can_defs<'a>(
     if stored.is_empty() {
         ret
     } else {
-        Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
+        let mut decs = Vec::with_capacity_in(stored.len(), arena);
+        for (symbol, layout, _) in stored.iter() {
+            if layout.is_ref_counted() {
+                decs.push(*symbol)
+            }
+        }
+
+        Expr::Store(
+            stored.into_bump_slice(),
+            arena.alloc(Expr::Dec {
+                ret: arena.alloc(ret),
+                others: decs.into_bump_slice(),
+            }),
+        )
     }
 }
 

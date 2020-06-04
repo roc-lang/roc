@@ -135,6 +135,19 @@ impl<'a> Layout<'a> {
             Pointer(_) => pointer_size,
         }
     }
+
+    pub fn is_ref_counted(&self) -> bool {
+        match self {
+            _ => true
+            // TODO figure out what these cases should be
+            // Builtin(Builtin<'a>)
+            // Struct(&'a [Layout<'a>]),
+            // Union(&'a [&'a [Layout<'a>]]),
+            // /// A function. The types of its arguments, then the type of its return value.
+            // FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
+            // Pointer(&'a Layout<'a>),
+        }
+    }
 }
 
 /// Avoid recomputing Layout from Variable multiple times.

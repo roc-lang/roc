@@ -596,17 +596,41 @@ mod test_mono {
                 let var_other_name = interns.symbol(home, "otherName".into());
 
                 // TODO expect a mono Expr which has an Inc wrapper around the `name` in `= name` and a Dec wrapper around otherName at the end
+
                 Store(
-                    arena.alloc([
-                        (var_name, Layout::Builtin(Builtin::Str), Expr::Str("blah")),
-                    ]),
-                    arena.alloc(Store(
-                        arena.alloc([
-                            (var_other_name, Layout::Builtin(Builtin::Str), Expr::Load(var_name)),
-                        ]),
-                        arena.alloc(Load(var_other_name))
-                    ))
+                    arena.alloc([(var_name, Layout::Builtin(Builtin::Str), Str("blah"))]),
+                    arena.alloc(Dec {
+                        ret: arena.alloc(Store(
+                            arena.alloc([(
+                                var_other_name,
+                                Layout::Builtin(Builtin::Str),
+                                Inc(arena.alloc(Load(var_name))),
+                            )]),
+                            arena.alloc(Dec {
+                                ret: arena.alloc(Inc(arena.alloc(Load(var_other_name)))),
+                                others: arena.alloc([var_other_name])
+                            }),
+                        )),
+                        others: arena.alloc([var_name])
+                    }),
                 )
+
+                // Dec {
+                //     ret: &'a Expr<'a>,
+                //     others: &'a [Expr<'a>],
+                // },
+
+                // Store(
+                //     arena.alloc([(var_name, Layout::Builtin(Builtin::Str), Expr::Str("blah"))]),
+                //     arena.alloc(Store(
+                //         arena.alloc([(
+                //             var_other_name,
+                //             Layout::Builtin(Builtin::Str),
+                //             Expr::Load(var_name),
+                //         )]),
+                //         arena.alloc(Load(var_other_name)),
+                //     )),
+                // )
             },
         )
     }

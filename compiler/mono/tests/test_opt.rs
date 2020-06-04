@@ -185,6 +185,14 @@ mod test_opt {
                     extract_named_calls_help(elem, calls, unexpected_calls);
                 }
             }
+
+            Inc(expr) => {
+                extract_named_calls_help(expr, calls, unexpected_calls);
+            }
+
+            Dec { ret, .. } => {
+                extract_named_calls_help(ret, calls, unexpected_calls);
+            }
         }
     }
 
