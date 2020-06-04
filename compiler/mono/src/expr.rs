@@ -198,6 +198,12 @@ pub enum Expr<'a> {
     Load(Symbol),
     Store(&'a [(Symbol, Layout<'a>, Expr<'a>)], &'a Expr<'a>),
 
+    Inc(&'a Expr<'a>),
+    Dec {
+        ret: &'a Expr<'a>,
+        others: &'a [Expr<'a>],
+    },
+
     // Functions
     FunctionPointer(Symbol, Layout<'a>),
     RuntimeErrorFunction(&'a str),

@@ -579,4 +579,35 @@ mod test_mono {
     //            },
     //        )
     //    }
+
+    #[test]
+    fn basic_inc_dec() {
+        let arena = Bump::new();
+
+        compiles_to_with_interns(
+            r#"
+                name = "blah"
+                otherName = name
+                otherName
+            "#,
+            |interns| {
+                let home = test_home();
+                let var_name = interns.symbol(home, "name".into());
+                let var_other_name = interns.symbol(home, "otherName".into());
+
+                // TODO expect a mono Expr which has an Inc wrapper around the `name` in `= name` and a Dec wrapper around otherName at the end
+                Store(
+                    arena.alloc([
+                        (var_name, Layout::Builtin(Builtin::Str), Expr::Str("blah")),
+                    ]),
+                    arena.alloc(Store(
+                        arena.alloc([
+                            (var_other_name, Layout::Builtin(Builtin::Str), Expr::Load(var_name)),
+                        ]),
+                        arena.alloc(Load(var_other_name))
+                    ))
+                )
+            },
+        )
+    }
 }
