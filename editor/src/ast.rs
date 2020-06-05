@@ -36,6 +36,46 @@ impl fmt::Debug for NodeId {
     }
 }
 
+/// This is a cache designed to speed up the autocomplete results when you type |>
+/// after an expression. Since |> autocomplete should show functions whose
+/// first argument matches the expression preceding the |> operator, we index
+/// functions which could be autocompleted there based on the Variable of their
+/// first argument.
+///
+/// We also optimize for traversal rather than insertion or deletion, because
+/// the algorithm will have to unify with each individual Variable one by one to
+/// see if they match.
+///
+/// We can avoid a lot of duplicate work by only storing each *root* Variable
+/// once, and then having an associated Vec<Symbol> which goes with each root.
+/// This way, if I have a bunch of functions whose first argument is (let's say)
+/// Str, then if my expression unifies with Str, I can immediately add all of
+/// those functions to the list of autocomplete results, and if unification fails,
+/// I can immediately skip over all those functions.
+///
+/// This will make cache invalidation slightly more involved, because when
+/// a particular arg's Variable changes, we have to go look it up in the cache
+/// by its root (rather than by the Variable itself) and then delete that.
+///
+/// This can be parallelized. We can split up these Vecs into equally sized
+/// slices, filter them based on unification results, and also do interning and
+/// preliminary alphabetical sorting, all on separate threads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionsByFirstArg {
+    /// Functions that are imported in the current module, regardless of
+    /// whether they are exposed.
+    pub imported: Vec<(Variable, Vec<Symbol>)>,
+
+    /// Functions that are *not* imported in the current module, which
+    /// we can suggest as a fallback after the imported ones. (Maybe this
+    /// can be traversed on a background thread, only after displaying the imported list.)
+    pub not_imported: Vec<(Variable, Vec<Symbol>)>,
+
+    /// Functions defined locally in certain scopes. If you have local functions
+    /// in defs in the current scope, those should be available in autocomplete.
+    pub by_scope: MutMap<ScopeId, Vec<(Variable, Vec<Symbol>)>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UndoAction {
     UndoEdit {
