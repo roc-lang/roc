@@ -72,6 +72,7 @@ macro_rules! assert_llvm_evals_to {
             ident_ids: &mut ident_ids,
             pointer_size: ptr_bytes,
             jump_counter: arena.alloc(0),
+            scope: roc_mono::expr::Scope::default()
         };
         let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
@@ -237,6 +238,7 @@ macro_rules! assert_opt_evals_to {
             ident_ids: &mut ident_ids,
             pointer_size: ptr_bytes,
             jump_counter: arena.alloc(0),
+            scope: roc_mono::expr::Scope::default()
         };
         let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 

@@ -256,6 +256,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
         ident_ids: &mut ident_ids,
         pointer_size: ptr_bytes,
         jump_counter: arena.alloc(0),
+        scope: roc_mono::expr::Scope::default(),
     };
     let main_body = roc_mono::expr::Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 

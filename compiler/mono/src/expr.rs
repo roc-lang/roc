@@ -36,6 +36,11 @@ pub struct Procs<'a> {
     builtin: MutSet<Symbol>,
 }
 
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Scope<'a> {
+    non_functions: MutMap<Symbol, Layout<'a>>,
+}
+
 impl<'a> Procs<'a> {
     pub fn insert_named(
         &mut self,
@@ -156,6 +161,7 @@ impl<'a> Procs<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct Env<'a, 'i> {
     pub arena: &'a Bump,
     pub subs: &'a mut Subs,
@@ -164,6 +170,7 @@ pub struct Env<'a, 'i> {
     pub ident_ids: &'i mut IdentIds,
     pub pointer_size: u32,
     pub jump_counter: &'a mut u64,
+    pub scope: Scope<'a>,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -512,7 +519,20 @@ fn from_can<'a>(
                     layout_cache,
                 )
             } else {
-                Expr::Inc(env.arena.alloc(Expr::Load(symbol)))
+                match env.scope.non_functions.get(&symbol) {
+                    Some(_layout) => {
+                        // This was a function, so we may need to increment
+                        // its refcount depending on its layout.
+
+                        // TODO use layout to decide whether to increment refcount.
+                        Expr::Inc(env.arena.alloc(Expr::Load(symbol)))
+                    }
+                    None => {
+                        // Since it wasn't in the map, this must have been a
+                        // function. No need to increment any refcount for it.
+                        Expr::Load(symbol)
+                    }
+                }
             }
         }
         LetRec(defs, ret_expr, _, _) => from_can_defs(env, defs, *ret_expr, layout_cache, procs),
@@ -1113,16 +1133,40 @@ fn from_can_defs<'a>(
     }
     // At this point, it's safe to assume we aren't assigning a Closure to a def.
     // Extract Procs from the def body and the ret expression, and return the result!
-    let ret = from_can(env, ret_expr.value, procs, layout_cache);
-
     if stored.is_empty() {
-        ret
+        from_can(env, ret_expr.value, procs, layout_cache)
     } else {
-        let mut decs = Vec::with_capacity_in(stored.len(), arena);
-        for (symbol, layout, _) in stored.iter() {
-            if layout.is_ref_counted() {
-                decs.push(*symbol)
+        // Do all this in a separate block to avoid a borrow checker conflict
+        // due to having a mutable borrow on env.scope.
+        let decs = {
+            // We only record non-functions in the scope. (Functions are handled by Procs.)
+            let scope = &mut env.scope;
+
+            let mut decs = Vec::with_capacity_in(stored.len(), arena);
+
+            for (symbol, layout, _) in stored.iter() {
+                if layout.is_ref_counted() {
+                    decs.push(*symbol)
+                }
+
+                // This way, when we're computing ret and we go to look up
+                // what to Inc, we have the layout. (The layout is important for
+                // situations like records, where only some fields of the Load-ed
+                // record may be refcounted and need incrementing.)
+                scope.non_functions.insert(*symbol, layout.clone());
             }
+
+            decs
+        };
+
+        let ret = from_can(env, ret_expr.value, procs, layout_cache);
+        let scope = &mut env.scope;
+
+        // Now that ret has been computed (with the benefit of our additions
+        // to scope), remove what we'd just added to scope; they should no
+        // longer be needed, and reclaiming that memory can prevent future allocations.
+        for (symbol, _, _) in stored.iter() {
+            scope.non_functions.remove(symbol);
         }
 
         Expr::Store(

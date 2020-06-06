@@ -61,6 +61,7 @@ mod test_mono {
             ident_ids: &mut ident_ids,
             pointer_size,
             jump_counter: arena.alloc(0),
+            scope: roc_mono::expr::Scope::default(),
         };
         let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
@@ -608,10 +609,10 @@ mod test_mono {
                             )]),
                             arena.alloc(Dec {
                                 ret: arena.alloc(Inc(arena.alloc(Load(var_other_name)))),
-                                others: arena.alloc([var_other_name])
+                                others: arena.alloc([var_other_name]),
                             }),
                         )),
-                        others: arena.alloc([var_name])
+                        others: arena.alloc([var_name]),
                     }),
                 )
 
