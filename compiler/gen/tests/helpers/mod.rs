@@ -245,16 +245,19 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     // since we aren't using modules here.
     let builtin_defs = roc_can::builtins::builtin_defs(&var_store);
 
-    for def in builtin_defs {
-        with_builtins = Expr::LetNonRec(
-            Box::new(def),
-            Box::new(Located {
-                region: Region::zero(),
-                value: with_builtins,
-            }),
-            var_store.fresh(),
-            SendMap::default(),
-        );
+    for (symbol, def) in builtin_defs {
+        if output.references.lookups.contains(&symbol) || output.references.calls.contains(&symbol)
+        {
+            with_builtins = Expr::LetNonRec(
+                Box::new(def),
+                Box::new(Located {
+                    region: Region::zero(),
+                    value: with_builtins,
+                }),
+                var_store.fresh(),
+                SendMap::default(),
+            );
+        }
     }
 
     let loc_expr = Located {
