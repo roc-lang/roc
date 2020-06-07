@@ -1,6 +1,6 @@
 use crate::def::Def;
 use crate::expr::{Expr, Recursive};
-use roc_collections::all::SendMap;
+use roc_collections::all::{MutMap, SendMap};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
@@ -25,17 +25,17 @@ use roc_types::subs::{VarStore, Variable};
 /// delegates to the compiler-internal List.getUnsafe function to do the actual
 /// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
 /// which works fine because it doesn't involve any open tag unions.
-pub fn builtin_defs(var_store: &VarStore) -> Vec<Def> {
-    vec![
-        list_len(var_store),
-        list_get(var_store),
-        list_first(var_store),
-        int_div(var_store),
-        int_abs(var_store),
-        int_rem(var_store),
-        int_is_odd(var_store),
-        int_is_even(var_store),
-    ]
+pub fn builtin_defs(var_store: &VarStore) -> MutMap<Symbol, Def> {
+    mut_map! {
+        Symbol::LIST_LEN => list_len(var_store),
+        Symbol::LIST_GET => list_get(var_store),
+        Symbol::LIST_FIRST => list_first(var_store),
+        Symbol::INT_DIV => int_div(var_store),
+        Symbol::INT_ABS => int_abs(var_store),
+        Symbol::INT_REM => int_rem(var_store),
+        Symbol::INT_IS_ODD => int_is_odd(var_store),
+        Symbol::INT_IS_EVEN => int_is_even(var_store)
+    }
 }
 
 /// Int.isOdd : Int -> Bool

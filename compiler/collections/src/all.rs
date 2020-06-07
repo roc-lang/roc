@@ -134,3 +134,21 @@ fn int_to_ordinal(number: usize) -> std::string::String {
 
     format!("{}{}", number, ending)
 }
+
+#[macro_export]
+macro_rules! mut_map {
+    (@single $($x:tt)*) => (());
+    (@count $($rest:expr),*) => (<[()]>::len(&[$(mut_map!(@single $rest)),*]));
+
+    ($($key:expr => $value:expr,)+) => { mut_map!($($key => $value),+) };
+    ($($key:expr => $value:expr),*) => {
+        {
+            let _cap = mut_map!(@count $($key),*);
+            let mut _map = ::std::collections::HashMap::with_capacity_and_hasher(_cap, $crate::all::default_hasher());
+            $(
+                let _ = _map.insert($key, $value);
+            )*
+            _map
+        }
+    };
+}
