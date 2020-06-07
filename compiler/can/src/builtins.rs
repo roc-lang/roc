@@ -1,7 +1,6 @@
 use crate::def::Def;
-use crate::expr::Expr;
-use crate::expr::Recursive;
-use roc_collections::all::SendMap;
+use crate::expr::{Expr, Recursive};
+use roc_collections::all::{MutMap, SendMap};
 use roc_module::ident::TagName;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
@@ -25,22 +24,22 @@ use roc_types::subs::{VarStore, Variable};
 /// delegates to the compiler-internal List.getUnsafe function to do the actual
 /// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
 /// which works fine because it doesn't involve any open tag unions.
-pub fn builtin_defs(var_store: &VarStore) -> Vec<Def> {
-    vec![
-        list_get(var_store),
-        list_first(var_store),
-        int_div(var_store),
-        int_abs(var_store),
-        int_rem(var_store),
-        int_is_odd(var_store),
-        int_is_even(var_store),
-        int_is_zero(var_store),
-        int_is_positive(var_store),
-        int_is_negative(var_store),
-        float_is_positive(var_store),
-        float_is_negative(var_store),
-        float_is_zero(var_store),
-    ]
+pub fn builtin_defs(var_store: &VarStore) -> MutMap<Symbol, Def> {
+    mut_map! {
+        Symbol::LIST_GET => list_get(var_store),
+        Symbol::LIST_FIRST => list_first(var_store),
+        Symbol::INT_DIV => int_div(var_store),
+        Symbol::INT_ABS => int_abs(var_store),
+        Symbol::INT_REM => int_rem(var_store),
+        Symbol::INT_IS_ODD => int_is_odd(var_store),
+        Symbol::INT_IS_EVEN => int_is_even(var_store),
+        Symbol::INT_IS_ZERO => int_is_zero(var_store),
+        Symbol::INT_IS_POSITIVE => int_is_positive(var_store),
+        Symbol::INT_IS_NEGATIVE => int_is_negative(var_store),
+        Symbol::FLOAT_IS_POSITIVE => float_is_positive(var_store),
+        Symbol::FLOAT_IS_NEGATIVE => float_is_negative(var_store),
+        Symbol::FLOAT_IS_ZERO => float_is_zero(var_store),
+    }
 }
 
 /// Float.isZero : Float -> Bool
