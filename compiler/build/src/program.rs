@@ -21,6 +21,7 @@ use inkwell::targets::{
 use std::path::{Path, PathBuf};
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
 
+// TODO how should imported modules factor into this? What if those use builtins too?
 // TODO this should probably use more helper functions
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
 #[allow(clippy::cognitive_complexity)]
@@ -110,7 +111,9 @@ pub fn build(
                     }
                 }
             }
-            InvalidCycle(_, _) => {}
+            InvalidCycle(_, _) | Builtin(_) => {
+                // These can never contain main.
+            }
         }
     }
 
@@ -181,7 +184,7 @@ pub fn build(
             use roc_can::pattern::Pattern::*;
 
             match decl {
-                Declare(def) => match def.loc_pattern.value {
+                Declare(def) | Builtin(def) => match def.loc_pattern.value {
                     Identifier(symbol) => {
                         match def.loc_expr.value {
                             Closure(annotation, _, _, loc_args, boxed_body) => {

@@ -19,7 +19,15 @@ mod gen_module {
     use inkwell::passes::PassManager;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
-    use roc_can::{canonicalize_module_defs, operator};
+    use roc_can::{
+        builtins::builtin_defs,
+        def::Declaration,
+        expected::Expected,
+        expr::{canonicalize_expr, Env},
+        module::canonicalize_module_defs,
+        operator,
+        scope::Scope,
+    };
     use roc_collections::all::{ImMap, MutMap, MutSet};
     use roc_gen::llvm::build::{build_proc, build_proc_header};
     use roc_gen::llvm::convert::basic_type_from_layout;
@@ -30,7 +38,8 @@ mod gen_module {
     use roc_parse::blankspace::space0_before;
     use roc_parse::parser::{self, loc, Parser};
     use roc_region::all::{Located, Region};
-    use roc_types::subs::{Content, Subs, VarStore, Variable};
+    use roc_types::subs::{Subs, VarStore};
+    use roc_types::types::Type;
 
     static TEST_MODULE_NAME: &str = "Test";
 
@@ -72,7 +81,10 @@ mod gen_module {
             region: Region::zero(),
             value: main_pattern,
         };
-        let loc_def = ast::Def::Body(&loc_main_pattern, &loc_expr);
+        let loc_def = Located {
+            region: Region::zero(),
+            value: ast::Def::Body(&loc_main_pattern, &loc_expr),
+        };
         let loc_defs = bumpalo::vec![in arena; loc_def];
         let module_ids = ModuleIds::default();
         let home: ModuleId = module_ids.get_or_insert(&TEST_MODULE_NAME.into());
@@ -85,11 +97,11 @@ mod gen_module {
         exposed_ident_ids.add(main_fn_name.into());
 
         // Canonicalize the module.
-        let module_output = canonicalize_module_defs(
+        let mut module_output = canonicalize_module_defs(
             arena,
             loc_defs,
             home,
-            module_ids,
+            &module_ids,
             exposed_ident_ids,
             dep_idents,
             exposed_imports,
@@ -98,9 +110,26 @@ mod gen_module {
         )
         .expect("Error canonicalizing test module");
 
-        // TODO add the builtins as separate (unexposed) Declarations to the module
+        // Add the builtins as Declarations to the module.
+        let module_output = {
+            let builtins = builtin_defs(&var_store);
+            let decls = &mut module_output.declarations;
+            let references = module_output.references;
 
-        // TODO type-check the module
+            decls.reserve(builtins.len());
+
+            for (symbol, builtin_def) in builtins.into_iter() {
+                // Only add decls for builtins that were actually referenced.
+                if references.contains(&symbol) {
+                    decls.push(Declaration::Builtin(builtin_def));
+                }
+            }
+
+            // Release the borrows on declarations and references
+            module_output
+        };
+
+        // TODO type-check the module, making sure to use builtin types from std.rs/unique.rs
         // TODO monomorphize the module
         // TODO code gen the module
 
@@ -118,24 +147,6 @@ mod gen_module {
             Region::zero(),
             &loc_expr.value,
         );
-
-        let mut with_builtins = loc_expr.value;
-
-        // Add builtin defs (e.g. List.get) directly to the canonical Expr,
-        // since we aren't using modules here.
-        let builtin_defs = roc_can::builtins::builtin_defs(&var_store);
-
-        for def in builtin_defs {
-            with_builtins = Expr::LetNonRec(
-                Box::new(def),
-                Box::new(Located {
-                    region: Region::zero(),
-                    value: with_builtins,
-                }),
-                var_store.fresh(),
-                SendMap::default(),
-            );
-        }
 
         let loc_expr = Located {
             region: loc_expr.region,

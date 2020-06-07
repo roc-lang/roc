@@ -91,6 +91,7 @@ pub enum Declaration {
         Vec<Located<Ident>>,
         Vec<(Region /* pattern */, Region /* expr */)>,
     ),
+    Builtin(Def),
 }
 
 impl Declaration {
@@ -100,6 +101,7 @@ impl Declaration {
             Declare(_) => 1,
             DeclareRec(defs) => defs.len(),
             InvalidCycle(_, _) => 0,
+            Builtin(_) => 0,
         }
     }
 }
@@ -1248,6 +1250,10 @@ fn decl_to_let(
         }
         Declaration::InvalidCycle(symbols, regions) => {
             Expr::RuntimeError(RuntimeError::CircularDef(symbols, regions))
+        }
+        Declaration::Builtin(_) => {
+            // Builtins should only be added to top-level decls, not to let-exprs!
+            unreachable!()
         }
     }
 }

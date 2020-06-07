@@ -67,6 +67,8 @@ impl<'a> Procs<'a> {
 
         self.add_pending_specialization(name, layout.clone(), pending);
 
+        debug_assert!(!self.partial_procs.contains_key(&name), "Procs was told to insert a value for key {:?}, but there was already an entry for that key! Procs should never attempt to insert duplicates.", name);
+
         // a named closure
         self.partial_procs.insert(
             name,

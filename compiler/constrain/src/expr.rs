@@ -880,7 +880,7 @@ pub fn constrain_decls(
     for decl in decls.iter().rev() {
         // NOTE: rigids are empty because they are not shared between top-level definitions
         match decl {
-            Declaration::Declare(def) => {
+            Declaration::Declare(def) | Declaration::Builtin(def) => {
                 constraint = exists_with_aliases(
                     aliases.clone(),
                     Vec::new(),
