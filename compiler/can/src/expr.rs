@@ -450,7 +450,7 @@ pub fn canonicalize_expr<'a>(
                 }
             }
 
-            env.register_closure(symbol.clone(), output.references.clone());
+            env.register_closure(symbol, output.references.clone());
 
             (
                 Closure(
@@ -818,7 +818,7 @@ where
                     answer = answer.union(other_refs);
                 }
 
-                answer.lookups.insert(local.clone());
+                answer.lookups.insert(*local);
             }
 
             for call in refs.calls.iter() {
@@ -828,7 +828,7 @@ where
                     answer = answer.union(other_refs);
                 }
 
-                answer.calls.insert(call.clone());
+                answer.calls.insert(*call);
             }
 
             answer
@@ -860,7 +860,7 @@ where
                     answer = answer.union(other_refs);
                 }
 
-                answer.lookups.insert(closed_over_local.clone());
+                answer.lookups.insert(*closed_over_local);
             }
 
             for call in references.calls.iter() {

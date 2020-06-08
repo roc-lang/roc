@@ -6,10 +6,12 @@ pub mod eval;
 use self::bumpalo::Bump;
 use roc_builtins::unique::uniq_stdlib;
 use roc_can::constraint::Constraint;
+use roc_can::def::Def;
 use roc_can::env::Env;
 use roc_can::expected::Expected;
 use roc_can::expr::{canonicalize_expr, Expr, Output};
 use roc_can::operator;
+use roc_can::pattern::Pattern;
 use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, ImSet, MutMap, SendMap, SendSet};
 use roc_constrain::expr::constrain_expr;
@@ -245,16 +247,31 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     // since we aren't using modules here.
     let builtin_defs = roc_can::builtins::builtin_defs(&var_store);
 
-    for def in builtin_defs {
-        with_builtins = Expr::LetNonRec(
-            Box::new(def),
-            Box::new(Located {
-                region: Region::zero(),
-                value: with_builtins,
-            }),
-            var_store.fresh(),
-            SendMap::default(),
-        );
+    for (symbol, expr) in builtin_defs {
+        if output.references.lookups.contains(&symbol) || output.references.calls.contains(&symbol)
+        {
+            with_builtins = Expr::LetNonRec(
+                Box::new(Def {
+                    loc_pattern: Located {
+                        region: Region::zero(),
+                        value: Pattern::Identifier(symbol),
+                    },
+                    loc_expr: Located {
+                        region: Region::zero(),
+                        value: expr,
+                    },
+                    expr_var: var_store.fresh(),
+                    pattern_vars: SendMap::default(),
+                    annotation: None,
+                }),
+                Box::new(Located {
+                    region: Region::zero(),
+                    value: with_builtins,
+                }),
+                var_store.fresh(),
+                SendMap::default(),
+            );
+        }
     }
 
     let loc_expr = Located {

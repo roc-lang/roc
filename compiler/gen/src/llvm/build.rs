@@ -87,11 +87,25 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         LLVM_FABS_F64,
         f64_type.fn_type(&[f64_type.into()], false),
     );
+
+    add_intrinsic(
+        module,
+        LLVM_SIN_F64,
+        f64_type.fn_type(&[f64_type.into()], false),
+    );
+
+    add_intrinsic(
+        module,
+        LLVM_COS_F64,
+        f64_type.fn_type(&[f64_type.into()], false),
+    );
 }
 
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
 static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
 static LLVM_FABS_F64: &str = "llvm.fabs.f64";
+static LLVM_SIN_F64: &str = "llvm.sin.f64";
+static LLVM_COS_F64: &str = "llvm.cos.f64";
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -1193,6 +1207,8 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(bool_val)
         }
+        Symbol::FLOAT_SIN => call_intrinsic(LLVM_SIN_F64, env, args),
+        Symbol::FLOAT_COS => call_intrinsic(LLVM_COS_F64, env, args),
         Symbol::NUM_MUL => {
             debug_assert!(args.len() == 2);
 
