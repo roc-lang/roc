@@ -47,7 +47,7 @@ fn headers_from_annotation_help(
 ) -> bool {
     match pattern {
         Identifier(symbol) => {
-            headers.insert(symbol.clone(), annotation.clone());
+            headers.insert(*symbol, annotation.clone());
             true
         }
         Underscore
@@ -64,7 +64,7 @@ fn headers_from_annotation_help(
                     // NOTE ignores the .guard field.
                     if let Some(field_type) = fields.get(&destruct.value.label) {
                         headers.insert(
-                            destruct.value.symbol.clone(),
+                            destruct.value.symbol,
                             Located::at(annotation.region, field_type.clone()),
                         );
                     } else {
@@ -123,7 +123,7 @@ pub fn constrain_pattern(
 
         Identifier(symbol) => {
             state.headers.insert(
-                symbol.clone(),
+                *symbol,
                 Located {
                     region,
                     value: expected.get_type(),
@@ -197,7 +197,7 @@ pub fn constrain_pattern(
                 if !state.headers.contains_key(&symbol) {
                     state
                         .headers
-                        .insert(symbol.clone(), Located::at(region, pat_type.clone()));
+                        .insert(*symbol, Located::at(region, pat_type.clone()));
                 }
 
                 field_types.insert(label.clone(), pat_type.clone());

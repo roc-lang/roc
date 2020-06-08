@@ -24,3 +24,6 @@ pub mod pattern;
 pub mod procedure;
 pub mod scope;
 pub mod string;
+
+#[macro_use]
+extern crate roc_collections;
