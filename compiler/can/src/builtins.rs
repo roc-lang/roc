@@ -1,7 +1,5 @@
-use crate::def::Def;
-use crate::expr::Expr;
-use crate::expr::Recursive;
-use roc_collections::all::SendMap;
+use crate::expr::{Expr, Recursive};
+use roc_collections::all::MutMap;
 use roc_module::ident::TagName;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
@@ -25,26 +23,26 @@ use roc_types::subs::{VarStore, Variable};
 /// delegates to the compiler-internal List.getUnsafe function to do the actual
 /// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
 /// which works fine because it doesn't involve any open tag unions.
-pub fn builtin_defs(var_store: &VarStore) -> Vec<Def> {
-    vec![
-        list_get(var_store),
-        list_first(var_store),
-        int_div(var_store),
-        int_abs(var_store),
-        int_rem(var_store),
-        int_is_odd(var_store),
-        int_is_even(var_store),
-        int_is_zero(var_store),
-        int_is_positive(var_store),
-        int_is_negative(var_store),
-        float_is_positive(var_store),
-        float_is_negative(var_store),
-        float_is_zero(var_store),
-    ]
+pub fn builtin_defs(var_store: &VarStore) -> MutMap<Symbol, Expr> {
+    mut_map! {
+        Symbol::LIST_GET => list_get(var_store),
+        Symbol::LIST_FIRST => list_first(var_store),
+        Symbol::INT_DIV => int_div(var_store),
+        Symbol::INT_ABS => int_abs(var_store),
+        Symbol::INT_REM => int_rem(var_store),
+        Symbol::INT_IS_ODD => int_is_odd(var_store),
+        Symbol::INT_IS_EVEN => int_is_even(var_store),
+        Symbol::INT_IS_ZERO => int_is_zero(var_store),
+        Symbol::INT_IS_POSITIVE => int_is_positive(var_store),
+        Symbol::INT_IS_NEGATIVE => int_is_negative(var_store),
+        Symbol::FLOAT_IS_POSITIVE => float_is_positive(var_store),
+        Symbol::FLOAT_IS_NEGATIVE => float_is_negative(var_store),
+        Symbol::FLOAT_IS_ZERO => float_is_zero(var_store),
+    }
 }
 
 /// Float.isZero : Float -> Bool
-fn float_is_zero(var_store: &VarStore) -> Def {
+fn float_is_zero(var_store: &VarStore) -> Expr {
     use crate::expr::Expr::*;
 
     defn(
@@ -63,7 +61,7 @@ fn float_is_zero(var_store: &VarStore) -> Def {
 }
 
 /// Float.isNegative : Float -> Bool
-fn float_is_negative(var_store: &VarStore) -> Def {
+fn float_is_negative(var_store: &VarStore) -> Expr {
     use crate::expr::Expr::*;
 
     defn(
@@ -82,7 +80,7 @@ fn float_is_negative(var_store: &VarStore) -> Def {
 }
 
 /// Float.isPositive : Float -> Bool
-fn float_is_positive(var_store: &VarStore) -> Def {
+fn float_is_positive(var_store: &VarStore) -> Expr {
     use crate::expr::Expr::*;
 
     defn(
@@ -101,7 +99,7 @@ fn float_is_positive(var_store: &VarStore) -> Def {
 }
 
 /// Int.isNegative : Int -> Bool
-fn int_is_negative(var_store: &VarStore) -> Def {
+fn int_is_negative(var_store: &VarStore) -> Expr {
     use crate::expr::Expr::*;
 
     defn(
@@ -117,7 +115,7 @@ fn int_is_negative(var_store: &VarStore) -> Def {
 }
 
 /// Int.isPositive : Int -> Bool
-fn int_is_positive(var_store: &VarStore) -> Def {
+fn int_is_positive(var_store: &VarStore) -> Expr {
     use crate::expr::Expr::*;
 
     defn(
@@ -133,7 +131,7 @@ fn int_is_positive(var_store: &VarStore) -> Def {
 }
 
 /// Int.isZero : Int -> Bool
-fn int_is_zero(var_store: &VarStore) -> Def {
+fn int_is_zero(var_store: &VarStore) -> Expr {
     use crate::expr::Expr::*;
 
     defn(
@@ -149,7 +147,7 @@ fn int_is_zero(var_store: &VarStore) -> Def {
 }
 
 /// Int.isOdd : Int -> Bool
-fn int_is_odd(var_store: &VarStore) -> Def {
+fn int_is_odd(var_store: &VarStore) -> Expr {
     use crate::expr::Expr::*;
 
     defn(
@@ -172,7 +170,7 @@ fn int_is_odd(var_store: &VarStore) -> Def {
 }
 
 /// Int.isEven : Int -> Bool
-fn int_is_even(var_store: &VarStore) -> Def {
+fn int_is_even(var_store: &VarStore) -> Expr {
     use crate::expr::Expr::*;
 
     defn(
@@ -195,7 +193,7 @@ fn int_is_even(var_store: &VarStore) -> Def {
 }
 
 /// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
-fn list_get(var_store: &VarStore) -> Def {
+fn list_get(var_store: &VarStore) -> Expr {
     use crate::expr::Expr::*;
 
     defn(
@@ -266,7 +264,7 @@ fn list_get(var_store: &VarStore) -> Def {
 }
 
 /// Int.rem : Int, Int -> Int
-fn int_rem(var_store: &VarStore) -> Def {
+fn int_rem(var_store: &VarStore) -> Expr {
     use crate::expr::Expr::*;
 
     defn(
@@ -313,7 +311,7 @@ fn int_rem(var_store: &VarStore) -> Def {
 }
 
 /// Int.abs : Int -> Int
-fn int_abs(var_store: &VarStore) -> Def {
+fn int_abs(var_store: &VarStore) -> Expr {
     use crate::expr::Expr::*;
 
     defn(
@@ -350,7 +348,7 @@ fn int_abs(var_store: &VarStore) -> Def {
 }
 
 /// Int.div : Int, Int -> Result Int [ DivByZero ]*
-fn int_div(var_store: &VarStore) -> Def {
+fn int_div(var_store: &VarStore) -> Expr {
     use crate::expr::Expr::*;
 
     defn(
@@ -409,7 +407,7 @@ fn int_div(var_store: &VarStore) -> Def {
 }
 
 /// List.first : List elem -> Result elem [ ListWasEmpty ]*
-fn list_first(var_store: &VarStore) -> Def {
+fn list_first(var_store: &VarStore) -> Expr {
     use crate::expr::Expr::*;
 
     defn(
@@ -501,7 +499,7 @@ fn call(symbol: Symbol, args: Vec<Expr>, var_store: &VarStore) -> Expr {
 }
 
 #[inline(always)]
-fn defn(fn_name: Symbol, args: Vec<Symbol>, var_store: &VarStore, body: Expr) -> Def {
+fn defn(fn_name: Symbol, args: Vec<Symbol>, var_store: &VarStore, body: Expr) -> Expr {
     use crate::expr::Expr::*;
     use crate::pattern::Pattern::*;
 
@@ -510,19 +508,11 @@ fn defn(fn_name: Symbol, args: Vec<Symbol>, var_store: &VarStore, body: Expr) ->
         .map(|symbol| (var_store.fresh(), no_region(Identifier(symbol))))
         .collect();
 
-    let expr = Closure(
+    Closure(
         var_store.fresh(),
         fn_name,
         Recursive::NotRecursive,
         closure_args,
         Box::new((no_region(body), var_store.fresh())),
-    );
-
-    Def {
-        loc_pattern: no_region(Identifier(fn_name)),
-        loc_expr: no_region(expr),
-        expr_var: var_store.fresh(),
-        pattern_vars: SendMap::default(),
-        annotation: None,
-    }
+    )
 }

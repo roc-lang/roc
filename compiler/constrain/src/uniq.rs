@@ -148,7 +148,7 @@ fn constrain_pattern(
     match &pattern.value {
         Identifier(symbol) => {
             state.headers.insert(
-                symbol.clone(),
+                *symbol,
                 Located {
                     region: pattern.region,
                     value: expected.get_type(),
@@ -223,10 +223,9 @@ fn constrain_pattern(
                 let expected = PExpected::NoExpectation(pat_type.clone());
 
                 if !state.headers.contains_key(&symbol) {
-                    state.headers.insert(
-                        symbol.clone(),
-                        Located::at(pattern.region, pat_type.clone()),
-                    );
+                    state
+                        .headers
+                        .insert(*symbol, Located::at(pattern.region, pat_type.clone()));
                 }
 
                 field_types.insert(label.clone(), pat_type.clone());
@@ -1391,7 +1390,7 @@ fn constrain_var(
             Lookup(symbol_for_lookup, expected, region)
         }
         Some(Usage::Access(_, _, _)) | Some(Usage::Update(_, _, _)) => {
-            applied_usage_constraint.insert(symbol_for_lookup.clone());
+            applied_usage_constraint.insert(symbol_for_lookup);
 
             let mut variables = Vec::new();
             let (free, rest, inner_type) =

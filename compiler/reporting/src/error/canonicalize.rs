@@ -280,7 +280,7 @@ fn pretty_runtime_error<'b>(
             if idents.is_empty() {
                 alloc
                     .reflow("The ")
-                    .append(alloc.ident(first.value.clone()))
+                    .append(alloc.ident(first.value))
                     .append(alloc.reflow(
                         " value is defined directly in terms of itself, causing an infinite loop.",
                     ))
