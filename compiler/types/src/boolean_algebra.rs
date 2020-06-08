@@ -74,7 +74,7 @@ impl Bool {
 
         for atom in &self.1 {
             if let Variable(v) = atom {
-                result.insert(v.clone());
+                result.insert(*v);
             }
         }
 
@@ -152,7 +152,7 @@ impl Bool {
             if let Variable(v) = atom {
                 new_bound.insert(Variable(f(*v)));
             } else {
-                new_bound.insert(atom.clone());
+                new_bound.insert(*atom);
             }
         }
         Bool(new_free, new_bound)

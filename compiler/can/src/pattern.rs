@@ -57,7 +57,7 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
 
     match pattern {
         Identifier(symbol) => {
-            symbols.push(symbol.clone());
+            symbols.push(*symbol);
         }
 
         AppliedTag { arguments, .. } => {
@@ -67,7 +67,7 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
         }
         RecordDestructure { destructs, .. } => {
             for destruct in destructs {
-                symbols.push(destruct.value.symbol.clone());
+                symbols.push(destruct.value.symbol);
             }
         }
 

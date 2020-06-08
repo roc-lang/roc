@@ -333,7 +333,7 @@ fn solve(
                         let var = type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
 
                         local_def_vars.insert(
-                            symbol.clone(),
+                            *symbol,
                             Located {
                                 value: var,
                                 region: loc_type.region,
@@ -344,7 +344,7 @@ fn solve(
                     let mut new_env = env.clone();
                     for (symbol, loc_var) in local_def_vars.iter() {
                         if !new_env.vars_by_symbol.contains_key(&symbol) {
-                            new_env.vars_by_symbol.insert(symbol.clone(), loc_var.value);
+                            new_env.vars_by_symbol.insert(*symbol, loc_var.value);
                         }
                     }
 
@@ -398,7 +398,7 @@ fn solve(
                                 type_to_var(subs, next_rank, next_pools, cached_aliases, &def_type);
 
                             local_def_vars.insert(
-                                symbol.clone(),
+                                *symbol,
                                 Located {
                                     value: var,
                                     region: loc_type.region,
@@ -469,7 +469,7 @@ fn solve(
 
                         for (symbol, loc_var) in local_def_vars.iter() {
                             if !new_env.vars_by_symbol.contains_key(&symbol) {
-                                new_env.vars_by_symbol.insert(symbol.clone(), loc_var.value);
+                                new_env.vars_by_symbol.insert(*symbol, loc_var.value);
                             }
                         }
 
