@@ -373,6 +373,24 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         SolvedType::Func(vec![float_type()], Box::new(float_type())),
     );
 
+    // sin : Float -> Float
+    add_type(
+        Symbol::FLOAT_SIN,
+        SolvedType::Func(vec![float_type()], Box::new(float_type())),
+    );
+
+    // cos : Float -> Float
+    add_type(
+        Symbol::FLOAT_COS,
+        SolvedType::Func(vec![float_type()], Box::new(float_type())),
+    );
+
+    // tan : Float -> Float
+    add_type(
+        Symbol::FLOAT_TAN,
+        SolvedType::Func(vec![float_type()], Box::new(float_type())),
+    );
+
     // highest : Float
     add_type(Symbol::FLOAT_HIGHEST, float_type());
 

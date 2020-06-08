@@ -316,6 +316,24 @@ mod gen_builtins {
     }
 
     #[test]
+    fn sin() {
+        assert_evals_to!("Float.sin 0", 0.0, f64);
+        assert_evals_to!("Float.sin 1.41421356237", 0.9877659459922529, f64);
+    }
+
+    #[test]
+    fn cos() {
+        assert_evals_to!("Float.cos 0", 1.0, f64);
+        assert_evals_to!("Float.cos 3.14159265359", -1.0, f64);
+    }
+
+    #[test]
+    fn tan() {
+        assert_evals_to!("Float.tan 0", 0.0, f64);
+        assert_evals_to!("Float.tan 1", 1.557407724654902, f64);
+    }
+
+    #[test]
     fn lt_i64() {
         assert_evals_to!("1 < 2", true, bool);
         assert_evals_to!("1 < 1", false, bool);
