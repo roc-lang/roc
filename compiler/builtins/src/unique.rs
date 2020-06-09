@@ -593,6 +593,28 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
+    add_type(Symbol::LIST_SINGLE, {
+        let u = UVAR1;
+        let v = UVAR2;
+        let star = UVAR4;
+
+        let a = TVAR1;
+
+        unique_function(
+            vec![SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![disjunction(u, vec![v]), flex(a)],
+            )],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    boolean(star),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                ],
+            ),
+        )
+    });
+
     // push : Attr (w | u | v) (List (Attr u a))
     //      , Attr (u | v) a
     //     -> Attr * (List (Attr u a))

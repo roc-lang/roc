@@ -691,6 +691,7 @@ define_builtins! {
         14 LIST_CONCAT: "concat"
         15 LIST_FIRST: "first"
         16 LIST_FIRST_ARG: "first#list"
+        17 LIST_SINGLE: "single"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

@@ -489,6 +489,17 @@ mod gen_builtins {
         );
     }
 
+    // #[test]
+    // fn list_push() {
+    //     assert_evals_to!("List.push [] 1", &[1], &'static [i64]);
+    // }
+
+    #[test]
+    fn list_single() {
+        assert_evals_to!("List.single 1", &[1], &'static [i64]);
+        assert_evals_to!("List.single 5.6", &[5.6], &'static [f64]);
+    }
+
     #[test]
     fn empty_list_len() {
         with_larger_debug_stack(|| {

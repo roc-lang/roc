@@ -507,6 +507,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // single : a -> List a
+    add_type(
+        Symbol::LIST_SINGLE,
+        SolvedType::Func(vec![flex(TVAR1)], Box::new(list_type(flex(TVAR1)))),
+    );
+
     // len : List * -> Int
     add_type(
         Symbol::LIST_LEN,

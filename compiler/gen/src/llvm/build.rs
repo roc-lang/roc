@@ -435,7 +435,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             if elems.is_empty() {
                 let struct_type = collection(ctx, env.ptr_bytes);
 
-                // THe pointer should be null (aka zero) and the length should be zero,
+                // The pointer should be null (aka zero) and the length should be zero,
                 // so the whole struct should be a const_zero
                 BasicValueEnum::StructValue(struct_type.const_zero())
             } else {
@@ -1402,6 +1402,74 @@ fn call_with_args<'a, 'ctx, 'env>(
         Symbol::FLOAT_ROUND => call_intrinsic(LLVM_LROUND_I64_F64, env, args),
         Symbol::LIST_SET => list_set(parent, args, env, InPlace::Clone),
         Symbol::LIST_SET_IN_PLACE => list_set(parent, args, env, InPlace::InPlace),
+        Symbol::LIST_SINGLE => {
+            // List.single : a -> List a
+            debug_assert!(args.len() == 1);
+
+            let (elem, elem_layout) = args[0];
+
+            let builder = env.builder;
+            let ctx = env.context;
+
+            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+            let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+
+            let ptr = {
+                let bytes_len = elem_bytes;
+                let len_type = env.ptr_int();
+                let len = len_type.const_int(bytes_len, false);
+
+                env.builder
+                    .build_array_malloc(elem_type, len, "create_list_ptr")
+                    .unwrap()
+
+                // TODO check if malloc returned null; if so, runtime error for OOM!
+            };
+
+            // Put the element into the list
+            let elem_ptr = unsafe {
+                builder.build_in_bounds_gep(
+                    ptr,
+                    &[ctx.i32_type().const_int(
+                        // 0 as in 0 index of our new list
+                        0 as u64, false,
+                    )],
+                    "index",
+                )
+            };
+
+            builder.build_store(elem_ptr, elem);
+
+            let ptr_bytes = env.ptr_bytes;
+            let int_type = ptr_int(ctx, ptr_bytes);
+            let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+            let struct_type = collection(ctx, ptr_bytes);
+            let len = BasicValueEnum::IntValue(env.ptr_int().const_int(1, false));
+
+            let mut struct_val;
+
+            // Store the pointer
+            struct_val = builder
+                .build_insert_value(
+                    struct_type.get_undef(),
+                    ptr_as_int,
+                    Builtin::WRAPPER_PTR,
+                    "insert_ptr",
+                )
+                .unwrap();
+
+            // Store the length
+            struct_val = builder
+                .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
+                .unwrap();
+
+            //
+            builder.build_bitcast(
+                struct_val.into_struct_value(),
+                collection(ctx, ptr_bytes),
+                "cast_collection",
+            )
+        }
         Symbol::INT_DIV_UNSAFE => {
             debug_assert!(args.len() == 2);
 
