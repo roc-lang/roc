@@ -392,6 +392,7 @@ fn gen(
         ident_ids: &mut ident_ids,
         pointer_size: ptr_bytes,
         jump_counter: arena.alloc(0),
+        scope: roc_mono::expr::Scope::default()
     };
 
     // Add modules' decls to Procs

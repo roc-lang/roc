@@ -50,6 +50,7 @@ mod test_opt {
             ident_ids: &mut ident_ids,
             pointer_size,
             jump_counter: arena.alloc(0),
+            scope: roc_mono::expr::Scope::default(),
         };
         let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
@@ -220,6 +221,7 @@ mod test_opt {
             ident_ids: &mut ident_ids,
             pointer_size,
             jump_counter: arena.alloc(0),
+            scope: roc_mono::expr::Scope::default(),
         };
         let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
