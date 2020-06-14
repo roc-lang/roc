@@ -23,7 +23,7 @@ use roc_types::subs::{VarStore, Variable};
 /// delegates to the compiler-internal List.getUnsafe function to do the actual
 /// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
 /// which works fine because it doesn't involve any open tag unions.
-pub fn builtin_defs(var_store: &VarStore) -> MutMap<Symbol, Expr> {
+pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Expr> {
     mut_map! {
         Symbol::LIST_GET => list_get(var_store),
         Symbol::LIST_FIRST => list_first(var_store),
@@ -43,341 +43,406 @@ pub fn builtin_defs(var_store: &VarStore) -> MutMap<Symbol, Expr> {
 }
 
 /// Float.tan : Float -> Float
-fn float_tan(var_store: &VarStore) -> Expr {
+fn float_tan(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
+
+    let body = call(
+        Symbol::FLOAT_DIV,
+        vec![
+            call(
+                Symbol::FLOAT_SIN,
+                vec![Var(Symbol::FLOAT_TAN_ARG)],
+                var_store,
+            ),
+            call(
+                Symbol::FLOAT_COS,
+                vec![Var(Symbol::FLOAT_TAN_ARG)],
+                var_store,
+            ),
+        ],
+        var_store,
+    );
 
     defn(
         Symbol::FLOAT_TAN,
         vec![Symbol::FLOAT_TAN_ARG],
         var_store,
-        call(
-            Symbol::FLOAT_DIV,
-            vec![
-                call(
-                    Symbol::FLOAT_SIN,
-                    vec![Var(Symbol::FLOAT_TAN_ARG)],
-                    var_store,
-                ),
-                call(
-                    Symbol::FLOAT_COS,
-                    vec![Var(Symbol::FLOAT_TAN_ARG)],
-                    var_store,
-                ),
-            ],
-            var_store,
-        ),
+        body,
     )
 }
 
 /// Float.isZero : Float -> Bool
-fn float_is_zero(var_store: &VarStore) -> Expr {
+fn float_is_zero(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
+
+    let body = call(
+        Symbol::FLOAT_EQ,
+        vec![
+            Float(var_store.fresh(), 0.0),
+            Var(Symbol::FLOAT_IS_ZERO_ARG),
+        ],
+        var_store,
+    );
 
     defn(
         Symbol::FLOAT_IS_ZERO,
         vec![Symbol::FLOAT_IS_ZERO_ARG],
         var_store,
-        call(
-            Symbol::FLOAT_EQ,
-            vec![
-                Float(var_store.fresh(), 0.0),
-                Var(Symbol::FLOAT_IS_ZERO_ARG),
-            ],
-            var_store,
-        ),
+        body,
     )
 }
 
 /// Float.isNegative : Float -> Bool
-fn float_is_negative(var_store: &VarStore) -> Expr {
+fn float_is_negative(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
+
+    let body = call(
+        Symbol::FLOAT_GT,
+        vec![
+            Float(var_store.fresh(), 0.0),
+            Var(Symbol::FLOAT_IS_NEGATIVE_ARG),
+        ],
+        var_store,
+    );
 
     defn(
         Symbol::FLOAT_IS_NEGATIVE,
         vec![Symbol::FLOAT_IS_NEGATIVE_ARG],
         var_store,
-        call(
-            Symbol::FLOAT_GT,
-            vec![
-                Float(var_store.fresh(), 0.0),
-                Var(Symbol::FLOAT_IS_NEGATIVE_ARG),
-            ],
-            var_store,
-        ),
+        body,
     )
 }
 
 /// Float.isPositive : Float -> Bool
-fn float_is_positive(var_store: &VarStore) -> Expr {
+fn float_is_positive(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
+
+    let body = call(
+        Symbol::FLOAT_GT,
+        vec![
+            Var(Symbol::FLOAT_IS_POSITIVE_ARG),
+            Float(var_store.fresh(), 0.0),
+        ],
+        var_store,
+    );
 
     defn(
         Symbol::FLOAT_IS_POSITIVE,
         vec![Symbol::FLOAT_IS_POSITIVE_ARG],
         var_store,
-        call(
-            Symbol::FLOAT_GT,
-            vec![
-                Var(Symbol::FLOAT_IS_POSITIVE_ARG),
-                Float(var_store.fresh(), 0.0),
-            ],
-            var_store,
-        ),
+        body,
     )
 }
 
 /// Int.isNegative : Int -> Bool
-fn int_is_negative(var_store: &VarStore) -> Expr {
+fn int_is_negative(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
+
+    let body = call(
+        Symbol::NUM_LT,
+        vec![Var(Symbol::INT_IS_NEGATIVE_ARG), Int(var_store.fresh(), 0)],
+        var_store,
+    );
 
     defn(
         Symbol::INT_IS_NEGATIVE,
         vec![Symbol::INT_IS_NEGATIVE_ARG],
         var_store,
-        call(
-            Symbol::NUM_LT,
-            vec![Var(Symbol::INT_IS_NEGATIVE_ARG), Int(var_store.fresh(), 0)],
-            var_store,
-        ),
+        body,
     )
 }
 
 /// Int.isPositive : Int -> Bool
-fn int_is_positive(var_store: &VarStore) -> Expr {
+fn int_is_positive(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
+
+    let body = call(
+        Symbol::NUM_GT,
+        vec![Var(Symbol::INT_IS_POSITIVE_ARG), Int(var_store.fresh(), 0)],
+        var_store,
+    );
 
     defn(
         Symbol::INT_IS_POSITIVE,
         vec![Symbol::INT_IS_POSITIVE_ARG],
         var_store,
-        call(
-            Symbol::NUM_GT,
-            vec![Var(Symbol::INT_IS_POSITIVE_ARG), Int(var_store.fresh(), 0)],
-            var_store,
-        ),
+        body,
     )
 }
 
 /// Int.isZero : Int -> Bool
-fn int_is_zero(var_store: &VarStore) -> Expr {
+fn int_is_zero(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
+
+    let body = call(
+        Symbol::INT_EQ_I64,
+        vec![Var(Symbol::INT_IS_ZERO_ARG), Int(var_store.fresh(), 0)],
+        var_store,
+    );
 
     defn(
         Symbol::INT_IS_ZERO,
         vec![Symbol::INT_IS_ZERO_ARG],
         var_store,
-        call(
-            Symbol::INT_EQ_I64,
-            vec![Var(Symbol::INT_IS_ZERO_ARG), Int(var_store.fresh(), 0)],
-            var_store,
-        ),
+        body,
     )
 }
 
 /// Int.isOdd : Int -> Bool
-fn int_is_odd(var_store: &VarStore) -> Expr {
+fn int_is_odd(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
+
+    let body = call(
+        Symbol::INT_EQ_I64,
+        vec![
+            call(
+                Symbol::INT_REM_UNSAFE,
+                vec![Var(Symbol::INT_IS_ODD_ARG), Int(var_store.fresh(), 2)],
+                var_store,
+            ),
+            Int(var_store.fresh(), 1),
+        ],
+        var_store,
+    );
 
     defn(
         Symbol::INT_IS_ODD,
         vec![Symbol::INT_IS_ODD_ARG],
         var_store,
-        call(
-            Symbol::INT_EQ_I64,
-            vec![
-                call(
-                    Symbol::INT_REM_UNSAFE,
-                    vec![Var(Symbol::INT_IS_ODD_ARG), Int(var_store.fresh(), 2)],
-                    var_store,
-                ),
-                Int(var_store.fresh(), 1),
-            ],
-            var_store,
-        ),
+        body,
     )
 }
 
 /// Int.isEven : Int -> Bool
-fn int_is_even(var_store: &VarStore) -> Expr {
+fn int_is_even(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
+
+    let body = call(
+        Symbol::INT_EQ_I64,
+        vec![
+            call(
+                Symbol::INT_REM_UNSAFE,
+                vec![Var(Symbol::INT_IS_EVEN_ARG), Int(var_store.fresh(), 2)],
+                var_store,
+            ),
+            Int(var_store.fresh(), 0),
+        ],
+        var_store,
+    );
 
     defn(
         Symbol::INT_IS_EVEN,
         vec![Symbol::INT_IS_EVEN_ARG],
         var_store,
-        call(
-            Symbol::INT_EQ_I64,
-            vec![
-                call(
-                    Symbol::INT_REM_UNSAFE,
-                    vec![Var(Symbol::INT_IS_EVEN_ARG), Int(var_store.fresh(), 2)],
-                    var_store,
-                ),
-                Int(var_store.fresh(), 0),
-            ],
-            var_store,
-        ),
+        body,
     )
 }
 
 /// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
-fn list_get(var_store: &VarStore) -> Expr {
+fn list_get(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
+
+    // Perform a bounds check. If it passes, delegate to List.#getUnsafe
+    let body = If {
+        cond_var: var_store.fresh(),
+        branch_var: var_store.fresh(),
+        branches: vec![(
+            // if-condition
+            no_region(
+                // index < List.len list
+                call(
+                    Symbol::NUM_LT,
+                    vec![
+                        Var(Symbol::LIST_GET_ARG_INDEX),
+                        call(
+                            Symbol::LIST_LEN,
+                            vec![Var(Symbol::LIST_GET_ARG_LIST)],
+                            var_store,
+                        ),
+                    ],
+                    var_store,
+                ),
+            ),
+            // then-branch
+            no_region(
+                // Ok
+                tag(
+                    "Ok",
+                    vec![
+                        // List.getUnsafe list index
+                        Call(
+                            Box::new((
+                                var_store.fresh(),
+                                no_region(Var(Symbol::LIST_GET_UNSAFE)),
+                                var_store.fresh(),
+                            )),
+                            vec![
+                                (var_store.fresh(), no_region(Var(Symbol::LIST_GET_ARG_LIST))),
+                                (
+                                    var_store.fresh(),
+                                    no_region(Var(Symbol::LIST_GET_ARG_INDEX)),
+                                ),
+                            ],
+                            CalledVia::Space,
+                        ),
+                    ],
+                    var_store,
+                ),
+            ),
+        )],
+        final_else: Box::new(
+            // else-branch
+            no_region(
+                // Err
+                tag(
+                    "Err",
+                    vec![tag("OutOfBounds", Vec::new(), var_store)],
+                    var_store,
+                ),
+            ),
+        ),
+    };
 
     defn(
         Symbol::LIST_GET,
         vec![Symbol::LIST_GET_ARG_LIST, Symbol::LIST_GET_ARG_INDEX],
         var_store,
-        // Perform a bounds check. If it passes, delegate to List.#getUnsafe
-        If {
-            cond_var: var_store.fresh(),
-            branch_var: var_store.fresh(),
-            branches: vec![(
-                // if-condition
-                no_region(
-                    // index < List.len list
-                    call(
-                        Symbol::NUM_LT,
-                        vec![
-                            Var(Symbol::LIST_GET_ARG_INDEX),
-                            call(
-                                Symbol::LIST_LEN,
-                                vec![Var(Symbol::LIST_GET_ARG_LIST)],
-                                var_store,
-                            ),
-                        ],
-                        var_store,
-                    ),
-                ),
-                // then-branch
-                no_region(
-                    // Ok
-                    tag(
-                        "Ok",
-                        vec![
-                            // List.getUnsafe list index
-                            Call(
-                                Box::new((
-                                    var_store.fresh(),
-                                    no_region(Var(Symbol::LIST_GET_UNSAFE)),
-                                    var_store.fresh(),
-                                )),
-                                vec![
-                                    (var_store.fresh(), no_region(Var(Symbol::LIST_GET_ARG_LIST))),
-                                    (
-                                        var_store.fresh(),
-                                        no_region(Var(Symbol::LIST_GET_ARG_INDEX)),
-                                    ),
-                                ],
-                                CalledVia::Space,
-                            ),
-                        ],
-                        var_store,
-                    ),
-                ),
-            )],
-            final_else: Box::new(
-                // else-branch
-                no_region(
-                    // Err
-                    tag(
-                        "Err",
-                        vec![tag("OutOfBounds", Vec::new(), var_store)],
-                        var_store,
-                    ),
-                ),
-            ),
-        },
+        body,
     )
 }
 
 /// Int.rem : Int, Int -> Int
-fn int_rem(var_store: &VarStore) -> Expr {
+fn int_rem(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
+
+    let body = If {
+        branch_var: var_store.fresh(),
+        cond_var: var_store.fresh(),
+        branches: vec![(
+            // if condition
+            no_region(
+                // Int.neq arg1 0
+                call(
+                    Symbol::INT_NEQ_I64,
+                    vec![Var(Symbol::INT_REM_ARG_1), (Int(var_store.fresh(), 0))],
+                    var_store,
+                ),
+            ),
+            // arg1 was not zero
+            no_region(
+                // Ok (Int.#remUnsafe arg0 arg1)
+                tag(
+                    "Ok",
+                    vec![
+                        // Int.#remUnsafe arg0 arg1
+                        call(
+                            Symbol::INT_REM_UNSAFE,
+                            vec![Var(Symbol::INT_REM_ARG_0), Var(Symbol::INT_REM_ARG_1)],
+                            var_store,
+                        ),
+                    ],
+                    var_store,
+                ),
+            ),
+        )],
+        final_else: Box::new(no_region(tag(
+            "Err",
+            vec![tag("DivByZero", Vec::new(), var_store)],
+            var_store,
+        ))),
+    };
 
     defn(
         Symbol::INT_REM,
         vec![Symbol::INT_REM_ARG_0, Symbol::INT_REM_ARG_1],
         var_store,
-        If {
-            branch_var: var_store.fresh(),
-            cond_var: var_store.fresh(),
-            branches: vec![(
-                // if condition
-                no_region(
-                    // Int.neq arg1 0
-                    call(
-                        Symbol::INT_NEQ_I64,
-                        vec![Var(Symbol::INT_REM_ARG_1), (Int(var_store.fresh(), 0))],
-                        var_store,
-                    ),
-                ),
-                // arg1 was not zero
-                no_region(
-                    // Ok (Int.#remUnsafe arg0 arg1)
-                    tag(
-                        "Ok",
-                        vec![
-                            // Int.#remUnsafe arg0 arg1
-                            call(
-                                Symbol::INT_REM_UNSAFE,
-                                vec![Var(Symbol::INT_REM_ARG_0), Var(Symbol::INT_REM_ARG_1)],
-                                var_store,
-                            ),
-                        ],
-                        var_store,
-                    ),
-                ),
-            )],
-            final_else: Box::new(no_region(tag(
-                "Err",
-                vec![tag("DivByZero", Vec::new(), var_store)],
-                var_store,
-            ))),
-        },
+        body,
     )
 }
 
 /// Int.abs : Int -> Int
-fn int_abs(var_store: &VarStore) -> Expr {
+fn int_abs(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
 
-    defn(
-        Symbol::INT_ABS,
-        vec![Symbol::INT_ABS_ARG],
-        var_store,
-        If {
-            branch_var: var_store.fresh(),
-            cond_var: var_store.fresh(),
-            branches: vec![(
-                // if-condition
-                no_region(
-                    // Int.isLt 0 n
-                    // 0 < n
-                    call(
-                        Symbol::INT_LT,
-                        vec![Int(var_store.fresh(), 0), Var(Symbol::INT_ABS_ARG)],
-                        var_store,
-                    ),
-                ),
-                // int is at least 0, so just pass it along
-                no_region(Var(Symbol::INT_ABS_ARG)),
-            )],
-            final_else: Box::new(
-                // int is below 0, so negate it.
-                no_region(call(
-                    Symbol::NUM_NEG,
-                    vec![Var(Symbol::INT_ABS_ARG)],
+    let body = If {
+        branch_var: var_store.fresh(),
+        cond_var: var_store.fresh(),
+        branches: vec![(
+            // if-condition
+            no_region(
+                // Int.isLt 0 n
+                // 0 < n
+                call(
+                    Symbol::INT_LT,
+                    vec![Int(var_store.fresh(), 0), Var(Symbol::INT_ABS_ARG)],
                     var_store,
-                )),
+                ),
             ),
-        },
-    )
+            // int is at least 0, so just pass it along
+            no_region(Var(Symbol::INT_ABS_ARG)),
+        )],
+        final_else: Box::new(
+            // int is below 0, so negate it.
+            no_region(call(
+                Symbol::NUM_NEG,
+                vec![Var(Symbol::INT_ABS_ARG)],
+                var_store,
+            )),
+        ),
+    };
+
+    defn(Symbol::INT_ABS, vec![Symbol::INT_ABS_ARG], var_store, body)
 }
 
 /// Int.div : Int, Int -> Result Int [ DivByZero ]*
-fn int_div(var_store: &VarStore) -> Expr {
+fn int_div(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
+
+    let body = If {
+        branch_var: var_store.fresh(),
+        cond_var: var_store.fresh(),
+        branches: vec![(
+            // if-condition
+            no_region(
+                // Int.neq denominator 0
+                call(
+                    Symbol::INT_NEQ_I64,
+                    vec![
+                        Var(Symbol::INT_DIV_ARG_DENOMINATOR),
+                        (Int(var_store.fresh(), 0)),
+                    ],
+                    var_store,
+                ),
+            ),
+            // denominator was not zero
+            no_region(
+                // Ok (Int.#divUnsafe numerator denominator)
+                tag(
+                    "Ok",
+                    vec![
+                        // Int.#divUnsafe numerator denominator
+                        call(
+                            Symbol::INT_DIV_UNSAFE,
+                            vec![
+                                Var(Symbol::INT_DIV_ARG_NUMERATOR),
+                                Var(Symbol::INT_DIV_ARG_DENOMINATOR),
+                            ],
+                            var_store,
+                        ),
+                    ],
+                    var_store,
+                ),
+            ),
+        )],
+        final_else: Box::new(
+            // denominator was zero
+            no_region(tag(
+                "Err",
+                vec![tag("DivByZero", Vec::new(), var_store)],
+                var_store,
+            )),
+        ),
+    };
 
     defn(
         Symbol::INT_DIV,
@@ -386,107 +451,65 @@ fn int_div(var_store: &VarStore) -> Expr {
             Symbol::INT_DIV_ARG_DENOMINATOR,
         ],
         var_store,
-        If {
-            branch_var: var_store.fresh(),
-            cond_var: var_store.fresh(),
-            branches: vec![(
-                // if-condition
-                no_region(
-                    // Int.neq denominator 0
-                    call(
-                        Symbol::INT_NEQ_I64,
-                        vec![
-                            Var(Symbol::INT_DIV_ARG_DENOMINATOR),
-                            (Int(var_store.fresh(), 0)),
-                        ],
-                        var_store,
-                    ),
-                ),
-                // denominator was not zero
-                no_region(
-                    // Ok (Int.#divUnsafe numerator denominator)
-                    tag(
-                        "Ok",
-                        vec![
-                            // Int.#divUnsafe numerator denominator
-                            call(
-                                Symbol::INT_DIV_UNSAFE,
-                                vec![
-                                    Var(Symbol::INT_DIV_ARG_NUMERATOR),
-                                    Var(Symbol::INT_DIV_ARG_DENOMINATOR),
-                                ],
-                                var_store,
-                            ),
-                        ],
-                        var_store,
-                    ),
-                ),
-            )],
-            final_else: Box::new(
-                // denominator was zero
-                no_region(tag(
-                    "Err",
-                    vec![tag("DivByZero", Vec::new(), var_store)],
-                    var_store,
-                )),
-            ),
-        },
+        body,
     )
 }
 
 /// List.first : List elem -> Result elem [ ListWasEmpty ]*
-fn list_first(var_store: &VarStore) -> Expr {
+fn list_first(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
+
+    // Perform a bounds check. If it passes, delegate to List.getUnsafe.
+    let body = If {
+        // TODO Use "when" instead of "if" so that we can have False be the first branch.
+        // We want that for branch prediction; usually we expect the list to be nonempty.
+        cond_var: var_store.fresh(),
+        branch_var: var_store.fresh(),
+        branches: vec![(
+            // if-condition
+            no_region(
+                // List.isEmpty list
+                call(
+                    Symbol::LIST_IS_EMPTY,
+                    vec![Var(Symbol::LIST_FIRST_ARG)],
+                    var_store,
+                ),
+            ),
+            // list was empty
+            no_region(
+                // Err ListWasEmpty
+                tag(
+                    "Err",
+                    vec![tag("ListWasEmpty", Vec::new(), var_store)],
+                    var_store,
+                ),
+            ),
+        )],
+        final_else: Box::new(
+            // list was not empty
+            no_region(
+                // Ok (List.#getUnsafe list 0)
+                tag(
+                    "Ok",
+                    vec![
+                        // List.#getUnsafe list 0
+                        call(
+                            Symbol::LIST_GET_UNSAFE,
+                            vec![(Var(Symbol::LIST_FIRST_ARG)), (Int(var_store.fresh(), 0))],
+                            var_store,
+                        ),
+                    ],
+                    var_store,
+                ),
+            ),
+        ),
+    };
 
     defn(
         Symbol::LIST_FIRST,
         vec![Symbol::LIST_FIRST_ARG],
         var_store,
-        // Perform a bounds check. If it passes, delegate to List.getUnsafe.
-        If {
-            // TODO Use "when" instead of "if" so that we can have False be the first branch.
-            // We want that for branch prediction; usually we expect the list to be nonempty.
-            cond_var: var_store.fresh(),
-            branch_var: var_store.fresh(),
-            branches: vec![(
-                // if-condition
-                no_region(
-                    // List.isEmpty list
-                    call(
-                        Symbol::LIST_IS_EMPTY,
-                        vec![Var(Symbol::LIST_FIRST_ARG)],
-                        var_store,
-                    ),
-                ),
-                // list was empty
-                no_region(
-                    // Err ListWasEmpty
-                    tag(
-                        "Err",
-                        vec![tag("ListWasEmpty", Vec::new(), var_store)],
-                        var_store,
-                    ),
-                ),
-            )],
-            final_else: Box::new(
-                // list was not empty
-                no_region(
-                    // Ok (List.#getUnsafe list 0)
-                    tag(
-                        "Ok",
-                        vec![
-                            // List.#getUnsafe list 0
-                            call(
-                                Symbol::LIST_GET_UNSAFE,
-                                vec![(Var(Symbol::LIST_FIRST_ARG)), (Int(var_store.fresh(), 0))],
-                                var_store,
-                            ),
-                        ],
-                        var_store,
-                    ),
-                ),
-            ),
-        },
+        body,
     )
 }
 
@@ -499,7 +522,7 @@ fn no_region<T>(value: T) -> Located<T> {
 }
 
 #[inline(always)]
-fn tag(name: &'static str, args: Vec<Expr>, var_store: &VarStore) -> Expr {
+fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
     Expr::Tag {
         variant_var: var_store.fresh(),
         ext_var: var_store.fresh(),
@@ -512,7 +535,7 @@ fn tag(name: &'static str, args: Vec<Expr>, var_store: &VarStore) -> Expr {
 }
 
 #[inline(always)]
-fn call(symbol: Symbol, args: Vec<Expr>, var_store: &VarStore) -> Expr {
+fn call(symbol: Symbol, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
     Expr::Call(
         Box::new((
             var_store.fresh(),
@@ -527,7 +550,7 @@ fn call(symbol: Symbol, args: Vec<Expr>, var_store: &VarStore) -> Expr {
 }
 
 #[inline(always)]
-fn defn(fn_name: Symbol, args: Vec<Symbol>, var_store: &VarStore, body: Expr) -> Expr {
+fn defn(fn_name: Symbol, args: Vec<Symbol>, var_store: &mut VarStore, body: Expr) -> Expr {
     use crate::expr::Expr::*;
     use crate::pattern::Pattern::*;
 
