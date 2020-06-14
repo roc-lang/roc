@@ -17,14 +17,14 @@ pub enum Constraint {
 }
 
 impl Constraint {
-    pub fn instantiate_aliases(&mut self, var_store: &VarStore) {
+    pub fn instantiate_aliases(&mut self, var_store: &mut VarStore) {
         Self::instantiate_aliases_help(self, &ImMap::default(), var_store, &mut ImSet::default())
     }
 
     fn instantiate_aliases_help(
         &mut self,
         aliases: &ImMap<Symbol, Alias>,
-        var_store: &VarStore,
+        var_store: &mut VarStore,
         introduced: &mut ImSet<Variable>,
     ) {
         use Constraint::*;

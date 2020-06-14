@@ -108,7 +108,7 @@ impl Declaration {
 pub fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
     mut output: Output,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     original_scope: &Scope,
     loc_defs: &'a bumpalo::collections::Vec<'a, &'a Located<ast::Def<'a>>>,
     pattern_type: PatternType,
@@ -251,7 +251,7 @@ pub fn canonicalize_defs<'a>(
         }
     }
 
-    correct_mutual_recursive_type_alias(env, &mut aliases, &var_store);
+    correct_mutual_recursive_type_alias(env, &mut aliases, var_store);
 
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
@@ -723,7 +723,7 @@ fn canonicalize_pending_def<'a>(
     mut output: Output,
     scope: &mut Scope,
     can_defs_by_symbol: &mut MutMap<Symbol, Def>,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     refs_by_symbol: &mut MutMap<Symbol, (Located<Ident>, References)>,
     aliases: &mut SendMap<Symbol, Alias>,
 ) -> Output {
@@ -1182,7 +1182,7 @@ fn canonicalize_pending_def<'a>(
 #[inline(always)]
 pub fn can_defs_with_return<'a>(
     env: &mut Env<'a>,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     scope: Scope,
     loc_defs: &'a bumpalo::collections::Vec<'a, &'a Located<ast::Def<'a>>>,
     loc_ret: &'a Located<ast::Expr<'a>>,
@@ -1234,7 +1234,7 @@ pub fn can_defs_with_return<'a>(
 }
 
 fn decl_to_let(
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     decl: Declaration,
     loc_ret: Located<Expr>,
     aliases: SendMap<Symbol, Alias>,
@@ -1288,7 +1288,7 @@ fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) ->
 
 fn to_pending_def<'a>(
     env: &mut Env<'a>,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     def: &'a ast::Def<'a>,
     scope: &mut Scope,
     pattern_type: PatternType,
@@ -1393,7 +1393,7 @@ fn pending_typed_body<'a>(
     loc_pattern: &'a Located<ast::Pattern<'a>>,
     loc_ann: &'a Located<ast::TypeAnnotation<'a>>,
     loc_expr: &'a Located<ast::Expr<'a>>,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     scope: &mut Scope,
     pattern_type: PatternType,
 ) -> PendingDef<'a> {
@@ -1414,7 +1414,7 @@ fn pending_typed_body<'a>(
 fn correct_mutual_recursive_type_alias<'a>(
     env: &mut Env<'a>,
     aliases: &mut SendMap<Symbol, Alias>,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
 ) {
     let mut symbols_introduced = ImSet::default();
 
@@ -1510,7 +1510,7 @@ fn make_tag_union_recursive<'a>(
     region: Region,
     others: Vec<Symbol>,
     typ: &mut Type,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     can_report_error: &mut bool,
 ) {
     match typ {

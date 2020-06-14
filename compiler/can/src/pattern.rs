@@ -84,7 +84,7 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
 
 pub fn canonicalize_pattern<'a>(
     env: &mut Env<'a>,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     scope: &mut Scope,
     pattern_type: PatternType,
     pattern: &ast::Pattern<'a>,
