@@ -416,7 +416,7 @@ impl Composable for VarUsage {
                 }
             };
 
-            self.usage.insert(symbol.clone(), value);
+            self.usage.insert(*symbol, value);
         }
     }
 }

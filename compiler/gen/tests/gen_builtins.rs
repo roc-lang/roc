@@ -95,15 +95,17 @@ mod gen_builtins {
 
     #[test]
     fn gen_add_f64() {
-        assert_evals_to!(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
                     1.1 + 2.4 + 3
                 "#
-            ),
-            6.5,
-            f64
-        );
+                ),
+                6.5,
+                f64
+            );
+        })
     }
 
     #[test]
@@ -147,15 +149,17 @@ mod gen_builtins {
 
     #[test]
     fn gen_add_i64() {
-        assert_evals_to!(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
                     1 + 2 + 3
                 "#
-            ),
-            6,
-            i64
-        );
+                ),
+                6,
+                i64
+            );
+        })
     }
 
     #[test]
@@ -258,6 +262,48 @@ mod gen_builtins {
     }
 
     #[test]
+    fn gen_is_zero_i64() {
+        assert_evals_to!("Int.isZero 0", true, bool);
+        assert_evals_to!("Int.isZero 1", false, bool);
+    }
+
+    #[test]
+    fn gen_is_positive_i64() {
+        assert_evals_to!("Int.isPositive 0", false, bool);
+        assert_evals_to!("Int.isPositive 1", true, bool);
+        assert_evals_to!("Int.isPositive -5", false, bool);
+    }
+
+    #[test]
+    fn gen_is_negative_i64() {
+        assert_evals_to!("Int.isNegative 0", false, bool);
+        assert_evals_to!("Int.isNegative 3", false, bool);
+        assert_evals_to!("Int.isNegative -2", true, bool);
+    }
+
+    #[test]
+    fn gen_is_positive_f64() {
+        assert_evals_to!("Float.isPositive 0.0", false, bool);
+        assert_evals_to!("Float.isPositive 4.7", true, bool);
+        assert_evals_to!("Float.isPositive -8.5", false, bool);
+    }
+
+    #[test]
+    fn gen_is_negative_f64() {
+        assert_evals_to!("Float.isNegative 0.0", false, bool);
+        assert_evals_to!("Float.isNegative 9.9", false, bool);
+        assert_evals_to!("Float.isNegative -4.4", true, bool);
+    }
+
+    #[test]
+    fn gen_is_zero_f64() {
+        assert_evals_to!("Float.isZero 0", true, bool);
+        assert_evals_to!("Float.isZero 0_0", true, bool);
+        assert_evals_to!("Float.isZero 0.0", true, bool);
+        assert_evals_to!("Float.isZero 1", false, bool);
+    }
+
+    #[test]
     fn gen_is_odd() {
         assert_evals_to!("Int.isOdd 4", false, bool);
         assert_evals_to!("Int.isOdd 5", true, bool);
@@ -267,6 +313,24 @@ mod gen_builtins {
     fn gen_is_even() {
         assert_evals_to!("Int.isEven 6", true, bool);
         assert_evals_to!("Int.isEven 7", false, bool);
+    }
+
+    #[test]
+    fn sin() {
+        assert_evals_to!("Float.sin 0", 0.0, f64);
+        assert_evals_to!("Float.sin 1.41421356237", 0.9877659459922529, f64);
+    }
+
+    #[test]
+    fn cos() {
+        assert_evals_to!("Float.cos 0", 1.0, f64);
+        assert_evals_to!("Float.cos 3.14159265359", -1.0, f64);
+    }
+
+    #[test]
+    fn tan() {
+        assert_evals_to!("Float.tan 0", 0.0, f64);
+        assert_evals_to!("Float.tan 1", 1.557407724654902, f64);
     }
 
     #[test]
@@ -387,9 +451,10 @@ mod gen_builtins {
     }
     #[test]
     fn tail_call_elimination() {
-        assert_evals_to!(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
                 sum = \n, accum ->
                     when n is
                         0 -> accum
@@ -397,10 +462,11 @@ mod gen_builtins {
 
                 sum 1_000_000 0
                 "#
-            ),
-            500000500000,
-            i64
-        );
+                ),
+                500000500000,
+                i64
+            );
+        })
     }
     #[test]
     fn int_negate() {
@@ -423,14 +489,29 @@ mod gen_builtins {
         );
     }
 
+    // #[test]
+    // fn list_push() {
+    //     assert_evals_to!("List.push [] 1", &[1], &'static [i64]);
+    // }
+
+    #[test]
+    fn list_single() {
+        assert_evals_to!("List.single 1", &[1], &'static [i64]);
+        assert_evals_to!("List.single 5.6", &[5.6], &'static [f64]);
+    }
+
     #[test]
     fn empty_list_len() {
-        assert_evals_to!("List.len []", 0, usize);
+        with_larger_debug_stack(|| {
+            assert_evals_to!("List.len []", 0, usize);
+        })
     }
 
     #[test]
     fn basic_int_list_len() {
-        assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, usize);
+        with_larger_debug_stack(|| {
+            assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, usize);
+        })
     }
 
     #[test]
@@ -472,37 +553,43 @@ mod gen_builtins {
 
     #[test]
     fn empty_list_is_empty() {
-        assert_evals_to!("List.isEmpty []", true, bool);
+        with_larger_debug_stack(|| {
+            assert_evals_to!("List.isEmpty []", true, bool);
+        })
     }
 
     #[test]
     fn first_int_list() {
-        assert_evals_to!(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
                     when List.first [ 12, 9, 6, 3 ] is
                         Ok val -> val
                         Err _ -> -1
                 "#
-            ),
-            12,
-            i64
-        );
+                ),
+                12,
+                i64
+            );
+        })
     }
 
     #[test]
     fn first_empty_list() {
-        assert_evals_to!(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
                     when List.first [] is
                         Ok val -> val
                         Err _ -> -1
                 "#
-            ),
-            -1,
-            i64
-        );
+                ),
+                -1,
+                i64
+            );
+        })
     }
 
     #[test]

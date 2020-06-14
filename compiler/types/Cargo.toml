@@ -12,7 +12,7 @@ roc_module = { path = "../module" }
 roc_parse = { path = "../parse" }
 roc_problem = { path = "../problem" }
 ven_ena = { path = "../../vendor/ena" }
-inlinable_string = "0.1.0"
+inlinable_string = "0.1"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"

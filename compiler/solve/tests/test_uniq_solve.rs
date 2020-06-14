@@ -116,14 +116,16 @@ mod test_uniq_solve {
 
     #[test]
     fn empty_list_literal() {
-        infer_eq(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            infer_eq(
+                indoc!(
+                    r#"
                     []
                 "#
-            ),
-            "Attr * (List *)",
-        );
+                ),
+                "Attr * (List *)",
+            );
+        })
     }
 
     #[test]

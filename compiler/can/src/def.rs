@@ -360,8 +360,8 @@ pub fn sort_can_defs(
     let mut defined_symbols_set: ImSet<Symbol> = ImSet::default();
 
     for symbol in can_defs_by_symbol.keys().into_iter() {
-        defined_symbols.push(symbol.clone());
-        defined_symbols_set.insert(symbol.clone());
+        defined_symbols.push(*symbol);
+        defined_symbols_set.insert(*symbol);
     }
 
     // Use topological sort to reorder the defs based on their dependencies to one another.
@@ -690,7 +690,7 @@ fn pattern_to_vars_by_symbol(
     use Pattern::*;
     match pattern {
         Identifier(symbol) => {
-            vars_by_symbol.insert(symbol.clone(), expr_var);
+            vars_by_symbol.insert(*symbol, expr_var);
         }
 
         AppliedTag { arguments, .. } => {
@@ -701,7 +701,7 @@ fn pattern_to_vars_by_symbol(
 
         RecordDestructure { destructs, .. } => {
             for destruct in destructs {
-                vars_by_symbol.insert(destruct.value.symbol.clone(), destruct.value.var);
+                vars_by_symbol.insert(destruct.value.symbol, destruct.value.var);
             }
         }
 
@@ -949,7 +949,7 @@ fn canonicalize_pending_def<'a>(
             ) = (
                 &loc_pattern.value,
                 &loc_can_pattern.value,
-                &loc_can_expr.value.clone(),
+                &loc_can_expr.value,
             ) {
                 is_closure = true;
 
@@ -966,7 +966,7 @@ fn canonicalize_pending_def<'a>(
                 // closures don't have a name, and therefore pick a fresh symbol. But in this
                 // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
                 // and we want to reference it by that name.
-                env.closures.insert(defined_symbol.clone(), references);
+                env.closures.insert(*defined_symbol, references);
 
                 // The closure is self tail recursive iff it tail calls itself (by defined name).
                 let is_recursive = match can_output.tail_call {
@@ -977,7 +977,7 @@ fn canonicalize_pending_def<'a>(
                 // Recursion doesn't count as referencing. (If it did, all recursive functions
                 // would result in circular def errors!)
                 refs_by_symbol
-                    .entry(defined_symbol.clone())
+                    .entry(*defined_symbol)
                     .and_modify(|(_, refs)| {
                         refs.lookups = refs.lookups.without(defined_symbol);
                     });
@@ -1010,7 +1010,7 @@ fn canonicalize_pending_def<'a>(
                     };
 
                 refs_by_symbol.insert(
-                    symbol.clone(),
+                    *symbol,
                     (
                         Located {
                             value: ident.clone(),
@@ -1057,7 +1057,7 @@ fn canonicalize_pending_def<'a>(
                 env.tailcallable_symbol = Some(*defined_symbol);
 
                 // TODO isn't types_by_symbol enough? Do we need vars_by_symbol too?
-                vars_by_symbol.insert(defined_symbol.clone(), expr_var);
+                vars_by_symbol.insert(*defined_symbol, expr_var);
             };
 
             let (mut loc_can_expr, can_output) =
@@ -1082,7 +1082,7 @@ fn canonicalize_pending_def<'a>(
             ) = (
                 &loc_pattern.value,
                 &loc_can_pattern.value,
-                &loc_can_expr.value.clone(),
+                &loc_can_expr.value,
             ) {
                 is_closure = true;
 
@@ -1099,7 +1099,7 @@ fn canonicalize_pending_def<'a>(
                 // closures don't have a name, and therefore pick a fresh symbol. But in this
                 // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
                 // and we want to reference it by that name.
-                env.closures.insert(defined_symbol.clone(), references);
+                env.closures.insert(*defined_symbol, references);
 
                 // The closure is self tail recursive iff it tail calls itself (by defined name).
                 let is_recursive = match can_output.tail_call {
@@ -1110,7 +1110,7 @@ fn canonicalize_pending_def<'a>(
                 // Recursion doesn't count as referencing. (If it did, all recursive functions
                 // would result in circular def errors!)
                 refs_by_symbol
-                    .entry(defined_symbol.clone())
+                    .entry(*defined_symbol)
                     .and_modify(|(_, refs)| {
                         refs.lookups = refs.lookups.without(defined_symbol);
                     });
@@ -1147,7 +1147,7 @@ fn canonicalize_pending_def<'a>(
                     });
 
                 refs_by_symbol.insert(
-                    symbol.clone(),
+                    symbol,
                     (
                         Located {
                             value: ident.clone().into(),
@@ -1265,7 +1265,7 @@ fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) ->
 
     if let Some(references) = closures.get(&symbol) {
         for v in &references.calls {
-            stack.push(v.clone());
+            stack.push(*v);
         }
 
         // while there are symbols left to visit
@@ -1281,7 +1281,7 @@ fn closure_recursivity(symbol: Symbol, closures: &MutMap<Symbol, References>) ->
                 if let Some(nested_references) = closures.get(&nested_symbol) {
                     // add its called to the stack
                     for v in &nested_references.calls {
-                        stack.push(v.clone());
+                        stack.push(*v);
                     }
                 }
                 visited.insert(nested_symbol);
