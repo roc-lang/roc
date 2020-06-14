@@ -49,7 +49,7 @@ pub fn canonicalize_module_defs<'a>(
     dep_idents: MutMap<ModuleId, IdentIds>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     mut exposed_symbols: MutSet<Symbol>,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
     let mut scope = Scope::new(home);

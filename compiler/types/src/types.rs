@@ -397,7 +397,7 @@ impl Type {
         &mut self,
         region: Region,
         aliases: &ImMap<Symbol, Alias>,
-        var_store: &VarStore,
+        var_store: &mut VarStore,
         introduced: &mut ImSet<Variable>,
     ) {
         use Type::*;

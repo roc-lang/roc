@@ -170,7 +170,7 @@ pub struct WhenBranch {
 
 pub fn canonicalize_expr<'a>(
     env: &mut Env<'a>,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     scope: &mut Scope,
     region: Region,
     expr: &'a ast::Expr<'a>,
@@ -692,7 +692,7 @@ pub fn canonicalize_expr<'a>(
 #[inline(always)]
 fn canonicalize_when_branch<'a>(
     env: &mut Env<'a>,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     scope: &mut Scope,
     _region: Region,
     branch: &'a ast::WhenBranch<'a>,
@@ -887,7 +887,7 @@ where
 
 fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     scope: &mut Scope,
     region: Region,
     fields: &'a [Located<ast::AssignedField<'a, ast::Expr<'a>>>],
@@ -924,7 +924,7 @@ fn canonicalize_fields<'a>(
 
 fn canonicalize_field<'a>(
     env: &mut Env<'a>,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     scope: &mut Scope,
     field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
     region: Region,

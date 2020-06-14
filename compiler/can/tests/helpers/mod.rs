@@ -60,7 +60,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         )
     });
 
-    let var_store = VarStore::default();
+    let mut var_store = VarStore::default();
     let var = var_store.fresh();
     let module_ids = ModuleIds::default();
 
@@ -78,7 +78,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     let mut env = Env::new(home, dep_idents, &module_ids, IdentIds::default());
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
-        &var_store,
+        &mut var_store,
         &mut scope,
         Region::zero(),
         &loc_expr.value,

@@ -144,19 +144,19 @@ pub fn uniq_expr_with(
         loc_expr,
         output,
         problems,
-        var_store: old_var_store,
+        var_store: mut old_var_store,
         var,
         interns,
         ..
     } = can_expr_with(arena, home, expr_str);
 
     // double check
-    let var_store = VarStore::new(old_var_store.fresh());
+    let mut var_store = VarStore::new(old_var_store.fresh());
 
     let expected2 = Expected::NoExpectation(Type::Variable(var));
     let constraint = roc_constrain::uniq::constrain_declaration(
         home,
-        &var_store,
+        &mut var_store,
         Region::zero(),
         &loc_expr,
         declared_idents,
@@ -176,12 +176,12 @@ pub fn uniq_expr_with(
 
     // load builtin values
     let (_introduced_rigids, constraint) =
-        constrain_imported_values(imports, constraint, &var_store);
+        constrain_imported_values(imports, constraint, &mut var_store);
 
     // load builtin types
-    let mut constraint = load_builtin_aliases(stdlib.aliases, constraint, &var_store);
+    let mut constraint = load_builtin_aliases(stdlib.aliases, constraint, &mut var_store);
 
-    constraint.instantiate_aliases(&var_store);
+    constraint.instantiate_aliases(&mut var_store);
 
     let subs2 = Subs::new(var_store.into());
 
@@ -210,7 +210,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         )
     });
 
-    let var_store = VarStore::default();
+    let mut var_store = VarStore::default();
     let var = var_store.fresh();
     let expected = Expected::NoExpectation(Type::Variable(var));
     let module_ids = ModuleIds::default();
@@ -229,7 +229,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     let mut env = Env::new(home, dep_idents, &module_ids, IdentIds::default());
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
-        &var_store,
+        &mut var_store,
         &mut scope,
         Region::zero(),
         &loc_expr.value,
@@ -257,7 +257,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
 
     //load builtin values
     let (_introduced_rigids, constraint) =
-        constrain_imported_values(imports, constraint, &var_store);
+        constrain_imported_values(imports, constraint, &mut var_store);
 
     // TODO include only the aliases actually used in this module
     let aliases = roc_builtins::std::aliases()
@@ -266,9 +266,9 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         .collect::<Vec<(Symbol, BuiltinAlias)>>();
 
     //load builtin types
-    let mut constraint = load_builtin_aliases(aliases.into_iter(), constraint, &var_store);
+    let mut constraint = load_builtin_aliases(aliases.into_iter(), constraint, &mut var_store);
 
-    constraint.instantiate_aliases(&var_store);
+    constraint.instantiate_aliases(&mut var_store);
 
     let mut all_ident_ids = MutMap::default();
 

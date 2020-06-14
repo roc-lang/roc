@@ -28,7 +28,7 @@ pub fn constrain_module(
     module: &ModuleOutput,
     home: ModuleId,
     mode: Mode,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
 ) -> Constraint {
     use Mode::*;
 
@@ -42,7 +42,7 @@ pub fn constrain_module(
 
     match mode {
         Standard => constrain_decls(home, decls, send_aliases),
-        Uniqueness => crate::uniq::constrain_decls(home, decls, send_aliases, &var_store),
+        Uniqueness => crate::uniq::constrain_decls(home, decls, send_aliases, var_store),
     }
 }
 
@@ -55,7 +55,7 @@ pub struct Import {
 pub fn constrain_imported_values(
     imports: Vec<Import>,
     body_con: Constraint,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
 ) -> (Vec<Variable>, Constraint) {
     use Constraint::*;
     let mut def_types = SendMap::default();
@@ -111,7 +111,11 @@ pub fn constrain_imported_values(
     )
 }
 
-pub fn load_builtin_aliases<I>(aliases: I, body_con: Constraint, var_store: &VarStore) -> Constraint
+pub fn load_builtin_aliases<I>(
+    aliases: I,
+    body_con: Constraint,
+    var_store: &mut VarStore,
+) -> Constraint
 where
     I: IntoIterator<Item = (Symbol, BuiltinAlias)>,
 {
@@ -169,7 +173,7 @@ pub struct FreeVars {
     pub wildcards: Vec<Variable>,
 }
 
-fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarStore) -> Type {
+fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &mut VarStore) -> Type {
     use roc_types::solved_types::SolvedType::*;
 
     match solved_type {
@@ -293,7 +297,11 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &VarSt
     }
 }
 
-pub fn to_atom(solved_atom: &SolvedAtom, free_vars: &mut FreeVars, var_store: &VarStore) -> Atom {
+pub fn to_atom(
+    solved_atom: &SolvedAtom,
+    free_vars: &mut FreeVars,
+    var_store: &mut VarStore,
+) -> Atom {
     match solved_atom {
         SolvedAtom::Zero => Atom::Zero,
         SolvedAtom::One => Atom::One,
@@ -313,7 +321,7 @@ pub fn to_atom(solved_atom: &SolvedAtom, free_vars: &mut FreeVars, var_store: &V
 pub fn constrain_imported_aliases(
     aliases: MutMap<Symbol, Alias>,
     body_con: Constraint,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
 ) -> Constraint {
     use Constraint::*;
     let mut def_aliases = SendMap::default();

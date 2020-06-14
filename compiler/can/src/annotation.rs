@@ -65,7 +65,7 @@ pub fn canonicalize_annotation(
     scope: &mut Scope,
     annotation: &roc_parse::ast::TypeAnnotation,
     region: Region,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
     let mut aliases = SendMap::default();
@@ -95,7 +95,7 @@ fn can_annotation_help(
     annotation: &roc_parse::ast::TypeAnnotation,
     region: Region,
     scope: &mut Scope,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
     references: &mut MutSet<Symbol>,
@@ -407,7 +407,7 @@ fn can_assigned_field<'a>(
     field: &AssignedField<'a, TypeAnnotation<'a>>,
     region: Region,
     scope: &mut Scope,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
     field_types: &mut SendMap<Lowercase, Type>,
@@ -472,7 +472,7 @@ fn can_tag<'a>(
     tag: &Tag<'a>,
     region: Region,
     scope: &mut Scope,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
     tag_types: &mut Vec<(TagName, Vec<Type>)>,

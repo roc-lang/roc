@@ -5,7 +5,6 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use std::fmt;
 use std::iter::{once, Iterator};
-use std::sync::atomic::{AtomicU32, Ordering};
 use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -56,7 +55,7 @@ impl fmt::Debug for Subs {
 
 #[derive(Debug)]
 pub struct VarStore {
-    next: AtomicU32,
+    next: u32,
 }
 
 impl Default for VarStore {
@@ -70,24 +69,22 @@ impl VarStore {
     pub fn new(next_var: Variable) -> Self {
         debug_assert!(next_var.0 >= Variable::FIRST_USER_SPACE_VAR.0);
 
-        VarStore {
-            next: AtomicU32::new(next_var.0),
-        }
+        VarStore { next: next_var.0 }
     }
 
-    pub fn fresh(&self) -> Variable {
-        // Increment the counter and return the previous value.
-        //
-        // Since the counter starts at 0, this will return 0 on first invocation,
-        // and var_store.into() will return the number of Variables distributed
-        // (in this case, 1).
-        Variable(AtomicU32::fetch_add(&self.next, 1, Ordering::Relaxed))
+    pub fn fresh(&mut self) -> Variable {
+        // Increment the counter and return the value it had before it was incremented.
+        let answer = self.next;
+
+        self.next += 1;
+
+        Variable(answer)
     }
 }
 
 impl Into<Variable> for VarStore {
     fn into(self) -> Variable {
-        Variable(self.next.into_inner())
+        Variable(self.next)
     }
 }
 

@@ -800,7 +800,7 @@ fn spawn_solve_module(
     module: Module,
     src: Box<str>,
     constraint: Constraint,
-    var_store: VarStore,
+    mut var_store: VarStore,
     imported_modules: MutSet<ModuleId>,
     msg_tx: MsgSender,
     exposed_types: &mut SubsByModule,
@@ -922,12 +922,12 @@ fn spawn_solve_module(
         // in the ones we just computed. We can do this off the main thread.
         // TODO what to do with the introduced rigids?
         let (_introduced_rigids, constraint) =
-            constrain_imported_values(imported_symbols, constraint, &var_store);
-        let constraint = constrain_imported_aliases(imported_aliases, constraint, &var_store);
-        let mut constraint = load_builtin_aliases(aliases, constraint, &var_store);
+            constrain_imported_values(imported_symbols, constraint, &mut var_store);
+        let constraint = constrain_imported_aliases(imported_aliases, constraint, &mut var_store);
+        let mut constraint = load_builtin_aliases(aliases, constraint, &mut var_store);
 
         // Turn Apply into Alias
-        constraint.instantiate_aliases(&var_store);
+        constraint.instantiate_aliases(&mut var_store);
 
         let (solved_subs, solved_module) =
             roc_solve::module::solve_module(module, constraint, var_store);
@@ -1029,7 +1029,7 @@ fn parse_and_constrain(
     msg_tx: MsgSender,
 ) {
     let module_id = header.module_id;
-    let var_store = VarStore::default();
+    let mut var_store = VarStore::default();
     let arena = Bump::new();
     let state = State::new(&header.src, Attempting::Module);
 
@@ -1046,10 +1046,10 @@ fn parse_and_constrain(
         dep_idents,
         header.exposed_imports,
         exposed_symbols,
-        &var_store,
+        &mut var_store,
     ) {
         Ok(module_output) => {
-            let constraint = constrain_module(&module_output, module_id, mode, &var_store);
+            let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
             let module = Module {
                 module_id,
                 exposed_imports: module_output.exposed_imports,
