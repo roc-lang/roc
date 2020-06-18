@@ -235,6 +235,10 @@ fn spaces<'a>(
                             // indentation yet, but maybe it will be after more spaces happen!
                             state = state.advance_spaces(1)?;
                         }
+                        '\r' => {
+                            // Ignore carriage returns.
+                            state = state.advance_spaces(1)?;
+                        }
                         '\n' => {
                             // No need to check indentation because we're about to reset it anyway.
                             state = state.newline()?;
