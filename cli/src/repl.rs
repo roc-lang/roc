@@ -50,7 +50,7 @@ pub fn main() -> io::Result<()> {
 
     loop {
         if pending_src.is_empty() {
-            print!("\n\u{001b}[36m▶\u{001b}[0m ");
+            print!("\n\u{001b}[36m»\u{001b}[0m ");
         } else {
             print!("\u{001b}[36m…\u{001b}[0m ");
         }
