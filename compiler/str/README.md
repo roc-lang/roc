@@ -75,18 +75,26 @@ This has the downside of being potentially wasteful of the program's memory, but
 
 ## Unique lists
 
+If uniqueness typing tells us that a list is Unique, we know two things about it:
 
+1. It doesn't need a refcount, because nothing else ever references it.
+2. It can be mutated in-place.
 
-**TODO**: here, talk about how the refcount `usize` slot is repurposed to be a `capacity: usize` slot. Shared lists never need capacity because they're never mutated in place, and unique lists never need a refcount because they're always unique.
+One of the in-place mutations that can happen to a list is that its length can increase. For example, if I call `List.append list1 list2`, and `list1` is unique, then we'll attempt to append `list2`'s contents in-place into `list1`.
 
+Calling `List.append` on a Shared list results in allocating a new chunk of heap memory large enough to hold both lists (with a fresh refcount, since nothing is referencing the new memory yet), then copying the contents of both lists into the new memory, and finally decrementing the refcount of the old memory.
 
-If I call `List.append list1 list2`, and `list1` is unique, then we'll attempt to append `list2`'s contents in-place into `list1`.
+Calling `List.append` on a Unique list can potentially be done in-place instead.
 
-This will mean we first check to see if `list1.capacity <= list1.length + list2.length`. If it is, then we can copy in the new values without needing to allocate more memory for `list1`.
+First, `List.append` repurposes the `usize` slot normally used to store refcount, and stores a `capacity` counter in there instead of a refcount. (After all, unique lists don't need to be refcounted.) A list's capacity refers to how many elements the list *can* hold given the memory it has allocated to it, which is always guaranteed to be at least as many as its length.
 
-However, if there is not enough capacity to fit both lists, or if `list1` is shared (meaning in-place mutation is not allowed), then we have to allocate a new chunk of heap memory large enough to hold both (with a fresh refcount, since nothing is referencing htis new memory yet), then copy the contents of both lists into the new memory, and finally decrement the refcount of the old memory.
+When calling `List.append list1 list2` on a unique `list1`, first we'll check to see if `list1.capacity <= list1.length + list2.length`. If it is, then we can copy in the new values without needing to allocate more memory for `list1`.
 
-When this happens, the size of the new chunk of heap memory will be an exact fit to the contents of both lists. If you want, you can use `List.reserve` to guarantee more capacity in anticipation of future additions. (`List.reserve` works like Rust's [`Vec::reserve`](https://doc.rust-lang.org/std/vec/struct.Vec.html#method.reserve).)
+If there is not enough capacity to fit both lists, then we can try to call [`realloc`](https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/realloc?view=vs-2019) to hopefully extend the size of our allocated memory. If `realloc` succeeds (meaning there happened to be enough free memory right after our current allocation), then we update `capacity` to reflect the new amount of space, and move on.
+
+If `realloc` fails, then we have to fall back on the same "allocate new memory and copy everything" strategy that we do with shared lists.
+ 
+When you have a way to anticipate that a list will want to grow incrementally to a certain size, you can avoid such extra allocations by using `List.reserve` to guarantee more capacity up front. (`List.reserve` works like Rust's [`Vec::reserve`](https://doc.rust-lang.org/std/vec/struct.Vec.html#method.reserve).)
 
 > **Note:** Calling `List.reserve 0 myList` will have no effect on a Unique list, but on a Shared list it will clone `myList` and return a Unique one. If you want to do a bunch of in-place mutations on a list, but it's currently Shared, calling `List.reserve 0` on it to get a Unique clone could actually be an effective performance optimization!
 
@@ -94,22 +102,22 @@ When this happens, the size of the new chunk of heap memory will be an exact fit
 
 Some lists may end up beginning with excess capacity due to memory alignment requirements. Since the refcount is `usize`, all lists need a minimum of that alignment. For example, on a 64-bit system, a `List Bool` has an alignment of 8B even though bools can fit in 1B.
 
-This means the list `[ True, True, False ]` would have a memory layout like this:
+This means the list `[ True, True, False ]` would have a memory layout like this):
 
 ```
-|------------8B------------|--1B--|--1B--|--1B--|-----5B-----|
-          refcount           bool1  bool2  bool3    unused
+|--------------8B--------------|--1B--|--1B--|--1B--|-----5B-----|
+  either refcount or capacity   bool1  bool2  bool3     unused
 ```
 
-As such, it would start out with a length of 3 and a capacity of 8.
+As such, if this list is Unique, it would start out with a length of 3 and a capacity of 8.
 
-Note that since each bool value is a byte, it's okay for them to be packed side-by-side even though the overall alignment of the list elements is 8. This is fine because each of their individual memory addresses will end up being a multiple of their size in bytes.
+Since each bool value is a byte, it's okay for them to be packed side-by-side even though the overall alignment of the list elements is 8. This is fine because each of their individual memory addresses will end up being a multiple of their size in bytes.
 
-Note that unlike in the `List Str` example before, there wouldn't be any unused memory between the refcount and the first element in the list. That will always be the case when the size of the refcount is no bigger than the alignment of the list's elements.
+Note that unlike in the `List Str` example before, there wouldn't be any unused memory between the refcount (or capacity, depending on whether the list was shared or unique) and the first element in the list. That will always be the case when the size of the refcount is no bigger than the alignment of the list's elements.
 
 ## Summary of Lists
 
-Lists are a `2 * usize` struct which contains a length, a capacity, and a pointer.
+Lists are a `2 * usize` struct which contains a length and a pointer.
 
 That pointer is a memory address (null in the case of an empty list) which points to the first element in a sequential array of memory.
 
@@ -117,9 +125,7 @@ If that pointer is shared in multiple places, then there will be a `usize` refer
 
 Refcounts get incremented each time a list gets shared somewhere, and decremented each time that shared value is no longer referenced by anything else (for example, by going out of scope). Once there are no more references, the list's heap memory can be safely freed. If a reference count gets all the way up to `usize`, then it will never be decremented again and the memory will never be freed.
 
-Whenever a list grows, it will grow in-place if it's Unique and there is enough capacity. If there isn't enough capacity, or if the list is Shared, then instead new heap memory will be allocated, all the necessary elements will get copied into it, and the original list's refcount will be decremented.
-
-If a list is too big for either its length or capacity to fit in a `usize/2` unsigned integer, then it gets promoted to a Large List. A Large List has a non-null pointer, but its capacity and length fields are set to 0 in the struct. Instead, its actual capacity and length are stored as `usize` values right before the refcount.
+Whenever a list grows, it will grow in-place if it's Unique and there is enough capacity. (Capacity is stored where a refcount would be in a Shared list.) If there isn't enough capacity - even after trying `realloc` - or if the list is Shared, then instead new heap memory will be allocated, all the necessary elements will get copied into it, and the original list's refcount will be decremented.
 
 ## Strings
 
@@ -136,7 +142,7 @@ However, they also have two things going on that lists do not:
 
 ## The Small String Optimization
 
-In practice, a lot of strings are pretty small. For example, the string `"Richard Feldman"` can be stored in 15 UTF-8 bytes. If we stored that string the same way we store a Shared list, then on a 64-bit system we'd need a 16B struct, which would include a pointer to 24B of heap memory (including the refcount and one unused byte for alignment).
+In practice, a lot of strings are pretty small. For example, the string `"Richard Feldman"` can be stored in 15 UTF-8 bytes. If we stored that string the same way we store a list, then on a 64-bit system we'd need a 16B struct, which would include a pointer to 24B of heap memory (including the refcount/capacity and one unused byte for alignment).
 
 That's a total of 48B to store 15B of data, when we could have fit the whole string into the original 16B we needed for the struct, with one byte left over.
 
@@ -144,17 +150,46 @@ The Small String Optimization is where we store strings directly in the struct, 
 
 ## String Memory Layout
 
-In the case of lists, we have Large Lists and regular lists. In the case of strings, we have Small, Medium, and Large strings. We already know how to tell Medium and Large apart (the pointer is non-null, but length and capacity are 0), but how do we tell Small strings apart from the other two?
+How do we tell small strings apart from nonsmall strings?
 
-The answer comes down to memory alignment. Our strings always align their heap-allocated memory to `usize`, even if they are not reference counted and theoretically don't have that alignment requirement. This is done because one of the side effects of memory alignment is helpful to us in this case.
+We make use of the fact that lengths (for both strings *and* lists) are `usize` values which have a maximum value of `isize::MAX` rather than `usize::MAX`. This is because `List.get` compiles down to an array access operation, and LLVM uses `isize` indices for those because they do signed arithmetic on the pointer in case the caller wants to add a negative number to the address. (We don't want to, as it happens, but that's what the low-level API supports, so we are bound by its limitations.)
 
-To recap from earlier, it's best for performance if each element in an array of data has an address that's a multiple of its size in bytes. A memory address that's a multiple of 8 (`usize` on a 64-bit system) or 4 (`usize` on a 32-bit system) will be a binary number whose last two bits are always guaranteed to be 00.
+Since the string's length is a `usize` value with a maximum of `isize::MAX`, we can be sure that its most significant bit will always be 0, not 1. (If it were a 1, that would be a negative `isize`!) We can use this fact to use that spare bit as a flag indicating whether the string is small: if that bit is a 1, it's a small string; otherwise, it's a nonsmall string.
 
-We can make use of this fact to tell whether our string contains a non-null pointer. Here's our algorithm:
+This makes calculating the length of the string a multi-step process:
 
-1. Get the low byte of the struct field where the pointer would normally be stored.
-2. If its last two bits are `00`, it's a pointer. That means this is either a Medium or a Large string, and we can tell the one from the other by looking at the length and capacity fields as normal.
-3. If its last two bits are `11`, it's a 
+1. Get the length field out of the struct.
+2. Look at its highest bit. If that bit is 0, return the length as-is.
+3. If the bit is 1, then this is a small string, and its length is packed into the highest byte of the `usize` length field we're currently examining. Take that byte and bit shift it by 1 (to drop the `1` flag we used to indicate this is a small string), cast the resulting byte to `usize`, and that's our length.
 
+Using this strategy with a [conditional move instruction](https://stackoverflow.com/questions/14131096/why-is-a-conditional-move-not-vulnerable-for-branch-prediction-failure), we can always get the length of a `Str` in 2-3 cheap instructions on a single `usize` value, without any chance of a branch misprediction.
 
-a [conditional move instruction](https://stackoverflow.com/questions/14131096/why-is-a-conditional-move-not-vulnerable-for-branch-prediction-failure)
+Thus, the layout of a small string on a 64-bit big-endian architecture would be:
+
+```
+|-----------usize length field----------|-----------usize pointer field---------|
+|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|
+ len   'R'  'i'  'c'  'h'  'a'  'r'  'd'  ' '  'F'  'e'  'l'  'd'  'm'  'a'  'n'
+```
+
+The `len` value here would be the number 15, plus a 1 (to flag that this is a small string) that would always get bit-shifted away. The capacity of a small Unique string is always equal to `2 * usize`, because that's how much you can fit without promoting to a nonsmall string.
+
+## Endianness
+
+The preceding memory layout example works on a big-endian architecture, but most CPUs are little-endian. That means the high bit where we want to store the flag (the 0 or 1
+that would make an `isize` either negative or positive) will actually be the `usize`'s last byte rather than its first byte.
+
+That means we'd have to move swap the order of the struct's length and pointer fields. Here's how the string `"Roc string"` would be stored on a little-endian system:
+
+```
+|-----------usize pointer field---------|-----------usize length field----------|
+|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|-1B-|
+  'R'  'o'  'c'  ' '  's'  't'  'r'  'i'  'n'  'g'   0    0    0    0    0   len
+```
+
+Here, `len` would have the same format as before (including the extra 1 in the same position, which we'd bit shift away) except that it'd store a length of 10 instead of 15.
+
+Notice that the leftover bytes are stored as zeroes. This is handy because it means we can convert small Roc strings into C strings (which are 0-terminated) for free as long as they have at least one unused byte. Also notice that `usize pointer field` and `usize length field` have been swapped compared to the preceding example!
+
+## Storing string literals in read-only memory
+
