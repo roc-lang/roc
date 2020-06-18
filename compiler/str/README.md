@@ -8,9 +8,8 @@ An empty `List Str` is essentially this Rust type with all 0s in memory:
 
 ```rust
 struct List {
-    pointer: *Str, // pointers have the same size as `usize`
-    length: (usize/2), // pretend (usize/2) is a real Rust type
-    capacity: (usize/2)
+    pointer: *Str, // pointers are the same size as `usize`
+    length: usize
 }
 ```
 
@@ -20,30 +19,31 @@ Here's what the fields mean:
 
 * `pointer` is the memory address of the heap-allocated memory containing the `Bool` elements. For an empty list, the pointer is null (that is, 0).
 * `length` is the number of `Bool` elements in the list. For an empty list, this is also 0.
-* `capacity` is the amount of elements we have allocated space for in memory. If we call `List.append` and `capacity` is sufficiently greater than `length`, that means we have some unused memory and can potentially append in place rather than needing to allocate a new `List` and copy everything over. For an empty list, `capacity` is also 0.
 
 ## Nonempty list
 
-Now let's say we define a `List Point3d` with two elements in it, each of which is a struct containing three 64-bit integers (so each is a 24B value).
+Now let's say we define a `List Str` with two elements in it, like so: `[ "foo", "bar" ]`.
 
-First we'd have the `struct` above, with `length` set to 2. Then, we'd have some memory allocated on the heap, and `pointer` would store an address into that memory.
+First we'd have the `struct` above, with both `length` and `capacity` set to 2. Then, we'd have some memory allocated on the heap, and `pointer` would store that memory's address.
 
 Here's how that heap memory would be laid out on a 64-bit system. It's a total of 48 bytes.
 
 ```
-|---8B---|---8B---|---8B---|------24B------|------24B------|
- refcount capacity  unused     Point3d #1      Point3d #2
+|---8B---|---8B---|------16B------|------16B------|
+ refcount  unused      string #1       string #2
 ```
 
-Later on we'll get to what refcount and capacity do, but first let's talk about the memory layout. Both refcount and capacity are `usize` integers, so 8B on our 64-bit system. Why do we have another 8B of unused memory after them?
+Just like how `List` is a `struct` that takes up `2 * usize` bytes in memory, `Str` takes up the same amount of memory - namely, 16B on a 64-bit system. That's why each of the two strings take up 16B of this heap-allocated memory. (Those structs may also point to other heap memory, but they could also be empty strings! Either way we just store the structs in the list, which take up 16B.)
 
-This is because of memory alignment. Whenever a system loads some memory from a memory address, it's much more efficient if the address is a multiple of the number of bytes it wants to get. So if we want to load a 24B `Point3d` struct, we want its address to be a multiple of 24.
+We'll get to what the refcount is for shortly, but first let's talk about the memory layout. The refcount is a `usize` integer, so 8B on our 64-bit system. Why is there 8B of unused memory after it?
+
+This is because of memory alignment. Whenever a system loads some memory from a memory address, it's much more efficient if the address is a multiple of the number of bytes it wants to get. So if we want to load a 16B string struct, we want its address to be a multiple of 16.
 
 When we're allocating memory on the heap, the way we specify what alignment we want is to say how big each element is, and how many of them we want. In this case, we say we want 16B elements, and we want 3 of them. Then we use the first 16B slot to store the 8B refcount, and the 8B after it are unused.
 
-This is memory-inefficient, but it's the price we pay for having all the 24B `Point3d` values stored in addresses that are multiples of 24. It'd be worse for performance if we tried to pack everything tightly, so we accept the memory inefficiency as a cost of achieving better overall execution speed.
+This is memory-inefficient, but it's the price we pay for having all the 16B strings stored in addresses that are multiples of 16. It'd be worse for performance if we tried to pack everything tightly, so we accept the memory inefficiency as a cost of achieving better overall execution speed.
 
-> Note: if we happened to have 8B elements instead of 24B elements, the memory addresses would all align to 8 and we'd have no unused memory.
+> Note: if we happened to have 8B elements instead of 16B elements, the alignment would be 8 anyway and we'd have no unused memory.
 
 ## Reference counting
 
@@ -73,15 +73,18 @@ This would be a total disaster, so what we do instead is that we decide to leak 
 
 This has the downside of being potentially wasteful of the program's memory, but it's less detrimental to user experience than a crash, and it doesn't impact correctness at all.
 
-## Growing a list
+## Unique lists
+
+
+
+**TODO**: here, talk about how the refcount `usize` slot is repurposed to be a `capacity: usize` slot. Shared lists never need capacity because they're never mutated in place, and unique lists never need a refcount because they're always unique.
+
 
 If I call `List.append list1 list2`, and `list1` is unique, then we'll attempt to append `list2`'s contents in-place into `list1`.
 
 This will mean we first check to see if `list1.capacity <= list1.length + list2.length`. If it is, then we can copy in the new values without needing to allocate more memory for `list1`.
 
-If there is not enough capacity to fit both lists, or if `list1` is shared (meaning in-place mutation is not allowed), then we can try to call [`realloc`](https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/realloc?view=vs-2019) to hopefully extend the size of our allocated memory. If `realloc` succeeds (meaning there happened to be enough free memory right after our current allocation), then we update `capacity` to reflect the new amount of space, and move on.
-
-If `realloc` fails, then we have to allocate a new chunk of heap memory large enough to hold both (with a fresh refcount, since nothing is referencing htis new memory yet), then copy the contents of both lists into the new memory, and finally decrement the refcount of the old memory.
+However, if there is not enough capacity to fit both lists, or if `list1` is shared (meaning in-place mutation is not allowed), then we have to allocate a new chunk of heap memory large enough to hold both (with a fresh refcount, since nothing is referencing htis new memory yet), then copy the contents of both lists into the new memory, and finally decrement the refcount of the old memory.
 
 When this happens, the size of the new chunk of heap memory will be an exact fit to the contents of both lists. If you want, you can use `List.reserve` to guarantee more capacity in anticipation of future additions. (`List.reserve` works like Rust's [`Vec::reserve`](https://doc.rust-lang.org/std/vec/struct.Vec.html#method.reserve).)
 
@@ -94,15 +97,15 @@ Some lists may end up beginning with excess capacity due to memory alignment req
 This means the list `[ True, True, False ]` would have a memory layout like this:
 
 ```
-|-------8B-------|-------8B-------|--1B--|--1B--|--1B--|-----5B-----|
-     refcount         capacity     bool1  bool2  bool3    unused
+|------------8B------------|--1B--|--1B--|--1B--|-----5B-----|
+          refcount           bool1  bool2  bool3    unused
 ```
 
 As such, it would start out with a length of 3 and a capacity of 8.
 
 Note that since each bool value is a byte, it's okay for them to be packed side-by-side even though the overall alignment of the list elements is 8. This is fine because each of their individual memory addresses will end up being a multiple of their size in bytes.
 
-Note that unlike in the `List Point3d` example before, there wouldn't be any unused memory between the refcount and the first element in the list. That will always be the case when the size of the refcount is no bigger than the alignment of the list's elements.
+Note that unlike in the `List Str` example before, there wouldn't be any unused memory between the refcount and the first element in the list. That will always be the case when the size of the refcount is no bigger than the alignment of the list's elements.
 
 ## Summary of Lists
 
@@ -114,7 +117,9 @@ If that pointer is shared in multiple places, then there will be a `usize` refer
 
 Refcounts get incremented each time a list gets shared somewhere, and decremented each time that shared value is no longer referenced by anything else (for example, by going out of scope). Once there are no more references, the list's heap memory can be safely freed. If a reference count gets all the way up to `usize`, then it will never be decremented again and the memory will never be freed.
 
-Whenever a list grows, it will grow in-place if it's Unique and there is enough capacity (or if `realloc` succeeds). If there isn't enough capacity, or if the list is Shared, or if `realloc` fails, then instead new heap memory will be allocated, all the necessary elements will get copied into it, and the original list's refcount will be decremented.
+Whenever a list grows, it will grow in-place if it's Unique and there is enough capacity. If there isn't enough capacity, or if the list is Shared, then instead new heap memory will be allocated, all the necessary elements will get copied into it, and the original list's refcount will be decremented.
+
+If a list is too big for either its length or capacity to fit in a `usize/2` unsigned integer, then it gets promoted to a Large List. A Large List has a non-null pointer, but its capacity and length fields are set to 0 in the struct. Instead, its actual capacity and length are stored as `usize` values right before the refcount.
 
 ## Strings
 
@@ -138,8 +143,6 @@ That's a total of 48B to store 15B of data, when we could have fit the whole str
 The Small String Optimization is where we store strings directly in the struct, assuming they can fit in there. We reserve one of those bytes to indicate whether this is a Small String or a larger one that actually uses a pointer.
 
 ## String Memory Layout
-
-**UPDATE:** We no longer need to use the pointer at all; it will suffice to have the msbit of the length be 1 if it's small and 0 if it's nonsmall. A nice thing about this is that we can do bounds checking by loading just the length into a register, and don't even need to load the pointer at all.
 
 In the case of lists, we have Large Lists and regular lists. In the case of strings, we have Small, Medium, and Large strings. We already know how to tell Medium and Large apart (the pointer is non-null, but length and capacity are 0), but how do we tell Small strings apart from the other two?
 
