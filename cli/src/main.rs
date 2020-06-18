@@ -617,5 +617,5 @@ fn gen(
         .write_to_file(&env.module, FileType::Object, &dest_filename)
         .expect("Writing .o file failed");
 
-    println!("\nSuccess! 🎉\n\n\t➡ {}\n", dest_filename.display());
+    println!("\nSuccess!\n\n\t—> {}\n", dest_filename.display());
 }
