@@ -2,10 +2,10 @@ use bumpalo::Bump;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
-use roc_can::module::{Module, canonicalize_module_defs};
+use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_constrain::module::{
-    constrain_imported_aliases, constrain_imported_values, load_builtin_aliases, Import,
+    constrain_imports, load_builtin_aliases, pre_constrain_imports, ConstrainableImports,
 };
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName};
@@ -16,9 +16,8 @@ use roc_parse::parser::{Fail, Parser, State};
 use roc_region::all::{Located, Region};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
-use roc_types::solved_types::{Solved, SolvedType};
+use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
-use roc_types::types;
 use std::collections::{HashMap, HashSet};
 use std::fs::read_to_string;
 use std::io;
@@ -806,97 +805,22 @@ fn spawn_solve_module(
     exposed_types: &mut SubsByModule,
     stdlib: &StdLib,
 ) {
-    // Get the constriants for this module's imports. We do this on the main thread
+    let home = module.module_id;
+
+    // Get the constraints for this module's imports. We do this on the main thread
     // to avoid having to lock the map of exposed types, or to clone it
     // (which would be more expensive for the main thread).
-    let home = module.module_id;
-    let mut imported_symbols = Vec::with_capacity(module.references.len());
-    let mut imported_aliases = MutMap::default();
-    let mut unused_imports = imported_modules; // We'll remove these as we encounter them.
-
-    // Translate referenced symbols into constraints. We do this on the main
-    // thread because we need exclusive access to the exposed_types map, in order
-    // to get the necessary constraint info for any aliases we imported. We also
-    // resolve builtin types now, so we can use a refernce to stdlib instead of
-    // having to either clone it or recreate it from scratch on the other thread.
-    for &symbol in module.references.iter() {
-        let module_id = symbol.module_id();
-
-        // We used this one, so clearly it is not unused!
-        unused_imports.remove(&module_id);
-
-        if module_id.is_builtin() {
-            // For builtin modules, we create imports from the
-            // hardcoded builtin map.
-            match stdlib.types.get(&symbol) {
-                Some((solved_type, region)) => {
-                    let loc_symbol = Located {
-                        value: symbol,
-                        region: *region,
-                    };
-
-                    imported_symbols.push(Import {
-                        loc_symbol,
-                        solved_type: solved_type.clone(),
-                    });
-                }
-                None => {
-                    let is_valid_alias = stdlib.applies.contains(&symbol)
-                        // This wasn't a builtin value or Apply; maybe it was a builtin alias.
-                        || stdlib.aliases.contains_key(&symbol);
-
-                    if !is_valid_alias {
-                        panic!(
-                            "Could not find {:?} in builtin types {:?} or aliases {:?}",
-                            symbol, stdlib.types, stdlib.aliases
-                        );
-                    }
-                }
-            }
-        } else if module_id != home {
-            // We already have constraints for our own symbols.
-            let region = Region::zero(); // TODO this should be the region where this symbol was declared in its home module. Look that up!
-            let loc_symbol = Located {
-                value: symbol,
-                region,
-            };
-
-            match exposed_types.get(&module_id) {
-                Some(ExposedModuleTypes::Valid(solved_types, new_aliases)) => {
-                    let solved_type = solved_types.get(&symbol).unwrap_or_else(|| {
-                        panic!(
-                            "Could not find {:?} in solved_types {:?}",
-                            loc_symbol.value, solved_types
-                        )
-                    });
-
-                    // TODO should this be a union?
-                    for (k, v) in new_aliases.clone() {
-                        imported_aliases.insert(k, v);
-                    }
-
-                    imported_symbols.push(Import {
-                        loc_symbol,
-                        solved_type: solved_type.clone(),
-                    });
-                }
-                Some(ExposedModuleTypes::Invalid) => {
-                    // If that module was invalid, use True constraints
-                    // for everything imported from it.
-                    imported_symbols.push(Import {
-                        loc_symbol,
-                        solved_type: SolvedType::Erroneous(types::Problem::InvalidModule),
-                    });
-                }
-                None => {
-                    panic!(
-                        "Could not find module {:?} in exposed_types {:?}",
-                        module_id, exposed_types
-                    );
-                }
-            }
-        }
-    }
+    let ConstrainableImports {
+        imported_symbols,
+        imported_aliases,
+        unused_imports,
+    } = pre_constrain_imports(
+        home,
+        &module.references,
+        imported_modules,
+        exposed_types,
+        stdlib,
+    );
 
     for unused_import in unused_imports {
         todo!(
@@ -920,10 +844,12 @@ fn spawn_solve_module(
 
         // Finish constraining the module by wrapping the existing Constraint
         // in the ones we just computed. We can do this off the main thread.
-        // TODO what to do with the introduced rigids?
-        let (_introduced_rigids, constraint) =
-            constrain_imported_values(imported_symbols, constraint, &mut var_store);
-        let constraint = constrain_imported_aliases(imported_aliases, constraint, &mut var_store);
+        let constraint = constrain_imports(
+            imported_symbols,
+            imported_aliases,
+            constraint,
+            &mut var_store,
+        );
         let mut constraint = load_builtin_aliases(aliases, constraint, &mut var_store);
 
         // Turn Apply into Alias
