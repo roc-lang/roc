@@ -19,16 +19,21 @@ mod gen_module {
     use inkwell::passes::PassManager;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
+    use roc_builtins::std::Mode;
     use roc_can::{
         builtins::builtin_defs,
         def::Declaration,
         expected::Expected,
         expr::{canonicalize_expr, Env},
-        module::canonicalize_module_defs,
+        module::{canonicalize_module_defs, Module},
         operator,
         scope::Scope,
     };
     use roc_collections::all::{ImMap, MutMap, MutSet};
+    use roc_constrain::module::{
+        constrain_imported_aliases, constrain_imported_values, constrain_module,
+        load_builtin_aliases,
+    };
     use roc_gen::llvm::build::{build_proc, build_proc_header};
     use roc_gen::llvm::convert::basic_type_from_layout;
     use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
@@ -38,6 +43,7 @@ mod gen_module {
     use roc_parse::blankspace::space0_before;
     use roc_parse::parser::{self, loc, Parser};
     use roc_region::all::{Located, Region};
+    use roc_solve::module::solve_module;
     use roc_types::subs::{Subs, VarStore};
     use roc_types::types::Type;
 
@@ -62,6 +68,7 @@ mod gen_module {
         arena: &'a Bump,
         src: &str,
         main_fn_name: &str,
+        mode: Mode,
         ptr_bytes: u32,
     ) -> (ModuleId, Interns, Subs, Layout<'a>, roc_can::expr::Expr) {
         // Parse and desugar the src
@@ -91,7 +98,7 @@ mod gen_module {
         let dep_idents = MutMap::default();
         let exposed_imports = MutMap::default();
         let exposed_symbols = MutSet::default();
-        let var_store = VarStore::default();
+        let mut var_store = VarStore::default();
         let exposed_ident_ids: IdentIds = IdentIds::default();
 
         exposed_ident_ids.add(main_fn_name.into());
@@ -106,13 +113,13 @@ mod gen_module {
             dep_idents,
             exposed_imports,
             exposed_symbols,
-            &var_store,
+            &mut var_store,
         )
         .expect("Error canonicalizing test module");
 
         // Add the builtins as Declarations to the module.
         let module_output = {
-            let builtins = builtin_defs(&var_store);
+            let builtins = builtin_defs(&mut var_store);
             let decls = &mut module_output.declarations;
             let references = module_output.references;
 
@@ -129,6 +136,56 @@ mod gen_module {
             module_output
         };
 
+        let module = Module {
+            module_id: home,
+            exposed_imports: module_output.exposed_imports,
+            exposed_vars_by_symbol: module_output.exposed_vars_by_symbol,
+            references: module_output.references,
+            aliases: module_output.aliases,
+            rigid_variables: module_output.rigid_variables,
+        };
+
+        let constraint = {
+            let constraint = constrain_module(&module_output, home, mode, &mut var_store);
+
+            let aliases = match mode {
+                Mode::Standard => roc_builtins::std::aliases(),
+                Mode::Uniqueness => roc_builtins::unique::aliases(),
+            };
+
+            // TODO what to do with the introduced rigids?
+            let (_introduced_rigids, constraint) =
+                constrain_imported_values(imported_symbols, constraint, &mut var_store);
+            let constraint =
+                constrain_imported_aliases(imported_aliases, constraint, &mut var_store);
+            let mut constraint = load_builtin_aliases(aliases, constraint, &mut var_store);
+
+            // Turn Apply into Alias
+            constraint.instantiate_aliases(&mut var_store);
+
+            constraint
+        };
+
+        let (solved_subs, solved_module) = solve_module(module, constraint, var_store);
+
+        // ModuleOutput
+        // pub aliases: MutMap<Symbol, Alias>,
+        // pub rigid_variables: MutMap<Variable, Lowercase>,
+        // pub declarations: Vec<Declaration>,
+        // pub exposed_imports: MutMap<Symbol, Variable>,
+        // pub lookups: Vec<(Symbol, Variable, Region)>,
+        // pub problems: Vec<Problem>,
+        // pub ident_ids: IdentIds,
+        // pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+        // pub references: MutSet<Symbol>,
+
+        // Module
+        // pub module_id: ModuleId,
+        // pub exposed_imports: MutMap<Symbol, Variable>,
+        // pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+        // pub references: MutSet<Symbol>,
+        // pub aliases: MutMap<Symbol, Alias>,
+        // pub rigid_variables: MutMap<Variable, Lowercase>,
         // TODO type-check the module, making sure to use builtin types from std.rs/unique.rs
         // TODO monomorphize the module
         // TODO code gen the module
@@ -142,7 +199,7 @@ mod gen_module {
         let mut env = Env::new(home, dep_idents, &module_ids, IdentIds::default());
         let (loc_expr, output) = canonicalize_expr(
             &mut env,
-            &var_store,
+            &mut var_store,
             &mut scope,
             Region::zero(),
             &loc_expr.value,
@@ -240,7 +297,11 @@ mod gen_module {
             let target = target_lexicon::Triple::host();
             let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
             let main_fn_name = "#main";
-            let (home, interns, mut subs, main_layout, can_expr) = compile_main(&arena, $src, main_fn_name, ptr_bytes);
+            let mode =
+                if cfg!(debug_assertions) {
+                    Mode::Standard
+                } else { Mode::Uniqueness };
+            let (home, interns, mut subs, main_layout, can_expr) = compile_main(&arena, $src, main_fn_name, mode, ptr_bytes);
             let context = Context::create();
             let module = roc_gen::llvm::build::module_from_builtins(&context, "app");
             let builder = context.create_builder();
