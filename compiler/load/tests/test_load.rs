@@ -112,6 +112,7 @@ mod test_load {
                         );
                     }
                 }
+                Builtin(_) => {}
                 cycle @ InvalidCycle(_, _) => {
                     panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
                 }

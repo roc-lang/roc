@@ -86,6 +86,7 @@ mod test_opt {
             | Byte(_)
             | Load(_)
             | FunctionPointer(_, _)
+            | RunLowLevel(_)
             | RuntimeError(_)
             | RuntimeErrorFunction(_) => (),
 
