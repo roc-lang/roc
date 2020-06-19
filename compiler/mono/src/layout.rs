@@ -21,10 +21,14 @@ pub enum Layout<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Builtin<'a> {
+    Int128,
     Int64,
+    Int32,
+    Int16,
+    Int8,
+    Int1,
     Float64,
-    Bool,
-    Byte,
+    Float32,
     Str,
     Map(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
@@ -169,10 +173,14 @@ impl<'a> LayoutCache<'a> {
 }
 
 impl<'a> Builtin<'a> {
+    const I128_SIZE: u32 = std::mem::size_of::<i128>() as u32;
     const I64_SIZE: u32 = std::mem::size_of::<i64>() as u32;
+    const I32_SIZE: u32 = std::mem::size_of::<i32>() as u32;
+    const I16_SIZE: u32 = std::mem::size_of::<i16>() as u32;
+    const I8_SIZE: u32 = std::mem::size_of::<i8>() as u32;
+    const I1_SIZE: u32 = std::mem::size_of::<bool>() as u32;
     const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
-    const BOOL_SIZE: u32 = std::mem::size_of::<bool>() as u32;
-    const BYTE_SIZE: u32 = std::mem::size_of::<u8>() as u32;
+    const F32_SIZE: u32 = std::mem::size_of::<f32>() as u32;
 
     /// Number of machine words in an empty one of these
     pub const STR_WORDS: u32 = 2;
@@ -180,7 +188,7 @@ impl<'a> Builtin<'a> {
     pub const SET_WORDS: u32 = Builtin::MAP_WORDS; // Set is an alias for Map with {} for value
     pub const LIST_WORDS: u32 = 2;
 
-    /// Layout of collection wrapper for List and Str - a struct of (pointre, length).
+    /// Layout of collection wrapper for List and Str - a struct of (pointer, length).
     ///
     /// We choose this layout (with pointer first) because it's how
     /// Rust slices are laid out, meaning we can cast to/from them for free.
@@ -191,10 +199,14 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
+            Int128 => Builtin::I128_SIZE,
             Int64 => Builtin::I64_SIZE,
+            Int32 => Builtin::I32_SIZE,
+            Int16 => Builtin::I16_SIZE,
+            Int8 => Builtin::I8_SIZE,
+            Int1 => Builtin::I1_SIZE,
             Float64 => Builtin::F64_SIZE,
-            Bool => Builtin::BOOL_SIZE,
-            Byte => Builtin::BYTE_SIZE,
+            Float32 => Builtin::F32_SIZE,
             Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
             Map(_, _) | EmptyMap => Builtin::MAP_WORDS * pointer_size,
             Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
@@ -206,7 +218,8 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int64 | Float64 | Bool | Byte | EmptyStr | EmptyMap | EmptyList | EmptySet => true,
+            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Float64 | Float32 | EmptyStr
+            | EmptyMap | EmptyList | EmptySet => true,
             Str | Map(_, _) | Set(_) | List(_) => false,
         }
     }
@@ -481,8 +494,8 @@ pub fn layout_from_tag_union<'a>(
     match variant {
         Never => panic!("TODO gracefully handle trying to instantiate Never"),
         Unit => Layout::Struct(&[]),
-        BoolUnion { .. } => Layout::Builtin(Builtin::Bool),
-        ByteUnion(_) => Layout::Builtin(Builtin::Byte),
+        BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
+        ByteUnion(_) => Layout::Builtin(Builtin::Int8),
         Unwrapped(field_layouts) => match first_tag.0 {
             TagName::Private(Symbol::NUM_AT_NUM) => {
                 let arguments = first_tag.1;

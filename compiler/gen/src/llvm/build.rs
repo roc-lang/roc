@@ -1,4 +1,5 @@
 use crate::layout_id::LayoutIds;
+use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
     basic_type_from_layout, collection, get_fn_type, get_ptr_type, ptr_int,
 };
@@ -34,7 +35,7 @@ pub enum OptLevel {
     Optimize,
 }
 
-type Scope<'a, 'ctx> = ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>;
+pub type Scope<'a, 'ctx> = ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>;
 
 pub struct Env<'a, 'ctx, 'env> {
     pub arena: &'a Bump,
@@ -711,12 +712,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
         RuntimeError(_) => {
             todo!("LLVM build runtime error of {:?}", expr);
         }
-        RunLowLevel(op) => match op {
-            LowLevel::ListLen { arg } => BasicValueEnum::IntValue(load_list_len(
-                env.builder,
-                load_symbol(env, scope, arg).into_struct_value(),
-            )),
-        },
+        RunLowLevel(op, args) => run_low_level(env, layout_ids, scope, parent, *op, args),
     }
 }
 
@@ -851,9 +847,12 @@ fn build_switch<'a, 'ctx, 'env>(
         //
         // they either need to all be i8, or i64
         let int_val = match cond_layout {
+            Layout::Builtin(Builtin::Int128) => context.i128_type().const_int(*int as u64, false), /* TODO file an issue: you can't currently have an int literal bigger than 64 bits long, and also (as we see here), you can't currently have (at least in Inkwell) a when-branch with an i128 literal in its pattren  */
             Layout::Builtin(Builtin::Int64) => context.i64_type().const_int(*int as u64, false),
-            Layout::Builtin(Builtin::Bool) => context.bool_type().const_int(*int as u64, false),
-            Layout::Builtin(Builtin::Byte) => context.i8_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Int32) => context.i32_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Int16) => context.i16_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Int8) => context.i8_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Int1) => context.bool_type().const_int(*int as u64, false),
             _ => panic!("Can't cast to cond_layout = {:?}", cond_layout),
         };
         let block = context.append_basic_block(parent, format!("branch{}", int).as_str());
@@ -1266,78 +1265,6 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(int_val)
         }
-        Symbol::INT_EQ_I64 => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_compare(
-                IntPredicate::EQ,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "cmp_i64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::INT_NEQ_I64 => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_compare(
-                IntPredicate::NE,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "cmp_i64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::INT_EQ_I1 => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_compare(
-                IntPredicate::EQ,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "cmp_i1",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::INT_NEQ_I1 => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_compare(
-                IntPredicate::NE,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "cmp_i1",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::INT_EQ_I8 => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_compare(
-                IntPredicate::EQ,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "cmp_i8",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::INT_NEQ_I8 => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_compare(
-                IntPredicate::NE,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "cmp_i8",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
         Symbol::NUM_TO_FLOAT => {
             // TODO specialize this to be not just for i64!
             let builtin_fn_name = "i64_to_f64_";
@@ -1549,7 +1476,7 @@ fn call_intrinsic<'a, 'ctx, 'env>(
     })
 }
 
-fn load_list_len<'ctx>(
+pub fn load_list_len<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
@@ -1739,3 +1666,44 @@ pub fn get_call_conventions(cc: CallingConvention) -> u32 {
 /// Source: https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
 pub static C_CALL_CONV: u32 = 0;
 pub static COLD_CALL_CONV: u32 = 9;
+
+fn run_low_level<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    op: LowLevel,
+    args: &[(Expr<'a>, Layout<'a>)],
+) -> BasicValueEnum<'ctx> {
+    use LowLevel::*;
+
+    match op {
+        ListLen => {
+            debug_assert!(args.len() == 1);
+
+            let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+
+            BasicValueEnum::IntValue(load_list_len(env.builder, arg.into_struct_value()))
+        }
+        Eq => {
+            debug_assert_eq!(args.len(), 2);
+
+            let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let lhs_layout = &args[0].1;
+            let rhs_arg = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let rhs_layout = &args[1].1;
+
+            build_eq(env, lhs_arg, rhs_arg, lhs_layout, rhs_layout)
+        }
+        NotEq => {
+            debug_assert_eq!(args.len(), 2);
+
+            let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let lhs_layout = &args[0].1;
+            let rhs_arg = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let rhs_layout = &args[1].1;
+
+            build_neq(env, lhs_arg, rhs_arg, lhs_layout, rhs_layout)
+        }
+    }
+}

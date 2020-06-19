@@ -1,15 +1,14 @@
 use crate::expr::Env;
 use crate::expr::Expr;
 use crate::expr::Pattern;
-use bumpalo::Bump;
-use roc_collections::all::{MutMap, MutSet};
-use roc_module::ident::TagName;
-use roc_module::symbol::Symbol;
-
-use crate::expr::specialize_equality;
 use crate::layout::Builtin;
 use crate::layout::Layout;
 use crate::pattern::{Ctor, RenderAs, TagId, Union};
+use bumpalo::Bump;
+use roc_collections::all::{MutMap, MutSet};
+use roc_module::ident::TagName;
+use roc_module::low_level::LowLevel;
+use roc_module::symbol::Symbol;
 
 /// COMPILE CASES
 
@@ -1030,14 +1029,14 @@ fn test_to_equality<'a>(
             let lhs = Expr::Byte(test_byte);
             let rhs = path_to_expr(env, cond_symbol, &path, &cond_layout);
 
-            tests.push((lhs, rhs, Layout::Builtin(Builtin::Byte)));
+            tests.push((lhs, rhs, Layout::Builtin(Builtin::Int8)));
         }
 
         Test::IsBit(test_bit) => {
             let lhs = Expr::Bool(test_bit);
             let rhs = path_to_expr(env, cond_symbol, &path, &cond_layout);
 
-            tests.push((lhs, rhs, Layout::Builtin(Builtin::Bool)));
+            tests.push((lhs, rhs, Layout::Builtin(Builtin::Int8)));
         }
 
         Test::IsStr(test_str) => {
@@ -1059,7 +1058,7 @@ fn test_to_equality<'a>(
             let lhs = Expr::Bool(true);
             let rhs = Expr::Store(stores, env.arena.alloc(expr));
 
-            tests.push((lhs, rhs, Layout::Builtin(Builtin::Bool)));
+            tests.push((lhs, rhs, Layout::Builtin(Builtin::Int8)));
         }
     }
 }
@@ -1122,9 +1121,9 @@ fn decide_to_branching<'a>(
             let condition = boolean_all(env.arena, tests);
 
             let branch_symbol = env.unique_symbol();
-            let stores = [(branch_symbol, Layout::Builtin(Builtin::Bool), condition)];
+            let stores = [(branch_symbol, Layout::Builtin(Builtin::Int8), condition)];
 
-            let cond_layout = Layout::Builtin(Builtin::Bool);
+            let cond_layout = Layout::Builtin(Builtin::Int8);
 
             (
                 env.arena.alloc(stores),
@@ -1203,14 +1202,17 @@ fn boolean_all<'a>(arena: &'a Bump, tests: Vec<(Expr<'a>, Expr<'a>, Layout<'a>)>
     let mut expr = Expr::Bool(true);
 
     for (lhs, rhs, layout) in tests.into_iter().rev() {
-        let test = specialize_equality(arena, lhs, rhs, layout.clone());
+        let test = Expr::RunLowLevel(
+            LowLevel::Eq,
+            bumpalo::vec![in arena; (lhs, layout.clone()), (rhs, layout.clone())].into_bump_slice(),
+        );
 
         expr = Expr::CallByName {
             name: Symbol::BOOL_AND,
             layout,
             args: arena.alloc([
-                (test, Layout::Builtin(Builtin::Bool)),
-                (expr, Layout::Builtin(Builtin::Bool)),
+                (test, Layout::Builtin(Builtin::Int8)),
+                (expr, Layout::Builtin(Builtin::Int8)),
             ]),
         };
     }

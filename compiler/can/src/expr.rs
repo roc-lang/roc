@@ -90,7 +90,11 @@ pub enum Expr {
         Vec<(Variable, Located<Expr>)>,
         CalledVia,
     ),
-    RunLowLevel(LowLevel),
+    RunLowLevel {
+        op: LowLevel,
+        args: Vec<(Variable, Expr)>,
+        ret_var: Variable,
+    },
 
     Closure(
         Variable,

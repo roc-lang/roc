@@ -600,35 +600,29 @@ define_builtins! {
         6 INT_LOWEST: "lowest"
         7 INT_ADD: "#add"
         8 INT_SUB: "#sub"
-        9 INT_EQ_I64: "#eqi64" // Equality on 64-bit integers, the standard in Roc
-        10 INT_EQ_I1: "#eqi1" // Equality on boolean (theoretically i1) values
-        11 INT_EQ_I8: "#eqi8" // Equality on byte (theoretically i8) values
-        12 INT_DIV_UNSAFE: "divUnsafe" // TODO remove once we can code gen Result
-        13 INT_LT: "#lt"
-        14 INT_LTE: "#lte"
-        15 INT_GT: "#gt"
-        16 INT_GTE: "#gte"
-        17 INT_DIV_ARG_NUMERATOR: "div#numerator" // The first argument to `//`, the numerator
-        18 INT_DIV_ARG_DENOMINATOR: "div#denominator" // The first argument to `//`, the denominator
-        19 INT_NEQ_I64: "#neqi64"
-        20 INT_NEQ_I1: "#neqi1"
-        21 INT_NEQ_I8: "#neqi8"
-        22 INT_ABS: "abs"
-        23 INT_ABS_ARG: "abs#arg"
-        24 INT_REM_UNSAFE: "remUnsafe"
-        25 INT_REM: "rem"
-        26 INT_REM_ARG_0: "rem#arg0"
-        27 INT_REM_ARG_1: "rem#arg1"
-        28 INT_IS_ODD: "isOdd"
-        29 INT_IS_ODD_ARG: "isOdd#arg"
-        30 INT_IS_EVEN: "isEven"
-        31 INT_IS_EVEN_ARG: "isEven#arg"
-        32 INT_IS_ZERO: "isZero"
-        33 INT_IS_ZERO_ARG: "isZero#arg"
-        34 INT_IS_POSITIVE: "isPositive"
-        35 INT_IS_POSITIVE_ARG: "isPositive#arg"
-        36 INT_IS_NEGATIVE: "isNegative"
-        37 INT_IS_NEGATIVE_ARG: "isNegative#arg"
+        9 INT_DIV_UNSAFE: "divUnsafe" // TODO remove once we can code gen Result
+        10 INT_LT: "#lt"
+        11 INT_LTE: "#lte"
+        12 INT_GT: "#gt"
+        13 INT_GTE: "#gte"
+        14 INT_DIV_ARG_NUMERATOR: "div#numerator" // The first argument to `//`, the numerator
+        15 INT_DIV_ARG_DENOMINATOR: "div#denominator" // The first argument to `//`, the denominator
+        16 INT_ABS: "abs"
+        17 INT_ABS_ARG: "abs#arg"
+        18 INT_REM_UNSAFE: "remUnsafe"
+        19 INT_REM: "rem"
+        20 INT_REM_ARG_0: "rem#arg0"
+        21 INT_REM_ARG_1: "rem#arg1"
+        22 INT_IS_ODD: "isOdd"
+        23 INT_IS_ODD_ARG: "isOdd#arg"
+        24 INT_IS_EVEN: "isEven"
+        25 INT_IS_EVEN_ARG: "isEven#arg"
+        26 INT_IS_ZERO: "isZero"
+        27 INT_IS_ZERO_ARG: "isZero#arg"
+        28 INT_IS_POSITIVE: "isPositive"
+        29 INT_IS_POSITIVE_ARG: "isPositive#arg"
+        30 INT_IS_NEGATIVE: "isNegative"
+        31 INT_IS_NEGATIVE_ARG: "isNegative#arg"
     }
     3 FLOAT: "Float" => {
         0 FLOAT_FLOAT: "Float" imported // the Float.Float type alias

@@ -765,6 +765,13 @@ fn to_expr_report<'b>(
                     None,
                 )
             }
+            Reason::LowLevelOpArg { op, arg_index } => {
+                panic!(
+                    "Compiler bug: argument #{} to low-level operation {:?} was the wrong type!",
+                    arg_index.ordinal(),
+                    op
+                );
+            }
             Reason::FloatLiteral | Reason::IntLiteral | Reason::NumLiteral => {
                 unreachable!("I don't think these can be reached")
             }
@@ -892,6 +899,12 @@ fn add_category<'b>(
             alloc.text(" call produces:"),
         ]),
         CallResult(None) => alloc.concat(vec![this_is, alloc.text(":")]),
+        LowLevelOpResult(op) => {
+            panic!(
+                "Compiler bug: invalid return type from low-level op {:?}",
+                op
+            );
+        }
 
         Uniqueness => alloc.concat(vec![
             this_is,

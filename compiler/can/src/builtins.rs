@@ -176,11 +176,14 @@ fn int_is_positive(var_store: &mut VarStore) -> Expr {
 fn int_is_zero(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
 
-    let body = call(
-        Symbol::INT_EQ_I64,
-        vec![Var(Symbol::INT_IS_ZERO_ARG), Int(var_store.fresh(), 0)],
-        var_store,
-    );
+    let body = RunLowLevel {
+        op: LowLevel::Eq,
+        args: vec![
+            (var_store.fresh(), Var(Symbol::INT_IS_ZERO_ARG)),
+            (var_store.fresh(), Int(var_store.fresh(), 0)),
+        ],
+        ret_var: var_store.fresh(),
+    };
 
     defn(
         Symbol::INT_IS_ZERO,
@@ -194,18 +197,21 @@ fn int_is_zero(var_store: &mut VarStore) -> Expr {
 fn int_is_odd(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
 
-    let body = call(
-        Symbol::INT_EQ_I64,
-        vec![
-            call(
-                Symbol::INT_REM_UNSAFE,
-                vec![Var(Symbol::INT_IS_ODD_ARG), Int(var_store.fresh(), 2)],
-                var_store,
+    let body = RunLowLevel {
+        op: LowLevel::Eq,
+        args: vec![
+            (
+                var_store.fresh(),
+                call(
+                    Symbol::INT_REM_UNSAFE,
+                    vec![Var(Symbol::INT_IS_ODD_ARG), Int(var_store.fresh(), 2)],
+                    var_store,
+                ),
             ),
-            Int(var_store.fresh(), 1),
+            (var_store.fresh(), Int(var_store.fresh(), 1)),
         ],
-        var_store,
-    );
+        ret_var: var_store.fresh(),
+    };
 
     defn(
         Symbol::INT_IS_ODD,
@@ -219,18 +225,14 @@ fn int_is_odd(var_store: &mut VarStore) -> Expr {
 fn int_is_even(var_store: &mut VarStore) -> Expr {
     use crate::expr::Expr::*;
 
-    let body = call(
-        Symbol::INT_EQ_I64,
-        vec![
-            call(
-                Symbol::INT_REM_UNSAFE,
-                vec![Var(Symbol::INT_IS_EVEN_ARG), Int(var_store.fresh(), 2)],
-                var_store,
-            ),
-            Int(var_store.fresh(), 0),
+    let body = RunLowLevel {
+        op: LowLevel::Eq,
+        args: vec![
+            (var_store.fresh(), Var(Symbol::INT_IS_EVEN_ARG)),
+            (var_store.fresh(), Int(var_store.fresh(), 2)),
         ],
-        var_store,
-    );
+        ret_var: var_store.fresh(),
+    };
 
     defn(
         Symbol::INT_IS_EVEN,
@@ -246,12 +248,18 @@ fn list_len(var_store: &mut VarStore) -> Expr {
 
     // Polymorphic wrapper around LowLevel::ListLen
     let arg = Symbol::LIST_LEN_ARG;
+    let arg_var = var_store.fresh();
+    let ret_var = var_store.fresh();
 
     defn(
         Symbol::LIST_LEN,
         vec![arg],
         var_store,
-        RunLowLevel(LowLevel::ListLen { arg }),
+        RunLowLevel {
+            op: LowLevel::ListLen,
+            args: vec![(arg_var, Var(arg))],
+            ret_var,
+        },
     )
 }
 
@@ -338,11 +346,14 @@ fn int_rem(var_store: &mut VarStore) -> Expr {
             // if condition
             no_region(
                 // Int.neq arg1 0
-                call(
-                    Symbol::INT_NEQ_I64,
-                    vec![Var(Symbol::INT_REM_ARG_1), (Int(var_store.fresh(), 0))],
-                    var_store,
-                ),
+                RunLowLevel {
+                    op: LowLevel::NotEq,
+                    args: vec![
+                        (var_store.fresh(), Var(Symbol::INT_REM_ARG_1)),
+                        (var_store.fresh(), Int(var_store.fresh(), 0)),
+                    ],
+                    ret_var: var_store.fresh(),
+                },
             ),
             // arg1 was not zero
             no_region(
@@ -421,14 +432,14 @@ fn int_div(var_store: &mut VarStore) -> Expr {
             // if-condition
             no_region(
                 // Int.neq denominator 0
-                call(
-                    Symbol::INT_NEQ_I64,
-                    vec![
-                        Var(Symbol::INT_DIV_ARG_DENOMINATOR),
-                        (Int(var_store.fresh(), 0)),
+                RunLowLevel {
+                    op: LowLevel::NotEq,
+                    args: vec![
+                        (var_store.fresh(), Var(Symbol::INT_DIV_ARG_DENOMINATOR)),
+                        (var_store.fresh(), Int(var_store.fresh(), 0)),
                     ],
-                    var_store,
-                ),
+                    ret_var: var_store.fresh(),
+                },
             ),
             // denominator was not zero
             no_region(

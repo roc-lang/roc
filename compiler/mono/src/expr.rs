@@ -256,7 +256,7 @@ pub enum Expr<'a> {
         args: &'a [(Expr<'a>, Layout<'a>)],
     },
     CallByPointer(&'a Expr<'a>, &'a [Expr<'a>], Layout<'a>),
-    RunLowLevel(LowLevel),
+    RunLowLevel(LowLevel, &'a [(Expr<'a>, Layout<'a>)]),
 
     // Exactly two conditional branches, e.g. if/else
     Cond {
@@ -572,7 +572,20 @@ fn from_can<'a>(
             Expr::FunctionPointer(name, layout)
         }
 
-        RunLowLevel(op) => Expr::RunLowLevel(op),
+        RunLowLevel { op, args, .. } => {
+            let mut mono_args = Vec::with_capacity_in(args.len(), env.arena);
+
+            for (arg_var, arg_expr) in args {
+                let arg = from_can(env, arg_expr, procs, layout_cache);
+                let layout = layout_cache
+                    .from_var(env.arena, arg_var, env.subs, env.pointer_size)
+                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+                mono_args.push((arg, layout));
+            }
+
+            Expr::RunLowLevel(op, mono_args.into_bump_slice())
+        }
 
         Call(boxed, loc_args, _) => {
             let (fn_var, loc_expr, ret_var) = *boxed;
@@ -581,13 +594,8 @@ fn from_can<'a>(
                 Expr::Load(proc_name) => {
                     // Some functions can potentially mutate in-place.
                     // If we have one of those, switch to the in-place version if appropriate.
-                    match specialize_builtin_functions(
-                        env,
-                        proc_name,
-                        loc_args.as_slice(),
-                        ret_var,
-                        layout_cache,
-                    ) {
+                    match specialize_builtin_functions(env, proc_name, loc_args.as_slice(), ret_var)
+                    {
                         Symbol::LIST_SET => {
                             let subs = &env.subs;
                             // The first arg is the one with the List in it.
@@ -698,6 +706,7 @@ fn from_can<'a>(
             final_else,
         } => {
             let mut expr = from_can(env, final_else.value, procs, layout_cache);
+            let arena = env.arena;
 
             let ret_layout = layout_cache
                 .from_var(env.arena, branch_var, env.subs, env.pointer_size)
@@ -722,8 +731,8 @@ fn from_can<'a>(
                 };
 
                 expr = Expr::Store(
-                    env.arena
-                        .alloc(vec![(branch_symbol, Layout::Builtin(Builtin::Bool), cond)]),
+                    bumpalo::vec![in arena; (branch_symbol, Layout::Builtin(Builtin::Int8), cond)]
+                        .into_bump_slice(),
                     env.arena.alloc(cond_expr),
                 );
             }
@@ -1469,7 +1478,7 @@ pub fn specialize_all<'a>(
         for (name, mut by_layout) in pending_specializations.drain() {
             for (layout, pending) in by_layout.drain() {
                 // TODO should pending_procs hold a Rc<Proc>?
-                let partial_proc = procs
+                let partial_proc = dbg!(&procs)
                     .partial_procs
                     .get(&name)
                     .unwrap_or_else(|| panic!("Could not find partial_proc for {:?}", name))
@@ -1847,36 +1856,11 @@ fn from_can_record_destruct<'a>(
     }
 }
 
-pub fn specialize_equality<'a>(
-    arena: &'a Bump,
-    lhs: Expr<'a>,
-    rhs: Expr<'a>,
-    layout: Layout<'a>,
-) -> Expr<'a> {
-    let name = match &layout {
-        Layout::Builtin(builtin) => match builtin {
-            Builtin::Int64 => Symbol::INT_EQ_I64,
-            Builtin::Float64 => Symbol::FLOAT_EQ,
-            Builtin::Byte => Symbol::INT_EQ_I8,
-            Builtin::Bool => Symbol::INT_EQ_I1,
-            other => todo!("Cannot yet compare for equality {:?}", other),
-        },
-        other => todo!("Cannot yet compare for equality {:?}", other),
-    };
-
-    Expr::CallByName {
-        name,
-        layout: layout.clone(),
-        args: arena.alloc([(lhs, layout.clone()), (rhs, layout)]),
-    }
-}
-
 fn specialize_builtin_functions<'a>(
     env: &mut Env<'a, '_>,
     symbol: Symbol,
     loc_args: &[(Variable, Located<roc_can::expr::Expr>)],
     ret_var: Variable,
-    layout_cache: &mut LayoutCache<'a>,
 ) -> Symbol {
     use IntOrFloat::*;
 
@@ -1884,6 +1868,13 @@ fn specialize_builtin_functions<'a>(
         // return unchanged
         symbol
     } else {
+        if true {
+            todo!(
+                "replace specialize_builtin_functions({:?}) with a LowLevel op",
+                symbol
+            );
+        }
+
         match symbol {
             Symbol::NUM_ADD => match num_to_int_or_float(env.subs, ret_var) {
                 FloatType => Symbol::FLOAT_ADD,
@@ -1909,38 +1900,6 @@ fn specialize_builtin_functions<'a>(
                 FloatType => Symbol::FLOAT_GT,
                 IntType => Symbol::INT_GT,
             },
-            // TODO make this work for more than just int/float
-            Symbol::BOOL_EQ => {
-                match layout_cache.from_var(env.arena, loc_args[0].0, env.subs, env.pointer_size) {
-                    Ok(Layout::Builtin(builtin)) => match builtin {
-                        Builtin::Int64 => Symbol::INT_EQ_I64,
-                        Builtin::Float64 => Symbol::FLOAT_EQ,
-                        Builtin::Bool => Symbol::INT_EQ_I1,
-                        Builtin::Byte => Symbol::INT_EQ_I8,
-                        _ => panic!("Equality not implemented for {:?}", builtin),
-                    },
-                    Ok(complex) => panic!(
-                        "TODO support equality on complex layouts like {:?}",
-                        complex
-                    ),
-                    Err(()) => panic!("Invalid layout"),
-                }
-            }
-            Symbol::BOOL_NEQ => {
-                match layout_cache.from_var(env.arena, loc_args[0].0, env.subs, env.pointer_size) {
-                    Ok(Layout::Builtin(builtin)) => match builtin {
-                        Builtin::Int64 => Symbol::INT_NEQ_I64,
-                        Builtin::Bool => Symbol::INT_NEQ_I1,
-                        Builtin::Byte => Symbol::INT_NEQ_I8,
-                        _ => panic!("Not-Equality not implemented for {:?}", builtin),
-                    },
-                    Ok(complex) => panic!(
-                        "TODO support equality on complex layouts like {:?}",
-                        complex
-                    ),
-                    Err(()) => panic!("Invalid layout"),
-                }
-            }
             _ => symbol,
         }
     }
