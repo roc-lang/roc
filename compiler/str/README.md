@@ -29,8 +29,8 @@ First we'd have the `struct` above, with both `length` and `capacity` set to 2. 
 Here's how that heap memory would be laid out on a 64-bit system. It's a total of 48 bytes.
 
 ```
-|---8B---|---8B---|------16B------|------16B------|
- refcount  unused      string #1       string #2
+|------16B------|------16B------|---8B---|---8B---|
+     string #1       string #2   refcount  unused
 ```
 
 Just like how `List` is a `struct` that takes up `2 * usize` bytes in memory, `Str` takes up the same amount of memory - namely, 16B on a 64-bit system. That's why each of the two strings take up 16B of this heap-allocated memory. (Those structs may also point to other heap memory, but they could also be empty strings! Either way we just store the structs in the list, which take up 16B.)
@@ -63,17 +63,7 @@ For example, should `List.get 0` return the first 16B of the heap-allocated byte
 
 To solve this, the pointer in the List struct *always* points to the first element in the list. That means to access the reference count, it does negative pointer arithmetic to get the address at 16B *preceding* the memory address it has stored in its pointer field.
 
-### Saturated reference count
-
-What happens if the reference count overflows? As in, we try to reference the same list more than `usize` times?
-
-In this situation, the reference count becomes unreliable. Suppose we try to increment it 3 more times after it's already hit `usize::MAX`, and since we can't store any higher numbers, we leave it at `usize::MAX`. If we later decrement it `usize::MAX` times, we'll be down to 0 and will free the memory, even though 3 things are still referencing that memory!
-
-This would be a total disaster, so what we do instead is that we decide to leak the memory. Once the reference count hits `usize::MAX`, we neither increment nor decrement it ever again, which in turn means we will never free it.
-
-This has the downside of being potentially wasteful of the program's memory, but it's less detrimental to user experience than a crash, and it doesn't impact correctness at all.
-
-## Unique lists
+## Growing lists
 
 If uniqueness typing tells us that a list is Unique, we know two things about it:
 
@@ -91,6 +81,8 @@ First, `List.append` repurposes the `usize` slot normally used to store refcount
 When calling `List.append list1 list2` on a unique `list1`, first we'll check to see if `list1.capacity <= list1.length + list2.length`. If it is, then we can copy in the new values without needing to allocate more memory for `list1`.
 
 If there is not enough capacity to fit both lists, then we can try to call [`realloc`](https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/realloc?view=vs-2019) to hopefully extend the size of our allocated memory. If `realloc` succeeds (meaning there happened to be enough free memory right after our current allocation), then we update `capacity` to reflect the new amount of space, and move on.
+
+> **Note:** The reason we store capacity right after the last element in the list is becasue of how memory cache lines work. Whenever we need to access `capacity`, it's because we're about to increase the length of the list, which means that we will most certainly be writing to the memory location right after its last element. That in turn means that we'll need to have that memory location in cache, which in turn means that looking up the `capacity` there is guaranteed not to cause a cache miss. (It's possible that writing the new capacity value to a later address could cause a cache miss, but this strategy minimizes the chance of that happening.) An alternate design would be where we store the capacity right before the first element in the list. In that design we wouldn't have to re-write the capacity value at the end of the list every time we grew it, but we'd be much more likely to incur more cache misses that way - because we're working at the end of the list, not at the beginning. Cache misses are many times more expensive than an extra write to a memory address that's in cache already, not to mention the potential extra load instruction to add the length to the memory address of the first element (instead of subtracting 1 from that address), so we optimize for minimizing the highly expensive cache misses by always paying a tiny additional cost when increasing the length of the list, as well as a potential even tinier cost (zero, if the length already happens to be in a register) when looking up its capacity or refcount.
 
 If `realloc` fails, then we have to fall back on the same "allocate new memory and copy everything" strategy that we do with shared lists.
  
@@ -114,6 +106,29 @@ As such, if this list is Unique, it would start out with a length of 3 and a cap
 Since each bool value is a byte, it's okay for them to be packed side-by-side even though the overall alignment of the list elements is 8. This is fine because each of their individual memory addresses will end up being a multiple of their size in bytes.
 
 Note that unlike in the `List Str` example before, there wouldn't be any unused memory between the refcount (or capacity, depending on whether the list was shared or unique) and the first element in the list. That will always be the case when the size of the refcount is no bigger than the alignment of the list's elements.
+
+## Distinguishing bewteen refcount and capacity in the host
+
+If I'm a platform author, and I receive a `List` from the application, it's important that I be able to tell whether I'm dealing with a refcount or a capacity. (The uniqueness type information will have been erased by this time, because some applications will return a Unique list while others return a Shared list, so I need to be able to tell using runtime information only which is which.) This way, I can know to either increment the refcount, or to feel free to mutate it in-place using the capacity value.
+
+We use a very simple system to distinguish the two: if the high bit in that `usize` value is 0, then it's capacity. If it's 1, then it's a refcount.
+
+This has a couple of implications:
+
+* `capacity` actually has a maximum of `isize::MAX`, not `usize::MAX` - because if its high bit flips to 1, then now suddenly it's considered a refcount by the host. As it happens, capacity's maximum value is naturally `isize::MAX` anyway, so there's no downside here.
+* `refcount` actually begins at `isize::MIN` and increments towards 0, rather than beginning at 0 and incrementing towards a larger number. When a decrement instruction is executed and the refcount is `isize::MIN`, it gets freed instead. Since all refcounts do is count up and down, and they only ever compare the refcount to a fixed constant, there's no real performance cost to comparing to `isize::MIN` instead of to 0. So this has no significant downside either.
+
+Using this representation, hosts can trivially distinguish any list they receive as being either refcounted or having a capacity value, without any runtime cost in either the refcounted case or the capacity case.
+
+### Saturated reference count
+
+What happens if the reference count overflows? As in, we try to reference the same list more than `isize` times?
+
+In this situation, the reference count becomes unreliable. Suppose we try to increment it 3 more times after it's already been incremented `isize` times, and since we can't store any further numbers without flipping the high bit from 1 to 0 (meaning it will become a capacity value instead of a refcount), we leave it at -1. If we later decrement it `isize` times, we'll be down to `isize::MIN` and will free the memory, even though 3 things are still referencing that memory!
+
+This would be a total disaster, so what we do instead is that we decide to leak the memory. Once the reference count hits -1, we neither increment nor decrement it ever again, which in turn means we will never free it. So -1 is a special reference count meaning "this memory has become unreclaimable, and must never be freed."
+
+This has the downside of being potentially wasteful of the program's memory, but it's less detrimental to user experience than a crash, and it doesn't impact correctness at all.
 
 ## Summary of Lists
 
@@ -160,7 +175,7 @@ This makes calculating the length of the string a multi-step process:
 
 1. Get the length field out of the struct.
 2. Look at its highest bit. If that bit is 0, return the length as-is.
-3. If the bit is 1, then this is a small string, and its length is packed into the highest byte of the `usize` length field we're currently examining. Take that byte and bit shift it by 1 (to drop the `1` flag we used to indicate this is a small string), cast the resulting byte to `usize`, and that's our length.
+3. If the bit is 1, then this is a small string, and its length is packed into the highest byte of the `usize` length field we're currently examining. Take that byte and bit shift it by 1 (to drop the `1` flag we used to indicate this is a small string), cast the resulting byte to `usize`, and that's our length. (Actually we bit shift by 4, not 1, because we only need 4 bits to store a length of 0-16, and the leftover 3 bits can potentially be useful in the future.)
 
 Using this strategy with a [conditional move instruction](https://stackoverflow.com/questions/14131096/why-is-a-conditional-move-not-vulnerable-for-branch-prediction-failure), we can always get the length of a `Str` in 2-3 cheap instructions on a single `usize` value, without any chance of a branch misprediction.
 
