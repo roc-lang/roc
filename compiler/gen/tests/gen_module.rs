@@ -31,8 +31,7 @@ mod gen_module {
     };
     use roc_collections::all::{ImMap, MutMap, MutSet};
     use roc_constrain::module::{
-        constrain_imported_aliases, constrain_imported_values, constrain_module,
-        load_builtin_aliases,
+        constrain_imports, constrain_module, pre_constrain_imports, ConstrainableImports,
     };
     use roc_gen::llvm::build::{build_proc, build_proc_header};
     use roc_gen::llvm::convert::basic_type_from_layout;
@@ -148,17 +147,27 @@ mod gen_module {
         let constraint = {
             let constraint = constrain_module(&module_output, home, mode, &mut var_store);
 
-            let aliases = match mode {
-                Mode::Standard => roc_builtins::std::aliases(),
-                Mode::Uniqueness => roc_builtins::unique::aliases(),
-            };
+            let ConstrainableImports {
+                imported_symbols,
+                imported_aliases,
+                unused_imports,
+            } = pre_constrain_imports(
+                home,
+                &module.references,
+                imported_modules,
+                exposed_types,
+                stdlib,
+            );
 
-            // TODO what to do with the introduced rigids?
-            let (_introduced_rigids, constraint) =
-                constrain_imported_values(imported_symbols, constraint, &mut var_store);
-            let constraint =
-                constrain_imported_aliases(imported_aliases, constraint, &mut var_store);
-            let mut constraint = load_builtin_aliases(aliases, constraint, &mut var_store);
+            assert_eq!(unused_imports, MutSet::default());
+
+            let constraint = constrain_imports(
+                imported_symbols,
+                imported_aliases,
+                constraint,
+                &mut var_store,
+            );
+            let mut constraint = load_builtin_aliases(stdlib.aliases, constraint, &mut var_store);
 
             // Turn Apply into Alias
             constraint.instantiate_aliases(&mut var_store);
