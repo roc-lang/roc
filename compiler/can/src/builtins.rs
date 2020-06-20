@@ -52,6 +52,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::BOOL_NOT => bool_not,
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
+        Symbol::LIST_SET => list_set,
         Symbol::LIST_FIRST => list_first,
         Symbol::INT_DIV => int_div,
         Symbol::INT_ABS => int_abs,
@@ -343,7 +344,7 @@ fn list_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
-    // Perform a bounds check. If it passes, delegate to List.#getUnsafe
+    // Perform a bounds check. If it passes, run LowLevel::ListGetUnsafe
     let body = If {
         cond_var: var_store.fresh(),
         branch_var: var_store.fresh(),
@@ -370,22 +371,15 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 tag(
                     "Ok",
                     vec![
-                        // List.getUnsafe list index
-                        Call(
-                            Box::new((
-                                var_store.fresh(),
-                                no_region(Var(Symbol::LIST_GET_UNSAFE)),
-                                var_store.fresh(),
-                            )),
-                            vec![
-                                (var_store.fresh(), no_region(Var(Symbol::LIST_GET_ARG_LIST))),
-                                (
-                                    var_store.fresh(),
-                                    no_region(Var(Symbol::LIST_GET_ARG_INDEX)),
-                                ),
+                        // List#getUnsafe list index
+                        RunLowLevel {
+                            op: LowLevel::ListGetUnsafe,
+                            args: vec![
+                                (var_store.fresh(), Var(Symbol::LIST_GET_ARG_LIST)),
+                                (var_store.fresh(), Var(Symbol::LIST_GET_ARG_INDEX)),
                             ],
-                            CalledVia::Space,
-                        ),
+                            ret_var: var_store.fresh(),
+                        },
                     ],
                     var_store,
                 ),
@@ -401,6 +395,60 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     var_store,
                 ),
             ),
+        ),
+    };
+
+    defn(
+        symbol,
+        vec![Symbol::LIST_GET_ARG_LIST, Symbol::LIST_GET_ARG_INDEX],
+        var_store,
+        body,
+    )
+}
+
+/// List.set : List elem, Int, elem -> List elem
+fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    use crate::expr::Expr::*;
+
+    // Perform a bounds check. If it passes, run LowLevel::ListSetUnsafe.
+    // Otherwise, return the list unmodified.
+    let body = If {
+        cond_var: var_store.fresh(),
+        branch_var: var_store.fresh(),
+        branches: vec![(
+            // if-condition
+            no_region(
+                // index < List.len list
+                call(
+                    Symbol::NUM_LT,
+                    vec![
+                        Var(Symbol::LIST_SET_ARG_INDEX),
+                        RunLowLevel {
+                            op: LowLevel::ListLen,
+                            args: vec![(var_store.fresh(), Var(Symbol::LIST_SET_ARG_LIST))],
+                            ret_var: var_store.fresh(),
+                        },
+                    ],
+                    var_store,
+                ),
+            ),
+            // then-branch
+            no_region(
+                // List.setUnsafe list index
+                RunLowLevel {
+                    op: LowLevel::ListSetUnsafe,
+                    args: vec![
+                        (var_store.fresh(), Var(Symbol::LIST_SET_ARG_LIST)),
+                        (var_store.fresh(), Var(Symbol::LIST_SET_ARG_INDEX)),
+                        (var_store.fresh(), Var(Symbol::LIST_SET_ARG_ELEM)),
+                    ],
+                    ret_var: var_store.fresh(),
+                },
+            ),
+        )],
+        final_else: Box::new(
+            // else-branch
+            no_region(Var(Symbol::LIST_SET_ARG_LIST)),
         ),
     };
 
@@ -596,12 +644,15 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 tag(
                     "Ok",
                     vec![
-                        // List.#getUnsafe list 0
-                        call(
-                            Symbol::LIST_GET_UNSAFE,
-                            vec![(Var(Symbol::LIST_FIRST_ARG)), (Int(var_store.fresh(), 0))],
-                            var_store,
-                        ),
+                        // List#getUnsafe list 0
+                        RunLowLevel {
+                            op: LowLevel::ListGetUnsafe,
+                            args: vec![
+                                (var_store.fresh(), Var(Symbol::LIST_GET_ARG_LIST)),
+                                (var_store.fresh(), Int(var_store.fresh(), 0)),
+                            ],
+                            ret_var: var_store.fresh(),
+                        },
                     ],
                     var_store,
                 ),
@@ -666,8 +717,6 @@ fn defn(fn_name: Symbol, args: Vec<Symbol>, var_store: &mut VarStore, body: Expr
         Box::new((no_region(body), var_store.fresh())),
     );
 
-    let annotation = None; // TODO
-
     Def {
         loc_pattern: Located {
             region: Region::zero(),
@@ -679,6 +728,6 @@ fn defn(fn_name: Symbol, args: Vec<Symbol>, var_store: &mut VarStore, body: Expr
         },
         expr_var: var_store.fresh(),
         pattern_vars: SendMap::default(),
-        annotation,
+        annotation: None,
     }
 }

@@ -13,7 +13,7 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_builtins {
-    use crate::helpers::{can_expr, infer_expr, uniq_expr, with_larger_debug_stack, CanExprOut};
+    use crate::helpers::{can_expr, infer_expr, uniq_expr, CanExprOut};
     use bumpalo::Bump;
     use inkwell::context::Context;
     use inkwell::execution_engine::JitFunction;
@@ -95,17 +95,15 @@ mod gen_builtins {
 
     #[test]
     fn gen_add_f64() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!(
-                indoc!(
-                    r#"
+        assert_evals_to!(
+            indoc!(
+                r#"
                     1.1 + 2.4 + 3
                 "#
-                ),
-                6.5,
-                f64
-            );
-        })
+            ),
+            6.5,
+            f64
+        );
     }
 
     #[test]
@@ -149,17 +147,15 @@ mod gen_builtins {
 
     #[test]
     fn gen_add_i64() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!(
-                indoc!(
-                    r#"
+        assert_evals_to!(
+            indoc!(
+                r#"
                     1 + 2 + 3
                 "#
-                ),
-                6,
-                i64
-            );
-        })
+            ),
+            6,
+            i64
+        );
     }
 
     #[test]
@@ -451,22 +447,20 @@ mod gen_builtins {
     }
     #[test]
     fn tail_call_elimination() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!(
-                indoc!(
-                    r#"
-                sum = \n, accum ->
-                    when n is
-                        0 -> accum
-                        _ -> sum (n - 1) (n + accum)
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    sum = \n, accum ->
+                        when n is
+                            0 -> accum
+                            _ -> sum (n - 1) (n + accum)
 
-                sum 1_000_000 0
+                    sum 1_000_000 0
                 "#
-                ),
-                500000500000,
-                i64
-            );
-        })
+            ),
+            500000500000,
+            i64
+        );
     }
     #[test]
     fn int_negate() {
@@ -502,16 +496,12 @@ mod gen_builtins {
 
     #[test]
     fn empty_list_len() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!("List.len []", 0, usize);
-        })
+        assert_evals_to!("List.len []", 0, usize);
     }
 
     #[test]
     fn basic_int_list_len() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, usize);
-        })
+        assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, usize);
     }
 
     #[test]
@@ -553,43 +543,37 @@ mod gen_builtins {
 
     #[test]
     fn empty_list_is_empty() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!("List.isEmpty []", true, bool);
-        })
+        assert_evals_to!("List.isEmpty []", true, bool);
     }
 
     #[test]
     fn first_int_list() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!(
-                indoc!(
-                    r#"
+        assert_evals_to!(
+            indoc!(
+                r#"
                     when List.first [ 12, 9, 6, 3 ] is
                         Ok val -> val
                         Err _ -> -1
                 "#
-                ),
-                12,
-                i64
-            );
-        })
+            ),
+            12,
+            i64
+        );
     }
 
     #[test]
     fn first_empty_list() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!(
-                indoc!(
-                    r#"
+        assert_evals_to!(
+            indoc!(
+                r#"
                     when List.first [] is
                         Ok val -> val
                         Err _ -> -1
                 "#
-                ),
-                -1,
-                i64
-            );
-        })
+            ),
+            -1,
+            i64
+        );
     }
 
     #[test]
@@ -711,10 +695,9 @@ mod gen_builtins {
 
     #[test]
     fn gen_quicksort() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!(
-                indoc!(
-                    r#"
+        assert_evals_to!(
+            indoc!(
+                r#"
                     quicksort : List (Num a) -> List (Num a)
                     quicksort = \list ->
                         quicksortHelp list 0 (List.len list - 1)
@@ -774,10 +757,9 @@ mod gen_builtins {
 
                     quicksort [ 7, 4, 21, 19 ]
                 "#
-                ),
-                &[4, 7, 19, 21],
-                &'static [i64]
-            );
-        })
+            ),
+            &[4, 7, 19, 21],
+            &'static [i64]
+        );
     }
 }

@@ -13,7 +13,7 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_primitives {
-    use crate::helpers::{can_expr, infer_expr, uniq_expr, with_larger_debug_stack, CanExprOut};
+    use crate::helpers::{can_expr, infer_expr, uniq_expr, CanExprOut};
     use bumpalo::Bump;
     use inkwell::context::Context;
     use inkwell::execution_engine::JitFunction;
@@ -298,7 +298,7 @@ mod gen_primitives {
     }
 
     #[test]
-    fn apply_unnamed_fn() {
+    fn apply_unnamed_identity() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -406,30 +406,27 @@ mod gen_primitives {
 
     #[test]
     fn gen_chained_defs() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!(
-                indoc!(
-                    r#"
-                        x = i1
-                        i3 = i2
-                        i1 = 1337
-                        i2 = i1
-                        y = 12.4
-    
-                        i3
-                    "#
-                ),
-                1337,
-                i64
-            );
-        })
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x = i1
+                    i3 = i2
+                    i1 = 1337
+                    i2 = i1
+                    y = 12.4
+
+                    i3
+                "#
+            ),
+            1337,
+            i64
+        );
     }
     #[test]
     fn gen_nested_defs() {
-        with_larger_debug_stack(|| {
-            assert_evals_to!(
-                indoc!(
-                    r#"
+        assert_evals_to!(
+            indoc!(
+                r#"
                     x = 5
 
                     answer =
@@ -460,10 +457,9 @@ mod gen_primitives {
 
                     answer
                 "#
-                ),
-                1337,
-                i64
-            );
-        })
+            ),
+            1337,
+            i64
+        );
     }
 }

@@ -429,14 +429,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    add_type(
-        Symbol::LIST_GET_UNSAFE,
-        SolvedType::Func(
-            vec![list_type(flex(TVAR1)), int_type()],
-            Box::new(flex(TVAR1)),
-        ),
-    );
-
     // set : List elem, Int, elem -> List elem
     add_type(
         Symbol::LIST_SET,

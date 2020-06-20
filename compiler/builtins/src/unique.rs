@@ -541,11 +541,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    add_type(
-        Symbol::LIST_GET_UNSAFE,
-        unique_function(vec![list_type(UVAR1, TVAR1), int_type(UVAR2)], flex(TVAR1)),
-    );
-
     // set : Attr (w | u | v) (List (Attr u a))
     //     , Attr * Int
     //     , Attr (u | v) a

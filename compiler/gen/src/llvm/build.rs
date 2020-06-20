@@ -1259,39 +1259,6 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(int_val)
         }
-        Symbol::LIST_GET_UNSAFE => {
-            let builder = env.builder;
-
-            // List.get : List elem, Int -> [ Ok elem, OutOfBounds ]*
-            debug_assert!(args.len() == 2);
-
-            let (_, list_layout) = &args[0];
-
-            let wrapper_struct = args[0].0.into_struct_value();
-            let elem_index = args[1].0.into_int_value();
-
-            match list_layout {
-                Layout::Builtin(Builtin::List(elem_layout)) => {
-                    let ctx = env.context;
-                    let elem_type =
-                        basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-                    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-                    // Load the pointer to the array data
-                    let array_data_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
-
-                    // Assume the bounds have already been checked earlier
-                    // (e.g. by List.get or List.first, which wrap List.#getUnsafe)
-                    let elem_ptr = unsafe {
-                        builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem")
-                    };
-
-                    builder.build_load(elem_ptr, "List.get")
-                }
-                _ => {
-                    unreachable!("Invalid List layout for List.get: {:?}", list_layout);
-                }
-            }
-        }
         Symbol::FLOAT_SQRT => call_intrinsic(LLVM_SQRT_F64, env, args),
         Symbol::FLOAT_ROUND => call_intrinsic(LLVM_LROUND_I64_F64, env, args),
         Symbol::LIST_SET => list_set(parent, args, env, InPlace::Clone),
@@ -1704,6 +1671,42 @@ fn run_low_level<'a, 'ctx, 'env>(
             let bool_val = env.builder.build_not(arg.into_int_value(), "bool_not");
 
             BasicValueEnum::IntValue(bool_val)
+        }
+        ListGetUnsafe => {
+            // List.get : List elem, Int -> [ Ok elem, OutOfBounds ]*
+            debug_assert_eq!(args.len(), 2);
+
+            let builder = env.builder;
+            let (_, list_layout) = &args[0];
+            let wrapper_struct =
+                build_expr(env, layout_ids, scope, parent, &args[0].0).into_struct_value();
+            let elem_index =
+                build_expr(env, layout_ids, scope, parent, &args[1].0).into_int_value();
+
+            match list_layout {
+                Layout::Builtin(Builtin::List(elem_layout)) => {
+                    let ctx = env.context;
+                    let elem_type =
+                        basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+                    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+                    // Load the pointer to the array data
+                    let array_data_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
+
+                    // Assume the bounds have already been checked earlier
+                    // (e.g. by List.get or List.first, which wrap List.#getUnsafe)
+                    let elem_ptr = unsafe {
+                        builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem")
+                    };
+
+                    builder.build_load(elem_ptr, "List.get")
+                }
+                _ => {
+                    unreachable!("Invalid List layout for List.get: {:?}", list_layout);
+                }
+            }
+        }
+        ListSetUnsafe => {
+            todo!("re-implement List#setUnsafe");
         }
     }
 }

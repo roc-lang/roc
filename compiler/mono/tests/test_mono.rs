@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate pretty_assertions;
-// #[macro_use]
-// extern crate indoc;
+#[macro_use]
+extern crate indoc;
 
 extern crate bumpalo;
 extern crate roc_mono;
@@ -78,6 +78,20 @@ mod test_mono {
     #[test]
     fn float_literal() {
         compiles_to("0.5", Float(0.5));
+    }
+
+    #[test]
+    fn apply_identity() {
+        compiles_to(
+            indoc!(
+                r#"
+                    identity = \a -> a
+
+                    identity 5
+                "#
+            ),
+            Int(5),
+        );
     }
 
     #[test]
@@ -201,13 +215,13 @@ mod test_mono {
                 Store(
                     &[(
                         gen_symbol_0,
-                        Layout::Builtin(layout::Builtin::Bool),
+                        Layout::Builtin(layout::Builtin::Int1),
                         Expr::Bool(true),
                     )],
                     &Cond {
                         cond_symbol: gen_symbol_0,
                         branch_symbol: gen_symbol_0,
-                        cond_layout: Builtin(Bool),
+                        cond_layout: Builtin(Int1),
                         pass: (&[] as &[_], &Expr::Str("bar")),
                         fail: (&[] as &[_], &Expr::Str("foo")),
                         ret_layout: Builtin(Str),
@@ -239,26 +253,26 @@ mod test_mono {
                 Store(
                     &[(
                         gen_symbol_0,
-                        Layout::Builtin(layout::Builtin::Bool),
+                        Layout::Builtin(layout::Builtin::Int1),
                         Expr::Bool(true),
                     )],
                     &Cond {
                         cond_symbol: gen_symbol_0,
                         branch_symbol: gen_symbol_0,
-                        cond_layout: Builtin(Bool),
+                        cond_layout: Builtin(Int1),
                         pass: (&[] as &[_], &Expr::Str("bar")),
                         fail: (
                             &[] as &[_],
                             &Store(
                                 &[(
                                     gen_symbol_1,
-                                    Layout::Builtin(layout::Builtin::Bool),
+                                    Layout::Builtin(layout::Builtin::Int1),
                                     Expr::Bool(false),
                                 )],
                                 &Cond {
                                     cond_symbol: gen_symbol_1,
                                     branch_symbol: gen_symbol_1,
-                                    cond_layout: Builtin(Bool),
+                                    cond_layout: Builtin(Int1),
                                     pass: (&[] as &[_], &Expr::Str("foo")),
                                     fail: (&[] as &[_], &Expr::Str("baz")),
                                     ret_layout: Builtin(Str),
@@ -297,13 +311,13 @@ mod test_mono {
                         Store(
                             &[(
                                 gen_symbol_0,
-                                Layout::Builtin(layout::Builtin::Bool),
+                                Layout::Builtin(layout::Builtin::Int1),
                                 Expr::Bool(true),
                             )],
                             &Cond {
                                 cond_symbol: gen_symbol_0,
                                 branch_symbol: gen_symbol_0,
-                                cond_layout: Builtin(Bool),
+                                cond_layout: Builtin(Int1),
                                 pass: (&[] as &[_], &Expr::Str("bar")),
                                 fail: (&[] as &[_], &Expr::Str("foo")),
                                 ret_layout: Builtin(Str),
@@ -443,7 +457,7 @@ mod test_mono {
                 let home = test_home();
                 let var_x = interns.symbol(home, "x".into());
 
-                let stores = [(var_x, Layout::Builtin(Builtin::Bool), Bool(true))];
+                let stores = [(var_x, Layout::Builtin(Builtin::Int1), Bool(true))];
 
                 let load = Load(var_x);
 
@@ -467,7 +481,7 @@ mod test_mono {
                 let home = test_home();
                 let var_x = interns.symbol(home, "x".into());
 
-                let stores = [(var_x, Layout::Builtin(Builtin::Bool), Bool(false))];
+                let stores = [(var_x, Layout::Builtin(Builtin::Int1), Bool(false))];
 
                 let load = Load(var_x);
 
@@ -493,7 +507,7 @@ mod test_mono {
                 let var_x = interns.symbol(home, "x".into());
 
                 // orange gets index (and therefore tag_id) 1
-                let stores = [(var_x, Layout::Builtin(Builtin::Byte), Byte(2))];
+                let stores = [(var_x, Layout::Builtin(Builtin::Int8), Byte(2))];
 
                 let load = Load(var_x);
 
@@ -504,9 +518,9 @@ mod test_mono {
 
     #[test]
     fn set_unique_int_list() {
-        compiles_to("List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1", {
+        compiles_to("List.get (List.set [ 12, 9, 7, 3 ] 1 42) 1", {
             CallByName {
-                name: Symbol::LIST_GET_UNSAFE,
+                name: Symbol::LIST_GET,
                 layout: Layout::FunctionPointer(
                     &[
                         Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),

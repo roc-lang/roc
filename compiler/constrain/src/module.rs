@@ -411,7 +411,7 @@ pub fn pre_constrain_imports(
     for &symbol in references.iter() {
         let module_id = symbol.module_id();
 
-        // We used this one, so clearly it is not unused!
+        // We used this module, so clearly it is not unused!
         unused_imports.remove(&module_id);
 
         if module_id.is_builtin() {

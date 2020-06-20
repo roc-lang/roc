@@ -684,11 +684,13 @@ define_builtins! {
         11 LIST_LEN_ARG: "len#list"
         12 LIST_FOLDL: "foldl"
         13 LIST_FOLDR: "foldr"
-        14 LIST_GET_UNSAFE: "getUnsafe"
-        15 LIST_CONCAT: "concat"
-        16 LIST_FIRST: "first"
-        17 LIST_FIRST_ARG: "first#list"
-        18 LIST_SINGLE: "single"
+        14 LIST_CONCAT: "concat"
+        15 LIST_FIRST: "first"
+        16 LIST_FIRST_ARG: "first#list"
+        17 LIST_SINGLE: "single"
+        18 LIST_SET_ARG_LIST: "set#list"
+        19 LIST_SET_ARG_INDEX: "set#index"
+        20 LIST_SET_ARG_ELEM: "set#elem"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

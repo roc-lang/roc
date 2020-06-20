@@ -50,10 +50,7 @@ impl<'a> Layout<'a> {
 
         match content {
             var @ FlexVar(_) | var @ RigidVar(_) => {
-                panic!(
-                    "Layout::new encountered an unresolved {:?} - subs was {:?}",
-                    var, subs
-                );
+                panic!("Layout::new encountered an unresolved {:?}", var);
             }
             Structure(flat_type) => layout_from_flat_type(arena, flat_type, subs, pointer_size),
 

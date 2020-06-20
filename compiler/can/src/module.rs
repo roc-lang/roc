@@ -137,8 +137,13 @@ pub fn canonicalize_module_defs<'a>(
 
     let mut references = MutSet::default();
 
-    // Gather up all the symbols that were referenced across all the defs.
+    // Gather up all the symbols that were referenced across all the defs' lookups.
     for symbol in output.references.lookups.iter() {
+        references.insert(*symbol);
+    }
+
+    // Gather up all the symbols that were referenced across all the defs' calls.
+    for symbol in output.references.calls.iter() {
         references.insert(*symbol);
     }
 
@@ -228,6 +233,11 @@ pub fn canonicalize_module_defs<'a>(
 
             // Incorporate any remaining output.lookups entries into references.
             for symbol in output.references.lookups {
+                references.insert(symbol);
+            }
+
+            // Incorporate any remaining output.calls entries into references.
+            for symbol in output.references.calls {
                 references.insert(symbol);
             }
 

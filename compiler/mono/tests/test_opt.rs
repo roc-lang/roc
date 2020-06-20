@@ -13,6 +13,7 @@ mod helpers;
 mod test_opt {
     use crate::helpers::{infer_expr, uniq_expr};
     use bumpalo::Bump;
+    use roc_module::low_level::LowLevel;
     use roc_module::symbol::Symbol;
     use roc_mono::expr::Expr::{self, *};
     use roc_mono::expr::Procs;
@@ -86,7 +87,7 @@ mod test_opt {
             | Byte(_)
             | Load(_)
             | FunctionPointer(_, _)
-            | RunLowLevel(_)
+            | RunLowLevel(_, _)
             | RuntimeError(_)
             | RuntimeErrorFunction(_) => (),
 
@@ -234,16 +235,9 @@ mod test_opt {
         // This should optimize List.set to List.set_in_place
         compiles_to(
             "List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1",
-            CallByName {
-                name: Symbol::LIST_GET_UNSAFE,
-                layout: Layout::FunctionPointer(
-                    &[
-                        Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
-                        Layout::Builtin(Builtin::Int64),
-                    ],
-                    &Layout::Builtin(Builtin::Int64),
-                ),
-                args: &vec![
+            RunLowLevel(
+                LowLevel::ListGetUnsafe,
+                &vec![
                     (
                         CallByName {
                             name: Symbol::LIST_SET_IN_PLACE,
@@ -275,7 +269,7 @@ mod test_opt {
                     ),
                     (Int(1), Layout::Builtin(Builtin::Int64)),
                 ],
-            },
+            ),
         );
     }
 
@@ -293,7 +287,9 @@ mod test_opt {
                     { x, y: List.getUnsafe shared 1 }
                 "#
             ),
-            vec![Symbol::LIST_SET, Symbol::LIST_GET_UNSAFE],
+            vec![
+                Symbol::LIST_SET, /* Symbol::LIST_GET_UNSAFE TODO revise this test */
+            ],
         );
     }
 }
