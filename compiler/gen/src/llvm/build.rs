@@ -1402,7 +1402,7 @@ fn call_with_args<'a, 'ctx, 'env>(
         Symbol::FLOAT_ROUND => call_intrinsic(LLVM_LROUND_I64_F64, env, args),
         Symbol::LIST_SET => list_set(parent, args, env, InPlace::Clone),
         Symbol::LIST_SET_IN_PLACE => list_set(parent, args, env, InPlace::InPlace),
-        Symbol::LIST_PUSH => list_push(parent, args, env, InPlace::Clone),
+        Symbol::LIST_PUSH => list_push(parent, args, env),
         Symbol::LIST_SINGLE => {
             // List.single : a -> List a
             debug_assert!(args.len() == 1);
@@ -1653,7 +1653,6 @@ fn list_push<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
     env: &Env<'a, 'ctx, 'env>,
-    in_place: InPlace,
 ) -> BasicValueEnum<'ctx> {
     // List.push List elem, elem -> List elem
     let builder = env.builder;
@@ -1661,7 +1660,7 @@ fn list_push<'a, 'ctx, 'env>(
 
     debug_assert!(args.len() == 2);
 
-    let original_wrapper = args[1].0.into_struct_value();
+    let original_wrapper = args[0].0.into_struct_value();
 
     // Load the usize length from the wrapper. We need it for bounds checking.
     let list_len = load_list_len(builder, original_wrapper);
@@ -1673,7 +1672,7 @@ fn list_push<'a, 'ctx, 'env>(
     let elems_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
 
     let new_list_len = env.builder.build_int_add(
-        ctx.i32_type().const_int(
+        ctx.i64_type().const_int(
             // 0 as in 0 index of our new list
             1 as u64, false,
         ),
@@ -1729,7 +1728,7 @@ fn list_push<'a, 'ctx, 'env>(
 
     // Store the length
     struct_val = builder
-        .build_insert_value(struct_val, list_len, Builtin::WRAPPER_LEN, "insert_len")
+        .build_insert_value(struct_val, new_list_len, Builtin::WRAPPER_LEN, "insert_len")
         .unwrap();
 
     let answer = builder.build_bitcast(
