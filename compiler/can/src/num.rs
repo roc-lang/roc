@@ -8,7 +8,7 @@ use std::i64;
 
 #[inline(always)]
 pub fn num_expr_from_result(
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     result: Result<i64, &str>,
     env: &mut Env,
 ) -> Expr {
@@ -29,7 +29,7 @@ pub fn num_expr_from_result(
 
 #[inline(always)]
 pub fn int_expr_from_result(
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     result: Result<i64, &str>,
     env: &mut Env,
 ) -> Expr {
@@ -48,7 +48,7 @@ pub fn int_expr_from_result(
 
 #[inline(always)]
 pub fn float_expr_from_result(
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     result: Result<f64, &str>,
     env: &mut Env,
 ) -> Expr {

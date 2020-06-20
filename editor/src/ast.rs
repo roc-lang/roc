@@ -548,7 +548,7 @@ impl Module {
 fn single_backspace_1_caret() {
     use roc_types::subs::VarStore;
 
-    let var_store = VarStore::default();
+    let mut var_store = VarStore::default();
     let int_var = var_store.fresh();
     let int_node_id;
     let caret_node_id;
@@ -628,7 +628,7 @@ fn single_backspace_1_caret() {
 fn double_backspace_1_caret() {
     use roc_types::subs::VarStore;
 
-    let var_store = VarStore::default();
+    let mut var_store = VarStore::default();
     let int_var = var_store.fresh();
     let int_node_id;
     let caret_node_id;

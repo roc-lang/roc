@@ -28,7 +28,7 @@ pub struct Env {
 
 pub fn constrain_declaration(
     home: ModuleId,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     region: Region,
     loc_expr: &Located<Expr>,
     _declared_idents: &ImMap<Ident, (Symbol, Region)>,
@@ -61,7 +61,7 @@ pub fn constrain_decls(
     home: ModuleId,
     decls: &[Declaration],
     mut aliases: SendMap<Symbol, Alias>,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
 ) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
 
@@ -96,7 +96,7 @@ pub fn constrain_decls(
                             home,
                             rigids: ImMap::default(),
                         },
-                        &var_store,
+                        var_store,
                         &var_usage,
                         &mut ImSet::default(),
                         def,
@@ -113,7 +113,7 @@ pub fn constrain_decls(
                             home,
                             rigids: ImMap::default(),
                         },
-                        &var_store,
+                        var_store,
                         &var_usage,
                         &mut ImSet::default(),
                         defs,
@@ -135,7 +135,7 @@ pub struct PatternState {
 }
 
 fn constrain_pattern(
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     state: &mut PatternState,
     pattern: &Located<Pattern>,
     expected: PExpected<Type>,
@@ -347,7 +347,7 @@ fn constrain_pattern(
 
 fn unique_unbound_num(
     inner_var: Variable,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
 ) -> (Variable, Variable, Type, Variable) {
     let num_var = var_store.fresh();
     let num_uvar = var_store.fresh();
@@ -362,7 +362,7 @@ fn unique_unbound_num(
     (num_uvar, val_uvar, num_type, num_var)
 }
 
-fn unique_num(var_store: &VarStore, symbol: Symbol) -> (Variable, Variable, Type) {
+fn unique_num(var_store: &mut VarStore, symbol: Symbol) -> (Variable, Variable, Type) {
     let num_uvar = var_store.fresh();
     let val_uvar = var_store.fresh();
 
@@ -375,17 +375,17 @@ fn unique_num(var_store: &VarStore, symbol: Symbol) -> (Variable, Variable, Type
     (num_uvar, val_uvar, num_type)
 }
 
-fn unique_int(var_store: &VarStore) -> (Variable, Variable, Type) {
+fn unique_int(var_store: &mut VarStore) -> (Variable, Variable, Type) {
     unique_num(var_store, Symbol::INT_INTEGER)
 }
 
-fn unique_float(var_store: &VarStore) -> (Variable, Variable, Type) {
+fn unique_float(var_store: &mut VarStore) -> (Variable, Variable, Type) {
     unique_num(var_store, Symbol::FLOAT_FLOATINGPOINT)
 }
 
 pub fn constrain_expr(
     env: &Env,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     var_usage: &VarUsage,
     applied_usage_constraint: &mut ImSet<Symbol>,
     region: Region,
@@ -1350,7 +1350,7 @@ pub fn constrain_expr(
 }
 
 fn constrain_var(
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     applied_usage_constraint: &mut ImSet<Symbol>,
     symbol_for_lookup: Symbol,
     usage: Option<&Usage>,
@@ -1415,7 +1415,7 @@ fn constrain_var(
 
 fn constrain_by_usage(
     usage: &Usage,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     introduced: &mut Vec<Variable>,
 ) -> (Atom, Vec<Atom>, Type) {
     use Mark::*;
@@ -1478,7 +1478,7 @@ fn constrain_by_usage_list(
     fields: &FieldAccess,
     list_uniq_var: Atom,
     introduced: &mut Vec<Variable>,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
 ) -> (Atom, Vec<Atom>, Type) {
     let field_usage = fields
         .get(&sharing::LIST_ELEM.into())
@@ -1502,7 +1502,7 @@ fn constrain_by_usage_record(
     record_uniq_var: Atom,
     ext_type: Type,
     introduced: &mut Vec<Variable>,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
 ) -> (Atom, Vec<Atom>, Type) {
     let mut field_types = SendMap::default();
 
@@ -1547,7 +1547,7 @@ fn constrain_by_usage_record(
 // NOTE enabling the inline pragma can blow the stack in debug mode
 // #[inline(always)]
 fn constrain_when_branch(
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     var_usage: &VarUsage,
     applied_usage_constraint: &mut ImSet<Symbol>,
     env: &Env,
@@ -1628,7 +1628,7 @@ fn constrain_when_branch(
 }
 
 fn constrain_def_pattern(
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     loc_pattern: &Located<Pattern>,
     expr_type: Type,
 ) -> PatternState {
@@ -1649,7 +1649,7 @@ fn constrain_def_pattern(
 
 /// Turn e.g. `Int` into `Attr.Attr * Int`
 fn annotation_to_attr_type(
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     ann: &Type,
     rigids: &mut ImMap<Variable, Variable>,
     change_var_kind: bool,
@@ -1838,7 +1838,7 @@ fn annotation_to_attr_type(
 }
 
 fn annotation_to_attr_type_many(
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     anns: &[Type],
     rigids: &mut ImMap<Variable, Variable>,
     change_var_kind: bool,
@@ -1854,7 +1854,7 @@ fn annotation_to_attr_type_many(
         })
 }
 
-fn aliases_to_attr_type(var_store: &VarStore, aliases: &mut SendMap<Symbol, Alias>) {
+fn aliases_to_attr_type(var_store: &mut VarStore, aliases: &mut SendMap<Symbol, Alias>) {
     for alias in aliases.iter_mut() {
         // ensure
         //
@@ -1880,7 +1880,7 @@ fn aliases_to_attr_type(var_store: &VarStore, aliases: &mut SendMap<Symbol, Alia
 
 fn constrain_def(
     env: &Env,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     var_usage: &VarUsage,
     applied_usage_constraint: &mut ImSet<Symbol>,
     def: &Def,
@@ -1973,7 +1973,7 @@ fn constrain_def(
 }
 
 fn instantiate_rigids(
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     annotation: &Type,
     introduced_vars: &IntroducedVariables,
     new_rigids: &mut Vec<Variable>,
@@ -2041,7 +2041,7 @@ fn instantiate_rigids(
 
 fn constrain_recursive_defs(
     env: &Env,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     var_usage: &VarUsage,
     applied_usage_constraint: &mut ImSet<Symbol>,
     defs: &[Def],
@@ -2062,7 +2062,7 @@ fn constrain_recursive_defs(
 #[allow(clippy::too_many_arguments)]
 pub fn rec_defs_help(
     env: &Env,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     var_usage: &VarUsage,
     applied_usage_constraint: &mut ImSet<Symbol>,
     defs: &[Def],
@@ -2222,7 +2222,7 @@ pub fn rec_defs_help(
 #[inline(always)]
 fn constrain_field_update(
     env: &Env,
-    var_store: &VarStore,
+    var_store: &mut VarStore,
     var_usage: &VarUsage,
     applied_usage_constraint: &mut ImSet<Symbol>,
     var: Variable,

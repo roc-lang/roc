@@ -27,7 +27,7 @@ use inkwell::targets::{
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::process;
-use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
+use target_lexicon::{Architecture, Environment, OperatingSystem, Triple, Vendor};
 use tokio::process::Command;
 use tokio::runtime::Builder;
 
@@ -565,6 +565,8 @@ fn gen(
     // Best guide I've found on how to determine these magic strings:
     //
     // https://stackoverflow.com/questions/15036909/clang-how-to-list-supported-target-architectures
+    //
+    // Clang docs are particularly helpful: http://clang.llvm.org/docs/CrossCompilation.html
     let target_triple_str = match target {
         Triple {
             architecture: Architecture::X86_64,
@@ -590,6 +592,13 @@ fn gen(
             operating_system: OperatingSystem::Darwin,
             ..
         } => "x86_64-apple-darwin10",
+        Triple {
+            architecture: Architecture::X86_64,
+            vendor: Vendor::Pc,
+            operating_system: OperatingSystem::Windows,
+            environment: Environment::Msvc,
+            ..
+        } => "x86_64-pc-win32-gnu",
         _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
     };
     let target_machine = Target::from_name(arch_str)
@@ -608,5 +617,5 @@ fn gen(
         .write_to_file(&env.module, FileType::Object, &dest_filename)
         .expect("Writing .o file failed");
 
-    println!("\nSuccess! 🎉\n\n\t➡ {}\n", dest_filename.display());
+    println!("\nSuccess!\n\n\t—> {}\n", dest_filename.display());
 }
