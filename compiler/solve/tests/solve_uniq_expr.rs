@@ -8,7 +8,7 @@ extern crate bumpalo;
 mod helpers;
 
 #[cfg(test)]
-mod test_uniq_solve {
+mod solve_uniq_expr {
     use crate::helpers::{
         assert_correct_variable_usage, infer_expr, uniq_expr, with_larger_debug_stack,
     };
@@ -2109,7 +2109,9 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                    List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1
+                    when List.get (List.set [ 12, 9, 7, 3 ] 1 42) 1 is
+                        Ok num -> num
+                        Err OutOfBounds -> 0
                 "#
             ),
             "Attr * (Num (Attr * *))",

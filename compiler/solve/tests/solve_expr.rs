@@ -8,7 +8,7 @@ extern crate bumpalo;
 mod helpers;
 
 #[cfg(test)]
-mod test_solve {
+mod solve_expr {
     use crate::helpers::{
         assert_correct_variable_usage, can_expr, infer_expr, with_larger_debug_stack, CanExprOut,
     };
@@ -2518,7 +2518,7 @@ mod test_solve {
 
     #[test]
     fn rigids() {
-        // I was sligtly surprised this works
+        // I was slightly surprised this works
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -2527,10 +2527,9 @@ mod test_solve {
                     x : List b
                     x = []
 
-                    v = List.getUnsafe input 0
-
-                    List.push x v
-
+                    when List.get input 0 is
+                        Ok val -> List.push x val
+                        Err _ -> f input
                 f
                 "#
             ),
@@ -2543,7 +2542,7 @@ mod test_solve {
     #[should_panic]
     fn rigid_record_quantification() {
         // the ext here is qualified on the outside (because we have rank 1 types, not rank 2).
-        // That means e.g. `f : { bar : String, foo : Int } -> Bool }` is a valid argument. but
+        // That means e.g. `f : { bar : String, foo : Int } -> Bool }` is a valid argument, but
         // that function could not be applied to the `{ foo : Int }` list. Therefore, this function
         // is not allowed.
         //
