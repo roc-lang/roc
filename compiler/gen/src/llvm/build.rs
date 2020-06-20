@@ -1474,15 +1474,21 @@ fn call_with_args<'a, 'ctx, 'env>(
             // List.repeat : Int, a -> List a
             debug_assert!(args.len() == 2);
 
+            let ptr_bytes = env.ptr_bytes;
+
             let (elem, elem_layout) = args[1];
+
+            // Number of repeats
+            let list_len = args[0].0.into_int_value();
 
             let builder = env.builder;
             let ctx = env.context;
 
-            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+            // Allocate space for the new array that we'll copy into.
             let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
 
-            let ptr = {
+            let list_ptr = {
                 let bytes_len = elem_bytes;
                 let len_type = env.ptr_int();
                 let len = len_type.const_int(bytes_len, false);
@@ -1494,50 +1500,24 @@ fn call_with_args<'a, 'ctx, 'env>(
                 // TODO check if malloc returned null; if so, runtime error for OOM!
             };
 
-            // List elem length, as in, the number of elements
-            // in the output list. This could be negative, since
-            // it is just whatever value the function is given.
-            let list_elem_len = args[1].0.into_int_value();
+            // dbg!(elem_type);
 
-            let counter : BasicValueEnum<'ctx> = env.context.i64_type().const_int(0 as u64, true).into();
-
-            let comparison =
-
-            builder.build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
-
-
-            let loop_block = ctx.append_basic_block(parent, "loop");
-            builder.build_unconditional_branch(loop_block);
-            builder.position_at_end(loop_block);
-
-            let loop_step = || {
-                // Put the elements into the list
+            for (dummy_i) in (0..5) {
                 let elem_ptr = unsafe {
                     builder.build_in_bounds_gep(
-                        ptr,
-                        &[ctx.i32_type().const_int(0 as u64, false)],
-                        "index",
+                        list_ptr,
+                        &[ctx.i64_type().const_int(dummy_i, false)],
+                        "load_index",
                     )
                 };
 
+                // Mutate the new array in-place to change the element.
                 builder.build_store(elem_ptr, elem);
-            };
-            // // Bounds check: only proceed if index < length.
-            // // Otherwise, return the list unaltered.
-            // let end_condition = builder.build_int_compare(
-            //     IntPredicate::SLT,
-            //     ctx.i32_type().const_int(0 as u64, true),
-            //     list_elem_len,
-            //     "loopcond",
-            // );
-            //
-            // // let start_alloca = b.create_entry_block_alloca("#");
-            //
-            // let i = builder.build_load()
+            }
 
             let ptr_bytes = env.ptr_bytes;
             let int_type = ptr_int(ctx, ptr_bytes);
-            let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+            let ptr_as_int = builder.build_ptr_to_int(list_ptr, int_type, "list_cast_ptr");
             let struct_type = collection(ctx, ptr_bytes);
 
             let mut struct_val;
@@ -1554,12 +1534,7 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             // Store the length
             struct_val = builder
-                .build_insert_value(
-                    struct_val,
-                    list_elem_len,
-                    Builtin::WRAPPER_LEN,
-                    "insert_len",
-                )
+                .build_insert_value(struct_val, list_len, Builtin::WRAPPER_LEN, "insert_len")
                 .unwrap();
 
             //
