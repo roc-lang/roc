@@ -26,6 +26,8 @@ use roc_types::subs::{VarStore, Variable};
 /// which works fine because it doesn't involve any open tag unions.
 pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Expr> {
     mut_map! {
+        Symbol::BOOL_EQ => bool_eq(var_store),
+        Symbol::BOOL_NEQ => bool_neq(var_store),
         Symbol::LIST_LEN => list_len(var_store),
         Symbol::LIST_GET => list_get(var_store),
         Symbol::LIST_FIRST => list_first(var_store),
@@ -42,6 +44,48 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Expr> {
         Symbol::FLOAT_IS_ZERO => float_is_zero(var_store),
         Symbol::FLOAT_TAN => float_tan(var_store),
     }
+}
+
+/// Bool.isEq : val, val -> Bool
+fn bool_eq(var_store: &mut VarStore) -> Expr {
+    use crate::expr::Expr::*;
+
+    let body = RunLowLevel {
+        op: LowLevel::Eq,
+        args: vec![
+            (var_store.fresh(), Var(Symbol::BOOL_EQ_LHS)),
+            (var_store.fresh(), Var(Symbol::BOOL_EQ_RHS)),
+        ],
+        ret_var: var_store.fresh(),
+    };
+
+    defn(
+        Symbol::BOOL_EQ,
+        vec![Symbol::BOOL_EQ_LHS, Symbol::BOOL_EQ_RHS],
+        var_store,
+        body,
+    )
+}
+
+/// Bool.isNotEq : val, val -> Bool
+fn bool_neq(var_store: &mut VarStore) -> Expr {
+    use crate::expr::Expr::*;
+
+    let body = RunLowLevel {
+        op: LowLevel::NotEq,
+        args: vec![
+            (var_store.fresh(), Var(Symbol::BOOL_EQ_LHS)),
+            (var_store.fresh(), Var(Symbol::BOOL_EQ_RHS)),
+        ],
+        ret_var: var_store.fresh(),
+    };
+
+    defn(
+        Symbol::BOOL_NEQ,
+        vec![Symbol::BOOL_EQ_LHS, Symbol::BOOL_EQ_RHS],
+        var_store,
+        body,
+    )
 }
 
 /// Float.tan : Float -> Float
