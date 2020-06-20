@@ -9,6 +9,23 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 
+macro_rules! defs {
+    (@single $($x:tt)*) => (());
+    (@count $($rest:expr),*) => (<[()]>::len(&[$(defs!(@single $rest)),*]));
+
+    ($var_store:expr; $($key:expr => $func:expr,)+) => { defs!($var_store; $($key => $func),+) };
+    ($var_store:expr; $($key:expr => $func:expr),*) => {
+        {
+            let _cap = defs!(@count $($key),*);
+            let mut _map = ::std::collections::HashMap::with_capacity_and_hasher(_cap, roc_collections::all::default_hasher());
+            $(
+                let _ = _map.insert($key, $func($key, $var_store));
+            )*
+            _map
+        }
+    };
+}
+
 /// Some builtins cannot be constructed in code gen alone, and need to be defined
 /// as separate Roc defs. For example, List.get has this type:
 ///
@@ -27,32 +44,32 @@ use roc_types::subs::{VarStore, Variable};
 /// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
 /// which works fine because it doesn't involve any open tag unions.
 pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
-    mut_map! {
-        Symbol::BOOL_EQ => bool_eq(var_store),
-        Symbol::BOOL_NEQ => bool_neq(var_store),
-        Symbol::BOOL_AND => bool_and(var_store),
-        Symbol::BOOL_OR => bool_or(var_store),
-        Symbol::BOOL_NOT => bool_not(var_store),
-        Symbol::LIST_LEN => list_len(var_store),
-        Symbol::LIST_GET => list_get(var_store),
-        Symbol::LIST_FIRST => list_first(var_store),
-        Symbol::INT_DIV => int_div(var_store),
-        Symbol::INT_ABS => int_abs(var_store),
-        Symbol::INT_REM => int_rem(var_store),
-        Symbol::INT_IS_ODD => int_is_odd(var_store),
-        Symbol::INT_IS_EVEN => int_is_even(var_store),
-        Symbol::INT_IS_ZERO => int_is_zero(var_store),
-        Symbol::INT_IS_POSITIVE => int_is_positive(var_store),
-        Symbol::INT_IS_NEGATIVE => int_is_negative(var_store),
-        Symbol::FLOAT_IS_POSITIVE => float_is_positive(var_store),
-        Symbol::FLOAT_IS_NEGATIVE => float_is_negative(var_store),
-        Symbol::FLOAT_IS_ZERO => float_is_zero(var_store),
-        Symbol::FLOAT_TAN => float_tan(var_store),
+    defs! { var_store;
+        Symbol::BOOL_EQ => bool_eq,
+        Symbol::BOOL_NEQ => bool_neq,
+        Symbol::BOOL_AND => bool_and,
+        Symbol::BOOL_OR => bool_or,
+        Symbol::BOOL_NOT => bool_not,
+        Symbol::LIST_LEN => list_len,
+        Symbol::LIST_GET => list_get,
+        Symbol::LIST_FIRST => list_first,
+        Symbol::INT_DIV => int_div,
+        Symbol::INT_ABS => int_abs,
+        Symbol::INT_REM => int_rem,
+        Symbol::INT_IS_ODD => int_is_odd,
+        Symbol::INT_IS_EVEN => int_is_even,
+        Symbol::INT_IS_ZERO => int_is_zero,
+        Symbol::INT_IS_POSITIVE => int_is_positive,
+        Symbol::INT_IS_NEGATIVE => int_is_negative,
+        Symbol::FLOAT_IS_POSITIVE => float_is_positive,
+        Symbol::FLOAT_IS_NEGATIVE => float_is_negative,
+        Symbol::FLOAT_IS_ZERO => float_is_zero,
+        Symbol::FLOAT_TAN => float_tan,
     }
 }
 
 /// Bool.isEq : val, val -> Bool
-fn bool_eq(var_store: &mut VarStore) -> Def {
+fn bool_eq(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = RunLowLevel {
@@ -65,7 +82,7 @@ fn bool_eq(var_store: &mut VarStore) -> Def {
     };
 
     defn(
-        Symbol::BOOL_EQ,
+        symbol,
         vec![Symbol::BOOL_BINOP_LHS, Symbol::BOOL_BINOP_RHS],
         var_store,
         body,
@@ -73,7 +90,7 @@ fn bool_eq(var_store: &mut VarStore) -> Def {
 }
 
 /// Bool.isNotEq : val, val -> Bool
-fn bool_neq(var_store: &mut VarStore) -> Def {
+fn bool_neq(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = RunLowLevel {
@@ -86,7 +103,7 @@ fn bool_neq(var_store: &mut VarStore) -> Def {
     };
 
     defn(
-        Symbol::BOOL_NEQ,
+        symbol,
         vec![Symbol::BOOL_BINOP_LHS, Symbol::BOOL_BINOP_RHS],
         var_store,
         body,
@@ -94,7 +111,7 @@ fn bool_neq(var_store: &mut VarStore) -> Def {
 }
 
 /// Bool.or : val, val -> Bool
-fn bool_or(var_store: &mut VarStore) -> Def {
+fn bool_or(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = RunLowLevel {
@@ -107,7 +124,7 @@ fn bool_or(var_store: &mut VarStore) -> Def {
     };
 
     defn(
-        Symbol::BOOL_OR,
+        symbol,
         vec![Symbol::BOOL_BINOP_LHS, Symbol::BOOL_BINOP_RHS],
         var_store,
         body,
@@ -115,7 +132,7 @@ fn bool_or(var_store: &mut VarStore) -> Def {
 }
 
 /// Bool.not : Bool -> Bool
-fn bool_not(var_store: &mut VarStore) -> Def {
+fn bool_not(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = RunLowLevel {
@@ -124,16 +141,11 @@ fn bool_not(var_store: &mut VarStore) -> Def {
         ret_var: var_store.fresh(),
     };
 
-    defn(
-        Symbol::BOOL_NOT,
-        vec![Symbol::BOOL_BINOP_LHS],
-        var_store,
-        body,
-    )
+    defn(symbol, vec![Symbol::BOOL_BINOP_LHS], var_store, body)
 }
 
 /// Bool.and : val, val -> Bool
-fn bool_and(var_store: &mut VarStore) -> Def {
+fn bool_and(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = RunLowLevel {
@@ -146,7 +158,7 @@ fn bool_and(var_store: &mut VarStore) -> Def {
     };
 
     defn(
-        Symbol::BOOL_AND,
+        symbol,
         vec![Symbol::BOOL_BINOP_LHS, Symbol::BOOL_BINOP_RHS],
         var_store,
         body,
@@ -154,7 +166,7 @@ fn bool_and(var_store: &mut VarStore) -> Def {
 }
 
 /// Float.tan : Float -> Float
-fn float_tan(var_store: &mut VarStore) -> Def {
+fn float_tan(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = call(
@@ -174,16 +186,11 @@ fn float_tan(var_store: &mut VarStore) -> Def {
         var_store,
     );
 
-    defn(
-        Symbol::FLOAT_TAN,
-        vec![Symbol::FLOAT_TAN_ARG],
-        var_store,
-        body,
-    )
+    defn(symbol, vec![Symbol::FLOAT_TAN_ARG], var_store, body)
 }
 
 /// Float.isZero : Float -> Bool
-fn float_is_zero(var_store: &mut VarStore) -> Def {
+fn float_is_zero(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = call(
@@ -195,16 +202,11 @@ fn float_is_zero(var_store: &mut VarStore) -> Def {
         var_store,
     );
 
-    defn(
-        Symbol::FLOAT_IS_ZERO,
-        vec![Symbol::FLOAT_IS_ZERO_ARG],
-        var_store,
-        body,
-    )
+    defn(symbol, vec![Symbol::FLOAT_IS_ZERO_ARG], var_store, body)
 }
 
 /// Float.isNegative : Float -> Bool
-fn float_is_negative(var_store: &mut VarStore) -> Def {
+fn float_is_negative(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = call(
@@ -216,16 +218,11 @@ fn float_is_negative(var_store: &mut VarStore) -> Def {
         var_store,
     );
 
-    defn(
-        Symbol::FLOAT_IS_NEGATIVE,
-        vec![Symbol::FLOAT_IS_NEGATIVE_ARG],
-        var_store,
-        body,
-    )
+    defn(symbol, vec![Symbol::FLOAT_IS_NEGATIVE_ARG], var_store, body)
 }
 
 /// Float.isPositive : Float -> Bool
-fn float_is_positive(var_store: &mut VarStore) -> Def {
+fn float_is_positive(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = call(
@@ -237,16 +234,11 @@ fn float_is_positive(var_store: &mut VarStore) -> Def {
         var_store,
     );
 
-    defn(
-        Symbol::FLOAT_IS_POSITIVE,
-        vec![Symbol::FLOAT_IS_POSITIVE_ARG],
-        var_store,
-        body,
-    )
+    defn(symbol, vec![Symbol::FLOAT_IS_POSITIVE_ARG], var_store, body)
 }
 
 /// Int.isNegative : Int -> Bool
-fn int_is_negative(var_store: &mut VarStore) -> Def {
+fn int_is_negative(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = call(
@@ -255,16 +247,11 @@ fn int_is_negative(var_store: &mut VarStore) -> Def {
         var_store,
     );
 
-    defn(
-        Symbol::INT_IS_NEGATIVE,
-        vec![Symbol::INT_IS_NEGATIVE_ARG],
-        var_store,
-        body,
-    )
+    defn(symbol, vec![Symbol::INT_IS_NEGATIVE_ARG], var_store, body)
 }
 
 /// Int.isPositive : Int -> Bool
-fn int_is_positive(var_store: &mut VarStore) -> Def {
+fn int_is_positive(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = call(
@@ -273,16 +260,11 @@ fn int_is_positive(var_store: &mut VarStore) -> Def {
         var_store,
     );
 
-    defn(
-        Symbol::INT_IS_POSITIVE,
-        vec![Symbol::INT_IS_POSITIVE_ARG],
-        var_store,
-        body,
-    )
+    defn(symbol, vec![Symbol::INT_IS_POSITIVE_ARG], var_store, body)
 }
 
 /// Int.isZero : Int -> Bool
-fn int_is_zero(var_store: &mut VarStore) -> Def {
+fn int_is_zero(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = RunLowLevel {
@@ -294,16 +276,11 @@ fn int_is_zero(var_store: &mut VarStore) -> Def {
         ret_var: var_store.fresh(),
     };
 
-    defn(
-        Symbol::INT_IS_ZERO,
-        vec![Symbol::INT_IS_ZERO_ARG],
-        var_store,
-        body,
-    )
+    defn(symbol, vec![Symbol::INT_IS_ZERO_ARG], var_store, body)
 }
 
 /// Int.isOdd : Int -> Bool
-fn int_is_odd(var_store: &mut VarStore) -> Def {
+fn int_is_odd(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = RunLowLevel {
@@ -322,16 +299,11 @@ fn int_is_odd(var_store: &mut VarStore) -> Def {
         ret_var: var_store.fresh(),
     };
 
-    defn(
-        Symbol::INT_IS_ODD,
-        vec![Symbol::INT_IS_ODD_ARG],
-        var_store,
-        body,
-    )
+    defn(symbol, vec![Symbol::INT_IS_ODD_ARG], var_store, body)
 }
 
 /// Int.isEven : Int -> Bool
-fn int_is_even(var_store: &mut VarStore) -> Def {
+fn int_is_even(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = RunLowLevel {
@@ -343,16 +315,11 @@ fn int_is_even(var_store: &mut VarStore) -> Def {
         ret_var: var_store.fresh(),
     };
 
-    defn(
-        Symbol::INT_IS_EVEN,
-        vec![Symbol::INT_IS_EVEN_ARG],
-        var_store,
-        body,
-    )
+    defn(symbol, vec![Symbol::INT_IS_EVEN_ARG], var_store, body)
 }
 
 /// List.len : List * -> Int
-fn list_len(var_store: &mut VarStore) -> Def {
+fn list_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     // Polymorphic wrapper around LowLevel::ListLen
@@ -361,7 +328,7 @@ fn list_len(var_store: &mut VarStore) -> Def {
     let ret_var = var_store.fresh();
 
     defn(
-        Symbol::LIST_LEN,
+        symbol,
         vec![arg],
         var_store,
         RunLowLevel {
@@ -373,7 +340,7 @@ fn list_len(var_store: &mut VarStore) -> Def {
 }
 
 /// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
-fn list_get(var_store: &mut VarStore) -> Def {
+fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     // Perform a bounds check. If it passes, delegate to List.#getUnsafe
@@ -438,14 +405,15 @@ fn list_get(var_store: &mut VarStore) -> Def {
     };
 
     defn(
-        Symbol::LIST_GET,
+        symbol,
         vec![Symbol::LIST_GET_ARG_LIST, Symbol::LIST_GET_ARG_INDEX],
         var_store,
         body,
     )
 }
+
 /// Int.rem : Int, Int -> Int
-fn int_rem(var_store: &mut VarStore) -> Def {
+fn int_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = If {
@@ -489,7 +457,7 @@ fn int_rem(var_store: &mut VarStore) -> Def {
     };
 
     defn(
-        Symbol::INT_REM,
+        symbol,
         vec![Symbol::INT_REM_ARG_0, Symbol::INT_REM_ARG_1],
         var_store,
         body,
@@ -497,7 +465,7 @@ fn int_rem(var_store: &mut VarStore) -> Def {
 }
 
 /// Int.abs : Int -> Int
-fn int_abs(var_store: &mut VarStore) -> Def {
+fn int_abs(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = If {
@@ -527,11 +495,11 @@ fn int_abs(var_store: &mut VarStore) -> Def {
         ),
     };
 
-    defn(Symbol::INT_ABS, vec![Symbol::INT_ABS_ARG], var_store, body)
+    defn(symbol, vec![Symbol::INT_ABS_ARG], var_store, body)
 }
 
 /// Int.div : Int, Int -> Result Int [ DivByZero ]*
-fn int_div(var_store: &mut VarStore) -> Def {
+fn int_div(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     let body = If {
@@ -581,7 +549,7 @@ fn int_div(var_store: &mut VarStore) -> Def {
     };
 
     defn(
-        Symbol::INT_DIV,
+        symbol,
         vec![
             Symbol::INT_DIV_ARG_NUMERATOR,
             Symbol::INT_DIV_ARG_DENOMINATOR,
@@ -592,7 +560,7 @@ fn int_div(var_store: &mut VarStore) -> Def {
 }
 
 /// List.first : List elem -> Result elem [ ListWasEmpty ]*
-fn list_first(var_store: &mut VarStore) -> Def {
+fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
     // Perform a bounds check. If it passes, delegate to List.getUnsafe.
@@ -641,12 +609,7 @@ fn list_first(var_store: &mut VarStore) -> Def {
         ),
     };
 
-    defn(
-        Symbol::LIST_FIRST,
-        vec![Symbol::LIST_FIRST_ARG],
-        var_store,
-        body,
-    )
+    defn(symbol, vec![Symbol::LIST_FIRST_ARG], var_store, body)
 }
 
 #[inline(always)]
