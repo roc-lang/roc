@@ -287,66 +287,23 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             build_expr(env, layout_ids, &scope, parent, ret)
         }
-        CallByName { name, layout, args } => match *name {
-            Symbol::BOOL_OR => {
-                // The (||) operator
-                debug_assert!(args.len() == 2);
+        CallByName { name, layout, args } => {
+            let mut arg_tuples: Vec<(BasicValueEnum, &'a Layout<'a>)> =
+                Vec::with_capacity_in(args.len(), env.arena);
 
-                let comparison =
-                    build_expr(env, layout_ids, scope, parent, &args[0].0).into_int_value();
-                let build_then = || env.context.bool_type().const_int(true as u64, false).into();
-                let build_else = || build_expr(env, layout_ids, scope, parent, &args[1].0);
-
-                let ret_type = env.context.bool_type().into();
-
-                build_basic_phi2(env, parent, comparison, build_then, build_else, ret_type)
+            for (arg, arg_layout) in args.iter() {
+                arg_tuples.push((build_expr(env, layout_ids, scope, parent, arg), arg_layout));
             }
-            Symbol::BOOL_AND => {
-                // The (&&) operator
-                debug_assert!(args.len() == 2);
 
-                let comparison =
-                    build_expr(env, layout_ids, scope, parent, &args[0].0).into_int_value();
-                let build_then = || build_expr(env, layout_ids, scope, parent, &args[1].0);
-                let build_else = || {
-                    env.context
-                        .bool_type()
-                        .const_int(false as u64, false)
-                        .into()
-                };
-
-                let ret_type = env.context.bool_type().into();
-
-                build_basic_phi2(env, parent, comparison, build_then, build_else, ret_type)
-            }
-            Symbol::BOOL_NOT => {
-                // The (!) operator
-                debug_assert!(args.len() == 1);
-
-                let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
-
-                let int_val = env.builder.build_not(arg.into_int_value(), "bool_not");
-
-                BasicValueEnum::IntValue(int_val)
-            }
-            _ => {
-                let mut arg_tuples: Vec<(BasicValueEnum, &'a Layout<'a>)> =
-                    Vec::with_capacity_in(args.len(), env.arena);
-
-                for (arg, arg_layout) in args.iter() {
-                    arg_tuples.push((build_expr(env, layout_ids, scope, parent, arg), arg_layout));
-                }
-
-                call_with_args(
-                    env,
-                    layout_ids,
-                    layout,
-                    *name,
-                    parent,
-                    arg_tuples.into_bump_slice(),
-                )
-            }
-        },
+            call_with_args(
+                env,
+                layout_ids,
+                layout,
+                *name,
+                parent,
+                arg_tuples.into_bump_slice(),
+            )
+        }
         FunctionPointer(symbol, layout) => {
             let fn_name = layout_ids
                 .get(*symbol, layout)
@@ -1425,7 +1382,13 @@ fn call_with_args<'a, 'ctx, 'env>(
             let fn_val = env
                 .module
                 .get_function(fn_name.as_str())
-                .unwrap_or_else(|| panic!("Unrecognized function: {:?}", symbol));
+                .unwrap_or_else(|| {
+                    if symbol.is_builtin() {
+                        panic!("Unrecognized builtin function: {:?}", symbol)
+                    } else {
+                        panic!("Unrecognized non-builtin function: {:?}", symbol)
+                    }
+                });
 
             let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
 
@@ -1704,6 +1667,43 @@ fn run_low_level<'a, 'ctx, 'env>(
             let rhs_layout = &args[1].1;
 
             build_neq(env, lhs_arg, rhs_arg, lhs_layout, rhs_layout)
+        }
+        And => {
+            // The (&&) operator
+            debug_assert_eq!(args.len(), 2);
+
+            let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let rhs_arg = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let bool_val = env.builder.build_and(
+                lhs_arg.into_int_value(),
+                rhs_arg.into_int_value(),
+                "bool_and",
+            );
+
+            BasicValueEnum::IntValue(bool_val)
+        }
+        Or => {
+            // The (||) operator
+            debug_assert_eq!(args.len(), 2);
+
+            let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let rhs_arg = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let bool_val = env.builder.build_or(
+                lhs_arg.into_int_value(),
+                rhs_arg.into_int_value(),
+                "bool_or",
+            );
+
+            BasicValueEnum::IntValue(bool_val)
+        }
+        Not => {
+            // The (!) operator
+            debug_assert_eq!(args.len(), 1);
+
+            let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let bool_val = env.builder.build_not(arg.into_int_value(), "bool_not");
+
+            BasicValueEnum::IntValue(bool_val)
         }
     }
 }

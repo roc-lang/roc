@@ -7,4 +7,7 @@ pub enum LowLevel {
     ListLen,
     Eq,
     NotEq,
+    And,
+    Or,
+    Not,
 }

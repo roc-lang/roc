@@ -661,8 +661,8 @@ define_builtins! {
         4 BOOL_XOR: "xor"
         5 BOOL_EQ: "isEq"
         6 BOOL_NEQ: "isNotEq"
-        7 BOOL_EQ_LHS: "eq#lhs"
-        8 BOOL_EQ_RHS: "eq#rhs"
+        7 BOOL_BINOP_LHS: "bool#lhs"
+        8 BOOL_BINOP_RHS: "bool#rhs"
     }
     5 STR: "Str" => {
         0 STR_STR: "Str" imported // the Str.Str type alias
