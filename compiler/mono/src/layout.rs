@@ -48,7 +48,7 @@ impl<'a> Layout<'a> {
     ) -> Result<Self, ()> {
         use roc_types::subs::Content::*;
 
-        match dbg!(content) {
+        match content {
             var @ FlexVar(_) | var @ RigidVar(_) => {
                 panic!("Layout::new encountered an unresolved {:?}", var);
             }

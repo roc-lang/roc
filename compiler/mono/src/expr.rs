@@ -1478,11 +1478,9 @@ fn specialize<'a>(
 
     // unify the called function with the specialized signature, then specialize the function body
     let snapshot = env.subs.snapshot();
+    let unified = roc_unify::unify::unify(env.subs, annotation, fn_var);
 
-    debug_assert!(matches!(
-        roc_unify::unify::unify(env.subs, annotation, fn_var),
-        roc_unify::unify::Unified::Success(_)
-    ));
+    debug_assert!(matches!(unified, roc_unify::unify::Unified::Success(_)));
 
     let specialized_body = from_can(env, body, procs, layout_cache);
     // reset subs, so we don't get type errors when specializing for a different signature

@@ -188,6 +188,31 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         &loc_expr.value,
     );
 
+    // Add builtin defs (e.g. List.get) directly to the canonical Expr,
+    // since we aren't using modules here.
+    let mut with_builtins = loc_expr.value;
+    let builtin_defs = roc_can::builtins::builtin_defs(&mut var_store);
+
+    for (symbol, def) in builtin_defs {
+        if output.references.lookups.contains(&symbol) || output.references.calls.contains(&symbol)
+        {
+            with_builtins = Expr::LetNonRec(
+                Box::new(def),
+                Box::new(Located {
+                    region: Region::zero(),
+                    value: with_builtins,
+                }),
+                var_store.fresh(),
+                SendMap::default(),
+            );
+        }
+    }
+
+    let loc_expr = Located {
+        region: loc_expr.region,
+        value: with_builtins,
+    };
+
     let constraint = constrain_expr(
         &roc_constrain::expr::Env {
             rigids: ImMap::default(),
@@ -236,35 +261,6 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     let interns = Interns {
         module_ids: env.module_ids.clone(),
         all_ident_ids,
-    };
-
-    // Finally, add the builtins' defs. We add these defs *after* incorporating
-    // all their hardcoded constraints, so that their expressions do not affect
-    // constraint generation. (Only their hardcoded types should generate constraints.)
-    let mut with_builtins = loc_expr.value;
-
-    // Add builtin defs (e.g. List.get) directly to the canonical Expr,
-    // since we aren't using modules here.
-    let builtin_defs = roc_can::builtins::builtin_defs(&mut var_store);
-
-    for (symbol, def) in builtin_defs {
-        if output.references.lookups.contains(&symbol) || output.references.calls.contains(&symbol)
-        {
-            with_builtins = Expr::LetNonRec(
-                Box::new(def),
-                Box::new(Located {
-                    region: Region::zero(),
-                    value: with_builtins,
-                }),
-                var_store.fresh(),
-                SendMap::default(),
-            );
-        }
-    }
-
-    let loc_expr = Located {
-        region: loc_expr.region,
-        value: with_builtins,
     };
 
     CanExprOut {
