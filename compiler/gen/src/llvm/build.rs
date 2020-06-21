@@ -1483,6 +1483,13 @@ fn call_with_args<'a, 'ctx, 'env>(
             let (elem, elem_layout) = args[1];
             let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
 
+            // list_len > 0
+            // We have to do a loop below, continuously adding the `elem`
+            // to the output list `List elem` until we have reached the
+            // number of repeats. This `comparison` is used to check
+            // if we need to do any looping; because if we dont, then we
+            // dont need to allocate memory for the index or the check
+            // if index != 0
             let comparison = builder.build_int_compare(
                 IntPredicate::UGT,
                 list_len,
