@@ -398,7 +398,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 let byte_type = ctx.i8_type();
                 let nul_terminator = byte_type.const_zero();
-                let len_val = ctx.i32_type().const_int(str_len as u64, false);
+                let len_val = ctx.i64_type().const_int(str_len as u64, false);
                 let ptr = env
                     .builder
                     .build_array_malloc(ctx.i8_type(), len_val, "str_ptr")
@@ -408,7 +408,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 // Copy the bytes from the string literal into the array
                 for (index, byte) in str_literal.bytes().enumerate() {
-                    let index_val = ctx.i32_type().const_int(index as u64, false);
+                    let index_val = ctx.i64_type().const_int(index as u64, false);
                     let elem_ptr =
                         unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "byte") };
 
@@ -418,7 +418,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 // Add a NUL terminator at the end.
                 // TODO: Instead of NUL-terminating, return a struct
                 // with the pointer and also the length and capacity.
-                let index_val = ctx.i32_type().const_int(str_len as u64 - 1, false);
+                let index_val = ctx.i64_type().const_int(str_len as u64 - 1, false);
                 let elem_ptr =
                     unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "nul_terminator") };
 
@@ -456,7 +456,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 // Copy the elements from the list literal into the array
                 for (index, elem) in elems.iter().enumerate() {
-                    let index_val = ctx.i32_type().const_int(index as u64, false);
+                    let index_val = ctx.i64_type().const_int(index as u64, false);
                     let elem_ptr =
                         unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
                     let val = build_expr(env, layout_ids, &scope, parent, &elem);
@@ -1431,7 +1431,7 @@ fn call_with_args<'a, 'ctx, 'env>(
             let elem_ptr = unsafe {
                 builder.build_in_bounds_gep(
                     ptr,
-                    &[ctx.i32_type().const_int(
+                    &[ctx.i64_type().const_int(
                         // 0 as in 0 index of our new list
                         0 as u64, false,
                     )],
