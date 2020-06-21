@@ -12,9 +12,9 @@ use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, PointerType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
-use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{FloatValue, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
-use inkwell::{FloatPredicate, IntPredicate, OptimizationLevel};
+use inkwell::{IntPredicate, OptimizationLevel};
 use roc_collections::all::ImMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
@@ -1021,158 +1021,7 @@ fn call_with_args<'a, 'ctx, 'env>(
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
 ) -> BasicValueEnum<'ctx> {
     match symbol {
-        Symbol::INT_ADD | Symbol::NUM_ADD => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_add(
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "add_i64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::FLOAT_ADD => {
-            debug_assert!(args.len() == 2);
-
-            let float_val = env.builder.build_float_add(
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "add_f64",
-            );
-
-            BasicValueEnum::FloatValue(float_val)
-        }
-        Symbol::INT_SUB | Symbol::NUM_SUB => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_sub(
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "sub_i64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::FLOAT_DIV => {
-            debug_assert!(args.len() == 2);
-
-            let float_val = env.builder.build_float_div(
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "div_f64",
-            );
-
-            BasicValueEnum::FloatValue(float_val)
-        }
-        Symbol::FLOAT_SUB => {
-            debug_assert!(args.len() == 2);
-
-            let float_val = env.builder.build_float_sub(
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "sub_f64",
-            );
-
-            BasicValueEnum::FloatValue(float_val)
-        }
         Symbol::FLOAT_ABS => call_intrinsic(LLVM_FABS_F64, env, args),
-        Symbol::INT_GTE | Symbol::NUM_GTE => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_int_compare(
-                IntPredicate::SGE,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "gte_i64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Symbol::FLOAT_GTE => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_float_compare(
-                FloatPredicate::OGE,
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "gte_F64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Symbol::INT_GT | Symbol::NUM_GT => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_int_compare(
-                IntPredicate::SGT,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "gt_i64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Symbol::FLOAT_GT => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_float_compare(
-                FloatPredicate::OGT,
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "gt_f64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Symbol::INT_LTE | Symbol::NUM_LTE => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_int_compare(
-                IntPredicate::SLE,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "lte_i64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Symbol::FLOAT_LTE => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_float_compare(
-                FloatPredicate::OLE,
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "lte_f64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Symbol::INT_LT | Symbol::NUM_LT => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_int_compare(
-                IntPredicate::SLT,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "lt_i64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Symbol::FLOAT_LT => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_float_compare(
-                FloatPredicate::OLT,
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "lt_f64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
         Symbol::FLOAT_SIN => call_intrinsic(LLVM_SIN_F64, env, args),
         Symbol::FLOAT_COS => call_intrinsic(LLVM_COS_F64, env, args),
         Symbol::NUM_MUL => {
@@ -1246,18 +1095,6 @@ fn call_with_args<'a, 'ctx, 'env>(
             call.try_as_basic_value()
                 .left()
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call for builtin {:?}", symbol))
-        }
-        Symbol::FLOAT_EQ => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_float_compare(
-                FloatPredicate::OEQ,
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "cmp_f64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
         }
         Symbol::FLOAT_SQRT => call_intrinsic(LLVM_SQRT_F64, env, args),
         Symbol::FLOAT_ROUND => call_intrinsic(LLVM_LROUND_I64_F64, env, args),
@@ -1615,6 +1452,43 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(load_list_len(env.builder, arg.into_struct_value()))
         }
+        NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte => {
+            debug_assert_eq!(args.len(), 2);
+
+            let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let lhs_layout = &args[0].1;
+            let rhs_arg = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let rhs_layout = &args[1].1;
+
+            match (lhs_layout, rhs_layout) {
+                (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
+                    if lhs_builtin == rhs_builtin =>
+                {
+                    use roc_mono::layout::Builtin::*;
+
+                    match lhs_builtin {
+                        Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
+                            env.builder,
+                            lhs_arg.into_int_value(),
+                            rhs_arg.into_int_value(),
+                            op,
+                        ),
+                        Float64 | Float32 => build_float_binop(
+                            env.builder,
+                            lhs_arg.into_float_value(),
+                            rhs_arg.into_float_value(),
+                            op,
+                        ),
+                        _ => {
+                            unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, lhs_layout);
+                        }
+                    }
+                }
+                _ => {
+                    unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid layouts. The 2 layouts were: ({:?}) and ({:?})", op, lhs_layout, rhs_layout);
+                }
+            }
+        }
         Eq => {
             debug_assert_eq!(args.len(), 2);
 
@@ -1707,6 +1581,52 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         ListSetUnsafe => {
             todo!("re-implement List#setUnsafe");
+        }
+    }
+}
+
+fn build_int_binop<'ctx>(
+    bd: &Builder<'ctx>,
+    lhs: IntValue<'ctx>,
+    rhs: IntValue<'ctx>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    use inkwell::IntPredicate::*;
+    use roc_module::low_level::LowLevel::*;
+
+    match op {
+        NumAdd => bd.build_int_add(lhs, rhs, "add_int").into(),
+        NumSub => bd.build_int_sub(lhs, rhs, "sub_int").into(),
+        NumMul => bd.build_int_mul(lhs, rhs, "mul_int").into(),
+        NumGt => bd.build_int_compare(SGT, lhs, rhs, "int_gt").into(),
+        NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),
+        NumLt => bd.build_int_compare(SLT, lhs, rhs, "int_lt").into(),
+        NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
+        _ => {
+            unreachable!("Unrecognized int binary operation: {:?}", op);
+        }
+    }
+}
+
+fn build_float_binop<'ctx>(
+    bd: &Builder<'ctx>,
+    lhs: FloatValue<'ctx>,
+    rhs: FloatValue<'ctx>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    use inkwell::FloatPredicate::*;
+    use roc_module::low_level::LowLevel::*;
+
+    match op {
+        NumAdd => bd.build_float_add(lhs, rhs, "add_float").into(),
+        NumSub => bd.build_float_sub(lhs, rhs, "sub_float").into(),
+        NumMul => bd.build_float_mul(lhs, rhs, "mul_float").into(),
+        NumGt => bd.build_float_compare(OGT, lhs, rhs, "float_gt").into(),
+        NumGte => bd.build_float_compare(OGE, lhs, rhs, "float_gte").into(),
+        NumLt => bd.build_float_compare(OLT, lhs, rhs, "float_lt").into(),
+        NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
+        _ => {
+            unreachable!("Unrecognized int binary operation: {:?}", op);
         }
     }
 }

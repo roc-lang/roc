@@ -358,34 +358,6 @@ fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
     }
 }
 
-/// Given a `Num a`, determines whether it's an int or a float
-fn num_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
-    match subs.get_without_compacting(var).content {
-        Content::Alias(Symbol::NUM_NUM, args, _) => {
-            debug_assert!(args.len() == 1);
-
-            num_argument_to_int_or_float(subs, args[0].1)
-        }
-
-        Content::Alias(Symbol::INT_INT, _, _) => IntOrFloat::IntType,
-        Content::Alias(Symbol::FLOAT_FLOAT, _, _) => IntOrFloat::FloatType,
-
-        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
-            debug_assert!(attr_args.len() == 2);
-
-            // Recurse on the second argument
-            num_to_int_or_float(subs, attr_args[1])
-        }
-
-        other => {
-            panic!(
-                "Input variable is not a Num, but {:?} is a {:?}",
-                var, other
-            );
-        }
-    }
-}
-
 /// turn record/tag patterns into a when expression, e.g.
 ///
 /// foo = \{ x } -> body
@@ -586,8 +558,7 @@ fn from_can<'a>(
                 Expr::Load(proc_name) => {
                     // Some functions can potentially mutate in-place.
                     // If we have one of those, switch to the in-place version if appropriate.
-                    match specialize_builtin_functions(env, proc_name, loc_args.as_slice(), ret_var)
-                    {
+                    match proc_name {
                         Symbol::LIST_SET => {
                             let subs = &env.subs;
                             // The first arg is the one with the List in it.
@@ -723,7 +694,7 @@ fn from_can<'a>(
                 };
 
                 expr = Expr::Store(
-                    bumpalo::vec![in arena; (branch_symbol, Layout::Builtin(Builtin::Int8), cond)]
+                    bumpalo::vec![in arena; (branch_symbol, Layout::Builtin(Builtin::Int1), cond)]
                         .into_bump_slice(),
                     env.arena.alloc(cond_expr),
                 );
@@ -1837,54 +1808,5 @@ fn from_can_record_destruct<'a>(
             None => None,
             Some((_, loc_pattern)) => Some(from_can_pattern(env, &loc_pattern.value)),
         },
-    }
-}
-
-fn specialize_builtin_functions<'a>(
-    env: &mut Env<'a, '_>,
-    symbol: Symbol,
-    loc_args: &[(Variable, Located<roc_can::expr::Expr>)],
-    ret_var: Variable,
-) -> Symbol {
-    use IntOrFloat::*;
-
-    if !symbol.is_builtin() {
-        // return unchanged
-        symbol
-    } else {
-        if true {
-            todo!(
-                "replace specialize_builtin_functions({:?}) with a LowLevel op",
-                symbol
-            );
-        }
-
-        match symbol {
-            Symbol::NUM_ADD => match num_to_int_or_float(env.subs, ret_var) {
-                FloatType => Symbol::FLOAT_ADD,
-                IntType => Symbol::INT_ADD,
-            },
-            Symbol::NUM_SUB => match num_to_int_or_float(env.subs, ret_var) {
-                FloatType => Symbol::FLOAT_SUB,
-                IntType => Symbol::INT_SUB,
-            },
-            Symbol::NUM_LTE => match num_to_int_or_float(env.subs, loc_args[0].0) {
-                FloatType => Symbol::FLOAT_LTE,
-                IntType => Symbol::INT_LTE,
-            },
-            Symbol::NUM_LT => match num_to_int_or_float(env.subs, loc_args[0].0) {
-                FloatType => Symbol::FLOAT_LT,
-                IntType => Symbol::INT_LT,
-            },
-            Symbol::NUM_GTE => match num_to_int_or_float(env.subs, loc_args[0].0) {
-                FloatType => Symbol::FLOAT_GTE,
-                IntType => Symbol::INT_GTE,
-            },
-            Symbol::NUM_GT => match num_to_int_or_float(env.subs, loc_args[0].0) {
-                FloatType => Symbol::FLOAT_GT,
-                IntType => Symbol::INT_GT,
-            },
-            _ => symbol,
-        }
     }
 }

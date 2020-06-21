@@ -54,6 +54,13 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_GET => list_get,
         Symbol::LIST_SET => list_set,
         Symbol::LIST_FIRST => list_first,
+        Symbol::NUM_ADD => num_add,
+        Symbol::NUM_SUB => num_sub,
+        Symbol::NUM_MUL => num_mul,
+        Symbol::NUM_GT => num_gt,
+        Symbol::NUM_GTE => num_gte,
+        Symbol::NUM_LT => num_lt,
+        Symbol::NUM_LTE => num_lte,
         Symbol::INT_DIV => int_div,
         Symbol::INT_ABS => int_abs,
         Symbol::INT_REM => int_rem,
@@ -164,6 +171,56 @@ fn bool_and(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
     )
+}
+
+fn num_binop(symbol: Symbol, var_store: &mut VarStore, op: LowLevel) -> Def {
+    use crate::expr::Expr::*;
+
+    let body = RunLowLevel {
+        op,
+        args: vec![
+            (var_store.fresh(), Var(Symbol::ARG_1)),
+            (var_store.fresh(), Var(Symbol::ARG_2)),
+        ],
+        ret_var: var_store.fresh(),
+    };
+
+    defn(symbol, vec![Symbol::ARG_1, Symbol::ARG_2], var_store, body)
+}
+
+/// Num.add : Num a, Num a -> Num a
+fn num_add(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumAdd)
+}
+
+/// Num.sub : Num a, Num a -> Num a
+fn num_sub(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumSub)
+}
+
+/// Num.mul : Num a, Num a -> Num a
+fn num_mul(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumMul)
+}
+
+/// Num.gt : Num a, Num a -> Num a
+fn num_gt(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumGt)
+}
+
+/// Num.gte : Num a, Num a -> Num a
+fn num_gte(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumGte)
+}
+
+/// Num.lt : Num a, Num a -> Num a
+fn num_lt(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumLt)
+}
+
+/// Num.lte : Num a, Num a -> Num a
+fn num_lte(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumLte)
 }
 
 /// Float.tan : Float -> Float

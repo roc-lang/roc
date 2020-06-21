@@ -575,6 +575,14 @@ define_builtins! {
     0 ATTR: "#Attr" => {
         0 UNDERSCORE: "_" // the _ used in pattern matches. This is Symbol 0.
         1 ATTR_ATTR: "Attr" // the #Attr.Attr type alias, used in uniqueness types.
+        2 ARG_1: "#arg1"
+        3 ARG_2: "#arg2"
+        4 ARG_3: "#arg3"
+        5 ARG_4: "#arg4"
+        6 ARG_5: "#arg5"
+        7 ARG_6: "#arg6"
+        8 ARG_7: "#arg7"
+        9 ARG_8: "#arg8"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias

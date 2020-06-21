@@ -86,20 +86,6 @@ mod test_mono {
     }
 
     #[test]
-    fn apply_identity() {
-        compiles_to(
-            indoc!(
-                r#"
-                    identity = \a -> a
-
-                    identity 5
-                "#
-            ),
-            Int(5),
-        );
-    }
-
-    #[test]
     fn float_addition() {
         compiles_to(
             "3.0 + 4",
