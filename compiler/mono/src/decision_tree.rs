@@ -1207,14 +1207,13 @@ fn boolean_all<'a>(arena: &'a Bump, tests: Vec<(Expr<'a>, Expr<'a>, Layout<'a>)>
             bumpalo::vec![in arena; (lhs, layout.clone()), (rhs, layout.clone())].into_bump_slice(),
         );
 
-        expr = Expr::CallByName {
-            name: Symbol::BOOL_AND,
-            layout,
-            args: arena.alloc([
+        expr = Expr::RunLowLevel(
+            LowLevel::And,
+            arena.alloc([
                 (test, Layout::Builtin(Builtin::Int8)),
                 (expr, Layout::Builtin(Builtin::Int8)),
             ]),
-        };
+        );
     }
 
     expr
