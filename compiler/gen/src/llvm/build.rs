@@ -433,11 +433,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let builder = env.builder;
 
             if elems.is_empty() {
-                let struct_type = collection(ctx, env.ptr_bytes);
-
-                // The pointer should be null (aka zero) and the length should be zero,
-                // so the whole struct should be a const_zero
-                BasicValueEnum::StructValue(struct_type.const_zero())
+                empty_list(env)
             } else {
                 let len_u64 = elems.len() as u64;
                 let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
@@ -1582,16 +1578,7 @@ fn call_with_args<'a, 'ctx, 'env>(
                 )
             };
 
-            // If the number of repeats is 0 or lower, dont even
-            // bother allocating memory, since that it a costly
-            // operation. Just return an empty list.
-            let build_else = || {
-                let struct_type = collection(ctx, env.ptr_bytes);
-
-                // The pointer should be null (aka zero) and the length should be zero,
-                // so the whole struct should be a const_zero
-                BasicValueEnum::StructValue(struct_type.const_zero())
-            };
+            let build_else = || empty_list(env);
 
             let struct_type = collection(ctx, env.ptr_bytes);
 
@@ -1768,6 +1755,16 @@ fn clone_nonempty_list<'a, 'ctx, 'env>(
 enum InPlace {
     InPlace,
     Clone,
+}
+
+fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+
+    let struct_type = collection(ctx, env.ptr_bytes);
+
+    // The pointer should be null (aka zero) and the length should be zero,
+    // so the whole struct should be a const_zero
+    BasicValueEnum::StructValue(struct_type.const_zero())
 }
 
 fn bounds_check_comparison<'ctx>(
