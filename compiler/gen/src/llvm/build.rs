@@ -1670,6 +1670,7 @@ fn list_push<'a, 'ctx, 'env>(
 
     let elems_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
 
+    // The output list length, which is the old list length + 1
     let new_list_len = env.builder.build_int_add(
         ctx.i64_type().const_int(
             // 0 as in 0 index of our new list
