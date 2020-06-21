@@ -537,11 +537,12 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, ()> {
     use roc_types::subs::FlatType::*;
 
     match content {
-        var @ FlexVar(_) | var @ RigidVar(_) => {
-            panic!(
-                "Layout::from_num_content encountered an unresolved {:?}",
-                var
-            );
+        FlexVar(_) | RigidVar(_) => {
+            // If a Num makes it all the way through type checking with an unbound
+            // type variable, then assume it's a 64-bit integer.
+            //
+            // (e.g. for (5 + 5) assume both 5s are 64-bit integers.)
+            Ok(Layout::Builtin(Builtin::Int64))
         }
         Structure(Apply(symbol, args)) => match symbol {
             Symbol::INT_INTEGER => Ok(Layout::Builtin(Builtin::Int64)),
@@ -553,11 +554,11 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, ()> {
                 );
             }
         },
+        Alias(_, _, _) => {
+            todo!("TODO recursively resolve type aliases in num_from_content");
+        }
         Structure(_) => {
             panic!("Invalid Num.Num type application: {:?}", content);
-        }
-        Alias(_, _, _) => {
-            panic!("TODO recursively resolve type aliases in num_from_content");
         }
         Error => Err(()),
     }
