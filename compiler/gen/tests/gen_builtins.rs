@@ -503,11 +503,11 @@ mod gen_builtins {
     #[test]
     fn list_repeat() {
         assert_evals_to!("List.repeat 5 1", &[1, 1, 1, 1, 1], &'static [i64]);
-        // assert_evals_to!("List.repeat -1 1", &[], &'static [i64]);
-        // assert_evals_to!("List.repeat 4 5", &[5, 5, 5, 5], &'static [i64]);
+        assert_evals_to!("List.repeat -1 1", &[], &'static [i64]);
+        assert_evals_to!("List.repeat 4 2", &[2, 2, 2, 2], &'static [i64]);
 
-        // assert_evals_to!("List.repeat 0 []", &[], &'static [i64]);
-        // assert_evals_to!("List.repeat 2 []", &[&[], &[]], &'static [&'static [i64]]);
+        assert_evals_to!("List.repeat 0 []", &[], &'static [i64]);
+        assert_evals_to!("List.repeat 2 []", &[&[], &[]], &'static [&'static [i64]]);
     }
 
     #[test]

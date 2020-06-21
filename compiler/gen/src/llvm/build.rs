@@ -1471,12 +1471,8 @@ fn call_with_args<'a, 'ctx, 'env>(
             )
         }
         Symbol::LIST_REPEAT => {
-            // List.repeat : Int, a -> List a
+            // List.repeat : Int, elem -> List elem
             debug_assert!(args.len() == 2);
-
-            let ptr_bytes = env.ptr_bytes;
-
-            let (elem, elem_layout) = args[1];
 
             // Number of repeats
             let list_len = args[0].0.into_int_value();
@@ -1484,64 +1480,121 @@ fn call_with_args<'a, 'ctx, 'env>(
             let builder = env.builder;
             let ctx = env.context;
 
-            // Allocate space for the new array that we'll copy into.
-            let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+            let (elem, elem_layout) = args[1];
             let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
 
-            let list_ptr = {
-                let bytes_len = elem_bytes;
-                let len_type = env.ptr_int();
-                let len = len_type.const_int(bytes_len, false);
+            let comparison = builder.build_int_compare(
+                IntPredicate::UGT,
+                list_len,
+                ctx.i64_type().const_int(0, false),
+                "atleastzero",
+            );
 
-                env.builder
-                    .build_array_malloc(elem_type, len, "create_list_ptr")
-                    .unwrap()
+            let build_then = || {
+                // Allocate space for the new array that we'll copy into.
+                let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
 
-                // TODO check if malloc returned null; if so, runtime error for OOM!
-            };
+                let list_ptr = {
+                    let bytes_len = elem_bytes;
+                    let len_type = env.ptr_int();
+                    let len = len_type.const_int(bytes_len, false);
 
-            // dbg!(elem_type);
+                    env.builder
+                        .build_array_malloc(elem_type, len, "create_list_ptr")
+                        .unwrap()
 
-            for (dummy_i) in (0..5) {
-                let elem_ptr = unsafe {
-                    builder.build_in_bounds_gep(
-                        list_ptr,
-                        &[ctx.i64_type().const_int(dummy_i, false)],
-                        "load_index",
-                    )
+                    // TODO check if malloc returned null; if so, runtime error for OOM!
                 };
+
+                let index_name = "#index";
+                let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
+
+                builder.build_store(start_alloca, list_len);
+
+                let loop_bb = ctx.append_basic_block(parent, "loop");
+                builder.build_unconditional_branch(loop_bb);
+                builder.position_at_end(loop_bb);
+
+                // #index = #index - 1
+                let curr_index = builder
+                    .build_load(start_alloca, index_name)
+                    .into_int_value();
+                let next_index = builder.build_int_sub(
+                    curr_index,
+                    ctx.i64_type().const_int(1, false),
+                    "nextindex",
+                );
+
+                builder.build_store(start_alloca, next_index);
+
+                let elem_ptr =
+                    unsafe { builder.build_in_bounds_gep(list_ptr, &[curr_index], "load_index") };
 
                 // Mutate the new array in-place to change the element.
                 builder.build_store(elem_ptr, elem);
-            }
 
-            let ptr_bytes = env.ptr_bytes;
-            let int_type = ptr_int(ctx, ptr_bytes);
-            let ptr_as_int = builder.build_ptr_to_int(list_ptr, int_type, "list_cast_ptr");
-            let struct_type = collection(ctx, ptr_bytes);
+                // #index != 0
+                let end_cond = builder.build_int_compare(
+                    IntPredicate::NE,
+                    ctx.i64_type().const_int(0, false),
+                    curr_index,
+                    "loopcond",
+                );
 
-            let mut struct_val;
+                let after_bb = ctx.append_basic_block(parent, "afterloop");
 
-            // Store the pointer
-            struct_val = builder
-                .build_insert_value(
-                    struct_type.get_undef(),
-                    ptr_as_int,
-                    Builtin::WRAPPER_PTR,
-                    "insert_ptr",
+                builder.build_conditional_branch(end_cond, loop_bb, after_bb);
+                builder.position_at_end(after_bb);
+
+                let ptr_bytes = env.ptr_bytes;
+                let int_type = ptr_int(ctx, ptr_bytes);
+                let ptr_as_int = builder.build_ptr_to_int(list_ptr, int_type, "list_cast_ptr");
+                let struct_type = collection(ctx, ptr_bytes);
+
+                let mut struct_val;
+
+                // Store the pointer
+                struct_val = builder
+                    .build_insert_value(
+                        struct_type.get_undef(),
+                        ptr_as_int,
+                        Builtin::WRAPPER_PTR,
+                        "insert_ptr",
+                    )
+                    .unwrap();
+
+                // Store the length
+                struct_val = builder
+                    .build_insert_value(struct_val, list_len, Builtin::WRAPPER_LEN, "insert_len")
+                    .unwrap();
+
+                builder.build_bitcast(
+                    struct_val.into_struct_value(),
+                    collection(ctx, ptr_bytes),
+                    "cast_collection",
                 )
-                .unwrap();
+            };
 
-            // Store the length
-            struct_val = builder
-                .build_insert_value(struct_val, list_len, Builtin::WRAPPER_LEN, "insert_len")
-                .unwrap();
+            // If the number of repeats is 0 or lower, dont even
+            // bother allocating memory, since that it a costly
+            // operation. Just return an empty list.
+            let build_else = || {
+                let struct_type = collection(ctx, env.ptr_bytes);
 
-            //
-            builder.build_bitcast(
-                struct_val.into_struct_value(),
-                collection(ctx, ptr_bytes),
-                "cast_collection",
+                // The pointer should be null (aka zero) and the length should be zero,
+                // so the whole struct should be a const_zero
+                BasicValueEnum::StructValue(struct_type.const_zero())
+            };
+
+            let struct_type = collection(ctx, env.ptr_bytes);
+
+            build_basic_phi2(
+                env,
+                parent,
+                comparison,
+                build_then,
+                build_else,
+                BasicTypeEnum::StructType(struct_type),
             )
         }
         Symbol::INT_DIV_UNSAFE => {
