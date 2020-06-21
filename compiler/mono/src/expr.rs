@@ -107,6 +107,8 @@ impl<'a> Procs<'a> {
 
         self.add_pending_specialization(symbol, layout.clone(), pending);
 
+        debug_assert!(!self.partial_procs.contains_key(&symbol), "Procs was told to insert a value for symbol {:?}, but there was already an entry for that key! Procs should never attempt to insert duplicates.", symbol);
+
         self.partial_procs.insert(
             symbol,
             PartialProc {
