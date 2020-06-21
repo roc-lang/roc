@@ -1,7 +1,5 @@
 #[macro_use]
 extern crate pretty_assertions;
-#[macro_use]
-extern crate indoc;
 
 extern crate bumpalo;
 extern crate roc_mono;
@@ -13,11 +11,13 @@ mod helpers;
 mod test_mono {
     use crate::helpers::{can_expr, infer_expr, test_home, CanExprOut};
     use bumpalo::Bump;
+    use roc_collections::all::SendMap;
     use roc_module::symbol::{Interns, Symbol};
     use roc_mono::expr::Expr::{self, *};
     use roc_mono::expr::Procs;
     use roc_mono::layout;
     use roc_mono::layout::{Builtin, Layout, LayoutCache};
+    use roc_region::all::{Located, Region};
     use roc_types::subs::Subs;
 
     // HELPERS
@@ -33,13 +33,45 @@ mod test_mono {
         let arena = Bump::new();
         let CanExprOut {
             loc_expr,
-            var_store,
+            mut var_store,
             var,
             constraint,
             home,
             mut interns,
+            output,
             ..
         } = can_expr(src);
+
+        // Finally, add the builtins' defs. We add these defs *after* incorporating
+        // all their hardcoded constraints, so that their expressions do not affect
+        // constraint generation. (Only their hardcoded types should generate constraints.)
+        let mut with_builtins = loc_expr.value;
+
+        // Add builtin defs (e.g. List.get) directly to the canonical Expr,
+        // since we aren't using modules here.
+        let builtin_defs = roc_can::builtins::builtin_defs(&mut var_store);
+
+        for (symbol, def) in builtin_defs {
+            if output.references.lookups.contains(&symbol)
+                || output.references.calls.contains(&symbol)
+            {
+                with_builtins = roc_can::expr::Expr::LetNonRec(
+                    Box::new(def),
+                    Box::new(Located {
+                        region: Region::zero(),
+                        value: with_builtins,
+                    }),
+                    var_store.fresh(),
+                    SendMap::default(),
+                );
+            }
+        }
+
+        let loc_expr = Located {
+            region: loc_expr.region,
+            value: with_builtins,
+        };
+
         let subs = Subs::new(var_store.into());
         let mut unify_problems = Vec::new();
         let (_content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);

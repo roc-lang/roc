@@ -1433,21 +1433,14 @@ pub fn specialize_all<'a>(
         for (name, mut by_layout) in pending_specializations.drain() {
             for (layout, pending) in by_layout.drain() {
                 // TODO should pending_procs hold a Rc<Proc>?
-                let partial_proc = dbg!(&procs)
+                let partial_proc = procs
                     .partial_procs
                     .get(&name)
                     .unwrap_or_else(|| panic!("Could not find partial_proc for {:?}", name))
                     .clone();
 
-                dbg!(
-                    "{:?} is specializing partial_proc {:?}",
-                    &name,
-                    &partial_proc
-                );
-
                 match specialize(env, &mut procs, name, layout_cache, pending, partial_proc) {
                     Ok(proc) => {
-                        dbg!("{:?} specialized to {:?}", &name, &proc);
                         answer.push((name, layout, proc));
                     }
                     Err(()) => {
