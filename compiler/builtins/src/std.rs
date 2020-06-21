@@ -313,18 +313,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Float module
 
-    // isGt or (>) : Num a, Num a -> Bool
-    add_type(
-        Symbol::FLOAT_GT,
-        SolvedType::Func(vec![float_type(), float_type()], Box::new(bool_type())),
-    );
-
-    // eq or (==) : Num a, Num a -> Bool
-    add_type(
-        Symbol::FLOAT_EQ,
-        SolvedType::Func(vec![float_type(), float_type()], Box::new(bool_type())),
-    );
-
     // div : Float, Float -> Float
     add_type(
         Symbol::FLOAT_DIV,

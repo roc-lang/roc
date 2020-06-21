@@ -122,7 +122,7 @@ mod test_mono {
         compiles_to(
             "3.0 + 4",
             CallByName {
-                name: Symbol::FLOAT_ADD,
+                name: Symbol::NUM_ADD,
                 layout: Layout::FunctionPointer(
                     &[
                         Layout::Builtin(Builtin::Float64),
@@ -143,7 +143,7 @@ mod test_mono {
         compiles_to(
             "0xDEADBEEF + 4",
             CallByName {
-                name: Symbol::INT_ADD,
+                name: Symbol::NUM_ADD,
                 layout: Layout::FunctionPointer(
                     &[
                         Layout::Builtin(Builtin::Int64),
@@ -165,7 +165,7 @@ mod test_mono {
         compiles_to(
             "3 + 5",
             CallByName {
-                name: Symbol::INT_ADD,
+                name: Symbol::NUM_ADD,
                 layout: Layout::FunctionPointer(
                     &[
                         Layout::Builtin(Builtin::Int64),

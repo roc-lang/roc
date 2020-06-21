@@ -251,14 +251,14 @@ fn float_tan(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn float_is_zero(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
-    let body = call(
-        Symbol::FLOAT_EQ,
-        vec![
-            Float(var_store.fresh(), 0.0),
-            Var(Symbol::FLOAT_IS_ZERO_ARG),
+    let body = RunLowLevel {
+        op: LowLevel::Eq,
+        args: vec![
+            (var_store.fresh(), Float(var_store.fresh(), 0.0)),
+            (var_store.fresh(), Var(Symbol::FLOAT_IS_ZERO_ARG)),
         ],
-        var_store,
-    );
+        ret_var: var_store.fresh(),
+    };
 
     defn(symbol, vec![Symbol::FLOAT_IS_ZERO_ARG], var_store, body)
 }
@@ -267,14 +267,14 @@ fn float_is_zero(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn float_is_negative(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
-    let body = call(
-        Symbol::FLOAT_GT,
-        vec![
-            Float(var_store.fresh(), 0.0),
-            Var(Symbol::FLOAT_IS_NEGATIVE_ARG),
+    let body = RunLowLevel {
+        op: LowLevel::NumGt,
+        args: vec![
+            (var_store.fresh(), Float(var_store.fresh(), 0.0)),
+            (var_store.fresh(), Var(Symbol::FLOAT_IS_NEGATIVE_ARG)),
         ],
-        var_store,
-    );
+        ret_var: var_store.fresh(),
+    };
 
     defn(symbol, vec![Symbol::FLOAT_IS_NEGATIVE_ARG], var_store, body)
 }
@@ -283,14 +283,14 @@ fn float_is_negative(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn float_is_positive(symbol: Symbol, var_store: &mut VarStore) -> Def {
     use crate::expr::Expr::*;
 
-    let body = call(
-        Symbol::FLOAT_GT,
-        vec![
-            Var(Symbol::FLOAT_IS_POSITIVE_ARG),
-            Float(var_store.fresh(), 0.0),
+    let body = RunLowLevel {
+        op: LowLevel::NumGt,
+        args: vec![
+            (var_store.fresh(), Var(Symbol::FLOAT_IS_NEGATIVE_ARG)),
+            (var_store.fresh(), Float(var_store.fresh(), 0.0)),
         ],
-        var_store,
-    );
+        ret_var: var_store.fresh(),
+    };
 
     defn(symbol, vec![Symbol::FLOAT_IS_POSITIVE_ARG], var_store, body)
 }
