@@ -50,26 +50,13 @@ impl<'a> Procs<'a> {
         loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
         loc_body: Located<roc_can::expr::Expr>,
         ret_var: Variable,
-        layout_cache: &mut LayoutCache<'a>,
     ) {
-        let (pattern_vars, pattern_symbols, body) =
-            patterns_to_when(env, loc_args, ret_var, loc_body);
+        let (_, pattern_symbols, body) = patterns_to_when(env, loc_args, ret_var, loc_body);
 
-        let layout = layout_cache
-            .from_var(env.arena, annotation, env.subs, env.pointer_size)
-            .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
-
-        let pending = PendingSpecialization {
-            ret_var,
-            fn_var: annotation,
-            pattern_vars,
-        };
-
-        self.add_pending_specialization(name, layout.clone(), pending);
-
-        debug_assert!(!self.partial_procs.contains_key(&name), "Procs was told to insert a value for key {:?}, but there was already an entry for that key! Procs should never attempt to insert duplicates.", name);
-
-        // a named closure
+        // a named closure. Since these aren't specialized by the surrounding
+        // context, we can't add pending specializations for them yet.
+        // (If we did, all named polymorphic functions would immediately error
+        // on trying to convert a flex var to a Layout.)
         self.partial_procs.insert(
             name,
             PartialProc {
@@ -95,6 +82,9 @@ impl<'a> Procs<'a> {
         let (pattern_vars, pattern_symbols, body) =
             patterns_to_when(env, loc_args, ret_var, loc_body);
 
+        // an anonymous closure. These will always be specialized already
+        // by the surrounding context, so we can add pending specializations
+        // for them immediately.
         let layout = layout_cache
             .from_var(env.arena, annotation, env.subs, env.pointer_size)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
@@ -1102,15 +1092,7 @@ fn from_can_defs<'a>(
 
                         let (loc_body, ret_var) = *boxed_body;
 
-                        procs.insert_named(
-                            env,
-                            *symbol,
-                            ann,
-                            loc_args,
-                            loc_body,
-                            ret_var,
-                            layout_cache,
-                        );
+                        procs.insert_named(env, *symbol, ann, loc_args, loc_body, ret_var);
 
                         continue;
                     }
