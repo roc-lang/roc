@@ -17,7 +17,7 @@ mod test_mono {
     use roc_mono::expr::Expr::{self, *};
     use roc_mono::expr::Procs;
     use roc_mono::layout;
-    use roc_mono::layout::{Builtin, Layout};
+    use roc_mono::layout::{Builtin, Layout, LayoutCache};
     use roc_types::subs::Subs;
 
     // HELPERS
@@ -63,6 +63,11 @@ mod test_mono {
             jump_counter: arena.alloc(0),
         };
         let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
+
+        let (_, runtime_errors) =
+            roc_mono::expr::specialize_all(&mut mono_env, procs, &mut LayoutCache::default());
+
+        assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
 
         // Put this module's ident_ids back in the interns
         interns.all_ident_ids.insert(home, ident_ids);
