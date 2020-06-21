@@ -615,7 +615,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // repeat : Int, a -> List a
+    // repeat : Int, elem -> List elem
     add_type(Symbol::LIST_REPEAT, {
         let u = UVAR1;
         let v = UVAR2;

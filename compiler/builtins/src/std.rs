@@ -498,7 +498,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // push : List a -> a -> List a
+    // push : List elem -> elem -> List elem
     add_type(
         Symbol::LIST_PUSH,
         SolvedType::Func(
@@ -513,7 +513,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         SolvedType::Func(vec![flex(TVAR1)], Box::new(list_type(flex(TVAR1)))),
     );
 
-    // repeat : Int, a -> List a
+    // repeat : Int, elem -> List elem
     add_type(
         Symbol::LIST_REPEAT,
         SolvedType::Func(
