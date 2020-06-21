@@ -1036,7 +1036,7 @@ fn test_to_equality<'a>(
             let lhs = Expr::Bool(test_bit);
             let rhs = path_to_expr(env, cond_symbol, &path, &cond_layout);
 
-            tests.push((lhs, rhs, Layout::Builtin(Builtin::Int8)));
+            tests.push((lhs, rhs, Layout::Builtin(Builtin::Int1)));
         }
 
         Test::IsStr(test_str) => {
@@ -1058,7 +1058,7 @@ fn test_to_equality<'a>(
             let lhs = Expr::Bool(true);
             let rhs = Expr::Store(stores, env.arena.alloc(expr));
 
-            tests.push((lhs, rhs, Layout::Builtin(Builtin::Int8)));
+            tests.push((lhs, rhs, Layout::Builtin(Builtin::Int1)));
         }
     }
 }
@@ -1121,9 +1121,9 @@ fn decide_to_branching<'a>(
             let condition = boolean_all(env.arena, tests);
 
             let branch_symbol = env.unique_symbol();
-            let stores = [(branch_symbol, Layout::Builtin(Builtin::Int8), condition)];
+            let stores = [(branch_symbol, Layout::Builtin(Builtin::Int1), condition)];
 
-            let cond_layout = Layout::Builtin(Builtin::Int8);
+            let cond_layout = Layout::Builtin(Builtin::Int1);
 
             (
                 env.arena.alloc(stores),
@@ -1210,8 +1210,8 @@ fn boolean_all<'a>(arena: &'a Bump, tests: Vec<(Expr<'a>, Expr<'a>, Layout<'a>)>
         expr = Expr::RunLowLevel(
             LowLevel::And,
             arena.alloc([
-                (test, Layout::Builtin(Builtin::Int8)),
-                (expr, Layout::Builtin(Builtin::Int8)),
+                (test, Layout::Builtin(Builtin::Int1)),
+                (expr, Layout::Builtin(Builtin::Int1)),
             ]),
         );
     }
