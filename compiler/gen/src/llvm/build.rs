@@ -1402,7 +1402,7 @@ fn call_with_args<'a, 'ctx, 'env>(
         Symbol::FLOAT_ROUND => call_intrinsic(LLVM_LROUND_I64_F64, env, args),
         Symbol::LIST_SET => list_set(parent, args, env, InPlace::Clone),
         Symbol::LIST_SET_IN_PLACE => list_set(parent, args, env, InPlace::InPlace),
-        Symbol::LIST_PUSH => list_push(parent, args, env),
+        Symbol::LIST_PUSH => list_push(args, env),
         Symbol::LIST_SINGLE => {
             // List.single : a -> List a
             debug_assert!(args.len() == 1);
@@ -1650,7 +1650,6 @@ fn bounds_check_comparison<'ctx>(
 }
 
 fn list_push<'a, 'ctx, 'env>(
-    parent: FunctionValue<'ctx>,
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
     env: &Env<'a, 'ctx, 'env>,
 ) -> BasicValueEnum<'ctx> {
@@ -1662,7 +1661,7 @@ fn list_push<'a, 'ctx, 'env>(
 
     let original_wrapper = args[0].0.into_struct_value();
 
-    // Load the usize length from the wrapper. We need it for bounds checking.
+    // Load the usize length from the wrapper.
     let list_len = load_list_len(builder, original_wrapper);
 
     let (elem, elem_layout) = args[1];
@@ -1701,7 +1700,6 @@ fn list_push<'a, 'ctx, 'env>(
 
     // TODO check if malloc returned null; if so, runtime error for OOM!
 
-    // Either memcpy or deep clone the array elements
     if elem_layout.safe_to_memcpy() {
         // Copy the bytes from the original array into the new
         // one we just malloc'd.
@@ -1739,7 +1737,6 @@ fn list_push<'a, 'ctx, 'env>(
 
     let elem_ptr = unsafe { builder.build_in_bounds_gep(clone_ptr, &[list_len], "load_index") };
 
-    // Mutate the new array in-place to change the element.
     builder.build_store(elem_ptr, elem);
 
     answer
