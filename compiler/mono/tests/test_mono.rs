@@ -596,8 +596,6 @@ mod test_mono {
                 let var_name = interns.symbol(home, "name".into());
                 let var_other_name = interns.symbol(home, "otherName".into());
 
-                // TODO expect a mono Expr which has an Inc wrapper around the `name` in `= name` and a Dec wrapper around otherName at the end
-
                 Store(
                     arena.alloc([(var_name, Layout::Builtin(Builtin::Str), Str("blah"))]),
                     arena.alloc(Dec {
@@ -615,23 +613,96 @@ mod test_mono {
                         others: arena.alloc([var_name]),
                     }),
                 )
+            },
+        )
+    }
 
-                // Dec {
-                //     ret: &'a Expr<'a>,
-                //     others: &'a [Expr<'a>],
-                // },
+    #[test]
+    fn record_access_and_return_inc_dec() {
+        let arena = Bump::new();
 
-                // Store(
-                //     arena.alloc([(var_name, Layout::Builtin(Builtin::Str), Expr::Str("blah"))]),
-                //     arena.alloc(Store(
-                //         arena.alloc([(
-                //             var_other_name,
-                //             Layout::Builtin(Builtin::Str),
-                //             Expr::Load(var_name),
-                //         )]),
-                //         arena.alloc(Load(var_other_name)),
-                //     )),
-                // )
+        compiles_to_with_interns(
+            r#"
+                name = { fname: "foo", lname: "bar" }
+                name.fname
+            "#,
+            |interns| {
+                let home = test_home();
+                let var_name = interns.symbol(home, "name".into());
+                let field_layouts =
+                    arena.alloc([Layout::Builtin(Builtin::Str), Layout::Builtin(Builtin::Str)]);
+                let project_fname = arena.alloc(AccessAtIndex {
+                    index: 0,
+                    field_layouts: field_layouts,
+                    expr: arena.alloc(Inc(arena.alloc(Load(var_name)))),
+                    is_unwrapped: true,
+                });
+
+                Store(
+                    arena.alloc([(
+                        var_name,
+                        Layout::Struct(field_layouts),
+                        Struct(&[
+                            (Str("foo"), Layout::Builtin(Builtin::Str)),
+                            (Str("bar"), Layout::Builtin(Builtin::Str)),
+                        ]),
+                    )]),
+                    arena.alloc(Dec {
+                        ret: project_fname,
+                        others: arena.alloc([var_name]),
+                    }),
+                )
+            },
+        )
+    }
+
+    #[test]
+    fn record_access_and_store_inc_dec() {
+        let arena = Bump::new();
+
+        compiles_to_with_interns(
+            r#"
+                name = { fname: "foo", lname: "bar" }
+                fname = name.fname
+                fname
+            "#,
+            |interns| {
+                let home = test_home();
+                let var_name = interns.symbol(home, "name".into());
+                let var_fname = interns.symbol(home, "fname".into());
+                let field_layouts =
+                    arena.alloc([Layout::Builtin(Builtin::Str), Layout::Builtin(Builtin::Str)]);
+                let project_fname = AccessAtIndex {
+                    index: 0,
+                    field_layouts: field_layouts,
+                    expr: arena.alloc(Inc(arena.alloc(Load(var_name)))),
+                    is_unwrapped: true,
+                };
+
+                Store(
+                    arena.alloc([(
+                        var_name,
+                        Layout::Struct(field_layouts),
+                        Struct(&[
+                            (Str("foo"), Layout::Builtin(Builtin::Str)),
+                            (Str("bar"), Layout::Builtin(Builtin::Str)),
+                        ]),
+                    )]),
+                    arena.alloc(Dec {
+                        ret: arena.alloc(Store(
+                            arena.alloc([(
+                                var_fname,
+                                Layout::Builtin(Builtin::Str),
+                                project_fname,
+                            )]),
+                            arena.alloc(Dec {
+                                ret: arena.alloc(Inc(arena.alloc(Load(var_fname)))),
+                                others: arena.alloc([var_fname]),
+                            }),
+                        )),
+                        others: arena.alloc([var_name]),
+                    }),
+                )
             },
         )
     }
