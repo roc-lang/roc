@@ -122,12 +122,6 @@ impl<'a> Procs<'a> {
             .entry(symbol)
             .or_insert_with(|| HashMap::with_capacity_and_hasher(1, default_hasher()));
 
-        // If we already have an entry for this, it should be no different
-        // from what we're about to insert.
-        debug_assert!(
-            !all_pending.contains_key(&layout) || all_pending.get(&layout) == Some(&pending)
-        );
-
         all_pending.insert(layout, pending);
     }
 }
