@@ -49,7 +49,7 @@ fn boolean(b: VarId) -> SolvedType {
     SolvedType::Boolean(SolvedAtom::Variable(b), vec![])
 }
 
-fn disjunction(free: VarId, rest: Vec<VarId>) -> SolvedType {
+fn container(free: VarId, rest: Vec<VarId>) -> SolvedType {
     let solved_rest = rest.into_iter().map(SolvedAtom::Variable).collect();
 
     SolvedType::Boolean(SolvedAtom::Variable(free), solved_rest)
@@ -576,12 +576,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        disjunction(w, vec![u, v]),
+                        container(w, vec![u, v]),
                         SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
                     ],
                 ),
                 int_type(star1),
-                SolvedType::Apply(Symbol::ATTR_ATTR, vec![disjunction(u, vec![v]), flex(a)]),
+                SolvedType::Apply(Symbol::ATTR_ATTR, vec![container(u, vec![v]), flex(a)]),
             ],
             SolvedType::Apply(
                 Symbol::ATTR_ATTR,
@@ -593,6 +593,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
+    // single : Attr u elem -> Attr * (List (Attr u elem))
     add_type(Symbol::LIST_SINGLE, {
         let u = UVAR1;
         let v = UVAR2;
@@ -603,7 +604,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(
             vec![SolvedType::Apply(
                 Symbol::ATTR_ATTR,
-                vec![disjunction(u, vec![v]), flex(a)],
+                vec![container(u, vec![v]), flex(a)],
             )],
             SolvedType::Apply(
                 Symbol::ATTR_ATTR,
@@ -615,33 +616,37 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // repeat : Int, elem -> List elem
+    // repeat : Attr * Int
+    //        , Attr u elem
+    //       -> Attr * (List (Attr u elem))
     add_type(Symbol::LIST_REPEAT, {
         let u = UVAR1;
-        let v = UVAR2;
-        let star1 = UVAR4;
-        let star2 = UVAR5;
+        let star1 = UVAR2;
+        let star2 = UVAR3;
 
-        let a = TVAR1;
+        let elem = TVAR1;
 
         unique_function(
             vec![
                 int_type(star1),
-                SolvedType::Apply(Symbol::ATTR_ATTR, vec![disjunction(u, vec![v]), flex(a)]),
+                SolvedType::Apply(Symbol::ATTR_ATTR, vec![boolean(u), flex(elem)]),
             ],
             SolvedType::Apply(
                 Symbol::ATTR_ATTR,
                 vec![
                     boolean(star2),
-                    SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, elem)]),
                 ],
             ),
         )
     });
 
-    // push : Attr (w | u | v) (List (Attr u a))
-    //      , Attr (u | v) a
+    // push : Attr * (List (Attr u a))
+    //      , Attr u a
     //     -> Attr * (List (Attr u a))
+    //
+    // NOTE: we demand the new item to have the same uniqueness as the other list items.
+    // It could be allowed to add unique items to shared lists, but that requires special code gen
     add_type(Symbol::LIST_PUSH, {
         let u = UVAR1;
         let v = UVAR2;
@@ -655,11 +660,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        disjunction(w, vec![u, v]),
+                        container(w, vec![u, v]),
                         SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
                     ],
                 ),
-                SolvedType::Apply(Symbol::ATTR_ATTR, vec![disjunction(u, vec![v]), flex(a)]),
+                SolvedType::Apply(Symbol::ATTR_ATTR, vec![container(u, vec![v]), flex(a)]),
             ],
             SolvedType::Apply(
                 Symbol::ATTR_ATTR,
@@ -671,7 +676,9 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // map : List a, (a -> b) -> List b
+    // map : Attr * (List a)
+    //     , Attr Shared (a -> b)
+    //    -> Attr * (List b)
     add_type(
         Symbol::LIST_MAP,
         unique_function(
@@ -689,7 +696,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
-    // foldr : List a, (a -> b -> b), b -> b
+    // foldr : Attr * (List a)
+    //       , Attr Shared (a -> b -> b)
+    //       , b
+    //      -> b
     add_type(
         Symbol::LIST_FOLDR,
         unique_function(
@@ -750,7 +760,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        disjunction(star1, vec![u, v]),
+                        container(star1, vec![u, v]),
                         SolvedType::Apply(
                             Symbol::MAP_MAP,
                             vec![attr_type(u, key), attr_type(v, val)],
@@ -759,7 +769,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 ),
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
-                    vec![disjunction(star2, vec![u]), flex(key)],
+                    vec![container(star2, vec![u]), flex(key)],
                 ),
             ],
             SolvedType::Apply(
@@ -792,7 +802,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        disjunction(star1, vec![u, v]),
+                        container(star1, vec![u, v]),
                         SolvedType::Apply(
                             Symbol::MAP_MAP,
                             vec![attr_type(u, key), attr_type(v, val)],
@@ -801,11 +811,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 ),
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
-                    vec![disjunction(star2, vec![u]), flex(key)],
+                    vec![container(star2, vec![u]), flex(key)],
                 ),
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
-                    vec![disjunction(star2, vec![v]), flex(val)],
+                    vec![container(star2, vec![v]), flex(val)],
                 ),
             ],
             SolvedType::Apply(
@@ -844,14 +854,14 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        disjunction(star1, vec![u]),
+                        container(star1, vec![u]),
                         SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
                     ],
                 ),
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        disjunction(star2, vec![u]),
+                        container(star2, vec![u]),
                         SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
                     ],
                 ),
@@ -886,7 +896,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        disjunction(star1, vec![u]),
+                        container(star1, vec![u]),
                         SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
                     ],
                 ),
@@ -918,14 +928,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        disjunction(star1, vec![u]),
+                        container(star1, vec![u]),
                         SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
                     ],
                 ),
-                SolvedType::Apply(
-                    Symbol::ATTR_ATTR,
-                    vec![disjunction(star2, vec![u]), flex(a)],
-                ),
+                SolvedType::Apply(Symbol::ATTR_ATTR, vec![container(star2, vec![u]), flex(a)]),
             ],
             SolvedType::Apply(
                 Symbol::ATTR_ATTR,
@@ -953,7 +960,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        disjunction(star1, vec![u]),
+                        container(star1, vec![u]),
                         SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
                     ],
                 ),
@@ -993,7 +1000,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        disjunction(star1, vec![u]),
+                        container(star1, vec![u]),
                         SolvedType::Apply(Symbol::RESULT_RESULT, vec![attr_type(u, a), flex(e)]),
                     ],
                 ),
