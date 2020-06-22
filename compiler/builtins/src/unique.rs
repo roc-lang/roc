@@ -696,20 +696,30 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // map : Attr * (List a)
-    //     , Attr Shared (a -> b)
+    // map : Attr (* | u) (List (Attr u a))
+    //     , Attr Shared (Attr u a -> b)
     //    -> Attr * (List b)
     add_type(Symbol::LIST_MAP, {
+        let u = tvar!();
         let a = tvar!();
         let b = tvar!();
         let star1 = tvar!();
         let star2 = tvar!();
         unique_function(
             vec![
-                list_type(star1, a),
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
-                    vec![shared(), SolvedType::Func(vec![flex(a)], Box::new(flex(b)))],
+                    vec![
+                        container(star1, vec![u]),
+                        SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                    ],
+                ),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        shared(),
+                        SolvedType::Func(vec![attr_type(u, a)], Box::new(flex(b))),
+                    ],
                 ),
             ],
             list_type(star2, b),

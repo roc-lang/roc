@@ -2028,7 +2028,7 @@ mod test_uniq_solve {
     fn list_map_identity() {
         infer_eq(
             indoc!(r#"\list -> List.map list (\x -> x)"#),
-            "Attr * (Attr * (List a) -> Attr * (List a))",
+            "Attr * (Attr (* | a) (List (Attr a b)) -> Attr * (List (Attr a b)))",
         );
     }
 
@@ -2102,11 +2102,10 @@ mod test_uniq_solve {
     fn list_map() {
         infer_eq(
             indoc!("List.map"),
-            "Attr * (Attr * (List a), Attr Shared (a -> b) -> Attr * (List b))",
+            "Attr * (Attr (* | a) (List (Attr a b)), Attr Shared (Attr a b -> c) -> Attr * (List c))",
         );
     }
 
-    /*
     #[test]
     fn list_foldr() {
         infer_eq(
@@ -2114,7 +2113,6 @@ mod test_uniq_solve {
             "Attr * (Attr (* | a) (List (Attr a b)), Attr Shared (Attr a b, c -> c), c -> c)",
         );
     }
-    */
 
     #[test]
     fn list_push_singleton() {
