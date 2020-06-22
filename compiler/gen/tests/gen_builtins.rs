@@ -695,6 +695,10 @@ mod gen_builtins {
 
     #[test]
     fn gen_quicksort() {
+        if true {
+            todo!("fix gen_quicksort");
+        }
+
         assert_evals_to!(
             indoc!(
                 r#"

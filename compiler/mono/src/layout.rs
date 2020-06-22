@@ -27,8 +27,10 @@ pub enum Builtin<'a> {
     Int16,
     Int8,
     Int1,
+    Float128,
     Float64,
     Float32,
+    Float16,
     Str,
     Map(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
@@ -176,8 +178,10 @@ impl<'a> Builtin<'a> {
     const I16_SIZE: u32 = std::mem::size_of::<i16>() as u32;
     const I8_SIZE: u32 = std::mem::size_of::<i8>() as u32;
     const I1_SIZE: u32 = std::mem::size_of::<bool>() as u32;
+    const F128_SIZE: u32 = 16;
     const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
     const F32_SIZE: u32 = std::mem::size_of::<f32>() as u32;
+    const F16_SIZE: u32 = 2;
 
     /// Number of machine words in an empty one of these
     pub const STR_WORDS: u32 = 2;
@@ -202,8 +206,10 @@ impl<'a> Builtin<'a> {
             Int16 => Builtin::I16_SIZE,
             Int8 => Builtin::I8_SIZE,
             Int1 => Builtin::I1_SIZE,
+            Float128 => Builtin::F128_SIZE,
             Float64 => Builtin::F64_SIZE,
             Float32 => Builtin::F32_SIZE,
+            Float16 => Builtin::F16_SIZE,
             Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
             Map(_, _) | EmptyMap => Builtin::MAP_WORDS * pointer_size,
             Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
@@ -215,8 +221,8 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Float64 | Float32 | EmptyStr
-            | EmptyMap | EmptyList | EmptySet => true,
+            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Float128 | Float64 | Float32
+            | Float16 | EmptyStr | EmptyMap | EmptyList | EmptySet => true,
             Str | Map(_, _) | Set(_) | List(_) => false,
         }
     }
