@@ -129,11 +129,11 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 ..
             } => {
                 match ch {
-                    '\u{8}' => {
-                        // In Linux, we get one of these when you press
-                        // backspace, but in macOS we don't. In both, we
+                    '\u{8}' | '\u{7f}' => {
+                        // In Linux, we get a '\u{8}' when you press backspace,
+                        // but in macOS we get '\u{7f}'. In both, we
                         // get a Back keydown event. Therefore, we use the
-                        // Back keydown event and ignore this, resulting
+                        // Back keydown event and ignore these, resulting
                         // in a system that works in both Linux and macOS.
                     }
                     '\u{e000}'..='\u{f8ff}'
