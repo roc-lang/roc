@@ -126,23 +126,6 @@ impl<'a> Procs<'a> {
     }
 }
 
-//     pub fn into_map(self) -> (MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>, MutSet<Symbol>) {
-//         let mut specializations = self.specializations;
-
-//         for symbol in self.builtin.iter() {
-//             // Builtins should only ever be stored as empty maps.
-//             debug_assert!(
-//                 !specializations.contains_key(&symbol)
-//                     || specializations.get(&symbol).unwrap().is_empty()
-//             );
-
-//             specializations.insert(*symbol, MutMap::default());
-//         }
-
-//         (specializations, self.runtime_errors)
-//     }
-// }
-
 #[derive(Default)]
 pub struct Specializations<'a> {
     by_symbol: MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>,
