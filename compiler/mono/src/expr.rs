@@ -1383,8 +1383,9 @@ pub fn specialize_all<'a>(
     env: &mut Env<'a, '_>,
     mut procs: Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
-) -> (Vec<'a, (Symbol, Layout<'a>, Proc<'a>)>, MutSet<Symbol>) {
-    let mut answer = Vec::with_capacity_in(procs.pending_specializations.len(), env.arena);
+) -> (MutMap<(Symbol, Layout<'a>), Proc<'a>>, MutSet<Symbol>) {
+    let mut answer =
+        HashMap::with_capacity_and_hasher(procs.pending_specializations.len(), default_hasher());
     let mut runtime_errors = MutSet::default();
     let mut is_finished = procs.pending_specializations.is_empty();
 
@@ -1409,19 +1410,23 @@ pub fn specialize_all<'a>(
 
         for (name, mut by_layout) in pending_specializations.drain() {
             for (layout, pending) in by_layout.drain() {
-                // TODO should pending_procs hold a Rc<Proc>?
-                let partial_proc = procs
-                    .partial_procs
-                    .get(&name)
-                    .unwrap_or_else(|| panic!("Could not find partial_proc for {:?}", name))
-                    .clone();
+                // If we've already seen this (Symbol, Layout) combination before,
+                // don't try to specialize it again. If we do, we'll loop forever!
+                if !answer.contains_key(&(name, layout.clone())) {
+                    // TODO should pending_procs hold a Rc<Proc>?
+                    let partial_proc = procs
+                        .partial_procs
+                        .get(&name)
+                        .unwrap_or_else(|| panic!("Could not find partial_proc for {:?}", name))
+                        .clone();
 
-                match specialize(env, &mut procs, name, layout_cache, pending, partial_proc) {
-                    Ok(proc) => {
-                        answer.push((name, layout, proc));
-                    }
-                    Err(()) => {
-                        runtime_errors.insert(name);
+                    match specialize(env, &mut procs, name, layout_cache, pending, partial_proc) {
+                        Ok(proc) => {
+                            answer.insert((name, layout), proc);
+                        }
+                        Err(()) => {
+                            runtime_errors.insert(name);
+                        }
                     }
                 }
             }

@@ -92,7 +92,7 @@ macro_rules! assert_llvm_evals_to {
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
-        for (symbol, layout, proc) in specializations.drain(..) {
+        for ((symbol, layout), proc) in specializations.drain() {
             let (fn_val, arg_basic_types) =
                 build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
@@ -263,7 +263,7 @@ macro_rules! assert_opt_evals_to {
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
-        for (symbol, layout, proc) in specializations.drain(..) {
+        for ((symbol, layout), proc) in specializations.drain() {
             let (fn_val, arg_basic_types) =
                 build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
