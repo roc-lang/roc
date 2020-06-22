@@ -2086,7 +2086,7 @@ mod test_uniq_solve {
     fn list_repeat() {
         infer_eq(
             indoc!("List.repeat"),
-            "Attr * (Attr * Int, a -> Attr * (List a))",
+            "Attr * (Attr * Int, Attr Shared a -> Attr * (List (Attr Shared a)))",
         );
     }
 

@@ -57,8 +57,11 @@ impl IDStore {
     }
 }
 
-fn shared() -> SolvedType {
-    SolvedType::Boolean(SolvedAtom::Zero, vec![])
+fn shared(base: SolvedType) -> SolvedType {
+    SolvedType::Apply(
+        Symbol::ATTR_ATTR,
+        vec![SolvedType::Boolean(SolvedAtom::Zero, vec![]), base],
+    )
 }
 
 fn boolean(b: VarId) -> SolvedType {
@@ -644,21 +647,23 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
+    // To repeat an item, it must be shared!
+    //
     // repeat : Attr * Int
-    //        , a
-    //       -> Attr * (List a)
+    //        , Attr Shared a
+    //       -> Attr * (List (Attr Shared a))
     add_type(Symbol::LIST_REPEAT, {
         let a = tvar!();
         let star1 = tvar!();
         let star2 = tvar!();
 
         unique_function(
-            vec![int_type(star1), flex(a)],
+            vec![int_type(star1), shared(flex(a))],
             SolvedType::Apply(
                 Symbol::ATTR_ATTR,
                 vec![
                     boolean(star2),
-                    SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)]),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![shared(flex(a))]),
                 ],
             ),
         )
@@ -714,13 +719,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                         SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
                     ],
                 ),
-                SolvedType::Apply(
-                    Symbol::ATTR_ATTR,
-                    vec![
-                        shared(),
-                        SolvedType::Func(vec![attr_type(u, a)], Box::new(flex(b))),
-                    ],
-                ),
+                shared(SolvedType::Func(vec![attr_type(u, a)], Box::new(flex(b)))),
             ],
             list_type(star2, b),
         )
@@ -744,13 +743,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                         SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
                     ],
                 ),
-                SolvedType::Apply(
-                    Symbol::ATTR_ATTR,
-                    vec![
-                        shared(),
-                        SolvedType::Func(vec![attr_type(u, a), flex(b)], Box::new(flex(b))),
-                    ],
-                ),
+                shared(SolvedType::Func(
+                    vec![attr_type(u, a), flex(b)],
+                    Box::new(flex(b)),
+                )),
                 flex(b),
             ],
             flex(b),
@@ -939,13 +935,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                         SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
                     ],
                 ),
-                SolvedType::Apply(
-                    Symbol::ATTR_ATTR,
-                    vec![
-                        shared(),
-                        SolvedType::Func(vec![attr_type(u, a), flex(b)], Box::new(flex(b))),
-                    ],
-                ),
+                shared(SolvedType::Func(
+                    vec![attr_type(u, a), flex(b)],
+                    Box::new(flex(b)),
+                )),
                 flex(b),
             ],
             flex(b),
