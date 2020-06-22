@@ -1044,22 +1044,6 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(int_val)
         }
-        Symbol::LIST_LEN => {
-            debug_assert!(args.len() == 1);
-
-            BasicValueEnum::IntValue(load_list_len(env.builder, args[0].0.into_struct_value()))
-        }
-        Symbol::LIST_IS_EMPTY => {
-            debug_assert!(args.len() == 1);
-
-            let list_struct = args[0].0.into_struct_value();
-            let builder = env.builder;
-            let list_len = load_list_len(builder, list_struct);
-            let zero = env.ptr_int().const_zero();
-            let answer = builder.build_int_compare(IntPredicate::EQ, list_len, zero, "is_zero");
-
-            BasicValueEnum::IntValue(answer)
-        }
         Symbol::INT_REM_UNSAFE => {
             debug_assert!(args.len() == 2);
 
@@ -1446,11 +1430,23 @@ fn run_low_level<'a, 'ctx, 'env>(
 
     match op {
         ListLen => {
-            debug_assert!(args.len() == 1);
+            debug_assert_eq!(args.len(), 1);
 
             let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
 
             BasicValueEnum::IntValue(load_list_len(env.builder, arg.into_struct_value()))
+        }
+        ListIsEmpty => {
+            debug_assert_eq!(args.len(), 1);
+
+            let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let list_struct = arg.into_struct_value();
+            let builder = env.builder;
+            let list_len = load_list_len(builder, list_struct);
+            let zero = env.ptr_int().const_zero();
+            let answer = builder.build_int_compare(IntPredicate::EQ, list_len, zero, "is_zero");
+
+            BasicValueEnum::IntValue(answer)
         }
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte => {
             debug_assert_eq!(args.len(), 2);
