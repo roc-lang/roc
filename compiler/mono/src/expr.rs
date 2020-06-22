@@ -158,7 +158,7 @@ impl<'a> Specializations<'a> {
         self.runtime_errors.insert(symbol);
     }
 
-    pub fn to_owned(self) -> (MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>, MutSet<Symbol>) {
+    pub fn into_owned(self) -> (MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>, MutSet<Symbol>) {
         (self.by_symbol, self.runtime_errors)
     }
 
