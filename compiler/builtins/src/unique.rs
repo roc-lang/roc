@@ -7,6 +7,22 @@ use roc_types::solved_types::{BuiltinAlias, SolvedAtom, SolvedType};
 use roc_types::subs::VarId;
 use std::collections::HashMap;
 
+/// A macro that increments this variable every time it is called
+/// effectively gives unique variable ids every time
+static mut TYPE_VAR_COUNT: u32 = 10000;
+
+/// Safety:
+///
+/// TYPE_VAR_COUNT is not shared across threads, so mutating is safe
+macro_rules! tvar {
+    () => {{
+        unsafe {
+            TYPE_VAR_COUNT += 1;
+            VarId::from_u32(TYPE_VAR_COUNT)
+        }
+    }};
+}
+
 /// Keep this up to date by hand!
 ///
 const NUM_BUILTIN_IMPORTS: usize = 7;
@@ -266,14 +282,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Num module
 
-    // add or (+) : Attr u1 (Num a), Attr u2 (Num a) -> Attr u3 (Num a)
-    add_type(
-        Symbol::NUM_ADD,
+    // add or (+) : Attr u (Num (Attr u num))
+    //            , Attr v (Num (Attr v num))
+    //           -> Attr w (Num (Attr w num))
+    add_type(Symbol::NUM_ADD, {
         unique_function(
             vec![num_type(UVAR1, TVAR1), num_type(UVAR2, TVAR1)],
             num_type(UVAR3, TVAR1),
-        ),
-    );
+        )
+    });
 
     // sub or (-) : Num a, Num a -> Num a
     add_type(
@@ -527,31 +544,48 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // List module
 
-    // isEmpty : Attr u (List *) -> Attr v Bool
+    // isEmpty : Attr * (List *) -> Attr * Bool
     add_type(
         Symbol::LIST_IS_EMPTY,
         unique_function(vec![list_type(UVAR1, TVAR1)], bool_type(UVAR2)),
     );
 
-    // len : Attr u (List *) -> Attr v Int
+    // len : Attr * (List *) -> Attr * Int
     add_type(
         Symbol::LIST_LEN,
         unique_function(vec![list_type(UVAR1, TVAR1)], int_type(UVAR2)),
     );
 
-    // get : List a, Int -> Result a [ OutOfBounds ]*
+    // get : Attr (* | u) (List (Attr u a))
+    //     , Attr * Int
+    //    -> Attr * (Result (Attr u a) (Attr * [ OutOfBounds ]*))
     let index_out_of_bounds = SolvedType::TagUnion(
         vec![(TagName::Global("OutOfBounds".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
-    add_type(
-        Symbol::LIST_GET,
+    add_type(Symbol::LIST_GET, {
+        let a = TVAR1;
+        let u = UVAR1;
+        let star1 = UVAR2;
+        let star2 = UVAR3;
+        let star3 = UVAR4;
+        let star4 = UVAR5;
+
         unique_function(
-            vec![list_type(UVAR1, TVAR1), int_type(UVAR2)],
-            result_type(UVAR3, flex(TVAR1), lift(UVAR4, index_out_of_bounds)),
-        ),
-    );
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        container(star1, vec![u]),
+                        SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                    ],
+                ),
+                int_type(star2),
+            ],
+            result_type(star3, attr_type(u, a), lift(star4, index_out_of_bounds)),
+        )
+    });
 
     add_type(
         Symbol::LIST_GET_UNSAFE,
@@ -593,84 +627,70 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // single : Attr u elem -> Attr * (List (Attr u elem))
+    // single : a -> Attr * (List a)
     add_type(Symbol::LIST_SINGLE, {
-        let u = UVAR1;
-        let v = UVAR2;
-        let star = UVAR4;
-
-        let a = TVAR1;
+        let a = tvar!();
+        let star = tvar!();
 
         unique_function(
-            vec![SolvedType::Apply(
-                Symbol::ATTR_ATTR,
-                vec![container(u, vec![v]), flex(a)],
-            )],
+            vec![flex(a)],
             SolvedType::Apply(
                 Symbol::ATTR_ATTR,
                 vec![
                     boolean(star),
-                    SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)]),
                 ],
             ),
         )
     });
 
     // repeat : Attr * Int
-    //        , Attr u elem
-    //       -> Attr * (List (Attr u elem))
+    //        , a
+    //       -> Attr * (List a)
     add_type(Symbol::LIST_REPEAT, {
-        let u = UVAR1;
-        let star1 = UVAR2;
-        let star2 = UVAR3;
-
-        let elem = TVAR1;
+        let a = tvar!();
+        let star1 = tvar!();
+        let star2 = tvar!();
 
         unique_function(
-            vec![
-                int_type(star1),
-                SolvedType::Apply(Symbol::ATTR_ATTR, vec![boolean(u), flex(elem)]),
-            ],
+            vec![int_type(star1), flex(a)],
             SolvedType::Apply(
                 Symbol::ATTR_ATTR,
                 vec![
                     boolean(star2),
-                    SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, elem)]),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)]),
                 ],
             ),
         )
     });
 
-    // push : Attr * (List (Attr u a))
-    //      , Attr u a
-    //     -> Attr * (List (Attr u a))
+    // push : Attr * (List a)
+    //      , a
+    //     -> Attr * (List a)
     //
     // NOTE: we demand the new item to have the same uniqueness as the other list items.
     // It could be allowed to add unique items to shared lists, but that requires special code gen
     add_type(Symbol::LIST_PUSH, {
-        let u = UVAR1;
-        let v = UVAR2;
-        let w = UVAR3;
-        let star = UVAR4;
-
-        let a = TVAR1;
+        let a = tvar!();
+        let star1 = tvar!();
+        let star2 = tvar!();
 
         unique_function(
             vec![
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        container(w, vec![u, v]),
-                        SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                        flex(star1),
+                        SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)]),
                     ],
                 ),
-                SolvedType::Apply(Symbol::ATTR_ATTR, vec![container(u, vec![v]), flex(a)]),
+                flex(a),
             ],
             SolvedType::Apply(
                 Symbol::ATTR_ATTR,
                 vec![
-                    boolean(star),
-                    SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                    boolean(star2),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)]),
                 ],
             ),
         )
@@ -679,44 +699,53 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // map : Attr * (List a)
     //     , Attr Shared (a -> b)
     //    -> Attr * (List b)
-    add_type(
-        Symbol::LIST_MAP,
+    add_type(Symbol::LIST_MAP, {
+        let a = tvar!();
+        let b = tvar!();
+        let star1 = tvar!();
+        let star2 = tvar!();
         unique_function(
             vec![
-                list_type(UVAR1, TVAR1),
+                list_type(star1, a),
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
-                    vec![
-                        shared(),
-                        SolvedType::Func(vec![flex(TVAR1)], Box::new(flex(TVAR2))),
-                    ],
+                    vec![shared(), SolvedType::Func(vec![flex(a)], Box::new(flex(b)))],
                 ),
             ],
-            list_type(UVAR2, TVAR2),
-        ),
-    );
+            list_type(star2, b),
+        )
+    });
 
-    // foldr : Attr * (List a)
-    //       , Attr Shared (a -> b -> b)
+    // foldr : Attr (* | u) (List (Attr u a))
+    //       , Attr Shared (Attr u a -> b -> b)
     //       , b
     //      -> b
-    add_type(
-        Symbol::LIST_FOLDR,
+    add_type(Symbol::LIST_FOLDR, {
+        let u = tvar!();
+        let a = tvar!();
+        let b = tvar!();
+        let star1 = tvar!();
         unique_function(
             vec![
-                list_type(UVAR1, TVAR1),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        container(star1, vec![u]),
+                        SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                    ],
+                ),
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
                         shared(),
-                        SolvedType::Func(vec![flex(TVAR1), flex(TVAR2)], Box::new(flex(TVAR2))),
+                        SolvedType::Func(vec![attr_type(u, a), flex(b)], Box::new(flex(b))),
                     ],
                 ),
-                flex(TVAR2),
+                flex(b),
             ],
-            flex(TVAR2),
-        ),
-    );
+            flex(b),
+        )
+    });
 
     // Map module
 
@@ -1085,7 +1114,10 @@ fn str_type(u: VarId) -> SolvedType {
 fn num_type(u: VarId, a: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![flex(u), SolvedType::Apply(Symbol::NUM_NUM, vec![flex(a)])],
+        vec![
+            flex(u),
+            SolvedType::Apply(Symbol::NUM_NUM, vec![attr_type(u, a)]),
+        ],
     )
 }
 
