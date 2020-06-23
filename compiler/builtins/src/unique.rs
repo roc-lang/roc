@@ -845,72 +845,73 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // Set module
 
     // empty : Set a
-    add_type(Symbol::SET_EMPTY, set_type(UVAR1, TVAR1));
+    add_type(Symbol::SET_EMPTY, {
+        let_tvars! { star, a };
+        set_type(star, a)
+    });
 
     // singleton : a -> Set a
-    add_type(
-        Symbol::SET_SINGLETON,
-        unique_function(vec![flex(TVAR1)], set_type(UVAR1, TVAR1)),
-    );
+    add_type(Symbol::SET_SINGLETON, {
+        let_tvars! { star, a };
+        unique_function(vec![flex(a)], set_type(star, a))
+    });
 
-    // op : Attr (u | *) (Set (Attr u a)), Attr (u | *) (Set (Attr u a)) -> Attr * Set (Attr u a)
+    // union : Attr * (Set * a)
+    //       , Attr * (Set * a)
+    //      -> Attr * (Set * a)
     let set_combine = {
-        let mut store = IDStore::new();
-
-        let u = store.fresh();
-        let a = store.fresh();
-        let star1 = store.fresh();
-        let star2 = store.fresh();
-        let star3 = store.fresh();
+        let_tvars! { star1, star2, star3, star4, star5, star6, a };
 
         unique_function(
             vec![
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        container(star1, vec![u]),
-                        SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
+                        flex(star1),
+                        SolvedType::Apply(Symbol::SET_SET, vec![attr_type(star2, a)]),
                     ],
                 ),
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        container(star2, vec![u]),
-                        SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
+                        flex(star3),
+                        SolvedType::Apply(Symbol::SET_SET, vec![attr_type(star4, a)]),
                     ],
                 ),
             ],
             SolvedType::Apply(
                 Symbol::ATTR_ATTR,
                 vec![
-                    flex(star3),
-                    SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
+                    flex(star5),
+                    SolvedType::Apply(Symbol::SET_SET, vec![attr_type(star6, a)]),
                 ],
             ),
         )
     };
 
-    // union : Set a, Set a -> Set a
+    // union : Attr * (Set * a)
+    //       , Attr * (Set * a)
+    //      -> Attr * (Set * a)
     add_type(Symbol::SET_UNION, set_combine.clone());
 
-    // diff : Set a, Set a -> Set a
+    // diff : Attr * (Set * a)
+    //      , Attr * (Set * a)
+    //     -> Attr * (Set * a)
     add_type(Symbol::SET_DIFF, set_combine);
 
-    // foldl : Attr (u | *) (Set (Attr u a)), Attr Shared (Attr u a -> b -> b), b -> b
+    // foldl : Attr (* | u) (Set (Attr u a))
+    //       , Attr Shared (Attr u a -> b -> b)
+    //       , b
+    //      -> b
     add_type(Symbol::SET_FOLDL, {
-        let mut store = IDStore::new();
-
-        let u = store.fresh();
-        let a = store.fresh();
-        let b = store.fresh();
-        let star1 = store.fresh();
+        let_tvars! { star, u, a, b };
 
         unique_function(
             vec![
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        container(star1, vec![u]),
+                        container(star, vec![u]),
                         SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
                     ],
                 ),
@@ -924,54 +925,47 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // insert : Attr (u | *) (Set (Attr u a)), Attr (u | *) a -> Attr * (Set (Attr u a))
+    // insert : Attr * (Set a)
+    //        , a
+    //        , Attr * (Set a)
     add_type(Symbol::SET_INSERT, {
-        let mut store = IDStore::new();
-
-        let u = store.fresh();
-        let a = store.fresh();
-        let star1 = store.fresh();
-        let star2 = store.fresh();
-        let star3 = store.fresh();
+        let_tvars! { star1, star2, a };
 
         unique_function(
             vec![
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        container(star1, vec![u]),
-                        SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
+                        flex(star1),
+                        SolvedType::Apply(Symbol::SET_SET, vec![flex(a)]),
                     ],
                 ),
-                SolvedType::Apply(Symbol::ATTR_ATTR, vec![container(star2, vec![u]), flex(a)]),
+                flex(a),
             ],
             SolvedType::Apply(
                 Symbol::ATTR_ATTR,
                 vec![
-                    flex(star3),
-                    SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
+                    flex(star2),
+                    SolvedType::Apply(Symbol::SET_SET, vec![flex(a)]),
                 ],
             ),
         )
     });
 
     // we can remove a key that is shared from a set of unique keys
-    // remove : Attr (u | *) (Set (Attr u a)), Attr * a -> Attr * (Set (Attr u a))
+    //
+    // remove : Attr * (Set (Attr u a))
+    //        , Attr * a
+    //        , Attr * (Set (Attr u a))
     add_type(Symbol::SET_REMOVE, {
-        let mut store = IDStore::new();
-
-        let u = store.fresh();
-        let a = store.fresh();
-        let star1 = store.fresh();
-        let star2 = store.fresh();
-        let star3 = store.fresh();
+        let_tvars! { u, a, star1, star2, star3 };
 
         unique_function(
             vec![
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        container(star1, vec![u]),
+                        flex(star1),
                         SolvedType::Apply(Symbol::SET_SET, vec![attr_type(u, a)]),
                     ],
                 ),

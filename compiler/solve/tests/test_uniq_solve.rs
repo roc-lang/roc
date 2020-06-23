@@ -2152,6 +2152,53 @@ mod test_uniq_solve {
     }
 
     #[test]
+    fn set_empty() {
+        infer_eq("Set.empty", "Attr * (Set *)");
+    }
+
+    #[test]
+    fn set_singelton() {
+        infer_eq("Set.singleton", "Attr * (a -> Attr * (Set a))");
+    }
+
+    #[test]
+    fn set_union() {
+        infer_eq(
+            "Set.union",
+            "Attr * (Attr * (Set (Attr * a)), Attr * (Set (Attr * a)) -> Attr * (Set (Attr * a)))",
+        );
+    }
+
+    #[test]
+    fn set_diff() {
+        infer_eq(
+            "Set.diff",
+            "Attr * (Attr * (Set (Attr * a)), Attr * (Set (Attr * a)) -> Attr * (Set (Attr * a)))",
+        );
+    }
+
+    #[test]
+    fn set_foldl() {
+        infer_eq(
+            "Set.foldl",
+            "Attr * (Attr (* | a) (Set (Attr a b)), Attr Shared (Attr a b, c -> c), c -> c)",
+        );
+    }
+
+    #[test]
+    fn set_insert() {
+        infer_eq("Set.insert", "Attr * (Attr * (Set a), a -> Attr * (Set a))");
+    }
+
+    #[test]
+    fn set_remove() {
+        infer_eq(
+            "Set.remove",
+            "Attr * (Attr * (Set (Attr a b)), Attr * b -> Attr * (Set (Attr a b)))",
+        );
+    }
+
+    #[test]
     fn use_correct_ext_var() {
         infer_eq(
             indoc!(
