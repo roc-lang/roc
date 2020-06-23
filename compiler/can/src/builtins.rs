@@ -338,22 +338,23 @@ fn num_is_odd(symbol: Symbol, var_store: &mut VarStore) -> Def {
     defn(symbol, vec![Symbol::ARG_1], var_store, body)
 }
 
-/// Num.isEven : Int -> Bool
+/// Num.isEven : Num * -> Bool
 fn num_is_even(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let bool_var = var_store.fresh();
+    let arg_var = var_store.fresh();
+    let arg_num_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::Eq,
         args: vec![
-            (bool_var, Int(var_store.fresh(), 0)),
+            (arg_var, Num(arg_num_var, 0)),
             (
-                bool_var,
+                arg_var,
                 RunLowLevel {
                     op: LowLevel::NumRemUnchecked,
                     args: vec![
-                        (var_store.fresh(), Var(Symbol::ARG_1)),
-                        (var_store.fresh(), Int(var_store.fresh(), 2)),
+                        (arg_var, Var(Symbol::ARG_1)),
+                        (arg_var, Num(arg_num_var, 2)),
                     ],
-                    ret_var: var_store.fresh(),
+                    ret_var: arg_var,
                 },
             ),
         ],
@@ -542,7 +543,7 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.rem : Int, Int -> Int
+/// Num.rem : Int, Int -> Result Int [ DivByZero ]*
 fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let body = If {
@@ -604,34 +605,11 @@ fn num_neg(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.abs : Num a -> Num a
 fn num_abs(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let body = If {
-        branch_var: var_store.fresh(),
-        cond_var: var_store.fresh(),
-        branches: vec![(
-            // if-condition
-            no_region(
-                // Num.isLt 0 n
-                // 0 < n
-                RunLowLevel {
-                    op: LowLevel::NumLt,
-                    args: vec![
-                        (var_store.fresh(), Int(var_store.fresh(), 0)),
-                        (var_store.fresh(), Var(Symbol::ARG_1)),
-                    ],
-                    ret_var: var_store.fresh(),
-                },
-            ),
-            // int is at least 0, so just pass it along
-            no_region(Var(Symbol::ARG_1)),
-        )],
-        final_else: Box::new(
-            // int is below 0, so negate it.
-            no_region(RunLowLevel {
-                op: LowLevel::NumNeg,
-                args: vec![(var_store.fresh(), Var(Symbol::ARG_1))],
-                ret_var: var_store.fresh(),
-            }),
-        ),
+    let arg_var = var_store.fresh();
+    let body = RunLowLevel {
+        op: LowLevel::NumAbs,
+        args: vec![(arg_var, Var(Symbol::ARG_1))],
+        ret_var: arg_var,
     };
 
     defn(symbol, vec![Symbol::ARG_1], var_store, body)

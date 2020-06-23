@@ -792,7 +792,9 @@ pub fn constrain_expr(
             let mut arg_types = Vec::with_capacity(args.len());
             let mut arg_cons = Vec::with_capacity(args.len());
 
-            for (index, (arg_var, arg)) in args.iter().enumerate() {
+            let args_iter = args.iter();
+
+            for (index, (arg_var, arg)) in args_iter.enumerate() {
                 let arg_type = Variable(*arg_var);
                 let reason = Reason::LowLevelOpArg {
                     op: *op,

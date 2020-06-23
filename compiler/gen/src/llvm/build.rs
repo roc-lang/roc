@@ -1671,7 +1671,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
     let bd = env.builder;
 
     match op {
-        NumAdd => bd.build_int_neg(arg, "negate_int").into(),
+        NumNeg => bd.build_int_neg(arg, "negate_int").into(),
         NumAbs => {
             todo!("build_int_unary_op for integer absolute value. (possibly bitwise AND with 0b0111_1111_...)");
         }
@@ -1692,7 +1692,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
     let bd = env.builder;
 
     match op {
-        NumAdd => bd.build_float_neg(arg, "negate_float").into(),
+        NumNeg => bd.build_float_neg(arg, "negate_float").into(),
         NumAbs => call_intrinsic(LLVM_FABS_F64, env, &[(arg.into(), arg_layout)]),
         NumSqrt => call_intrinsic(LLVM_SQRT_F64, env, &[(arg.into(), arg_layout)]),
         NumRound => call_intrinsic(LLVM_LROUND_I64_F64, env, &[(arg.into(), arg_layout)]),
