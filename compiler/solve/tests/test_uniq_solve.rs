@@ -2402,14 +2402,18 @@ mod test_uniq_solve {
     }
 
     #[test]
-    fn equals() {
+    fn bool_eq() {
         infer_eq(
-            indoc!(
-                r#"
-                \a, b -> a == b
-                "#
-            ),
-            "Attr * (a, a -> Attr * Bool)",
+            "\\a, b -> a == b",
+            "Attr * (Attr * a, Attr * a -> Attr * Bool)",
+        );
+    }
+
+    #[test]
+    fn bool_neq() {
+        infer_eq(
+            "\\a, b -> a != b",
+            "Attr * (Attr * a, Attr * a -> Attr * Bool)",
         );
     }
 
