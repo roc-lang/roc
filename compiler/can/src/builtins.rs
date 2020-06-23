@@ -65,6 +65,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_SIN => num_sin,
         Symbol::NUM_COS => num_cos,
         Symbol::NUM_TAN => num_tan,
+        Symbol::NUM_DIV_FLOAT => num_div_float,
         Symbol::NUM_DIV_INT => num_div_int,
         Symbol::NUM_ABS => num_abs,
         Symbol::NUM_NEG => num_neg,
@@ -81,8 +82,6 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
 
 /// Bool.isEq : val, val -> Bool
 fn bool_eq(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let bool_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::Eq,
@@ -103,8 +102,6 @@ fn bool_eq(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Bool.isNotEq : val, val -> Bool
 fn bool_neq(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let bool_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::NotEq,
@@ -125,8 +122,6 @@ fn bool_neq(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Bool.or : val, val -> Bool
 fn bool_or(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let body = RunLowLevel {
         op: LowLevel::Or,
         args: vec![
@@ -146,8 +141,6 @@ fn bool_or(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Bool.not : Bool -> Bool
 fn bool_not(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let body = RunLowLevel {
         op: LowLevel::Not,
         args: vec![(var_store.fresh(), Var(Symbol::BOOL_BINOP_LHS))],
@@ -159,8 +152,6 @@ fn bool_not(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Bool.and : val, val -> Bool
 fn bool_and(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let body = RunLowLevel {
         op: LowLevel::And,
         args: vec![
@@ -179,8 +170,6 @@ fn bool_and(symbol: Symbol, var_store: &mut VarStore) -> Def {
 }
 
 fn num_binop(symbol: Symbol, var_store: &mut VarStore, op: LowLevel) -> Def {
-    use crate::expr::Expr::*;
-
     let body = RunLowLevel {
         op,
         args: vec![
@@ -230,13 +219,11 @@ fn num_lte(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.sin : Float -> Float
 fn num_sin(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let arg_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::NumSin,
-        args: vec![
-            (var_store.fresh(), Var(Symbol::ARG_1)),
-            (var_store.fresh(), Num(var_store.fresh(), 0)),
-        ],
-        ret_var: var_store.fresh(),
+        args: vec![(arg_var, Var(Symbol::ARG_1))],
+        ret_var: arg_var,
     };
 
     defn(symbol, vec![Symbol::ARG_1], var_store, body)
@@ -244,13 +231,11 @@ fn num_sin(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.cos : Float -> Float
 fn num_cos(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let arg_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::NumCos,
-        args: vec![
-            (var_store.fresh(), Var(Symbol::ARG_1)),
-            (var_store.fresh(), Num(var_store.fresh(), 0)),
-        ],
-        ret_var: var_store.fresh(),
+        args: vec![(arg_var, Var(Symbol::ARG_1))],
+        ret_var: arg_var,
     };
 
     defn(symbol, vec![Symbol::ARG_1], var_store, body)
@@ -258,33 +243,28 @@ fn num_cos(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.tan : Float -> Float
 fn num_tan(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let float_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::NumDivUnchecked,
         args: vec![
             (
-                var_store.fresh(),
+                float_var,
                 RunLowLevel {
                     op: LowLevel::NumSin,
-                    args: vec![
-                        (var_store.fresh(), Var(Symbol::ARG_1)),
-                        (var_store.fresh(), Num(var_store.fresh(), 0)),
-                    ],
-                    ret_var: var_store.fresh(),
+                    args: vec![(float_var, Var(Symbol::ARG_1))],
+                    ret_var: float_var,
                 },
             ),
             (
-                var_store.fresh(),
+                float_var,
                 RunLowLevel {
                     op: LowLevel::NumCos,
-                    args: vec![
-                        (var_store.fresh(), Var(Symbol::ARG_1)),
-                        (var_store.fresh(), Num(var_store.fresh(), 0)),
-                    ],
-                    ret_var: var_store.fresh(),
+                    args: vec![(float_var, Var(Symbol::ARG_1))],
+                    ret_var: float_var,
                 },
             ),
         ],
-        ret_var: var_store.fresh(),
+        ret_var: float_var,
     };
 
     defn(symbol, vec![Symbol::ARG_1], var_store, body)
@@ -321,8 +301,6 @@ fn num_is_negative(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.isPositive : Float -> Bool
 fn num_is_positive(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let body = RunLowLevel {
         op: LowLevel::NumGt,
         args: vec![
@@ -337,8 +315,6 @@ fn num_is_positive(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.isOdd : Int -> Bool
 fn num_is_odd(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let bool_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::Eq,
@@ -364,8 +340,6 @@ fn num_is_odd(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.isEven : Int -> Bool
 fn num_is_even(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let bool_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::Eq,
@@ -391,8 +365,6 @@ fn num_is_even(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.sqrt : Float -> Result Float [ SqrtOfNegative ]*
 fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let body = RunLowLevel {
         op: LowLevel::NumSqrt,
         args: vec![(var_store.fresh(), Var(Symbol::ARG_1))],
@@ -404,8 +376,6 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.round : Float -> Int
 fn num_round(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let body = RunLowLevel {
         op: LowLevel::NumRound,
         args: vec![(var_store.fresh(), Var(Symbol::ARG_1))],
@@ -450,8 +420,6 @@ fn list_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
 fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let arg_list = Symbol::ARG_1;
     let arg_index = Symbol::ARG_2;
 
@@ -517,8 +485,6 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// List.set : List elem, Int, elem -> List elem
 fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let arg_list = Symbol::ARG_1;
     let arg_index = Symbol::ARG_2;
     let arg_elem = Symbol::ARG_3;
@@ -578,8 +544,6 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.rem : Int, Int -> Int
 fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let bool_var = var_store.fresh();
     let body = If {
         branch_var: var_store.fresh(),
@@ -629,8 +593,6 @@ fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.neg : Num a -> Num a
 fn num_neg(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let body = RunLowLevel {
         op: LowLevel::NumNeg,
         args: vec![(var_store.fresh(), Var(Symbol::ARG_1))],
@@ -642,8 +604,6 @@ fn num_neg(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.abs : Num a -> Num a
 fn num_abs(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let body = If {
         branch_var: var_store.fresh(),
         cond_var: var_store.fresh(),
@@ -677,10 +637,60 @@ fn num_abs(symbol: Symbol, var_store: &mut VarStore) -> Def {
     defn(symbol, vec![Symbol::ARG_1], var_store, body)
 }
 
+/// Num.div : Float, Float -> Result Float [ DivByZero ]*
+fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let bool_var = var_store.fresh();
+    let body = If {
+        branch_var: var_store.fresh(),
+        cond_var: var_store.fresh(),
+        branches: vec![(
+            // if-condition
+            no_region(
+                // Num.neq denominator 0
+                RunLowLevel {
+                    op: LowLevel::NotEq,
+                    args: vec![
+                        (bool_var, Var(Symbol::ARG_1)),
+                        (bool_var, Float(var_store.fresh(), 0.0)),
+                    ],
+                    ret_var: var_store.fresh(),
+                },
+            ),
+            // denominator was not zero
+            no_region(
+                // Ok (Float.#divUnsafe numerator denominator)
+                tag(
+                    "Ok",
+                    vec![
+                        // Num.#divUnsafe numerator denominator
+                        RunLowLevel {
+                            op: LowLevel::NumDivUnchecked,
+                            args: vec![
+                                (var_store.fresh(), Var(Symbol::ARG_1)),
+                                (var_store.fresh(), Var(Symbol::ARG_2)),
+                            ],
+                            ret_var: var_store.fresh(),
+                        },
+                    ],
+                    var_store,
+                ),
+            ),
+        )],
+        final_else: Box::new(
+            // denominator was zero
+            no_region(tag(
+                "Err",
+                vec![tag("DivByZero", Vec::new(), var_store)],
+                var_store,
+            )),
+        ),
+    };
+
+    defn(symbol, vec![Symbol::ARG_1, Symbol::ARG_2], var_store, body)
+}
+
 /// Num.div : Int, Int -> Result Int [ DivByZero ]*
 fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     let bool_var = var_store.fresh();
     let body = If {
         branch_var: var_store.fresh(),
@@ -733,8 +743,6 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// List.first : List elem -> Result elem [ ListWasEmpty ]*
 fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    use crate::expr::Expr::*;
-
     // Perform a bounds check. If it passes, delegate to List.getUnsafe.
     let body = If {
         // TODO Use "when" instead of "if" so that we can have False be the first branch.
@@ -810,7 +818,6 @@ fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
 
 #[inline(always)]
 fn defn(fn_name: Symbol, args: Vec<Symbol>, var_store: &mut VarStore, body: Expr) -> Def {
-    use crate::expr::Expr::*;
     use crate::pattern::Pattern::*;
 
     let closure_args = args

@@ -1399,7 +1399,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(answer)
         }
-        NumAbs | NumNeg | NumRound | NumSqrt => {
+        NumAbs | NumNeg | NumRound | NumSqrt | NumSin | NumCos => {
             debug_assert_eq!(args.len(), 1);
 
             let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
@@ -1429,8 +1429,8 @@ fn run_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
-        NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumSin | NumCos
-        | NumRemUnchecked | NumDivUnchecked => {
+        NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
+        | NumDivUnchecked => {
             debug_assert_eq!(args.len(), 2);
 
             let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
@@ -1634,9 +1634,9 @@ fn build_int_binop<'a, 'ctx, 'env>(
 fn build_float_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     lhs: FloatValue<'ctx>,
-    lhs_layout: &Layout<'a>,
+    _lhs_layout: &Layout<'a>,
     rhs: FloatValue<'ctx>,
-    rhs_layout: &Layout<'a>,
+    _rhs_layout: &Layout<'a>,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     use inkwell::FloatPredicate::*;
@@ -1654,18 +1654,6 @@ fn build_float_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
         NumRemUnchecked => bd.build_float_rem(lhs, rhs, "rem_float").into(),
         NumDivUnchecked => bd.build_float_div(lhs, rhs, "div_float").into(),
-
-        // Float-specific ops
-        NumSin => call_intrinsic(
-            LLVM_SIN_F64,
-            env,
-            &[(lhs.into(), lhs_layout), (rhs.into(), rhs_layout)],
-        ),
-        NumCos => call_intrinsic(
-            LLVM_COS_F64,
-            env,
-            &[(lhs.into(), lhs_layout), (rhs.into(), rhs_layout)],
-        ),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
@@ -1708,6 +1696,8 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
         NumAbs => call_intrinsic(LLVM_FABS_F64, env, &[(arg.into(), arg_layout)]),
         NumSqrt => call_intrinsic(LLVM_SQRT_F64, env, &[(arg.into(), arg_layout)]),
         NumRound => call_intrinsic(LLVM_LROUND_I64_F64, env, &[(arg.into(), arg_layout)]),
+        NumSin => call_intrinsic(LLVM_SIN_F64, env, &[(arg.into(), arg_layout)]),
+        NumCos => call_intrinsic(LLVM_COS_F64, env, &[(arg.into(), arg_layout)]),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }
