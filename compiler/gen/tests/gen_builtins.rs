@@ -670,13 +670,13 @@ mod gen_builtins {
         assert_evals_to!(
             indoc!(
                 r#"
-                    shared = [ 2, 4 ]
+                    unique = [ 2, 4 ]
 
-                    List.getUnsafe shared 1
+                    List.get unique 1
                 "#
             ),
-            4,
-            i64
+            (1, 4),
+            (u64, i64)
         );
     }
 
