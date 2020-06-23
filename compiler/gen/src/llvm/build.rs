@@ -1017,21 +1017,10 @@ fn call_with_args<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
     symbol: Symbol,
-    parent: FunctionValue<'ctx>,
+    _parent: FunctionValue<'ctx>,
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
 ) -> BasicValueEnum<'ctx> {
     match symbol {
-        Symbol::NUM_MUL => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_mul(
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "mul_i64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
         Symbol::NUM_TO_FLOAT => {
             // TODO specialize this to be not just for i64!
             let builtin_fn_name = "i64_to_f64_";
@@ -1057,10 +1046,6 @@ fn call_with_args<'a, 'ctx, 'env>(
                 .left()
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call for builtin {:?}", symbol))
         }
-        Symbol::NUM_SQRT => call_intrinsic(LLVM_SQRT_F64, env, args),
-        Symbol::NUM_ROUND => call_intrinsic(LLVM_LROUND_I64_F64, env, args),
-        Symbol::LIST_SET => list_set(parent, args, env, InPlace::Clone),
-        Symbol::LIST_SET_IN_PLACE => list_set(parent, args, env, InPlace::InPlace),
         Symbol::LIST_SINGLE => {
             // List.single : a -> List a
             debug_assert!(args.len() == 1);
@@ -1311,7 +1296,7 @@ fn list_set<'a, 'ctx, 'env>(
     // List.set : List elem, Int, elem -> List elem
     let builder = env.builder;
 
-    debug_assert!(args.len() == 3);
+    debug_assert_eq!(args.len(), 3);
 
     let original_wrapper = args[0].0.into_struct_value();
     let elem_index = args[1].0.into_int_value();
@@ -1414,7 +1399,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(answer)
         }
-        NumAbs | NumNeg => {
+        NumAbs | NumNeg | NumRound | NumSqrt => {
             debug_assert_eq!(args.len(), 1);
 
             let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
@@ -1445,7 +1430,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             }
         }
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumSin | NumCos
-        | NumRemUnsafe | NumDivUnsafe => {
+        | NumRemUnchecked | NumDivUnchecked => {
             debug_assert_eq!(args.len(), 2);
 
             let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
@@ -1576,9 +1561,44 @@ fn run_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
-        ListSetUnsafe => {
-            todo!("re-implement List#setUnsafe");
-        }
+        ListSet => list_set(
+            parent,
+            &[
+                (
+                    build_expr(env, layout_ids, scope, parent, &args[0].0),
+                    &args[0].1,
+                ),
+                (
+                    build_expr(env, layout_ids, scope, parent, &args[1].0),
+                    &args[1].1,
+                ),
+                (
+                    build_expr(env, layout_ids, scope, parent, &args[2].0),
+                    &args[2].1,
+                ),
+            ],
+            env,
+            InPlace::Clone,
+        ),
+        ListSetInPlace => list_set(
+            parent,
+            &[
+                (
+                    build_expr(env, layout_ids, scope, parent, &args[0].0),
+                    &args[0].1,
+                ),
+                (
+                    build_expr(env, layout_ids, scope, parent, &args[1].0),
+                    &args[1].1,
+                ),
+                (
+                    build_expr(env, layout_ids, scope, parent, &args[2].0),
+                    &args[2].1,
+                ),
+            ],
+            env,
+            InPlace::InPlace,
+        ),
     }
 }
 
@@ -1603,8 +1623,8 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),
         NumLt => bd.build_int_compare(SLT, lhs, rhs, "int_lt").into(),
         NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
-        NumRemUnsafe => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
-        NumDivUnsafe => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
+        NumRemUnchecked => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
+        NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
@@ -1632,8 +1652,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
         NumGte => bd.build_float_compare(OGE, lhs, rhs, "float_gte").into(),
         NumLt => bd.build_float_compare(OLT, lhs, rhs, "float_lt").into(),
         NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
-        NumRemUnsafe => bd.build_float_rem(lhs, rhs, "rem_float").into(),
-        NumDivUnsafe => bd.build_float_div(lhs, rhs, "div_float").into(),
+        NumRemUnchecked => bd.build_float_rem(lhs, rhs, "rem_float").into(),
+        NumDivUnchecked => bd.build_float_div(lhs, rhs, "div_float").into(),
 
         // Float-specific ops
         NumSin => call_intrinsic(
@@ -1686,6 +1706,8 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
     match op {
         NumAdd => bd.build_float_neg(arg, "negate_float").into(),
         NumAbs => call_intrinsic(LLVM_FABS_F64, env, &[(arg.into(), arg_layout)]),
+        NumSqrt => call_intrinsic(LLVM_SQRT_F64, env, &[(arg.into(), arg_layout)]),
+        NumRound => call_intrinsic(LLVM_LROUND_I64_F64, env, &[(arg.into(), arg_layout)]),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }

@@ -514,6 +514,7 @@ fn from_can<'a>(
         }
 
         RunLowLevel { op, args, .. } => {
+            let op = optimize_low_level(env.subs, op, &args);
             let mut mono_args = Vec::with_capacity_in(args.len(), env.arena);
 
             for (arg_var, arg_expr) in args {
@@ -535,64 +536,15 @@ fn from_can<'a>(
                 Expr::Load(proc_name) => {
                     // Some functions can potentially mutate in-place.
                     // If we have one of those, switch to the in-place version if appropriate.
-                    match proc_name {
-                        Symbol::LIST_SET => {
-                            let subs = &env.subs;
-                            // The first arg is the one with the List in it.
-                            // List.set : List elem, Int, elem -> List elem
-                            let (list_arg_var, _) = loc_args.get(0).unwrap();
-
-                            let content = subs.get_without_compacting(*list_arg_var).content;
-
-                            match content {
-                                Content::Structure(FlatType::Apply(
-                                    Symbol::ATTR_ATTR,
-                                    attr_args,
-                                )) => {
-                                    debug_assert!(attr_args.len() == 2);
-
-                                    // If the first argument (the List) is unique,
-                                    // then we can safely upgrade to List.set_in_place
-                                    let attr_arg_content =
-                                        subs.get_without_compacting(attr_args[0]).content;
-
-                                    let new_name = if attr_arg_content.is_unique(subs) {
-                                        Symbol::LIST_SET_IN_PLACE
-                                    } else {
-                                        Symbol::LIST_SET
-                                    };
-
-                                    call_by_name(
-                                        env,
-                                        procs,
-                                        fn_var,
-                                        ret_var,
-                                        new_name,
-                                        loc_args,
-                                        layout_cache,
-                                    )
-                                }
-                                _ => call_by_name(
-                                    env,
-                                    procs,
-                                    fn_var,
-                                    ret_var,
-                                    proc_name,
-                                    loc_args,
-                                    layout_cache,
-                                ),
-                            }
-                        }
-                        specialized_proc_symbol => call_by_name(
-                            env,
-                            procs,
-                            fn_var,
-                            ret_var,
-                            specialized_proc_symbol,
-                            loc_args,
-                            layout_cache,
-                        ),
-                    }
+                    call_by_name(
+                        env,
+                        procs,
+                        fn_var,
+                        ret_var,
+                        proc_name,
+                        loc_args,
+                        layout_cache,
+                    )
                 }
                 ptr => {
                     // Call by pointer - the closure was anonymous, e.g.
@@ -1781,5 +1733,43 @@ fn from_can_record_destruct<'a>(
             None => None,
             Some((_, loc_pattern)) => Some(from_can_pattern(env, &loc_pattern.value)),
         },
+    }
+}
+
+/// Potentially translate LowLevel operations into more efficient ones based on
+/// uniqueness type info.
+///
+/// For example, turning LowLevel::ListSet to LowLevel::ListSetInPlace if the
+/// list is Unique.
+fn optimize_low_level(
+    subs: &Subs,
+    op: LowLevel,
+    args: &[(Variable, roc_can::expr::Expr)],
+) -> LowLevel {
+    match op {
+        LowLevel::ListSet => {
+            // The first arg is the one with the List in it.
+            // List.set : List elem, Int, elem -> List elem
+            let list_arg_var = args[0].0;
+            let content = subs.get_without_compacting(list_arg_var).content;
+
+            match content {
+                Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
+                    debug_assert_eq!(attr_args.len(), 2);
+
+                    // If the first argument (the List) is unique,
+                    // then we can safely upgrade to List.set_in_place
+                    let attr_arg_content = subs.get_without_compacting(attr_args[0]).content;
+
+                    if attr_arg_content.is_unique(subs) {
+                        LowLevel::ListSetInPlace
+                    } else {
+                        LowLevel::ListSet
+                    }
+                }
+                _ => op,
+            }
+        }
+        _ => op,
     }
 }
