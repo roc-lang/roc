@@ -36,34 +36,7 @@ macro_rules! let_tvars {
 const NUM_BUILTIN_IMPORTS: usize = 7;
 
 /// These can be shared between definitions, they will get instantiated when converted to Type
-const TVAR1: VarId = VarId::from_u32(1);
-const TVAR2: VarId = VarId::from_u32(2);
-const TVAR3: VarId = VarId::from_u32(3);
-
-/// These can be shared between definitions, they will get instantiated when converted to Type
 const FUVAR: VarId = VarId::from_u32(1000);
-const UVAR1: VarId = VarId::from_u32(1001);
-const UVAR2: VarId = VarId::from_u32(1002);
-// const UVAR3: VarId = VarId::from_u32(1003);
-const UVAR4: VarId = VarId::from_u32(1004);
-const UVAR5: VarId = VarId::from_u32(1005);
-const UVAR6: VarId = VarId::from_u32(1006);
-
-pub struct IDStore(u32);
-
-impl IDStore {
-    fn new() -> Self {
-        IDStore(2000)
-    }
-
-    fn fresh(&mut self) -> VarId {
-        let result = VarId::from_u32(self.0);
-
-        self.0 += 1;
-
-        result
-    }
-}
 
 fn shared(base: SolvedType) -> SolvedType {
     SolvedType::Apply(
@@ -145,7 +118,6 @@ pub fn uniq_stdlib() -> StdLib {
 }
 
 pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
-    // let mut aliases = builtins::aliases();
     let mut aliases = MutMap::default();
 
     let mut add_alias = |symbol, alias| {
@@ -168,13 +140,16 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         )
     };
 
+    // NOTE: `a` must be the first variable bound here!
+    let_tvars! { a, err, star };
+
     // Num : Num Integer
     add_alias(
         Symbol::NUM_NUM,
         BuiltinAlias {
             region: Region::zero(),
             vars: vec![Located::at(Region::zero(), "a".into())],
-            typ: single_private_tag(Symbol::NUM_AT_NUM, vec![flex(TVAR1)]),
+            typ: single_private_tag(Symbol::NUM_AT_NUM, vec![flex(a)]),
         },
     );
 
@@ -207,7 +182,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             typ: SolvedType::Apply(
                 Symbol::NUM_NUM,
                 vec![lift(
-                    UVAR1,
+                    star,
                     SolvedType::Apply(Symbol::INT_INTEGER, Vec::new()),
                 )],
             ),
@@ -223,7 +198,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             typ: SolvedType::Apply(
                 Symbol::NUM_NUM,
                 vec![lift(
-                    UVAR1,
+                    star,
                     SolvedType::Apply(Symbol::FLOAT_FLOATINGPOINT, Vec::new()),
                 )],
             ),
@@ -257,8 +232,8 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             ],
             typ: SolvedType::TagUnion(
                 vec![
-                    (TagName::Global("Ok".into()), vec![flex(TVAR1)]),
-                    (TagName::Global("Err".into()), vec![flex(TVAR2)]),
+                    (TagName::Global("Ok".into()), vec![flex(a)]),
+                    (TagName::Global("Err".into()), vec![flex(err)]),
                 ],
                 Box::new(SolvedType::EmptyTagUnion),
             ),
@@ -345,10 +320,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_num_comparison(Symbol::NUM_GTE);
 
     // toFloat : Num a -> Float
-    add_type(
-        Symbol::NUM_TO_FLOAT,
-        unique_function(vec![num_type(UVAR1, TVAR1)], float_type(UVAR2)),
-    );
+    add_type(Symbol::NUM_TO_FLOAT, {
+        let_tvars! { star1, star2, a };
+        unique_function(vec![num_type(star1, a)], float_type(star2))
+    });
 
     // Int module
 
@@ -391,10 +366,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     });
 
     // highest : Int
-    add_type(Symbol::INT_HIGHEST, int_type(UVAR1));
+    add_type(Symbol::INT_HIGHEST, {
+        let_tvars! { star };
+        int_type(star)
+    });
 
     // lowest : Int
-    add_type(Symbol::INT_LOWEST, int_type(UVAR1));
+    add_type(Symbol::INT_LOWEST, {
+        let_tvars! { star };
+        int_type(star)
+    });
 
     // div or (//) : Int, Int -> Result Int [ DivByZero ]*
     add_type(Symbol::INT_DIV, {
@@ -485,10 +466,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     });
 
     // highest : Float
-    add_type(Symbol::FLOAT_HIGHEST, float_type(UVAR1));
+    add_type(Symbol::FLOAT_HIGHEST, {
+        let_tvars! { star };
+        float_type(star)
+    });
 
     // lowest : Float
-    add_type(Symbol::FLOAT_LOWEST, float_type(UVAR1));
+    add_type(Symbol::FLOAT_LOWEST, {
+        let_tvars! { star };
+        float_type(star)
+    });
 
     // Bool module
 
@@ -575,10 +562,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     });
 
     // is LIST_GET_UNSAFE still used?
-    add_type(
-        Symbol::LIST_GET_UNSAFE,
-        unique_function(vec![list_type(UVAR1, TVAR1), int_type(UVAR2)], flex(TVAR1)),
-    );
+    add_type(Symbol::LIST_GET_UNSAFE, {
+        let_tvars! { star1, star2, a };
+        unique_function(vec![list_type(star1, a), int_type(star2)], flex(a))
+    });
 
     // set : Attr (w | u | v) (List (Attr u a))
     //     , Attr * Int
@@ -734,19 +721,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Map module
 
-    // empty : Map k v
-    add_type(Symbol::MAP_EMPTY, map_type(UVAR1, TVAR1, TVAR2));
+    // empty : Attr * (Map k v)
+    add_type(Symbol::MAP_EMPTY, {
+        let_tvars! { star, k , v };
+        map_type(star, k, v)
+    });
 
-    // singleton : k, v -> Map k v
-    add_type(
-        Symbol::MAP_SINGLETON,
-        unique_function(
-            vec![flex(TVAR1), flex(TVAR2)],
-            map_type(UVAR1, TVAR1, TVAR2),
-        ),
-    );
+    // singleton : k, v -> Attr * (Map k v)
+    add_type(Symbol::MAP_SINGLETON, {
+        let_tvars! { star, k , v };
+        unique_function(vec![flex(k), flex(v)], map_type(star, k, v))
+    });
 
-    // get : Attr (u | v | *) (Map (Attr u key) (Attr v val), (Attr * key) -> Attr * (Result (Attr v val) [ KeyNotFound ]*)
     let key_not_found = SolvedType::Apply(
         Symbol::ATTR_ATTR,
         vec![
@@ -758,85 +744,63 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ],
     );
 
+    // get : Attr (* | u) (Map (Attr * key) (Attr u val))
+    //     , Attr * key
+    //    -> Attr * (Result (Attr u val) [ KeyNotFound ]*)
     add_type(Symbol::MAP_GET, {
-        let mut store = IDStore::new();
-
-        let u = store.fresh();
-        let v = store.fresh();
-        let key = store.fresh();
-        let val = store.fresh();
-        let star1 = store.fresh();
-        let star2 = store.fresh();
-        let star3 = store.fresh();
+        let_tvars! { u, key, val, star1, star2, star3, star4 };
 
         unique_function(
             vec![
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        container(star1, vec![u, v]),
+                        container(star1, vec![u]),
                         SolvedType::Apply(
                             Symbol::MAP_MAP,
-                            vec![attr_type(u, key), attr_type(v, val)],
+                            vec![attr_type(star2, key), attr_type(u, val)],
                         ),
                     ],
                 ),
-                SolvedType::Apply(
-                    Symbol::ATTR_ATTR,
-                    vec![container(star2, vec![u]), flex(key)],
-                ),
+                SolvedType::Apply(Symbol::ATTR_ATTR, vec![flex(star3), flex(key)]),
             ],
             SolvedType::Apply(
                 Symbol::ATTR_ATTR,
                 vec![
-                    flex(star3),
+                    flex(star4),
                     SolvedType::Apply(
                         Symbol::RESULT_RESULT,
-                        vec![attr_type(v, val), key_not_found],
+                        vec![attr_type(u, val), key_not_found],
                     ),
                 ],
             ),
         )
     });
 
-    // insert : Attr (u | v | *) (Map (Attr u key) (Attr v val)), Attr (u | *) key, Attr (v | *) val -> Attr * (Map (Attr u key) (Attr v val))
+    // insert : Attr * (Map key value)
+    //        , key
+    //        , value
+    //        , Attr * (Map key value)
     add_type(Symbol::MAP_INSERT, {
-        let mut store = IDStore::new();
-
-        let u = store.fresh();
-        let v = store.fresh();
-        let key = store.fresh();
-        let val = store.fresh();
-        let star1 = store.fresh();
-        let star2 = store.fresh();
-        let star3 = store.fresh();
+        let_tvars! { star1, star2, key, value };
 
         unique_function(
             vec![
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        container(star1, vec![u, v]),
-                        SolvedType::Apply(
-                            Symbol::MAP_MAP,
-                            vec![attr_type(u, key), attr_type(v, val)],
-                        ),
+                        flex(star1),
+                        SolvedType::Apply(Symbol::MAP_MAP, vec![flex(key), flex(value)]),
                     ],
                 ),
-                SolvedType::Apply(
-                    Symbol::ATTR_ATTR,
-                    vec![container(star2, vec![u]), flex(key)],
-                ),
-                SolvedType::Apply(
-                    Symbol::ATTR_ATTR,
-                    vec![container(star2, vec![v]), flex(val)],
-                ),
+                flex(key),
+                flex(value),
             ],
             SolvedType::Apply(
                 Symbol::ATTR_ATTR,
                 vec![
-                    flex(star3),
-                    SolvedType::Apply(Symbol::MAP_MAP, vec![attr_type(u, key), attr_type(v, val)]),
+                    flex(star2),
+                    SolvedType::Apply(Symbol::MAP_MAP, vec![flex(key), flex(value)]),
                 ],
             ),
         )
@@ -983,37 +947,39 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Str module
 
-    // isEmpty : Attr u Str -> Attr v Bool
+    // isEmpty : Attr * Str -> Attr * Bool
     add_type(Symbol::STR_ISEMPTY, {
-        unique_function(vec![str_type(UVAR1)], bool_type(UVAR2))
+        let_tvars! { star1, star2 };
+        unique_function(vec![str_type(star1)], bool_type(star2))
+    });
+
+    // append : Attr * Str, Attr * Str -> Attr * Str
+    add_type(Symbol::STR_APPEND, {
+        let_tvars! { star1, star2, star3 };
+        unique_function(vec![str_type(star1), str_type(star2)], str_type(star3))
     });
 
     // Result module
 
-    // map : Attr (* | u | v) (Result (Attr u a) e), Attr * (Attr u a -> b) -> Attr * (Result b e)
+    // map : Attr * (Result (Attr a e))
+    //     , Attr * (a -> b)
+    //    -> Attr * (Result b e)
     add_type(Symbol::RESULT_MAP, {
-        let u = UVAR1;
-        let star1 = UVAR4;
-        let star2 = UVAR5;
-        let star3 = UVAR6;
-
-        let a = TVAR1;
-        let b = TVAR2;
-        let e = TVAR3;
+        let_tvars! { star1, star2, star3, a, b, e };
         unique_function(
             vec![
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
-                        container(star1, vec![u]),
-                        SolvedType::Apply(Symbol::RESULT_RESULT, vec![attr_type(u, a), flex(e)]),
+                        flex(star1),
+                        SolvedType::Apply(Symbol::RESULT_RESULT, vec![flex(a), flex(e)]),
                     ],
                 ),
                 SolvedType::Apply(
                     Symbol::ATTR_ATTR,
                     vec![
                         flex(star2),
-                        SolvedType::Func(vec![attr_type(u, a)], Box::new(flex(b))),
+                        SolvedType::Func(vec![flex(a)], Box::new(flex(b))),
                     ],
                 ),
             ],

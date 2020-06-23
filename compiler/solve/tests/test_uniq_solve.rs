@@ -2199,6 +2199,50 @@ mod test_uniq_solve {
     }
 
     #[test]
+    fn map_empty() {
+        infer_eq("Map.empty", "Attr * (Map * *)");
+    }
+
+    #[test]
+    fn map_singelton() {
+        infer_eq("Map.singleton", "Attr * (a, b -> Attr * (Map a b))");
+    }
+
+    #[test]
+    fn map_get() {
+        infer_eq("Map.get", "Attr * (Attr (* | a) (Map (Attr * b) (Attr a c)), Attr * b -> Attr * (Result (Attr a c) (Attr * [ KeyNotFound ]*)))");
+    }
+
+    #[test]
+    fn map_insert() {
+        infer_eq(
+            "Map.insert",
+            "Attr * (Attr * (Map a b), a, b -> Attr * (Map a b))",
+        );
+    }
+
+    #[test]
+    fn str_is_empty() {
+        infer_eq("Str.isEmpty", "Attr * (Attr * Str -> Attr * Bool)");
+    }
+
+    #[test]
+    fn str_append() {
+        infer_eq(
+            "Str.append",
+            "Attr * (Attr * Str, Attr * Str -> Attr * Str)",
+        );
+    }
+
+    #[test]
+    fn result_map() {
+        infer_eq(
+            "Result.map",
+            "Attr * (Attr * (Result a b), Attr * (a -> c) -> Attr * (Result c b))",
+        );
+    }
+
+    #[test]
     fn use_correct_ext_var() {
         infer_eq(
             indoc!(
