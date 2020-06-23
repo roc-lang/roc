@@ -587,72 +587,43 @@ define_builtins! {
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
         1 NUM_AT_NUM: "@Num" // the Num.@Num private tag
-        2 NUM_ABS: "abs"
-        3 NUM_NEG: "neg"
-        4 NUM_ADD: "add"
-        5 NUM_SUB: "sub"
-        6 NUM_MUL: "mul"
-        7 NUM_LT: "isLt"
-        8 NUM_LTE: "isLte"
-        9 NUM_GT: "isGt"
-        10 NUM_GTE: "isGte"
-        11 NUM_TO_FLOAT: "toFloat"
+        2 NUM_INT: "Int" imported // the Int.Int type alias
+        3 NUM_INTEGER: "Integer" imported // Int : Num Integer
+        4 NUM_AT_INTEGER: "@Integer" // the Int.@Integer private tag
+        5 NUM_FLOAT: "Float" imported // the Float.Float type alias
+        6 NUM_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
+        7 NUM_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
+        8 NUM_MAX_INT: "maxInt"
+        9 NUM_MIN_INT: "minInt"
+        10 NUM_MAX_FLOAT: "maxFloat"
+        11 NUM_MIN_FLOAT: "minFloat"
+        12 NUM_ABS: "abs"
+        13 NUM_NEG: "neg"
+        14 NUM_ADD: "add"
+        15 NUM_SUB: "sub"
+        16 NUM_MUL: "mul"
+        17 NUM_LT: "isLt"
+        18 NUM_LTE: "isLte"
+        19 NUM_GT: "isGt"
+        20 NUM_GTE: "isGte"
+        21 NUM_TO_FLOAT: "toFloat"
+        22 NUM_SIN: "sin"
+        23 NUM_COS: "cos"
+        24 NUM_TAN: "tan"
+        25 NUM_IS_ZERO: "isZero"
+        26 NUM_IS_EVEN: "isEven"
+        27 NUM_IS_ODD: "isOdd"
+        28 NUM_IS_POSITIVE: "isPositive"
+        29 NUM_IS_NEGATIVE: "isNegative"
+        30 NUM_REM: "rem"
+        31 NUM_DIV_FLOAT: "div"
+        32 NUM_DIV_INT: "divFloor"
+        33 NUM_MOD_INT: "modInt"
+        34 NUM_MOD_FLOAT: "modFloat"
+        35 NUM_SQRT: "sqrt"
+        36 NUM_ROUND: "round"
     }
-    2 INT: "Int" => {
-        0 INT_INT: "Int" imported // the Int.Int type alias
-        1 INT_INTEGER: "Integer" imported // Int : Num Integer
-        2 INT_AT_INTEGER: "@Integer" // the Int.@Integer private tag
-        3 INT_DIV: "div"
-        4 INT_MOD: "mod"
-        5 INT_HIGHEST: "highest"
-        6 INT_LOWEST: "lowest"
-        7 INT_DIV_UNSAFE: "divUnsafe" // TODO remove once we can code gen Result
-        8 INT_LT: "#lt"
-        9 INT_LTE: "#lte"
-        10 INT_GT: "#gt"
-        11 INT_GTE: "#gte"
-        12 INT_DIV_ARG_NUMERATOR: "div#numerator" // The first argument to `//`, the numerator
-        13 INT_DIV_ARG_DENOMINATOR: "div#denominator" // The first argument to `//`, the denominator
-        14 INT_ABS: "abs"
-        15 INT_ABS_ARG: "abs#arg"
-        16 INT_REM_UNSAFE: "remUnsafe"
-        17 INT_REM: "rem"
-        18 INT_REM_ARG_0: "rem#arg0"
-        19 INT_REM_ARG_1: "rem#arg1"
-        20 INT_IS_ODD: "isOdd"
-        21 INT_IS_ODD_ARG: "isOdd#arg"
-        22 INT_IS_EVEN: "isEven"
-        23 INT_IS_EVEN_ARG: "isEven#arg"
-        24 INT_IS_ZERO: "isZero"
-        25 INT_IS_ZERO_ARG: "isZero#arg"
-        26 INT_IS_POSITIVE: "isPositive"
-        27 INT_IS_POSITIVE_ARG: "isPositive#arg"
-        28 INT_IS_NEGATIVE: "isNegative"
-        29 INT_IS_NEGATIVE_ARG: "isNegative#arg"
-    }
-    3 FLOAT: "Float" => {
-        0 FLOAT_FLOAT: "Float" imported // the Float.Float type alias
-        1 FLOAT_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
-        2 FLOAT_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
-        3 FLOAT_DIV: "div"
-        4 FLOAT_MOD: "mod"
-        5 FLOAT_SQRT: "sqrt"
-        6 FLOAT_HIGHEST: "highest"
-        7 FLOAT_LOWEST: "lowest"
-        8 FLOAT_ROUND: "round"
-        9 FLOAT_ABS: "abs"
-        10 FLOAT_IS_POSITIVE: "isPositive"
-        11 FLOAT_IS_POSITIVE_ARG: "isPositive#arg"
-        12 FLOAT_IS_NEGATIVE: "isNegative"
-        13 FLOAT_IS_NEGATIVE_ARG: "isNegative#arg"
-        14 FLOAT_IS_ZERO: "isZero"
-        15 FLOAT_IS_ZERO_ARG: "isZero#arg"
-        16 FLOAT_SIN: "sin"
-        17 FLOAT_COS: "cos"
-        18 FLOAT_TAN: "tan"
-        19 FLOAT_TAN_ARG: "tan#arg"
-    }
-    4 BOOL: "Bool" => {
+    2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
         1 BOOL_AND: "and"
         2 BOOL_OR: "or"
@@ -663,12 +634,12 @@ define_builtins! {
         7 BOOL_BINOP_LHS: "bool#lhs"
         8 BOOL_BINOP_RHS: "bool#rhs"
     }
-    5 STR: "Str" => {
+    3 STR: "Str" => {
         0 STR_STR: "Str" imported // the Str.Str type alias
         1 STR_AT_STR: "@Str" // the Str.@Str private tag
         2 STR_ISEMPTY: "isEmpty"
     }
-    6 LIST: "List" => {
+    4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
         1 LIST_AT_LIST: "@List" // the List.@List private tag
         2 LIST_IS_EMPTY: "isEmpty"
@@ -691,11 +662,11 @@ define_builtins! {
         19 LIST_SET_ARG_INDEX: "set#index"
         20 LIST_SET_ARG_ELEM: "set#elem"
     }
-    7 RESULT: "Result" => {
+    5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
         1 RESULT_MAP: "map"
     }
-    8 MAP: "Map" => {
+    6 MAP: "Map" => {
         0 MAP_MAP: "Map" imported // the Map.Map type alias
         1 MAP_AT_MAP: "@Map" // the Map.@Map private tag
         2 MAP_EMPTY: "empty"
@@ -703,7 +674,7 @@ define_builtins! {
         4 MAP_GET: "get"
         5 MAP_INSERT: "insert"
     }
-    9 SET: "Set" => {
+    7 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias
         1 SET_AT_SET: "@Set" // the Set.@Set private tag
         2 SET_EMPTY: "empty"
@@ -715,5 +686,5 @@ define_builtins! {
         8 SET_DIFF: "diff"
     }
 
-    num_modules: 10 // Keep this count up to date by hand! (Rust macros can't do arithmetic.)
+    num_modules: 8 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

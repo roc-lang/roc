@@ -376,11 +376,11 @@ fn unique_num(var_store: &mut VarStore, symbol: Symbol) -> (Variable, Variable, 
 }
 
 fn unique_int(var_store: &mut VarStore) -> (Variable, Variable, Type) {
-    unique_num(var_store, Symbol::INT_INTEGER)
+    unique_num(var_store, Symbol::NUM_INTEGER)
 }
 
 fn unique_float(var_store: &mut VarStore) -> (Variable, Variable, Type) {
-    unique_num(var_store, Symbol::FLOAT_FLOATINGPOINT)
+    unique_num(var_store, Symbol::NUM_FLOATINGPOINT)
 }
 
 pub fn constrain_expr(

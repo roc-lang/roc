@@ -9,10 +9,6 @@ use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use std::fmt;
 
-pub const TYPE_NUM: &str = "Num";
-pub const TYPE_INTEGER: &str = "Integer";
-pub const TYPE_FLOATINGPOINT: &str = "FloatingPoint";
-
 #[derive(PartialEq, Eq, Clone)]
 pub enum Type {
     EmptyRec,
@@ -800,10 +796,10 @@ fn write_error_type_help(
             let argument = arguments.remove(0).1;
 
             match argument {
-                Type(Symbol::INT_INTEGER, _) => {
+                Type(Symbol::NUM_INTEGER, _) => {
                     buf.push_str("Int");
                 }
-                Type(Symbol::FLOAT_FLOATINGPOINT, _) => {
+                Type(Symbol::NUM_FLOATINGPOINT, _) => {
                     buf.push_str("Float");
                 }
                 other => {

@@ -78,46 +78,46 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
 
     // Integer : [ @Integer ]
     add_alias(
-        Symbol::INT_INTEGER,
+        Symbol::NUM_INTEGER,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: single_private_tag(Symbol::INT_AT_INTEGER, Vec::new()),
+            typ: single_private_tag(Symbol::NUM_AT_INTEGER, Vec::new()),
         },
     );
 
     // Int : Num Integer
     add_alias(
-        Symbol::INT_INT,
+        Symbol::NUM_INT,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
             typ: SolvedType::Apply(
                 Symbol::NUM_NUM,
-                vec![SolvedType::Apply(Symbol::INT_INTEGER, Vec::new())],
+                vec![SolvedType::Apply(Symbol::NUM_INTEGER, Vec::new())],
             ),
         },
     );
 
     // FloatingPoint : [ @FloatingPoint ]
     add_alias(
-        Symbol::FLOAT_FLOATINGPOINT,
+        Symbol::NUM_FLOATINGPOINT,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: single_private_tag(Symbol::FLOAT_AT_FLOATINGPOINT, Vec::new()),
+            typ: single_private_tag(Symbol::NUM_AT_FLOATINGPOINT, Vec::new()),
         },
     );
 
     // Float : Num FloatingPoint
     add_alias(
-        Symbol::FLOAT_FLOAT,
+        Symbol::NUM_FLOAT,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
             typ: SolvedType::Apply(
                 Symbol::NUM_NUM,
-                vec![SolvedType::Apply(Symbol::FLOAT_FLOATINGPOINT, Vec::new())],
+                vec![SolvedType::Apply(Symbol::NUM_FLOATINGPOINT, Vec::new())],
             ),
         },
     );
@@ -273,27 +273,21 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Int module
 
-    // abs : Int -> Int
-    add_type(
-        Symbol::INT_ABS,
-        SolvedType::Func(vec![int_type()], Box::new(int_type())),
-    );
-
     // highest : Int
-    add_type(Symbol::INT_HIGHEST, int_type());
+    add_type(Symbol::NUM_MAX_INT, int_type());
 
     // lowest : Int
-    add_type(Symbol::INT_LOWEST, int_type());
+    add_type(Symbol::NUM_MIN_INT, int_type());
 
     // div : Int, Int -> Int
     add_type(
-        Symbol::INT_DIV_UNSAFE,
+        Symbol::NUM_DIV_INT,
         SolvedType::Func(vec![int_type(), int_type()], Box::new(int_type())),
     );
 
     // rem : Int, Int -> Int
     add_type(
-        Symbol::INT_REM_UNSAFE,
+        Symbol::NUM_REM,
         SolvedType::Func(vec![int_type(), int_type()], Box::new(int_type())),
     );
 
@@ -304,7 +298,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     add_type(
-        Symbol::INT_MOD,
+        Symbol::NUM_MOD_INT,
         SolvedType::Func(
             vec![int_type(), int_type()],
             Box::new(result_type(flex(TVAR1), div_by_zero)),
@@ -315,57 +309,51 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // div : Float, Float -> Float
     add_type(
-        Symbol::FLOAT_DIV,
+        Symbol::NUM_DIV_FLOAT,
         SolvedType::Func(vec![float_type(), float_type()], Box::new(float_type())),
     );
 
     // mod : Float, Float -> Float
     add_type(
-        Symbol::FLOAT_MOD,
+        Symbol::NUM_MOD_FLOAT,
         SolvedType::Func(vec![float_type(), float_type()], Box::new(float_type())),
     );
 
     // sqrt : Float -> Float
     add_type(
-        Symbol::FLOAT_SQRT,
+        Symbol::NUM_SQRT,
         SolvedType::Func(vec![float_type()], Box::new(float_type())),
     );
 
     // round : Float -> Int
     add_type(
-        Symbol::FLOAT_ROUND,
+        Symbol::NUM_ROUND,
         SolvedType::Func(vec![float_type()], Box::new(int_type())),
-    );
-
-    // abs : Float -> Float
-    add_type(
-        Symbol::FLOAT_ABS,
-        SolvedType::Func(vec![float_type()], Box::new(float_type())),
     );
 
     // sin : Float -> Float
     add_type(
-        Symbol::FLOAT_SIN,
+        Symbol::NUM_SIN,
         SolvedType::Func(vec![float_type()], Box::new(float_type())),
     );
 
     // cos : Float -> Float
     add_type(
-        Symbol::FLOAT_COS,
+        Symbol::NUM_COS,
         SolvedType::Func(vec![float_type()], Box::new(float_type())),
     );
 
     // tan : Float -> Float
     add_type(
-        Symbol::FLOAT_TAN,
+        Symbol::NUM_TAN,
         SolvedType::Func(vec![float_type()], Box::new(float_type())),
     );
 
     // highest : Float
-    add_type(Symbol::FLOAT_HIGHEST, float_type());
+    add_type(Symbol::NUM_MAX_FLOAT, float_type());
 
     // lowest : Float
-    add_type(Symbol::FLOAT_LOWEST, float_type());
+    add_type(Symbol::NUM_MIN_FLOAT, float_type());
 
     // Bool module
 
@@ -605,12 +593,12 @@ fn flex(tvar: VarId) -> SolvedType {
 
 #[inline(always)]
 fn float_type() -> SolvedType {
-    SolvedType::Apply(Symbol::FLOAT_FLOAT, Vec::new())
+    SolvedType::Apply(Symbol::NUM_FLOAT, Vec::new())
 }
 
 #[inline(always)]
 fn int_type() -> SolvedType {
-    SolvedType::Apply(Symbol::INT_INT, Vec::new())
+    SolvedType::Apply(Symbol::NUM_INT, Vec::new())
 }
 
 #[inline(always)]

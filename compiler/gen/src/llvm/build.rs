@@ -1021,9 +1021,6 @@ fn call_with_args<'a, 'ctx, 'env>(
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
 ) -> BasicValueEnum<'ctx> {
     match symbol {
-        Symbol::FLOAT_ABS => call_intrinsic(LLVM_FABS_F64, env, args),
-        Symbol::FLOAT_SIN => call_intrinsic(LLVM_SIN_F64, env, args),
-        Symbol::FLOAT_COS => call_intrinsic(LLVM_COS_F64, env, args),
         Symbol::NUM_MUL => {
             debug_assert!(args.len() == 2);
 
@@ -1031,26 +1028,6 @@ fn call_with_args<'a, 'ctx, 'env>(
                 args[0].0.into_int_value(),
                 args[1].0.into_int_value(),
                 "mul_i64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::NUM_NEG => {
-            debug_assert!(args.len() == 1);
-
-            let int_val = env
-                .builder
-                .build_int_neg(args[0].0.into_int_value(), "negate_i64");
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::INT_REM_UNSAFE => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_unsigned_rem(
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "rem_i64",
             );
 
             BasicValueEnum::IntValue(int_val)
@@ -1080,8 +1057,8 @@ fn call_with_args<'a, 'ctx, 'env>(
                 .left()
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call for builtin {:?}", symbol))
         }
-        Symbol::FLOAT_SQRT => call_intrinsic(LLVM_SQRT_F64, env, args),
-        Symbol::FLOAT_ROUND => call_intrinsic(LLVM_LROUND_I64_F64, env, args),
+        Symbol::NUM_SQRT => call_intrinsic(LLVM_SQRT_F64, env, args),
+        Symbol::NUM_ROUND => call_intrinsic(LLVM_LROUND_I64_F64, env, args),
         Symbol::LIST_SET => list_set(parent, args, env, InPlace::Clone),
         Symbol::LIST_SET_IN_PLACE => list_set(parent, args, env, InPlace::InPlace),
         Symbol::LIST_SINGLE => {
@@ -1151,17 +1128,6 @@ fn call_with_args<'a, 'ctx, 'env>(
                 collection(ctx, ptr_bytes),
                 "cast_collection",
             )
-        }
-        Symbol::INT_DIV_UNSAFE => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_signed_div(
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "div_i64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
         }
         _ => {
             let fn_name = layout_ids
@@ -1448,7 +1414,38 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(answer)
         }
-        NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte => {
+        NumAbs | NumNeg => {
+            debug_assert_eq!(args.len(), 1);
+
+            let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let arg_layout = &args[0].1;
+
+            match arg_layout {
+                Layout::Builtin(arg_builtin) => {
+                    use roc_mono::layout::Builtin::*;
+
+                    match arg_builtin {
+                        Int128 | Int64 | Int32 | Int16 | Int8 => {
+                            build_int_unary_op(env, arg.into_int_value(), arg_layout, op)
+                        }
+                        Float128 | Float64 | Float32 | Float16 => {
+                            build_float_unary_op(env, arg.into_float_value(), arg_layout, op)
+                        }
+                        _ => {
+                            unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, arg_layout);
+                        }
+                    }
+                }
+                _ => {
+                    unreachable!(
+                        "Compiler bug: tried to run numeric operation {:?} on invalid layout: {:?}",
+                        op, arg_layout
+                    );
+                }
+            }
+        }
+        NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumSin | NumCos
+        | NumRemUnsafe | NumDivUnsafe => {
             debug_assert_eq!(args.len(), 2);
 
             let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
@@ -1464,15 +1461,19 @@ fn run_low_level<'a, 'ctx, 'env>(
 
                     match lhs_builtin {
                         Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
-                            env.builder,
+                            env,
                             lhs_arg.into_int_value(),
+                            lhs_layout,
                             rhs_arg.into_int_value(),
+                            rhs_layout,
                             op,
                         ),
-                        Float64 | Float32 => build_float_binop(
-                            env.builder,
+                        Float128 | Float64 | Float32 | Float16 => build_float_binop(
+                            env,
                             lhs_arg.into_float_value(),
+                            lhs_layout,
                             rhs_arg.into_float_value(),
+                            rhs_layout,
                             op,
                         ),
                         _ => {
@@ -1581,14 +1582,18 @@ fn run_low_level<'a, 'ctx, 'env>(
     }
 }
 
-fn build_int_binop<'ctx>(
-    bd: &Builder<'ctx>,
+fn build_int_binop<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
     lhs: IntValue<'ctx>,
+    _lhs_layout: &Layout<'a>,
     rhs: IntValue<'ctx>,
+    _rhs_layout: &Layout<'a>,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     use inkwell::IntPredicate::*;
     use roc_module::low_level::LowLevel::*;
+
+    let bd = env.builder;
 
     match op {
         NumAdd => bd.build_int_add(lhs, rhs, "add_int").into(),
@@ -1598,20 +1603,26 @@ fn build_int_binop<'ctx>(
         NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),
         NumLt => bd.build_int_compare(SLT, lhs, rhs, "int_lt").into(),
         NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
+        NumRemUnsafe => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
+        NumDivUnsafe => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
     }
 }
 
-fn build_float_binop<'ctx>(
-    bd: &Builder<'ctx>,
+fn build_float_binop<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
     lhs: FloatValue<'ctx>,
+    lhs_layout: &Layout<'a>,
     rhs: FloatValue<'ctx>,
+    rhs_layout: &Layout<'a>,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     use inkwell::FloatPredicate::*;
     use roc_module::low_level::LowLevel::*;
+
+    let bd = env.builder;
 
     match op {
         NumAdd => bd.build_float_add(lhs, rhs, "add_float").into(),
@@ -1621,8 +1632,62 @@ fn build_float_binop<'ctx>(
         NumGte => bd.build_float_compare(OGE, lhs, rhs, "float_gte").into(),
         NumLt => bd.build_float_compare(OLT, lhs, rhs, "float_lt").into(),
         NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
+        NumRemUnsafe => bd.build_float_rem(lhs, rhs, "rem_float").into(),
+        NumDivUnsafe => bd.build_float_div(lhs, rhs, "div_float").into(),
+
+        // Float-specific ops
+        NumSin => call_intrinsic(
+            LLVM_SIN_F64,
+            env,
+            &[(lhs.into(), lhs_layout), (rhs.into(), rhs_layout)],
+        ),
+        NumCos => call_intrinsic(
+            LLVM_COS_F64,
+            env,
+            &[(lhs.into(), lhs_layout), (rhs.into(), rhs_layout)],
+        ),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
+        }
+    }
+}
+
+fn build_int_unary_op<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    arg: IntValue<'ctx>,
+    _arg_layout: &Layout<'a>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    use roc_module::low_level::LowLevel::*;
+
+    let bd = env.builder;
+
+    match op {
+        NumAdd => bd.build_int_neg(arg, "negate_int").into(),
+        NumAbs => {
+            todo!("build_int_unary_op for integer absolute value. (possibly bitwise AND with 0b0111_1111_...)");
+        }
+        _ => {
+            unreachable!("Unrecognized int unary operation: {:?}", op);
+        }
+    }
+}
+
+fn build_float_unary_op<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    arg: FloatValue<'ctx>,
+    arg_layout: &Layout<'a>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    use roc_module::low_level::LowLevel::*;
+
+    let bd = env.builder;
+
+    match op {
+        NumAdd => bd.build_float_neg(arg, "negate_float").into(),
+        NumAbs => call_intrinsic(LLVM_FABS_F64, env, &[(arg.into(), arg_layout)]),
+        _ => {
+            unreachable!("Unrecognized int unary operation: {:?}", op);
         }
     }
 }

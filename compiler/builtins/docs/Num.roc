@@ -670,7 +670,7 @@ pi : Float *
 
 ## Divide two #Float numbers.
 ##
-## `a / b` is shorthand for `Float.div a b`.
+## `a / b` is shorthand for `Num.div a b`.
 ##
 ## Division by zero is undefined in mathematics. As such, you should make
 ## sure never to pass zero as the denomaintor to this function!
@@ -684,12 +684,12 @@ pi : Float *
 ##
 ## >>> 5.0 / 7.0
 ##
-## >>> Float.div 5 7
+## >>> Num.div 5 7
 ##
-## `Float.div` can be convenient in pipelines.
+## `Num.div` can be convenient in pipelines.
 ##
 ## >>> Float.pi
-## >>>     |> Float.div 2.0
+## >>>     |> Num.div 2.0
 #div : Float, Float -> Result Float DivByZero
 div = \numerator, denominator ->
     when numerator is

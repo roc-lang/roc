@@ -153,27 +153,27 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
 
     // Integer : [ @Integer ]
     add_alias(
-        Symbol::INT_INTEGER,
+        Symbol::NUM_INTEGER,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: single_private_tag(Symbol::INT_AT_INTEGER, Vec::new()),
+            typ: single_private_tag(Symbol::NUM_AT_INTEGER, Vec::new()),
         },
     );
 
     // FloatingPoint : [ @FloatingPoint ]
     add_alias(
-        Symbol::FLOAT_FLOATINGPOINT,
+        Symbol::NUM_FLOATINGPOINT,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: single_private_tag(Symbol::FLOAT_AT_FLOATINGPOINT, Vec::new()),
+            typ: single_private_tag(Symbol::NUM_AT_FLOATINGPOINT, Vec::new()),
         },
     );
 
     // Int : Num Integer
     add_alias(
-        Symbol::INT_INT,
+        Symbol::NUM_INT,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
@@ -181,7 +181,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
                 Symbol::NUM_NUM,
                 vec![lift(
                     UVAR1,
-                    SolvedType::Apply(Symbol::INT_INTEGER, Vec::new()),
+                    SolvedType::Apply(Symbol::NUM_INTEGER, Vec::new()),
                 )],
             ),
         },
@@ -189,7 +189,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
 
     // Float : Num FloatingPoint
     add_alias(
-        Symbol::FLOAT_FLOAT,
+        Symbol::NUM_FLOAT,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
@@ -197,7 +197,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
                 Symbol::NUM_NUM,
                 vec![lift(
                     UVAR1,
-                    SolvedType::Apply(Symbol::FLOAT_FLOATINGPOINT, Vec::new()),
+                    SolvedType::Apply(Symbol::NUM_FLOATINGPOINT, Vec::new()),
                 )],
             ),
         },
@@ -347,57 +347,33 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![num_type(UVAR1, TVAR1)], float_type(UVAR2)),
     );
 
-    // Int module
-
-    // isLt or (<) : Num a, Num a -> Bool
-    add_type(
-        Symbol::INT_LT,
-        unique_function(vec![int_type(UVAR1), int_type(UVAR2)], bool_type(UVAR3)),
-    );
-
-    // abs : Int -> Int
-    add_type(
-        Symbol::INT_ABS,
-        unique_function(vec![int_type(UVAR1)], int_type(UVAR2)),
-    );
-
     // rem : Int, Int -> Result Int [ DivByZero ]*
     add_type(
-        Symbol::INT_REM,
+        Symbol::NUM_REM,
         unique_function(
             vec![int_type(UVAR1), int_type(UVAR2)],
             result_type(UVAR3, int_type(UVAR4), lift(UVAR5, div_by_zero())),
         ),
-    );
-
-    add_type(
-        Symbol::INT_REM_UNSAFE,
-        unique_function(vec![int_type(UVAR1), int_type(UVAR2)], int_type(UVAR3)),
     );
 
     // highest : Int
-    add_type(Symbol::INT_HIGHEST, int_type(UVAR1));
+    add_type(Symbol::NUM_MAX_INT, int_type(UVAR1));
 
     // lowest : Int
-    add_type(Symbol::INT_LOWEST, int_type(UVAR1));
+    add_type(Symbol::NUM_MIN_INT, int_type(UVAR1));
 
     // div or (//) : Int, Int -> Result Int [ DivByZero ]*
     add_type(
-        Symbol::INT_DIV,
+        Symbol::NUM_DIV_INT,
         unique_function(
             vec![int_type(UVAR1), int_type(UVAR2)],
             result_type(UVAR3, int_type(UVAR4), lift(UVAR5, div_by_zero())),
         ),
-    );
-
-    add_type(
-        Symbol::INT_DIV_UNSAFE,
-        unique_function(vec![int_type(UVAR1), int_type(UVAR2)], int_type(UVAR3)),
     );
 
     // mod : Int, Int -> Int
     add_type(
-        Symbol::INT_MOD,
+        Symbol::NUM_MOD_INT,
         unique_function(vec![int_type(UVAR1), int_type(UVAR2)], int_type(UVAR3)),
     );
 
@@ -405,7 +381,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // div : Float, Float -> Float
     add_type(
-        Symbol::FLOAT_DIV,
+        Symbol::NUM_DIV_FLOAT,
         unique_function(
             vec![float_type(UVAR1), float_type(UVAR2)],
             float_type(UVAR3),
@@ -414,7 +390,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // mod : Float, Float -> Float
     add_type(
-        Symbol::FLOAT_MOD,
+        Symbol::NUM_MOD_FLOAT,
         unique_function(
             vec![float_type(UVAR1), float_type(UVAR2)],
             float_type(UVAR3),
@@ -423,45 +399,39 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // sqrt : Float -> Float
     add_type(
-        Symbol::FLOAT_SQRT,
+        Symbol::NUM_SQRT,
         unique_function(vec![float_type(UVAR1)], float_type(UVAR2)),
     );
 
     // round : Float -> Int
     add_type(
-        Symbol::FLOAT_ROUND,
+        Symbol::NUM_ROUND,
         unique_function(vec![float_type(UVAR1)], int_type(UVAR2)),
-    );
-
-    // abs : Float -> Float
-    add_type(
-        Symbol::FLOAT_ABS,
-        unique_function(vec![float_type(UVAR1)], float_type(UVAR2)),
     );
 
     // sin : Float -> Float
     add_type(
-        Symbol::FLOAT_SIN,
+        Symbol::NUM_SIN,
         unique_function(vec![float_type(UVAR1)], float_type(UVAR2)),
     );
 
     // cos : Float -> Float
     add_type(
-        Symbol::FLOAT_COS,
+        Symbol::NUM_COS,
         unique_function(vec![float_type(UVAR1)], float_type(UVAR2)),
     );
 
     // tan : Float -> Float
     add_type(
-        Symbol::FLOAT_TAN,
+        Symbol::NUM_TAN,
         unique_function(vec![float_type(UVAR1)], float_type(UVAR2)),
     );
 
     // highest : Float
-    add_type(Symbol::FLOAT_HIGHEST, float_type(UVAR1));
+    add_type(Symbol::NUM_MAX_FLOAT, float_type(UVAR1));
 
     // lowest : Float
-    add_type(Symbol::FLOAT_LOWEST, float_type(UVAR1));
+    add_type(Symbol::NUM_MIN_FLOAT, float_type(UVAR1));
 
     // Bool module
 
@@ -993,7 +963,7 @@ fn lift(u: VarId, a: SolvedType) -> SolvedType {
 fn float_type(u: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![flex(u), SolvedType::Apply(Symbol::FLOAT_FLOAT, Vec::new())],
+        vec![flex(u), SolvedType::Apply(Symbol::NUM_FLOAT, Vec::new())],
     )
 }
 
@@ -1001,7 +971,7 @@ fn float_type(u: VarId) -> SolvedType {
 fn int_type(u: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![flex(u), SolvedType::Apply(Symbol::INT_INT, Vec::new())],
+        vec![flex(u), SolvedType::Apply(Symbol::NUM_INT, Vec::new())],
     )
 }
 

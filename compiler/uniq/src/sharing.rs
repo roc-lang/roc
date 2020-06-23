@@ -755,8 +755,8 @@ fn annotate_low_level_usage(
             }
         }
 
-        NumAdd | NumSub | NumMul | NumGt | NumGte | NumLt | NumLte | Eq | NotEq | And | Or
-        | Not => {
+        NumAdd | NumSub | NumMul | NumGt | NumGte | NumLt | NumLte | NumAbs | NumNeg
+        | NumDivUnsafe | NumRemUnsafe | NumSin | NumCos | Eq | NotEq | And | Or | Not => {
             for (_, arg) in args {
                 annotate_usage(&arg, usage);
             }

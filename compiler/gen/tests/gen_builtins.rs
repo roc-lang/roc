@@ -29,24 +29,24 @@ mod gen_builtins {
 
     #[test]
     fn f64_sqrt() {
-        assert_evals_to!("Float.sqrt 144", 12.0, f64);
+        assert_evals_to!("Num.sqrt 144", 12.0, f64);
     }
 
     #[test]
     fn f64_round() {
-        assert_evals_to!("Float.round 3.6", 4, i64);
+        assert_evals_to!("Num.round 3.6", 4, i64);
     }
 
     #[test]
     fn f64_abs() {
-        assert_evals_to!("Float.abs -4.7", 4.7, f64);
-        assert_evals_to!("Float.abs 5.8", 5.8, f64);
+        assert_evals_to!("Num.abs -4.7", 4.7, f64);
+        assert_evals_to!("Num.abs 5.8", 5.8, f64);
     }
 
     #[test]
     fn i64_abs() {
-        assert_evals_to!("Int.abs -6", 6, i64);
-        assert_evals_to!("Int.abs 7", 7, i64);
+        assert_evals_to!("Num.abs -6", 6, i64);
+        assert_evals_to!("Num.abs 7", 7, i64);
     }
 
     #[test]
@@ -232,7 +232,7 @@ mod gen_builtins {
         assert_evals_to!(
             indoc!(
                 r#"
-                    when Int.rem 8 3 is
+                    when Num.rem 8 3 is
                         Ok val -> val
                         _ -> -1
                 "#
@@ -247,7 +247,7 @@ mod gen_builtins {
         assert_evals_to!(
             indoc!(
                 r#"
-                    when Int.rem 8 0 is
+                    when Num.rem 8 0 is
                         Err DivByZero -> 4
                         _ -> -23
                 "#
@@ -259,74 +259,74 @@ mod gen_builtins {
 
     #[test]
     fn gen_is_zero_i64() {
-        assert_evals_to!("Int.isZero 0", true, bool);
-        assert_evals_to!("Int.isZero 1", false, bool);
+        assert_evals_to!("Num.isZero 0", true, bool);
+        assert_evals_to!("Num.isZero 1", false, bool);
     }
 
     #[test]
     fn gen_is_positive_i64() {
-        assert_evals_to!("Int.isPositive 0", false, bool);
-        assert_evals_to!("Int.isPositive 1", true, bool);
-        assert_evals_to!("Int.isPositive -5", false, bool);
+        assert_evals_to!("Num.isPositive 0", false, bool);
+        assert_evals_to!("Num.isPositive 1", true, bool);
+        assert_evals_to!("Num.isPositive -5", false, bool);
     }
 
     #[test]
     fn gen_is_negative_i64() {
-        assert_evals_to!("Int.isNegative 0", false, bool);
-        assert_evals_to!("Int.isNegative 3", false, bool);
-        assert_evals_to!("Int.isNegative -2", true, bool);
+        assert_evals_to!("Num.isNegative 0", false, bool);
+        assert_evals_to!("Num.isNegative 3", false, bool);
+        assert_evals_to!("Num.isNegative -2", true, bool);
     }
 
     #[test]
     fn gen_is_positive_f64() {
-        assert_evals_to!("Float.isPositive 0.0", false, bool);
-        assert_evals_to!("Float.isPositive 4.7", true, bool);
-        assert_evals_to!("Float.isPositive -8.5", false, bool);
+        assert_evals_to!("Num.isPositive 0.0", false, bool);
+        assert_evals_to!("Num.isPositive 4.7", true, bool);
+        assert_evals_to!("Num.isPositive -8.5", false, bool);
     }
 
     #[test]
     fn gen_is_negative_f64() {
-        assert_evals_to!("Float.isNegative 0.0", false, bool);
-        assert_evals_to!("Float.isNegative 9.9", false, bool);
-        assert_evals_to!("Float.isNegative -4.4", true, bool);
+        assert_evals_to!("Num.isNegative 0.0", false, bool);
+        assert_evals_to!("Num.isNegative 9.9", false, bool);
+        assert_evals_to!("Num.isNegative -4.4", true, bool);
     }
 
     #[test]
     fn gen_is_zero_f64() {
-        assert_evals_to!("Float.isZero 0", true, bool);
-        assert_evals_to!("Float.isZero 0_0", true, bool);
-        assert_evals_to!("Float.isZero 0.0", true, bool);
-        assert_evals_to!("Float.isZero 1", false, bool);
+        assert_evals_to!("Num.isZero 0", true, bool);
+        assert_evals_to!("Num.isZero 0_0", true, bool);
+        assert_evals_to!("Num.isZero 0.0", true, bool);
+        assert_evals_to!("Num.isZero 1", false, bool);
     }
 
     #[test]
     fn gen_is_odd() {
-        assert_evals_to!("Int.isOdd 4", false, bool);
-        assert_evals_to!("Int.isOdd 5", true, bool);
+        assert_evals_to!("Num.isOdd 4", false, bool);
+        assert_evals_to!("Num.isOdd 5", true, bool);
     }
 
     #[test]
     fn gen_is_even() {
-        assert_evals_to!("Int.isEven 6", true, bool);
-        assert_evals_to!("Int.isEven 7", false, bool);
+        assert_evals_to!("Num.isEven 6", true, bool);
+        assert_evals_to!("Num.isEven 7", false, bool);
     }
 
     #[test]
     fn sin() {
-        assert_evals_to!("Float.sin 0", 0.0, f64);
-        assert_evals_to!("Float.sin 1.41421356237", 0.9877659459922529, f64);
+        assert_evals_to!("Num.sin 0", 0.0, f64);
+        assert_evals_to!("Num.sin 1.41421356237", 0.9877659459922529, f64);
     }
 
     #[test]
     fn cos() {
-        assert_evals_to!("Float.cos 0", 1.0, f64);
-        assert_evals_to!("Float.cos 3.14159265359", -1.0, f64);
+        assert_evals_to!("Num.cos 0", 1.0, f64);
+        assert_evals_to!("Num.cos 3.14159265359", -1.0, f64);
     }
 
     #[test]
     fn tan() {
-        assert_evals_to!("Float.tan 0", 0.0, f64);
-        assert_evals_to!("Float.tan 1", 1.557407724654902, f64);
+        assert_evals_to!("Num.tan 0", 0.0, f64);
+        assert_evals_to!("Num.tan 1", 1.557407724654902, f64);
     }
 
     #[test]
@@ -472,7 +472,7 @@ mod gen_builtins {
         assert_evals_to!(
             indoc!(
                 r#"
-                    always42 : Num.Num Int.Integer -> Num.Num Int.Integer
+                    always42 : Num.Num Num.Integer -> Num.Num Num.Integer
                     always42 = \num -> 42
 
                     always42 5

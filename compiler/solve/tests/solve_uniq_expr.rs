@@ -1115,7 +1115,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                    x : Num.Num Int.Integer
+                    x : Num.Num Num.Integer
                     x = 4
 
                     x
@@ -1366,7 +1366,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                    x : Num.Num Int.Integer
+                    x : Num.Num Num.Integer
                     x =
                         when 2 is
                             3 -> 4
@@ -1801,7 +1801,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                    { x, y } : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+                    { x, y } : { x : Str.Str, y : Num.Num Num.FloatingPoint }
                     { x, y } = { x : "foo", y : 3.14 }
 
                     x
@@ -1907,7 +1907,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                Float.highest / Float.highest
+                Num.maxFloat / Num.maxFloat
                "#
             ),
             "Attr * Float",
@@ -1931,7 +1931,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                3.0 / Float.highest
+                3.0 / Num.maxFloat
                "#
             ),
             "Attr * Float",
@@ -1943,7 +1943,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                Int.highest // Int.highest
+                Num.maxInt // Num.maxInt
                "#
             ),
             "Attr * (Result (Attr * Int) (Attr * [ DivByZero ]*))",
@@ -1967,7 +1967,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                3 // Int.highest
+                3 // Num.maxInt
                "#
             ),
             "Attr * (Result (Attr * Int) (Attr * [ DivByZero ]*))",
@@ -2099,8 +2099,8 @@ mod solve_uniq_expr {
                     reverse
                 "#
             ),
-            "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr b c)))",
-            // "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr a c)))",
+            // "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr b c)))",
+            "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr a c)))",
         );
     }
 

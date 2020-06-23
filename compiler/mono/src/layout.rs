@@ -56,11 +56,11 @@ impl<'a> Layout<'a> {
             }
             Structure(flat_type) => layout_from_flat_type(arena, flat_type, subs, pointer_size),
 
-            Alias(Symbol::INT_INT, args, _) => {
+            Alias(Symbol::NUM_INT, args, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Int64))
             }
-            Alias(Symbol::FLOAT_FLOAT, args, _) => {
+            Alias(Symbol::NUM_FLOAT, args, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Float64))
             }
@@ -239,11 +239,11 @@ fn layout_from_flat_type<'a>(
     match flat_type {
         Apply(symbol, args) => {
             match symbol {
-                Symbol::INT_INT => {
+                Symbol::NUM_INT => {
                     debug_assert!(args.is_empty());
                     Ok(Layout::Builtin(Builtin::Int64))
                 }
-                Symbol::FLOAT_FLOAT => {
+                Symbol::NUM_FLOAT => {
                     debug_assert!(args.is_empty());
                     Ok(Layout::Builtin(Builtin::Float64))
                 }
@@ -551,8 +551,8 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, ()> {
             Ok(Layout::Builtin(Builtin::Int64))
         }
         Structure(Apply(symbol, args)) => match symbol {
-            Symbol::INT_INTEGER => Ok(Layout::Builtin(Builtin::Int64)),
-            Symbol::FLOAT_FLOATINGPOINT => Ok(Layout::Builtin(Builtin::Float64)),
+            Symbol::NUM_INTEGER => Ok(Layout::Builtin(Builtin::Int64)),
+            Symbol::NUM_FLOATINGPOINT => Ok(Layout::Builtin(Builtin::Float64)),
             _ => {
                 panic!(
                     "Invalid Num.Num type application: {:?}",
@@ -584,11 +584,11 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, ()> {
                 panic!("TODO handle Num.@Num flat_type {:?}", flat_type);
             }
         },
-        Content::Alias(Symbol::INT_INTEGER, args, _) => {
+        Content::Alias(Symbol::NUM_INTEGER, args, _) => {
             debug_assert!(args.is_empty());
             Ok(Layout::Builtin(Builtin::Int64))
         }
-        Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
+        Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _) => {
             debug_assert!(args.is_empty());
             Ok(Layout::Builtin(Builtin::Float64))
         }

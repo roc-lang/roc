@@ -4,7 +4,7 @@ interface WithBuiltins
 
 floatTest = Float.highest
 
-divisionFn = Float.div
+divisionFn = Num.div
 
 x = 5.0
 

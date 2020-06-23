@@ -308,7 +308,7 @@ enum IntOrFloat {
 /// Given the `a` in `Num a`, determines whether it's an int or a float
 fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
     match subs.get_without_compacting(var).content {
-        Content::Alias(Symbol::INT_INTEGER, args, _) => {
+        Content::Alias(Symbol::NUM_INTEGER, args, _) => {
             debug_assert!(args.is_empty());
             IntOrFloat::IntType
         }
@@ -316,7 +316,7 @@ fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
             // If this was still a (Num *), assume compiling it to an Int
             IntOrFloat::IntType
         }
-        Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
+        Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _) => {
             debug_assert!(args.is_empty());
             IntOrFloat::FloatType
         }
