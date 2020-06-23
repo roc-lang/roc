@@ -8,6 +8,7 @@ pub enum LowLevel {
     ListSet,
     ListSetInPlace,
     ListIsEmpty,
+    ListSingle,
     NumAdd,
     NumSub,
     NumMul,

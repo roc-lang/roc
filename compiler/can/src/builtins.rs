@@ -55,6 +55,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_SET => list_set,
         Symbol::LIST_FIRST => list_first,
         Symbol::LIST_IS_EMPTY => list_is_empty,
+        Symbol::LIST_SINGLE => list_single,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_SUB => num_sub,
         Symbol::NUM_MUL => num_mul,
@@ -416,6 +417,17 @@ fn list_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 },
             ),
         ],
+        ret_var: var_store.fresh(),
+    };
+
+    defn(symbol, vec![Symbol::ARG_1], var_store, body)
+}
+
+/// List.single : elem -> List elem
+fn list_single(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let body = RunLowLevel {
+        op: LowLevel::ListSingle,
+        args: vec![(var_store.fresh(), Var(Symbol::ARG_1))],
         ret_var: var_store.fresh(),
     };
 

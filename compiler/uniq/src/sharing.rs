@@ -755,9 +755,9 @@ fn annotate_low_level_usage(
             }
         }
 
-        NumAdd | NumSub | NumMul | NumGt | NumGte | NumLt | NumLte | NumAbs | NumNeg
-        | NumDivUnchecked | NumRemUnchecked | NumSqrt | NumRound | NumSin | NumCos | Eq | NotEq
-        | And | Or | Not | NumToFloat => {
+        ListSingle | NumAdd | NumSub | NumMul | NumGt | NumGte | NumLt | NumLte | NumAbs
+        | NumNeg | NumDivUnchecked | NumRemUnchecked | NumSqrt | NumRound | NumSin | NumCos
+        | Eq | NotEq | And | Or | Not | NumToFloat => {
             for (_, arg) in args {
                 annotate_usage(&arg, usage);
             }

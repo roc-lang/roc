@@ -1020,107 +1020,35 @@ fn call_with_args<'a, 'ctx, 'env>(
     _parent: FunctionValue<'ctx>,
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
 ) -> BasicValueEnum<'ctx> {
-    match symbol {
-        Symbol::LIST_SINGLE => {
-            // List.single : a -> List a
-            debug_assert!(args.len() == 1);
-
-            let (elem, elem_layout) = args[0];
-
-            let builder = env.builder;
-            let ctx = env.context;
-
-            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-            let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-
-            let ptr = {
-                let bytes_len = elem_bytes;
-                let len_type = env.ptr_int();
-                let len = len_type.const_int(bytes_len, false);
-
-                env.builder
-                    .build_array_malloc(elem_type, len, "create_list_ptr")
-                    .unwrap()
-
-                // TODO check if malloc returned null; if so, runtime error for OOM!
-            };
-
-            // Put the element into the list
-            let elem_ptr = unsafe {
-                builder.build_in_bounds_gep(
-                    ptr,
-                    &[ctx.i32_type().const_int(
-                        // 0 as in 0 index of our new list
-                        0 as u64, false,
-                    )],
-                    "index",
-                )
-            };
-
-            builder.build_store(elem_ptr, elem);
-
-            let ptr_bytes = env.ptr_bytes;
-            let int_type = ptr_int(ctx, ptr_bytes);
-            let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
-            let struct_type = collection(ctx, ptr_bytes);
-            let len = BasicValueEnum::IntValue(env.ptr_int().const_int(1, false));
-
-            let mut struct_val;
-
-            // Store the pointer
-            struct_val = builder
-                .build_insert_value(
-                    struct_type.get_undef(),
-                    ptr_as_int,
-                    Builtin::WRAPPER_PTR,
-                    "insert_ptr",
-                )
-                .unwrap();
-
-            // Store the length
-            struct_val = builder
-                .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
-                .unwrap();
-
-            //
-            builder.build_bitcast(
-                struct_val.into_struct_value(),
-                collection(ctx, ptr_bytes),
-                "cast_collection",
-            )
-        }
-        _ => {
-            let fn_name = layout_ids
-                .get(symbol, layout)
-                .to_symbol_string(symbol, &env.interns);
-            let fn_val = env
-                .module
-                .get_function(fn_name.as_str())
-                .unwrap_or_else(|| {
-                    if symbol.is_builtin() {
-                        panic!("Unrecognized builtin function: {:?}", symbol)
-                    } else {
-                        panic!("Unrecognized non-builtin function: {:?}", symbol)
-                    }
-                });
-
-            let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
-
-            for (arg, _layout) in args.iter() {
-                arg_vals.push(*arg);
+    let fn_name = layout_ids
+        .get(symbol, layout)
+        .to_symbol_string(symbol, &env.interns);
+    let fn_val = env
+        .module
+        .get_function(fn_name.as_str())
+        .unwrap_or_else(|| {
+            if symbol.is_builtin() {
+                panic!("Unrecognized builtin function: {:?}", symbol)
+            } else {
+                panic!("Unrecognized non-builtin function: {:?}", symbol)
             }
+        });
 
-            let call = env
-                .builder
-                .build_call(fn_val, arg_vals.into_bump_slice(), "call");
+    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
 
-            call.set_call_convention(fn_val.get_call_conventions());
-
-            call.try_as_basic_value()
-                .left()
-                .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
-        }
+    for (arg, _layout) in args.iter() {
+        arg_vals.push(*arg);
     }
+
+    let call = env
+        .builder
+        .build_call(fn_val, arg_vals.into_bump_slice(), "call");
+
+    call.set_call_convention(fn_val.get_call_conventions());
+
+    call.try_as_basic_value()
+        .left()
+        .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
 }
 
 fn call_intrinsic<'a, 'ctx, 'env>(
@@ -1373,6 +1301,74 @@ fn run_low_level<'a, 'ctx, 'env>(
             let answer = builder.build_int_compare(IntPredicate::EQ, list_len, zero, "is_zero");
 
             BasicValueEnum::IntValue(answer)
+        }
+        ListSingle => {
+            // List.single : a -> List a
+            debug_assert_eq!(args.len(), 1);
+
+            let elem = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let builder = env.builder;
+            let ctx = env.context;
+
+            let elem_layout = &args[0].1;
+            let elem_type = basic_type_from_layout(env.arena, ctx, &elem_layout, env.ptr_bytes);
+            let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+
+            let ptr = {
+                let bytes_len = elem_bytes;
+                let len_type = env.ptr_int();
+                let len = len_type.const_int(bytes_len, false);
+
+                env.builder
+                    .build_array_malloc(elem_type, len, "create_list_ptr")
+                    .unwrap()
+
+                // TODO check if malloc returned null; if so, runtime error for OOM!
+            };
+
+            // Put the element into the list
+            let elem_ptr = unsafe {
+                builder.build_in_bounds_gep(
+                    ptr,
+                    &[ctx.i32_type().const_int(
+                        // 0 as in 0 index of our new list
+                        0 as u64, false,
+                    )],
+                    "index",
+                )
+            };
+
+            builder.build_store(elem_ptr, elem);
+
+            let ptr_bytes = env.ptr_bytes;
+            let int_type = ptr_int(ctx, ptr_bytes);
+            let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+            let struct_type = collection(ctx, ptr_bytes);
+            let len = BasicValueEnum::IntValue(env.ptr_int().const_int(1, false));
+
+            let mut struct_val;
+
+            // Store the pointer
+            struct_val = builder
+                .build_insert_value(
+                    struct_type.get_undef(),
+                    ptr_as_int,
+                    Builtin::WRAPPER_PTR,
+                    "insert_ptr",
+                )
+                .unwrap();
+
+            // Store the length
+            struct_val = builder
+                .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
+                .unwrap();
+
+            //
+            builder.build_bitcast(
+                struct_val.into_struct_value(),
+                collection(ctx, ptr_bytes),
+                "cast_collection",
+            )
         }
         NumAbs | NumNeg | NumRound | NumSqrt | NumSin | NumCos | NumToFloat => {
             debug_assert_eq!(args.len(), 1);
