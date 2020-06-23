@@ -304,13 +304,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     });
 
     // sub or (-) : Num a, Num a -> Num a
-    add_type(
-        Symbol::NUM_SUB,
-        unique_function(
-            vec![num_type(UVAR1, TVAR1), num_type(UVAR2, TVAR1)],
-            num_type(UVAR3, TVAR1),
-        ),
-    );
+    add_type(Symbol::NUM_SUB, {
+        let_tvars! { u, v, w, num };
+        unique_function(vec![num_type(u, num), num_type(v, num)], num_type(w, num))
+    });
 
     // mul or (*) : Num a, Num a -> Num a
     add_type(
