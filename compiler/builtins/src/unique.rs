@@ -7,20 +7,28 @@ use roc_types::solved_types::{BuiltinAlias, SolvedAtom, SolvedType};
 use roc_types::subs::VarId;
 use std::collections::HashMap;
 
-/// A macro that increments this variable every time it is called
-/// effectively gives unique variable ids every time
-static mut TYPE_VAR_COUNT: u32 = 10000;
-
-/// Safety:
+/// Example:
 ///
-/// TYPE_VAR_COUNT is not shared across threads, so mutating is safe
-macro_rules! let_tvar {
-    () => {{
-        unsafe {
-            TYPE_VAR_COUNT += 1;
-            VarId::from_u32(TYPE_VAR_COUNT)
-        }
-    }};
+///     let_tvars! { a, b, c }
+///
+/// This is equivalent to:
+///
+///     let a = VarId::from_u32(1);
+///     let b = VarId::from_u32(2);
+///     let c = VarId::from_u32(3);
+///
+/// The idea is that this is less error-prone than assigning hardcoded IDs by hand.
+macro_rules! let_tvars {
+    ($($name:ident,)+) => { let_tvars!($($name),+) };
+    ($($name:ident),*) => {
+        let mut _current_tvar = 0;
+
+        $(
+            _current_tvar += 1;
+
+            let $name = VarId::from_u32(_current_tvar);
+        )*
+    };
 }
 
 /// Keep this up to date by hand!
@@ -632,8 +640,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // single : a -> Attr * (List a)
     add_type(Symbol::LIST_SINGLE, {
-        let a = tvar!();
-        let star = tvar!();
+        let_tvars! { a, star };
 
         unique_function(
             vec![flex(a)],
@@ -653,9 +660,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //        , Attr Shared a
     //       -> Attr * (List (Attr Shared a))
     add_type(Symbol::LIST_REPEAT, {
-        let a = tvar!();
-        let star1 = tvar!();
-        let star2 = tvar!();
+        let_tvars! { a, star1, star2 };
 
         unique_function(
             vec![int_type(star1), shared(flex(a))],
@@ -676,9 +681,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // NOTE: we demand the new item to have the same uniqueness as the other list items.
     // It could be allowed to add unique items to shared lists, but that requires special code gen
     add_type(Symbol::LIST_PUSH, {
-        let a = tvar!();
-        let star1 = tvar!();
-        let star2 = tvar!();
+        let_tvars! { a, star1, star2 };
 
         unique_function(
             vec![
@@ -705,11 +708,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //     , Attr Shared (Attr u a -> b)
     //    -> Attr * (List b)
     add_type(Symbol::LIST_MAP, {
-        let u = tvar!();
-        let a = tvar!();
-        let b = tvar!();
-        let star1 = tvar!();
-        let star2 = tvar!();
+        let_tvars! { u, a, b, star1, star2 };
+
         unique_function(
             vec![
                 SolvedType::Apply(
@@ -730,10 +730,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //       , b
     //      -> b
     add_type(Symbol::LIST_FOLDR, {
-        let u = tvar!();
-        let a = tvar!();
-        let b = tvar!();
-        let star1 = tvar!();
+        let_tvars! { u, a, b, star1 };
+
         unique_function(
             vec![
                 SolvedType::Apply(
