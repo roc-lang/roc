@@ -1021,31 +1021,6 @@ fn call_with_args<'a, 'ctx, 'env>(
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
 ) -> BasicValueEnum<'ctx> {
     match symbol {
-        Symbol::NUM_TO_FLOAT => {
-            // TODO specialize this to be not just for i64!
-            let builtin_fn_name = "i64_to_f64_";
-
-            let fn_val = env
-                .module
-                .get_function(builtin_fn_name)
-                .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", builtin_fn_name));
-
-            let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
-
-            for (arg, _layout) in args.iter() {
-                arg_vals.push(*arg);
-            }
-
-            let call = env
-                .builder
-                .build_call(fn_val, arg_vals.into_bump_slice(), "call_builtin");
-
-            call.set_call_convention(fn_val.get_call_conventions());
-
-            call.try_as_basic_value()
-                .left()
-                .unwrap_or_else(|| panic!("LLVM error: Invalid call for builtin {:?}", symbol))
-        }
         Symbol::LIST_SINGLE => {
             // List.single : a -> List a
             debug_assert!(args.len() == 1);
@@ -1399,7 +1374,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             BasicValueEnum::IntValue(answer)
         }
-        NumAbs | NumNeg | NumRound | NumSqrt | NumSin | NumCos => {
+        NumAbs | NumNeg | NumRound | NumSqrt | NumSin | NumCos | NumToFloat => {
             debug_assert_eq!(args.len(), 1);
 
             let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
@@ -1675,6 +1650,25 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
         NumAbs => {
             todo!("build_int_unary_op for integer absolute value. (possibly bitwise AND with 0b0111_1111_...)");
         }
+        NumToFloat => {
+            // TODO specialize this to be not just for i64!
+            let builtin_fn_name = "i64_to_f64_";
+
+            let fn_val = env
+                .module
+                .get_function(builtin_fn_name)
+                .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", builtin_fn_name));
+
+            let call = env
+                .builder
+                .build_call(fn_val, &[arg.into()], "call_builtin");
+
+            call.set_call_convention(fn_val.get_call_conventions());
+
+            call.try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| panic!("LLVM error: Invalid call for low-level op {:?}", op))
+        }
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }
@@ -1698,6 +1692,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
         NumRound => call_intrinsic(LLVM_LROUND_I64_F64, env, &[(arg.into(), arg_layout)]),
         NumSin => call_intrinsic(LLVM_SIN_F64, env, &[(arg.into(), arg_layout)]),
         NumCos => call_intrinsic(LLVM_COS_F64, env, &[(arg.into(), arg_layout)]),
+        NumToFloat => arg.into(), /* Converting from Float to Float is a no-op */
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }

@@ -77,6 +77,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_IS_ZERO => num_is_zero,
         Symbol::NUM_IS_POSITIVE => num_is_positive,
         Symbol::NUM_IS_NEGATIVE => num_is_negative,
+        Symbol::NUM_TO_FLOAT => num_to_float,
     }
 }
 
@@ -272,12 +273,12 @@ fn num_tan(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.isZero : Float -> Bool
 fn num_is_zero(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let bool_var = var_store.fresh();
+    let arg_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::Eq,
         args: vec![
-            (bool_var, Var(Symbol::ARG_1)),
-            (bool_var, Num(var_store.fresh(), 0)),
+            (arg_var, Var(Symbol::ARG_1)),
+            (arg_var, Num(var_store.fresh(), 0)),
         ],
         ret_var: var_store.fresh(),
     };
@@ -287,11 +288,12 @@ fn num_is_zero(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.isNegative : Float -> Bool
 fn num_is_negative(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let arg_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::NumGt,
         args: vec![
-            (var_store.fresh(), Num(var_store.fresh(), 0)),
-            (var_store.fresh(), Var(Symbol::ARG_1)),
+            (arg_var, Num(var_store.fresh(), 0)),
+            (arg_var, Var(Symbol::ARG_1)),
         ],
         ret_var: var_store.fresh(),
     };
@@ -301,11 +303,12 @@ fn num_is_negative(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.isPositive : Float -> Bool
 fn num_is_positive(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let arg_var = var_store.fresh();
     let body = RunLowLevel {
         op: LowLevel::NumGt,
         args: vec![
-            (var_store.fresh(), Var(Symbol::ARG_1)),
-            (var_store.fresh(), Num(var_store.fresh(), 0)),
+            (arg_var, Var(Symbol::ARG_1)),
+            (arg_var, Num(var_store.fresh(), 0)),
         ],
         ret_var: var_store.fresh(),
     };
@@ -358,6 +361,17 @@ fn num_is_even(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 },
             ),
         ],
+        ret_var: var_store.fresh(),
+    };
+
+    defn(symbol, vec![Symbol::ARG_1], var_store, body)
+}
+
+/// Num.toFloat : Num * -> Float
+fn num_to_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let body = RunLowLevel {
+        op: LowLevel::NumToFloat,
+        args: vec![(var_store.fresh(), Var(Symbol::ARG_1))],
         ret_var: var_store.fresh(),
     };
 

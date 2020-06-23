@@ -682,15 +682,17 @@ mod gen_builtins {
 
     #[test]
     fn int_to_float() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    Num.toFloat 0x9
-                "#
-            ),
-            9.0,
-            f64
-        );
+        assert_evals_to!("Num.toFloat 0x9", 9.0, f64);
+    }
+
+    #[test]
+    fn num_to_float() {
+        assert_evals_to!("Num.toFloat 9", 9.0, f64);
+    }
+
+    #[test]
+    fn float_to_float() {
+        assert_evals_to!("Num.toFloat 0.5", 0.5, f64);
     }
 
     #[test]

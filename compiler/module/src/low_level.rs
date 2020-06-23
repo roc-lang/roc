@@ -23,6 +23,7 @@ pub enum LowLevel {
     NumCos,
     NumSqrt,
     NumRound,
+    NumToFloat,
     Eq,
     NotEq,
     And,
