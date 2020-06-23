@@ -14,7 +14,7 @@ static mut TYPE_VAR_COUNT: u32 = 10000;
 /// Safety:
 ///
 /// TYPE_VAR_COUNT is not shared across threads, so mutating is safe
-macro_rules! tvar {
+macro_rules! let_tvar {
     () => {{
         unsafe {
             TYPE_VAR_COUNT += 1;
