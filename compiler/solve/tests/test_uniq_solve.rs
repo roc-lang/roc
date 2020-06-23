@@ -2028,7 +2028,7 @@ mod test_uniq_solve {
     fn list_map_identity() {
         infer_eq(
             indoc!(r#"\list -> List.map list (\x -> x)"#),
-            "Attr * (Attr (* | a) (List (Attr a b)) -> Attr * (List (Attr a b)))",
+            "Attr * (Attr * (List a) -> Attr * (List a))",
         );
     }
 
@@ -2049,43 +2049,40 @@ mod test_uniq_solve {
     #[test]
     fn num_add() {
         infer_eq(
-            indoc!("Num.add"),
+            "Num.add",
             "Attr * (Attr a (Num (Attr a b)), Attr c (Num (Attr c b)) -> Attr d (Num (Attr d b)))",
         );
     }
 
     #[test]
     fn list_isempty() {
-        infer_eq(
-            indoc!("List.isEmpty"),
-            "Attr * (Attr * (List *) -> Attr * Bool)",
-        );
+        infer_eq("List.isEmpty", "Attr * (Attr * (List *) -> Attr * Bool)");
     }
 
     #[test]
     fn list_len() {
-        infer_eq(indoc!("List.len"), "Attr * (Attr * (List *) -> Attr * Int)");
+        infer_eq("List.len", "Attr * (Attr * (List *) -> Attr * Int)");
     }
 
     #[test]
     fn list_get() {
-        infer_eq(indoc!("List.get"), "Attr * (Attr (* | a) (List (Attr a b)), Attr * Int -> Attr * (Result (Attr a b) (Attr * [ OutOfBounds ]*)))");
+        infer_eq("List.get", "Attr * (Attr (* | a) (List (Attr a b)), Attr * Int -> Attr * (Result (Attr a b) (Attr * [ OutOfBounds ]*)))");
     }
 
     #[test]
     fn list_set() {
-        infer_eq(indoc!("List.set"), "Attr * (Attr (* | a | b) (List (Attr a c)), Attr * Int, Attr (a | b) c -> Attr * (List (Attr a c)))");
+        infer_eq("List.set", "Attr * (Attr (* | a | b) (List (Attr a c)), Attr * Int, Attr (a | b) c -> Attr * (List (Attr a c)))");
     }
 
     #[test]
     fn list_single() {
-        infer_eq(indoc!("List.single"), "Attr * (a -> Attr * (List a))");
+        infer_eq("List.single", "Attr * (a -> Attr * (List a))");
     }
 
     #[test]
     fn list_repeat() {
         infer_eq(
-            indoc!("List.repeat"),
+            "List.repeat",
             "Attr * (Attr * Int, Attr Shared a -> Attr * (List (Attr Shared a)))",
         );
     }
@@ -2093,7 +2090,7 @@ mod test_uniq_solve {
     #[test]
     fn list_push() {
         infer_eq(
-            indoc!("List.push"),
+            "List.push",
             "Attr * (Attr * (List a), a -> Attr * (List a))",
         );
     }
@@ -2101,15 +2098,15 @@ mod test_uniq_solve {
     #[test]
     fn list_map() {
         infer_eq(
-            indoc!("List.map"),
-            "Attr * (Attr (* | a) (List (Attr a b)), Attr Shared (Attr a b -> c) -> Attr * (List c))",
+            "List.map",
+            "Attr * (Attr * (List a), Attr Shared (a -> b) -> Attr * (List b))",
         );
     }
 
     #[test]
     fn list_foldr() {
         infer_eq(
-            indoc!("List.foldr"),
+            "List.foldr",
             "Attr * (Attr (* | a) (List (Attr a b)), Attr Shared (Attr a b, c -> c), c -> c)",
         );
     }

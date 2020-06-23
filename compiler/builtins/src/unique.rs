@@ -556,16 +556,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // List module
 
     // isEmpty : Attr * (List *) -> Attr * Bool
-    add_type(
-        Symbol::LIST_IS_EMPTY,
-        unique_function(vec![list_type(UVAR1, TVAR1)], bool_type(UVAR2)),
-    );
+    add_type(Symbol::LIST_IS_EMPTY, {
+        let_tvars! { star1, a, star2 };
+        unique_function(vec![list_type(star1, a)], bool_type(star2))
+    });
 
     // len : Attr * (List *) -> Attr * Int
-    add_type(
-        Symbol::LIST_LEN,
-        unique_function(vec![list_type(UVAR1, TVAR1)], int_type(UVAR2)),
-    );
+    add_type(Symbol::LIST_LEN, {
+        let_tvars! { star1, a, star2 };
+        unique_function(vec![list_type(star1, a)], int_type(star2))
+    });
 
     // get : Attr (* | u) (List (Attr u a))
     //     , Attr * Int
@@ -576,12 +576,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     add_type(Symbol::LIST_GET, {
-        let a = TVAR1;
-        let u = UVAR1;
-        let star1 = UVAR2;
-        let star2 = UVAR3;
-        let star3 = UVAR4;
-        let star4 = UVAR5;
+        let_tvars! { a, u, star1, star2, star3, star4 };
 
         unique_function(
             vec![
@@ -598,6 +593,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
+    // is LIST_GET_UNSAFE still used?
     add_type(
         Symbol::LIST_GET_UNSAFE,
         unique_function(vec![list_type(UVAR1, TVAR1), int_type(UVAR2)], flex(TVAR1)),
@@ -608,13 +604,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //     , Attr (u | v) a
     //    -> List a
     add_type(Symbol::LIST_SET, {
-        let u = UVAR1;
-        let v = UVAR2;
-        let w = UVAR3;
-        let star1 = UVAR4;
-        let star2 = UVAR5;
-
-        let a = TVAR1;
+        let_tvars! { u, v, w, star1, star2, a };
 
         unique_function(
             vec![
@@ -704,22 +694,32 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // map : Attr (* | u) (List (Attr u a))
-    //     , Attr Shared (Attr u a -> b)
+    // List.map does not need to check the container rule on the input list.
+    // There is no way in which this signature can cause unique values to be duplicated
+    //
+    //      foo : Attr Shared (List (Attr u a))
+    //
+    //      List.map : Attr * (List (Attr u a)) -> (Attr u a -> b) -> Attr * (List b)
+    //      List.unsafeGet : Attr (* | u) (List (Attr u a)) -> Attr u a
+    //
+    //      -- the elements still have uniqueness `u`, and will be made shared whenever accessing an element in `foo`
+    //      bar1 : Attr * (List (Attr u a))
+    //      bar1 = List.map foo (\x -> x)
+    //
+    //      -- no reference to `foo`'s elements can escape
+    //      bar2 : Attr * (List (Attr * Int))
+    //      bar2 = List.map foo (\_ -> 32)
+
+    // map : Attr * (List a)
+    //     , Attr Shared (a -> b)
     //    -> Attr * (List b)
     add_type(Symbol::LIST_MAP, {
-        let_tvars! { u, a, b, star1, star2 };
+        let_tvars! { a, b, star1, star2 };
 
         unique_function(
             vec![
-                SolvedType::Apply(
-                    Symbol::ATTR_ATTR,
-                    vec![
-                        container(star1, vec![u]),
-                        SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
-                    ],
-                ),
-                shared(SolvedType::Func(vec![attr_type(u, a)], Box::new(flex(b)))),
+                list_type(star1, a),
+                shared(SolvedType::Func(vec![flex(a)], Box::new(flex(b)))),
             ],
             list_type(star2, b),
         )
