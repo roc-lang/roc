@@ -1,4 +1,4 @@
-use crate::layout::{Builtin, Layout, LayoutCache};
+use crate::layout::{Builtin, Layout, LayoutCache, LayoutProblem};
 use crate::pattern::{Ctor, Guard, RenderAs, TagId};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -789,8 +789,11 @@ fn from_can<'a>(
                 Content::FlexVar(_) => Layout::Builtin(Builtin::EmptyList),
                 _ => match layout_cache.from_var(arena, elem_var, env.subs, env.pointer_size) {
                     Ok(layout) => layout.clone(),
-                    Err(()) => {
-                        panic!("TODO gracefully handle List with invalid element layout");
+                    Err(problem) => {
+                        todo!(
+                            "gracefully handle List with element layout problem: {:?}",
+                            problem
+                        );
                     }
                 },
             };
@@ -1300,7 +1303,7 @@ fn call_by_name<'a>(
                     Ok(layout) => {
                         args.push((from_can(env, loc_arg.value, procs, layout_cache), layout));
                     }
-                    Err(()) => {
+                    Err(_) => {
                         // One of this function's arguments code gens to a runtime error,
                         // so attempting to call it will immediately crash.
                         return Expr::RuntimeError("");
@@ -1323,7 +1326,7 @@ fn call_by_name<'a>(
                 args: args.into_bump_slice(),
             }
         }
-        Err(()) => {
+        Err(_) => {
             // This function code gens to a runtime error,
             // so attempting to call it will immediately crash.
             Expr::RuntimeError("")
@@ -1376,7 +1379,7 @@ pub fn specialize_all<'a>(
                         Ok(proc) => {
                             answer.insert((name, layout), proc);
                         }
-                        Err(()) => {
+                        Err(_) => {
                             runtime_errors.insert(name);
                         }
                     }
@@ -1397,7 +1400,7 @@ fn specialize<'a>(
     layout_cache: &mut LayoutCache<'a>,
     pending: PendingSpecialization<'a>,
     partial_proc: PartialProc<'a>,
-) -> Result<Proc<'a>, ()> {
+) -> Result<Proc<'a>, LayoutProblem> {
     let PendingSpecialization {
         ret_var,
         fn_var,

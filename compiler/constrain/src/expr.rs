@@ -792,10 +792,7 @@ pub fn constrain_expr(
             let mut arg_types = Vec::with_capacity(args.len());
             let mut arg_cons = Vec::with_capacity(args.len());
 
-            let args_iter = args.iter();
-
-            for (index, (arg_var, arg)) in args_iter.enumerate() {
-                let arg_type = Variable(*arg_var);
+            let mut add_arg = |index, arg_type: Type, arg| {
                 let reason = Reason::LowLevelOpArg {
                     op: *op,
                     arg_index: Index::zero_based(index),
@@ -803,9 +800,14 @@ pub fn constrain_expr(
                 let expected_arg = ForReason(reason, arg_type.clone(), Region::zero());
                 let arg_con = constrain_expr(env, Region::zero(), arg, expected_arg);
 
-                vars.push(*arg_var);
                 arg_types.push(arg_type);
                 arg_cons.push(arg_con);
+            };
+
+            for (index, (arg_var, arg)) in args.iter().enumerate() {
+                vars.push(*arg_var);
+
+                add_arg(index, Variable(*arg_var), arg);
             }
 
             let category = Category::LowLevelOpResult(*op);

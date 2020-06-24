@@ -177,7 +177,7 @@ lazy_static! {
         std::sync::Mutex::new(roc_collections::all::MutMap::default());
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Interns {
     pub module_ids: ModuleIds,
     pub all_ident_ids: MutMap<ModuleId, IdentIds>,

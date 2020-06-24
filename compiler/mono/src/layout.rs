@@ -47,13 +47,11 @@ impl<'a> Layout<'a> {
         content: Content,
         subs: &Subs,
         pointer_size: u32,
-    ) -> Result<Self, ()> {
+    ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
 
         match content {
-            var @ FlexVar(_) | var @ RigidVar(_) => {
-                panic!("Layout::new encountered an unresolved {:?}", var);
-            }
+            FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnboundVar),
             Structure(flat_type) => layout_from_flat_type(arena, flat_type, subs, pointer_size),
 
             Alias(Symbol::NUM_INT, args, _) => {
@@ -70,7 +68,7 @@ impl<'a> Layout<'a> {
                 subs,
                 pointer_size,
             ),
-            Error => Err(()),
+            Error => Err(LayoutProblem::Erroneous),
         }
     }
 
@@ -82,7 +80,7 @@ impl<'a> Layout<'a> {
         var: Variable,
         subs: &Subs,
         pointer_size: u32,
-    ) -> Result<Self, ()> {
+    ) -> Result<Self, LayoutProblem> {
         let content = subs.get_without_compacting(var).content;
 
         Self::new(arena, content, subs, pointer_size)
@@ -143,7 +141,7 @@ impl<'a> Layout<'a> {
 /// Avoid recomputing Layout from Variable multiple times.
 #[derive(Default)]
 pub struct LayoutCache<'a> {
-    layouts: MutMap<Variable, Result<Layout<'a>, ()>>,
+    layouts: MutMap<Variable, Result<Layout<'a>, LayoutProblem>>,
 }
 
 impl<'a> LayoutCache<'a> {
@@ -156,7 +154,7 @@ impl<'a> LayoutCache<'a> {
         var: Variable,
         subs: &Subs,
         pointer_size: u32,
-    ) -> Result<Layout<'a>, ()> {
+    ) -> Result<Layout<'a>, LayoutProblem> {
         // Store things according to the root Variable, to avoid duplicate work.
         let var = subs.get_root_key_without_compacting(var);
 
@@ -228,12 +226,23 @@ impl<'a> Builtin<'a> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum LayoutProblem {
+    /// We get this error when, after unwrapping all the Attr wrappers,
+    /// we ultimately end up with an unresolved FlexVar. This can happen
+    /// legitimately, for example when resolving a layout for a `List (Attr * *)` -
+    /// which should be an empty list. However, if we get all the way back to
+    /// the top and it's still this error, that's a compiler bug.
+    UnboundVar,
+    Erroneous,
+}
+
 fn layout_from_flat_type<'a>(
     arena: &'a Bump,
     flat_type: FlatType,
     subs: &Subs,
     pointer_size: u32,
-) -> Result<Layout<'a>, ()> {
+) -> Result<Layout<'a>, LayoutProblem> {
     use roc_types::subs::FlatType::*;
 
     match flat_type {
@@ -258,19 +267,24 @@ fn layout_from_flat_type<'a>(
                 }
                 Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
                 Symbol::LIST_LIST => {
-                    use roc_types::subs::Content::*;
+                    use LayoutProblem::*;
 
-                    match subs.get_without_compacting(args[0]).content {
-                        FlexVar(_) | RigidVar(_) => Ok(Layout::Builtin(Builtin::EmptyList)),
-                        content => {
-                            let elem_layout = Layout::new(arena, content, subs, pointer_size)?;
+                    let content = subs.get_without_compacting(args[0]).content;
 
+                    match Layout::new(arena, content, subs, pointer_size) {
+                        Ok(elem_layout) => {
+                            // This is a normal list.
                             Ok(Layout::Builtin(Builtin::List(arena.alloc(elem_layout))))
                         }
+                        Err(UnboundVar) => {
+                            // This is an empty list. That's fine!
+                            Ok(Layout::Builtin(Builtin::EmptyList))
+                        }
+                        Err(Erroneous) => Err(Erroneous),
                     }
                 }
                 Symbol::ATTR_ATTR => {
-                    debug_assert!(args.len() == 2);
+                    debug_assert_eq!(args.len(), 2);
 
                     // The first argument is the uniqueness info;
                     // that doesn't affect layout, so we don't need it here.
@@ -316,7 +330,7 @@ fn layout_from_flat_type<'a>(
                 let field_content = subs.get_without_compacting(field_var).content;
                 let field_layout = match Layout::new(arena, field_content, subs, pointer_size) {
                     Ok(layout) => layout,
-                    Err(()) => {
+                    Err(_) => {
                         // Invalid field!
                         panic!("TODO gracefully handle record with invalid field.var");
                     }
@@ -341,7 +355,7 @@ fn layout_from_flat_type<'a>(
         Boolean(_) => {
             panic!("TODO make Layout for Boolean");
         }
-        Erroneous(_) => Err(()),
+        Erroneous(_) => Err(LayoutProblem::Erroneous),
         EmptyRecord => Ok(Layout::Struct(&[])),
     }
 }
@@ -538,7 +552,7 @@ fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
     }
 }
 
-fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, ()> {
+fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutProblem> {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
@@ -566,11 +580,11 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, ()> {
         Structure(_) => {
             panic!("Invalid Num.Num type application: {:?}", content);
         }
-        Error => Err(()),
+        Error => Err(LayoutProblem::Erroneous),
     }
 }
 
-fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, ()> {
+fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutProblem> {
     match subs.get_without_compacting(var).content {
         Content::Structure(flat_type) => match flat_type {
             FlatType::Apply(Symbol::ATTR_ATTR, args) => {
