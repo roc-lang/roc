@@ -698,11 +698,13 @@ mod gen_builtins {
                 r#"
                     unique = [ 2, 4 ]
 
-                    List.get unique 1
+                    when List.get unique 1 is
+                        Ok num -> num
+                        Err _ -> -1
                 "#
             ),
-            (1, 4),
-            (u64, i64)
+            4,
+            i64
         );
     }
 
