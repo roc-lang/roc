@@ -275,13 +275,16 @@ fn num_tan(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.isZero : Float -> Bool
 fn num_is_zero(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+    let unbound_zero_var = var_store.fresh();
+
     let body = RunLowLevel {
         op: LowLevel::Eq,
         args: vec![
             (arg_var, Var(Symbol::ARG_1)),
-            (arg_var, Num(var_store.fresh(), 0)),
+            (arg_var, Num(unbound_zero_var, 0)),
         ],
-        ret_var: var_store.fresh(),
+        ret_var: bool_var,
     };
 
     defn(symbol, vec![Symbol::ARG_1], var_store, body)
@@ -290,13 +293,16 @@ fn num_is_zero(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.isNegative : Float -> Bool
 fn num_is_negative(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+    let unbound_zero_var = var_store.fresh();
+
     let body = RunLowLevel {
         op: LowLevel::NumGt,
         args: vec![
-            (arg_var, Num(var_store.fresh(), 0)),
+            (arg_var, Num(unbound_zero_var, 0)),
             (arg_var, Var(Symbol::ARG_1)),
         ],
-        ret_var: var_store.fresh(),
+        ret_var: bool_var,
     };
 
     defn(symbol, vec![Symbol::ARG_1], var_store, body)
@@ -305,13 +311,16 @@ fn num_is_negative(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.isPositive : Float -> Bool
 fn num_is_positive(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+    let unbound_zero_var = var_store.fresh();
+
     let body = RunLowLevel {
         op: LowLevel::NumGt,
         args: vec![
             (arg_var, Var(Symbol::ARG_1)),
-            (arg_var, Num(var_store.fresh(), 0)),
+            (arg_var, Num(unbound_zero_var, 0)),
         ],
-        ret_var: var_store.fresh(),
+        ret_var: bool_var,
     };
 
     defn(symbol, vec![Symbol::ARG_1], var_store, body)
@@ -654,9 +663,13 @@ fn num_abs(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.div : Float, Float -> Result Float [ DivByZero ]*
 fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
+    let num_var = var_store.fresh();
+    let unbound_zero_var = var_store.fresh();
+    let branch_var = var_store.fresh();
+
     let body = If {
-        branch_var: var_store.fresh(),
-        cond_var: var_store.fresh(),
+        branch_var,
+        cond_var: bool_var,
         branches: vec![(
             // if-condition
             no_region(
@@ -664,10 +677,10 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (bool_var, Var(Symbol::ARG_1)),
-                        (bool_var, Float(var_store.fresh(), 0.0)),
+                        (num_var, Var(Symbol::ARG_1)),
+                        (num_var, Float(unbound_zero_var, 0.0)),
                     ],
-                    ret_var: var_store.fresh(),
+                    ret_var: bool_var,
                 },
             ),
             // denominator was not zero
@@ -680,10 +693,10 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         RunLowLevel {
                             op: LowLevel::NumDivUnchecked,
                             args: vec![
-                                (var_store.fresh(), Var(Symbol::ARG_1)),
-                                (var_store.fresh(), Var(Symbol::ARG_2)),
+                                (num_var, Var(Symbol::ARG_1)),
+                                (num_var, Var(Symbol::ARG_2)),
                             ],
-                            ret_var: var_store.fresh(),
+                            ret_var: num_var,
                         },
                     ],
                     var_store,
