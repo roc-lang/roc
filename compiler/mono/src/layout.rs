@@ -8,6 +8,9 @@ use std::collections::BTreeMap;
 
 pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
 
+/// If a (Num *) gets translated to a Layout, this is the numeric type it defaults to.
+const DEFAULT_NUM_BUILTIN: Builtin<'_> = Builtin::Int64;
+
 /// Types for code gen must be monomorphic. No type variables allowed!
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Layout<'a> {
@@ -50,8 +53,13 @@ impl<'a> Layout<'a> {
     ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
 
-        match content {
-            FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnboundVar),
+        match content.dbg(subs) {
+            var @ FlexVar(_) | var @ RigidVar(_) => {
+                unreachable!(
+                    "Encountered an unresolved {:?} when determining layout",
+                    var
+                );
+            }
             Structure(flat_type) => layout_from_flat_type(arena, flat_type, subs, pointer_size),
 
             Alias(Symbol::NUM_INT, args, _) => {
@@ -228,12 +236,6 @@ impl<'a> Builtin<'a> {
 
 #[derive(Debug, Clone)]
 pub enum LayoutProblem {
-    /// We get this error when, after unwrapping all the Attr wrappers,
-    /// we ultimately end up with an unresolved FlexVar. This can happen
-    /// legitimately, for example when resolving a layout for a `List (Attr * *)` -
-    /// which should be an empty list. However, if we get all the way back to
-    /// the top and it's still this error, that's a compiler bug.
-    UnboundVar,
     Erroneous,
 }
 
@@ -249,16 +251,16 @@ fn layout_from_flat_type<'a>(
         Apply(symbol, args) => {
             match symbol {
                 Symbol::NUM_INT => {
-                    debug_assert!(args.is_empty());
+                    debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Int64))
                 }
                 Symbol::NUM_FLOAT => {
-                    debug_assert!(args.is_empty());
+                    debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Float64))
                 }
-                Symbol::NUM_NUM => {
+                Symbol::NUM_NUM | Symbol::NUM_AT_NUM => {
                     // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
-                    debug_assert!(args.len() == 1);
+                    debug_assert_eq!(args.len(), 1);
 
                     let var = args.iter().next().unwrap();
                     let content = subs.get_without_compacting(*var).content;
@@ -266,23 +268,7 @@ fn layout_from_flat_type<'a>(
                     layout_from_num_content(content)
                 }
                 Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
-                Symbol::LIST_LIST => {
-                    use LayoutProblem::*;
-
-                    let content = subs.get_without_compacting(args[0]).content;
-
-                    match Layout::new(arena, content, subs, pointer_size) {
-                        Ok(elem_layout) => {
-                            // This is a normal list.
-                            Ok(Layout::Builtin(Builtin::List(arena.alloc(elem_layout))))
-                        }
-                        Err(UnboundVar) => {
-                            // This is an empty list. That's fine!
-                            Ok(Layout::Builtin(Builtin::EmptyList))
-                        }
-                        Err(Erroneous) => Err(Erroneous),
-                    }
-                }
+                Symbol::LIST_LIST => unwrap_list(arena, subs, args[0], pointer_size),
                 Symbol::ATTR_ATTR => {
                     debug_assert_eq!(args.len(), 2);
 
@@ -451,12 +437,12 @@ fn union_sorted_tags_help<'a>(
             UnionVariant::ByteUnion(tag_names)
         }
         1 => {
-            // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
             let (tag_name, arguments) = tags_vec.remove(0);
 
             // just one tag in the union (but with arguments) can be a struct
             let mut layouts = Vec::with_capacity_in(tags_vec.len(), arena);
 
+            // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
             match tag_name {
                 TagName::Private(Symbol::NUM_AT_NUM) => {
                     layouts.push(unwrap_num_tag(subs, arguments[0]).expect("invalid num layout"));
@@ -516,7 +502,9 @@ pub fn layout_from_tag_union<'a>(
         Unwrapped(field_layouts) => match first_tag.0 {
             TagName::Private(Symbol::NUM_AT_NUM) => {
                 let arguments = first_tag.1;
-                debug_assert!(arguments.len() == 1);
+
+                debug_assert_eq!(arguments.len(), 1);
+
                 let var = arguments.iter().next().unwrap();
 
                 unwrap_num_tag(subs, *var).expect("invalid Num argument")
@@ -562,7 +550,7 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
             // type variable, then assume it's a 64-bit integer.
             //
             // (e.g. for (5 + 5) assume both 5s are 64-bit integers.)
-            Ok(Layout::Builtin(Builtin::Int64))
+            Ok(Layout::Builtin(DEFAULT_NUM_BUILTIN))
         }
         Structure(Apply(symbol, args)) => match symbol {
             Symbol::NUM_INTEGER => Ok(Layout::Builtin(Builtin::Int64)),
@@ -588,14 +576,14 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
     match subs.get_without_compacting(var).content {
         Content::Structure(flat_type) => match flat_type {
             FlatType::Apply(Symbol::ATTR_ATTR, args) => {
-                debug_assert!(args.len() == 2);
+                debug_assert_eq!(args.len(), 2);
 
                 let arg_var = args.get(1).unwrap();
 
                 unwrap_num_tag(subs, *arg_var)
             }
             _ => {
-                panic!("TODO handle Num.@Num flat_type {:?}", flat_type);
+                todo!("TODO handle Num.@Num flat_type {:?}", flat_type);
             }
         },
         Content::Alias(Symbol::NUM_INTEGER, args, _) => {
@@ -606,12 +594,39 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
             debug_assert!(args.is_empty());
             Ok(Layout::Builtin(Builtin::Float64))
         }
-        Content::FlexVar(_) => {
+        Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (Num *) then default to compiling it to i64
-            Ok(Layout::Builtin(Builtin::Int64))
+            Ok(Layout::Builtin(DEFAULT_NUM_BUILTIN))
         }
         other => {
-            panic!("TODO non structure Num.@Num flat_type {:?}", other);
+            todo!("TODO non structure Num.@Num flat_type {:?}", other);
+        }
+    }
+}
+
+fn unwrap_list<'a>(
+    arena: &'a Bump,
+    subs: &Subs,
+    var: Variable,
+    pointer_size: u32,
+) -> Result<Layout<'a>, LayoutProblem> {
+    match subs.get_without_compacting(var).content {
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
+            debug_assert_eq!(args.len(), 2);
+
+            let arg_var = args.get(1).unwrap();
+
+            unwrap_list(arena, subs, *arg_var, pointer_size)
+        }
+        Content::FlexVar(_) | Content::RigidVar(_) => {
+            // If this was still a (List *) then it must have been an empty list
+            Ok(Layout::Builtin(Builtin::EmptyList))
+        }
+        content => {
+            let elem_layout = Layout::new(arena, content, subs, pointer_size)?;
+
+            // This is a normal list.
+            Ok(Layout::Builtin(Builtin::List(arena.alloc(elem_layout))))
         }
     }
 }

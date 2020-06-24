@@ -449,11 +449,15 @@ fn list_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_list = Symbol::ARG_1;
     let arg_index = Symbol::ARG_2;
+    let bool_var = var_store.fresh();
+    let ulen_var = var_store.fresh();
+    let branch_var = var_store.fresh();
+    let list_var = var_store.fresh();
 
     // Perform a bounds check. If it passes, run LowLevel::ListGetUnsafe
     let body = If {
-        cond_var: var_store.fresh(),
-        branch_var: var_store.fresh(),
+        cond_var: bool_var,
+        branch_var,
         branches: vec![(
             // if-condition
             no_region(
@@ -461,17 +465,17 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NumLt,
                     args: vec![
-                        (var_store.fresh(), Var(arg_index)),
+                        (ulen_var, Var(arg_index)),
                         (
-                            var_store.fresh(),
+                            ulen_var,
                             RunLowLevel {
                                 op: LowLevel::ListLen,
-                                args: vec![(var_store.fresh(), Var(arg_list))],
-                                ret_var: var_store.fresh(),
+                                args: vec![(list_var, Var(arg_list))],
+                                ret_var: ulen_var,
                             },
                         ),
                     ],
-                    ret_var: var_store.fresh(),
+                    ret_var: bool_var,
                 },
             ),
             // then-branch
@@ -483,11 +487,8 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         // List#getUnsafe list index
                         RunLowLevel {
                             op: LowLevel::ListGetUnsafe,
-                            args: vec![
-                                (var_store.fresh(), Var(arg_list)),
-                                (var_store.fresh(), Var(arg_index)),
-                            ],
-                            ret_var: var_store.fresh(),
+                            args: vec![(list_var, Var(arg_list)), (ulen_var, Var(arg_index))],
+                            ret_var: ulen_var,
                         },
                     ],
                     var_store,
@@ -515,12 +516,17 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_list = Symbol::ARG_1;
     let arg_index = Symbol::ARG_2;
     let arg_elem = Symbol::ARG_3;
+    let bool_var = var_store.fresh();
+    let ulen_var = var_store.fresh();
+    let list_var = var_store.fresh();
+    let branch_var = var_store.fresh();
+    let elem_var = var_store.fresh();
 
     // Perform a bounds check. If it passes, run LowLevel::ListSet.
     // Otherwise, return the list unmodified.
     let body = If {
-        cond_var: var_store.fresh(),
-        branch_var: var_store.fresh(),
+        cond_var: bool_var,
+        branch_var,
         branches: vec![(
             // if-condition
             no_region(
@@ -528,17 +534,17 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NumLt,
                     args: vec![
-                        (var_store.fresh(), Var(arg_index)),
+                        (ulen_var, Var(arg_index)),
                         (
-                            var_store.fresh(),
+                            ulen_var,
                             RunLowLevel {
                                 op: LowLevel::ListLen,
-                                args: vec![(var_store.fresh(), Var(arg_list))],
-                                ret_var: var_store.fresh(),
+                                args: vec![(list_var, Var(arg_list))],
+                                ret_var: ulen_var,
                             },
                         ),
                     ],
-                    ret_var: var_store.fresh(),
+                    ret_var: bool_var,
                 },
             ),
             // then-branch
@@ -547,11 +553,11 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::ListSet,
                     args: vec![
-                        (var_store.fresh(), Var(arg_list)),
-                        (var_store.fresh(), Var(arg_index)),
-                        (var_store.fresh(), Var(arg_elem)),
+                        (list_var, Var(arg_list)),
+                        (ulen_var, Var(arg_index)),
+                        (elem_var, Var(arg_elem)),
                     ],
-                    ret_var: var_store.fresh(),
+                    ret_var: list_var,
                 },
             ),
         )],
@@ -571,37 +577,41 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.rem : Int, Int -> Result Int [ DivByZero ]*
 fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let num_var = var_store.fresh();
+    let unbound_zero_var = var_store.fresh();
     let bool_var = var_store.fresh();
+    let branch_var = var_store.fresh();
+
     let body = If {
-        branch_var: var_store.fresh(),
-        cond_var: var_store.fresh(),
+        branch_var,
+        cond_var: bool_var,
         branches: vec![(
             // if condition
             no_region(
-                // Num.neq arg1 0
+                // Num.isNeq arg2 0
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (bool_var, Var(Symbol::ARG_2)),
-                        (bool_var, Int(var_store.fresh(), 0)),
+                        (num_var, Var(Symbol::ARG_2)),
+                        (num_var, Num(unbound_zero_var, 0)),
                     ],
-                    ret_var: var_store.fresh(),
+                    ret_var: bool_var,
                 },
             ),
             // arg1 was not zero
             no_region(
-                // Ok (Int.#remUnsafe arg0 arg1)
+                // Ok (Int.#remUnsafe arg1 arg2)
                 tag(
                     "Ok",
                     vec![
-                        // Num.#remUnsafe arg0 arg1
+                        // Num.#remUnsafe arg1 arg2
                         RunLowLevel {
                             op: LowLevel::NumRemUnchecked,
                             args: vec![
-                                (var_store.fresh(), Var(Symbol::ARG_1)),
-                                (var_store.fresh(), Var(Symbol::ARG_2)),
+                                (num_var, Var(Symbol::ARG_1)),
+                                (num_var, Var(Symbol::ARG_2)),
                             ],
-                            ret_var: var_store.fresh(),
+                            ret_var: num_var,
                         },
                     ],
                     var_store,
