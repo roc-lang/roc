@@ -1,7 +1,7 @@
 use roc_collections::all::{relative_complement, union, MutMap, SendSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_types::boolean_algebra::{Atom, Bool};
+use roc_types::boolean_algebra::Bool;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
 use roc_types::types::{gather_fields, ErrorType, Mismatch, RecordStructure};
@@ -128,7 +128,10 @@ pub fn unify_pool(subs: &mut Subs, pool: &mut Pool, var1: Variable, var2: Variab
 }
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
-    // println!( "{:?} {:?} ~ {:?} {:?}", ctx.first, ctx.first_desc.content, ctx.second, ctx.second_desc.content,);
+    println!(
+        "{:?} {:?} ~ {:?} {:?}",
+        ctx.first, ctx.first_desc.content, ctx.second, ctx.second_desc.content,
+    );
     match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(subs, pool, &ctx, opt_name, &ctx.second_desc.content),
         RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
@@ -193,11 +196,21 @@ fn unify_structure(
 ) -> Outcome {
     match other {
         FlexVar(_) => {
-            // TODO special-case boolean here
-            match flat_type {
-                FlatType::Boolean(Bool(Atom::Variable(var), _rest)) => {
-                    unify_pool(subs, pool, *var, ctx.second)
-                }
+            match &ctx.first_desc.content {
+                Structure(FlatType::Boolean(b)) => match b {
+                    Bool::Container(cvar, _mvars)
+                        if roc_types::boolean_algebra::var_is_shared(subs, *cvar) =>
+                    {
+                        subs.set_content(ctx.first, Structure(FlatType::Boolean(Bool::Shared)));
+                        subs.set_content(ctx.second, Structure(FlatType::Boolean(Bool::Shared)));
+
+                        vec![]
+                    }
+                    Bool::Container(_cvar, _mvars) => {
+                        merge(subs, ctx, Structure(flat_type.clone()))
+                    }
+                    Bool::Shared => merge(subs, ctx, Structure(flat_type.clone())),
+                },
                 _ => {
                     // If the other is flex, Structure wins!
                     merge(subs, ctx, Structure(flat_type.clone()))
@@ -632,34 +645,65 @@ fn unify_flat_type(
             unify_tag_union(subs, pool, ctx, union1, union2, (Some(*rec1), Some(*rec2)))
         }
 
-        (Boolean(Bool(free1, rest1)), Boolean(Bool(free2, rest2))) => {
-            // unify the free variables
-            let (new_free, mut free_var_problems) = unify_free_atoms(subs, pool, *free1, *free2);
+        (Boolean(b1), Boolean(b2)) => {
+            use Bool::*;
+            match (b1, b2) {
+                (Shared, Shared) => merge(subs, ctx, Structure(left.clone())),
+                (Shared, Container(cvar, mvars)) => {
+                    let mut outcome = vec![];
+                    // unify everything with shared
+                    outcome.extend(unify_pool(subs, pool, ctx.first, *cvar));
 
-            let combined_rest: SendSet<Atom> = rest1
-                .clone()
-                .into_iter()
-                .chain(rest2.clone().into_iter())
-                .collect::<SendSet<Atom>>();
+                    for mvar in mvars {
+                        outcome.extend(unify_pool(subs, pool, ctx.first, *mvar));
+                    }
 
-            let mut combined = if let Err(false) = chase_atom(subs, new_free) {
-                // if the container is shared, all elements must be shared too
-                for atom in combined_rest {
-                    let (_, atom_problems) = unify_free_atoms(subs, pool, atom, Atom::Zero);
-                    free_var_problems.extend(atom_problems);
+                    // set the first and second variables to Shared
+                    let content = Content::Structure(FlatType::Boolean(Bool::Shared));
+                    outcome.extend(merge(subs, ctx, content));
+
+                    outcome
                 }
-                Bool(Atom::Zero, SendSet::default())
-            } else {
-                Bool(new_free, combined_rest)
-            };
+                (Container(cvar, mvars), Shared) => {
+                    let mut outcome = vec![];
+                    // unify everything with shared
+                    outcome.extend(unify_pool(subs, pool, ctx.second, *cvar));
 
-            combined.apply_subs(subs);
+                    for mvar in mvars {
+                        outcome.extend(unify_pool(subs, pool, ctx.second, *mvar));
+                    }
 
-            // force first and second to equal this new variable
-            let content = Content::Structure(FlatType::Boolean(combined));
-            merge(subs, ctx, content);
+                    // set the first and second variables to Shared
+                    let content = Content::Structure(FlatType::Boolean(Bool::Shared));
+                    outcome.extend(merge(subs, ctx, content));
 
-            free_var_problems
+                    outcome
+                }
+                (Container(cvar1, mvars1), Container(cvar2, mvars2)) => {
+                    // unify cvar1 and cvar2?
+                    unify_pool(subs, pool, *cvar1, *cvar2);
+
+                    let mvars: SendSet<Variable> = mvars1
+                        .into_iter()
+                        .chain(mvars2.into_iter())
+                        .copied()
+                        .filter_map(|v| {
+                            let root = subs.get_root_key(v);
+
+                            if roc_types::boolean_algebra::var_is_shared(subs, root) {
+                                None
+                            } else {
+                                Some(root)
+                            }
+                        })
+                        .collect();
+
+                    let content =
+                        Content::Structure(FlatType::Boolean(Bool::Container(*cvar1, mvars)));
+
+                    merge(subs, ctx, content)
+                }
+            }
         }
 
         (Apply(l_symbol, l_args), Apply(r_symbol, r_args)) if l_symbol == r_symbol => {
@@ -689,41 +733,6 @@ fn unify_flat_type(
             "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
             other1,
             other2
-        ),
-    }
-}
-
-fn chase_atom(subs: &mut Subs, atom: Atom) -> Result<Variable, bool> {
-    match atom {
-        Atom::Zero => Err(false),
-        Atom::One => Err(true),
-        Atom::Variable(var) => match subs.get(var).content {
-            Content::Structure(FlatType::Boolean(Bool(first, rest))) => {
-                debug_assert!(rest.is_empty());
-                chase_atom(subs, first)
-            }
-            _ => Ok(var),
-        },
-    }
-}
-
-fn unify_free_atoms(subs: &mut Subs, pool: &mut Pool, b1: Atom, b2: Atom) -> (Atom, Vec<Mismatch>) {
-    match (b1, b2) {
-        (Atom::Variable(v1), Atom::Variable(v2)) => {
-            (Atom::Variable(v1), unify_pool(subs, pool, v1, v2))
-        }
-        (Atom::Variable(var), other) | (other, Atom::Variable(var)) => {
-            subs.set_content(
-                var,
-                Content::Structure(FlatType::Boolean(Bool(other, SendSet::default()))),
-            );
-
-            (other, vec![])
-        }
-        (Atom::Zero, Atom::Zero) => (Atom::Zero, vec![]),
-        (Atom::One, Atom::One) => (Atom::One, vec![]),
-        _ => unreachable!(
-            "invalid boolean unification. Because we never infer One, this should never happen!"
         ),
     }
 }
@@ -776,10 +785,17 @@ fn unify_flex(
             merge(subs, ctx, FlexVar(opt_name.clone()))
         }
 
-        Structure(FlatType::Boolean(Bool(Atom::Variable(var), _rest))) => {
-            unify_pool(subs, pool, ctx.first, *var)
-        }
-
+        /*
+        Structure(FlatType::Boolean(b)) => match b {
+            Bool::Container(cvar, _mvars)
+                if roc_types::boolean_algebra::var_is_shared(subs, *cvar) =>
+            {
+                merge(subs, ctx, Structure(FlatType::Boolean(Bool::Shared)))
+            }
+            Bool::Container(cvar, _mvars) => unify_pool(subs, pool, ctx.first, *cvar),
+            Bool::Shared => merge(subs, ctx, other.clone()),
+        },
+        */
         FlexVar(Some(_)) | RigidVar(_) | Structure(_) | Alias(_, _, _) => {
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.

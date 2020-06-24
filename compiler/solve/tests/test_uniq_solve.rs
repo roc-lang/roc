@@ -54,7 +54,10 @@ mod test_uniq_solve {
         let (problems, actual) = infer_eq_help(src);
 
         if !problems.is_empty() {
-            panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
+            panic!(
+                "expected:\n{:?}\ninferred:\n{:?}\nproblems:\n{:?}",
+                expected, actual, problems
+            );
         }
 
         assert_eq!(actual, expected.to_string());
@@ -1303,7 +1306,7 @@ mod test_uniq_solve {
                         r
                 "#
             ),
-            "Attr * (Attr (a | b) { foo : (Attr a { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f -> Attr (a | b) { foo : (Attr a { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f)"
+            "Attr * (Attr (a | b) { foo : (Attr b { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f -> Attr (a | b) { foo : (Attr b { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f)"
         );
     }
 
@@ -1321,7 +1324,7 @@ mod test_uniq_solve {
                         r
                 "#
             ),
-            "Attr * (Attr (a | b) { foo : (Attr a { bar : (Attr Shared c) }d) }e -> Attr (a | b) { foo : (Attr a { bar : (Attr Shared c) }d) }e)"
+            "Attr * (Attr (a | b) { foo : (Attr b { bar : (Attr Shared c) }d) }e -> Attr (a | b) { foo : (Attr b { bar : (Attr Shared c) }d) }e)"
         );
     }
 
@@ -2239,6 +2242,133 @@ mod test_uniq_solve {
         infer_eq(
             "Result.map",
             "Attr * (Attr * (Result a b), Attr * (a -> c) -> Attr * (Result c b))",
+        );
+    }
+
+    #[test]
+    fn list_roc_head() {
+        infer_eq(
+            indoc!(
+                r#"
+                ConsList a : [ Cons a (ConsList a), Nil ]
+                Maybe a : [ Just a, Nothing ]
+
+                head : ConsList a -> Maybe a
+                head = \list ->
+                    when list is 
+                        Cons x _ -> Just x
+                        Nil -> Nothing
+
+                head
+                "#
+            ),
+            "Attr * (Attr (* | b) (ConsList (Attr b a)) -> Attr * (Maybe (Attr b a)))",
+        );
+    }
+
+    #[test]
+    fn list_roc_is_empty() {
+        infer_eq(
+            indoc!(
+                r#"
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                isEmpty : ConsList a -> Bool 
+                isEmpty = \list ->
+                    when list is 
+                        Cons _ _ -> False 
+                        Nil -> True
+
+                isEmpty
+                "#
+            ),
+            "Attr * (Attr (* | b) (ConsList (Attr b a)) -> Attr * Bool)",
+        );
+    }
+
+    #[test]
+    fn peano_roc_is_empty() {
+        infer_eq(
+            indoc!(
+                r#"
+                Peano : [ Z, S Peano ]
+
+                isEmpty : Peano -> Bool 
+                isEmpty = \list ->
+                    when list is 
+                        S _ -> False 
+                        Z -> True
+
+                isEmpty
+                "#
+            ),
+            "Attr * (Attr * Peano -> Attr * Bool)",
+        );
+    }
+
+    #[test]
+    fn result_roc_map() {
+        infer_eq(
+            indoc!(
+                r#"
+                map : Result a e, (a -> b) -> Result b e 
+                map = \result, f ->
+                    when result is
+                        Ok v -> Ok (f v)
+                        Err e -> Err e 
+
+                map
+                "#
+            ),
+        "Attr * (Attr (* | c | d) (Result (Attr c a) (Attr d e)), Attr * (Attr c a -> Attr f b) -> Attr * (Result (Attr f b) (Attr d e)))"
+        );
+    }
+
+    #[test]
+    fn result_roc_with_default_with_signature() {
+        infer_eq(
+            indoc!(
+                r#"
+                withDefault : Result a e, a -> a 
+                withDefault = \result, default ->
+                    when result is
+                        Ok v -> v 
+                        Err _ -> default 
+
+                withDefault
+                "#
+            ),
+            "Attr * (Attr (* | b | c) (Result (Attr b a) (Attr c e)), Attr b a -> Attr b a)",
+        );
+    }
+
+    #[test]
+    fn result_roc_with_default_no_signature() {
+        infer_eq(
+            indoc!(
+                r#"
+                \result, default ->
+                    when result is
+                        Ok x -> x
+                        Err _ -> default
+                "#
+            ),
+            "Attr * (Attr (* | a | b) [ Err (Attr a *), Ok (Attr b c) ]*, Attr b c -> Attr b c)",
+        );
+    }
+
+    #[test]
+    fn foobar() {
+        infer_eq(
+            indoc!(
+                r#"
+                f : { x : b } -> b
+                f = \{ x } -> x
+
+                f
+                "#
+            ),
+            "Attr * (Attr (* | a) { x : (Attr a b) } -> Attr a b)",
         );
     }
 

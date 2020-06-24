@@ -4,7 +4,7 @@ use roc_collections::all::{ImMap, MutMap, SendMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
-use roc_types::boolean_algebra::{self, Atom};
+use roc_types::boolean_algebra::{self, Bool};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use roc_types::types::Type::{self, *};
@@ -91,6 +91,7 @@ pub fn run(
     mut subs: Subs,
     constraint: &Constraint,
 ) -> (Solved<Subs>, Env) {
+    dbg!(&constraint);
     let mut pools = Pools::default();
     let state = State {
         env: env.clone(),
@@ -547,7 +548,7 @@ fn type_to_variable(
         EmptyTagUnion => Variable::EMPTY_TAG_UNION,
 
         // This case is important for the rank of boolean variables
-        Boolean(boolean_algebra::Bool(Atom::Variable(var), rest)) if rest.is_empty() => *var,
+        Boolean(boolean_algebra::Bool::Container(cvar, mvars)) if mvars.is_empty() => *cvar,
         Boolean(b) => {
             let content = Content::Structure(FlatType::Boolean(b.clone()));
 
@@ -793,7 +794,15 @@ fn check_for_infinite_type(
                     _ => circular_error(subs, problems, symbol, &loc_var),
                 }
             }
-            _ => circular_error(subs, problems, symbol, &loc_var),
+            Content::Structure(FlatType::Boolean(Bool::Container(_cvar, _mvars))) => {
+                // subs.explicit_substitute(recursive, cvar, var);
+                boolean_algebra::flatten(subs, recursive);
+                dbg!(subs.get(recursive).content);
+            }
+            _other => {
+                // dbg!(&_other);
+                circular_error(subs, problems, symbol, &loc_var)
+            }
         }
     }
 }
@@ -812,6 +821,8 @@ fn correct_recursive_attr(
 ) {
     let rec_var = subs.fresh_unnamed_flex_var();
     let attr_var = subs.fresh_unnamed_flex_var();
+
+    dbg!(uniq_var);
 
     let content = content_attr(uniq_var, rec_var);
     subs.set_content(attr_var, content);

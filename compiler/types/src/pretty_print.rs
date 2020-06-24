@@ -1,4 +1,4 @@
-use crate::boolean_algebra::{Atom, Bool};
+use crate::boolean_algebra::Bool;
 use crate::subs::{Content, FlatType, Subs, Variable};
 use crate::types::name_type_var;
 use roc_collections::all::{ImSet, MutMap, MutSet};
@@ -78,27 +78,33 @@ fn find_names_needed(
     use crate::subs::FlatType::*;
 
     while let Some((recursive, _)) = subs.occurs(variable) {
-        if let Content::Structure(FlatType::TagUnion(tags, ext_var)) =
-            subs.get_without_compacting(recursive).content
-        {
-            let rec_var = subs.fresh_unnamed_flex_var();
+        let content = subs.get_without_compacting(recursive).content;
+        match content {
+            Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+                let rec_var = subs.fresh_unnamed_flex_var();
 
-            let mut new_tags = MutMap::default();
+                let mut new_tags = MutMap::default();
 
-            for (label, args) in tags {
-                let new_args = args
-                    .clone()
-                    .into_iter()
-                    .map(|var| if var == recursive { rec_var } else { var })
-                    .collect();
+                for (label, args) in tags {
+                    let new_args = args
+                        .clone()
+                        .into_iter()
+                        .map(|var| if var == recursive { rec_var } else { var })
+                        .collect();
 
-                new_tags.insert(label.clone(), new_args);
+                    new_tags.insert(label.clone(), new_args);
+                }
+
+                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
+                subs.set_content(recursive, Content::Structure(flat_type));
             }
-
-            let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
-            subs.set_content(recursive, Content::Structure(flat_type));
-        } else {
-            panic!("unfixable recursive type in roc_types::pretty_print")
+            Content::Structure(FlatType::Boolean(Bool::Container(cvar, mvars))) => {
+                subs.explicit_substitute(recursive, cvar, variable);
+            }
+            _ => panic!(
+                "unfixable recursive type in roc_types::pretty_print {:?} {:?} {:?}",
+                recursive, variable, content
+            ),
         }
     }
 
@@ -168,23 +174,15 @@ fn find_names_needed(
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
             find_names_needed(rec_var, subs, roots, root_appearances, names_taken);
         }
-        Structure(Boolean(b)) =>
-        // NOTE it's important that we traverse the variables in the same order as they are
-        // below in write_boolean, hence the call to `simplify`.
-        {
-            match b.simplify(subs) {
-                Err(Atom::Variable(var)) => {
+        Structure(Boolean(b)) => match b {
+            Bool::Shared => {}
+            Bool::Container(cvar, mvars) => {
+                find_names_needed(cvar, subs, roots, root_appearances, names_taken);
+                for var in mvars {
                     find_names_needed(var, subs, roots, root_appearances, names_taken);
                 }
-                Err(_) => {}
-                Ok(mut variables) => {
-                    variables.sort();
-                    for var in variables {
-                        find_names_needed(var, subs, roots, root_appearances, names_taken);
-                    }
-                }
             }
-        }
+        },
         Alias(symbol, args, _actual) => {
             if let Symbol::ATTR_ATTR = symbol {
                 find_names_needed(args[0].1, subs, roots, root_appearances, names_taken);
@@ -585,13 +583,31 @@ pub fn chase_ext_record(
 }
 
 fn write_boolean(env: &Env, boolean: Bool, subs: &Subs, buf: &mut String, parens: Parens) {
-    match boolean.simplify(subs) {
-        Err(atom) => write_boolean_atom(env, atom, subs, buf, parens),
-        Ok(mut variables) => {
-            variables.sort();
-            let mut buffers_set = ImSet::default();
+    use crate::boolean_algebra::var_is_shared;
 
-            for v in variables {
+    match boolean {
+        Bool::Shared => {
+            buf.push_str("Shared");
+        }
+        Bool::Container(cvar, mvars) if mvars.iter().all(|v| var_is_shared(subs, *v)) => {
+            // Bool::Container(cvar, mvars) if mvars.is_empty() => {
+            write_content(
+                env,
+                subs.get_without_compacting(cvar).content,
+                subs,
+                buf,
+                Parens::Unnecessary,
+            );
+        }
+        Bool::Container(cvar, mvars) => {
+            dbg!(&cvar, &mvars);
+            dbg!(&subs);
+            let mut buffers_set = ImSet::default();
+            for v in mvars {
+                if var_is_shared(subs, v) {
+                    continue;
+                }
+
                 let mut inner_buf: String = "".to_string();
                 write_content(
                     env,
@@ -608,33 +624,17 @@ fn write_boolean(env: &Env, boolean: Bool, subs: &Subs, buf: &mut String, parens
 
             let combined = buffers.join(" | ");
 
-            let write_parens = buffers.len() > 1;
-
-            if write_parens {
-                buf.push_str("(");
-            }
+            buf.push_str("(");
+            write_content(
+                env,
+                subs.get_without_compacting(cvar).content,
+                subs,
+                buf,
+                Parens::Unnecessary,
+            );
+            buf.push_str(" | ");
             buf.push_str(&combined);
-            if write_parens {
-                buf.push_str(")");
-            }
-        }
-    }
-}
-
-fn write_boolean_atom(env: &Env, atom: Atom, subs: &Subs, buf: &mut String, parens: Parens) {
-    match atom {
-        Atom::Variable(var) => write_content(
-            env,
-            subs.get_without_compacting(var).content,
-            subs,
-            buf,
-            parens,
-        ),
-        Atom::Zero => {
-            buf.push_str("Shared");
-        }
-        Atom::One => {
-            buf.push_str("Unique");
+            buf.push_str(")");
         }
     }
 }
