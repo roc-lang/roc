@@ -1,4 +1,4 @@
-use crate::layout::{Builtin, Layout, LayoutCache, LayoutProblem};
+use crate::layout::{list_layout_from_elem, Builtin, Layout, LayoutCache, LayoutProblem};
 use crate::pattern::{Ctor, Guard, RenderAs, TagId};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -278,6 +278,7 @@ pub enum Expr<'a> {
         elem_layout: Layout<'a>,
         elems: &'a [Expr<'a>],
     },
+    EmptyArray,
 
     RuntimeError(&'a str),
 }
@@ -782,31 +783,30 @@ fn from_can<'a>(
         } => {
             let arena = env.arena;
             let subs = &env.subs;
-            let elem_content = subs.get_without_compacting(elem_var).content;
-            let elem_layout = match elem_content {
-                // We have to special-case the empty list, because trying to
-                // compute a layout for an unbound var won't work.
-                Content::FlexVar(_) => Layout::Builtin(Builtin::EmptyList),
-                _ => match layout_cache.from_var(arena, elem_var, env.subs, env.pointer_size) {
-                    Ok(layout) => layout.clone(),
-                    Err(problem) => {
-                        todo!(
-                            "gracefully handle List with element layout problem: {:?}",
-                            problem
-                        );
+
+            match list_layout_from_elem(arena, subs, elem_var, env.pointer_size) {
+                Ok(Layout::Builtin(Builtin::EmptyList)) => Expr::EmptyArray,
+                Ok(Layout::Builtin(Builtin::List(elem_layout))) => {
+                    let mut elems = Vec::with_capacity_in(loc_elems.len(), arena);
+
+                    for loc_elem in loc_elems {
+                        elems.push(from_can(env, loc_elem.value, procs, layout_cache));
                     }
-                },
-            };
 
-            let mut elems = Vec::with_capacity_in(loc_elems.len(), arena);
-
-            for loc_elem in loc_elems {
-                elems.push(from_can(env, loc_elem.value, procs, layout_cache));
-            }
-
-            Expr::Array {
-                elem_layout,
-                elems: elems.into_bump_slice(),
+                    Expr::Array {
+                        elem_layout: elem_layout.clone(),
+                        elems: elems.into_bump_slice(),
+                    }
+                }
+                Ok(_) => {
+                    unreachable!();
+                }
+                Err(problem) => {
+                    todo!(
+                        "gracefully handle List with element layout problem: {:?}",
+                        problem
+                    );
+                }
             }
         }
         Accessor { .. } => todo!("record accessor"),

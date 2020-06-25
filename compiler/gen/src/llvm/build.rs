@@ -386,6 +386,13 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 BasicValueEnum::PointerValue(ptr)
             }
         }
+        EmptyArray => {
+            let struct_type = collection(env.context, env.ptr_bytes);
+
+            // The pointer should be null (aka zero) and the length should be zero,
+            // so the whole struct should be a const_zero
+            BasicValueEnum::StructValue(struct_type.const_zero())
+        }
         Array { elem_layout, elems } => {
             let ctx = env.context;
             let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);

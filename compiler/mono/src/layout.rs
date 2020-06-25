@@ -11,6 +11,12 @@ pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
 /// If a (Num *) gets translated to a Layout, this is the numeric type it defaults to.
 const DEFAULT_NUM_BUILTIN: Builtin<'_> = Builtin::Int64;
 
+#[derive(Debug, Clone)]
+pub enum LayoutProblem {
+    UnresolvedTypeVar,
+    Erroneous,
+}
+
 /// Types for code gen must be monomorphic. No type variables allowed!
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Layout<'a> {
@@ -54,12 +60,7 @@ impl<'a> Layout<'a> {
         use roc_types::subs::Content::*;
 
         match content.dbg(subs) {
-            var @ FlexVar(_) | var @ RigidVar(_) => {
-                unreachable!(
-                    "Encountered an unresolved {:?} when determining layout",
-                    var
-                );
-            }
+            FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar),
             Structure(flat_type) => layout_from_flat_type(arena, flat_type, subs, pointer_size),
 
             Alias(Symbol::NUM_INT, args, _) => {
@@ -234,11 +235,6 @@ impl<'a> Builtin<'a> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum LayoutProblem {
-    Erroneous,
-}
-
 fn layout_from_flat_type<'a>(
     arena: &'a Bump,
     flat_type: FlatType,
@@ -268,7 +264,7 @@ fn layout_from_flat_type<'a>(
                     layout_from_num_content(content)
                 }
                 Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
-                Symbol::LIST_LIST => unwrap_list(arena, subs, args[0], pointer_size),
+                Symbol::LIST_LIST => list_layout_from_elem(arena, subs, args[0], pointer_size),
                 Symbol::ATTR_ATTR => {
                     debug_assert_eq!(args.len(), 2);
 
@@ -401,40 +397,13 @@ fn union_sorted_tags_help<'a>(
     subs: &Subs,
     pointer_size: u32,
 ) -> UnionVariant<'a> {
-    // for this union be be an enum, none of the tags may have any arguments
-    let has_no_arguments = tags_vec.iter().all(|(_, args)| args.is_empty());
-
-    // sort up-front, make sure the ordering stays intact!
+    // sort up front; make sure the ordering stays intact!
     tags_vec.sort();
 
     match tags_vec.len() {
         0 => {
             // trying to instantiate a type with no values
             UnionVariant::Never
-        }
-        1 if has_no_arguments => {
-            // a unit type
-            UnionVariant::Unit
-        }
-        2 if has_no_arguments => {
-            // type can be stored in a boolean
-
-            // tags_vec is sorted,
-            let ttrue = tags_vec.remove(1).0;
-            let ffalse = tags_vec.remove(0).0;
-
-            UnionVariant::BoolUnion { ffalse, ttrue }
-        }
-        3..=MAX_ENUM_SIZE if has_no_arguments => {
-            // type can be stored in a byte
-            // needs the sorted tag names to determine the tag_id
-            let mut tag_names = Vec::with_capacity_in(tags_vec.len(), arena);
-
-            for (label, _) in tags_vec {
-                tag_names.push(label);
-            }
-
-            UnionVariant::ByteUnion(tag_names)
         }
         1 => {
             let (tag_name, arguments) = tags_vec.remove(0);
@@ -448,36 +417,92 @@ fn union_sorted_tags_help<'a>(
                     layouts.push(unwrap_num_tag(subs, arguments[0]).expect("invalid num layout"));
                 }
                 _ => {
-                    for var in arguments.iter() {
-                        let layout = Layout::from_var(arena, *var, subs, pointer_size)
-                            .expect("invalid layout from var");
-                        layouts.push(layout);
+                    for var in arguments {
+                        match Layout::from_var(arena, var, subs, pointer_size) {
+                            Ok(layout) => {
+                                // Drop any zero-sized arguments like {}
+                                if layout.stack_size(pointer_size) != 0 {
+                                    layouts.push(layout);
+                                }
+                            }
+                            Err(LayoutProblem::UnresolvedTypeVar) => {
+                                // If we encounter an unbound type var (e.g. `Ok *`)
+                                // then it's zero-sized; drop the argument.
+                            }
+                            Err(LayoutProblem::Erroneous) => {
+                                // An erroneous type var will code gen to a runtime
+                                // error, so we don't need to store any data for it.
+                            }
+                        }
                     }
                 }
             }
-            UnionVariant::Unwrapped(layouts)
-        }
 
-        _ => {
+            if layouts.is_empty() {
+                UnionVariant::Unit
+            } else {
+                UnionVariant::Unwrapped(layouts)
+            }
+        }
+        num_tags => {
             // default path
-            let mut result = Vec::with_capacity_in(tags_vec.len(), arena);
+            let mut answer = Vec::with_capacity_in(tags_vec.len(), arena);
+            let mut has_any_arguments = false;
 
             for (tag_name, arguments) in tags_vec {
-                // resverse space for the tag discriminant
+                // reserve space for the tag discriminant
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
 
-                // add the tag discriminant
+                // add the tag discriminant (size currently always hardcoded to i64)
                 arg_layouts.push(Layout::Builtin(Builtin::Int64));
 
                 for var in arguments {
-                    let layout = Layout::from_var(arena, var, subs, pointer_size)
-                        .expect("invalid layout from var");
-                    arg_layouts.push(layout);
+                    match Layout::from_var(arena, var, subs, pointer_size) {
+                        Ok(layout) => {
+                            // Drop any zero-sized arguments like {}
+                            if layout.stack_size(pointer_size) != 0 {
+                                has_any_arguments = true;
+
+                                arg_layouts.push(layout);
+                            }
+                        }
+                        Err(LayoutProblem::UnresolvedTypeVar) => {
+                            // If we encounter an unbound type var (e.g. `Ok *`)
+                            // then it's zero-sized; drop the argument.
+                        }
+                        Err(LayoutProblem::Erroneous) => {
+                            // An erroneous type var will code gen to a runtime
+                            // error, so we don't need to store any data for it.
+                        }
+                    }
                 }
 
-                result.push((tag_name, arg_layouts.into_bump_slice()));
+                answer.push((tag_name, arg_layouts.into_bump_slice()));
             }
-            UnionVariant::Wrapped(result)
+
+            match num_tags {
+                2 if !has_any_arguments => {
+                    // type can be stored in a boolean
+
+                    // tags_vec is sorted, and answer is sorted the same way
+                    let ttrue = answer.remove(1).0;
+                    let ffalse = answer.remove(0).0;
+
+                    UnionVariant::BoolUnion { ffalse, ttrue }
+                }
+                3..=MAX_ENUM_SIZE if !has_any_arguments => {
+                    // type can be stored in a byte
+                    // needs the sorted tag names to determine the tag_id
+                    let mut tag_names = Vec::with_capacity_in(answer.len(), arena);
+
+                    for (tag_name, _) in answer {
+                        tag_names.push(tag_name);
+                    }
+
+                    UnionVariant::ByteUnion(tag_names)
+                }
+                _ => UnionVariant::Wrapped(dbg!(answer)),
+            }
         }
     }
 }
@@ -606,7 +631,7 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
     }
 }
 
-fn unwrap_list<'a>(
+pub fn list_layout_from_elem<'a>(
     arena: &'a Bump,
     subs: &Subs,
     var: Variable,
@@ -618,7 +643,7 @@ fn unwrap_list<'a>(
 
             let arg_var = args.get(1).unwrap();
 
-            unwrap_list(arena, subs, *arg_var, pointer_size)
+            list_layout_from_elem(arena, subs, *arg_var, pointer_size)
         }
         Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (List *) then it must have been an empty list
