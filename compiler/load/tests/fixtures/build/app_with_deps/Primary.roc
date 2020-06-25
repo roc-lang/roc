@@ -12,7 +12,7 @@ alwaysThree = \_ -> "foo"
 
 identity = \a -> a
 
-z = identity (alwaysThree {})
+z = identity (Primary.alwaysThree {})
 
 w : Dep1.Identity {}
 w = Identity {}
