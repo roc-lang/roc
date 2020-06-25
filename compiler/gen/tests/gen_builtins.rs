@@ -85,7 +85,7 @@ mod gen_builtins {
         assert_evals_to!(
             indoc!(
                 r#"
-                1.0 == 1.0
+                    1.0 == 1.0
                 "#
             ),
             true,
@@ -124,7 +124,7 @@ mod gen_builtins {
         assert_evals_to!(
             indoc!(
                 r#"
-                4 == 4
+                    4 == 4
                 "#
             ),
             true,
@@ -137,7 +137,7 @@ mod gen_builtins {
         assert_evals_to!(
             indoc!(
                 r#"
-                4 != 5
+                    4 != 5
                 "#
             ),
             true,
