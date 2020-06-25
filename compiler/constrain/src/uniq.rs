@@ -251,8 +251,6 @@ fn constrain_pattern(
                 Bool::container(empty_var, pattern_uniq_vars)
             };
 
-            // dbg!(&record_uniq_type);
-
             let record_type = attr_type(
                 record_uniq_type,
                 Type::Record(field_types, Box::new(ext_type)),
@@ -1698,8 +1696,6 @@ fn annotation_to_attr_type(
 ) -> (Vec<Variable>, Type) {
     use roc_types::types::Type::*;
 
-    dbg!(&ann);
-
     match ann {
         Variable(var) => {
             if change_var_kind {
@@ -1792,8 +1788,6 @@ fn annotation_to_attr_type(
 
             vars.push(uniq_var);
 
-            // dbg!(&uniq_var);
-
             (
                 vars,
                 attr_type(
@@ -1871,8 +1865,6 @@ fn annotation_to_attr_type(
         }
 
         Alias(symbol, fields, actual) => {
-            dbg!(actual);
-            panic!();
             let (mut actual_vars, lifted_actual) =
                 annotation_to_attr_type(var_store, actual, rigids, change_var_kind);
 
@@ -1923,7 +1915,6 @@ fn annotation_to_attr_type_many(
 }
 
 fn aliases_to_attr_type(var_store: &mut VarStore, aliases: &mut SendMap<Symbol, Alias>) {
-    dbg!(&aliases);
     for alias in aliases.iter_mut() {
         // ensure
         //
@@ -1937,8 +1928,22 @@ fn aliases_to_attr_type(var_store: &mut VarStore, aliases: &mut SendMap<Symbol, 
         // The `change_var_kind` flag set to false ensures type variables remain of kind *
         let (_, new) = annotation_to_attr_type(var_store, &alias.typ, &mut ImMap::default(), false);
         // remove the outer Attr, because when this occurs in a signature it'll already be wrapped in one
-        alias.typ = new;
+        match new {
+            Type::Apply(Symbol::ATTR_ATTR, args) => {
+                alias.typ = args[1].clone();
+                if let Type::Boolean(b) = args[0].clone() {
+                    alias.uniqueness = Some(b);
+                }
+            }
+            _ => unreachable!("`annotation_to_attr_type` always gives back an Attr"),
+        }
+
+        if let Some(b) = &alias.uniqueness {
+            fix_mutual_recursive_alias(&mut alias.typ, b);
+        }
     }
+
+    dbg!(&aliases);
 }
 
 fn constrain_def(
@@ -2307,4 +2312,83 @@ fn constrain_field_update(
     );
 
     (var, field_type, con)
+}
+
+/// Fix uniqueness attributes on mutually recursive type aliases.
+/// Given aliases
+///
+///     ListA a b : [ Cons a (ListB b a), Nil ]
+///     ListB a b : [ Cons a (ListA b a), Nil ]
+///
+/// We get the lifted alias:
+///
+///    `Test.ListB`: Alias {
+///        ...,
+///        uniqueness: Some(
+///            Container(
+///                118,
+///                {},
+///            ),
+///        ),
+///        typ: [ Global('Cons') <9> (`#Attr.Attr` Container(119, {}) Alias `Test.ListA` <10> <9>[ but actually [ Global('Cons') <10> (`#Attr.Attr` Container(118, {}) <13>), Global('Nil') ] ]), Global('Nil') ] as <13>,
+///    },
+///
+/// Note that the alias will get uniqueness variable <118>, but the contained `ListA` gets variable
+/// <119>. But, 119 is contained in 118, and 118 in 119, so we need <119> >= <118> >= <119> >= <118> ...
+/// That can only be true if they are the same. Type inference will not find that, so we must do it
+/// ourselves in user-defined aliases.
+fn fix_mutual_recursive_alias(typ: &mut Type, attribute: &Bool) {
+    use Type::*;
+    if let RecursiveTagUnion(rec, tags, ext) = typ {
+        for (_, args) in tags {
+            for mut arg in args {
+                fix_mutual_recursive_alias_help(*rec, &Type::Boolean(attribute.clone()), &mut arg);
+            }
+        }
+    }
+}
+
+fn fix_mutual_recursive_alias_help(rec_var: Variable, attribute: &Type, into_type: &mut Type) {
+    if into_type.contains_variable(rec_var) {
+        if let Type::Apply(Symbol::ATTR_ATTR, args) = into_type {
+            std::mem::replace(&mut args[0], attribute.clone());
+
+            fix_mutual_recursive_alias_help_help(rec_var, attribute, &mut args[1]);
+        }
+    }
+}
+
+#[inline(always)]
+fn fix_mutual_recursive_alias_help_help(rec_var: Variable, attribute: &Type, into_type: &mut Type) {
+    use Type::*;
+
+    match into_type {
+        Function(args, ret) => {
+            fix_mutual_recursive_alias_help(rec_var, attribute, ret);
+            args.iter_mut()
+                .for_each(|arg| fix_mutual_recursive_alias_help(rec_var, attribute, arg));
+        }
+        RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
+            fix_mutual_recursive_alias_help(rec_var, attribute, ext);
+            tags.iter_mut()
+                .map(|v| v.1.iter_mut())
+                .flatten()
+                .for_each(|arg| fix_mutual_recursive_alias_help(rec_var, attribute, arg));
+        }
+
+        Record(fields, ext) => {
+            fix_mutual_recursive_alias_help(rec_var, attribute, ext);
+            fields
+                .iter_mut()
+                .for_each(|arg| fix_mutual_recursive_alias_help(rec_var, attribute, arg));
+        }
+        Alias(_, _, actual_type) => {
+            fix_mutual_recursive_alias_help(rec_var, attribute, actual_type);
+        }
+        Apply(_, args) => {
+            args.iter_mut()
+                .for_each(|arg| fix_mutual_recursive_alias_help(rec_var, attribute, arg));
+        }
+        EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
+    }
 }

@@ -79,7 +79,7 @@ impl fmt::Debug for Type {
                 }
 
                 // Sometimes it's useful to see the expansion of the alias
-                // write!(f, "[ but actually {:?} ]", _actual)?;
+                write!(f, "[ but actually {:?} ]", _actual)?;
 
                 Ok(())
             }
@@ -378,6 +378,36 @@ impl Type {
         }
     }
 
+    pub fn contains_variable(&self, rep_variable: Variable) -> bool {
+        use Type::*;
+
+        match self {
+            Variable(v) => *v == rep_variable,
+            Function(args, ret) => {
+                ret.contains_variable(rep_variable)
+                    || args.iter().any(|arg| arg.contains_variable(rep_variable))
+            }
+            RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
+                ext.contains_variable(rep_variable)
+                    || tags
+                        .iter()
+                        .map(|v| v.1.iter())
+                        .flatten()
+                        .any(|arg| arg.contains_variable(rep_variable))
+            }
+
+            Record(fields, ext) => {
+                ext.contains_variable(rep_variable)
+                    || fields
+                        .values()
+                        .any(|arg| arg.contains_variable(rep_variable))
+            }
+            Alias(_, _, actual_type) => actual_type.contains_variable(rep_variable),
+            Apply(_, args) => args.iter().any(|arg| arg.contains_variable(rep_variable)),
+            EmptyRec | EmptyTagUnion | Erroneous(_) | Boolean(_) => false,
+        }
+    }
+
     pub fn symbols(&self) -> ImSet<Symbol> {
         let mut found_symbols = ImSet::default();
         symbols_help(self, &mut found_symbols);
@@ -431,6 +461,35 @@ impl Type {
 
                 actual_type.instantiate_aliases(region, aliases, var_store, introduced);
             }
+            Apply(Symbol::ATTR_ATTR, attr_args) => {
+                use boolean_algebra::Bool;
+
+                let mut substitution = ImMap::default();
+
+                if let Apply(symbol, _) = attr_args[1] {
+                    if let Some(alias) = aliases.get(&symbol) {
+                        if let Some(Bool::Container(unbound_cvar, mvars1)) =
+                            alias.uniqueness.clone()
+                        {
+                            debug_assert!(mvars1.is_empty());
+
+                            if let Type::Boolean(Bool::Container(bound_cvar, mvars2)) =
+                                &attr_args[0]
+                            {
+                                debug_assert!(mvars2.is_empty());
+                                substitution.insert(unbound_cvar, Type::Variable(*bound_cvar));
+                            }
+                        }
+                    }
+                }
+
+                for x in attr_args {
+                    x.instantiate_aliases(region, aliases, var_store, introduced);
+                    if !substitution.is_empty() {
+                        x.substitute(&substitution);
+                    }
+                }
+            }
             Apply(symbol, args) => {
                 if let Some(alias) = aliases.get(symbol) {
                     if args.len() != alias.vars.len() {
@@ -463,9 +522,18 @@ impl Type {
                         substitution.insert(*placeholder, filler);
                     }
 
+                    use boolean_algebra::Bool;
+
                     // instantiate "hidden" uniqueness variables
                     for variable in actual.variables() {
                         if !substitution.contains_key(&variable) {
+                            // but don't instantiate the uniqueness parameter on the recursive
+                            // variable (if any)
+                            if let Some(Bool::Container(unbound_cvar, _)) = alias.uniqueness {
+                                if variable == unbound_cvar {
+                                    continue;
+                                }
+                            }
                             let var = var_store.fresh();
                             substitution.insert(variable, Type::Variable(var));
 
@@ -696,6 +764,7 @@ pub enum PatternCategory {
 pub struct Alias {
     pub region: Region,
     pub vars: Vec<Located<(Lowercase, Variable)>>,
+    pub uniqueness: Option<boolean_algebra::Bool>,
     pub typ: Type,
 }
 

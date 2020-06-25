@@ -66,11 +66,11 @@ macro_rules! mismatch {
 
 type Pool = Vec<Variable>;
 
-struct Context {
-    first: Variable,
-    first_desc: Descriptor,
-    second: Variable,
-    second_desc: Descriptor,
+pub struct Context {
+    pub first: Variable,
+    pub first_desc: Descriptor,
+    pub second: Variable,
+    pub second_desc: Descriptor,
 }
 
 #[derive(Debug)]
@@ -128,10 +128,7 @@ pub fn unify_pool(subs: &mut Subs, pool: &mut Pool, var1: Variable, var2: Variab
 }
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
-    println!(
-        "{:?} {:?} ~ {:?} {:?}",
-        ctx.first, ctx.first_desc.content, ctx.second, ctx.second_desc.content,
-    );
+    // println!( "{:?} {:?} ~ {:?} {:?}", ctx.first, ctx.first_desc.content, ctx.second, ctx.second_desc.content,);
     match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(subs, pool, &ctx, opt_name, &ctx.second_desc.content),
         RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
@@ -197,6 +194,7 @@ fn unify_structure(
     match other {
         FlexVar(_) => {
             match &ctx.first_desc.content {
+                /*
                 Structure(FlatType::Boolean(b)) => match b {
                     Bool::Container(cvar, _mvars)
                         if roc_types::boolean_algebra::var_is_shared(subs, *cvar) =>
@@ -211,6 +209,7 @@ fn unify_structure(
                     }
                     Bool::Shared => merge(subs, ctx, Structure(flat_type.clone())),
                 },
+                    */
                 _ => {
                     // If the other is flex, Structure wins!
                     merge(subs, ctx, Structure(flat_type.clone()))
@@ -807,7 +806,7 @@ fn unify_flex(
     }
 }
 
-fn merge(subs: &mut Subs, ctx: &Context, content: Content) -> Outcome {
+pub fn merge(subs: &mut Subs, ctx: &Context, content: Content) -> Outcome {
     let rank = ctx.first_desc.rank.min(ctx.second_desc.rank);
     let desc = Descriptor {
         content,

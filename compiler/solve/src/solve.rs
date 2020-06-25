@@ -91,7 +91,6 @@ pub fn run(
     mut subs: Subs,
     constraint: &Constraint,
 ) -> (Solved<Subs>, Env) {
-    dbg!(&constraint);
     let mut pools = Pools::default();
     let state = State {
         env: env.clone(),
@@ -795,14 +794,29 @@ fn check_for_infinite_type(
                 }
             }
             Content::Structure(FlatType::Boolean(Bool::Container(_cvar, _mvars))) => {
-                // subs.explicit_substitute(recursive, cvar, var);
+                // We have a loop in boolean attributes. The attributes can be seen as constraints
+                // too, so if we have
+                //
+                // Container( u1, { u2, u3 } )
+                //
+                // That means u1 >= u2 and u1 >= u3
+                //
+                // Now if u1 occurs in the definition of u2, then that's like saying u1 >= u2 >= u1,
+                // which can only be true if u1 == u2. So that's what we do with unify.
+                for var in chain {
+                    if let Content::Structure(FlatType::Boolean(_)) =
+                        subs.get_without_compacting(var).content
+                    {
+                        // this unify just makes new pools. is that bad?
+                        let outcome = unify(subs, recursive, var);
+                        debug_assert!(matches!(outcome, roc_unify::unify::Unified::Success(_)));
+                    }
+                }
+
                 boolean_algebra::flatten(subs, recursive);
-                dbg!(subs.get(recursive).content);
             }
-            _other => {
-                // dbg!(&_other);
-                circular_error(subs, problems, symbol, &loc_var)
-            }
+
+            _other => circular_error(subs, problems, symbol, &loc_var),
         }
     }
 }
@@ -821,8 +835,6 @@ fn correct_recursive_attr(
 ) {
     let rec_var = subs.fresh_unnamed_flex_var();
     let attr_var = subs.fresh_unnamed_flex_var();
-
-    dbg!(uniq_var);
 
     let content = content_attr(uniq_var, rec_var);
     subs.set_content(attr_var, content);
@@ -1258,6 +1270,7 @@ fn deep_copy_var_help(
 }
 
 fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) -> Variable {
+    let c = content.clone();
     let var = subs.fresh(Descriptor {
         content,
         rank,

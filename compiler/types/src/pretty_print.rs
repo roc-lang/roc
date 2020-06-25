@@ -77,7 +77,7 @@ fn find_names_needed(
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    while let Some((recursive, _)) = subs.occurs(variable) {
+    while let Some((recursive, _chain)) = subs.occurs(variable) {
         let content = subs.get_without_compacting(recursive).content;
         match content {
             Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
@@ -98,8 +98,9 @@ fn find_names_needed(
                 let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
                 subs.set_content(recursive, Content::Structure(flat_type));
             }
-            Content::Structure(FlatType::Boolean(Bool::Container(cvar, mvars))) => {
-                subs.explicit_substitute(recursive, cvar, variable);
+            Content::Structure(FlatType::Boolean(Bool::Container(_cvar, _mvars))) => {
+                dbg!(_chain);
+                crate::boolean_algebra::flatten(subs, recursive);
             }
             _ => panic!(
                 "unfixable recursive type in roc_types::pretty_print {:?} {:?} {:?}",
@@ -210,6 +211,8 @@ pub fn name_all_type_vars(variable: Variable, subs: &mut Subs) {
     find_names_needed(variable, subs, &mut roots, &mut appearances, &mut taken);
 
     for root in roots {
+        // show the type variable number instead of `*`. useful for debugging
+        // set_root_name(root, &(format!("<{:?}>", root).into()), subs);
         if let Some(Appearances::Multiple) = appearances.get(&root) {
             letters_used = name_root(letters_used, root, subs, &mut taken);
         }
@@ -585,7 +588,7 @@ pub fn chase_ext_record(
 fn write_boolean(env: &Env, boolean: Bool, subs: &Subs, buf: &mut String, parens: Parens) {
     use crate::boolean_algebra::var_is_shared;
 
-    match boolean {
+    match boolean.simplify(subs) {
         Bool::Shared => {
             buf.push_str("Shared");
         }
@@ -600,8 +603,6 @@ fn write_boolean(env: &Env, boolean: Bool, subs: &Subs, buf: &mut String, parens
             );
         }
         Bool::Container(cvar, mvars) => {
-            dbg!(&cvar, &mvars);
-            dbg!(&subs);
             let mut buffers_set = ImSet::default();
             for v in mvars {
                 if var_is_shared(subs, v) {
@@ -701,7 +702,7 @@ fn write_apply(
                             _ => default_case(subs, arg_content),
                         },
 
-                        _ => default_case(subs, arg_content),
+                        _other => default_case(subs, arg_content),
                     },
                     _ => default_case(subs, arg_content),
                 },

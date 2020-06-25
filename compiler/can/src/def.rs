@@ -243,6 +243,7 @@ pub fn canonicalize_defs<'a>(
                 let alias = roc_types::types::Alias {
                     region: ann.region,
                     vars: can_vars,
+                    uniqueness: None,
                     typ: can_ann.typ,
                 };
                 aliases.insert(symbol, alias);

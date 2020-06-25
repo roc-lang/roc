@@ -1626,10 +1626,10 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                    singleton : p -> [ Cons p (ConsList p), Nil ] as ConsList p
-                    singleton = \x -> Cons x Nil
+                singleton : p -> [ Cons p (ConsList p), Nil ] as ConsList p
+                singleton = \x -> Cons x Nil
 
-                    singleton
+                singleton
                 "#
             ),
             "Attr * (Attr a p -> Attr * (ConsList (Attr a p)))",
@@ -1671,7 +1671,7 @@ mod test_uniq_solve {
                     map
                 "#
             ),
-            "Attr Shared (Attr Shared (Attr a p -> Attr b q), Attr * (ConsList (Attr a p)) -> Attr * (ConsList (Attr b q)))" ,
+            "Attr Shared (Attr Shared (Attr a p -> Attr b q), Attr (* | a) (ConsList (Attr a p)) -> Attr * (ConsList (Attr b q)))" ,
         );
     }
 
@@ -1693,7 +1693,7 @@ mod test_uniq_solve {
                     map
                 "#
             ),
-            "Attr Shared (Attr Shared (Attr a b -> c), Attr d [ Cons (Attr a b) (Attr d e), Nil ]* as e -> Attr f [ Cons c (Attr f g), Nil ]* as g)" ,
+            "Attr Shared (Attr Shared (Attr a b -> c), Attr (d | a) [ Cons (Attr a b) (Attr (d | a) e), Nil ]* as e -> Attr f [ Cons c (Attr f g), Nil ]* as g)" ,
         );
     }
 
@@ -1855,7 +1855,7 @@ mod test_uniq_solve {
                             toAs
                              "#
                     ),
-                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr * (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
+                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr (* | a | b) (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
                 );
     }
 

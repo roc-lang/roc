@@ -15,11 +15,25 @@ pub fn var_is_shared(subs: &Subs, var: Variable) -> bool {
     }
 }
 
-// pull all of the "nested" variables into one container
+/// Given the Subs
+///
+/// 0 |-> Container (Var 1, { Var 2, Var 3 })
+/// 1 |-> Flex 'a'
+/// 2 |-> Container(Var 4, { Var 5, Var 6 })
+/// 3 |-> Flex 'b'
+/// 4 |-> Flex 'c'
+/// 5 |-> Flex 'd'
+/// 6 |-> Shared
+///
+/// `flatten(subs, Var 0)` will rewrite it to
+///
+/// 0 |-> Container (Var 1, { Var 4, Var 5, Var 3 })
+///
+/// So containers are "inlined", and Shared variables are discarded
 pub fn flatten(subs: &mut Subs, var: Variable) {
     match subs.get_without_compacting(var).content {
         Content::Structure(FlatType::Boolean(Bool::Container(cvar, mvars))) => {
-            let flattened_mvars = var_to_variables(subs, cvar, mvars);
+            let flattened_mvars = var_to_variables(subs, cvar, &mvars);
 
             println!(
                 "for {:?}, cvar={:?} and all mvars are {:?}",
@@ -40,12 +54,17 @@ pub fn flatten(subs: &mut Subs, var: Variable) {
     }
 }
 
+/// For a Container(cvar, start_vars), find (transitively) all the flex/rigid vars that are
+/// actually in the disjunction.
+///
+/// Because type aliases in Roc can be recursive, we have to be a bit careful to not get stuck in
+/// an infinite loop.
 fn var_to_variables(
     subs: &Subs,
     cvar: Variable,
-    start_vars: SendSet<Variable>,
+    start_vars: &SendSet<Variable>,
 ) -> SendSet<Variable> {
-    let mut stack: Vec<_> = start_vars.into_iter().collect();
+    let mut stack: Vec<_> = start_vars.into_iter().copied().collect();
     let mut seen = SendSet::default();
     seen.insert(cvar);
     let mut result = SendSet::default();
@@ -71,7 +90,6 @@ fn var_to_variables(
                 // do nothing
             }
             _other => {
-                println!("add to result: {:?} at {:?} ", var, _other);
                 result.insert(var);
             }
         }
@@ -139,6 +157,16 @@ impl Bool {
 
                 Bool::Container(new_cvar, new_mvars)
             }
+        }
+    }
+
+    pub fn simplify(&self, subs: &Subs) -> Self {
+        match self {
+            Bool::Container(cvar, mvars) => {
+                let flattened_mvars = var_to_variables(subs, *cvar, mvars);
+                Bool::Container(*cvar, flattened_mvars)
+            }
+            Bool::Shared => Bool::Shared,
         }
     }
 }

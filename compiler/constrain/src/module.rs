@@ -150,6 +150,7 @@ where
         let alias = Alias {
             vars,
             region: builtin_alias.region,
+            uniqueness: None,
             typ: actual,
         };
 
@@ -337,6 +338,7 @@ pub fn constrain_imported_aliases(
         let alias = Alias {
             vars,
             region: imported_alias.region,
+            uniqueness: imported_alias.uniqueness,
             typ: actual,
         };
 
