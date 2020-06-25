@@ -373,7 +373,7 @@ pub fn record_fields_btree<'a>(
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum UnionVariant<'a> {
     Never,
     Unit,
