@@ -452,7 +452,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
                     .unwrap();
 
-                //
+                // Bitcast to an array of raw bytes
                 builder.build_bitcast(
                     struct_val.into_struct_value(),
                     collection(ctx, ptr_bytes),
@@ -614,6 +614,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             wrapper_val = builder
                 .build_insert_value(wrapper_val, result, 0, "insert_field")
                 .unwrap();
+
             wrapper_val.into_struct_value().into()
         }
         AccessAtIndex {
