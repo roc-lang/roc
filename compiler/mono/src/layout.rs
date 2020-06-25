@@ -4,7 +4,6 @@ use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::{Content, FlatType, Subs, Variable};
-use std::collections::BTreeMap;
 
 pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
 
@@ -304,13 +303,19 @@ fn layout_from_flat_type<'a>(
         Record(fields, ext_var) => {
             debug_assert!(ext_var_is_empty_record(subs, ext_var));
 
-            let btree = fields
-                .into_iter()
-                .collect::<BTreeMap<Lowercase, Variable>>();
+            // Sort the fields by label
+            let mut sorted_fields = Vec::with_capacity_in(fields.len(), arena);
 
-            let mut layouts = Vec::with_capacity_in(btree.len(), arena);
+            for tuple in fields {
+                sorted_fields.push(tuple);
+            }
 
-            for (_, field_var) in btree {
+            sorted_fields.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
+
+            // Determine the layouts of the fields, maintaining sort order
+            let mut layouts = Vec::with_capacity_in(sorted_fields.len(), arena);
+
+            for (_, field_var) in sorted_fields {
                 let field_content = subs.get_without_compacting(field_var).content;
 
                 match Layout::new(arena, field_content, subs, pointer_size) {
@@ -327,7 +332,13 @@ fn layout_from_flat_type<'a>(
                 }
             }
 
-            Ok(Layout::Struct(layouts.into_bump_slice()))
+            if layouts.len() == 1 {
+                // If the record has only one field that isn't zero-sized,
+                // unwrap it.
+                Ok(layouts.pop().unwrap())
+            } else {
+                Ok(Layout::Struct(layouts.into_bump_slice()))
+            }
         }
         TagUnion(tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
@@ -348,26 +359,32 @@ fn layout_from_flat_type<'a>(
     }
 }
 
-pub fn record_fields_btree<'a>(
+pub fn sort_record_fields<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
     pointer_size: u32,
-) -> BTreeMap<Lowercase, Layout<'a>> {
+) -> Vec<'a, (Lowercase, Layout<'a>)> {
     let mut fields_map = MutMap::default();
+
     match roc_types::pretty_print::chase_ext_record(subs, var, &mut fields_map) {
         Ok(()) | Err((_, Content::FlexVar(_))) => {
-            // collect into btreemap to sort
-            fields_map
-                .into_iter()
-                .map(|(label, var)| {
-                    (
-                        label,
-                        Layout::from_var(arena, var, subs, pointer_size)
-                            .expect("invalid layout from var"),
-                    )
-                })
-                .collect::<BTreeMap<Lowercase, Layout<'a>>>()
+            // Sort the fields by label
+            let mut sorted_fields = Vec::with_capacity_in(fields_map.len(), arena);
+
+            for (label, var) in fields_map {
+                let layout = Layout::from_var(arena, var, subs, pointer_size)
+                    .expect("invalid layout from var");
+
+                // Drop any zero-sized fields like {}
+                if layout.stack_size(pointer_size) != 0 {
+                    sorted_fields.push((label, layout));
+                }
+            }
+
+            sorted_fields.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
+
+            sorted_fields
         }
         Err(other) => panic!("invalid content in record variable: {:?}", other),
     }

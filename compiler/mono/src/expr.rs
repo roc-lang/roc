@@ -640,16 +640,16 @@ fn from_can<'a>(
         } => {
             let arena = env.arena;
 
-            let btree = crate::layout::record_fields_btree(
+            let sorted_fields = crate::layout::sort_record_fields(
                 env.arena,
                 record_var,
                 env.subs,
                 env.pointer_size,
             );
 
-            let mut field_tuples = Vec::with_capacity_in(btree.len(), arena);
+            let mut field_tuples = Vec::with_capacity_in(sorted_fields.len(), arena);
 
-            for (label, layout) in btree {
+            for (label, layout) in sorted_fields {
                 let field = fields.remove(&label).unwrap();
                 let expr = from_can(env, field.loc_expr.value, procs, layout_cache);
 
@@ -749,7 +749,7 @@ fn from_can<'a>(
         } => {
             let arena = env.arena;
 
-            let btree = crate::layout::record_fields_btree(
+            let sorted_fields = crate::layout::sort_record_fields(
                 env.arena,
                 record_var,
                 env.subs,
@@ -757,9 +757,9 @@ fn from_can<'a>(
             );
 
             let mut index = None;
-            let mut field_layouts = Vec::with_capacity_in(btree.len(), env.arena);
+            let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 
-            for (current, (label, field_layout)) in btree.into_iter().enumerate() {
+            for (current, (label, field_layout)) in sorted_fields.into_iter().enumerate() {
                 field_layouts.push(field_layout);
 
                 if label == field {
@@ -1675,16 +1675,16 @@ fn from_can_pattern<'a>(
             let mut it = destructs.iter();
             let mut opt_destruct = it.next();
 
-            let btree = crate::layout::record_fields_btree(
+            let sorted_fields = crate::layout::sort_record_fields(
                 env.arena,
                 *whole_var,
                 env.subs,
                 env.pointer_size,
             );
 
-            let mut field_layouts = Vec::with_capacity_in(btree.len(), env.arena);
+            let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 
-            for (label, field_layout) in btree.into_iter() {
+            for (label, field_layout) in sorted_fields.into_iter() {
                 if let Some(destruct) = opt_destruct {
                     if destruct.value.label == label {
                         opt_destruct = it.next();
