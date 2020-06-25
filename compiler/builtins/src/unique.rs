@@ -347,6 +347,36 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![num_type(UVAR1, TVAR1)], float_type(UVAR2)),
     );
 
+    // isNegative : Num a -> Bool
+    add_type(
+        Symbol::NUM_IS_NEGATIVE,
+        unique_function(vec![num_type(UVAR2, TVAR1)], bool_type(UVAR3)),
+    );
+
+    // isPositive : Num a -> Bool
+    add_type(
+        Symbol::NUM_IS_POSITIVE,
+        unique_function(vec![num_type(UVAR2, TVAR1)], bool_type(UVAR3)),
+    );
+
+    // isZero : Num a -> Bool
+    add_type(
+        Symbol::NUM_IS_ZERO,
+        unique_function(vec![num_type(UVAR2, TVAR1)], bool_type(UVAR3)),
+    );
+
+    // isEven : Num a -> Bool
+    add_type(
+        Symbol::NUM_IS_EVEN,
+        unique_function(vec![num_type(UVAR2, TVAR1)], bool_type(UVAR3)),
+    );
+
+    // isOdd : Num a -> Bool
+    add_type(
+        Symbol::NUM_IS_ODD,
+        unique_function(vec![num_type(UVAR2, TVAR1)], bool_type(UVAR3)),
+    );
+
     // rem : Int, Int -> Result Int [ DivByZero ]*
     add_type(
         Symbol::NUM_REM,

@@ -271,6 +271,36 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         SolvedType::Func(vec![num_type(flex(TVAR1))], Box::new(float_type())),
     );
 
+    // isNegative : Num a -> Bool
+    add_type(
+        Symbol::NUM_IS_NEGATIVE,
+        SolvedType::Func(vec![num_type(flex(TVAR1))], Box::new(bool_type())),
+    );
+
+    // isPositive : Num a -> Bool
+    add_type(
+        Symbol::NUM_IS_POSITIVE,
+        SolvedType::Func(vec![num_type(flex(TVAR1))], Box::new(bool_type())),
+    );
+
+    // isZero : Num a -> Bool
+    add_type(
+        Symbol::NUM_IS_ZERO,
+        SolvedType::Func(vec![num_type(flex(TVAR1))], Box::new(bool_type())),
+    );
+
+    // isEven : Num a -> Bool
+    add_type(
+        Symbol::NUM_IS_EVEN,
+        SolvedType::Func(vec![num_type(flex(TVAR1))], Box::new(bool_type())),
+    );
+
+    // isOdd : Num a -> Bool
+    add_type(
+        Symbol::NUM_IS_ODD,
+        SolvedType::Func(vec![num_type(flex(TVAR1))], Box::new(bool_type())),
+    );
+
     // Int module
 
     // highest : Int
