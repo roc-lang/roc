@@ -517,34 +517,33 @@ pub fn layout_from_tag_union<'a>(
     use UnionVariant::*;
 
     let tags_vec: std::vec::Vec<_> = tags.into_iter().collect();
-    let first_tag = tags_vec[0].clone();
-    let variant = union_sorted_tags_help(arena, tags_vec, subs, pointer_size);
 
-    match variant {
-        Never => panic!("TODO gracefully handle trying to instantiate Never"),
-        Unit => Layout::Struct(&[]),
-        BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
-        ByteUnion(_) => Layout::Builtin(Builtin::Int8),
-        Unwrapped(field_layouts) => match first_tag.0 {
-            TagName::Private(Symbol::NUM_AT_NUM) => {
-                let arguments = first_tag.1;
+    if tags_vec[0].0 != TagName::Private(Symbol::NUM_AT_NUM) {
+        let variant = union_sorted_tags_help(arena, tags_vec, subs, pointer_size);
 
-                debug_assert_eq!(arguments.len(), 1);
+        match variant {
+            Never => panic!("TODO gracefully handle trying to instantiate Never"),
+            Unit => Layout::Struct(&[]),
+            BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
+            ByteUnion(_) => Layout::Builtin(Builtin::Int8),
+            Unwrapped(field_layouts) => Layout::Struct(field_layouts.into_bump_slice()),
+            Wrapped(tags) => {
+                let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
 
-                let var = arguments.iter().next().unwrap();
-
-                unwrap_num_tag(subs, *var).expect("invalid Num argument")
+                for (_, tag_layout) in tags {
+                    tag_layouts.push(tag_layout);
+                }
+                Layout::Union(tag_layouts.into_bump_slice())
             }
-            _ => Layout::Struct(field_layouts.into_bump_slice()),
-        },
-        Wrapped(tags) => {
-            let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
-
-            for (_, tag_layout) in tags {
-                tag_layouts.push(tag_layout);
-            }
-            Layout::Union(tag_layouts.into_bump_slice())
         }
+    } else {
+        let arguments = &tags_vec[0].1;
+
+        debug_assert_eq!(arguments.len(), 1);
+
+        let var = arguments.iter().next().unwrap();
+
+        unwrap_num_tag(subs, *var).expect("invalid Num argument")
     }
 }
 
