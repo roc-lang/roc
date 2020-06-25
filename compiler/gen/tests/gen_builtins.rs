@@ -562,6 +562,21 @@ mod gen_builtins {
     }
 
     #[test]
+    fn first_wildcard_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when List.first [] is
+                        Ok _ -> 5
+                        Err _ -> -1
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    #[test]
     fn first_empty_list() {
         assert_evals_to!(
             indoc!(
@@ -583,6 +598,21 @@ mod gen_builtins {
                 r#"
                    when List.get [] 0 is
                         Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    #[test]
+    fn get_wildcard_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   when List.get [] 0 is
+                        Ok _ -> 5
                         Err _ -> -1
                 "#
             ),
