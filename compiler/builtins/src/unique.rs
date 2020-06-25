@@ -525,16 +525,21 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::LIST_GET,
         unique_function(
             vec![list_type(UVAR1, TVAR1), int_type(UVAR2)],
-            result_type(UVAR3, flex(TVAR1), lift(UVAR4, index_out_of_bounds.clone())),
+            result_type(UVAR3, flex(TVAR1), lift(UVAR4, index_out_of_bounds)),
         ),
     );
 
-    // first : List elem -> Result elem [ OutOfBounds ]*
+    // first : List elem -> Result elem [ ListWasEmpty ]*
+    let list_was_empty = SolvedType::TagUnion(
+        vec![(TagName::Global("ListWasEmpty".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
     add_type(
         Symbol::LIST_FIRST,
         unique_function(
             vec![list_type(UVAR1, TVAR1)],
-            result_type(UVAR3, flex(TVAR1), lift(UVAR4, index_out_of_bounds)),
+            result_type(UVAR3, flex(TVAR1), lift(UVAR4, list_was_empty)),
         ),
     );
 

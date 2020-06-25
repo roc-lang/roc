@@ -431,16 +431,21 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::LIST_GET,
         SolvedType::Func(
             vec![list_type(flex(TVAR1)), int_type()],
-            Box::new(result_type(flex(TVAR1), index_out_of_bounds.clone())),
+            Box::new(result_type(flex(TVAR1), index_out_of_bounds)),
         ),
     );
 
-    // first : List elem -> Result elem [ OutOfBounds ]*
+    // first : List elem -> Result elem [ ListWasEmpty ]*
+    let list_was_empty = SolvedType::TagUnion(
+        vec![(TagName::Global("ListWasEmpty".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
     add_type(
         Symbol::LIST_FIRST,
         SolvedType::Func(
             vec![list_type(flex(TVAR1))],
-            Box::new(result_type(flex(TVAR1), index_out_of_bounds)),
+            Box::new(result_type(flex(TVAR1), list_was_empty)),
         ),
     );
 
