@@ -502,7 +502,7 @@ fn union_sorted_tags_help<'a>(
 
                     UnionVariant::ByteUnion(tag_names)
                 }
-                _ => UnionVariant::Wrapped(dbg!(answer)),
+                _ => UnionVariant::Wrapped(answer),
             }
         }
     }
