@@ -391,7 +391,7 @@ pub fn union_sorted_tags<'a>(
         Ok(()) | Err((_, Content::FlexVar(_))) => {
             union_sorted_tags_help(arena, tags_vec, subs, pointer_size)
         }
-        Err(other) => panic!("invalid content in record variable: {:?}", other),
+        Err(other) => panic!("invalid content in tag union variable: {:?}", other),
     }
 }
 
