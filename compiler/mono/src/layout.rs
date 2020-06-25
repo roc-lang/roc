@@ -522,6 +522,7 @@ pub fn layout_from_tag_union<'a>(
     }
 }
 
+#[cfg(debug_assertions)]
 fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
     let mut ext_fields = std::vec::Vec::new();
@@ -531,6 +532,7 @@ fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
     }
 }
 
+#[cfg(debug_assertions)]
 fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
     let mut ext_fields = MutMap::default();
