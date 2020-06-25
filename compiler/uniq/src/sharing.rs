@@ -715,7 +715,7 @@ fn annotate_low_level_usage(
     use Usage::*;
 
     match op {
-        ListLen | ListIsEmpty | ListGetUnsafe => {
+        ListLen | ListGetUnsafe => {
             match &args[0].1 {
                 Var(list_var) => {
                     usage.register_with(

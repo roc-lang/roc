@@ -7,7 +7,6 @@ pub enum LowLevel {
     ListGetUnsafe,
     ListSet,
     ListSetInPlace,
-    ListIsEmpty,
     ListSingle,
     NumAdd,
     NumSub,

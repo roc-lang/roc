@@ -459,7 +459,7 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_list = Symbol::ARG_1;
     let arg_index = Symbol::ARG_2;
     let bool_var = var_store.fresh();
-    let ulen_var = var_store.fresh();
+    let len_var = var_store.fresh();
     let branch_var = var_store.fresh();
     let list_var = var_store.fresh();
 
@@ -474,13 +474,13 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NumLt,
                     args: vec![
-                        (ulen_var, Var(arg_index)),
+                        (len_var, Var(arg_index)),
                         (
-                            ulen_var,
+                            len_var,
                             RunLowLevel {
                                 op: LowLevel::ListLen,
                                 args: vec![(list_var, Var(arg_list))],
-                                ret_var: ulen_var,
+                                ret_var: len_var,
                             },
                         ),
                     ],
@@ -496,8 +496,8 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         // List#getUnsafe list index
                         RunLowLevel {
                             op: LowLevel::ListGetUnsafe,
-                            args: vec![(list_var, Var(arg_list)), (ulen_var, Var(arg_index))],
-                            ret_var: ulen_var,
+                            args: vec![(list_var, Var(arg_list)), (len_var, Var(arg_index))],
+                            ret_var: len_var,
                         },
                     ],
                     var_store,
@@ -526,7 +526,7 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_index = Symbol::ARG_2;
     let arg_elem = Symbol::ARG_3;
     let bool_var = var_store.fresh();
-    let ulen_var = var_store.fresh();
+    let len_var = var_store.fresh();
     let list_var = var_store.fresh();
     let branch_var = var_store.fresh();
     let elem_var = var_store.fresh();
@@ -543,13 +543,13 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NumLt,
                     args: vec![
-                        (ulen_var, Var(arg_index)),
+                        (len_var, Var(arg_index)),
                         (
-                            ulen_var,
+                            len_var,
                             RunLowLevel {
                                 op: LowLevel::ListLen,
                                 args: vec![(list_var, Var(arg_list))],
-                                ret_var: ulen_var,
+                                ret_var: len_var,
                             },
                         ),
                     ],
@@ -563,7 +563,7 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     op: LowLevel::ListSet,
                     args: vec![
                         (list_var, Var(arg_list)),
-                        (ulen_var, Var(arg_index)),
+                        (len_var, Var(arg_index)),
                         (elem_var, Var(arg_elem)),
                     ],
                     ret_var: list_var,
@@ -770,49 +770,61 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// List.first : List elem -> Result elem [ ListWasEmpty ]*
 fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let branch_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+    let list_var = var_store.fresh();
+    let len_var = var_store.fresh();
+    let zero_var = var_store.fresh();
+    let list_elem_var = var_store.fresh();
+
     // Perform a bounds check. If it passes, delegate to List.getUnsafe.
     let body = If {
-        // TODO Use "when" instead of "if" so that we can have False be the first branch.
-        // We want that for branch prediction; usually we expect the list to be nonempty.
-        cond_var: var_store.fresh(),
-        branch_var: var_store.fresh(),
+        cond_var: bool_var,
+        branch_var,
         branches: vec![(
             // if-condition
             no_region(
-                // List.isEmpty list
+                // List.len list != 0
                 RunLowLevel {
-                    op: LowLevel::ListIsEmpty,
-                    args: vec![(var_store.fresh(), Var(Symbol::ARG_1))],
-                    ret_var: var_store.fresh(),
+                    op: LowLevel::NotEq,
+                    args: vec![
+                        (len_var, Int(zero_var, 0)),
+                        (
+                            len_var,
+                            RunLowLevel {
+                                op: LowLevel::ListLen,
+                                args: vec![(list_var, Var(Symbol::ARG_1))],
+                                ret_var: len_var,
+                            },
+                        ),
+                    ],
+                    ret_var: bool_var,
                 },
             ),
-            // list was empty
-            no_region(
-                // Err ListWasEmpty
-                tag(
-                    "Err",
-                    vec![tag("ListWasEmpty", Vec::new(), var_store)],
-                    var_store,
-                ),
-            ),
-        )],
-        final_else: Box::new(
             // list was not empty
             no_region(
                 // Ok (List.#getUnsafe list 0)
                 tag(
                     "Ok",
                     vec![
-                        // List#getUnsafe list 0
+                        // List.#getUnsafe list 0
                         RunLowLevel {
                             op: LowLevel::ListGetUnsafe,
-                            args: vec![
-                                (var_store.fresh(), Var(Symbol::ARG_1)),
-                                (var_store.fresh(), Int(var_store.fresh(), 0)),
-                            ],
-                            ret_var: var_store.fresh(),
+                            args: vec![(list_var, Var(Symbol::ARG_1)), (len_var, Int(zero_var, 0))],
+                            ret_var: list_elem_var,
                         },
                     ],
+                    var_store,
+                ),
+            ),
+        )],
+        final_else: Box::new(
+            // list was empty
+            no_region(
+                // Err ListWasEmpty
+                tag(
+                    "Err",
+                    vec![tag("ListWasEmpty", Vec::new(), var_store)],
                     var_store,
                 ),
             ),

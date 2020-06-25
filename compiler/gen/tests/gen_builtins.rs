@@ -577,6 +577,21 @@ mod gen_builtins {
     }
 
     #[test]
+    fn get_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   when List.get [] 0 is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    #[test]
     fn get_int_list_ok() {
         assert_evals_to!(
             indoc!(

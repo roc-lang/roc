@@ -520,13 +520,13 @@ fn from_can<'a>(
             for (arg_var, arg_expr) in args {
                 let arg = from_can(env, arg_expr, procs, layout_cache);
                 let layout = layout_cache
-                    .from_var(env.arena, dbg!(arg_var), env.subs, env.pointer_size)
+                    .from_var(env.arena, arg_var, env.subs, env.pointer_size)
                     .unwrap_or_else(|err| todo!("TODO turn fn_var into a RuntimeError {:?}", err));
 
                 mono_args.push((arg, layout));
             }
 
-            dbg!(Expr::RunLowLevel(op, mono_args.into_bump_slice()))
+            Expr::RunLowLevel(op, mono_args.into_bump_slice())
         }
 
         Call(boxed, loc_args, _) => {
@@ -597,13 +597,6 @@ fn from_can<'a>(
             branches,
             final_else,
         } => {
-            dbg!(If {
-                cond_var,
-                branch_var,
-                branches: branches.clone(),
-                final_else: final_else.clone(),
-            });
-
             let mut expr = from_can(env, final_else.value, procs, layout_cache);
             let arena = env.arena;
 
@@ -615,8 +608,8 @@ fn from_can<'a>(
                 .expect("invalid cond_layout");
 
             for (loc_cond, loc_then) in branches.into_iter().rev() {
-                let cond = from_can(env, dbg!(loc_cond.value), procs, layout_cache);
-                let then = from_can(env, dbg!(loc_then.value), procs, layout_cache);
+                let cond = from_can(env, loc_cond.value, procs, layout_cache);
+                let then = from_can(env, loc_then.value, procs, layout_cache);
 
                 let branch_symbol = env.unique_symbol();
 

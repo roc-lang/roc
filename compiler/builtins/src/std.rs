@@ -431,6 +431,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::LIST_GET,
         SolvedType::Func(
             vec![list_type(flex(TVAR1)), int_type()],
+            Box::new(result_type(flex(TVAR1), index_out_of_bounds.clone())),
+        ),
+    );
+
+    // first : List elem -> Result elem [ OutOfBounds ]*
+    add_type(
+        Symbol::LIST_FIRST,
+        SolvedType::Func(
+            vec![list_type(flex(TVAR1))],
             Box::new(result_type(flex(TVAR1), index_out_of_bounds)),
         ),
     );
