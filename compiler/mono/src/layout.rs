@@ -312,15 +312,19 @@ fn layout_from_flat_type<'a>(
 
             for (_, field_var) in btree {
                 let field_content = subs.get_without_compacting(field_var).content;
-                let field_layout = match Layout::new(arena, field_content, subs, pointer_size) {
-                    Ok(layout) => layout,
+
+                match Layout::new(arena, field_content, subs, pointer_size) {
+                    Ok(layout) => {
+                        // Drop any zero-sized fields like {}
+                        if layout.stack_size(pointer_size) != 0 {
+                            layouts.push(layout);
+                        }
+                    }
                     Err(_) => {
                         // Invalid field!
                         panic!("TODO gracefully handle record with invalid field.var");
                     }
-                };
-
-                layouts.push(field_layout);
+                }
             }
 
             Ok(Layout::Struct(layouts.into_bump_slice()))
