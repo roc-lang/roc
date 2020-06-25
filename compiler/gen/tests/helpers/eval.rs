@@ -107,7 +107,7 @@ macro_rules! assert_llvm_evals_to {
                 fpm.run_on(&fn_val);
             } else {
                 eprintln!(
-                    "Function {:?} failed LLVM verification in NON-OPTIMIZED build. Its content was:", fn_val.get_name().to_str().unwrap()
+                    "\n\nFunction {:?} failed LLVM verification in NON-OPTIMIZED build. Its content was:\n", fn_val.get_name().to_str().unwrap()
                 );
 
                 fn_val.print_to_stderr();
@@ -279,7 +279,7 @@ macro_rules! assert_opt_evals_to {
                 fpm.run_on(&fn_val);
             } else {
                 eprintln!(
-                    "Function {:?} failed LLVM verification in OPTIMIZED build. Its content was:", fn_val.get_name().to_str().unwrap()
+                    "\n\nFunction {:?} failed LLVM verification in OPTIMIZED build. Its content was:\n", fn_val.get_name().to_str().unwrap()
                 );
 
                 fn_val.print_to_stderr();
