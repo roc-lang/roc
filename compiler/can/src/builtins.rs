@@ -720,7 +720,7 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (num_var, Var(Symbol::ARG_1)),
+                        (num_var, Var(Symbol::ARG_2)),
                         (num_var, Float(unbound_zero_var, 0.0)),
                     ],
                     ret_var: bool_var,
@@ -776,7 +776,7 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (num_var, Var(Symbol::ARG_1)),
+                        (num_var, Var(Symbol::ARG_2)),
                         (num_var, Int(unbound_zero_var, 0)),
                     ],
                     ret_var: bool_var,
