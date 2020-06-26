@@ -462,6 +462,7 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let len_var = var_store.fresh();
     let branch_var = var_store.fresh();
     let list_var = var_store.fresh();
+    let elem_var = var_store.fresh();
 
     // Perform a bounds check. If it passes, run LowLevel::ListGetUnsafe
     let body = If {
@@ -497,7 +498,7 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         RunLowLevel {
                             op: LowLevel::ListGetUnsafe,
                             args: vec![(list_var, Var(arg_list)), (len_var, Var(arg_index))],
-                            ret_var: len_var,
+                            ret_var: elem_var,
                         },
                     ],
                     var_store,
