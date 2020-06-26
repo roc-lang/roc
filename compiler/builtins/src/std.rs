@@ -309,29 +309,35 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // lowest : Int
     add_type(Symbol::NUM_MIN_INT, int_type());
 
-    // div : Int, Int -> Int
-    add_type(
-        Symbol::NUM_DIV_INT,
-        SolvedType::Func(vec![int_type(), int_type()], Box::new(int_type())),
-    );
-
-    // rem : Int, Int -> Int
-    add_type(
-        Symbol::NUM_REM,
-        SolvedType::Func(vec![int_type(), int_type()], Box::new(int_type())),
-    );
-
-    // mod : Int, Int -> Result Int [ DivByZero ]*
+    // div : Int, Int -> Result Int [ DivByZero ]*
     let div_by_zero = SolvedType::TagUnion(
         vec![(TagName::Global("DivByZero".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
     add_type(
+        Symbol::NUM_DIV_INT,
+        SolvedType::Func(
+            vec![int_type(), int_type()],
+            Box::new(result_type(int_type(), div_by_zero.clone())),
+        ),
+    );
+
+    // rem : Int, Int -> Result Int [ DivByZero ]*
+    add_type(
+        Symbol::NUM_REM,
+        SolvedType::Func(
+            vec![int_type(), int_type()],
+            Box::new(result_type(int_type(), div_by_zero.clone())),
+        ),
+    );
+
+    // mod : Int, Int -> Result Int [ DivByZero ]*
+    add_type(
         Symbol::NUM_MOD_INT,
         SolvedType::Func(
             vec![int_type(), int_type()],
-            Box::new(result_type(flex(TVAR1), div_by_zero)),
+            Box::new(result_type(int_type(), div_by_zero.clone())),
         ),
     );
 
@@ -340,19 +346,33 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // div : Float, Float -> Float
     add_type(
         Symbol::NUM_DIV_FLOAT,
-        SolvedType::Func(vec![float_type(), float_type()], Box::new(float_type())),
+        SolvedType::Func(
+            vec![float_type(), float_type()],
+            Box::new(result_type(float_type(), div_by_zero.clone())),
+        ),
     );
 
-    // mod : Float, Float -> Float
+    // mod : Float, Float -> Result Int [ DivByZero ]*
     add_type(
         Symbol::NUM_MOD_FLOAT,
-        SolvedType::Func(vec![float_type(), float_type()], Box::new(float_type())),
+        SolvedType::Func(
+            vec![float_type(), float_type()],
+            Box::new(result_type(float_type(), div_by_zero)),
+        ),
     );
 
     // sqrt : Float -> Float
+    let sqrt_of_negative = SolvedType::TagUnion(
+        vec![(TagName::Global("SqrtOfNegative".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
     add_type(
         Symbol::NUM_SQRT,
-        SolvedType::Func(vec![float_type()], Box::new(float_type())),
+        SolvedType::Func(
+            vec![float_type()],
+            Box::new(result_type(float_type(), sqrt_of_negative)),
+        ),
     );
 
     // round : Float -> Int

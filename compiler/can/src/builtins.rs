@@ -390,10 +390,52 @@ fn num_to_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.sqrt : Float -> Result Float [ SqrtOfNegative ]*
 fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let body = RunLowLevel {
-        op: LowLevel::NumSqrt,
-        args: vec![(var_store.fresh(), Var(Symbol::ARG_1))],
-        ret_var: var_store.fresh(),
+    let bool_var = var_store.fresh();
+    let num_var = var_store.fresh();
+    let unbound_zero_var = var_store.fresh();
+    let branch_var = var_store.fresh();
+
+    let body = If {
+        branch_var,
+        cond_var: bool_var,
+        branches: vec![(
+            // if-condition
+            no_region(
+                // Num.neq denominator 0
+                RunLowLevel {
+                    op: LowLevel::NotEq,
+                    args: vec![
+                        (num_var, Var(Symbol::ARG_1)),
+                        (num_var, Float(unbound_zero_var, 0.0)),
+                    ],
+                    ret_var: bool_var,
+                },
+            ),
+            // denominator was not zero
+            no_region(
+                // Ok (Float.#divUnchecked numerator denominator)
+                tag(
+                    "Ok",
+                    vec![
+                        // Num.#divUnchecked numerator denominator
+                        RunLowLevel {
+                            op: LowLevel::NumSqrtUnchecked,
+                            args: vec![(num_var, Var(Symbol::ARG_1))],
+                            ret_var: num_var,
+                        },
+                    ],
+                    var_store,
+                ),
+            ),
+        )],
+        final_else: Box::new(
+            // denominator was zero
+            no_region(tag(
+                "Err",
+                vec![tag("DivByZero", Vec::new(), var_store)],
+                var_store,
+            )),
+        ),
     };
 
     defn(symbol, vec![Symbol::ARG_1], var_store, body)
@@ -686,11 +728,11 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
             ),
             // denominator was not zero
             no_region(
-                // Ok (Float.#divUnsafe numerator denominator)
+                // Ok (Float.#divUnchecked numerator denominator)
                 tag(
                     "Ok",
                     vec![
-                        // Num.#divUnsafe numerator denominator
+                        // Num.#divUnchecked numerator denominator
                         RunLowLevel {
                             op: LowLevel::NumDivUnchecked,
                             args: vec![
@@ -720,9 +762,13 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.div : Int, Int -> Result Int [ DivByZero ]*
 fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
+    let num_var = var_store.fresh();
+    let unbound_zero_var = var_store.fresh();
+    let branch_var = var_store.fresh();
+
     let body = If {
-        branch_var: var_store.fresh(),
-        cond_var: var_store.fresh(),
+        branch_var,
+        cond_var: bool_var,
         branches: vec![(
             // if-condition
             no_region(
@@ -730,26 +776,26 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (bool_var, Var(Symbol::ARG_1)),
-                        (bool_var, Int(var_store.fresh(), 0)),
+                        (num_var, Var(Symbol::ARG_1)),
+                        (num_var, Int(unbound_zero_var, 0)),
                     ],
-                    ret_var: var_store.fresh(),
+                    ret_var: bool_var,
                 },
             ),
             // denominator was not zero
             no_region(
-                // Ok (Int.#divUnsafe numerator denominator)
+                // Ok (Int.#divUnchecked numerator denominator)
                 tag(
                     "Ok",
                     vec![
-                        // Num.#divUnsafe numerator denominator
+                        // Num.#divUnchecked numerator denominator
                         RunLowLevel {
                             op: LowLevel::NumDivUnchecked,
                             args: vec![
-                                (var_store.fresh(), Var(Symbol::ARG_1)),
-                                (var_store.fresh(), Var(Symbol::ARG_2)),
+                                (num_var, Var(Symbol::ARG_1)),
+                                (num_var, Var(Symbol::ARG_2)),
                             ],
-                            ret_var: var_store.fresh(),
+                            ret_var: num_var,
                         },
                     ],
                     var_store,

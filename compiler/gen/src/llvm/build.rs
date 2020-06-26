@@ -1366,7 +1366,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 "cast_collection",
             )
         }
-        NumAbs | NumNeg | NumRound | NumSqrt | NumSin | NumCos | NumToFloat => {
+        NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumToFloat => {
             debug_assert_eq!(args.len(), 1);
 
             let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
@@ -1683,7 +1683,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
     match op {
         NumNeg => bd.build_float_neg(arg, "negate_float").into(),
         NumAbs => call_intrinsic(LLVM_FABS_F64, env, &[(arg.into(), arg_layout)]),
-        NumSqrt => call_intrinsic(LLVM_SQRT_F64, env, &[(arg.into(), arg_layout)]),
+        NumSqrtUnchecked => call_intrinsic(LLVM_SQRT_F64, env, &[(arg.into(), arg_layout)]),
         NumRound => call_intrinsic(LLVM_LROUND_I64_F64, env, &[(arg.into(), arg_layout)]),
         NumSin => call_intrinsic(LLVM_SIN_F64, env, &[(arg.into(), arg_layout)]),
         NumCos => call_intrinsic(LLVM_COS_F64, env, &[(arg.into(), arg_layout)]),

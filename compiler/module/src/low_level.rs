@@ -21,7 +21,7 @@ pub enum LowLevel {
     NumNeg,
     NumSin,
     NumCos,
-    NumSqrt,
+    NumSqrtUnchecked,
     NumRound,
     NumToFloat,
     Eq,

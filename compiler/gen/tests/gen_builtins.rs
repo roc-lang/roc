@@ -29,7 +29,17 @@ mod gen_builtins {
 
     #[test]
     fn f64_sqrt() {
-        assert_evals_to!("Num.sqrt 144", 12.0, f64);
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Num.sqrt 144 is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            12.0,
+            f64
+        );
     }
 
     #[test]
@@ -234,7 +244,7 @@ mod gen_builtins {
                 r#"
                     when Num.rem 8 3 is
                         Ok val -> val
-                        _ -> -1
+                        Err _ -> -1
                 "#
             ),
             2,
@@ -249,7 +259,7 @@ mod gen_builtins {
                 r#"
                     when Num.rem 8 0 is
                         Err DivByZero -> 4
-                        _ -> -23
+                        Ok _ -> -23
                 "#
             ),
             4,
