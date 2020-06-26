@@ -17,7 +17,6 @@ mod test_opt {
     use roc_module::symbol::Symbol;
     use roc_mono::expr::Expr::{self, *};
     use roc_mono::expr::Procs;
-    use roc_mono::layout::{Builtin, Layout};
 
     // HELPERS
 
@@ -89,7 +88,8 @@ mod test_opt {
             | FunctionPointer(_, _)
             | RunLowLevel(_, _)
             | RuntimeError(_)
-            | RuntimeErrorFunction(_) => (),
+            | RuntimeErrorFunction(_)
+            | EmptyArray => (),
 
             Store(paths, sub_expr) => {
                 for (_, _, path_expr) in paths.iter() {
@@ -238,36 +238,36 @@ mod test_opt {
             RunLowLevel(
                 LowLevel::ListGetUnsafe,
                 &vec![
-                    (
-                        CallByName {
-                            name: Symbol::LIST_SET_IN_PLACE,
-                            layout: Layout::FunctionPointer(
-                                &[
-                                    Layout::Builtin(Builtin::List(&Layout::Builtin(
-                                        Builtin::Int64,
-                                    ))),
-                                    Layout::Builtin(Builtin::Int64),
-                                    Layout::Builtin(Builtin::Int64),
-                                ],
-                                &Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
-                            ),
-                            args: &vec![
-                                (
-                                    Array {
-                                        elem_layout: Layout::Builtin(Builtin::Int64),
-                                        elems: &vec![Int(12), Int(9), Int(7), Int(3)],
-                                    },
-                                    Layout::Builtin(Builtin::List(&Layout::Builtin(
-                                        Builtin::Int64,
-                                    ))),
-                                ),
-                                (Int(1), Layout::Builtin(Builtin::Int64)),
-                                (Int(42), Layout::Builtin(Builtin::Int64)),
-                            ],
-                        },
-                        Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
-                    ),
-                    (Int(1), Layout::Builtin(Builtin::Int64)),
+                    // (
+                    //     CallByName {
+                    //         name: Symbol::LIST_SET_IN_PLACE,
+                    //         layout: Layout::FunctionPointer(
+                    //             &[
+                    //                 Layout::Builtin(Builtin::List(&Layout::Builtin(
+                    //                     Builtin::Int64,
+                    //                 ))),
+                    //                 Layout::Builtin(Builtin::Int64),
+                    //                 Layout::Builtin(Builtin::Int64),
+                    //             ],
+                    //             &Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
+                    //         ),
+                    //         args: &vec![
+                    //             (
+                    //                 Array {
+                    //                     elem_layout: Layout::Builtin(Builtin::Int64),
+                    //                     elems: &vec![Int(12), Int(9), Int(7), Int(3)],
+                    //                 },
+                    //                 Layout::Builtin(Builtin::List(&Layout::Builtin(
+                    //                     Builtin::Int64,
+                    //                 ))),
+                    //             ),
+                    //             (Int(1), Layout::Builtin(Builtin::Int64)),
+                    //             (Int(42), Layout::Builtin(Builtin::Int64)),
+                    //         ],
+                    //     },
+                    //     Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
+                    // ),
+                    // (Int(1), Layout::Builtin(Builtin::Int64)),
                 ],
             ),
         );

@@ -58,9 +58,7 @@ impl<'a> Layout<'a> {
     ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
 
-        eprint!("content: ");
-
-        match content.dbg(subs) {
+        match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar),
             Structure(flat_type) => layout_from_flat_type(arena, flat_type, subs, pointer_size),
 

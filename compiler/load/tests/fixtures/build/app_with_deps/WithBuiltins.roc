@@ -2,15 +2,15 @@ interface WithBuiltins
     exposes [ floatTest, divisionFn, divisionTest, intTest, constantNum, fromDep2, divDep1ByDep2 ]
     imports [ Dep1, Dep2.{ two } ]
 
-floatTest = Float.highest
+floatTest = Num.maxFloat
 
 divisionFn = Num.div
 
 x = 5.0
 
-divisionTest = Float.highest / x
+divisionTest = Num.maxFloat / x
 
-intTest = Int.highest
+intTest = Num.maxInt
 
 constantNum = 5
 

@@ -362,7 +362,7 @@ Now let's say I do a pattern match with no type annotations.
 ```elm
 when foo is
     MyInt num -> num + 1
-    MyFloat float -> Float.round float
+    MyFloat float -> Num.round float
 ```
 
 The inferred type of this expression would be `[ MyInt Int, MyFloat Float ]`,
@@ -386,7 +386,7 @@ toInt : [ Foo, Bar Float ] -> Int
 toInt = \tag ->
     when tag is
         Foo -> 1
-        Bar float -> Float.round float
+        Bar float -> Num.round float
 ```
 
 Each of these type annotations involves a *tag union* - a collection of tags bracketed by `[` and `]`.

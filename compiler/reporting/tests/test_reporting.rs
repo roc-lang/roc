@@ -1058,7 +1058,7 @@ mod test_reporting {
 
                     Int
 
-                Hint: Convert between Int and Float with `Num.toFloat` and `Float.round`.
+                Hint: Convert between Int and Float with `Num.toFloat` and `Num.round`.
                 "#
             ),
         )
@@ -1094,7 +1094,7 @@ mod test_reporting {
 
                     Int
 
-                Hint: Convert between Int and Float with `Num.toFloat` and `Float.round`.
+                Hint: Convert between Int and Float with `Num.toFloat` and `Num.round`.
                 "#
             ),
         )
@@ -1129,7 +1129,7 @@ mod test_reporting {
 
                     Int -> Int
 
-                Hint: Convert between Int and Float with `Num.toFloat` and `Float.round`.
+                Hint: Convert between Int and Float with `Num.toFloat` and `Num.round`.
                 "#
             ),
         )
@@ -1462,7 +1462,7 @@ mod test_reporting {
 
                     { x : Int }
 
-                Hint: Convert between Int and Float with `Num.toFloat` and `Float.round`.
+                Hint: Convert between Int and Float with `Num.toFloat` and `Num.round`.
                 "#
             ),
         )
@@ -1947,7 +1947,7 @@ mod test_reporting {
 
                     Num Integer
 
-                Hint: Convert between Int and Float with `Num.toFloat` and `Float.round`.
+                Hint: Convert between Int and Float with `Num.toFloat` and `Num.round`.
                 "#
             ),
         )
