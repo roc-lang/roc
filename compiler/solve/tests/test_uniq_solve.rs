@@ -2357,7 +2357,7 @@ mod test_uniq_solve {
     }
 
     #[test]
-    fn foobar() {
+    fn record_pattern_match_field() {
         infer_eq(
             indoc!(
                 r#"
@@ -2368,6 +2368,91 @@ mod test_uniq_solve {
                 "#
             ),
             "Attr * (Attr (* | a) { x : (Attr a b) } -> Attr a b)",
+        );
+    }
+
+    #[test]
+    fn int_addition_with_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                f : Int, Int -> Int
+                f = \a, b -> a + b
+
+                f
+                "#
+            ),
+            "Attr * (Attr * Int, Attr * Int -> Attr * Int)",
+        );
+    }
+
+    #[test]
+    fn int_addition_without_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                f = \a, b -> a + b + 0x0
+
+                f
+                "#
+            ),
+            "Attr * (Attr a Int, Attr b Int -> Attr c Int)",
+        );
+    }
+
+    #[test]
+    fn num_addition_with_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                f : Num a, Num a -> Num a
+                f = \a, b -> a + b
+
+                f
+                "#
+            ),
+            "Attr * (Attr b (Num (Attr b a)), Attr c (Num (Attr c a)) -> Attr d (Num (Attr d a)))",
+        );
+    }
+
+    #[test]
+    fn num_addition_without_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                f = \a, b -> a + b
+
+                f
+                "#
+            ),
+            "Attr * (Attr a (Num (Attr a b)), Attr c (Num (Attr c b)) -> Attr d (Num (Attr d b)))",
+        );
+    }
+
+    #[test]
+    fn num_abs_with_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                f : Num a -> Num a
+                f = \x -> Num.abs x
+
+                f
+                "#
+            ),
+            "Attr * (Attr b (Num (Attr b a)) -> Attr c (Num (Attr c a)))",
+        );
+    }
+
+    #[test]
+    fn num_abs_without_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                \x -> Num.abs x
+                "#
+            ),
+            "Attr * (Attr a (Num (Attr a b)) -> Attr c (Num (Attr c b)))",
         );
     }
 
@@ -2423,7 +2508,7 @@ mod test_uniq_solve {
                     , cameFrom : Map.Map position position
                     }
 
-                cheapestOpen : (position -> Float), Model position -> Result position [ KeyNotFound ]*
+                # cheapestOpen : (position -> Float), Model position -> Result position [ KeyNotFound ]*
                 cheapestOpen = \costFunction, model ->
 
                     folder = \position, resSmallestSoFar ->
