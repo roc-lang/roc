@@ -24,9 +24,9 @@ interface Num
 ## a more specific type based on how they're used.
 ##
 ## For example, in `(1 + List.len myList)`, the `1` has the type `Num *` at first,
-## but because `List.len` returns a `Ulen`, the `1` ends up changing from
-## `Num *` to the more specific `Ulen`, and the expression as a whole
-## ends up having the type `Ulen`.
+## but because `List.len` returns a `Len`, the `1` ends up changing from
+## `Num *` to the more specific `Len`, and the expression as a whole
+## ends up having the type `Len`.
 ##
 ## Sometimes number literals don't become more specific. For example,
 ## the #Num.toStr function has the type `Num * -> Str`. This means that
@@ -47,7 +47,7 @@ interface Num
 ##
 ## * `215u8` is a `215` value of type #U8
 ## * `76.4f32` is a `76.4` value of type #F32
-## * `12345ulen` is a `12345` value of type `#Ulen`
+## * `12345ulen` is a `12345` value of type `#Len`
 ##
 ## In practice, these are rarely needed. It's most common to write
 ## number literals without any suffix.
@@ -116,7 +116,7 @@ U64 : Int @U64
 I128 : Int @I128
 U128 : Int @U128
 Ilen : Int @Ilen
-Ulen : Int @Ulen
+Len : Int @Len
 
 ## A 64-bit signed integer. All number literals without decimal points are compatible with #Int values.
 ##
@@ -176,12 +176,15 @@ Ulen : Int @Ulen
 ## | ` (over 340 undecillion)                            0` | #U128 | 16 Bytes |
 ## | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 ##
-## There are also two variable-size integer types: #Ulen and #Ilen. Their sizes
-## are determined by the [machine word length](https://en.wikipedia.org/wiki/Word_(computer_architecture))
-## of the system you're compiling for. (The "len" in their names is short for "length of a machine word.")
-## For example, when compiling for a 64-bit target, #Ulen is the same as #U64,
-## and #Ilen is the same as #I64. When compiling for a 32-bit target, #Ulen is the same as #U32,
-## and #Ilen is the same as #I32. In practice, #Ulen sees much more use than #Ilen.
+## Roc also has one variable-size integer type: #Len. The size of #Len is equal
+## to the size of a memory address, which varies by system. For example, when
+## compiling for a 64-bit system, #Len is the same as #U64. When compiling for a
+## 32-bit system, it's the same as #U32.
+##
+## A common use for #Len is to store the length ("len" for short) of a
+## collection like #List, #Set, or #Map. 64-bit systems can represent longer
+## lists in memory than 32-bit sytems can, which is why the length of a list
+## is represented as a #Len in Roc.
 ##
 ## If any operation would result in an #Int that is either too big
 ## or too small to fit in that range (e.g. calling `Int.maxI32 + 1`),
@@ -579,6 +582,21 @@ hash64 : a -> U64
 
 ## Limits
 
+## The highest number that can be stored in a #Len without overflowing its
+## available memory and crashing.
+##
+## Note that this number varies by systems. For example, when building for a
+## 64-bit system, this will be equal to #Num.maxU64, but when building for a
+## 32-bit system, this will be equal to #Num.maxU32.
+maxLen : Len
+
+## The number zero.
+##
+## #Num.minLen is the lowest number that can be stored in a #Len, which is zero
+## because #Len is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
+minLen : Len
+
 ## The highest number that can be stored in an #I32 without overflowing its
 ## available memory and crashing.
 ##
@@ -592,6 +610,32 @@ maxI32 : I32
 ## Note that the positive version of this number is this is larger than
 ## #Int.maxI32, which means if you call #Num.abs on #Int.minI32, it will overflow and crash!
 minI32 : I32
+
+## The highest number that can be stored in a #U64 without overflowing its
+## available memory and crashing.
+##
+## For reference, that number is `18_446_744_073_709_551_615`, which is over 18 quintillion.
+maxU64 : U64
+
+## The number zero.
+##
+## #Num.minU64 is the lowest number that can be stored in a #U64, which is zero
+## because #U64 is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
+minU64 : U64
+
+## The highest number that can be stored in a #U32 without overflowing its
+## available memory and crashing.
+##
+## For reference, that number is `4_294_967_295`, which is over 4 million.
+maxU32 : U32
+
+## The number zero.
+##
+## #Num.minU32 is the lowest number that can be stored in a #U32, which is zero
+## because #U32 is [unsigned](https://en.wikipedia.org/wiki/Signed_number_representations),
+## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
+minU32 : U32
 
 ## The highest supported #Float value you can have, which is approximately 1.8 × 10^308.
 ##
