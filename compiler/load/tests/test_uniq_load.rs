@@ -242,8 +242,8 @@ mod test_uniq_load {
                 loaded_module,
                 hashmap! {
                     "swap" => "Attr * (Attr Shared Int, Attr Shared Int, Attr * (List (Attr Shared a)) -> Attr * (List (Attr Shared a)))",
-                    "partition" => "Attr * (Attr Shared Int, Attr Shared Int, Attr b (List (Attr Shared (Num (Attr c a)))) -> Attr * [ Pair (Attr * Int) (Attr b (List (Attr Shared (Num (Attr c a))))) ])",
-                    "quicksort" => "Attr Shared (Attr b (List (Attr Shared (Num (Attr c a)))), Attr Shared Int, Attr Shared Int -> Attr b (List (Attr Shared (Num (Attr c a)))))",
+                    "partition" => "Attr * (Attr Shared Int, Attr Shared Int, Attr b (List (Attr Shared (Num (Attr Shared a)))) -> Attr * [ Pair (Attr Shared Int) (Attr b (List (Attr Shared (Num (Attr Shared a))))) ])",
+                    "quicksort" => "Attr Shared (Attr b (List (Attr Shared (Num (Attr Shared a)))), Attr Shared Int, Attr Shared Int -> Attr b (List (Attr Shared (Num (Attr Shared a)))))",
                 },
             );
         });
