@@ -2,6 +2,49 @@ use self::Bool::*;
 use crate::subs::{Content, FlatType, Subs, Variable};
 use roc_collections::all::SendSet;
 
+/// Uniqueness types
+///
+/// Roc uses uniqueness types to optimize programs. Uniqueness inference tries to find values that
+/// are guaranteed to be unique (i.e. have a reference count of at most 1) at compile time.
+///
+/// Such unique values can be updated in-place, something otherwise very unsafe in a pure
+/// functional language.
+///
+/// So how does that all work? Instead of inferring normal types like `Int`, we infer types
+/// `Attr u a`. The `a` could be any "normal" type (it's called a base type), like `Int` or `Str`.
+/// The `u` is the uniqueness attribute. It stores a value of type `Bool` (see definition below).
+///
+/// Before doing type inference, variables are tagged as either exclusive or shared. A variable is
+/// exclusive if we can be sure it's not duplicated. That's always true when the variable is used
+/// just once, but also e.g. `foo.x + foo.y` does not duplicate references to `foo`.
+///
+/// Next comes actual inference. Variables marked as shared always get the `Shared` uniqueness attribute.
+/// For exclusive variables, the uniqueness attribute is initially an unbound type variable.
+///
+/// An important detail is that there is no `Unique` annotation. Instead, uniqueness variables that
+/// are unbound after type inference and monomorphization are interpreted as unique. This makes inference
+/// easier and ensures we can never get type errors caused by uniqueness attributes.
+///
+/// Besides normal type inference rules (e.g. in `f a` if `a : t` then it must be that `f : t -> s`),
+/// uniqueness attributes must respect the container rule:
+///
+/// > Container rule: to extract a unique value from a container, the container must itself be unique
+///
+/// In this context a container can be a record, tag, built-in data structure (List, Set, etc) or
+/// a function closure.
+///
+/// Thus in the case of `List.get`, it must "check" the container rule. It's type is
+///
+/// > Attr (Container(w, { u })) (List (Attr u a)), Int -> Result _ _
+///
+/// The container attribute means that the uniqueness of the container (variable w) is at least
+/// uniqueness u. Unique is "more unique" than Shared. So if the elements are unique, the list must be unique. But if the list is
+/// unique, the elements can be shared.
+///
+/// As mentioned, we then use monomorphization to find values that are actually unique (those with
+/// an unbound uniqueness attribute). Those values are treated differently. They don't have to be
+/// reference counted, and can be mutated in-place.
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Bool {
     Shared,
@@ -50,7 +93,7 @@ pub fn flatten(subs: &mut Subs, var: Variable) {
 }
 
 /// For a Container(cvar, start_vars), find (transitively) all the flex/rigid vars that are
-/// actually in the disjunction.
+/// occur in start_vars.
 ///
 /// Because type aliases in Roc can be recursive, we have to be a bit careful to not get stuck in
 /// an infinite loop.
