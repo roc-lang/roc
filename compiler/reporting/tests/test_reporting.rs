@@ -2409,11 +2409,11 @@ mod test_reporting {
     }
 
     #[test]
-    fn circular_alias() {
+    fn cyclic_alias() {
         report_problem_as(
             indoc!(
                 r#"
-                Foo : { x: Bar }
+                Foo : { x : Bar }
                 Bar : { y : Foo }
 
                 f : Foo
@@ -2426,18 +2426,18 @@ mod test_reporting {
                 r#"
                 -- CYCLIC ALIAS ----------------------------------------------------------------
 
-                The `Bar` alias is recursive in an invalid way:
+                The `Foo` alias is recursive in an invalid way:
 
-                2 ┆  Bar : { y : Foo }
+                1 ┆  Foo : { x : Bar }
                   ┆        ^^^^^^^^^^^
 
-                The `Bar` alias depends on itself through the following chain of
+                The `Foo` alias depends on itself through the following chain of
                 definitions:
 
                     ┌─────┐
-                    │     Bar
-                    │     ↓
                     │     Foo
+                    │     ↓
+                    │     Bar
                     └─────┘
 
                 Recursion in aliases is only allowed if recursion happens behind a
