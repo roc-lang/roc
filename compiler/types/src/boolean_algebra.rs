@@ -35,11 +35,6 @@ pub fn flatten(subs: &mut Subs, var: Variable) {
         Content::Structure(FlatType::Boolean(Bool::Container(cvar, mvars))) => {
             let flattened_mvars = var_to_variables(subs, cvar, &mvars);
 
-            println!(
-                "for {:?}, cvar={:?} and all mvars are {:?}",
-                var, cvar, flattened_mvars
-            );
-
             let content =
                 Content::Structure(FlatType::Boolean(Bool::Container(cvar, flattened_mvars)));
 
@@ -125,9 +120,7 @@ impl Bool {
     }
 
     pub fn is_unique(&self, subs: &Subs) -> bool {
-        debug_assert!(self.is_fully_simplified(subs));
-
-        match self {
+        match self.simplify(subs) {
             Shared => false,
             _ => true,
         }

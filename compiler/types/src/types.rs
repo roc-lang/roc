@@ -965,32 +965,6 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 buf.push(')');
             }
         }
-        Alias(symbol, arguments, _actual) => {
-            let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
-
-            if write_parens {
-                buf.push('(');
-            }
-            buf.push_str(&format!("{:?}", symbol));
-
-            for arg in arguments {
-                buf.push(' ');
-
-                write_debug_error_type_help(arg.1, buf, Parens::InTypeParam);
-            }
-
-            // useful for debugging
-            let write_out_alias = true;
-            if write_out_alias {
-                buf.push_str("[[ but really ");
-                write_debug_error_type_help(*_actual, buf, Parens::Unnecessary);
-                buf.push_str("]]");
-            }
-
-            if write_parens {
-                buf.push(')');
-            }
-        }
         Alias(Symbol::NUM_NUM, mut arguments, _actual) => {
             debug_assert!(arguments.len() == 1);
 
@@ -1016,6 +990,32 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                         buf.push(')');
                     }
                 }
+            }
+        }
+        Alias(symbol, arguments, _actual) => {
+            let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
+
+            if write_parens {
+                buf.push('(');
+            }
+            buf.push_str(&format!("{:?}", symbol));
+
+            for arg in arguments {
+                buf.push(' ');
+
+                write_debug_error_type_help(arg.1, buf, Parens::InTypeParam);
+            }
+
+            // useful for debugging
+            let write_out_alias = true;
+            if write_out_alias {
+                buf.push_str("[[ but really ");
+                write_debug_error_type_help(*_actual, buf, Parens::Unnecessary);
+                buf.push_str("]]");
+            }
+
+            if write_parens {
+                buf.push(')');
             }
         }
         Function(arguments, result) => {

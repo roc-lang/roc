@@ -139,7 +139,7 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         println!("\n --------------- \n");
     }
     match &ctx.first_desc.content {
-        FlexVar(opt_name) => unify_flex(subs, pool, &ctx, opt_name, &ctx.second_desc.content),
+        FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, &ctx.second_desc.content),
         RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
@@ -202,33 +202,12 @@ fn unify_structure(
 ) -> Outcome {
     match other {
         FlexVar(_) => {
-            match &ctx.first_desc.content {
-                /*
-                Structure(FlatType::Boolean(b)) => match b {
-                    Bool::Container(cvar, _mvars)
-                        if roc_types::boolean_algebra::var_is_shared(subs, *cvar) =>
-                    {
-                        subs.set_content(ctx.first, Structure(FlatType::Boolean(Bool::Shared)));
-                        subs.set_content(ctx.second, Structure(FlatType::Boolean(Bool::Shared)));
-
-                        vec![]
-                    }
-                    Bool::Container(_cvar, _mvars) => {
-                        merge(subs, ctx, Structure(flat_type.clone()))
-                    }
-                    Bool::Shared => merge(subs, ctx, Structure(flat_type.clone())),
-                },
-                    */
-                _ => {
-                    // If the other is flex, Structure wins!
-                    merge(subs, ctx, Structure(flat_type.clone()))
-                }
-            }
+            // If the other is flex, Structure wins!
+            merge(subs, ctx, Structure(flat_type.clone()))
         }
         RigidVar(name) => {
             // Type mismatch! Rigid can only unify with flex.
-            mismatch!("trying to unify {:?} with rigid var {:?}", &flat_type, name);
-            panic!()
+            mismatch!("trying to unify {:?} with rigid var {:?}", &flat_type, name)
         }
 
         Structure(ref other_flat_type) => {
@@ -783,7 +762,6 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
 #[inline(always)]
 fn unify_flex(
     subs: &mut Subs,
-    pool: &mut Pool,
     ctx: &Context,
     opt_name: &Option<Lowercase>,
     other: &Content,
@@ -794,17 +772,6 @@ fn unify_flex(
             merge(subs, ctx, FlexVar(opt_name.clone()))
         }
 
-        /*
-        Structure(FlatType::Boolean(b)) => match b {
-            Bool::Container(cvar, _mvars)
-                if roc_types::boolean_algebra::var_is_shared(subs, *cvar) =>
-            {
-                merge(subs, ctx, Structure(FlatType::Boolean(Bool::Shared)))
-            }
-            Bool::Container(cvar, _mvars) => unify_pool(subs, pool, ctx.first, *cvar),
-            Bool::Shared => merge(subs, ctx, other.clone()),
-        },
-        */
         FlexVar(Some(_)) | RigidVar(_) | Structure(_) | Alias(_, _, _) => {
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.

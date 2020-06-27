@@ -1273,7 +1273,6 @@ fn deep_copy_var_help(
 }
 
 fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) -> Variable {
-    let c = content.clone();
     let var = subs.fresh(Descriptor {
         content,
         rank,

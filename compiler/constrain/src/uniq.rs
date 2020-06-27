@@ -1852,8 +1852,6 @@ fn annotation_to_attr_type(
                 Type::RecursiveTagUnion(*rec_var, lifted_tags, ext_type.clone()),
             );
 
-            dbg!(&result);
-
             (vars, result)
         }
 
@@ -2305,21 +2303,21 @@ fn constrain_field_update(
 /// Fix uniqueness attributes on mutually recursive type aliases.
 /// Given aliases
 ///
-///     ListA a b : [ Cons a (ListB b a), Nil ]
-///     ListB a b : [ Cons a (ListA b a), Nil ]
+/// >    ListA a b : [ Cons a (ListB b a), Nil ]
+/// >    ListB a b : [ Cons a (ListA b a), Nil ]
 ///
 /// We get the lifted alias:
 ///
-///    `Test.ListB`: Alias {
-///        ...,
-///        uniqueness: Some(
-///            Container(
-///                118,
-///                {},
-///            ),
-///        ),
-///        typ: [ Global('Cons') <9> (`#Attr.Attr` Container(119, {}) Alias `Test.ListA` <10> <9>[ but actually [ Global('Cons') <10> (`#Attr.Attr` Container(118, {}) <13>), Global('Nil') ] ]), Global('Nil') ] as <13>,
-///    },
+/// >   `Test.ListB`: Alias {
+/// >       ...,
+/// >       uniqueness: Some(
+/// >           Container(
+/// >               118,
+/// >               {},
+/// >           ),
+/// >       ),
+/// >       typ: [ Global('Cons') <9> (`#Attr.Attr` Container(119, {}) Alias `Test.ListA` <10> <9>[ but actually [ Global('Cons') <10> (`#Attr.Attr` Container(118, {}) <13>), Global('Nil') ] ]), Global('Nil') ] as <13>,
+/// >   },
 ///
 /// Note that the alias will get uniqueness variable <118>, but the contained `ListA` gets variable
 /// <119>. But, 119 is contained in 118, and 118 in 119, so we need <119> >= <118> >= <119> >= <118> ...
@@ -2327,7 +2325,7 @@ fn constrain_field_update(
 /// ourselves in user-defined aliases.
 fn fix_mutual_recursive_alias(typ: &mut Type, attribute: &Bool) {
     use Type::*;
-    if let RecursiveTagUnion(rec, tags, ext) = typ {
+    if let RecursiveTagUnion(rec, tags, _ext) = typ {
         for (_, args) in tags {
             for mut arg in args {
                 fix_mutual_recursive_alias_help(*rec, &Type::Boolean(attribute.clone()), &mut arg);

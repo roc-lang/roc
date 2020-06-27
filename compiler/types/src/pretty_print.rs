@@ -1,7 +1,7 @@
 use crate::boolean_algebra::Bool;
 use crate::subs::{Content, FlatType, Subs, Variable};
 use crate::types::name_type_var;
-use roc_collections::all::{ImSet, MutMap, MutSet};
+use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 
@@ -99,7 +99,6 @@ fn find_names_needed(
                 subs.set_content(recursive, Content::Structure(flat_type));
             }
             Content::Structure(FlatType::Boolean(Bool::Container(_cvar, _mvars))) => {
-                dbg!(_chain);
                 crate::boolean_algebra::flatten(subs, recursive);
             }
             _ => panic!(
