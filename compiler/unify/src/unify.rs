@@ -67,10 +67,10 @@ macro_rules! mismatch {
 type Pool = Vec<Variable>;
 
 pub struct Context {
-    pub first: Variable,
-    pub first_desc: Descriptor,
-    pub second: Variable,
-    pub second_desc: Descriptor,
+    first: Variable,
+    first_desc: Descriptor,
+    second: Variable,
+    second_desc: Descriptor,
 }
 
 #[derive(Debug)]
@@ -668,8 +668,10 @@ fn unify_flat_type(
                     outcome
                 }
                 (Container(cvar1, mvars1), Container(cvar2, mvars2)) => {
+                    let mut outcome = vec![];
+
                     // unify cvar1 and cvar2?
-                    unify_pool(subs, pool, *cvar1, *cvar2);
+                    outcome.extend(unify_pool(subs, pool, *cvar1, *cvar2));
 
                     let mvars: SendSet<Variable> = mvars1
                         .into_iter()
@@ -689,7 +691,9 @@ fn unify_flat_type(
                     let content =
                         Content::Structure(FlatType::Boolean(Bool::Container(*cvar1, mvars)));
 
-                    merge(subs, ctx, content)
+                    outcome.extend(merge(subs, ctx, content));
+
+                    outcome
                 }
             }
         }

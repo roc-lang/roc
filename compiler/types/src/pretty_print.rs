@@ -601,7 +601,8 @@ fn write_boolean(env: &Env, boolean: Bool, subs: &Subs, buf: &mut String, parens
             buf.push_str("Shared");
         }
         Bool::Container(cvar, mvars) if mvars.iter().all(|v| var_is_shared(subs, *v)) => {
-            // Bool::Container(cvar, mvars) if mvars.is_empty() => {
+            debug_assert!(!var_is_shared(subs, cvar));
+
             write_content(
                 env,
                 subs.get_without_compacting(cvar).content,
@@ -611,8 +612,11 @@ fn write_boolean(env: &Env, boolean: Bool, subs: &Subs, buf: &mut String, parens
             );
         }
         Bool::Container(cvar, mvars) => {
+            debug_assert!(!var_is_shared(subs, cvar));
+
             let mut buffers = Vec::with_capacity(mvars.len());
             for v in mvars {
+                // don't print shared in a container
                 if var_is_shared(subs, v) {
                     continue;
                 }
@@ -625,11 +629,10 @@ fn write_boolean(env: &Env, boolean: Bool, subs: &Subs, buf: &mut String, parens
                     &mut inner_buf,
                     parens,
                 );
-                // buffers_set.insert(inner_buf);
                 buffers.push(inner_buf);
             }
 
-            // let mut buffers: Vec<String> = buffers_set.into_iter().collect();
+            // sort type variables alphabetically
             buffers.sort();
 
             let combined = buffers.join(" | ");
