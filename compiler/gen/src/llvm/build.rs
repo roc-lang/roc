@@ -1677,7 +1677,7 @@ fn list_push<'a, 'ctx, 'env>(
             1 as u64, false,
         ),
         list_len,
-        "add_i64",
+        "new_list_length",
     );
 
     let ctx = env.context;
@@ -1687,9 +1687,12 @@ fn list_push<'a, 'ctx, 'env>(
     let elem_bytes = env
         .ptr_int()
         .const_int(elem_layout.stack_size(env.ptr_bytes) as u64, false);
-    let size = env
+
+    // This is the size of the list coming in, before we have added an element
+    // to the end.
+    let list_size = env
         .builder
-        .build_int_mul(elem_bytes, new_list_len, "mul_len_by_elem_bytes");
+        .build_int_mul(elem_bytes, list_len, "mul_old_len_by_elem_bytes");
 
     // Allocate space for the new array that we'll copy into.
     let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
@@ -1706,7 +1709,7 @@ fn list_push<'a, 'ctx, 'env>(
         // one we just malloc'd.
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder.build_memcpy(clone_ptr, ptr_bytes, elems_ptr, ptr_bytes, size);
+        builder.build_memcpy(clone_ptr, ptr_bytes, elems_ptr, ptr_bytes, list_size);
     } else {
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
