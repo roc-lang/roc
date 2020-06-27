@@ -1691,7 +1691,7 @@ fn constrain_def_pattern(
 fn annotation_to_attr_type(
     var_store: &mut VarStore,
     ann: &Type,
-    rigids: &mut ImMap<Variable, Variable>,
+    rigids: &mut ImSet<Variable>,
     change_var_kind: bool,
 ) -> (Vec<Variable>, Type) {
     use roc_types::types::Type::*;
@@ -1699,19 +1699,12 @@ fn annotation_to_attr_type(
     match ann {
         Variable(var) => {
             if change_var_kind {
-                if let Some(uvar) = rigids.get(var) {
-                    (
-                        vec![],
-                        attr_type(Bool::variable(*uvar), Type::Variable(*var)),
-                    )
-                } else {
-                    let uvar = var_store.fresh();
-                    rigids.insert(*var, uvar);
-                    (
-                        vec![],
-                        attr_type(Bool::variable(uvar), Type::Variable(*var)),
-                    )
-                }
+                let uvar = var_store.fresh();
+                rigids.insert(uvar);
+                (
+                    vec![],
+                    attr_type(Bool::variable(uvar), Type::Variable(*var)),
+                )
             } else {
                 (vec![], Type::Variable(*var))
             }
@@ -1900,7 +1893,7 @@ fn annotation_to_attr_type(
 fn annotation_to_attr_type_many(
     var_store: &mut VarStore,
     anns: &[Type],
-    rigids: &mut ImMap<Variable, Variable>,
+    rigids: &mut ImSet<Variable>,
     change_var_kind: bool,
 ) -> (Vec<Variable>, Vec<Type>) {
     anns.iter()
@@ -1926,7 +1919,7 @@ fn aliases_to_attr_type(var_store: &mut VarStore, aliases: &mut SendMap<Symbol, 
         //
         // That would give a double attr wrapper on the type arguments.
         // The `change_var_kind` flag set to false ensures type variables remain of kind *
-        let (_, new) = annotation_to_attr_type(var_store, &alias.typ, &mut ImMap::default(), false);
+        let (_, new) = annotation_to_attr_type(var_store, &alias.typ, &mut ImSet::default(), false);
         // remove the outer Attr, because when this occurs in a signature it'll already be wrapped in one
         match new {
             Type::Apply(Symbol::ATTR_ATTR, args) => {
@@ -1942,8 +1935,6 @@ fn aliases_to_attr_type(var_store: &mut VarStore, aliases: &mut SendMap<Symbol, 
             fix_mutual_recursive_alias(&mut alias.typ, b);
         }
     }
-
-    dbg!(&aliases);
 }
 
 fn constrain_def(
@@ -2077,9 +2068,9 @@ fn instantiate_rigids(
         annotation.substitute(&rigid_substitution);
     }
 
-    let mut new_rigid_pairs = ImMap::default();
+    let mut new_uniqueness_rigids = ImSet::default();
     let (mut uniq_vars, annotation) =
-        annotation_to_attr_type(var_store, &annotation, &mut new_rigid_pairs, true);
+        annotation_to_attr_type(var_store, &annotation, &mut new_uniqueness_rigids, true);
 
     if let Pattern::Identifier(symbol) = loc_pattern.value {
         headers.insert(symbol, Located::at(loc_pattern.region, annotation.clone()));
@@ -2089,7 +2080,7 @@ fn instantiate_rigids(
     ) {
         for (k, v) in new_headers {
             let (new_uniq_vars, attr_annotation) =
-                annotation_to_attr_type(var_store, &v.value, &mut new_rigid_pairs, true);
+                annotation_to_attr_type(var_store, &v.value, &mut new_uniqueness_rigids, true);
 
             uniq_vars.extend(new_uniq_vars);
 
@@ -2099,10 +2090,7 @@ fn instantiate_rigids(
 
     new_rigids.extend(uniq_vars);
     new_rigids.extend(introduced_vars.wildcards.iter().cloned());
-
-    for (_, v) in new_rigid_pairs {
-        new_rigids.push(v);
-    }
+    new_rigids.extend(new_uniqueness_rigids);
 
     annotation
 }

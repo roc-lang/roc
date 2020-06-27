@@ -333,6 +333,15 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
                             Parens::InTypeParam,
                         );
                     }
+
+                    // useful for debugging
+                    let write_out_alias = false;
+                    if write_out_alias {
+                        buf.push_str("[[ but really ");
+                        let content = subs.get_without_compacting(_actual).content;
+                        write_content(env, content, subs, buf, parens);
+                        buf.push_str("]]");
+                    }
                 }),
             }
         }
@@ -603,7 +612,7 @@ fn write_boolean(env: &Env, boolean: Bool, subs: &Subs, buf: &mut String, parens
             );
         }
         Bool::Container(cvar, mvars) => {
-            let mut buffers_set = ImSet::default();
+            let mut buffers = Vec::with_capacity(mvars.len());
             for v in mvars {
                 if var_is_shared(subs, v) {
                     continue;
@@ -617,10 +626,11 @@ fn write_boolean(env: &Env, boolean: Bool, subs: &Subs, buf: &mut String, parens
                     &mut inner_buf,
                     parens,
                 );
-                buffers_set.insert(inner_buf);
+                // buffers_set.insert(inner_buf);
+                buffers.push(inner_buf);
             }
 
-            let mut buffers: Vec<String> = buffers_set.into_iter().collect();
+            // let mut buffers: Vec<String> = buffers_set.into_iter().collect();
             buffers.sort();
 
             let combined = buffers.join(" | ");

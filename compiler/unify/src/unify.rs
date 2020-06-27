@@ -128,7 +128,16 @@ pub fn unify_pool(subs: &mut Subs, pool: &mut Pool, var1: Variable, var2: Variab
 }
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
-    // println!( "{:?} {:?} ~ {:?} {:?}", ctx.first, ctx.first_desc.content, ctx.second, ctx.second_desc.content,);
+    let print_debug_messages = false;
+    if print_debug_messages {
+        let (type1, _problems1) = subs.var_to_error_type(ctx.first);
+        let (type2, _problems2) = subs.var_to_error_type(ctx.second);
+        println!("\n --------------- \n");
+        dbg!(ctx.first, type1);
+        println!("\n --- \n");
+        dbg!(ctx.second, type2);
+        println!("\n --------------- \n");
+    }
     match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(subs, pool, &ctx, opt_name, &ctx.second_desc.content),
         RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
@@ -218,7 +227,8 @@ fn unify_structure(
         }
         RigidVar(name) => {
             // Type mismatch! Rigid can only unify with flex.
-            mismatch!("trying to unify {:?} with rigid var {:?}", &flat_type, name)
+            mismatch!("trying to unify {:?} with rigid var {:?}", &flat_type, name);
+            panic!()
         }
 
         Structure(ref other_flat_type) => {

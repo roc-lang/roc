@@ -650,6 +650,7 @@ fn type_to_variable(
         }
         Alias(Symbol::BOOL_BOOL, _, _) => Variable::BOOL,
         Alias(symbol, args, alias_type) => {
+            // TODO cache in uniqueness inference gives problems! all Int's get the same uniqueness var!
             // Cache aliases without type arguments. Commonly used aliases like `Int` would otherwise get O(n)
             // different variables (once for each occurence). The recursion restriction is required
             // for uniqueness types only: recursive aliases "introduce" an unbound uniqueness
@@ -666,11 +667,13 @@ fn type_to_variable(
             // TODO does caching work at all with uniqueness types? even Int then hides a uniqueness variable
             let is_recursive = alias_type.is_recursive();
             let no_args = args.is_empty();
+            /*
             if no_args && !is_recursive {
                 if let Some(var) = cached.get(symbol) {
                     return *var;
                 }
             }
+            */
 
             let mut arg_vars = Vec::with_capacity(args.len());
             let mut new_aliases = ImMap::default();
@@ -688,7 +691,7 @@ fn type_to_variable(
             let result = register(subs, rank, pools, content);
 
             if no_args && !is_recursive {
-                cached.insert(*symbol, result);
+                // cached.insert(*symbol, result);
             }
 
             result

@@ -164,7 +164,16 @@ impl Bool {
         match self {
             Bool::Container(cvar, mvars) => {
                 let flattened_mvars = var_to_variables(subs, *cvar, mvars);
-                Bool::Container(*cvar, flattened_mvars)
+
+                // find the parent variable, to remove distinct variables that all have the same
+                // parent. This prevents the signature from rendering as e.g. `( a | b | b)` and
+                // instead makes it `( a | b )`.
+                let parent_mvars = flattened_mvars
+                    .into_iter()
+                    .map(|v| subs.get_root_key_without_compacting(v))
+                    .collect();
+
+                Bool::Container(*cvar, parent_mvars)
             }
             Bool::Shared => Bool::Shared,
         }
