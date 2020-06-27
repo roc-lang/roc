@@ -1803,10 +1803,7 @@ fn list_push<'a, 'ctx, 'env>(
 
     // The output list length, which is the old list length + 1
     let new_list_len = env.builder.build_int_add(
-        ctx.i64_type().const_int(
-            // 0 as in 0 index of our new list
-            1 as u64, false,
-        ),
+        ctx.i64_type().const_int(1 as u64, false),
         list_len,
         "new_list_length",
     );
