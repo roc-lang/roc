@@ -3,7 +3,7 @@ use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
-use roc_types::solved_types::{BuiltinAlias, SolvedAtom, SolvedType};
+use roc_types::solved_types::{BuiltinAlias, SolvedBool, SolvedType};
 use roc_types::subs::VarId;
 use std::collections::HashMap;
 
@@ -41,18 +41,16 @@ const FUVAR: VarId = VarId::from_u32(1000);
 fn shared(base: SolvedType) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![SolvedType::Boolean(SolvedAtom::Zero, vec![]), base],
+        vec![SolvedType::Boolean(SolvedBool::SolvedShared), base],
     )
 }
 
 fn boolean(b: VarId) -> SolvedType {
-    SolvedType::Boolean(SolvedAtom::Variable(b), vec![])
+    SolvedType::Boolean(SolvedBool::SolvedContainer(b, vec![]))
 }
 
-fn container(free: VarId, rest: Vec<VarId>) -> SolvedType {
-    let solved_rest = rest.into_iter().map(SolvedAtom::Variable).collect();
-
-    SolvedType::Boolean(SolvedAtom::Variable(free), solved_rest)
+fn container(cvar: VarId, mvars: Vec<VarId>) -> SolvedType {
+    SolvedType::Boolean(SolvedBool::SolvedContainer(cvar, mvars))
 }
 
 pub fn uniq_stdlib() -> StdLib {

@@ -49,28 +49,29 @@ pub enum SolvedType {
     Alias(Symbol, Vec<(Lowercase, SolvedType)>, Box<SolvedType>),
 
     /// a boolean algebra Bool
-    Boolean(SolvedAtom, Vec<SolvedAtom>),
+    Boolean(SolvedBool),
 
     /// A type error
     Error,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum SolvedAtom {
-    Zero,
-    One,
-    Variable(VarId),
+pub enum SolvedBool {
+    SolvedShared,
+    SolvedContainer(VarId, Vec<VarId>),
 }
 
-impl SolvedAtom {
-    pub fn from_atom(atom: boolean_algebra::Atom) -> Self {
-        use boolean_algebra::Atom::*;
+impl SolvedBool {
+    pub fn from_bool(boolean: &boolean_algebra::Bool) -> Self {
+        use boolean_algebra::Bool;
 
-        // NOTE we blindly trust that `var` is a root and has a FlexVar as content
-        match atom {
-            Zero => SolvedAtom::Zero,
-            One => SolvedAtom::One,
-            Variable(var) => SolvedAtom::Variable(VarId::from_var(var)),
+        // NOTE we blindly trust that `cvar` is a root and has a FlexVar as content
+        match boolean {
+            Bool::Shared => SolvedBool::SolvedShared,
+            Bool::Container(cvar, mvars) => SolvedBool::SolvedContainer(
+                VarId::from_var(*cvar),
+                mvars.iter().map(|mvar| VarId::from_var(*mvar)).collect(),
+            ),
         }
     }
 }
@@ -170,15 +171,7 @@ impl SolvedType {
 
                 SolvedType::Alias(symbol, solved_args, Box::new(solved_type))
             }
-            Boolean(val) => {
-                let free = SolvedAtom::from_atom(val.0);
-
-                let mut rest = Vec::with_capacity(val.1.len());
-                for atom in val.1 {
-                    rest.push(SolvedAtom::from_atom(atom));
-                }
-                SolvedType::Boolean(free, rest)
-            }
+            Boolean(val) => SolvedType::Boolean(SolvedBool::from_bool(&val)),
             Variable(var) => Self::from_var(solved_subs.inner(), var),
         }
     }
@@ -281,15 +274,7 @@ impl SolvedType {
             }
             EmptyRecord => SolvedType::EmptyRecord,
             EmptyTagUnion => SolvedType::EmptyTagUnion,
-            Boolean(val) => {
-                let free = SolvedAtom::from_atom(val.0);
-
-                let mut rest = Vec::with_capacity(val.1.len());
-                for atom in val.1 {
-                    rest.push(SolvedAtom::from_atom(atom));
-                }
-                SolvedType::Boolean(free, rest)
-            }
+            Boolean(val) => SolvedType::Boolean(SolvedBool::from_bool(&val)),
             Erroneous(problem) => SolvedType::Erroneous(problem),
         }
     }

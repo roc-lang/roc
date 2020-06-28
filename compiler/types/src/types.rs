@@ -378,6 +378,36 @@ impl Type {
         }
     }
 
+    pub fn contains_variable(&self, rep_variable: Variable) -> bool {
+        use Type::*;
+
+        match self {
+            Variable(v) => *v == rep_variable,
+            Function(args, ret) => {
+                ret.contains_variable(rep_variable)
+                    || args.iter().any(|arg| arg.contains_variable(rep_variable))
+            }
+            RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
+                ext.contains_variable(rep_variable)
+                    || tags
+                        .iter()
+                        .map(|v| v.1.iter())
+                        .flatten()
+                        .any(|arg| arg.contains_variable(rep_variable))
+            }
+
+            Record(fields, ext) => {
+                ext.contains_variable(rep_variable)
+                    || fields
+                        .values()
+                        .any(|arg| arg.contains_variable(rep_variable))
+            }
+            Alias(_, _, actual_type) => actual_type.contains_variable(rep_variable),
+            Apply(_, args) => args.iter().any(|arg| arg.contains_variable(rep_variable)),
+            EmptyRec | EmptyTagUnion | Erroneous(_) | Boolean(_) => false,
+        }
+    }
+
     pub fn symbols(&self) -> ImSet<Symbol> {
         let mut found_symbols = ImSet::default();
         symbols_help(self, &mut found_symbols);
@@ -431,6 +461,35 @@ impl Type {
 
                 actual_type.instantiate_aliases(region, aliases, var_store, introduced);
             }
+            Apply(Symbol::ATTR_ATTR, attr_args) => {
+                use boolean_algebra::Bool;
+
+                let mut substitution = ImMap::default();
+
+                if let Apply(symbol, _) = attr_args[1] {
+                    if let Some(alias) = aliases.get(&symbol) {
+                        if let Some(Bool::Container(unbound_cvar, mvars1)) =
+                            alias.uniqueness.clone()
+                        {
+                            debug_assert!(mvars1.is_empty());
+
+                            if let Type::Boolean(Bool::Container(bound_cvar, mvars2)) =
+                                &attr_args[0]
+                            {
+                                debug_assert!(mvars2.is_empty());
+                                substitution.insert(unbound_cvar, Type::Variable(*bound_cvar));
+                            }
+                        }
+                    }
+                }
+
+                for x in attr_args {
+                    x.instantiate_aliases(region, aliases, var_store, introduced);
+                    if !substitution.is_empty() {
+                        x.substitute(&substitution);
+                    }
+                }
+            }
             Apply(symbol, args) => {
                 if let Some(alias) = aliases.get(symbol) {
                     if args.len() != alias.vars.len() {
@@ -463,9 +522,18 @@ impl Type {
                         substitution.insert(*placeholder, filler);
                     }
 
+                    use boolean_algebra::Bool;
+
                     // instantiate "hidden" uniqueness variables
                     for variable in actual.variables() {
                         if !substitution.contains_key(&variable) {
+                            // but don't instantiate the uniqueness parameter on the recursive
+                            // variable (if any)
+                            if let Some(Bool::Container(unbound_cvar, _)) = alias.uniqueness {
+                                if variable == unbound_cvar {
+                                    continue;
+                                }
+                            }
                             let var = var_store.fresh();
                             substitution.insert(variable, Type::Variable(var));
 
@@ -696,6 +764,7 @@ pub enum PatternCategory {
 pub struct Alias {
     pub region: Region,
     pub vars: Vec<Located<(Lowercase, Variable)>>,
+    pub uniqueness: Option<boolean_algebra::Bool>,
     pub typ: Type,
 }
 
@@ -725,7 +794,7 @@ pub enum Mismatch {
     CanonicalizationProblem,
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Clone)]
 pub enum ErrorType {
     Infinite,
     Type(Symbol, Vec<ErrorType>),
@@ -738,6 +807,13 @@ pub enum ErrorType {
     Alias(Symbol, Vec<(Lowercase, ErrorType)>, Box<ErrorType>),
     Boolean(boolean_algebra::Bool),
     Error,
+}
+
+impl std::fmt::Debug for ErrorType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO remove clone
+        write!(f, "{:?}", write_debug_error_type(self.clone()))
+    }
 }
 
 impl ErrorType {
@@ -853,6 +929,174 @@ fn write_error_type_help(
         }
 
         other => todo!("cannot format {:?} yet", other),
+    }
+}
+
+pub fn write_debug_error_type(error_type: ErrorType) -> String {
+    let mut buf = String::new();
+    write_debug_error_type_help(error_type, &mut buf, Parens::Unnecessary);
+
+    buf
+}
+
+fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: Parens) {
+    use ErrorType::*;
+
+    match error_type {
+        Infinite => buf.push_str("∞"),
+        Error => buf.push_str("?"),
+        FlexVar(name) => buf.push_str(name.as_str()),
+        RigidVar(name) => buf.push_str(name.as_str()),
+        Type(symbol, arguments) => {
+            let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
+
+            if write_parens {
+                buf.push('(');
+            }
+            buf.push_str(&format!("{:?}", symbol));
+
+            for arg in arguments {
+                buf.push(' ');
+
+                write_debug_error_type_help(arg, buf, Parens::InTypeParam);
+            }
+
+            if write_parens {
+                buf.push(')');
+            }
+        }
+        Alias(Symbol::NUM_NUM, mut arguments, _actual) => {
+            debug_assert!(arguments.len() == 1);
+
+            let argument = arguments.remove(0).1;
+
+            match argument {
+                Type(Symbol::INT_INTEGER, _) => {
+                    buf.push_str("Int");
+                }
+                Type(Symbol::FLOAT_FLOATINGPOINT, _) => {
+                    buf.push_str("Float");
+                }
+                other => {
+                    let write_parens = parens == Parens::InTypeParam;
+
+                    if write_parens {
+                        buf.push('(');
+                    }
+                    buf.push_str("Num ");
+                    write_debug_error_type_help(other, buf, Parens::InTypeParam);
+
+                    if write_parens {
+                        buf.push(')');
+                    }
+                }
+            }
+        }
+        Alias(symbol, arguments, _actual) => {
+            let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
+
+            if write_parens {
+                buf.push('(');
+            }
+            buf.push_str(&format!("{:?}", symbol));
+
+            for arg in arguments {
+                buf.push(' ');
+
+                write_debug_error_type_help(arg.1, buf, Parens::InTypeParam);
+            }
+
+            // useful for debugging
+            let write_out_alias = true;
+            if write_out_alias {
+                buf.push_str("[[ but really ");
+                write_debug_error_type_help(*_actual, buf, Parens::Unnecessary);
+                buf.push_str("]]");
+            }
+
+            if write_parens {
+                buf.push(')');
+            }
+        }
+        Function(arguments, result) => {
+            let write_parens = parens != Parens::Unnecessary;
+
+            if write_parens {
+                buf.push('(');
+            }
+
+            let mut it = arguments.into_iter().peekable();
+
+            while let Some(arg) = it.next() {
+                write_debug_error_type_help(arg, buf, Parens::InFn);
+                if it.peek().is_some() {
+                    buf.push_str(", ");
+                }
+            }
+
+            buf.push_str(" -> ");
+
+            write_debug_error_type_help(*result, buf, Parens::InFn);
+
+            if write_parens {
+                buf.push(')');
+            }
+        }
+        Record(fields, ext) => {
+            buf.push('{');
+
+            for (label, content) in fields {
+                buf.push_str(label.as_str());
+                buf.push_str(": ");
+                write_debug_error_type_help(content, buf, Parens::Unnecessary);
+            }
+
+            buf.push('}');
+            write_type_ext(ext, buf);
+        }
+        TagUnion(tags, ext) => {
+            buf.push('[');
+
+            let mut it = tags.into_iter().peekable();
+
+            while let Some((tag, args)) = it.next() {
+                buf.push_str(&format!("{:?}", tag));
+                for arg in args {
+                    buf.push_str(" ");
+                    write_debug_error_type_help(arg, buf, Parens::InTypeParam);
+                }
+
+                if it.peek().is_some() {
+                    buf.push_str(", ");
+                }
+            }
+
+            buf.push(']');
+            write_type_ext(ext, buf);
+        }
+        RecursiveTagUnion(rec, tags, ext) => {
+            buf.push('[');
+
+            for (tag, args) in tags {
+                buf.push_str(&format!("{:?}", tag));
+                for arg in args {
+                    buf.push_str(" ");
+                    write_debug_error_type_help(arg, buf, Parens::Unnecessary);
+                }
+            }
+
+            buf.push(']');
+            write_type_ext(ext, buf);
+
+            buf.push_str(" as ");
+
+            write_debug_error_type_help(*rec, buf, Parens::Unnecessary);
+        }
+
+        Boolean(boolean_algebra::Bool::Shared) => buf.push_str("Shared"),
+        Boolean(boolean_algebra::Bool::Container(mvar, cvars)) => {
+            buf.push_str(&format!("Container({:?}, {:?})", mvar, cvars))
+        }
     }
 }
 

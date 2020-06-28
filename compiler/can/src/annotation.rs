@@ -239,7 +239,8 @@ fn can_annotation_help(
                             let var_name = Lowercase::from(ident);
 
                             if let Some(var) = introduced_variables.var_by_name(&var_name) {
-                                vars.push((var_name, Type::Variable(*var)));
+                                vars.push((var_name.clone(), Type::Variable(*var)));
+                                lowercase_vars.push(Located::at(loc_var.region, (var_name, *var)));
                             } else {
                                 let var = var_store.fresh();
 
@@ -278,11 +279,15 @@ fn can_annotation_help(
                 let alias = Alias {
                     region,
                     vars: lowercase_vars,
-                    typ: alias_actual.clone(),
+                    uniqueness: None,
+                    typ: alias_actual,
                 };
                 local_aliases.insert(symbol, alias);
 
-                Type::Alias(symbol, vars, Box::new(alias_actual))
+                // We turn this 'inline' alias into an Apply. This will later get de-aliased again,
+                // but this approach is easier wrt. instantiation of uniqueness variables.
+                let args = vars.into_iter().map(|(_, b)| b).collect();
+                Type::Apply(symbol, args)
             }
             _ => {
                 // This is a syntactically invalid type alias.

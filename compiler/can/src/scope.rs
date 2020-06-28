@@ -146,6 +146,14 @@ impl Scope {
         vars: Vec<Located<(Lowercase, Variable)>>,
         typ: Type,
     ) {
-        self.aliases.insert(name, Alias { region, vars, typ });
+        self.aliases.insert(
+            name,
+            Alias {
+                region,
+                vars,
+                uniqueness: None,
+                typ,
+            },
+        );
     }
 }
