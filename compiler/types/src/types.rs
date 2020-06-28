@@ -524,11 +524,36 @@ impl Type {
 
                     use boolean_algebra::Bool;
 
-                    // instantiate "hidden" uniqueness variables
+                    // Instantiate "hidden" uniqueness variables
+                    //
+                    // Aliases can hide uniqueness variables: e.g. in
+                    //
+                    // Model : { x : Int, y : Bool }
+                    //
+                    // Its lifted variant is
+                    //
+                    // Attr a Model
+                    //
+                    // where the `a` doesn't really mention the attributes on the fields.
                     for variable in actual.variables() {
                         if !substitution.contains_key(&variable) {
-                            // but don't instantiate the uniqueness parameter on the recursive
-                            // variable (if any)
+                            // Leave attributes on recursion variables untouched!
+                            //
+                            // In a recursive type like
+                            //
+                            // > [ Z, S Peano ] as Peano
+                            //
+                            // By default the lifted version is
+                            //
+                            // > Attr a ([ Z, S (Attr b Peano) ] as Peano)
+                            //
+                            // But, it must be true that a = b because Peano is self-recursive.
+                            // Therefore we earlier have substituted
+                            //
+                            // > Attr a ([ Z, S (Attr a Peano) ] as Peano)
+                            //
+                            // And now we must make sure the `a`s stay the same variable, i.e.
+                            // don't re-instantiate it here.
                             if let Some(Bool::Container(unbound_cvar, _)) = alias.uniqueness {
                                 if variable == unbound_cvar {
                                     continue;
