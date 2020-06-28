@@ -130,19 +130,16 @@ impl fmt::Debug for Type {
                     write!(f, " ")?;
                 }
 
-                let mut any_written_yet = false;
-
-                for (label, arguments) in tags {
-                    if any_written_yet {
-                        write!(f, ", ")?;
-                    } else {
-                        any_written_yet = true;
-                    }
-
+                let mut it = tags.iter().peekable();
+                while let Some((label, arguments)) = it.next() {
                     write!(f, "{:?}", label)?;
 
                     for argument in arguments {
                         write!(f, " {:?}", argument)?;
+                    }
+
+                    if it.peek().is_some() {
+                        write!(f, ", ")?;
                     }
                 }
 
@@ -174,19 +171,16 @@ impl fmt::Debug for Type {
                     write!(f, " ")?;
                 }
 
-                let mut any_written_yet = false;
-
-                for (label, arguments) in tags {
-                    if any_written_yet {
-                        write!(f, ", ")?;
-                    } else {
-                        any_written_yet = true;
-                    }
-
+                let mut it = tags.iter().peekable();
+                while let Some((label, arguments)) = it.next() {
                     write!(f, "{:?}", label)?;
 
                     for argument in arguments {
                         write!(f, " {:?}", argument)?;
+                    }
+
+                    if it.peek().is_some() {
+                        write!(f, ", ")?;
                     }
                 }
 
@@ -556,6 +550,7 @@ impl Type {
                             // don't re-instantiate it here.
                             if let Some(Bool::Container(unbound_cvar, _)) = alias.uniqueness {
                                 if variable == unbound_cvar {
+                                    introduced.insert(variable);
                                     continue;
                                 }
                             }
@@ -1102,11 +1097,16 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
         RecursiveTagUnion(rec, tags, ext) => {
             buf.push('[');
 
-            for (tag, args) in tags {
+            let mut it = tags.into_iter().peekable();
+            while let Some((tag, args)) = it.next() {
                 buf.push_str(&format!("{:?}", tag));
                 for arg in args {
                     buf.push_str(" ");
                     write_debug_error_type_help(arg, buf, Parens::Unnecessary);
+                }
+
+                if it.peek().is_some() {
+                    buf.push_str(", ");
                 }
             }
 
