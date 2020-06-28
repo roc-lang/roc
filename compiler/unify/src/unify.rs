@@ -646,16 +646,14 @@ fn unify_flat_type(
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
 
-            let result = unify_tag_union(
+            unify_tag_union(
                 subs,
                 pool,
                 ctx,
                 union1,
                 union2,
                 (None, Some(*recursion_var)),
-            );
-
-            result
+            )
         }
 
         (RecursiveTagUnion(rec1, tags1, ext1), RecursiveTagUnion(rec2, tags2, ext2)) => {
