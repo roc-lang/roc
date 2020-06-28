@@ -3,7 +3,7 @@ use inlinable_string::InlinableString;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
-use roc_region::all::Region;
+use roc_region::all::{Located, Region};
 
 /// The canonicalization environment for a particular module.
 pub struct Env<'a> {
@@ -70,23 +70,47 @@ impl<'a> Env<'a> {
             Some(&module_id) => {
                 let ident: InlinableString = ident.into();
 
-                match self
-                    .dep_idents
-                    .get(&module_id)
-                    .and_then(|exposed_ids| exposed_ids.get_id(&ident))
-                {
-                    Some(ident_id) => {
-                        let symbol = Symbol::new(module_id, *ident_id);
+                // You can do qualified lookups on your own module, e.g.
+                // if I'm in the Foo module, I can do a `Foo.bar` lookup.
+                if module_id == self.home {
+                    match self.ident_ids.get_id(&ident) {
+                        Some(ident_id) => {
+                            let symbol = Symbol::new(module_id, *ident_id);
 
-                        self.referenced_symbols.insert(symbol);
+                            self.referenced_symbols.insert(symbol);
 
-                        Ok(symbol)
+                            Ok(symbol)
+                        }
+                        None => Err(RuntimeError::LookupNotInScope(
+                            Located {
+                                value: ident,
+                                region,
+                            },
+                            self.ident_ids
+                                .idents()
+                                .map(|(_, string)| string.as_ref().into())
+                                .collect(),
+                        )),
                     }
-                    None => Err(RuntimeError::ValueNotExposed {
-                        module_name,
-                        ident,
-                        region,
-                    }),
+                } else {
+                    match self
+                        .dep_idents
+                        .get(&module_id)
+                        .and_then(|exposed_ids| exposed_ids.get_id(&ident))
+                    {
+                        Some(ident_id) => {
+                            let symbol = Symbol::new(module_id, *ident_id);
+
+                            self.referenced_symbols.insert(symbol);
+
+                            Ok(symbol)
+                        }
+                        None => Err(RuntimeError::ValueNotExposed {
+                            module_name,
+                            ident,
+                            region,
+                        }),
+                    }
                 }
             }
             None => Err(RuntimeError::ModuleNotImported {
