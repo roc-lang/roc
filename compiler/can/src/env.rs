@@ -83,7 +83,7 @@ impl<'a> Env<'a> {
                         }
                         None => Err(RuntimeError::LookupNotInScope(
                             Located {
-                                value: ident.into(),
+                                value: ident,
                                 region,
                             },
                             self.ident_ids
