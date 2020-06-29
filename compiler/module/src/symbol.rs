@@ -638,6 +638,7 @@ define_builtins! {
         0 STR_STR: "Str" imported // the Str.Str type alias
         1 STR_AT_STR: "@Str" // the Str.@Str private tag
         2 STR_ISEMPTY: "isEmpty"
+        3 STR_APPEND: "append"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -653,6 +654,7 @@ define_builtins! {
         10 LIST_CONCAT: "concat"
         11 LIST_FIRST: "first"
         12 LIST_SINGLE: "single"
+        13 LIST_REPEAT: "repeat"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

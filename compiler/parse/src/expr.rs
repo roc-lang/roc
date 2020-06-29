@@ -1034,9 +1034,9 @@ mod when {
                     branch_result(indented_more)
                 ),
                 |((patterns, guard), expr)| WhenBranch {
-                    patterns: patterns,
+                    patterns,
                     value: expr,
-                    guard: guard
+                    guard
                 }
             );
 

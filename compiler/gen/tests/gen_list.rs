@@ -37,17 +37,6 @@ mod gen_builtins {
         assert_evals_to!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64]);
     }
 
-    // #[test]
-    // fn list_push() {
-    //     assert_evals_to!("List.push [] 1", &[1], &'static [i64]);
-    // }
-
-    #[test]
-    fn list_single() {
-        assert_evals_to!("List.single 1", &[1], &'static [i64]);
-        assert_evals_to!("List.single 5.6", &[5.6], &'static [f64]);
-    }
-
     #[test]
     fn empty_list_len() {
         assert_evals_to!("List.len []", 0, usize);
@@ -379,5 +368,32 @@ mod gen_builtins {
             &[4, 7, 19, 21],
             &'static [i64]
         );
+    }
+
+    #[test]
+    fn list_push() {
+        assert_evals_to!("List.push [1] 2", &[1, 2], &'static [i64]);
+        assert_evals_to!("List.push [1, 1] 2", &[1, 1, 2], &'static [i64]);
+        assert_evals_to!("List.push [] 3", &[3], &'static [i64]);
+        assert_evals_to!(
+            "List.push [ True, False ] True",
+            &[true, false, true],
+            &'static [bool]
+        );
+    }
+
+    #[test]
+    fn list_single() {
+        assert_evals_to!("List.single 1", &[1], &'static [i64]);
+        assert_evals_to!("List.single 5.6", &[5.6], &'static [f64]);
+    }
+
+    #[test]
+    fn list_repeat() {
+        assert_evals_to!("List.repeat 5 1", &[1, 1, 1, 1, 1], &'static [i64]);
+        assert_evals_to!("List.repeat 4 2", &[2, 2, 2, 2], &'static [i64]);
+
+        assert_evals_to!("List.repeat 0 []", &[], &'static [i64]);
+        assert_evals_to!("List.repeat 2 []", &[&[], &[]], &'static [&'static [i64]]);
     }
 }

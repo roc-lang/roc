@@ -357,7 +357,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 let byte_type = ctx.i8_type();
                 let nul_terminator = byte_type.const_zero();
-                let len_val = ctx.i32_type().const_int(str_len as u64, false);
+                let len_val = ctx.i64_type().const_int(str_len as u64, false);
                 let ptr = env
                     .builder
                     .build_array_malloc(ctx.i8_type(), len_val, "str_ptr")
@@ -367,7 +367,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 // Copy the bytes from the string literal into the array
                 for (index, byte) in str_literal.bytes().enumerate() {
-                    let index_val = ctx.i32_type().const_int(index as u64, false);
+                    let index_val = ctx.i64_type().const_int(index as u64, false);
                     let elem_ptr =
                         unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "byte") };
 
@@ -377,7 +377,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 // Add a NUL terminator at the end.
                 // TODO: Instead of NUL-terminating, return a struct
                 // with the pointer and also the length and capacity.
-                let index_val = ctx.i32_type().const_int(str_len as u64 - 1, false);
+                let index_val = ctx.i64_type().const_int(str_len as u64 - 1, false);
                 let elem_ptr =
                     unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "nul_terminator") };
 
@@ -399,11 +399,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let builder = env.builder;
 
             if elems.is_empty() {
-                let struct_type = collection(ctx, env.ptr_bytes);
-
-                // The pointer should be null (aka zero) and the length should be zero,
-                // so the whole struct should be a const_zero
-                BasicValueEnum::StructValue(struct_type.const_zero())
+                empty_list(env)
             } else {
                 let len_u64 = elems.len() as u64;
                 let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
@@ -422,7 +418,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                 // Copy the elements from the list literal into the array
                 for (index, elem) in elems.iter().enumerate() {
-                    let index_val = ctx.i32_type().const_int(index as u64, false);
+                    let index_val = ctx.i64_type().const_int(index as u64, false);
                     let elem_ptr =
                         unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
                     let val = build_expr(env, layout_ids, &scope, parent, &elem);
@@ -1018,6 +1014,212 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
     }
 }
 
+fn list_single<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    symbol: Symbol,
+    parent: FunctionValue<'ctx>,
+    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
+) -> BasicValueEnum<'ctx> {
+    // List.single : a -> List a
+    debug_assert_eq!(args.len(), 1);
+
+    let (elem, elem_layout) = args[0];
+
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+
+    let ptr = {
+        let bytes_len = elem_bytes;
+        let len_type = env.ptr_int();
+        let len = len_type.const_int(bytes_len, false);
+
+        env.builder
+            .build_array_malloc(elem_type, len, "create_list_ptr")
+            .unwrap()
+
+        // TODO check if malloc returned null; if so, runtime error for OOM!
+    };
+
+    // Put the element into the list
+    let elem_ptr = unsafe {
+        builder.build_in_bounds_gep(
+            ptr,
+            &[ctx.i64_type().const_int(
+                // 0 as in 0 index of our new list
+                0 as u64, false,
+            )],
+            "index",
+        )
+    };
+
+    builder.build_store(elem_ptr, elem);
+
+    let ptr_bytes = env.ptr_bytes;
+    let int_type = ptr_int(ctx, ptr_bytes);
+    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+    let struct_type = collection(ctx, ptr_bytes);
+    let len = BasicValueEnum::IntValue(env.ptr_int().const_int(1, false));
+
+    let mut struct_val;
+
+    // Store the pointer
+    struct_val = builder
+        .build_insert_value(
+            struct_type.get_undef(),
+            ptr_as_int,
+            Builtin::WRAPPER_PTR,
+            "insert_ptr",
+        )
+        .unwrap();
+
+    // Store the length
+    struct_val = builder
+        .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
+        .unwrap();
+
+    //
+    builder.build_bitcast(
+        struct_val.into_struct_value(),
+        collection(ctx, ptr_bytes),
+        "cast_collection",
+    )
+}
+
+fn list_repeat<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    symbol: Symbol,
+    parent: FunctionValue<'ctx>,
+    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
+) -> BasicValueEnum<'ctx> {
+    // List.repeat : Int, elem -> List elem
+    debug_assert_eq!(args.len(), 1);
+
+    // Number of repeats
+    let list_len = args[0].0.into_int_value();
+
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let (elem, elem_layout) = args[1];
+    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+
+    // list_len > 0
+    // We have to do a loop below, continuously adding the `elem`
+    // to the output list `List elem` until we have reached the
+    // number of repeats. This `comparison` is used to check
+    // if we need to do any looping; because if we dont, then we
+    // dont need to allocate memory for the index or the check
+    // if index != 0
+    let comparison = builder.build_int_compare(
+        IntPredicate::UGT,
+        list_len,
+        ctx.i64_type().const_int(0, false),
+        "atleastzero",
+    );
+
+    let build_then = || {
+        // Allocate space for the new array that we'll copy into.
+        let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+
+        let list_ptr = {
+            let bytes_len = elem_bytes;
+            let len_type = env.ptr_int();
+            let len = len_type.const_int(bytes_len, false);
+
+            env.builder
+                .build_array_malloc(elem_type, len, "create_list_ptr")
+                .unwrap()
+
+            // TODO check if malloc returned null; if so, runtime error for OOM!
+        };
+
+        let index_name = "#index";
+        let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
+
+        builder.build_store(start_alloca, list_len);
+
+        let loop_bb = ctx.append_basic_block(parent, "loop");
+        builder.build_unconditional_branch(loop_bb);
+        builder.position_at_end(loop_bb);
+
+        // #index = #index - 1
+        let curr_index = builder
+            .build_load(start_alloca, index_name)
+            .into_int_value();
+        let next_index =
+            builder.build_int_sub(curr_index, ctx.i64_type().const_int(1, false), "nextindex");
+
+        builder.build_store(start_alloca, next_index);
+
+        let elem_ptr =
+            unsafe { builder.build_in_bounds_gep(list_ptr, &[curr_index], "load_index") };
+
+        // Mutate the new array in-place to change the element.
+        builder.build_store(elem_ptr, elem);
+
+        // #index != 0
+        let end_cond = builder.build_int_compare(
+            IntPredicate::NE,
+            ctx.i64_type().const_int(0, false),
+            curr_index,
+            "loopcond",
+        );
+
+        let after_bb = ctx.append_basic_block(parent, "afterloop");
+
+        builder.build_conditional_branch(end_cond, loop_bb, after_bb);
+        builder.position_at_end(after_bb);
+
+        let ptr_bytes = env.ptr_bytes;
+        let int_type = ptr_int(ctx, ptr_bytes);
+        let ptr_as_int = builder.build_ptr_to_int(list_ptr, int_type, "list_cast_ptr");
+        let struct_type = collection(ctx, ptr_bytes);
+
+        let mut struct_val;
+
+        // Store the pointer
+        struct_val = builder
+            .build_insert_value(
+                struct_type.get_undef(),
+                ptr_as_int,
+                Builtin::WRAPPER_PTR,
+                "insert_ptr",
+            )
+            .unwrap();
+
+        // Store the length
+        struct_val = builder
+            .build_insert_value(struct_val, list_len, Builtin::WRAPPER_LEN, "insert_len")
+            .unwrap();
+
+        builder.build_bitcast(
+            struct_val.into_struct_value(),
+            collection(ctx, ptr_bytes),
+            "cast_collection",
+        )
+    };
+
+    let build_else = || empty_list(env);
+
+    let struct_type = collection(ctx, env.ptr_bytes);
+
+    build_basic_phi2(
+        env,
+        parent,
+        comparison,
+        build_then,
+        build_else,
+        BasicTypeEnum::StructType(struct_type),
+    )
+}
+
 #[inline(always)]
 #[allow(clippy::cognitive_complexity)]
 fn call_with_args<'a, 'ctx, 'env>(
@@ -1041,7 +1243,6 @@ fn call_with_args<'a, 'ctx, 'env>(
                 panic!("Unrecognized non-builtin function: {:?}", symbol)
             }
         });
-
     let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
 
     for (arg, _layout) in args.iter() {
@@ -1186,6 +1387,16 @@ enum InPlace {
     Clone,
 }
 
+fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+
+    let struct_type = collection(ctx, env.ptr_bytes);
+
+    // The pointer should be null (aka zero) and the length should be zero,
+    // so the whole struct should be a const_zero
+    BasicValueEnum::StructValue(struct_type.const_zero())
+}
+
 fn bounds_check_comparison<'ctx>(
     builder: &Builder<'ctx>,
     elem_index: IntValue<'ctx>,
@@ -1196,6 +1407,100 @@ fn bounds_check_comparison<'ctx>(
     // and CPUs generally default to predicting that a forward jump
     // shouldn't be taken; that is, they predict "else" won't be taken.)
     builder.build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
+}
+
+fn list_push<'a, 'ctx, 'env>(
+    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
+    env: &Env<'a, 'ctx, 'env>,
+) -> BasicValueEnum<'ctx> {
+    // List.push List elem, elem -> List elem
+    let builder = env.builder;
+    let ctx = env.context;
+
+    debug_assert!(args.len() == 2);
+
+    let original_wrapper = args[0].0.into_struct_value();
+
+    // Load the usize length from the wrapper.
+    let list_len = load_list_len(builder, original_wrapper);
+
+    let (elem, elem_layout) = args[1];
+    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+    let elems_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
+
+    // The output list length, which is the old list length + 1
+    let new_list_len = env.builder.build_int_add(
+        ctx.i64_type().const_int(1 as u64, false),
+        list_len,
+        "new_list_length",
+    );
+
+    let ctx = env.context;
+    let ptr_bytes = env.ptr_bytes;
+
+    // Calculate the number of bytes we'll need to allocate.
+    let elem_bytes = env
+        .ptr_int()
+        .const_int(elem_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    // This is the size of the list coming in, before we have added an element
+    // to the end.
+    let list_size = env
+        .builder
+        .build_int_mul(elem_bytes, list_len, "mul_old_len_by_elem_bytes");
+
+    // Allocate space for the new array that we'll copy into.
+    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let clone_ptr = builder
+        .build_array_malloc(elem_type, new_list_len, "list_ptr")
+        .unwrap();
+    let int_type = ptr_int(ctx, ptr_bytes);
+    let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
+
+    // TODO check if malloc returned null; if so, runtime error for OOM!
+
+    if elem_layout.safe_to_memcpy() {
+        // Copy the bytes from the original array into the new
+        // one we just malloc'd.
+        //
+        // TODO how do we decide when to do the small memcpy vs the normal one?
+        builder.build_memcpy(clone_ptr, ptr_bytes, elems_ptr, ptr_bytes, list_size);
+    } else {
+        panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
+    }
+
+    // Create a fresh wrapper struct for the newly populated array
+    let struct_type = collection(ctx, env.ptr_bytes);
+    let mut struct_val;
+
+    // Store the pointer
+    struct_val = builder
+        .build_insert_value(
+            struct_type.get_undef(),
+            ptr_as_int,
+            Builtin::WRAPPER_PTR,
+            "insert_ptr",
+        )
+        .unwrap();
+
+    // Store the length
+    struct_val = builder
+        .build_insert_value(struct_val, new_list_len, Builtin::WRAPPER_LEN, "insert_len")
+        .unwrap();
+
+    let answer = builder.build_bitcast(
+        struct_val.into_struct_value(),
+        collection(ctx, ptr_bytes),
+        "cast_collection",
+    );
+
+    let elem_ptr = unsafe { builder.build_in_bounds_gep(clone_ptr, &[list_len], "load_index") };
+
+    builder.build_store(elem_ptr, elem);
+
+    answer
 }
 
 fn list_set<'a, 'ctx, 'env>(

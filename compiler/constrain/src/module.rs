@@ -6,8 +6,8 @@ use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
-use roc_types::boolean_algebra::{Atom, Bool};
-use roc_types::solved_types::{BuiltinAlias, SolvedAtom, SolvedType};
+use roc_types::boolean_algebra::Bool;
+use roc_types::solved_types::{BuiltinAlias, SolvedBool, SolvedType};
 use roc_types::subs::{VarId, VarStore, Variable};
 use roc_types::types::{Alias, Problem, Type};
 
@@ -150,6 +150,7 @@ where
         let alias = Alias {
             vars,
             region: builtin_alias.region,
+            uniqueness: None,
             typ: actual,
         };
 
@@ -271,15 +272,15 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &mut V
                 Box::new(to_type(ext, free_vars, var_store)),
             )
         }
-        Boolean(solved_free, solved_rest) => {
-            let free = to_atom(solved_free, free_vars, var_store);
-            let mut rest = Vec::with_capacity(solved_rest.len());
+        Boolean(SolvedBool::SolvedShared) => Type::Boolean(Bool::Shared),
+        Boolean(SolvedBool::SolvedContainer(solved_cvar, solved_mvars)) => {
+            let cvar = var_id_to_var(*solved_cvar, free_vars, var_store);
 
-            for solved_atom in solved_rest {
-                rest.push(to_atom(solved_atom, free_vars, var_store));
-            }
+            let mvars = solved_mvars
+                .iter()
+                .map(|var_id| var_id_to_var(*var_id, free_vars, var_store));
 
-            Type::Boolean(Bool::from_parts(free, rest))
+            Type::Boolean(Bool::container(cvar, mvars))
         }
         Alias(symbol, solved_type_variables, solved_actual) => {
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());
@@ -297,24 +298,14 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &mut V
     }
 }
 
-pub fn to_atom(
-    solved_atom: &SolvedAtom,
-    free_vars: &mut FreeVars,
-    var_store: &mut VarStore,
-) -> Atom {
-    match solved_atom {
-        SolvedAtom::Zero => Atom::Zero,
-        SolvedAtom::One => Atom::One,
-        SolvedAtom::Variable(var_id) => {
-            if let Some(var) = free_vars.unnamed_vars.get(&var_id) {
-                Atom::Variable(*var)
-            } else {
-                let var = var_store.fresh();
-                free_vars.unnamed_vars.insert(*var_id, var);
+fn var_id_to_var(var_id: VarId, free_vars: &mut FreeVars, var_store: &mut VarStore) -> Variable {
+    if let Some(var) = free_vars.unnamed_vars.get(&var_id) {
+        *var
+    } else {
+        let var = var_store.fresh();
+        free_vars.unnamed_vars.insert(var_id, var);
 
-                Atom::Variable(var)
-            }
-        }
+        var
     }
 }
 
@@ -347,6 +338,7 @@ pub fn constrain_imported_aliases(
         let alias = Alias {
             vars,
             region: imported_alias.region,
+            uniqueness: imported_alias.uniqueness,
             typ: actual,
         };
 

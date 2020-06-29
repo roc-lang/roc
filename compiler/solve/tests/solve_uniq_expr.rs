@@ -54,7 +54,10 @@ mod solve_uniq_expr {
         let (problems, actual) = infer_eq_help(src);
 
         if !problems.is_empty() {
-            panic!("expected:\n{:?}\ninferred:\n{:?}", expected, actual);
+            panic!(
+                "expected:\n{:?}\ninferred:\n{:?}\nproblems:\n{:?}",
+                expected, actual, problems
+            );
         }
 
         assert_eq!(actual, expected.to_string());
@@ -1080,7 +1083,7 @@ mod solve_uniq_expr {
             // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
             // i.e. the `b` could be ignored in this example, is that true in general?
             // seems like it because we don't really extract anything.
-            "Attr * (Attr (* | a | b) [ Foo (Attr a c) (Attr b *) ]* -> Attr * [ Foo (Attr a c) (Attr * Str) ]*)"
+            "Attr * (Attr (* | a | b) [ Foo (Attr b c) (Attr a *) ]* -> Attr * [ Foo (Attr b c) (Attr * Str) ]*)"
         );
     }
 
@@ -1303,7 +1306,7 @@ mod solve_uniq_expr {
                         r
                 "#
             ),
-            "Attr * (Attr (a | b) { foo : (Attr a { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f -> Attr (a | b) { foo : (Attr a { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f)"
+            "Attr * (Attr (a | b) { foo : (Attr b { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f -> Attr (a | b) { foo : (Attr b { bar : (Attr Shared d), baz : (Attr Shared c) }e) }f)"
         );
     }
 
@@ -1321,7 +1324,7 @@ mod solve_uniq_expr {
                         r
                 "#
             ),
-            "Attr * (Attr (a | b) { foo : (Attr a { bar : (Attr Shared c) }d) }e -> Attr (a | b) { foo : (Attr a { bar : (Attr Shared c) }d) }e)"
+            "Attr * (Attr (a | b) { foo : (Attr b { bar : (Attr Shared c) }d) }e -> Attr (a | b) { foo : (Attr b { bar : (Attr Shared c) }d) }e)"
         );
     }
 
@@ -1356,8 +1359,7 @@ mod solve_uniq_expr {
                             r.tic.tac.toe
                 "#
             ),
-            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | b | e) { bar : (Attr (a | e) { baz : (Attr e f) }*) }*), tic : (Attr (c | d | e) { tac : (Attr (d | e) { toe : (Attr e f) }*) }*) }* -> Attr e f)"
-            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | b | c) { bar : (Attr (a | c) { baz : (Attr c f) }*) }*), tic : (Attr (c | d | e) { tac : (Attr (c | d) { toe : (Attr c f) }*) }*) }* -> Attr c f)"
+            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (d | b | e) { bar : (Attr (e | b) { baz : (Attr b f) }*) }*), tic : (Attr (a | b | c) { tac : (Attr (c | b) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
         );
     }
 
@@ -1475,7 +1477,7 @@ mod solve_uniq_expr {
                 quicksort
                    "#
             ),
-            "Attr Shared (Attr b (List (Attr Shared (Num (Attr c a)))), Attr Shared Int, Attr Shared Int -> Attr b (List (Attr Shared (Num (Attr c a)))))"
+            "Attr Shared (Attr b (List (Attr Shared (Num (Attr Shared a)))), Attr Shared Int, Attr Shared Int -> Attr b (List (Attr Shared (Num (Attr Shared a)))))"
         );
         })
     }
@@ -1623,10 +1625,10 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                    singleton : p -> [ Cons p (ConsList p), Nil ] as ConsList p
-                    singleton = \x -> Cons x Nil
+                singleton : p -> [ Cons p (ConsList p), Nil ] as ConsList p
+                singleton = \x -> Cons x Nil
 
-                    singleton
+                singleton
                 "#
             ),
             "Attr * (Attr a p -> Attr * (ConsList (Attr a p)))",
@@ -1668,7 +1670,7 @@ mod solve_uniq_expr {
                     map
                 "#
             ),
-            "Attr Shared (Attr Shared (Attr a p -> Attr b q), Attr * (ConsList (Attr a p)) -> Attr * (ConsList (Attr b q)))" ,
+            "Attr Shared (Attr Shared (Attr a p -> Attr b q), Attr (* | a) (ConsList (Attr a p)) -> Attr * (ConsList (Attr b q)))" ,
         );
     }
 
@@ -1690,7 +1692,7 @@ mod solve_uniq_expr {
                     map
                 "#
             ),
-            "Attr Shared (Attr Shared (Attr a b -> c), Attr d [ Cons (Attr a b) (Attr d e), Nil ]* as e -> Attr f [ Cons c (Attr f g), Nil ]* as g)" ,
+            "Attr Shared (Attr Shared (Attr a b -> c), Attr (d | a) [ Cons (Attr a b) (Attr (d | a) e), Nil ]* as e -> Attr f [ Cons c (Attr f g), Nil ]* as g)" ,
         );
     }
 
@@ -1735,8 +1737,6 @@ mod solve_uniq_expr {
         );
     }
 
-    // This snippet exhibits the rank issue. Seems to only occur when using recursive types with
-    // recursive functions.
     #[test]
     fn rigids_in_signature() {
         infer_eq(
@@ -1744,13 +1744,19 @@ mod solve_uniq_expr {
                 r#"
                     ConsList a : [ Cons a (ConsList a), Nil ]
 
-                    map : (p -> q), p -> ConsList q
-                    map = \f, x -> map f x
+                    map : (p -> q), ConsList p -> ConsList q
+                    map = \f, list ->
+                        when list is
+                            Cons x xs ->
+                                Cons (f x) (map f xs)
+
+                            Nil ->
+                                Nil
 
                     map
                 "#
             ),
-            "Attr Shared (Attr * (Attr a p -> Attr b q), Attr a p -> Attr * (ConsList (Attr b q)))",
+            "Attr Shared (Attr Shared (Attr a p -> Attr b q), Attr (* | a) (ConsList (Attr a p)) -> Attr * (ConsList (Attr b q)))",
         );
     }
 
@@ -1771,7 +1777,7 @@ mod solve_uniq_expr {
                     toEmpty
                 "#
             ),
-            "Attr * (Attr * (ConsList (Attr a p)) -> Attr * (ConsList (Attr a p)))",
+            "Attr * (Attr * (ConsList (Attr * p)) -> Attr * (ConsList (Attr * p)))",
         );
     }
 
@@ -1792,7 +1798,7 @@ mod solve_uniq_expr {
                     toEmpty
                 "#
             ),
-            "Attr Shared (Attr * (ConsList (Attr a p)) -> Attr * (ConsList (Attr a p)))",
+            "Attr Shared (Attr * (ConsList (Attr * p)) -> Attr * (ConsList (Attr * p)))",
         );
     }
 
@@ -1829,6 +1835,103 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    fn alias_of_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+               Foo : { x : Str, y : Float }
+
+               Bar : Foo
+
+               f : Bar -> Str
+               f = \{ x } -> x
+
+               f
+               "#
+            ),
+            "Attr * (Attr (* | a) Bar -> Attr a Str)",
+        );
+    }
+
+    #[test]
+    fn alias_of_alias_with_type_variable() {
+        infer_eq(
+            indoc!(
+                r#"
+                Identity a : [ Identity a ]
+
+                ID a : Identity a
+
+                f : ID a -> a
+                f = \Identity x -> x
+
+                f
+                "#
+            ),
+            "Attr * (Attr (* | b) (ID (Attr b a)) -> Attr b a)",
+        );
+    }
+
+    //    #[test]
+    //    fn assoc_list_map() {
+    //        infer_eq(
+    //                   indoc!(
+    //                       r#"
+    //                           ConsList a : [ Cons a (ConsList a), Nil ]
+    //                           AssocList a b : ConsList { key: a, value : b }
+    //
+    //                           map : AssocList k v -> AssocList k v
+    //                           map = \list ->
+    //                               when list is
+    //                                   Cons { key, value } xs ->
+    //                                       Cons {key: key,  value: value } xs
+    //
+    //                                   Nil ->
+    //                                       Nil
+    //
+    //                           map
+    //                       "#
+    //                   ),
+    //                    // "Attr Shared (Attr Shared (Attr Shared k, Attr a v -> Attr b v2), Attr (c | d | e) (AssocList (Attr Shared k) (Attr a v)) -> Attr (c | d | e) (AssocList (Attr Shared k) (Attr b v2)))"
+    //                   "Attr Shared (Attr Shared (Attr a p -> Attr b q), Attr (* | a) (ConsList (Attr a p)) -> Attr * (ConsList (Attr b q)))",
+    //               );
+    //    }
+
+    #[test]
+    fn same_uniqueness_builtin_list() {
+        infer_eq(
+                    indoc!(
+                        r#"
+                            toAs : (q -> p), p, q -> List p
+                            toAs =
+                                \f, x, y -> [ x, (f y) ]
+                            toAs
+                             "#
+                    ),
+                    "Attr * (Attr * (Attr a q -> Attr b p), Attr b p, Attr a q -> Attr * (List (Attr b p)))"
+                );
+    }
+
+    #[test]
+    fn same_uniqueness_cons_list() {
+        infer_eq(
+                    indoc!(
+                        r#"
+                            ConsList q : [ Cons q (ConsList q), Nil ]
+
+                            toAs : (q -> p), p, q -> ConsList p
+                            toAs =
+                                \f, x, y ->
+                                    # Cons (f y) (Cons x Nil)
+                                    Cons x (Cons (f y) Nil)
+                            toAs
+                             "#
+                    ),
+                    "Attr * (Attr * (Attr a q -> Attr b p), Attr b p, Attr a q -> Attr * (ConsList (Attr b p)))"
+                );
+    }
+
+    #[test]
     fn typecheck_mutually_recursive_tag_union() {
         infer_eq(
                     indoc!(
@@ -1849,10 +1952,14 @@ mod solve_uniq_expr {
                                                Cons b newLista ->
                                                    Cons a (Cons (f b) (toAs f newLista))
 
+                            foo = \_ ->
+                                x = 4
+                                { a : x, b : x }.a
+
                             toAs
                              "#
                     ),
-                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr * (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
+                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr (* | a | b) (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
                 );
     }
 
@@ -1873,7 +1980,7 @@ mod solve_uniq_expr {
                        toAs
                     "#
                 ),
-                "Attr Shared (Attr Shared (Attr a b -> c), Attr d [ Cons (Attr e f) (Attr * [ Cons (Attr a b) (Attr d g), Nil ]*), Nil ]* as g -> Attr h [ Cons (Attr e f) (Attr * [ Cons c (Attr h i) ]*), Nil ]* as i)",
+                "Attr Shared (Attr Shared (Attr a b -> c), Attr (d | a | e) [ Cons (Attr e f) (Attr (d | a | e) [ Cons (Attr a b) (Attr (d | a | e) g), Nil ]*), Nil ]* as g -> Attr h [ Cons (Attr e f) (Attr * [ Cons c (Attr h i) ]*), Nil ]* as i)"
             );
     }
 
@@ -1885,12 +1992,12 @@ mod solve_uniq_expr {
                     4 + 4
                 "#
             ),
-            "Attr * (Num (Attr * *))",
+            "Attr a (Num (Attr a *))",
         );
     }
 
     #[test]
-    fn list_get() {
+    fn list_get_at() {
         infer_eq(
             indoc!(
                 r#"
@@ -2004,7 +2111,7 @@ mod solve_uniq_expr {
                                 list
                "#
             ),
-            "Attr * (Attr a (List (Attr Shared (Num (Attr b c)))) -> Attr a (List (Attr Shared (Num (Attr b c)))))",
+            "Attr * (Attr a (List (Attr Shared (Num (Attr Shared b)))) -> Attr a (List (Attr Shared (Num (Attr Shared b)))))",
         );
     }
 
@@ -2025,31 +2132,10 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_set() {
-        infer_eq(indoc!(r#"List.set"#), "Attr * (Attr (* | a | b) (List (Attr a c)), Attr * Int, Attr (a | b) c -> Attr * (List (Attr a c)))");
-    }
-
-    #[test]
-    fn list_map() {
-        infer_eq(
-            indoc!(r#"List.map"#),
-            "Attr * (Attr * (List a), Attr Shared (a -> b) -> Attr * (List b))",
-        );
-    }
-
-    #[test]
     fn list_map_identity() {
         infer_eq(
             indoc!(r#"\list -> List.map list (\x -> x)"#),
             "Attr * (Attr * (List a) -> Attr * (List a))",
-        );
-    }
-
-    #[test]
-    fn list_foldr() {
-        infer_eq(
-            indoc!(r#"List.foldr"#),
-            "Attr * (Attr * (List a), Attr Shared (a, b -> b), b -> b)",
         );
     }
 
@@ -2063,15 +2149,72 @@ mod solve_uniq_expr {
                     sum
                 "#
             ),
-            "Attr * (Attr * (List (Attr * (Num (Attr a b)))) -> Attr * (Num (Attr a b)))",
+            "Attr * (Attr (* | a) (List (Attr a (Num (Attr a b)))) -> Attr c (Num (Attr c b)))",
+        );
+    }
+
+    #[test]
+    fn num_add() {
+        infer_eq(
+            "Num.add",
+            "Attr * (Attr a (Num (Attr a b)), Attr c (Num (Attr c b)) -> Attr d (Num (Attr d b)))",
+        );
+    }
+
+    #[test]
+    fn list_isempty() {
+        infer_eq("List.isEmpty", "Attr * (Attr * (List *) -> Attr * Bool)");
+    }
+
+    #[test]
+    fn list_len() {
+        infer_eq("List.len", "Attr * (Attr * (List *) -> Attr * Int)");
+    }
+
+    #[test]
+    fn list_get() {
+        infer_eq("List.get", "Attr * (Attr (* | a) (List (Attr a b)), Attr * Int -> Attr * (Result (Attr a b) (Attr * [ OutOfBounds ]*)))");
+    }
+
+    #[test]
+    fn list_set() {
+        infer_eq("List.set", "Attr * (Attr (* | a | b) (List (Attr a c)), Attr * Int, Attr (a | b) c -> Attr * (List (Attr a c)))");
+    }
+
+    #[test]
+    fn list_single() {
+        infer_eq("List.single", "Attr * (a -> Attr * (List a))");
+    }
+
+    #[test]
+    fn list_repeat() {
+        infer_eq(
+            "List.repeat",
+            "Attr * (Attr * Int, Attr Shared a -> Attr * (List (Attr Shared a)))",
         );
     }
 
     #[test]
     fn list_push() {
         infer_eq(
-            indoc!(r#"List.push"#),
-            "Attr * (Attr (* | a | b) (List (Attr a c)), Attr (a | b) c -> Attr * (List (Attr a c)))"
+            "List.push",
+            "Attr * (Attr * (List a), a -> Attr * (List a))",
+        );
+    }
+
+    #[test]
+    fn list_map() {
+        infer_eq(
+            "List.map",
+            "Attr * (Attr * (List a), Attr Shared (a -> b) -> Attr * (List b))",
+        );
+    }
+
+    #[test]
+    fn list_foldr() {
+        infer_eq(
+            "List.foldr",
+            "Attr * (Attr (* | a) (List (Attr a b)), Attr Shared (Attr a b, c -> c), c -> c)",
         );
     }
 
@@ -2085,7 +2228,7 @@ mod solve_uniq_expr {
                     singleton
                 "#
             ),
-            "Attr * (Attr (* | a) b -> Attr * (List (Attr a b)))",
+            "Attr * (a -> Attr * (List a))",
         );
     }
 
@@ -2095,12 +2238,10 @@ mod solve_uniq_expr {
             indoc!(
                 r#"
                     reverse = \list -> List.foldr list (\e, l -> List.push l e) []
-
                     reverse
                 "#
             ),
-            // "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr b c)))",
-            "Attr * (Attr * (List (Attr (a | b) c)) -> Attr (* | a | b) (List (Attr a c)))",
+            "Attr * (Attr (* | a) (List (Attr a b)) -> Attr * (List (Attr a b)))",
         );
     }
 
@@ -2115,6 +2256,377 @@ mod solve_uniq_expr {
                 "#
             ),
             "Attr * (Num (Attr * *))",
+        );
+    }
+
+    #[test]
+    fn set_empty() {
+        infer_eq("Set.empty", "Attr * (Set *)");
+    }
+
+    #[test]
+    fn set_singelton() {
+        infer_eq("Set.singleton", "Attr * (a -> Attr * (Set a))");
+    }
+
+    #[test]
+    fn set_union() {
+        infer_eq(
+            "Set.union",
+            "Attr * (Attr * (Set (Attr * a)), Attr * (Set (Attr * a)) -> Attr * (Set (Attr * a)))",
+        );
+    }
+
+    #[test]
+    fn set_diff() {
+        infer_eq(
+            "Set.diff",
+            "Attr * (Attr * (Set (Attr * a)), Attr * (Set (Attr * a)) -> Attr * (Set (Attr * a)))",
+        );
+    }
+
+    #[test]
+    fn set_foldl() {
+        infer_eq(
+            "Set.foldl",
+            "Attr * (Attr (* | a) (Set (Attr a b)), Attr Shared (Attr a b, c -> c), c -> c)",
+        );
+    }
+
+    #[test]
+    fn set_insert() {
+        infer_eq("Set.insert", "Attr * (Attr * (Set a), a -> Attr * (Set a))");
+    }
+
+    #[test]
+    fn set_remove() {
+        infer_eq(
+            "Set.remove",
+            "Attr * (Attr * (Set (Attr a b)), Attr * b -> Attr * (Set (Attr a b)))",
+        );
+    }
+
+    #[test]
+    fn map_empty() {
+        infer_eq("Map.empty", "Attr * (Map * *)");
+    }
+
+    #[test]
+    fn map_singelton() {
+        infer_eq("Map.singleton", "Attr * (a, b -> Attr * (Map a b))");
+    }
+
+    #[test]
+    fn map_get() {
+        infer_eq("Map.get", "Attr * (Attr (* | a) (Map (Attr * b) (Attr a c)), Attr * b -> Attr * (Result (Attr a c) (Attr * [ KeyNotFound ]*)))");
+    }
+
+    #[test]
+    fn map_insert() {
+        infer_eq(
+            "Map.insert",
+            "Attr * (Attr * (Map a b), a, b -> Attr * (Map a b))",
+        );
+    }
+
+    #[test]
+    fn str_is_empty() {
+        infer_eq("Str.isEmpty", "Attr * (Attr * Str -> Attr * Bool)");
+    }
+
+    #[test]
+    fn str_append() {
+        infer_eq(
+            "Str.append",
+            "Attr * (Attr * Str, Attr * Str -> Attr * Str)",
+        );
+    }
+
+    #[test]
+    fn result_map() {
+        infer_eq(
+            "Result.map",
+            "Attr * (Attr * (Result a b), Attr * (a -> c) -> Attr * (Result c b))",
+        );
+    }
+
+    #[test]
+    fn list_roc_head() {
+        infer_eq(
+            indoc!(
+                r#"
+                ConsList a : [ Cons a (ConsList a), Nil ]
+                Maybe a : [ Just a, Nothing ]
+
+                head : ConsList a -> Maybe a
+                head = \list ->
+                    when list is
+                        Cons x _ -> Just x
+                        Nil -> Nothing
+
+                head
+                "#
+            ),
+            "Attr * (Attr (* | b) (ConsList (Attr b a)) -> Attr * (Maybe (Attr b a)))",
+        );
+    }
+
+    #[test]
+    fn list_roc_is_empty() {
+        infer_eq(
+            indoc!(
+                r#"
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                isEmpty : ConsList a -> Bool
+                isEmpty = \list ->
+                    when list is
+                        Cons _ _ -> False
+                        Nil -> True
+
+                isEmpty
+                "#
+            ),
+            "Attr * (Attr (* | b) (ConsList (Attr b a)) -> Attr * Bool)",
+        );
+    }
+
+    #[test]
+    fn hidden_uniqueness_one() {
+        infer_eq(
+            indoc!(
+                r#"
+                Model : { foo : Int }
+
+                extract : Model -> Int
+                extract = \{ foo } -> foo
+
+                extract
+                "#
+            ),
+            "Attr * (Attr (* | a) Model -> Attr a Int)",
+        );
+    }
+
+    #[test]
+    fn hidden_uniqueness_two() {
+        infer_eq(
+            indoc!(
+                r#"
+                Model : { foo : Int, bar : Int  }
+
+                extract : Model -> Int
+                extract = \{ foo } -> foo
+
+                extract
+                "#
+            ),
+            "Attr * (Attr (* | a) Model -> Attr a Int)",
+        );
+    }
+
+    #[test]
+    fn hidden_uniqueness_three() {
+        infer_eq(
+            indoc!(
+                r#"
+                Model : { foo : Int, bar : Int }
+
+                # extract : { foo : Int, bar : Int  } -> Int
+                extract : Model -> Int
+                # extract = \r -> r.foo + r.bar
+                extract = \{foo, bar} -> foo + bar
+
+                extract
+                "#
+            ),
+            "Attr * (Attr (* | * | *) Model -> Attr * Int)",
+        );
+    }
+
+    #[test]
+    fn peano_roc_is_empty() {
+        infer_eq(
+            indoc!(
+                r#"
+                Peano : [ Z, S Peano ]
+
+                isEmpty : Peano -> Bool
+                isEmpty = \list ->
+                    when list is
+                        S _ -> False
+                        Z -> True
+
+                isEmpty
+                "#
+            ),
+            "Attr * (Attr * Peano -> Attr * Bool)",
+        );
+    }
+
+    #[test]
+    fn result_roc_map() {
+        infer_eq(
+            indoc!(
+                r#"
+                map : Result a e, (a -> b) -> Result b e
+                map = \result, f ->
+                    when result is
+                        Ok v -> Ok (f v)
+                        Err e -> Err e
+
+                map
+                "#
+            ),
+            "Attr * (Attr (* | c | d) (Result (Attr c a) (Attr d e)), Attr * (Attr c a -> Attr f b) -> Attr * (Result (Attr f b) (Attr d e)))"
+        );
+    }
+
+    #[test]
+    fn result_roc_with_default_with_signature() {
+        infer_eq(
+            indoc!(
+                r#"
+                withDefault : Result a e, a -> a
+                withDefault = \result, default ->
+                    when result is
+                        Ok v -> v
+                        Err _ -> default
+
+                withDefault
+                "#
+            ),
+            "Attr * (Attr (* | b | c) (Result (Attr b a) (Attr c e)), Attr b a -> Attr b a)",
+        );
+    }
+
+    #[test]
+    fn result_roc_with_default_no_signature() {
+        infer_eq(
+            indoc!(
+                r#"
+                \result, default ->
+                    when result is
+                        Ok x -> x
+                        Err _ -> default
+                "#
+            ),
+            "Attr * (Attr (* | a | b) [ Err (Attr a *), Ok (Attr b c) ]*, Attr b c -> Attr b c)",
+        );
+    }
+
+    #[test]
+    fn record_pattern_match_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                f : { x : b } -> b
+                f = \{ x } -> x
+
+                f
+                "#
+            ),
+            "Attr * (Attr (* | a) { x : (Attr a b) } -> Attr a b)",
+        );
+    }
+
+    #[test]
+    fn int_addition_with_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                f : Int, Int -> Int
+                f = \a, b -> a + b
+
+                f
+                "#
+            ),
+            "Attr * (Attr * Int, Attr * Int -> Attr * Int)",
+        );
+    }
+
+    #[test]
+    fn int_abs_with_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                foobar : Int -> Int
+                foobar = \x -> Num.abs x
+
+                foobar
+                "#
+            ),
+            "Attr * (Attr * Int -> Attr * Int)",
+        );
+    }
+
+    #[test]
+    fn int_addition_without_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                f = \a, b -> a + b + 0x0
+
+                f
+                "#
+            ),
+            "Attr * (Attr a Int, Attr b Int -> Attr c Int)",
+        );
+    }
+
+    #[test]
+    fn num_addition_with_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                f : Num a, Num a -> Num a
+                f = \a, b -> a + b
+
+                f
+                "#
+            ),
+            "Attr * (Attr b (Num (Attr b a)), Attr c (Num (Attr c a)) -> Attr d (Num (Attr d a)))",
+        );
+    }
+
+    #[test]
+    fn num_addition_without_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                f = \a, b -> a + b
+
+                f
+                "#
+            ),
+            "Attr * (Attr a (Num (Attr a b)), Attr c (Num (Attr c b)) -> Attr d (Num (Attr d b)))",
+        );
+    }
+
+    #[test]
+    fn num_abs_with_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                f : Num a -> Num a
+                f = \x -> Num.abs x
+
+                f
+                "#
+            ),
+            "Attr * (Attr b (Num (Attr b a)) -> Attr c (Num (Attr c a)))",
+        );
+    }
+
+    #[test]
+    fn num_abs_without_annotation() {
+        infer_eq(
+            indoc!(
+                r#"
+                \x -> Num.abs x
+                "#
+            ),
+            "Attr * (Attr a (Num (Attr a b)) -> Attr c (Num (Attr c b)))",
         );
     }
 
@@ -2154,7 +2666,7 @@ mod solve_uniq_expr {
                 reconstructPath
                 "#
             ),
-            "Attr Shared (Attr Shared (Map (Attr Shared position) (Attr Shared position)), Attr Shared position -> Attr * (List (Attr Shared position)))"
+            "Attr Shared (Attr Shared (Map (Attr * position) (Attr Shared position)), Attr Shared position -> Attr * (List (Attr Shared position)))"
         );
     }
 
@@ -2196,7 +2708,7 @@ mod solve_uniq_expr {
                 cheapestOpen
                 "#
             ),
-            "Attr * (Attr * (Attr Shared position -> Attr Shared Float), Attr * (Model (Attr Shared position)) -> Attr * (Result (Attr Shared position) (Attr * [ KeyNotFound ]*)))"
+            "Attr * (Attr * (Attr Shared position -> Attr Shared Float), Attr (* | * | *) (Model (Attr Shared position)) -> Attr * (Result (Attr Shared position) (Attr * [ KeyNotFound ]*)))"
         )
         });
     }
@@ -2363,20 +2875,24 @@ mod solve_uniq_expr {
                     findPath
                 "#
             ),
-            "Attr * (Attr * { costFunction : (Attr Shared (Attr Shared position, Attr Shared position -> Attr Shared Float)), end : (Attr Shared position), moveFunction : (Attr Shared (Attr Shared position -> Attr * (Set (Attr Shared position)))), start : (Attr Shared position) } -> Attr * (Result (Attr * (List (Attr Shared position))) (Attr * [ KeyNotFound ]*)))"
+            "Attr * (Attr * { costFunction : (Attr Shared (Attr Shared position, Attr Shared position -> Attr Shared Float)), end : (Attr Shared position), moveFunction : (Attr Shared (Attr Shared position -> Attr * (Set (Attr * position)))), start : (Attr Shared position) } -> Attr * (Result (Attr * (List (Attr Shared position))) (Attr * [ KeyNotFound ]*)))"
         )
         });
     }
 
     #[test]
-    fn equals() {
+    fn bool_eq() {
         infer_eq(
-            indoc!(
-                r#"
-                \a, b -> a == b
-                "#
-            ),
-            "Attr * (a, a -> Attr * Bool)",
+            "\\a, b -> a == b",
+            "Attr * (Attr * a, Attr * a -> Attr * Bool)",
+        );
+    }
+
+    #[test]
+    fn bool_neq() {
+        infer_eq(
+            "\\a, b -> a != b",
+            "Attr * (Attr * a, Attr * a -> Attr * Bool)",
         );
     }
 
@@ -2411,7 +2927,7 @@ mod solve_uniq_expr {
                         _ -> 3
                 "#
             ),
-            "Attr * (Attr Shared (Num (Attr * *)) -> Attr * (Num (Attr * *)))",
+            "Attr * (Attr Shared (Num (Attr Shared *)) -> Attr * (Num (Attr * *)))",
         );
     }
 }
