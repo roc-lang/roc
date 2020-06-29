@@ -553,7 +553,7 @@ fn unify_shared_tags(
                 }
             } else {
                 // we always unify NonRecursive with Recursive, so this should never happen
-                debug_assert!(Some(actual) != recursion_var);
+                debug_assert_ne!(Some(actual), recursion_var);
 
                 unify_pool(subs, pool, actual, expected)
             };

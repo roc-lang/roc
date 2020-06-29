@@ -458,29 +458,30 @@ impl Type {
             Apply(Symbol::ATTR_ATTR, attr_args) => {
                 use boolean_algebra::Bool;
 
-                let mut substitution = ImMap::default();
+                debug_assert_eq!(attr_args.len(), 2);
+                let mut it = attr_args.iter_mut();
+                let uniqueness_type = it.next().unwrap();
+                let base_type = it.next().unwrap();
 
-                if let Apply(symbol, _) = attr_args[1] {
-                    if let Some(alias) = aliases.get(&symbol) {
-                        if let Some(Bool::Container(unbound_cvar, mvars1)) =
-                            alias.uniqueness.clone()
+                // instantiate the rest
+                base_type.instantiate_aliases(region, aliases, var_store, introduced);
+
+                // correct uniqueness type
+                // if this attr contains an alias of a recursive tag union, then the uniqueness
+                // attribute on the recursion variable must match the uniqueness of the whole tag
+                // union. We enforce that here.
+
+                if let Some(rec_uvar) = find_rec_var_uniqueness(base_type, aliases) {
+                    if let Bool::Container(unbound_cvar, mvars1) = rec_uvar {
+                        if let Type::Boolean(Bool::Container(bound_cvar, mvars2)) = uniqueness_type
                         {
                             debug_assert!(mvars1.is_empty());
+                            debug_assert!(mvars2.is_empty());
 
-                            if let Type::Boolean(Bool::Container(bound_cvar, mvars2)) =
-                                &attr_args[0]
-                            {
-                                debug_assert!(mvars2.is_empty());
-                                substitution.insert(unbound_cvar, Type::Variable(*bound_cvar));
-                            }
+                            let mut substitution = ImMap::default();
+                            substitution.insert(unbound_cvar, Type::Variable(*bound_cvar));
+                            base_type.substitute(&substitution);
                         }
-                    }
-                }
-
-                for x in attr_args {
-                    x.instantiate_aliases(region, aliases, var_store, introduced);
-                    if !substitution.is_empty() {
-                        x.substitute(&substitution);
                     }
                 }
             }
@@ -686,6 +687,34 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                 variables_help(x, accum);
             }
         }
+    }
+}
+
+/// We're looking for an alias whose actual type is a recursive tag union
+/// if `base_type` is one, return the uniqueness variable of the alias.
+fn find_rec_var_uniqueness(
+    base_type: &Type,
+    aliases: &ImMap<Symbol, Alias>,
+) -> Option<boolean_algebra::Bool> {
+    use Type::*;
+
+    if let Alias(symbol, _, actual) = base_type {
+        match **actual {
+            Alias(_, _, _) => find_rec_var_uniqueness(actual, aliases),
+            RecursiveTagUnion(_, _, _) => {
+                if let Some(alias) = aliases.get(symbol) {
+                    // alias with a recursive tag union must have its uniqueness set
+                    debug_assert!(alias.uniqueness.is_some());
+
+                    alias.uniqueness.clone()
+                } else {
+                    unreachable!("aliases must be defined in the set of aliases!")
+                }
+            }
+            _ => None,
+        }
+    } else {
+        None
     }
 }
 

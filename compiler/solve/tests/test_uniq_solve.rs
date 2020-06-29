@@ -1872,6 +1872,57 @@ mod test_uniq_solve {
         );
     }
 
+    #[test]
+    fn alias_assoc_list_head() {
+        infer_eq(
+           indoc!(
+               r#"
+                   ConsList a : [ Cons a (ConsList a), Nil ]
+                   AssocList a b : ConsList { key: a, value : b }
+                   Maybe a : [ Just a, Nothing ]
+
+                   # AssocList2 a b : [ Cons { key: a, value : b } (AssocList2 a b), Nil ]
+
+                   head : AssocList k v -> Maybe { key: k , value: v  }
+                   head = \alist ->
+                       when alist is
+                           Cons first _ ->
+                                Just first
+
+                           Nil ->
+                               Nothing
+
+                   head
+               "#
+           ),
+            "Attr * (Attr (* | a) (AssocList (Attr b k) (Attr c v)) -> Attr * (Maybe (Attr a { key : (Attr b k), value : (Attr c v) })))"
+       );
+    }
+
+    #[test]
+    fn cons_list_as_assoc_list_head() {
+        infer_eq(
+           indoc!(
+               r#"
+                   ConsList a : [ Cons a (ConsList a), Nil ]
+                   Maybe a : [ Just a, Nothing ]
+
+                   head : ConsList { key: k, value: v } -> Maybe { key: k , value: v  }
+                   head = \alist ->
+                       when alist is
+                           Cons first _ ->
+                                Just first
+
+                           Nil ->
+                               Nothing
+
+                   head
+               "#
+           ),
+        "Attr * (Attr (* | a) (ConsList (Attr a { key : (Attr c k), value : (Attr b v) })) -> Attr * (Maybe (Attr a { key : (Attr c k), value : (Attr b v) })))"
+       );
+    }
+
     //    #[test]
     //    fn assoc_list_map() {
     //        infer_eq(
