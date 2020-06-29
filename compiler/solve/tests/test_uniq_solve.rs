@@ -1745,10 +1745,10 @@ mod test_uniq_solve {
                     ConsList a : [ Cons a (ConsList a), Nil ]
 
                     map : (p -> q), ConsList p -> ConsList q
-                    map = \f, list -> 
+                    map = \f, list ->
                         when list is
                             Cons x xs ->
-                                Cons (f x) (map f xs) 
+                                Cons (f x) (map f xs)
 
                             Nil ->
                                 Nil
@@ -1834,30 +1834,103 @@ mod test_uniq_solve {
         );
     }
 
+    #[test]
+    fn alias_of_alias() {
+        infer_eq(
+            indoc!(
+                r#"
+               Foo : { x : Str, y : Float }
+
+               Bar : Foo
+
+               f : Bar -> Str
+               f = \{ x } -> x
+
+               f
+               "#
+            ),
+            "Attr * (Attr (* | a) Bar -> Attr a Str)",
+        );
+    }
+
+    #[test]
+    fn alias_of_alias_with_type_variable() {
+        infer_eq(
+            indoc!(
+                r#"
+                Identity a : [ Identity a ]
+
+                ID a : Identity a
+
+                f : ID a -> a
+                f = \Identity x -> x
+
+                f
+                "#
+            ),
+            "Attr * (Attr (* | b) (ID (Attr b a)) -> Attr b a)",
+        );
+    }
+
     //    #[test]
     //    fn assoc_list_map() {
     //        infer_eq(
-    //            indoc!(
-    //                r#"
-    //                    ConsList a : [ Cons a (ConsList a), Nil ]
-    //                    AssocList a b : ConsList { key: a, value : b }
+    //                   indoc!(
+    //                       r#"
+    //                           ConsList a : [ Cons a (ConsList a), Nil ]
+    //                           AssocList a b : ConsList { key: a, value : b }
     //
-    //                    map : (k, v -> v2), AssocList k v -> ConsList k v2
-    //                    map = \f, list ->
-    //                        when list is
-    //                            Cons { key, value } xs ->
-    //                                Cons (f key value) (map f xs)
-    //                            Nil ->
-    //                                Nil
+    //                           map : AssocList k v -> AssocList k v
+    //                           map = \list ->
+    //                               when list is
+    //                                   Cons { key, value } xs ->
+    //                                       Cons {key: key,  value: value } xs
     //
-    //                    map
-    //                "#
-    //            ),
-    //            "Attr Shared (Attr Shared (Attr a p -> Attr b q), Attr (* | a) (ConsList (Attr a p)) -> Attr * (ConsList (Attr b q)))",
-    //        );
+    //                                   Nil ->
+    //                                       Nil
+    //
+    //                           map
+    //                       "#
+    //                   ),
+    //                    // "Attr Shared (Attr Shared (Attr Shared k, Attr a v -> Attr b v2), Attr (c | d | e) (AssocList (Attr Shared k) (Attr a v)) -> Attr (c | d | e) (AssocList (Attr Shared k) (Attr b v2)))"
+    //                   "Attr Shared (Attr Shared (Attr a p -> Attr b q), Attr (* | a) (ConsList (Attr a p)) -> Attr * (ConsList (Attr b q)))",
+    //               );
     //    }
-    //
-    //
+
+    #[test]
+    fn same_uniqueness_builtin_list() {
+        infer_eq(
+                    indoc!(
+                        r#"
+                            toAs : (q -> p), p, q -> List p
+                            toAs =
+                                \f, x, y -> [ x, (f y) ]
+                            toAs
+                             "#
+                    ),
+                    "Attr * (Attr * (Attr a q -> Attr b p), Attr b p, Attr a q -> Attr * (List (Attr b p)))"
+                );
+    }
+
+    #[test]
+    fn same_uniqueness_cons_list() {
+        infer_eq(
+                    indoc!(
+                        r#"
+                            ConsList q : [ Cons q (ConsList q), Nil ]
+
+                            toAs : (q -> p), p, q -> ConsList p
+                            toAs =
+                                \f, x, y ->
+                                    # Cons (f y) (Cons x Nil)
+                                    Cons x (Cons (f y) Nil)
+                            toAs
+                             "#
+                    ),
+                    "Attr * (Attr * (Attr a q -> Attr b p), Attr b p, Attr a q -> Attr * (ConsList (Attr b p)))"
+                );
+    }
+
     #[test]
     fn typecheck_mutually_recursive_tag_union() {
         infer_eq(
@@ -1883,10 +1956,10 @@ mod test_uniq_solve {
                                 x = 4
                                 { a : x, b : x }.a
 
-                            toAs 
+                            toAs
                              "#
                     ),
-                    "Attr Shared (Attr Shared (Attr a q -> Attr * p), Attr (* | a | b) (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
+                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr (* | a | b) (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
                 );
     }
 
@@ -2286,7 +2359,7 @@ mod test_uniq_solve {
 
                 head : ConsList a -> Maybe a
                 head = \list ->
-                    when list is 
+                    when list is
                         Cons x _ -> Just x
                         Nil -> Nothing
 
@@ -2304,10 +2377,10 @@ mod test_uniq_solve {
                 r#"
                 ConsList a : [ Cons a (ConsList a), Nil ]
 
-                isEmpty : ConsList a -> Bool 
+                isEmpty : ConsList a -> Bool
                 isEmpty = \list ->
-                    when list is 
-                        Cons _ _ -> False 
+                    when list is
+                        Cons _ _ -> False
                         Nil -> True
 
                 isEmpty
@@ -2324,7 +2397,7 @@ mod test_uniq_solve {
                 r#"
                 Model : { foo : Int }
 
-                extract : Model -> Int 
+                extract : Model -> Int
                 extract = \{ foo } -> foo
 
                 extract
@@ -2341,7 +2414,7 @@ mod test_uniq_solve {
                 r#"
                 Model : { foo : Int, bar : Int  }
 
-                extract : Model -> Int 
+                extract : Model -> Int
                 extract = \{ foo } -> foo
 
                 extract
@@ -2359,7 +2432,7 @@ mod test_uniq_solve {
                 Model : { foo : Int, bar : Int }
 
                 # extract : { foo : Int, bar : Int  } -> Int
-                extract : Model -> Int 
+                extract : Model -> Int
                 # extract = \r -> r.foo + r.bar
                 extract = \{foo, bar} -> foo + bar
 
@@ -2377,10 +2450,10 @@ mod test_uniq_solve {
                 r#"
                 Peano : [ Z, S Peano ]
 
-                isEmpty : Peano -> Bool 
+                isEmpty : Peano -> Bool
                 isEmpty = \list ->
-                    when list is 
-                        S _ -> False 
+                    when list is
+                        S _ -> False
                         Z -> True
 
                 isEmpty
@@ -2395,11 +2468,11 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                map : Result a e, (a -> b) -> Result b e 
+                map : Result a e, (a -> b) -> Result b e
                 map = \result, f ->
                     when result is
                         Ok v -> Ok (f v)
-                        Err e -> Err e 
+                        Err e -> Err e
 
                 map
                 "#
@@ -2413,11 +2486,11 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                withDefault : Result a e, a -> a 
+                withDefault : Result a e, a -> a
                 withDefault = \result, default ->
                     when result is
-                        Ok v -> v 
-                        Err _ -> default 
+                        Ok v -> v
+                        Err _ -> default
 
                 withDefault
                 "#

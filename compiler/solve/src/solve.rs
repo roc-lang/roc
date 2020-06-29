@@ -1076,9 +1076,11 @@ fn adjust_rank_content(
                     rank
                 }
 
-                Boolean(b) => {
-                    let mut rank = Rank::toplevel();
-                    for var in b.variables() {
+                Boolean(Bool::Shared) => Rank::toplevel(),
+                Boolean(Bool::Container(cvar, mvars)) => {
+                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, cvar);
+
+                    for var in mvars {
                         rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
                     }
 
