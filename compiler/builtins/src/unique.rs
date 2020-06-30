@@ -323,20 +323,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![num_type(star1, a)], float_type(star2))
     });
 
-    // Int module
-
-    // isLt or (<) : Num a, Num a -> Bool
-    add_type(Symbol::NUM_LT, {
-        let_tvars! { u, v, w };
-        unique_function(vec![int_type(u), int_type(v)], bool_type(w))
-    });
-
-    // abs : Int -> Int
-    add_type(Symbol::NUM_ABS, {
-        let_tvars! { u, v };
-        unique_function(vec![int_type(u)], int_type(v))
-    });
-
     // rem : Attr * Int, Attr * Int -> Attr * (Result (Attr * Int) (Attr * [ DivByZero ]*))
     add_type(Symbol::NUM_REM, {
         let_tvars! { star1, star2, star3, star4, star5 };
@@ -367,21 +353,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // rem : Int, Int -> Int
-    add_type(Symbol::NUM_REM, {
-        let_tvars! { star1, star2, star3, };
-        unique_function(vec![int_type(star1), int_type(star2)], int_type(star3))
-    });
-
-    // Float module
-
-    // isGt or (>) : Num a, Num a -> Bool
-    add_type(Symbol::NUM_GT, {
-        let_tvars! { star1, star2, star3}
-        unique_function(vec![float_type(star1), float_type(star2)], bool_type(star3))
-    });
-
-    // div : Float, Float -> Float
+    // divFloat : Float, Float -> Float
     add_type(Symbol::NUM_DIV_FLOAT, {
         let_tvars! { star1, star2, star3};
         unique_function(
@@ -389,15 +361,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             float_type(star3),
         )
     });
-
-    // mod : Float, Float -> Float
-    // add_type(Symbol::NUM_REM, {
-    //     let_tvars! { star1, star2, star3};
-    //     unique_function(
-    //         vec![float_type(star1), float_type(star2)],
-    //         float_type(star3),
-    //     )
-    // });
 
     // round : Float -> Int
     add_type(Symbol::NUM_ROUND, {
@@ -407,12 +370,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // sqrt : Float -> Float
     add_type(Symbol::NUM_SQRT, {
-        let_tvars! { star1, star2 };
-        unique_function(vec![float_type(star1)], float_type(star2))
-    });
-
-    // abs : Float -> Float
-    add_type(Symbol::NUM_ABS, {
         let_tvars! { star1, star2 };
         unique_function(vec![float_type(star1)], float_type(star2))
     });
