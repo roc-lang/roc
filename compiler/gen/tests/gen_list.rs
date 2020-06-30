@@ -12,7 +12,7 @@ extern crate roc_gen;
 mod helpers;
 
 #[cfg(test)]
-mod gen_builtins {
+mod gen_list {
     use crate::helpers::{can_expr, infer_expr, uniq_expr, CanExprOut};
     use bumpalo::Bump;
     use inkwell::context::Context;
