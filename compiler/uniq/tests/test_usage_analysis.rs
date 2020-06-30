@@ -18,10 +18,7 @@ mod test_usage_analysis {
     use roc_collections::all::{ImMap, ImSet};
     use roc_module::ident::Lowercase;
     use roc_module::symbol::{Interns, Symbol};
-    use roc_uniq::sharing;
-    use roc_uniq::sharing::FieldAccess;
-    use roc_uniq::sharing::VarUsage;
-    use roc_uniq::sharing::{Container, Mark, Usage};
+    use roc_uniq::sharing::{self, Container, FieldAccess, Mark, Usage, VarUsage};
     use std::collections::HashMap;
 
     use Container::*;
