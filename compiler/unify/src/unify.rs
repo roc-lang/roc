@@ -573,11 +573,11 @@ fn unify_shared_tags(
                     // with uniqueness inference). Thus we must expand the recursive tag union to
                     // unify if with the non-recursive one. Thus:
 
-                    // replace the rvar with ctx.second in expected
+                    // replace the rvar with ctx.second (the whole recursive tag union) in expected
                     subs.explicit_substitute(rvar, ctx.second, expected);
 
                     // but, by the `is_structure` condition above, only if we're unifying with a structure!
-                    // when `actual` is just a flex/rigid variable, the substitution will expand a
+                    // when `actual` is just a flex/rigid variable, the substitution would expand a
                     // recursive tag union infinitely!
 
                     unify_pool(subs, pool, actual, expected)

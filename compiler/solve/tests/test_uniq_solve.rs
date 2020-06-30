@@ -2010,6 +2010,40 @@ mod test_uniq_solve {
     }
 
     #[test]
+    fn typecheck_triple_mutually_recursive_tag_union() {
+        infer_eq(
+                    indoc!(
+                        r#"
+                        ListA a b : [ Cons a (ListB b a), Nil ]
+                        ListB a b : [ Cons a (ListC b a), Nil ]
+                        ListC a b : [ Cons a (ListA b a), Nil ]
+
+                        ConsList q : [ Cons q (ConsList q), Nil ]
+
+                        toAs : (q -> p), ListA p q -> ConsList p
+                        toAs =
+                            \f, lista ->
+                                when lista is
+                                    Nil -> Nil
+                                    Cons a listb ->
+                                        when listb is
+                                            Nil -> Nil
+                                            Cons b listc ->
+                                                when listc is
+                                                    Nil ->
+                                                        Nil
+
+                                                    Cons c newListA ->
+                                                        Cons a (Cons (f b) (Cons c (toAs f newListA)))
+
+                        toAs
+                        "#
+                    ),
+                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr (* | a | b) (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
+                );
+    }
+
+    #[test]
     fn infer_mutually_recursive_tag_union() {
         infer_eq(
                 indoc!(
