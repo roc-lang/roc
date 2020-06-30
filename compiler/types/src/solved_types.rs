@@ -65,16 +65,22 @@ impl SolvedBool {
     pub fn from_bool(boolean: &boolean_algebra::Bool, subs: &Subs) -> Self {
         use boolean_algebra::Bool;
 
-        // NOTE we blindly trust that `cvar` is a root and has a FlexVar as content
         match boolean {
             Bool::Shared => SolvedBool::SolvedShared,
-            Bool::Container(cvar, mvars) => SolvedBool::SolvedContainer(
-                VarId::from_var(*cvar, subs),
-                mvars
-                    .iter()
-                    .map(|mvar| VarId::from_var(*mvar, subs))
-                    .collect(),
-            ),
+            Bool::Container(cvar, mvars) => {
+                debug_assert!(matches!(
+                    subs.get_without_compacting(*cvar).content,
+                    crate::subs::Content::FlexVar(_)
+                ));
+
+                SolvedBool::SolvedContainer(
+                    VarId::from_var(*cvar, subs),
+                    mvars
+                        .iter()
+                        .map(|mvar| VarId::from_var(*mvar, subs))
+                        .collect(),
+                )
+            }
         }
     }
 }
