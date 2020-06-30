@@ -515,6 +515,17 @@ fn unify_tag_union(
     }
 }
 
+/// Is the given variable a structure. Does not consider Attr itself a structure, and instead looks
+/// into it.
+fn is_structure(var: Variable, subs: &mut Subs) -> bool {
+    match subs.get(var).content {
+        Content::Alias(_, _, actual) => is_structure(actual, subs),
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => is_structure(args[1], subs),
+        Content::Structure(_) => true,
+        _ => false,
+    }
+}
+
 fn unify_shared_tags(
     subs: &mut Subs,
     pool: &mut Pool,
@@ -543,12 +554,35 @@ fn unify_shared_tags(
             //
             // This correction introduces the same issue as in https://github.com/elm/compiler/issues/1964
             // Polymorphic recursion is now a type error.
+            //
+            // The strategy is to expand the recursive tag union as deeply as the non-recursive one
+            // is.
+            //
+            // > RecursiveTagUnion(rvar, [ Cons a rvar, Nil ], ext)
+            //
+            // Conceptually becomes
+            //
+            // > RecursiveTagUnion(rvar, [ Cons a [ Cons a rvar, Nil ], Nil ], ext)
+            //
+            // and so on until the whole non-recursive tag union can be unified with it.
             let problems = if let Some(rvar) = recursion_var {
                 if expected == rvar {
                     unify_pool(subs, pool, actual, ctx.second)
-                } else {
+                } else if is_structure(actual, subs) {
+                    // the recursion variable is hidden behind some structure (commonly an Attr
+                    // with uniqueness inference). Thus we must expand the recursive tag union to
+                    // unify if with the non-recursive one. Thus:
+
                     // replace the rvar with ctx.second in expected
                     subs.explicit_substitute(rvar, ctx.second, expected);
+
+                    // but, by the `is_structure` condition above, only if we're unifying with a structure!
+                    // when `actual` is just a flex/rigid variable, the substitution will expand a
+                    // recursive tag union infinitely!
+
+                    unify_pool(subs, pool, actual, expected)
+                } else {
+                    // unification with a non-structure is trivial
                     unify_pool(subs, pool, actual, expected)
                 }
             } else {

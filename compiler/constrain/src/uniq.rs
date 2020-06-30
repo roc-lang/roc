@@ -1929,6 +1929,8 @@ fn aliases_to_attr_type(var_store: &mut VarStore, aliases: &mut SendMap<Symbol, 
             _ => unreachable!("`annotation_to_attr_type` always gives back an Attr"),
         }
 
+        // TODO can we "just" fix this in alias instantiation?
+        // e.g. does this work for a triple-mutually-recursive alias?
         if let Some(b) = &alias.uniqueness {
             fix_mutual_recursive_alias(&mut alias.typ, b);
         }

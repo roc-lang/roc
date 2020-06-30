@@ -1923,30 +1923,25 @@ mod test_uniq_solve {
        );
     }
 
-    //    #[test]
-    //    fn assoc_list_map() {
-    //        infer_eq(
-    //                   indoc!(
-    //                       r#"
-    //                           ConsList a : [ Cons a (ConsList a), Nil ]
-    //                           AssocList a b : ConsList { key: a, value : b }
-    //
-    //                           map : AssocList k v -> AssocList k v
-    //                           map = \list ->
-    //                               when list is
-    //                                   Cons { key, value } xs ->
-    //                                       Cons {key: key,  value: value } xs
-    //
-    //                                   Nil ->
-    //                                       Nil
-    //
-    //                           map
-    //                       "#
-    //                   ),
-    //                    // "Attr Shared (Attr Shared (Attr Shared k, Attr a v -> Attr b v2), Attr (c | d | e) (AssocList (Attr Shared k) (Attr a v)) -> Attr (c | d | e) (AssocList (Attr Shared k) (Attr b v2)))"
-    //                   "Attr Shared (Attr Shared (Attr a p -> Attr b q), Attr (* | a) (ConsList (Attr a p)) -> Attr * (ConsList (Attr b q)))",
-    //               );
-    //    }
+    #[test]
+    fn assoc_list_map() {
+        infer_eq(
+            indoc!(
+                r#"
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                map : ConsList a -> ConsList a
+                map = \list ->
+                    when list is
+                        Cons r xs -> Cons r xs
+                        Nil -> Nil
+
+                map
+                "#
+            ),
+            "Attr * (Attr (b | c) (ConsList (Attr c a)) -> Attr (b | c) (ConsList (Attr c a)))",
+        );
+    }
 
     #[test]
     fn same_uniqueness_builtin_list() {
