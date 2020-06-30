@@ -272,8 +272,6 @@ mod test_uniq_load {
             let loaded_module =
                 load_fixture("interface_with_deps", "Primary", subs_by_module).await;
 
-            // the inferred signature for withDefault is wrong, part of the alias in alias issue.
-            // "withDefault" => "Attr * (Attr * (Res.Res (Attr a b) (Attr * *)), Attr a b -> Attr a b)",
             expect_types(
                 loaded_module,
                 hashmap! {
@@ -298,8 +296,6 @@ mod test_uniq_load {
             let subs_by_module = MutMap::default();
             let loaded_module = load_fixture("interface_with_deps", "Res", subs_by_module).await;
 
-            // the inferred signature for withDefault is wrong, part of the alias in alias issue.
-            // "withDefault" => "Attr * (Attr * (Res.Res (Attr a b) (Attr * *)), Attr a b -> Attr a b)",
             expect_types(
                 loaded_module,
                 hashmap! {
