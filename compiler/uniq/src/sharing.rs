@@ -733,7 +733,7 @@ fn annotate_low_level_usage(
             }
         }
 
-        ListSet | ListSetInPlace => {
+        ListSet | ListSetInPlace | ListPush => {
             match &args[0].1 {
                 Var(list_var) => {
                     usage.register_with(
@@ -757,7 +757,7 @@ fn annotate_low_level_usage(
 
         ListSingle | NumAdd | NumSub | NumMul | NumGt | NumGte | NumLt | NumLte | NumAbs
         | NumNeg | NumDivUnchecked | NumRemUnchecked | NumSqrtUnchecked | NumRound | NumSin
-        | NumCos | Eq | NotEq | And | Or | Not | NumToFloat => {
+        | NumCos | Eq | NotEq | And | Or | Not | NumToFloat | ListRepeat => {
             for (_, arg) in args {
                 annotate_usage(&arg, usage);
             }

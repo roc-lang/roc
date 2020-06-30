@@ -1014,19 +1014,12 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
     }
 }
 
+/// List.single : a -> List a
 fn list_single<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    layout: &Layout<'a>,
-    symbol: Symbol,
-    parent: FunctionValue<'ctx>,
-    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
+    elem: BasicValueEnum<'ctx>,
+    elem_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    // List.single : a -> List a
-    debug_assert_eq!(args.len(), 1);
-
-    let (elem, elem_layout) = args[0];
-
     let builder = env.builder;
     let ctx = env.context;
 
@@ -1090,24 +1083,16 @@ fn list_single<'a, 'ctx, 'env>(
     )
 }
 
+/// List.repeat : Int, elem -> List elem
 fn list_repeat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    layout: &Layout<'a>,
-    symbol: Symbol,
     parent: FunctionValue<'ctx>,
-    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
+    list_len: IntValue<'ctx>,
+    elem: BasicValueEnum<'ctx>,
+    elem_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    // List.repeat : Int, elem -> List elem
-    debug_assert_eq!(args.len(), 1);
-
-    // Number of repeats
-    let list_len = args[0].0.into_int_value();
-
     let builder = env.builder;
     let ctx = env.context;
-
-    let (elem, elem_layout) = args[1];
     let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
 
     // list_len > 0
@@ -1409,22 +1394,18 @@ fn bounds_check_comparison<'ctx>(
     builder.build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
 }
 
+/// List.push List elem, elem -> List elem
 fn list_push<'a, 'ctx, 'env>(
-    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
     env: &Env<'a, 'ctx, 'env>,
+    original_wrapper: StructValue<'ctx>,
+    elem: BasicValueEnum<'ctx>,
+    elem_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    // List.push List elem, elem -> List elem
     let builder = env.builder;
     let ctx = env.context;
 
-    debug_assert!(args.len() == 2);
-
-    let original_wrapper = args[0].0.into_struct_value();
-
     // Load the usize length from the wrapper.
     let list_len = load_list_len(builder, original_wrapper);
-
-    let (elem, elem_layout) = args[1];
     let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
     let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
@@ -1597,79 +1578,41 @@ fn run_low_level<'a, 'ctx, 'env>(
 
     match op {
         ListLen => {
+            // List.len : List * -> Int
             debug_assert_eq!(args.len(), 1);
 
             let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
 
-            BasicValueEnum::IntValue(load_list_len(env.builder, arg.into_struct_value()))
+            load_list_len(env.builder, arg.into_struct_value()).into()
         }
         ListSingle => {
             // List.single : a -> List a
             debug_assert_eq!(args.len(), 1);
 
-            let elem = build_expr(env, layout_ids, scope, parent, &args[0].0);
-            let builder = env.builder;
-            let ctx = env.context;
+            let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
 
-            let elem_layout = &args[0].1;
-            let elem_type = basic_type_from_layout(env.arena, ctx, &elem_layout, env.ptr_bytes);
-            let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+            list_single(env, arg, &args[0].1)
+        }
+        ListRepeat => {
+            // List.repeat : Int, elem -> List elem
+            debug_assert_eq!(args.len(), 2);
 
-            let ptr = {
-                let bytes_len = elem_bytes;
-                let len_type = env.ptr_int();
-                let len = len_type.const_int(bytes_len, false);
+            let list_len = build_expr(env, layout_ids, scope, parent, &args[0].0).into_int_value();
+            let elem = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let elem_layout = &args[1].1;
 
-                env.builder
-                    .build_array_malloc(elem_type, len, "create_list_ptr")
-                    .unwrap()
+            list_repeat(env, parent, list_len, elem, elem_layout)
+        }
+        ListPush => {
+            // List.push List elem, elem -> List elem
+            debug_assert_eq!(args.len(), 2);
 
-                // TODO check if malloc returned null; if so, runtime error for OOM!
-            };
+            let original_wrapper =
+                build_expr(env, layout_ids, scope, parent, &args[0].0).into_struct_value();
+            let elem = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let elem_layout = &args[1].1;
 
-            // Put the element into the list
-            let elem_ptr = unsafe {
-                builder.build_in_bounds_gep(
-                    ptr,
-                    &[ctx.i32_type().const_int(
-                        // 0 as in 0 index of our new list
-                        0 as u64, false,
-                    )],
-                    "index",
-                )
-            };
-
-            builder.build_store(elem_ptr, elem);
-
-            let ptr_bytes = env.ptr_bytes;
-            let int_type = ptr_int(ctx, ptr_bytes);
-            let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
-            let struct_type = collection(ctx, ptr_bytes);
-            let len = BasicValueEnum::IntValue(env.ptr_int().const_int(1, false));
-
-            let mut struct_val;
-
-            // Store the pointer
-            struct_val = builder
-                .build_insert_value(
-                    struct_type.get_undef(),
-                    ptr_as_int,
-                    Builtin::WRAPPER_PTR,
-                    "insert_ptr",
-                )
-                .unwrap();
-
-            // Store the length
-            struct_val = builder
-                .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
-                .unwrap();
-
-            //
-            builder.build_bitcast(
-                struct_val.into_struct_value(),
-                collection(ctx, ptr_bytes),
-                "cast_collection",
-            )
+            list_push(env, original_wrapper, elem, elem_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumToFloat => {
             debug_assert_eq!(args.len(), 1);
