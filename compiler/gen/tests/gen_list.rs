@@ -13,7 +13,7 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_list {
-    use crate::helpers::{can_expr, infer_expr, uniq_expr, CanExprOut};
+    use crate::helpers::{can_expr, infer_expr, uniq_expr, with_larger_debug_stack, CanExprOut};
     use bumpalo::Bump;
     use inkwell::context::Context;
     use inkwell::execution_engine::JitFunction;
@@ -298,13 +298,10 @@ mod gen_list {
 
     #[test]
     fn gen_quicksort() {
-        if true {
-            todo!("fix gen_quicksort stack overflow (note: TCO test passes, check to see if there's a stack overflow *before* the code begins to execute");
-        }
-
-        assert_evals_to!(
-            indoc!(
-                r#"
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
                     quicksort : List (Num a) -> List (Num a)
                     quicksort = \list ->
                         quicksortHelp list 0 (List.len list - 1)
@@ -364,10 +361,11 @@ mod gen_list {
 
                     quicksort [ 7, 4, 21, 19 ]
                 "#
-            ),
-            &[4, 7, 19, 21],
-            &'static [i64]
-        );
+                ),
+                &[4, 7, 19, 21],
+                &'static [i64]
+            );
+        });
     }
 
     #[test]
