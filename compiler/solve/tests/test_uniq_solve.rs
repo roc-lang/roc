@@ -1872,30 +1872,76 @@ mod test_uniq_solve {
         );
     }
 
-    //    #[test]
-    //    fn assoc_list_map() {
-    //        infer_eq(
-    //                   indoc!(
-    //                       r#"
-    //                           ConsList a : [ Cons a (ConsList a), Nil ]
-    //                           AssocList a b : ConsList { key: a, value : b }
-    //
-    //                           map : AssocList k v -> AssocList k v
-    //                           map = \list ->
-    //                               when list is
-    //                                   Cons { key, value } xs ->
-    //                                       Cons {key: key,  value: value } xs
-    //
-    //                                   Nil ->
-    //                                       Nil
-    //
-    //                           map
-    //                       "#
-    //                   ),
-    //                    // "Attr Shared (Attr Shared (Attr Shared k, Attr a v -> Attr b v2), Attr (c | d | e) (AssocList (Attr Shared k) (Attr a v)) -> Attr (c | d | e) (AssocList (Attr Shared k) (Attr b v2)))"
-    //                   "Attr Shared (Attr Shared (Attr a p -> Attr b q), Attr (* | a) (ConsList (Attr a p)) -> Attr * (ConsList (Attr b q)))",
-    //               );
-    //    }
+    #[test]
+    fn alias_assoc_list_head() {
+        infer_eq(
+           indoc!(
+               r#"
+                   ConsList a : [ Cons a (ConsList a), Nil ]
+                   AssocList a b : ConsList { key: a, value : b }
+                   Maybe a : [ Just a, Nothing ]
+
+                   # AssocList2 a b : [ Cons { key: a, value : b } (AssocList2 a b), Nil ]
+
+                   head : AssocList k v -> Maybe { key: k , value: v  }
+                   head = \alist ->
+                       when alist is
+                           Cons first _ ->
+                                Just first
+
+                           Nil ->
+                               Nothing
+
+                   head
+               "#
+           ),
+            "Attr * (Attr (* | a) (AssocList (Attr b k) (Attr c v)) -> Attr * (Maybe (Attr a { key : (Attr b k), value : (Attr c v) })))"
+       );
+    }
+
+    #[test]
+    fn cons_list_as_assoc_list_head() {
+        infer_eq(
+           indoc!(
+               r#"
+                   ConsList a : [ Cons a (ConsList a), Nil ]
+                   Maybe a : [ Just a, Nothing ]
+
+                   head : ConsList { key: k, value: v } -> Maybe { key: k , value: v  }
+                   head = \alist ->
+                       when alist is
+                           Cons first _ ->
+                                Just first
+
+                           Nil ->
+                               Nothing
+
+                   head
+               "#
+           ),
+        "Attr * (Attr (* | a) (ConsList (Attr a { key : (Attr c k), value : (Attr b v) })) -> Attr * (Maybe (Attr a { key : (Attr c k), value : (Attr b v) })))"
+       );
+    }
+
+    #[test]
+    fn assoc_list_map() {
+        infer_eq(
+            indoc!(
+                r#"
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                map : ConsList a -> ConsList a
+                map = \list ->
+                    when list is
+                        Cons r xs -> Cons r xs
+                        Nil -> Nil
+
+                map
+                "#
+            ),
+            "Attr * (Attr (b | c) (ConsList (Attr c a)) -> Attr (b | c) (ConsList (Attr c a)))",
+        );
+    }
 
     #[test]
     fn same_uniqueness_builtin_list() {
@@ -1958,6 +2004,40 @@ mod test_uniq_solve {
 
                             toAs
                              "#
+                    ),
+                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr (* | a | b) (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
+                );
+    }
+
+    #[test]
+    fn typecheck_triple_mutually_recursive_tag_union() {
+        infer_eq(
+                    indoc!(
+                        r#"
+                        ListA a b : [ Cons a (ListB b a), Nil ]
+                        ListB a b : [ Cons a (ListC b a), Nil ]
+                        ListC a b : [ Cons a (ListA b a), Nil ]
+
+                        ConsList q : [ Cons q (ConsList q), Nil ]
+
+                        toAs : (q -> p), ListA p q -> ConsList p
+                        toAs =
+                            \f, lista ->
+                                when lista is
+                                    Nil -> Nil
+                                    Cons a listb ->
+                                        when listb is
+                                            Nil -> Nil
+                                            Cons b listc ->
+                                                when listc is
+                                                    Nil ->
+                                                        Nil
+
+                                                    Cons c newListA ->
+                                                        Cons a (Cons (f b) (Cons c (toAs f newListA)))
+
+                        toAs
+                        "#
                     ),
                     "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr (* | a | b) (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
                 );
