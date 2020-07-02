@@ -211,7 +211,7 @@ pub fn name_all_type_vars(variable: Variable, subs: &mut Subs) {
 
     for root in roots {
         // show the type variable number instead of `*`. useful for debugging
-        // set_root_name(root, &(format!("<{:?}>", root).into()), subs);
+        // set_root_name(root, (format!("<{:?}>", root).into()), subs);
         if let Some(Appearances::Multiple) = appearances.get(&root) {
             letters_used = name_root(letters_used, root, subs, &mut taken);
         }
@@ -226,21 +226,19 @@ fn name_root(
 ) -> u32 {
     let (generated_name, new_letters_used) = name_type_var(letters_used, taken);
 
-    set_root_name(root, &generated_name, subs);
+    set_root_name(root, generated_name, subs);
 
     new_letters_used
 }
 
-fn set_root_name(root: Variable, name: &Lowercase, subs: &mut Subs) {
+fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
     use crate::subs::Content::*;
 
     let mut descriptor = subs.get_without_compacting(root);
 
     match descriptor.content {
         FlexVar(None) => {
-            descriptor.content = FlexVar(Some(name.clone()));
-
-            // TODO is this necessary, or was mutating descriptor in place sufficient?
+            descriptor.content = FlexVar(Some(name));
             subs.set(root, descriptor);
         }
         FlexVar(Some(_existing)) => {
