@@ -246,11 +246,6 @@ pub fn can_problem<'b>(
             alloc.reflow("This annotation does not match the definition immediately following it:"),
             alloc.region(Region::span_across(annotation_pattern, def_pattern)),
             alloc.reflow("Is it a typo? If not, put either a newline or comment between them."),
-            // TODO add link to this guide section
-            //            alloc.hint().append(alloc.reflow(
-            //                "If you want an unused type parameter (a so-called \"phantom type\"), \
-            //                read the guide section on phantom data.",
-            //            )),
         ]),
         Problem::RuntimeError(runtime_error) => pretty_runtime_error(alloc, runtime_error),
     };
