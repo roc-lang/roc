@@ -1,6 +1,7 @@
 use roc_collections::all::MutSet;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{Problem, RuntimeError};
+use roc_region::all::Region;
 use std::path::PathBuf;
 
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
@@ -237,6 +238,19 @@ pub fn can_problem<'b>(
                 alloc.tag_name(tag_name),
                 alloc.reflow(" definitions from this tag union type."),
             ]),
+        ]),
+        Problem::SignatureDefMismatch {
+            ref annotation_pattern,
+            ref def_pattern,
+        } => alloc.stack(vec![
+            alloc.reflow("This annotation does not match the definition immediately following it:"),
+            alloc.region(Region::span_across(annotation_pattern, def_pattern)),
+            alloc.reflow("Is it a typo? If not, put either a newline or comment between them."),
+            // TODO add link to this guide section
+            //            alloc.hint().append(alloc.reflow(
+            //                "If you want an unused type parameter (a so-called \"phantom type\"), \
+            //                read the guide section on phantom data.",
+            //            )),
         ]),
         Problem::RuntimeError(runtime_error) => pretty_runtime_error(alloc, runtime_error),
     };
