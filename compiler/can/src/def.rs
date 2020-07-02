@@ -168,7 +168,15 @@ pub fn canonicalize_defs<'a>(
                                 pattern_type,
                             )
                         } else {
-                            panic!("TODO gracefully handle the case where a type annotation appears immediately before a body def, but the patterns are different. This should be an error; put a newline or comment between them!");
+                            // the pattern of the annotation does not match the pattern of the body directly below it
+                            env.problems.push(Problem::SignatureDefMismatch {
+                                annotation_pattern: pattern.region,
+                                def_pattern: body_pattern.region,
+                            });
+
+                            // both the annotation and definition are skipped!
+                            iter.next();
+                            continue;
                         }
                     }
                     _ => to_pending_def(env, var_store, &loc_def.value, &mut scope, pattern_type),

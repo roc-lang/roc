@@ -2685,6 +2685,34 @@ mod test_reporting {
     }
 
     #[test]
+    fn annotation_definition_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                bar : Int
+                foo = \x -> x
+
+                # NOTE: neither bar or foo are defined at this point
+                4
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This annotation does not match the definition immediately following
+                it:
+
+                1 ┆>  bar : Int
+                2 ┆>  foo = \x -> x
+
+                Is it a typo? If not, put either a newline or comment between them.
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn invalid_num() {
         report_problem_as(
             indoc!(
