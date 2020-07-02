@@ -188,10 +188,11 @@ fn find_names_needed(
                 find_names_needed(args[0].1, subs, roots, root_appearances, names_taken);
                 find_names_needed(args[1].1, subs, roots, root_appearances, names_taken);
             } else {
-                // TODO should we also look in the actual variable?
                 for (_, var) in args {
                     find_names_needed(var, subs, roots, root_appearances, names_taken);
                 }
+                // TODO should we also look in the actual variable?
+                // find_names_needed(_actual, subs, roots, root_appearances, names_taken);
             }
         }
         Error | Structure(Erroneous(_)) | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
@@ -332,8 +333,7 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
                     }
 
                     // useful for debugging
-                    let write_out_alias = false;
-                    if write_out_alias {
+                    if false {
                         buf.push_str("[[ but really ");
                         let content = subs.get_without_compacting(_actual).content;
                         write_content(env, content, subs, buf, parens);

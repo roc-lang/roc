@@ -199,7 +199,8 @@ impl UnifyKey for Variable {
 pub struct VarId(u32);
 
 impl VarId {
-    pub fn from_var(var: Variable) -> Self {
+    pub fn from_var(var: Variable, subs: &Subs) -> Self {
+        let var = subs.get_root_key_without_compacting(var);
         let Variable(n) = var;
 
         VarId(n)

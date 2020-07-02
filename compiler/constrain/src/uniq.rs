@@ -1929,6 +1929,9 @@ fn aliases_to_attr_type(var_store: &mut VarStore, aliases: &mut SendMap<Symbol, 
             _ => unreachable!("`annotation_to_attr_type` always gives back an Attr"),
         }
 
+        // Check that if the alias is a recursive tag union, all structures containing the
+        // recursion variable get the same uniqueness as the recursion variable (and thus as the
+        // recursive tag union itself)
         if let Some(b) = &alias.uniqueness {
             fix_mutual_recursive_alias(&mut alias.typ, b);
         }
@@ -2356,10 +2359,12 @@ fn fix_mutual_recursive_alias_help_help(rec_var: Variable, attribute: &Type, int
         }
         RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
             fix_mutual_recursive_alias_help(rec_var, attribute, ext);
-            tags.iter_mut()
-                .map(|v| v.1.iter_mut())
-                .flatten()
-                .for_each(|arg| fix_mutual_recursive_alias_help(rec_var, attribute, arg));
+
+            for (_tag, args) in tags.iter_mut() {
+                for arg in args.iter_mut() {
+                    fix_mutual_recursive_alias_help(rec_var, attribute, arg);
+                }
+            }
         }
 
         Record(fields, ext) => {
@@ -2369,7 +2374,8 @@ fn fix_mutual_recursive_alias_help_help(rec_var: Variable, attribute: &Type, int
                 .for_each(|arg| fix_mutual_recursive_alias_help(rec_var, attribute, arg));
         }
         Alias(_, _, actual_type) => {
-            fix_mutual_recursive_alias_help(rec_var, attribute, actual_type);
+            // call help_help, because actual_type is not wrapped in ATTR
+            fix_mutual_recursive_alias_help_help(rec_var, attribute, actual_type);
         }
         Apply(_, args) => {
             args.iter_mut()
