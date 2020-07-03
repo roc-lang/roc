@@ -1647,10 +1647,13 @@ fn call_with_args<'a, 'ctx, 'env>(
                     builder.build_store(start_alloca, next_index);
 
                     let list_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
+
+                    // The pointer to the element in the input list
                     let elem_ptr = unsafe {
                         builder.build_in_bounds_gep(list_ptr, &[curr_index], "load_index")
                     };
 
+                    // The pointer to the element in the reversed list
                     let reverse_elem_ptr = unsafe {
                         builder.build_in_bounds_gep(
                             reversed_list_ptr,
