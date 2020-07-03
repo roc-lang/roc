@@ -630,6 +630,28 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
+    // reverse : Attr * (List (Attr * a)) -> Attr * (List (Attr * a))
+    add_type(Symbol::LIST_REVERSE, {
+        let_tvars! { a, star1, star2 };
+
+        unique_function(
+            vec![SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    flex(star1),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)]),
+                ],
+            )],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    boolean(star2),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)]),
+                ],
+            ),
+        )
+    });
+
     // push : Attr * (List a)
     //      , a
     //     -> Attr * (List a)

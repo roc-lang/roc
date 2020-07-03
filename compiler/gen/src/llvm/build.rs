@@ -1610,18 +1610,18 @@ fn call_with_args<'a, 'ctx, 'env>(
             // dont need to allocate memory for the index or the check
             // if list_len == 0
             let comparison = builder.build_int_compare(
-                IntPredicate::EQ,
+                IntPredicate::NE,
                 list_len,
                 ctx.i64_type().const_int(0, false),
                 "atleastzero",
             );
 
             let build_then = || {
-                // Allocate space for the new array that we'll copy into.
-                let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-
                 match list_layout {
                     Layout::Builtin(Builtin::List(elem_layout)) => {
+                        // Allocate space for the new array that we'll copy into.
+                        let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+
                         let list_ptr = {
                             let len_type = env.ptr_int();
                             let len = len_type.const_int(elem_bytes, false);
@@ -1663,7 +1663,7 @@ fn call_with_args<'a, 'ctx, 'env>(
 
                         // Mutate the new array in-place to change the element.
                         // builder.build_store(elem_ptr, builder.build_load(elem_ptr, "List.get"));
-                        builder.build_store(elem_ptr, curr_index);
+                        builder.build_store(elem_ptr, ctx.i64_type().const_int(1, false));
 
                         // #index != 0
                         let end_cond = builder.build_int_compare(

@@ -512,8 +512,12 @@ mod gen_builtins {
         assert_evals_to!("List.repeat 5 1", &[1, 1, 1, 1, 1], &'static [i64]);
         assert_evals_to!("List.repeat 4 2", &[2, 2, 2, 2], &'static [i64]);
 
-        assert_evals_to!("List.repeat 0 []", &[], &'static [i64]);
         assert_evals_to!("List.repeat 2 []", &[&[], &[]], &'static [&'static [i64]]);
+    }
+
+    #[test]
+    fn list_reverse() {
+        assert_evals_to!("List.reverse [1, 2, 3]", &[3, 2, 1], &'static [i64]);
     }
 
     #[test]
