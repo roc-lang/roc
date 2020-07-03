@@ -50,6 +50,10 @@ pub enum Problem {
         annotation_pattern: Region,
         def_pattern: Region,
     },
+    InvalidAliasRigid {
+        alias_name: Symbol,
+        region: Region,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

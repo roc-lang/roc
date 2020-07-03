@@ -79,7 +79,10 @@ enum PendingDef<'a> {
         ann: &'a Located<ast::TypeAnnotation<'a>>,
     },
 
-    ShadowedAlias,
+    /// An invalid alias, that is ignored in the rest of the pipeline
+    /// e.g. a shadowed alias, or a definition like `MyAlias 1 : Int`
+    /// with an incorrect pattern
+    InvalidAlias,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -899,9 +902,8 @@ fn canonicalize_pending_def<'a>(
                 .union(&can_ann.introduced_variables);
         }
 
-        ShadowedAlias => {
-            // Since this alias was shadowed, it gets ignored and has no
-            // effect on the output.
+        InvalidAlias => {
+            // invalid aliases (shadowed, incorrect patterns) get ignored
         }
         TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
             let ann =
@@ -1365,7 +1367,13 @@ fn to_pending_def<'a>(
                                 });
                             }
                             _ => {
-                                panic!("TODO gracefully handle an invalid pattern appearing where a type alias rigid var should be.");
+                                // any other pattern in this position is a syntax error.
+                                env.problems.push(Problem::InvalidAliasRigid {
+                                    alias_name: symbol,
+                                    region: loc_var.region,
+                                });
+
+                                return PendingDef::InvalidAlias;
                             }
                         }
                     }
@@ -1386,7 +1394,7 @@ fn to_pending_def<'a>(
                         shadow: loc_shadowed_symbol,
                     });
 
-                    PendingDef::ShadowedAlias
+                    PendingDef::InvalidAlias
                 }
             }
         }

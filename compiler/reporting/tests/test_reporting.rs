@@ -2715,6 +2715,41 @@ mod test_reporting {
     }
 
     #[test]
+    fn invalid_alias_rigid_var_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                MyAlias 1 : Int
+
+                4
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This pattern in the definition of `MyAlias` is not what I expect:
+
+                1 ┆  MyAlias 1 : Int
+                  ┆          ^
+
+                Only type variables like `a` or `value` can occur in this position.
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                `MyAlias` is not used anywhere in your code.
+
+                1 ┆  MyAlias 1 : Int
+                  ┆  ^^^^^^^^^^^^^^^
+
+                If you didn't intend on using `MyAlias` then remove it so future readers
+                of your code don't wonder why it is there.
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn invalid_num() {
         report_problem_as(
             indoc!(

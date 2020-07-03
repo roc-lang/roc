@@ -247,6 +247,21 @@ pub fn can_problem<'b>(
             alloc.region(Region::span_across(annotation_pattern, def_pattern)),
             alloc.reflow("Is it a typo? If not, put either a newline or comment between them."),
         ]),
+        Problem::InvalidAliasRigid { alias_name, region } => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("This pattern in the definition of "),
+                alloc.symbol_unqualified(alias_name),
+                alloc.reflow(" is not what I expect:"),
+            ]),
+            alloc.region(region),
+            alloc.concat(vec![
+                alloc.reflow("Only type variables like "),
+                alloc.type_variable("a".into()),
+                alloc.reflow(" or "),
+                alloc.type_variable("value".into()),
+                alloc.reflow(" can occur in this position."),
+            ]),
+        ]),
         Problem::RuntimeError(runtime_error) => pretty_runtime_error(alloc, runtime_error),
     };
 
