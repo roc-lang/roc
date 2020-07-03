@@ -10,7 +10,7 @@ use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
-use roc_module::ident::{Ident, Lowercase};
+use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
 use roc_parse::pattern::PatternType;
@@ -41,9 +41,7 @@ pub struct Annotation {
 
 #[derive(Debug)]
 pub struct CanDefs {
-    // TODO don't store the Ident in here (lots of cloning!) - instead,
-    // make refs_by_symbol be something like MutMap<Symbol, (Region, References)>
-    pub refs_by_symbol: MutMap<Symbol, (Located<Ident>, References)>,
+    pub refs_by_symbol: MutMap<Symbol, (Region, References)>,
     pub can_defs_by_symbol: MutMap<Symbol, Def>,
     pub aliases: SendMap<Symbol, Alias>,
 }
@@ -90,10 +88,7 @@ enum PendingDef<'a> {
 pub enum Declaration {
     Declare(Def),
     DeclareRec(Vec<Def>),
-    InvalidCycle(
-        Vec<Located<Ident>>,
-        Vec<(Region /* pattern */, Region /* expr */)>,
-    ),
+    InvalidCycle(Vec<Symbol>, Vec<(Region /* pattern */, Region /* expr */)>),
 }
 
 impl Declaration {
@@ -560,17 +555,18 @@ pub fn sort_can_defs(
 
                 if is_invalid_cycle {
                     // We want to show the entire cycle in the error message, so expand it out.
-                    let mut loc_idents_in_cycle: Vec<Located<Ident>> = Vec::new();
+                    let mut loc_symbols = Vec::new();
 
                     for symbol in cycle {
-                        let refs = refs_by_symbol.get(&symbol).unwrap_or_else(|| {
-                            panic!(
-                            "Symbol not found in refs_by_symbol: {:?} - refs_by_symbol was: {:?}",
-                            symbol, refs_by_symbol
-                        )
-                        });
-
-                        loc_idents_in_cycle.push(refs.0.clone());
+                        match refs_by_symbol.get(&symbol) {
+                            None => unreachable!(
+                                r#"Symbol `{:?}` not found in refs_by_symbol! refs_by_symbol was: {:?}"#,
+                                symbol, refs_by_symbol
+                            ),
+                            Some((region, _)) => {
+                                loc_symbols.push(Located::at(*region, symbol));
+                            }
+                        }
                     }
 
                     let mut regions = Vec::with_capacity(can_defs_by_symbol.len());
@@ -578,16 +574,19 @@ pub fn sort_can_defs(
                         regions.push((def.loc_pattern.region, def.loc_expr.region));
                     }
 
-                    // Sort them to make the report more helpful.
-                    loc_idents_in_cycle.sort();
+                    // Sort them by line number to make the report more helpful.
+                    loc_symbols.sort();
                     regions.sort();
 
+                    let symbols_in_cycle: Vec<Symbol> =
+                        loc_symbols.into_iter().map(|s| s.value).collect();
+
                     problems.push(Problem::RuntimeError(RuntimeError::CircularDef(
-                        loc_idents_in_cycle.clone(),
+                        symbols_in_cycle.clone(),
                         regions.clone(),
                     )));
 
-                    declarations.push(Declaration::InvalidCycle(loc_idents_in_cycle, regions));
+                    declarations.push(Declaration::InvalidCycle(symbols_in_cycle, regions));
                 } else {
                     // slightly inefficient, because we know this becomes exactly one DeclareRec already
                     group_to_declaration(
@@ -736,7 +735,7 @@ fn canonicalize_pending_def<'a>(
     scope: &mut Scope,
     can_defs_by_symbol: &mut MutMap<Symbol, Def>,
     var_store: &mut VarStore,
-    refs_by_symbol: &mut MutMap<Symbol, (Located<Ident>, References)>,
+    refs_by_symbol: &mut MutMap<Symbol, (Region, References)>,
     aliases: &mut SendMap<Symbol, Alias>,
 ) -> Output {
     use PendingDef::*;
@@ -1003,7 +1002,7 @@ fn canonicalize_pending_def<'a>(
 
             // Store the referenced locals in the refs_by_symbol map, so we can later figure out
             // which defined names reference each other.
-            for (ident, (symbol, region)) in scope.idents() {
+            for (_, (symbol, region)) in scope.idents() {
                 if !vars_by_symbol.contains_key(&symbol) {
                     continue;
                 }
@@ -1018,16 +1017,7 @@ fn canonicalize_pending_def<'a>(
                         can_output.references.clone()
                     };
 
-                refs_by_symbol.insert(
-                    *symbol,
-                    (
-                        Located {
-                            value: ident.clone(),
-                            region: *region,
-                        },
-                        refs,
-                    ),
-                );
+                refs_by_symbol.insert(*symbol, (*region, refs));
 
                 can_defs_by_symbol.insert(
                     *symbol,
@@ -1148,23 +1138,7 @@ fn canonicalize_pending_def<'a>(
                         can_output.references.clone()
                     };
 
-                let ident = env
-                    .ident_ids
-                    .get_name(symbol.ident_id())
-                    .unwrap_or_else(|| {
-                        panic!("Could not find {:?} in env.ident_ids", symbol);
-                    });
-
-                refs_by_symbol.insert(
-                    symbol,
-                    (
-                        Located {
-                            value: ident.clone().into(),
-                            region,
-                        },
-                        refs,
-                    ),
-                );
+                refs_by_symbol.insert(symbol, (region, refs));
 
                 can_defs_by_symbol.insert(
                     symbol,

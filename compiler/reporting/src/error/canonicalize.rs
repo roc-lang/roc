@@ -298,13 +298,13 @@ fn pretty_runtime_error<'b>(
         RuntimeError::LookupNotInScope(loc_name, options) => {
             not_found(alloc, loc_name.region, &loc_name.value, "value", options)
         }
-        RuntimeError::CircularDef(mut idents, regions) => {
-            let first = idents.remove(0);
+        RuntimeError::CircularDef(mut symbols, regions) => {
+            let first = symbols.remove(0);
 
-            if idents.is_empty() {
+            if symbols.is_empty() {
                 alloc
                     .reflow("The ")
-                    .append(alloc.ident(first.value))
+                    .append(alloc.symbol_unqualified(first))
                     .append(alloc.reflow(
                         " value is defined directly in terms of itself, causing an infinite loop.",
                     ))
@@ -314,24 +314,24 @@ fn pretty_runtime_error<'b>(
                 alloc.stack(vec![
                     alloc
                         .reflow("The ")
-                        .append(alloc.ident(first.value.clone()))
+                        .append(alloc.symbol_unqualified(first))
                         .append(
                             alloc.reflow(" definition is causing a very tricky infinite loop:"),
                         ),
                     alloc.region(regions[0].0),
                     alloc
                         .reflow("The ")
-                        .append(alloc.ident(first.value.clone()))
+                        .append(alloc.symbol_unqualified(first))
                         .append(alloc.reflow(
                             " value depends on itself through the following chain of definitions:",
                         )),
                     crate::report::cycle(
                         alloc,
                         4,
-                        alloc.ident(first.value),
-                        idents
+                        alloc.symbol_unqualified(first),
+                        symbols
                             .into_iter()
-                            .map(|ident| alloc.ident(ident.value))
+                            .map(|s| alloc.symbol_unqualified(s))
                             .collect::<Vec<_>>(),
                     ),
                     // TODO hint?
