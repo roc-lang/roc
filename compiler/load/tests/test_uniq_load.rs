@@ -220,12 +220,12 @@ mod test_uniq_load {
             expect_types(
                 loaded_module,
                 hashmap! {
-                    "findPath" => "Attr * (Attr * { costFunction : (Attr Shared (Attr Shared position, Attr Shared position -> Attr Shared Float)), end : (Attr Shared position), moveFunction : (Attr Shared (Attr Shared position -> Attr * (Set (Attr Shared position)))), start : (Attr Shared position) } -> Attr * (Result (Attr * (List (Attr Shared position))) (Attr * [ KeyNotFound ]*)))",
+                    "findPath" => "Attr * (Attr * { costFunction : (Attr Shared (Attr Shared position, Attr Shared position -> Attr Shared Float)), end : (Attr Shared position), moveFunction : (Attr Shared (Attr Shared position -> Attr * (Set (Attr * position)))), start : (Attr Shared position) } -> Attr * (Result (Attr * (List (Attr Shared position))) (Attr * [ KeyNotFound ]*)))",
                     "initialModel" => "Attr * (Attr Shared position -> Attr * (Model (Attr Shared position)))",
-                    "reconstructPath" => "Attr Shared (Attr Shared (Map (Attr Shared position) (Attr Shared position)), Attr Shared position -> Attr * (List (Attr Shared position)))",
+                    "reconstructPath" => "Attr Shared (Attr Shared (Map (Attr * position) (Attr Shared position)), Attr Shared position -> Attr * (List (Attr Shared position)))",
                     "updateCost" => "Attr * (Attr Shared position, Attr Shared position, Attr Shared (Model (Attr Shared position)) -> Attr Shared (Model (Attr Shared position)))",
-                    "cheapestOpen" => "Attr * (Attr * (Attr Shared position -> Attr Shared Float), Attr * (Model (Attr Shared position)) -> Attr * (Result (Attr Shared position) (Attr * [ KeyNotFound ]*)))",
-                    "astar" => "Attr Shared (Attr Shared (Attr Shared position, Attr Shared position -> Attr Shared Float), Attr Shared (Attr Shared position -> Attr * (Set (Attr Shared position))), Attr Shared position, Attr Shared (Model (Attr Shared position)) -> Attr * [ Err (Attr * [ KeyNotFound ]*), Ok (Attr * (List (Attr Shared position))) ]*)",
+                    "cheapestOpen" => "Attr * (Attr * (Attr Shared position -> Attr Shared Float), Attr (* | a | b) (Model (Attr Shared position)) -> Attr * (Result (Attr Shared position) (Attr * [ KeyNotFound ]*)))",
+                    "astar" => "Attr Shared (Attr Shared (Attr Shared position, Attr Shared position -> Attr Shared Float), Attr Shared (Attr Shared position -> Attr * (Set (Attr * position))), Attr Shared position, Attr Shared (Model (Attr Shared position)) -> Attr * [ Err (Attr * [ KeyNotFound ]*), Ok (Attr * (List (Attr Shared position))) ]*)",
                 },
             );
         });
@@ -242,7 +242,7 @@ mod test_uniq_load {
                 loaded_module,
                 hashmap! {
                     "swap" => "Attr * (Attr Shared Int, Attr Shared Int, Attr * (List (Attr Shared a)) -> Attr * (List (Attr Shared a)))",
-                    "partition" => "Attr * (Attr Shared Int, Attr Shared Int, Attr b (List (Attr Shared (Num (Attr Shared a)))) -> Attr * [ Pair (Attr Shared Int) (Attr b (List (Attr Shared (Num (Attr Shared a))))) ])",
+                    "partition" => "Attr * (Attr Shared Int, Attr Shared Int, Attr b (List (Attr Shared (Num (Attr Shared a)))) -> Attr * [ Pair (Attr * Int) (Attr b (List (Attr Shared (Num (Attr Shared a))))) ])",
                     "quicksort" => "Attr Shared (Attr b (List (Attr Shared (Num (Attr Shared a)))), Attr Shared Int, Attr Shared Int -> Attr b (List (Attr Shared (Num (Attr Shared a)))))",
                 },
             );
@@ -284,7 +284,24 @@ mod test_uniq_load {
                     "w" => "Attr * (Dep1.Identity (Attr * {}))",
                     "succeed" => "Attr * (Attr b a -> Attr * (Dep1.Identity (Attr b a)))",
                     "yay" => "Attr * (Res.Res (Attr * {}) (Attr * err))",
-                    "withDefault" => "Attr * (Attr * (Res.Res (Attr a b) (Attr * *)), Attr a b -> Attr a b)",
+                    "withDefault" => "Attr * (Attr (* | a | b) (Res.Res (Attr a c) (Attr b *)), Attr a c -> Attr a c)",
+                },
+            );
+        });
+    }
+
+    #[test]
+    fn load_custom_res() {
+        test_async(async {
+            let subs_by_module = MutMap::default();
+            let loaded_module = load_fixture("interface_with_deps", "Res", subs_by_module).await;
+
+            expect_types(
+                loaded_module,
+                hashmap! {
+                    "withDefault" =>"Attr * (Attr (* | b | c) (Res (Attr b a) (Attr c err)), Attr b a -> Attr b a)",
+                    "map" => "Attr * (Attr (* | c | d) (Res (Attr d a) (Attr c err)), Attr * (Attr d a -> Attr e b) -> Attr * (Res (Attr e b) (Attr c err)))",
+                    "andThen" => "Attr * (Attr (* | c | d) (Res (Attr d a) (Attr c err)), Attr * (Attr d a -> Attr e (Res (Attr f b) (Attr c err))) -> Attr e (Res (Attr f b) (Attr c err)))"
                 },
             );
         });

@@ -46,6 +46,10 @@ pub enum Problem {
         replaced_region: Region,
     },
     RuntimeError(RuntimeError),
+    SignatureDefMismatch {
+        annotation_pattern: Region,
+        def_pattern: Region,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

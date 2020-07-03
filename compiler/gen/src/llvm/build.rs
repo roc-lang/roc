@@ -1398,6 +1398,7 @@ fn call_with_args<'a, 'ctx, 'env>(
         Symbol::FLOAT_ROUND => call_intrinsic(LLVM_LROUND_I64_F64, env, args),
         Symbol::LIST_SET => list_set(parent, args, env, InPlace::Clone),
         Symbol::LIST_SET_IN_PLACE => list_set(parent, args, env, InPlace::InPlace),
+        Symbol::LIST_PUSH => list_push(args, env),
         Symbol::LIST_SINGLE => {
             // List.single : a -> List a
             debug_assert!(args.len() == 1);
@@ -1916,6 +1917,100 @@ fn bounds_check_comparison<'ctx>(
     // and CPUs generally default to predicting that a forward jump
     // shouldn't be taken; that is, they predict "else" won't be taken.)
     builder.build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
+}
+
+fn list_push<'a, 'ctx, 'env>(
+    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
+    env: &Env<'a, 'ctx, 'env>,
+) -> BasicValueEnum<'ctx> {
+    // List.push List elem, elem -> List elem
+    let builder = env.builder;
+    let ctx = env.context;
+
+    debug_assert!(args.len() == 2);
+
+    let original_wrapper = args[0].0.into_struct_value();
+
+    // Load the usize length from the wrapper.
+    let list_len = load_list_len(builder, original_wrapper);
+
+    let (elem, elem_layout) = args[1];
+    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+    let elems_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
+
+    // The output list length, which is the old list length + 1
+    let new_list_len = env.builder.build_int_add(
+        ctx.i64_type().const_int(1 as u64, false),
+        list_len,
+        "new_list_length",
+    );
+
+    let ctx = env.context;
+    let ptr_bytes = env.ptr_bytes;
+
+    // Calculate the number of bytes we'll need to allocate.
+    let elem_bytes = env
+        .ptr_int()
+        .const_int(elem_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    // This is the size of the list coming in, before we have added an element
+    // to the end.
+    let list_size = env
+        .builder
+        .build_int_mul(elem_bytes, list_len, "mul_old_len_by_elem_bytes");
+
+    // Allocate space for the new array that we'll copy into.
+    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let clone_ptr = builder
+        .build_array_malloc(elem_type, new_list_len, "list_ptr")
+        .unwrap();
+    let int_type = ptr_int(ctx, ptr_bytes);
+    let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
+
+    // TODO check if malloc returned null; if so, runtime error for OOM!
+
+    if elem_layout.safe_to_memcpy() {
+        // Copy the bytes from the original array into the new
+        // one we just malloc'd.
+        //
+        // TODO how do we decide when to do the small memcpy vs the normal one?
+        builder.build_memcpy(clone_ptr, ptr_bytes, elems_ptr, ptr_bytes, list_size);
+    } else {
+        panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
+    }
+
+    // Create a fresh wrapper struct for the newly populated array
+    let struct_type = collection(ctx, env.ptr_bytes);
+    let mut struct_val;
+
+    // Store the pointer
+    struct_val = builder
+        .build_insert_value(
+            struct_type.get_undef(),
+            ptr_as_int,
+            Builtin::WRAPPER_PTR,
+            "insert_ptr",
+        )
+        .unwrap();
+
+    // Store the length
+    struct_val = builder
+        .build_insert_value(struct_val, new_list_len, Builtin::WRAPPER_LEN, "insert_len")
+        .unwrap();
+
+    let answer = builder.build_bitcast(
+        struct_val.into_struct_value(),
+        collection(ctx, ptr_bytes),
+        "cast_collection",
+    );
+
+    let elem_ptr = unsafe { builder.build_in_bounds_gep(clone_ptr, &[list_len], "load_index") };
+
+    builder.build_store(elem_ptr, elem);
+
+    answer
 }
 
 fn list_set<'a, 'ctx, 'env>(

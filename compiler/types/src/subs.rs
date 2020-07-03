@@ -199,7 +199,8 @@ impl UnifyKey for Variable {
 pub struct VarId(u32);
 
 impl VarId {
-    pub fn from_var(var: Variable) -> Self {
+    pub fn from_var(var: Variable, subs: &Subs) -> Self {
+        let var = subs.get_root_key_without_compacting(var);
         let Variable(n) = var;
 
         VarId(n)
@@ -876,12 +877,25 @@ where
 }
 
 fn var_to_err_type(subs: &mut Subs, state: &mut ErrorTypeState, var: Variable) -> ErrorType {
-    let desc = subs.get(var);
+    let mut desc = subs.get(var);
 
     if desc.mark == Mark::OCCURS {
         ErrorType::Infinite
     } else {
         subs.set_mark(var, Mark::OCCURS);
+
+        if false {
+            // useful for debugging
+            match desc.content {
+                Content::FlexVar(_) => {
+                    desc.content = Content::FlexVar(Some(format!("{:?}", var).into()));
+                }
+                Content::RigidVar(_) => {
+                    desc.content = Content::RigidVar(format!("{:?}", var).into());
+                }
+                _ => {}
+            }
+        }
 
         let err_type = content_to_err_type(subs, state, var, desc.content);
 

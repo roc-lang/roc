@@ -10,7 +10,7 @@ use roc_collections::all::{ImMap, ImSet, Index, SendMap};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
-use roc_types::boolean_algebra::{Atom, Bool};
+use roc_types::boolean_algebra::Bool;
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
@@ -248,10 +248,7 @@ fn constrain_pattern(
                 let empty_var = var_store.fresh();
                 state.vars.push(empty_var);
                 state.vars.extend(pattern_uniq_vars.clone());
-                Bool::with_free(
-                    empty_var,
-                    pattern_uniq_vars.into_iter().map(Atom::Variable).collect(),
-                )
+                Bool::container(empty_var, pattern_uniq_vars)
             };
 
             let record_type = attr_type(
@@ -305,10 +302,7 @@ fn constrain_pattern(
                 let empty_var = var_store.fresh();
                 state.vars.push(empty_var);
                 state.vars.extend(pattern_uniq_vars.clone());
-                Bool::with_free(
-                    empty_var,
-                    pattern_uniq_vars.into_iter().map(Atom::Variable).collect(),
-                )
+                Bool::container(empty_var, pattern_uniq_vars)
             };
             let union_type = attr_type(
                 tag_union_uniq_type,
@@ -1252,8 +1246,7 @@ pub fn constrain_expr(
             field_types.insert(field.clone(), field_type.clone());
 
             let record_uniq_var = var_store.fresh();
-            let record_uniq_type =
-                Bool::with_free(record_uniq_var, vec![Atom::Variable(field_uniq_var)]);
+            let record_uniq_type = Bool::container(record_uniq_var, vec![field_uniq_var]);
             let record_type = attr_type(
                 record_uniq_type,
                 Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
@@ -1310,8 +1303,7 @@ pub fn constrain_expr(
             field_types.insert(field.clone(), field_type.clone());
 
             let record_uniq_var = var_store.fresh();
-            let record_uniq_type =
-                Bool::with_free(record_uniq_var, vec![Atom::Variable(field_uniq_var)]);
+            let record_uniq_type = Bool::container(record_uniq_var, vec![field_uniq_var]);
             let record_type = attr_type(
                 record_uniq_type,
                 Type::Record(field_types, Box::new(Type::Variable(*ext_var))),
@@ -1393,10 +1385,10 @@ fn constrain_var(
             applied_usage_constraint.insert(symbol_for_lookup);
 
             let mut variables = Vec::new();
-            let (free, rest, inner_type) =
+            let (record_bool, inner_type) =
                 constrain_by_usage(&usage.expect("wut"), var_store, &mut variables);
 
-            let record_type = attr_type(Bool::from_parts(free, rest), inner_type);
+            let record_type = attr_type(record_bool, inner_type);
 
             // NOTE breaking the expectation up like this REALLY matters!
             let new_expected = Expected::NoExpectation(record_type.clone());
@@ -1417,128 +1409,176 @@ fn constrain_by_usage(
     usage: &Usage,
     var_store: &mut VarStore,
     introduced: &mut Vec<Variable>,
-) -> (Atom, Vec<Atom>, Type) {
-    use Mark::*;
+) -> (Bool, Type) {
     use Usage::*;
 
     match usage {
-        Simple(Shared) => {
+        Simple(Mark::Shared) => {
             let var = var_store.fresh();
 
             introduced.push(var);
 
-            (Atom::Zero, vec![], Type::Variable(var))
+            (Bool::Shared, Type::Variable(var))
         }
-        Simple(Seen) | Simple(Unique) => {
+        Simple(Mark::Seen) | Simple(Mark::Unique) => {
             let var = var_store.fresh();
             let uvar = var_store.fresh();
 
             introduced.push(var);
             introduced.push(uvar);
 
-            (Atom::Variable(uvar), vec![], Type::Variable(var))
+            (Bool::container(uvar, vec![]), Type::Variable(var))
         }
         Usage::Access(Container::Record, mark, fields) => {
-            let (record_uniq_var, atoms, ext_type) =
-                constrain_by_usage(&Simple(*mark), var_store, introduced);
-            debug_assert!(atoms.is_empty());
+            let (record_bool, ext_type) = constrain_by_usage(&Simple(*mark), var_store, introduced);
 
-            constrain_by_usage_record(fields, record_uniq_var, ext_type, introduced, var_store)
+            constrain_by_usage_record(fields, record_bool, ext_type, introduced, var_store)
         }
         Usage::Update(Container::Record, _, fields) => {
             let record_uvar = var_store.fresh();
-            let record_uniq_var = Atom::Variable(record_uvar);
             introduced.push(record_uvar);
+
+            let record_bool = Bool::variable(record_uvar);
 
             let ext_var = var_store.fresh();
             let ext_type = Type::Variable(ext_var);
             introduced.push(ext_var);
 
-            constrain_by_usage_record(fields, record_uniq_var, ext_type, introduced, var_store)
+            constrain_by_usage_record(fields, record_bool, ext_type, introduced, var_store)
         }
         Usage::Access(Container::List, mark, fields) => {
-            let (list_uniq_var, atoms, _ext_type) =
-                constrain_by_usage(&Simple(*mark), var_store, introduced);
-            debug_assert!(atoms.is_empty());
+            let (list_bool, _ext_type) = constrain_by_usage(&Simple(*mark), var_store, introduced);
 
-            constrain_by_usage_list(fields, list_uniq_var, introduced, var_store)
+            let field_usage = fields
+                .get(&sharing::LIST_ELEM.into())
+                .expect("no LIST_ELEM key");
+
+            let (elem_bool, elem_type) = constrain_by_usage(field_usage, var_store, introduced);
+
+            match list_bool {
+                Bool::Shared => (
+                    Bool::Shared,
+                    Type::Apply(Symbol::LIST_LIST, vec![attr_type(Bool::Shared, elem_type)]),
+                ),
+                Bool::Container(list_uvar, list_mvars) => {
+                    debug_assert!(list_mvars.is_empty());
+
+                    match elem_bool {
+                        Bool::Shared => (
+                            Bool::variable(list_uvar),
+                            Type::Apply(
+                                Symbol::LIST_LIST,
+                                vec![attr_type(Bool::Shared, elem_type)],
+                            ),
+                        ),
+                        Bool::Container(cvar, mvars) => {
+                            debug_assert!(mvars.is_empty());
+                            (
+                                Bool::container(list_uvar, vec![cvar]),
+                                Type::Apply(
+                                    Symbol::LIST_LIST,
+                                    vec![attr_type(Bool::container(cvar, mvars), elem_type)],
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         Usage::Update(Container::List, _, fields) => {
             let list_uvar = var_store.fresh();
             introduced.push(list_uvar);
-            let list_uniq_var = Atom::Variable(list_uvar);
 
-            constrain_by_usage_list(fields, list_uniq_var, introduced, var_store)
+            let field_usage = fields
+                .get(&sharing::LIST_ELEM.into())
+                .expect("no LIST_ELEM key");
+
+            let (elem_bool, elem_type) = constrain_by_usage(field_usage, var_store, introduced);
+
+            match elem_bool {
+                Bool::Shared => (
+                    Bool::variable(list_uvar),
+                    Type::Apply(Symbol::LIST_LIST, vec![attr_type(Bool::Shared, elem_type)]),
+                ),
+                Bool::Container(cvar, mvars) => {
+                    debug_assert!(mvars.is_empty());
+                    (
+                        Bool::container(list_uvar, vec![cvar]),
+                        Type::Apply(
+                            Symbol::LIST_LIST,
+                            vec![attr_type(Bool::container(cvar, mvars), elem_type)],
+                        ),
+                    )
+                }
+            }
         }
     }
 }
 
-fn constrain_by_usage_list(
-    fields: &FieldAccess,
-    list_uniq_var: Atom,
-    introduced: &mut Vec<Variable>,
-    var_store: &mut VarStore,
-) -> (Atom, Vec<Atom>, Type) {
-    let field_usage = fields
-        .get(&sharing::LIST_ELEM.into())
-        .expect("no LIST_ELEM key");
-
-    let (elem_uvar, atoms, elem_type) = constrain_by_usage(field_usage, var_store, introduced);
-    debug_assert!(atoms.is_empty());
-
-    (
-        list_uniq_var,
-        vec![elem_uvar],
-        Type::Apply(
-            Symbol::LIST_LIST,
-            vec![attr_type(Bool::from_parts(elem_uvar, vec![]), elem_type)],
-        ),
-    )
-}
-
 fn constrain_by_usage_record(
     fields: &FieldAccess,
-    record_uniq_var: Atom,
+    record_bool: Bool,
     ext_type: Type,
     introduced: &mut Vec<Variable>,
     var_store: &mut VarStore,
-) -> (Atom, Vec<Atom>, Type) {
+) -> (Bool, Type) {
     let mut field_types = SendMap::default();
 
-    if fields.is_empty() {
-        (
-            record_uniq_var,
-            vec![],
-            Type::Record(field_types, Box::new(ext_type)),
-        )
-    } else {
-        let mut uniq_vars = Vec::with_capacity(fields.len());
+    match record_bool {
+        _ if fields.is_empty() => (record_bool, Type::Record(field_types, Box::new(ext_type))),
+        Bool::Shared => {
+            for (lowercase, nested_usage) in fields.clone().into_iter() {
+                let (_, nested_type) = constrain_by_usage(&nested_usage, var_store, introduced);
 
-        for (lowercase, nested_usage) in fields.clone().into_iter() {
-            let (uvar, atoms, nested_type) =
-                constrain_by_usage(&nested_usage, var_store, introduced);
+                let field_type = attr_type(Bool::Shared, nested_type);
 
-            for atom in &atoms {
-                uniq_vars.push(*atom);
+                field_types.insert(lowercase.clone(), field_type);
             }
-            uniq_vars.push(uvar);
-
-            let field_type = attr_type(Bool::from_parts(uvar, atoms), nested_type);
-
-            field_types.insert(lowercase.clone(), field_type);
+            (
+                Bool::Shared,
+                Type::Record(
+                    field_types,
+                    // TODO can we avoid doing Box::new on every single one of these?
+                    // For example, could we have a single lazy_static global Box they
+                    // could all share?
+                    Box::new(ext_type),
+                ),
+            )
         }
-        (
-            record_uniq_var,
-            uniq_vars,
-            Type::Record(
-                field_types,
-                // TODO can we avoid doing Box::new on every single one of these?
-                // For example, could we have a single lazy_static global Box they
-                // could all share?
-                Box::new(ext_type),
-            ),
-        )
+        Bool::Container(record_uniq_var, mvars) => {
+            debug_assert!(mvars.is_empty());
+
+            let mut uniq_vars = Vec::with_capacity(fields.len());
+
+            for (lowercase, nested_usage) in fields.clone().into_iter() {
+                let (nested_bool, nested_type) =
+                    constrain_by_usage(&nested_usage, var_store, introduced);
+
+                let field_type = match nested_bool {
+                    Bool::Container(uvar, atoms) => {
+                        for atom in &atoms {
+                            uniq_vars.push(*atom);
+                        }
+                        uniq_vars.push(uvar);
+                        attr_type(Bool::Container(uvar, atoms), nested_type)
+                    }
+                    Bool::Shared => attr_type(Bool::Shared, nested_type),
+                };
+
+                field_types.insert(lowercase.clone(), field_type);
+            }
+            (
+                Bool::container(record_uniq_var, uniq_vars),
+                Type::Record(
+                    field_types,
+                    // TODO can we avoid doing Box::new on every single one of these?
+                    // For example, could we have a single lazy_static global Box they
+                    // could all share?
+                    Box::new(ext_type),
+                ),
+            )
+        }
     }
 }
 
@@ -1651,7 +1691,7 @@ fn constrain_def_pattern(
 fn annotation_to_attr_type(
     var_store: &mut VarStore,
     ann: &Type,
-    rigids: &mut ImMap<Variable, Variable>,
+    rigids: &mut ImSet<Variable>,
     change_var_kind: bool,
 ) -> (Vec<Variable>, Type) {
     use roc_types::types::Type::*;
@@ -1659,19 +1699,12 @@ fn annotation_to_attr_type(
     match ann {
         Variable(var) => {
             if change_var_kind {
-                if let Some(uvar) = rigids.get(var) {
-                    (
-                        vec![],
-                        attr_type(Bool::variable(*uvar), Type::Variable(*var)),
-                    )
-                } else {
-                    let uvar = var_store.fresh();
-                    rigids.insert(*var, uvar);
-                    (
-                        vec![],
-                        attr_type(Bool::variable(uvar), Type::Variable(*var)),
-                    )
-                }
+                let uvar = var_store.fresh();
+                rigids.insert(uvar);
+                (
+                    vec![],
+                    attr_type(Bool::variable(uvar), Type::Variable(*var)),
+                )
             } else {
                 (vec![], Type::Variable(*var))
             }
@@ -1711,9 +1744,7 @@ fn annotation_to_attr_type(
             // A rigid behind an attr has already been lifted, don't do it again!
             let (result_vars, result_lifted) = match args[1] {
                 Type::Variable(_) => match uniq_type {
-                    Type::Boolean(Bool(Atom::Variable(urigid), _)) => {
-                        (vec![urigid], args[1].clone())
-                    }
+                    Type::Boolean(Bool::Container(urigid, _)) => (vec![urigid], args[1].clone()),
                     _ => (vec![], args[1].clone()),
                 },
                 _ => annotation_to_attr_type(var_store, &args[1], rigids, change_var_kind),
@@ -1782,26 +1813,46 @@ fn annotation_to_attr_type(
             )
         }
         RecursiveTagUnion(rec_var, tags, ext_type) => {
+            // In the case of
+            //
+            //      [ Cons a (List a), Nil ] as List a
+            //
+            // We need to lift it to
+            //
+            //      Attr u ([ Cons a (Attr u (List a)), Nil ] as List a)
+            //
+            // So the `u` of the whole recursive tag union is the same as the one used in the recursion
+
             let uniq_var = var_store.fresh();
             let mut vars = Vec::with_capacity(tags.len());
             let mut lifted_tags = Vec::with_capacity(tags.len());
 
+            let mut substitutions = ImMap::default();
+            substitutions.insert(
+                *rec_var,
+                attr_type(Bool::variable(uniq_var), Type::Variable(*rec_var)),
+            );
+
             for (tag, fields) in tags {
-                let (new_vars, lifted_fields) =
+                let (new_vars, mut lifted_fields) =
                     annotation_to_attr_type_many(var_store, fields, rigids, change_var_kind);
                 vars.extend(new_vars);
+
+                for f in lifted_fields.iter_mut() {
+                    f.substitute(&substitutions);
+                }
+
                 lifted_tags.push((tag.clone(), lifted_fields));
             }
 
             vars.push(uniq_var);
 
-            (
-                vars,
-                attr_type(
-                    Bool::variable(uniq_var),
-                    Type::RecursiveTagUnion(*rec_var, lifted_tags, ext_type.clone()),
-                ),
-            )
+            let result = attr_type(
+                Bool::variable(uniq_var),
+                Type::RecursiveTagUnion(*rec_var, lifted_tags, ext_type.clone()),
+            );
+
+            (vars, result)
         }
 
         Alias(symbol, fields, actual) => {
@@ -1840,7 +1891,7 @@ fn annotation_to_attr_type(
 fn annotation_to_attr_type_many(
     var_store: &mut VarStore,
     anns: &[Type],
-    rigids: &mut ImMap<Variable, Variable>,
+    rigids: &mut ImSet<Variable>,
     change_var_kind: bool,
 ) -> (Vec<Variable>, Vec<Type>) {
     anns.iter()
@@ -1866,14 +1917,23 @@ fn aliases_to_attr_type(var_store: &mut VarStore, aliases: &mut SendMap<Symbol, 
         //
         // That would give a double attr wrapper on the type arguments.
         // The `change_var_kind` flag set to false ensures type variables remain of kind *
-        let (_, new) = annotation_to_attr_type(var_store, &alias.typ, &mut ImMap::default(), false);
-
+        let (_, new) = annotation_to_attr_type(var_store, &alias.typ, &mut ImSet::default(), false);
         // remove the outer Attr, because when this occurs in a signature it'll already be wrapped in one
         match new {
             Type::Apply(Symbol::ATTR_ATTR, args) => {
                 alias.typ = args[1].clone();
+                if let Type::Boolean(b) = args[0].clone() {
+                    alias.uniqueness = Some(b);
+                }
             }
-            _ => unreachable!(),
+            _ => unreachable!("`annotation_to_attr_type` always gives back an Attr"),
+        }
+
+        // Check that if the alias is a recursive tag union, all structures containing the
+        // recursion variable get the same uniqueness as the recursion variable (and thus as the
+        // recursive tag union itself)
+        if let Some(b) = &alias.uniqueness {
+            fix_mutual_recursive_alias(&mut alias.typ, b);
         }
     }
 }
@@ -2009,9 +2069,9 @@ fn instantiate_rigids(
         annotation.substitute(&rigid_substitution);
     }
 
-    let mut new_rigid_pairs = ImMap::default();
+    let mut new_uniqueness_rigids = ImSet::default();
     let (mut uniq_vars, annotation) =
-        annotation_to_attr_type(var_store, &annotation, &mut new_rigid_pairs, true);
+        annotation_to_attr_type(var_store, &annotation, &mut new_uniqueness_rigids, true);
 
     if let Pattern::Identifier(symbol) = loc_pattern.value {
         headers.insert(symbol, Located::at(loc_pattern.region, annotation.clone()));
@@ -2021,7 +2081,7 @@ fn instantiate_rigids(
     ) {
         for (k, v) in new_headers {
             let (new_uniq_vars, attr_annotation) =
-                annotation_to_attr_type(var_store, &v.value, &mut new_rigid_pairs, true);
+                annotation_to_attr_type(var_store, &v.value, &mut new_uniqueness_rigids, true);
 
             uniq_vars.extend(new_uniq_vars);
 
@@ -2031,10 +2091,7 @@ fn instantiate_rigids(
 
     new_rigids.extend(uniq_vars);
     new_rigids.extend(introduced_vars.wildcards.iter().cloned());
-
-    for (_, v) in new_rigid_pairs {
-        new_rigids.push(v);
-    }
+    new_rigids.extend(new_uniqueness_rigids);
 
     annotation
 }
@@ -2244,4 +2301,86 @@ fn constrain_field_update(
     );
 
     (var, field_type, con)
+}
+
+/// Fix uniqueness attributes on mutually recursive type aliases.
+/// Given aliases
+///
+/// >    ListA a b : [ Cons a (ListB b a), Nil ]
+/// >    ListB a b : [ Cons a (ListA b a), Nil ]
+///
+/// We get the lifted alias:
+///
+/// >   `Test.ListB`: Alias {
+/// >       ...,
+/// >       uniqueness: Some(
+/// >           Container(
+/// >               118,
+/// >               {},
+/// >           ),
+/// >       ),
+/// >       typ: [ Global('Cons') <9> (`#Attr.Attr` Container(119, {}) Alias `Test.ListA` <10> <9>[ but actually [ Global('Cons') <10> (`#Attr.Attr` Container(118, {}) <13>), Global('Nil') ] ]), Global('Nil') ] as <13>,
+/// >   },
+///
+/// Note that the alias will get uniqueness variable <118>, but the contained `ListA` gets variable
+/// <119>. But, 119 is contained in 118, and 118 in 119, so we need <119> >= <118> >= <119> >= <118> ...
+/// That can only be true if they are the same. Type inference will not find that, so we must do it
+/// ourselves in user-defined aliases.
+fn fix_mutual_recursive_alias(typ: &mut Type, attribute: &Bool) {
+    use Type::*;
+    if let RecursiveTagUnion(rec, tags, _ext) = typ {
+        for (_, args) in tags {
+            for mut arg in args {
+                fix_mutual_recursive_alias_help(*rec, &Type::Boolean(attribute.clone()), &mut arg);
+            }
+        }
+    }
+}
+
+fn fix_mutual_recursive_alias_help(rec_var: Variable, attribute: &Type, into_type: &mut Type) {
+    if into_type.contains_variable(rec_var) {
+        if let Type::Apply(Symbol::ATTR_ATTR, args) = into_type {
+            std::mem::replace(&mut args[0], attribute.clone());
+
+            fix_mutual_recursive_alias_help_help(rec_var, attribute, &mut args[1]);
+        }
+    }
+}
+
+#[inline(always)]
+fn fix_mutual_recursive_alias_help_help(rec_var: Variable, attribute: &Type, into_type: &mut Type) {
+    use Type::*;
+
+    match into_type {
+        Function(args, ret) => {
+            fix_mutual_recursive_alias_help(rec_var, attribute, ret);
+            args.iter_mut()
+                .for_each(|arg| fix_mutual_recursive_alias_help(rec_var, attribute, arg));
+        }
+        RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
+            fix_mutual_recursive_alias_help(rec_var, attribute, ext);
+
+            for (_tag, args) in tags.iter_mut() {
+                for arg in args.iter_mut() {
+                    fix_mutual_recursive_alias_help(rec_var, attribute, arg);
+                }
+            }
+        }
+
+        Record(fields, ext) => {
+            fix_mutual_recursive_alias_help(rec_var, attribute, ext);
+            fields
+                .iter_mut()
+                .for_each(|arg| fix_mutual_recursive_alias_help(rec_var, attribute, arg));
+        }
+        Alias(_, _, actual_type) => {
+            // call help_help, because actual_type is not wrapped in ATTR
+            fix_mutual_recursive_alias_help_help(rec_var, attribute, actual_type);
+        }
+        Apply(_, args) => {
+            args.iter_mut()
+                .for_each(|arg| fix_mutual_recursive_alias_help(rec_var, attribute, arg));
+        }
+        EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
+    }
 }

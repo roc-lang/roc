@@ -2685,6 +2685,34 @@ mod test_reporting {
     }
 
     #[test]
+    fn annotation_definition_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                bar : Int
+                foo = \x -> x
+
+                # NOTE: neither bar or foo are defined at this point
+                4
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This annotation does not match the definition immediately following
+                it:
+
+                1 ┆>  bar : Int
+                2 ┆>  foo = \x -> x
+
+                Is it a typo? If not, put either a newline or comment between them.
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn invalid_num() {
         report_problem_as(
             indoc!(
@@ -2838,6 +2866,82 @@ mod test_reporting {
 
                 1 ┆  f x y = x
                   ┆    ^^^
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn two_different_cons() {
+        report_problem_as(
+            indoc!(
+                r#"
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                x : ConsList {}
+                x = Cons {} (Cons "foo" Nil)
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                Something is off with the body of the `x` definition:
+
+                3 ┆  x : ConsList {}
+                4 ┆  x = Cons {} (Cons "foo" Nil)
+                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^
+
+                This `Cons` global tag application has the type:
+
+                    [ Cons {} [ Cons Str [ Cons {} a, Nil ] as a, Nil ], Nil ]
+
+                But the type annotation on `x` says it should be:
+
+                    [ Cons {} a, Nil ] as a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn mutually_recursive_types_with_type_error() {
+        report_problem_as(
+            indoc!(
+                r#"
+                AList a b : [ ACons a (BList a b), ANil ]
+                BList a b : [ BCons a (AList a b), BNil ]
+
+                x : AList Int Int
+                x = ACons 0 (BCons 1 (ACons "foo" BNil ))
+
+                y : BList a a
+                y = BNil
+
+                { x, y }
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                Something is off with the body of the `x` definition:
+
+                4 ┆  x : AList Int Int
+                5 ┆  x = ACons 0 (BCons 1 (ACons "foo" BNil ))
+                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                This `ACons` global tag application has the type:
+                
+                    [ ACons (Num Integer) [ BCons (Num Integer) [ ACons Str [
+                    BCons Int [ ACons Int (BList Int Int), ANil ] as a, BNil ], ANil
+                    ], BNil ], ANil ]
+
+                But the type annotation on `x` says it should be:
+                
+                    [ ACons Int (BList Int Int), ANil ] as a
                 "#
             ),
         )

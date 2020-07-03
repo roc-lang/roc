@@ -1,137 +1,182 @@
-use self::Atom::*;
+use self::Bool::*;
 use crate::subs::{Content, FlatType, Subs, Variable};
 use roc_collections::all::SendSet;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Bool(pub Atom, pub SendSet<Atom>);
+/// Uniqueness types
+///
+/// Roc uses uniqueness types to optimize programs. Uniqueness inference tries to find values that
+/// are guaranteed to be unique (i.e. have a reference count of at most 1) at compile time.
+///
+/// Such unique values can be updated in-place, something otherwise very unsafe in a pure
+/// functional language.
+///
+/// So how does that all work? Instead of inferring normal types like `Int`, we infer types
+/// `Attr u a`. The `a` could be any "normal" type (it's called a base type), like `Int` or `Str`.
+/// The `u` is the uniqueness attribute. It stores a value of type `Bool` (see definition below).
+///
+/// Before doing type inference, variables are tagged as either exclusive or shared. A variable is
+/// exclusive if we can be sure it's not duplicated. That's always true when the variable is used
+/// just once, but also e.g. `foo.x + foo.y` does not duplicate references to `foo`.
+///
+/// Next comes actual inference. Variables marked as shared always get the `Shared` uniqueness attribute.
+/// For exclusive variables, the uniqueness attribute is initially an unbound type variable.
+///
+/// An important detail is that there is no `Unique` annotation. Instead, uniqueness variables that
+/// are unbound after type inference and monomorphization are interpreted as unique. This makes inference
+/// easier and ensures we can never get type errors caused by uniqueness attributes.
+///
+/// Besides normal type inference rules (e.g. in `f a` if `a : t` then it must be that `f : t -> s`),
+/// uniqueness attributes must respect the container rule:
+///
+/// > Container rule: to extract a unique value from a container, the container must itself be unique
+///
+/// In this context a container can be a record, tag, built-in data structure (List, Set, etc) or
+/// a function closure.
+///
+/// Thus in the case of `List.get`, it must "check" the container rule. It's type is
+///
+/// > Attr (Container(w, { u })) (List (Attr u a)), Int -> Result _ _
+///
+/// The container attribute means that the uniqueness of the container (variable w) is at least
+/// uniqueness u. Unique is "more unique" than Shared. So if the elements are unique, the list must be unique. But if the list is
+/// unique, the elements can be shared.
+///
+/// As mentioned, we then use monomorphization to find values that are actually unique (those with
+/// an unbound uniqueness attribute). Those values are treated differently. They don't have to be
+/// reference counted, and can be mutated in-place.
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Copy)]
-pub enum Atom {
-    Zero,
-    One,
-    Variable(Variable),
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Bool {
+    Shared,
+    Container(Variable, SendSet<Variable>),
 }
 
-impl Atom {
-    pub fn apply_subs(&mut self, subs: &mut Subs) {
-        match self {
-            Atom::Zero | Atom::One => {}
-            Atom::Variable(v) => match subs.get(*v).content {
-                Content::Structure(FlatType::Boolean(Bool(mut atom, rest))) if rest.is_empty() => {
-                    atom.apply_subs(subs);
-                    *self = atom;
+pub fn var_is_shared(subs: &Subs, var: Variable) -> bool {
+    match subs.get_without_compacting(var).content {
+        Content::Structure(FlatType::Boolean(Bool::Shared)) => true,
+        _ => false,
+    }
+}
+
+/// Given the Subs
+///
+/// 0 |-> Container (Var 1, { Var 2, Var 3 })
+/// 1 |-> Flex 'a'
+/// 2 |-> Container(Var 4, { Var 5, Var 6 })
+/// 3 |-> Flex 'b'
+/// 4 |-> Flex 'c'
+/// 5 |-> Flex 'd'
+/// 6 |-> Shared
+///
+/// `flatten(subs, Var 0)` will rewrite it to
+///
+/// 0 |-> Container (Var 1, { Var 4, Var 5, Var 3 })
+///
+/// So containers are "inlined", and Shared variables are discarded
+pub fn flatten(subs: &mut Subs, var: Variable) {
+    match subs.get_without_compacting(var).content {
+        Content::Structure(FlatType::Boolean(Bool::Container(cvar, mvars))) => {
+            let flattened_mvars = var_to_variables(subs, cvar, &mvars);
+
+            let content =
+                Content::Structure(FlatType::Boolean(Bool::Container(cvar, flattened_mvars)));
+
+            subs.set_content(var, content);
+        }
+        Content::Structure(FlatType::Boolean(Bool::Shared)) => {
+            // do nothing
+        }
+        _ => {
+            // do nothing
+        }
+    }
+}
+
+/// For a Container(cvar, start_vars), find (transitively) all the flex/rigid vars that are
+/// occur in start_vars.
+///
+/// Because type aliases in Roc can be recursive, we have to be a bit careful to not get stuck in
+/// an infinite loop.
+fn var_to_variables(
+    subs: &Subs,
+    cvar: Variable,
+    start_vars: &SendSet<Variable>,
+) -> SendSet<Variable> {
+    let mut stack: Vec<_> = start_vars.into_iter().copied().collect();
+    let mut seen = SendSet::default();
+    seen.insert(cvar);
+    let mut result = SendSet::default();
+
+    while let Some(var) = stack.pop() {
+        if seen.contains(&var) {
+            continue;
+        }
+
+        seen.insert(var);
+
+        match subs.get_without_compacting(var).content {
+            Content::Structure(FlatType::Boolean(Bool::Container(cvar, mvars))) => {
+                let it = std::iter::once(cvar).chain(mvars.into_iter());
+
+                for v in it {
+                    if !seen.contains(&v) {
+                        stack.push(v);
+                    }
                 }
-                _ => {
-                    *self = Atom::Variable(subs.get_root_key(*v));
-                }
-            },
+            }
+            Content::Structure(FlatType::Boolean(Bool::Shared)) => {
+                // do nothing
+            }
+            _other => {
+                result.insert(var);
+            }
         }
     }
 
-    pub fn is_unique(self, subs: &Subs) -> bool {
-        match self {
-            Atom::Zero => false,
-            Atom::One => true,
-            Atom::Variable(var) => match subs.get_without_compacting(var).content {
-                Content::Structure(FlatType::Boolean(boolean)) => boolean.is_unique(subs),
-                // for rank-related reasons, boolean attributes can be "unwrapped" flex vars
-                Content::FlexVar(_) => true,
-                _ => false,
-            },
-        }
-    }
+    result
 }
 
 impl Bool {
     pub fn shared() -> Self {
-        Bool(Zero, SendSet::default())
+        Bool::Shared
     }
 
-    pub fn unique() -> Self {
-        Bool(One, SendSet::default())
+    pub fn container<I>(cvar: Variable, mvars: I) -> Self
+    where
+        I: IntoIterator<Item = Variable>,
+    {
+        Bool::Container(cvar, mvars.into_iter().collect())
     }
 
-    pub fn variable(variable: Variable) -> Self {
-        Bool(Variable(variable), SendSet::default())
+    pub fn variable(var: Variable) -> Self {
+        Bool::Container(var, SendSet::default())
     }
 
-    pub fn with_free(variable: Variable, rest: Vec<Atom>) -> Self {
-        let atom_set: SendSet<Atom> = rest.into_iter().collect();
-        Bool(Variable(variable), atom_set)
+    pub fn is_fully_simplified(&self, subs: &Subs) -> bool {
+        match self {
+            Shared => true,
+            Container(cvar, mvars) => {
+                !var_is_shared(subs, *cvar)
+                    && !(mvars.iter().any(|mvar| var_is_shared(subs, *mvar)))
+            }
+        }
     }
 
-    pub fn from_parts(free: Atom, rest: Vec<Atom>) -> Self {
-        let atom_set: SendSet<Atom> = rest.into_iter().collect();
-        Bool(free, atom_set)
+    pub fn is_unique(&self, subs: &Subs) -> bool {
+        match self.simplify(subs) {
+            Shared => false,
+            _ => true,
+        }
     }
 
     pub fn variables(&self) -> SendSet<Variable> {
-        let mut result = SendSet::default();
+        match self {
+            Shared => SendSet::default(),
+            Container(cvar, mvars) => {
+                let mut mvars = mvars.clone();
+                mvars.insert(*cvar);
 
-        if let Variable(v) = self.0 {
-            result.insert(v);
-        }
-
-        for atom in &self.1 {
-            if let Variable(v) = atom {
-                result.insert(*v);
-            }
-        }
-
-        result
-    }
-
-    pub fn apply_subs(&mut self, subs: &mut Subs) {
-        self.0.apply_subs(subs);
-
-        for atom in self.1.iter_mut() {
-            atom.apply_subs(subs);
-        }
-    }
-
-    pub fn simplify(&self, subs: &Subs) -> Result<Vec<Variable>, Atom> {
-        match self.0 {
-            Atom::Zero => Err(Atom::Zero),
-            Atom::One => Err(Atom::One),
-            Atom::Variable(var) => {
-                // The var may still point to Zero or One!
-                match subs.get_without_compacting(var).content {
-                    Content::Structure(FlatType::Boolean(nested)) => nested.simplify(subs),
-                    _ => {
-                        let mut result = Vec::new();
-                        result.push(var);
-
-                        for atom in &self.1 {
-                            match atom {
-                                Atom::Zero => {}
-                                Atom::One => return Err(Atom::One),
-                                Atom::Variable(v) => {
-                                    match subs.get_without_compacting(*v).content {
-                                        Content::Structure(FlatType::Boolean(nested)) => {
-                                            match nested.simplify(subs) {
-                                                Ok(variables) => {
-                                                    for var in variables {
-                                                        result.push(var);
-                                                    }
-                                                }
-                                                Err(Atom::Zero) => {}
-                                                Err(Atom::One) => return Err(Atom::One),
-                                                Err(Atom::Variable(_)) => {
-                                                    panic!("TODO nested variable")
-                                                }
-                                            }
-                                        }
-                                        _ => {
-                                            result.push(*v);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Ok(result)
-                    }
-                }
+                mvars
             }
         }
     }
@@ -140,28 +185,33 @@ impl Bool {
     where
         F: FnMut(Variable) -> Variable,
     {
-        let mut new_bound = SendSet::default();
+        match self {
+            Bool::Shared => Bool::Shared,
+            Bool::Container(cvar, mvars) => {
+                let new_cvar = f(*cvar);
+                let new_mvars = mvars.iter().map(|var| f(*var)).collect();
 
-        let new_free = if let Variable(v) = self.0 {
-            Variable(f(v))
-        } else {
-            self.0
-        };
-
-        for atom in &self.1 {
-            if let Variable(v) = atom {
-                new_bound.insert(Variable(f(*v)));
-            } else {
-                new_bound.insert(*atom);
+                Bool::Container(new_cvar, new_mvars)
             }
         }
-        Bool(new_free, new_bound)
     }
 
-    pub fn is_unique(&self, subs: &Subs) -> bool {
-        match self.simplify(subs) {
-            Ok(_variables) => true,
-            Err(atom) => atom.is_unique(subs),
+    pub fn simplify(&self, subs: &Subs) -> Self {
+        match self {
+            Bool::Container(cvar, mvars) => {
+                let flattened_mvars = var_to_variables(subs, *cvar, mvars);
+
+                // find the parent variable, to remove distinct variables that all have the same
+                // parent. This prevents the signature from rendering as e.g. `( a | b | b)` and
+                // instead makes it `( a | b )`.
+                let parent_mvars = flattened_mvars
+                    .into_iter()
+                    .map(|v| subs.get_root_key_without_compacting(v))
+                    .collect();
+
+                Bool::Container(*cvar, parent_mvars)
+            }
+            Bool::Shared => Bool::Shared,
         }
     }
 }

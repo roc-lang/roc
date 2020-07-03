@@ -489,10 +489,17 @@ mod gen_builtins {
         );
     }
 
-    // #[test]
-    // fn list_push() {
-    //     assert_evals_to!("List.push [] 1", &[1], &'static [i64]);
-    // }
+    #[test]
+    fn list_push() {
+        assert_evals_to!("List.push [1] 2", &[1, 2], &'static [i64]);
+        assert_evals_to!("List.push [1, 1] 2", &[1, 1, 2], &'static [i64]);
+        assert_evals_to!("List.push [] 3", &[3], &'static [i64]);
+        assert_evals_to!(
+            "List.push [ True, False ] True",
+            &[true, false, true],
+            &'static [bool]
+        );
+    }
 
     #[test]
     fn list_single() {
