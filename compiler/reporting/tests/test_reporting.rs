@@ -1702,6 +1702,7 @@ mod test_reporting {
 
     #[test]
     fn circular_definition_self() {
+        // invalid recursion
         report_problem_as(
             indoc!(
                 r#"
@@ -1723,6 +1724,7 @@ mod test_reporting {
 
     #[test]
     fn circular_definition() {
+        // invalid mutual recursion
         report_problem_as(
             indoc!(
                 r#"
@@ -2413,7 +2415,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                Foo : { x: Bar }
+                Foo : { x : Bar }
                 Bar : { y : Foo }
 
                 f : Foo
