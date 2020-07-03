@@ -1597,10 +1597,12 @@ fn call_with_args<'a, 'ctx, 'env>(
 
             let (list, list_layout) = &args[0];
 
+            let wrapper_struct = list.into_struct_value();
+
             let builder = env.builder;
             let ctx = env.context;
 
-            let list_len = load_list_len(builder, list.into_struct_value());
+            let list_len = load_list_len(builder, wrapper_struct);
 
             // list_len > 0
             // We have to do a loop below, continuously adding the `elem`
@@ -1622,12 +1624,16 @@ fn call_with_args<'a, 'ctx, 'env>(
                         // Allocate space for the new array that we'll copy into.
                         let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
 
-                        let list_ptr = {
+                        let elem_type =
+                            basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+
+                        let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                        let list_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
+
+                        let reversed_list_ptr = {
                             let len_type = env.ptr_int();
                             let len = len_type.const_int(elem_bytes, false);
-
-                            let elem_type =
-                                basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
 
                             env.builder
                                 .build_array_malloc(elem_type, len, "create_list_ptr")
@@ -1681,7 +1687,7 @@ fn call_with_args<'a, 'ctx, 'env>(
                         let ptr_bytes = env.ptr_bytes;
                         let int_type = ptr_int(ctx, ptr_bytes);
                         let ptr_as_int =
-                            builder.build_ptr_to_int(list_ptr, int_type, "list_cast_ptr");
+                            builder.build_ptr_to_int(reversed_list_ptr, int_type, "list_cast_ptr");
                         let struct_type = collection(ctx, ptr_bytes);
 
                         let mut struct_val;
