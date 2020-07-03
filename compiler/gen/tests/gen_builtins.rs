@@ -518,6 +518,8 @@ mod gen_builtins {
     #[test]
     fn list_reverse() {
         assert_evals_to!("List.reverse [1, 2, 3]", &[3, 2, 1], &'static [i64]);
+        assert_evals_to!("List.reverse [4]", &[4], &'static [i64]);
+        assert_evals_to!("List.reverse []", &[], &'static [i64]);
     }
 
     #[test]
