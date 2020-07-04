@@ -1728,6 +1728,70 @@ fn call_with_args<'a, 'ctx, 'env>(
                 }
             }
         }
+        Symbol::LIST_APPEND => {
+            // List.append : List elem, List elem -> List elem
+            debug_assert_eq!(args.len(), 2);
+
+            let (first_list, first_list_layout) = &args[0];
+            let (second_list, second_list_layout) = &args[1];
+
+            let builder = env.builder;
+
+            let ctx = env.context;
+
+            let first_wrapper_struct = first_list.into_struct_value();
+            let second_wrapper_struct = second_list.into_struct_value();
+
+            let first_list_len = load_list_len(builder, first_wrapper_struct);
+            let second_list_len = load_list_len(builder, second_wrapper_struct);
+
+            match first_list_layout {
+                Layout::Builtin(Builtin::List(elem_layout)) => match second_list_layout {
+                    Layout::Builtin(Builtin::List(_)) => {}
+
+                    Layout::Builtin(Builtin::EmptyList) => {
+                        let elem_type =
+                            basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+
+                        let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                        clone_nonempty_list(
+                            env,
+                            first_list_len,
+                            load_list_ptr(builder, first_wrapper_struct, ptr_type),
+                            elem_layout,
+                        )
+                    }
+
+                    _ => {
+                        unreachable!("Invalid List layout for List.get: {:?}", second_list_layout);
+                    }
+                },
+
+                Layout::Builtin(Builtin::EmptyList) => match second_list_layout {
+                    Layout::Builtin(Builtin::List(elem_layout)) => {
+                        let elem_type =
+                            basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+
+                        let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                        clone_nonempty_list(
+                            env,
+                            second_list_len,
+                            load_list_ptr(builder, second_wrapper_struct, ptr_type),
+                            elem_layout,
+                        )
+                    }
+                    Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                    _ => {
+                        unreachable!("Invalid List layout for List.get: {:?}", second_list_layout);
+                    }
+                },
+                _ => {
+                    unreachable!("Invalid List layout for List.get: {:?}", first_list_layout);
+                }
+            }
+        }
         Symbol::INT_DIV_UNSAFE => {
             debug_assert!(args.len() == 2);
 

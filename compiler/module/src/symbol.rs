@@ -695,6 +695,7 @@ define_builtins! {
         17 LIST_SINGLE: "single"
         18 LIST_REPEAT: "repeat"
         19 LIST_REVERSE: "reverse"
+        20 LIST_APPEND: "append"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
