@@ -52,6 +52,7 @@ fn headers_from_annotation_help(
         }
         Underscore
         | Shadowed(_, _)
+        | MalformedPattern(_, _)
         | UnsupportedPattern(_)
         | NumLiteral(_, _)
         | IntLiteral(_)
@@ -117,7 +118,7 @@ pub fn constrain_pattern(
     state: &mut PatternState,
 ) {
     match pattern {
-        Underscore | UnsupportedPattern(_) | Shadowed(_, _) => {
+        Underscore | UnsupportedPattern(_) | MalformedPattern(_, _) | Shadowed(_, _) => {
             // Neither the _ pattern nor erroneous ones add any constraints.
         }
 

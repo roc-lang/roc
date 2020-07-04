@@ -5,7 +5,7 @@ use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
 use roc_parse::pattern::PatternType;
-use roc_problem::can::{Problem, RuntimeError};
+use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 
@@ -35,6 +35,8 @@ pub enum Pattern {
     Shadowed(Region, Located<Ident>),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
+    // parse error patterns
+    MalformedPattern(MalformedPatternProblem, Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -76,6 +78,7 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
         | FloatLiteral(_)
         | StrLiteral(_)
         | Underscore
+        | MalformedPattern(_, _)
         | UnsupportedPattern(_) => {}
 
         Shadowed(_, _) => {}
@@ -165,12 +168,13 @@ pub fn canonicalize_pattern<'a>(
         }
 
         FloatLiteral(ref string) => match pattern_type {
-            WhenBranch => {
-                let float = finish_parsing_float(string)
-                    .unwrap_or_else(|_| panic!("TODO handle malformed float pattern"));
-
-                Pattern::FloatLiteral(float)
-            }
+            WhenBranch => match finish_parsing_float(string) {
+                Err(_error) => {
+                    let problem = MalformedPatternProblem::MalformedFloat;
+                    malformed_pattern(env, problem, region)
+                }
+                Ok(float) => Pattern::FloatLiteral(float),
+            },
             ptype @ DefExpr | ptype @ TopLevelDef | ptype @ FunctionArg => {
                 unsupported_pattern(env, ptype, region)
             }
@@ -182,12 +186,13 @@ pub fn canonicalize_pattern<'a>(
         },
 
         NumLiteral(string) => match pattern_type {
-            WhenBranch => {
-                let int = finish_parsing_int(string)
-                    .unwrap_or_else(|_| panic!("TODO handle malformed int pattern"));
-
-                Pattern::NumLiteral(var_store.fresh(), int)
-            }
+            WhenBranch => match finish_parsing_int(string) {
+                Err(_error) => {
+                    let problem = MalformedPatternProblem::MalformedInt;
+                    malformed_pattern(env, problem, region)
+                }
+                Ok(int) => Pattern::NumLiteral(var_store.fresh(), int),
+            },
             ptype @ DefExpr | ptype @ TopLevelDef | ptype @ FunctionArg => {
                 unsupported_pattern(env, ptype, region)
             }
@@ -198,16 +203,19 @@ pub fn canonicalize_pattern<'a>(
             base,
             is_negative,
         } => match pattern_type {
-            WhenBranch => {
-                let int = finish_parsing_base(string, *base)
-                    .unwrap_or_else(|_| panic!("TODO handle malformed {:?} pattern", base));
-
-                if *is_negative {
-                    Pattern::IntLiteral(-int)
-                } else {
-                    Pattern::IntLiteral(int)
+            WhenBranch => match finish_parsing_base(string, *base) {
+                Err(_error) => {
+                    let problem = MalformedPatternProblem::MalformedBase(*base);
+                    malformed_pattern(env, problem, region)
                 }
-            }
+                Ok(int) => {
+                    if *is_negative {
+                        Pattern::IntLiteral(-int)
+                    } else {
+                        Pattern::IntLiteral(int)
+                    }
+                }
+            },
             ptype @ DefExpr | ptype @ TopLevelDef | ptype @ FunctionArg => {
                 unsupported_pattern(env, ptype, region)
             }
@@ -215,8 +223,8 @@ pub fn canonicalize_pattern<'a>(
 
         StrLiteral(_string) => match pattern_type {
             WhenBranch => {
-                panic!("TODO check whether string pattern is malformed.");
-                // Pattern::StrLiteral((*string).into())
+                // TODO report whether string was malformed
+                Pattern::StrLiteral((*string).into())
             }
             ptype @ DefExpr | ptype @ TopLevelDef | ptype @ FunctionArg => {
                 unsupported_pattern(env, ptype, region)
@@ -325,6 +333,20 @@ fn unsupported_pattern<'a>(
     Pattern::UnsupportedPattern(region)
 }
 
+/// When we detect a malformed pattern like `3.X` or `0b5`,
+/// report it to Env and return an UnsupportedPattern runtime error pattern.
+fn malformed_pattern<'a>(
+    env: &mut Env<'a>,
+    problem: MalformedPatternProblem,
+    region: Region,
+) -> Pattern {
+    env.problem(Problem::RuntimeError(RuntimeError::MalformedPattern(
+        problem, region,
+    )));
+
+    Pattern::MalformedPattern(problem, region)
+}
+
 pub fn bindings_from_patterns<'a, I>(loc_patterns: I, scope: &Scope) -> Vec<(Symbol, Region)>
 where
     I: Iterator<Item = &'a Located<Pattern>>,
@@ -374,6 +396,7 @@ fn add_bindings_from_patterns(
         | StrLiteral(_)
         | Underscore
         | Shadowed(_, _)
+        | MalformedPattern(_, _)
         | UnsupportedPattern(_) => (),
     }
 }
