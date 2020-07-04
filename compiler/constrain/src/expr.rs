@@ -118,8 +118,8 @@ pub fn constrain_expr(
                 let record_type = Type::Record(
                     field_types,
                     // TODO can we avoid doing Box::new on every single one of these?
-                    // For example, could we have a single lazy_static global Box they
-                    // could all share?
+                    // We can put `static EMPTY_REC: Type = Type::EmptyRec`, but that requires a
+                    // lifetime parameter on `Type`
                     Box::new(Type::EmptyRec),
                 );
                 let record_con = Eq(record_type, expected.clone(), Category::Record, region);
@@ -600,11 +600,7 @@ pub fn constrain_expr(
                 }
             }
 
-            // TODO check for exhaustiveness. If this `case` is non-exaustive, then:
-            //
-            // 1. Record a Problem.
-            // 2. Add an extra _ branch at the end which throws a runtime error.
-
+            // exhautiveness checking happens when converting to mono::Expr
             exists(vec![cond_var, *expr_var], And(constraints))
         }
         Access {
@@ -798,7 +794,6 @@ fn constrain_when_branch(
         constraints: Vec::with_capacity(1),
     };
 
-    // TODO ensure this is correct
     // TODO investigate for error messages, is it better to unify all branches with a variable,
     // then unify that variable with the expectation?
     for loc_pattern in &when_branch.patterns {
@@ -872,38 +867,35 @@ pub fn constrain_decls(
 ) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
 
+    let mut env = Env {
+        home,
+        rigids: ImMap::default(),
+    };
+
     for decl in decls.iter().rev() {
-        // NOTE: rigids are empty because they are not shared between top-level definitions
+        // Clear the rigids from the previous iteration.
+        // rigids are not shared between top-level definitions
+        env.rigids.clear();
+
         match decl {
             Declaration::Declare(def) => {
                 constraint = exists_with_aliases(
                     aliases.clone(),
                     Vec::new(),
-                    constrain_def(
-                        &Env {
-                            home,
-                            rigids: ImMap::default(),
-                        },
-                        def,
-                        constraint,
-                    ),
+                    constrain_def(&env, def, constraint),
                 );
             }
             Declaration::DeclareRec(defs) => {
                 constraint = exists_with_aliases(
                     aliases.clone(),
                     Vec::new(),
-                    constrain_recursive_defs(
-                        &Env {
-                            home,
-                            rigids: ImMap::default(),
-                        },
-                        defs,
-                        constraint,
-                    ),
+                    constrain_recursive_defs(&env, defs, constraint),
                 );
             }
-            Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),
+            Declaration::InvalidCycle(_, _) => {
+                // invalid cycles give a canonicalization error. we skip them here.
+                continue;
+            }
         }
     }
 
@@ -970,8 +962,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                 expr_type,
                 annotation_expected.clone(),
                 Category::Storage,
-                // TODO proper region
-                Region::zero(),
+                annotation.region,
             ));
 
             constrain_expr(

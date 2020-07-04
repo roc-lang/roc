@@ -78,24 +78,33 @@ pub fn constrain_decls(
                     sharing::annotate_usage(&def.loc_expr.value, &mut var_usage);
                 }
             }
-            Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),
+            Declaration::InvalidCycle(_, _) => {
+                // any usage of a value defined in an invalid cycle will blow up
+                // so for the analysis usage by such values doesn't count
+                continue;
+            }
         }
     }
 
     aliases_to_attr_type(var_store, &mut aliases);
 
+    let mut env = Env {
+        home,
+        rigids: ImMap::default(),
+    };
+
     for decl in decls.iter().rev() {
-        // NOTE: rigids are empty because they are not shared between top-level definitions
+        // clear the set of rigids from the previous iteration.
+        // rigids are not shared between top-level definitions.
+        env.rigids.clear();
+
         match decl {
             Declaration::Declare(def) => {
                 constraint = exists_with_aliases(
                     aliases.clone(),
                     Vec::new(),
                     constrain_def(
-                        &Env {
-                            home,
-                            rigids: ImMap::default(),
-                        },
+                        &env,
                         var_store,
                         &var_usage,
                         &mut ImSet::default(),
@@ -109,10 +118,7 @@ pub fn constrain_decls(
                     aliases.clone(),
                     Vec::new(),
                     constrain_recursive_defs(
-                        &Env {
-                            home,
-                            rigids: ImMap::default(),
-                        },
+                        &env,
                         var_store,
                         &var_usage,
                         &mut ImSet::default(),
@@ -121,7 +127,10 @@ pub fn constrain_decls(
                     ),
                 );
             }
-            Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),
+            Declaration::InvalidCycle(_, _) => {
+                // invalid cycles give a canonicalization error. we skip them here.
+                continue;
+            }
         }
     }
 
