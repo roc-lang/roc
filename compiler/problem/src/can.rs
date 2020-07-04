@@ -50,6 +50,10 @@ pub enum Problem {
         annotation_pattern: Region,
         def_pattern: Region,
     },
+    InvalidAliasRigid {
+        alias_name: Symbol,
+        region: Region,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -86,10 +90,7 @@ pub enum RuntimeError {
     InvalidOctal(std::num::ParseIntError, Box<str>),
     InvalidBinary(std::num::ParseIntError, Box<str>),
     QualifiedPatternIdent(InlinableString),
-    CircularDef(
-        Vec<Located<Ident>>,
-        Vec<(Region /* pattern */, Region /* expr */)>,
-    ),
+    CircularDef(Vec<Symbol>, Vec<(Region /* pattern */, Region /* expr */)>),
 
     /// When the author specifies a type annotation but no implementation
     NoImplementation,

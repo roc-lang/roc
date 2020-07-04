@@ -1702,6 +1702,7 @@ mod test_reporting {
 
     #[test]
     fn circular_definition_self() {
+        // invalid recursion
         report_problem_as(
             indoc!(
                 r#"
@@ -1723,6 +1724,7 @@ mod test_reporting {
 
     #[test]
     fn circular_definition() {
+        // invalid mutual recursion
         report_problem_as(
             indoc!(
                 r#"
@@ -2413,7 +2415,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                Foo : { x: Bar }
+                Foo : { x : Bar }
                 Bar : { y : Foo }
 
                 f : Foo
@@ -2707,6 +2709,41 @@ mod test_reporting {
                 2 ┆>  foo = \x -> x
 
                 Is it a typo? If not, put either a newline or comment between them.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_alias_rigid_var_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                MyAlias 1 : Int
+
+                4
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This pattern in the definition of `MyAlias` is not what I expect:
+
+                1 ┆  MyAlias 1 : Int
+                  ┆          ^
+
+                Only type variables like `a` or `value` can occur in this position.
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                `MyAlias` is not used anywhere in your code.
+
+                1 ┆  MyAlias 1 : Int
+                  ┆  ^^^^^^^^^^^^^^^
+
+                If you didn't intend on using `MyAlias` then remove it so future readers
+                of your code don't wonder why it is there.
                 "#
             ),
         )

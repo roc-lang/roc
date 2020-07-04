@@ -17,7 +17,7 @@ mod test_can {
     use roc_can::expr::Expr::{self, *};
     use roc_can::expr::Recursive;
     use roc_problem::can::{Problem, RuntimeError};
-    use roc_region::all::{Located, Region};
+    use roc_region::all::Region;
     use std::{f64, i64};
 
     fn assert_can(input: &str, expected: Expr) {
@@ -505,10 +505,14 @@ mod test_can {
             "#
         );
 
+        let home = test_home();
         let arena = Bump::new();
         let CanExprOut {
-            loc_expr, problems, ..
-        } = can_expr_with(&arena, test_home(), src);
+            loc_expr,
+            problems,
+            interns,
+            ..
+        } = can_expr_with(&arena, home, src);
 
         let is_circular_def = if let RuntimeError(RuntimeError::CircularDef(_, _)) = loc_expr.value
         {
@@ -518,7 +522,7 @@ mod test_can {
         };
 
         let problem = Problem::RuntimeError(RuntimeError::CircularDef(
-            vec![Located::at(Region::new(0, 0, 0, 1), "x".into())],
+            vec![interns.symbol(home, "x".into())],
             vec![(Region::new(0, 0, 0, 1), Region::new(0, 0, 4, 5))],
         ));
 
@@ -537,16 +541,20 @@ mod test_can {
                 x
             "#
         );
+        let home = test_home();
         let arena = Bump::new();
         let CanExprOut {
-            loc_expr, problems, ..
-        } = can_expr_with(&arena, test_home(), src);
+            loc_expr,
+            problems,
+            interns,
+            ..
+        } = can_expr_with(&arena, home, src);
 
         let problem = Problem::RuntimeError(RuntimeError::CircularDef(
             vec![
-                Located::at(Region::new(0, 0, 0, 1), "x".into()),
-                Located::at(Region::new(1, 1, 0, 1), "y".into()),
-                Located::at(Region::new(2, 2, 0, 1), "z".into()),
+                interns.symbol(home, "x".into()),
+                interns.symbol(home, "y".into()),
+                interns.symbol(home, "z".into()),
             ],
             vec![
                 (Region::new(0, 0, 0, 1), Region::new(0, 0, 4, 5)),
