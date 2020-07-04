@@ -1133,12 +1133,48 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             }
         }
 
-        LetRec(_, _, _, _ /*Vec<Def>, Box<Located<Expr>>, Variable, Aliases */) => {
-            todo!("inline for LetRec");
+        LetRec(defs, loc_expr, var, aliases) => {
+            let mut new_defs = Vec::with_capacity(defs.len());
+
+            for def in defs {
+                new_defs.push(Def {
+                    loc_pattern: def.loc_pattern,
+                    loc_expr: Located {
+                        region: def.loc_expr.region,
+                        value: inline_calls(var_store, scope, def.loc_expr.value),
+                    },
+                    expr_var: def.expr_var,
+                    pattern_vars: def.pattern_vars,
+                    annotation: def.annotation,
+                });
+            }
+
+            let loc_expr = Located {
+                region: loc_expr.region,
+                value: inline_calls(var_store, scope, loc_expr.value),
+            };
+
+            LetRec(new_defs, Box::new(loc_expr), var, aliases)
         }
 
-        LetNonRec(_, _, _, _ /*Box<Def>, Box<Located<Expr>>, Variable, Aliases*/) => {
-            todo!("inline for LetNonRec");
+        LetNonRec(def, loc_expr, var, aliases) => {
+            let def = Def {
+                loc_pattern: def.loc_pattern,
+                loc_expr: Located {
+                    region: def.loc_expr.region,
+                    value: inline_calls(var_store, scope, def.loc_expr.value),
+                },
+                expr_var: def.expr_var,
+                pattern_vars: def.pattern_vars,
+                annotation: def.annotation,
+            };
+
+            let loc_expr = Located {
+                region: loc_expr.region,
+                value: inline_calls(var_store, scope, loc_expr.value),
+            };
+
+            LetNonRec(Box::new(def), Box::new(loc_expr), var, aliases)
         }
 
         Closure(var, symbol, recursive, patterns, boxed_expr) => {
