@@ -39,6 +39,10 @@ mod can_inline {
         let var_store = &mut VarStore::default();
         let aliases = SendMap::default();
 
+        // TODO testing with hardcoded variables is very brittle.
+        // Should find a better way to test this!
+        // (One idea would be to traverse both Exprs and zero out all the Variables,
+        // so they always pass equality.)
         assert_inlines_to(
             indoc!(
                 r#"
