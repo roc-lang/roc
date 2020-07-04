@@ -175,14 +175,12 @@ pub fn canonicalize_pattern<'a>(
                 }
                 Ok(float) => Pattern::FloatLiteral(float),
             },
-            ptype @ DefExpr | ptype @ TopLevelDef | ptype @ FunctionArg => {
-                unsupported_pattern(env, ptype, region)
-            }
+            ptype => unsupported_pattern(env, ptype, region),
         },
 
         Underscore => match pattern_type {
             WhenBranch | FunctionArg => Pattern::Underscore,
-            ptype @ DefExpr | ptype @ TopLevelDef => unsupported_pattern(env, ptype, region),
+            ptype => unsupported_pattern(env, ptype, region),
         },
 
         NumLiteral(string) => match pattern_type {
@@ -193,9 +191,7 @@ pub fn canonicalize_pattern<'a>(
                 }
                 Ok(int) => Pattern::NumLiteral(var_store.fresh(), int),
             },
-            ptype @ DefExpr | ptype @ TopLevelDef | ptype @ FunctionArg => {
-                unsupported_pattern(env, ptype, region)
-            }
+            ptype => unsupported_pattern(env, ptype, region),
         },
 
         NonBase10Literal {
@@ -216,19 +212,20 @@ pub fn canonicalize_pattern<'a>(
                     }
                 }
             },
-            ptype @ DefExpr | ptype @ TopLevelDef | ptype @ FunctionArg => {
-                unsupported_pattern(env, ptype, region)
-            }
+            ptype => unsupported_pattern(env, ptype, region),
         },
 
-        StrLiteral(_string) => match pattern_type {
+        StrLiteral(string) => match pattern_type {
             WhenBranch => {
                 // TODO report whether string was malformed
                 Pattern::StrLiteral((*string).into())
             }
-            ptype @ DefExpr | ptype @ TopLevelDef | ptype @ FunctionArg => {
-                unsupported_pattern(env, ptype, region)
-            }
+            ptype => unsupported_pattern(env, ptype, region),
+        },
+
+        BlockStrLiteral(_lines) => match pattern_type {
+            WhenBranch => todo!("TODO block string literal pattern"),
+            ptype => unsupported_pattern(env, ptype, region),
         },
 
         SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) | Nested(sub_pattern) => {
@@ -296,7 +293,7 @@ pub fn canonicalize_pattern<'a>(
                             },
                         });
                     }
-                    _ => panic!("invalid pattern in record"),
+                    _ => unreachable!("Any other pattern should have given a parse error"),
                 }
             }
 
@@ -312,7 +309,15 @@ pub fn canonicalize_pattern<'a>(
             unreachable!("should have been handled in RecordDestructure");
         }
 
-        _ => panic!("TODO finish restoring can_pattern branch for {:?}", pattern),
+        Malformed(_str) => {
+            let problem = MalformedPatternProblem::Unknown;
+            malformed_pattern(env, problem, region)
+        }
+
+        QualifiedIdentifier { .. } => {
+            let problem = MalformedPatternProblem::QualifiedIdentifier;
+            malformed_pattern(env, problem, region)
+        }
     };
 
     Located {

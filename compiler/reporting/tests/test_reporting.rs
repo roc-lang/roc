@@ -1486,6 +1486,8 @@ mod test_reporting {
 
                 2 ┆      100A -> 3
                   ┆      ^^^^
+
+                Hint: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -1509,6 +1511,8 @@ mod test_reporting {
 
                 2 ┆      2.X -> 3
                   ┆      ^^^
+
+                Hint: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -1532,6 +1536,8 @@ mod test_reporting {
 
                 2 ┆      0xZ -> 3
                   ┆      ^^^
+
+                Hint: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -1555,6 +1561,8 @@ mod test_reporting {
 
                 2 ┆      0o9 -> 3
                   ┆      ^^^
+
+                Hint: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -1578,6 +1586,8 @@ mod test_reporting {
 
                 2 ┆      0b4 -> 3
                   ┆      ^^^
+
+                Hint: Learn more about number literals at TODO
                 "#
             ),
         )

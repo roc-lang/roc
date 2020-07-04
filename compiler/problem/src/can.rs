@@ -92,7 +92,6 @@ pub enum RuntimeError {
     InvalidHex(std::num::ParseIntError, Box<str>),
     InvalidOctal(std::num::ParseIntError, Box<str>),
     InvalidBinary(std::num::ParseIntError, Box<str>),
-    QualifiedPatternIdent(InlinableString),
     CircularDef(Vec<Symbol>, Vec<(Region /* pattern */, Region /* expr */)>),
 
     /// When the author specifies a type annotation but no implementation
@@ -104,4 +103,6 @@ pub enum MalformedPatternProblem {
     MalformedInt,
     MalformedFloat,
     MalformedBase(Base),
+    Unknown,
+    QualifiedIdentifier,
 }
