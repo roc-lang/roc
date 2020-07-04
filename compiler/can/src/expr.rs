@@ -1007,3 +1007,193 @@ fn canonicalize_lookup(
 
     (can_expr, output)
 }
+
+/// Currently uses the heuristic of "only inline if it's a builtin"
+pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> Expr {
+    use Expr::*;
+
+    match expr {
+        // Num stores the `a` variable in `Num a`. Not the same as the variable
+        // stored in Int and Float below, which is strictly for better error messages
+        other @ Num(_, _)
+        | other @ Int(_, _)
+        | other @ Float(_, _)
+        | other @ Str(_)
+        | other @ BlockStr(_)
+        | other @ RuntimeError(_)
+        | other @ EmptyRecord
+        | other @ Accessor { .. }
+        | other @ Update { .. }
+        | other @ Var(_) => other,
+
+        List {
+            elem_var,
+            loc_elems,
+        } => {
+            let mut new_elems = Vec::with_capacity(loc_elems.len());
+
+            for loc_elem in loc_elems {
+                let value = inline_calls(var_store, scope, loc_elem.value);
+
+                new_elems.push(Located {
+                    value,
+                    region: loc_elem.region,
+                });
+            }
+
+            List {
+                elem_var,
+                loc_elems: new_elems,
+            }
+        }
+        // Branching
+        When {
+            cond_var,
+            expr_var,
+            region,
+            loc_cond,
+            branches,
+        } => {
+            let loc_cond = Box::new(Located {
+                region: loc_cond.region,
+                value: inline_calls(var_store, scope, loc_cond.value),
+            });
+
+            let mut new_branches = Vec::with_capacity(branches.len());
+
+            for branch in branches {
+                let value = Located {
+                    value: inline_calls(var_store, scope, branch.value.value),
+                    region: branch.value.region,
+                };
+                let guard = match branch.guard {
+                    Some(loc_expr) => Some(Located {
+                        region: loc_expr.region,
+                        value: inline_calls(var_store, scope, loc_expr.value),
+                    }),
+                    None => None,
+                };
+                let new_branch = WhenBranch {
+                    patterns: branch.patterns,
+                    value,
+                    guard,
+                };
+
+                new_branches.push(new_branch);
+            }
+
+            When {
+                cond_var,
+                expr_var,
+                region,
+                loc_cond,
+                branches: new_branches,
+            }
+        }
+        If {
+            cond_var,
+            branch_var,
+            branches,
+            final_else,
+        } => {
+            let mut new_branches = Vec::with_capacity(branches.len());
+
+            for (loc_cond, loc_expr) in branches {
+                let loc_cond = Located {
+                    value: inline_calls(var_store, scope, loc_cond.value),
+                    region: loc_cond.region,
+                };
+
+                let loc_expr = Located {
+                    value: inline_calls(var_store, scope, loc_expr.value),
+                    region: loc_expr.region,
+                };
+
+                new_branches.push((loc_cond, loc_expr));
+            }
+
+            let final_else = Box::new(Located {
+                region: final_else.region,
+                value: inline_calls(var_store, scope, final_else.value),
+            });
+
+            If {
+                cond_var,
+                branch_var,
+                branches: new_branches,
+                final_else,
+            }
+        }
+
+        LetRec(_, _, _, _ /*Vec<Def>, Box<Located<Expr>>, Variable, Aliases */) => {
+            todo!("inline for LetRec");
+        }
+
+        LetNonRec(_, _, _, _ /*Box<Def>, Box<Located<Expr>>, Variable, Aliases*/) => {
+            todo!("inline for LetNonRec");
+        }
+
+        Closure(var, symbol, recursive, patterns, boxed_expr) => {
+            let (loc_expr, expr_var) = *boxed_expr;
+            let loc_expr = Located {
+                value: inline_calls(var_store, scope, loc_expr.value),
+                region: loc_expr.region,
+            };
+
+            Closure(
+                var,
+                symbol,
+                recursive,
+                patterns,
+                Box::new((loc_expr, expr_var)),
+            )
+        }
+
+        Record { record_var, fields } => {
+            todo!(
+                "Inlining for Record with record_var {:?} and fields {:?}",
+                record_var,
+                fields
+            );
+        }
+
+        Access {
+            record_var,
+            ext_var,
+            field_var,
+            loc_expr,
+            field,
+        } => {
+            todo!("Inlining for Access with record_var {:?}, ext_var {:?}, field_var {:?}, loc_expr {:?}, field {:?}", record_var, ext_var, field_var, loc_expr, field);
+        }
+
+        Tag {
+            variant_var,
+            ext_var,
+            name,
+            arguments,
+        } => {
+            todo!(
+                "Inlining for Tag with variant_var {:?}, ext_var {:?}, name {:?}, arguments {:?}",
+                variant_var,
+                ext_var,
+                name,
+                arguments
+            );
+        }
+
+        Call(boxed_tuple, args, called_via) => {
+            let (fn_var, loc_expr, expr_var) = *boxed_tuple;
+
+            match loc_expr.value {
+                Var(symbol) if symbol.is_builtin() => {
+                    todo!("Inline this builtin: {:?}", symbol);
+                }
+                _ => {
+                    // For now, we only inline calls to builtins. Leave this alone!
+                    Call(Box::new((fn_var, loc_expr, expr_var)), args, called_via)
+                }
+            }
+        }
+    }
+}
