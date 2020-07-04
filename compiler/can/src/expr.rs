@@ -1,4 +1,5 @@
 use crate::annotation::IntroducedVariables;
+use crate::builtins::builtin_defs;
 use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
@@ -1192,9 +1193,62 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             let (fn_var, loc_expr, expr_var) = *boxed_tuple;
 
             match loc_expr.value {
-                Var(symbol) if symbol.is_builtin() => {
-                    todo!("Inline this builtin: {:?}", symbol);
-                }
+                Var(symbol) if symbol.is_builtin() => match builtin_defs(var_store).get(&symbol) {
+                    Some(Closure(_var, _, recursive, params, boxed_body)) => {
+                        debug_assert_eq!(*recursive, Recursive::NotRecursive);
+
+                        // Since this is a canonicalized Expr, we should have
+                        // already detected any arity mismatches and replaced this
+                        // with a RuntimeError if there was a mismatch.
+                        debug_assert_eq!(params.len(), args.len());
+
+                        // Start with the function's body as the answer.
+                        let (mut loc_answer, _body_var) = *boxed_body.clone();
+
+                        // Wrap the body in one LetNonRec for each argument,
+                        // such that at the end we have all the arguments in
+                        // scope with the values the caller provided.
+                        for ((_param_var, loc_pattern), (expr_var, loc_expr)) in
+                            params.iter().cloned().zip(args.into_iter()).rev()
+                        {
+                            // TODO get the correct vars into here.
+                            // Not sure if param_var should be involved.
+                            let pattern_vars = SendMap::default();
+
+                            // TODO get the actual correct aliases
+                            let aliases = SendMap::default();
+
+                            let def = Def {
+                                loc_pattern,
+                                loc_expr,
+                                expr_var,
+                                pattern_vars,
+                                annotation: None,
+                            };
+
+                            loc_answer = Located {
+                                region: Region::zero(),
+                                value: LetNonRec(
+                                    Box::new(def),
+                                    Box::new(loc_answer),
+                                    var_store.fresh(),
+                                    aliases,
+                                ),
+                            };
+                        }
+
+                        loc_answer.value
+                    }
+                    Some(_) => {
+                        unreachable!("Tried to inline a non-function");
+                    }
+                    None => {
+                        unreachable!(
+                            "Tried to inline a builtin that wasn't registered: {:?}",
+                            symbol
+                        );
+                    }
+                },
                 _ => {
                     // For now, we only inline calls to builtins. Leave this alone!
                     Call(Box::new((fn_var, loc_expr, expr_var)), args, called_via)
