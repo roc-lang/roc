@@ -1031,7 +1031,8 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ EmptyRecord
         | other @ Accessor { .. }
         | other @ Update { .. }
-        | other @ Var(_) => other,
+        | other @ Var(_)
+        | other @ RunLowLevel { .. } => other,
 
         List {
             elem_var,
@@ -1194,7 +1195,14 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
 
             match loc_expr.value {
                 Var(symbol) if symbol.is_builtin() => match builtin_defs(var_store).get(&symbol) {
-                    Some(Closure(_var, _, recursive, params, boxed_body)) => {
+                    Some(Def {
+                        loc_expr:
+                            Located {
+                                value: Closure(_var, _, recursive, params, boxed_body),
+                                ..
+                            },
+                        ..
+                    }) => {
                         debug_assert_eq!(*recursive, Recursive::NotRecursive);
 
                         // Since this is a canonicalized Expr, we should have

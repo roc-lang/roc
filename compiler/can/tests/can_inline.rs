@@ -53,7 +53,7 @@ mod can_inline {
                 Box::new(Def {
                     loc_pattern: Located {
                         region: Region::zero(),
-                        value: Pattern::Identifier(Symbol::INT_IS_ZERO_ARG),
+                        value: Pattern::Identifier(Symbol::ARG_1),
                     },
                     pattern_vars: SendMap::default(),
                     loc_expr: Located {
@@ -70,7 +70,7 @@ mod can_inline {
                             unsafe { Variable::unsafe_test_debug_variable(138) },
                             Located {
                                 region: Region::zero(),
-                                value: Expr::Var(Symbol::INT_EQ_I64),
+                                value: Expr::Var(Symbol::BOOL_EQ),
                             },
                             unsafe { Variable::unsafe_test_debug_variable(139) },
                         )),
@@ -79,7 +79,7 @@ mod can_inline {
                                 unsafe { Variable::unsafe_test_debug_variable(140) },
                                 Located {
                                     region: Region::zero(),
-                                    value: Var(Symbol::INT_IS_ZERO_ARG),
+                                    value: Var(Symbol::ARG_1),
                                 },
                             ),
                             (
