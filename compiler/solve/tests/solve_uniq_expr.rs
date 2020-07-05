@@ -1083,7 +1083,8 @@ mod solve_uniq_expr {
             // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
             // i.e. the `b` could be ignored in this example, is that true in general?
             // seems like it because we don't really extract anything.
-            "Attr * (Attr (* | a | b) [ Foo (Attr b c) (Attr a *) ]* -> Attr * [ Foo (Attr b c) (Attr * Str) ]*)"
+            // "Attr * (Attr (* | a | b) [ Foo (Attr b c) (Attr a *) ]* -> Attr * [ Foo (Attr b c) (Attr * Str) ]*)"
+            "Attr * (Attr (* | a | b) [ Foo (Attr a c) (Attr b *) ]* -> Attr * [ Foo (Attr a c) (Attr * Str) ]*)"
         );
     }
 
@@ -1359,7 +1360,8 @@ mod solve_uniq_expr {
                             r.tic.tac.toe
                 "#
             ),
-            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (d | b | e) { bar : (Attr (e | b) { baz : (Attr b f) }*) }*), tic : (Attr (a | b | c) { tac : (Attr (c | b) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
+            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (d | b | e) { bar : (Attr (e | b) { baz : (Attr b f) }*) }*), tic : (Attr (a | b | c) { tac : (Attr (c | b) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
+            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | b | d) { bar : (Attr (d | b) { baz : (Attr b f) }*) }*), tic : (Attr (c | b | e) { tac : (Attr (e | b) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
         );
     }
 
@@ -2496,7 +2498,8 @@ mod solve_uniq_expr {
                 withDefault
                 "#
             ),
-            "Attr * (Attr (* | b | c) (Result (Attr b a) (Attr c e)), Attr b a -> Attr b a)",
+            // "Attr * (Attr (* | b | c) (Result (Attr b a) (Attr c e)), Attr b a -> Attr b a)",
+            "Attr * (Attr (* | b | c) (Result (Attr c a) (Attr b e)), Attr c a -> Attr c a)",
         );
     }
 
@@ -2511,7 +2514,8 @@ mod solve_uniq_expr {
                         Err _ -> default
                 "#
             ),
-            "Attr * (Attr (* | a | b) [ Err (Attr a *), Ok (Attr b c) ]*, Attr b c -> Attr b c)",
+            // "Attr * (Attr (* | a | b) [ Err (Attr a *), Ok (Attr b c) ]*, Attr b c -> Attr b c)",
+            "Attr * (Attr (* | a | b) [ Err (Attr b *), Ok (Attr a c) ]*, Attr a c -> Attr a c)",
         );
     }
 
@@ -2644,8 +2648,8 @@ mod solve_uniq_expr {
                 f
                 "#
             ),
-            //"Attr * (Attr (* | a | b) { p : (Attr a *), q : (Attr b *) }* -> Attr * (Num (Attr * *)))",
-            "Attr * (Attr (* | a | b) { p : (Attr b *), q : (Attr a *) }* -> Attr * (Num (Attr * *)))"
+            "Attr * (Attr (* | a | b) { p : (Attr a *), q : (Attr b *) }* -> Attr * (Num (Attr * *)))",
+            // "Attr * (Attr (* | a | b) { p : (Attr b *), q : (Attr a *) }* -> Attr * (Num (Attr * *)))"
         );
     }
 
