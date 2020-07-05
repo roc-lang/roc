@@ -1611,7 +1611,7 @@ fn call_with_args<'a, 'ctx, 'env>(
                 IntPredicate::UGT,
                 list_len,
                 ctx.i64_type().const_int(0, false),
-                "atleastzero",
+                "greaterthanzero",
             );
 
             let build_then = || {
@@ -1633,7 +1633,13 @@ fn call_with_args<'a, 'ctx, 'env>(
                         let index_name = "#index";
                         let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
 
-                        builder.build_store(start_alloca, list_len);
+                        // Start at the last element in the list.
+                        let last_elem_index = builder.build_int_sub(
+                            list_len,
+                            ctx.i64_type().const_int(1, false),
+                            "lastelemindex",
+                        );
+                        builder.build_store(start_alloca, last_elem_index);
 
                         let loop_bb = ctx.append_basic_block(parent, "loop");
                         builder.build_unconditional_branch(loop_bb);
