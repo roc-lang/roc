@@ -15,12 +15,9 @@ mod helpers;
 #[cfg(test)]
 mod test_usage_analysis {
     use crate::helpers::{can_expr, test_home, CanExprOut};
-    use roc_can::expr::inline_calls;
-    use roc_can::scope::Scope;
     use roc_collections::all::{ImMap, ImSet};
     use roc_module::ident::Lowercase;
     use roc_module::symbol::{Interns, Symbol};
-    use roc_types::subs::VarStore;
     use roc_uniq::sharing::{self, Container, FieldAccess, Mark, Usage, VarUsage};
     use std::collections::HashMap;
 
@@ -189,13 +186,9 @@ mod test_usage_analysis {
             loc_expr, interns, ..
         } = can_expr(src);
 
-        let scope = &mut Scope::new(test_home());
-        let var_store = &mut VarStore::default();
-        let expr = inline_calls(var_store, scope, loc_expr.value);
-
         use roc_uniq::sharing::annotate_usage;
         let mut usage = VarUsage::default();
-        annotate_usage(&expr, &mut usage);
+        annotate_usage(&loc_expr.value, &mut usage);
 
         assert_eq!(usage, get_expected(interns))
     }

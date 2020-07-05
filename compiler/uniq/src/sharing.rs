@@ -1,8 +1,8 @@
 use roc_can::expr::Expr;
 use roc_collections::all::{ImMap, ImSet};
 use roc_module::ident::Lowercase;
-use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
+use roc_region::all::Located;
 use roc_types::subs::Variable;
 
 // fake field names for container elements
@@ -527,7 +527,8 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
         | Str(_)
         | BlockStr(_)
         | EmptyRecord
-        | Accessor { .. } => {}
+        | Accessor { .. }
+        | RunLowLevel { .. } => {}
 
         Var(symbol) => usage.register_unique(*symbol),
 
@@ -618,27 +619,17 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
             annotate_usage(&loc_expr.value, usage);
         }
         Call(fun, loc_args, _) => {
-            match fun.1.value {
-                Var(symbol) => {
-                    // call by name
-                    usage.register_unique(symbol);
+            if let Var(symbol) = fun.1.value {
+                // call by name
+                special_case_builtins(usage, symbol, loc_args);
+            } else {
+                // unknown call
+                annotate_usage(&fun.1.value, usage);
 
-                    for (_, arg) in loc_args {
-                        annotate_usage(&arg.value, usage);
-                    }
-                }
-                _ => {
-                    // unknown call
-                    annotate_usage(&fun.1.value, usage);
-
-                    for (_, arg) in loc_args {
-                        annotate_usage(&arg.value, usage);
-                    }
+                for (_, arg) in loc_args {
+                    annotate_usage(&arg.value, usage);
                 }
             }
-        }
-        RunLowLevel { op, args, ret_var } => {
-            annotate_low_level_usage(usage, *op, args, *ret_var);
         }
         Closure(_, _, _, _, body) => {
             annotate_usage(&body.0.value, usage);
@@ -703,63 +694,75 @@ fn get_access_chain<'a>(expr: &'a Expr, chain: &mut Vec<Lowercase>) -> Option<&'
     }
 }
 
-fn annotate_low_level_usage(
+fn special_case_builtins(
     usage: &mut VarUsage,
-    op: LowLevel,
-    args: &[(Variable, Expr)],
-    _ret_var: Variable,
+    symbol: Symbol,
+    loc_args: &[(Variable, Located<Expr>)],
 ) {
     use Expr::Var;
-    use LowLevel::*;
     use Mark::*;
     use Usage::*;
+    match symbol {
+        Symbol::LIST_GET => {
+            debug_assert!(loc_args.len() == 2);
 
-    match op {
-        ListLen | ListGetUnsafe => {
-            match &args[0].1 {
-                Var(list_var) => {
-                    usage.register_with(
-                        *list_var,
-                        &Access(Container::List, Seen, FieldAccess::list_seen()),
-                    );
-                }
-                list => {
-                    annotate_usage(list, usage);
-                }
+            let loc_list = &loc_args[0].1;
+            let loc_index = &loc_args[1].1;
+
+            if let Var(list_var) = loc_list.value {
+                usage.register_with(
+                    list_var,
+                    &Access(Container::List, Seen, FieldAccess::list_access()),
+                );
+            } else {
+                annotate_usage(&loc_list.value, usage);
             }
+            annotate_usage(&loc_index.value, usage);
+        }
 
-            for (_, arg) in &args[1..] {
-                annotate_usage(arg, usage);
+        Symbol::LIST_SET => {
+            debug_assert!(loc_args.len() == 3);
+
+            let loc_list = &loc_args[0].1;
+            let loc_index = &loc_args[1].1;
+            let loc_value = &loc_args[2].1;
+
+            if let Var(list_var) = loc_list.value {
+                usage.register_with(
+                    list_var,
+                    &Update(
+                        Container::List,
+                        ImSet::default(),
+                        FieldAccess::list_update(),
+                    ),
+                );
+            } else {
+                annotate_usage(&loc_list.value, usage);
+            }
+            annotate_usage(&loc_index.value, usage);
+            annotate_usage(&loc_value.value, usage);
+        }
+
+        Symbol::LIST_IS_EMPTY | Symbol::LIST_LEN => {
+            debug_assert!(loc_args.len() == 1);
+
+            let loc_list = &loc_args[0].1;
+
+            if let Var(list_var) = loc_list.value {
+                usage.register_with(
+                    list_var,
+                    &Access(Container::List, Seen, FieldAccess::list_seen()),
+                );
+            } else {
+                annotate_usage(&loc_list.value, usage);
             }
         }
 
-        ListSet | ListSetInPlace | ListPush => {
-            match &args[0].1 {
-                Var(list_var) => {
-                    usage.register_with(
-                        *list_var,
-                        &Update(
-                            Container::List,
-                            ImSet::default(),
-                            FieldAccess::list_update(),
-                        ),
-                    );
-                }
-                list => {
-                    annotate_usage(list, usage);
-                }
-            }
+        _ => {
+            usage.register_unique(symbol);
 
-            for (_, arg) in &args[1..] {
-                annotate_usage(arg, usage);
-            }
-        }
-
-        ListSingle | NumAdd | NumSub | NumMul | NumGt | NumGte | NumLt | NumLte | NumAbs
-        | NumNeg | NumDivUnchecked | NumRemUnchecked | NumSqrtUnchecked | NumRound | NumSin
-        | NumCos | Eq | NotEq | And | Or | Not | NumToFloat | ListRepeat => {
-            for (_, arg) in args {
-                annotate_usage(&arg, usage);
+            for (_, arg) in loc_args {
+                annotate_usage(&arg.value, usage);
             }
         }
     }
