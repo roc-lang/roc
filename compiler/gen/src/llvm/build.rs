@@ -1625,16 +1625,12 @@ fn call_with_args<'a, 'ctx, 'env>(
 
                         let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-                        let reversed_list_ptr = {
-                            let len_type = env.ptr_int();
-                            let len = len_type.const_int(elem_bytes, false);
+                        let reversed_list_ptr = env
+                            .builder
+                            .build_array_malloc(elem_type, list_len, "create_reversed_list_ptr")
+                            .unwrap();
 
-                            env.builder
-                                .build_array_malloc(elem_type, len, "create_reversed_list_ptr")
-                                .unwrap()
-
-                            // TODO check if malloc returned null; if so, runtime error for OOM!
-                        };
+                        // TODO check if malloc returned null; if so, runtime error for OOM!
 
                         let index_name = "#index";
                         let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
