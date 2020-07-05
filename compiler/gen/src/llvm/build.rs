@@ -1611,35 +1611,35 @@ fn call_with_args<'a, 'ctx, 'env>(
                 IntPredicate::UGT,
                 list_len,
                 ctx.i64_type().const_int(0, false),
-                "atleastzero",
+                "greaterthanzero",
             );
 
             let build_then = || {
                 match list_layout {
                     Layout::Builtin(Builtin::List(elem_layout)) => {
                         // Allocate space for the new array that we'll copy into.
-                        let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-
                         let elem_type =
                             basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
 
                         let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-                        let reversed_list_ptr = {
-                            let len_type = env.ptr_int();
-                            let len = len_type.const_int(elem_bytes, false);
+                        let reversed_list_ptr = env
+                            .builder
+                            .build_array_malloc(elem_type, list_len, "create_reversed_list_ptr")
+                            .unwrap();
 
-                            env.builder
-                                .build_array_malloc(elem_type, len, "create_reversed_list_ptr")
-                                .unwrap()
-
-                            // TODO check if malloc returned null; if so, runtime error for OOM!
-                        };
+                        // TODO check if malloc returned null; if so, runtime error for OOM!
 
                         let index_name = "#index";
                         let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
 
-                        builder.build_store(start_alloca, list_len);
+                        // Start at the last element in the list.
+                        let last_elem_index = builder.build_int_sub(
+                            list_len,
+                            ctx.i64_type().const_int(1, false),
+                            "lastelemindex",
+                        );
+                        builder.build_store(start_alloca, last_elem_index);
 
                         let loop_bb = ctx.append_basic_block(parent, "loop");
                         builder.build_unconditional_branch(loop_bb);
