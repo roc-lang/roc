@@ -151,7 +151,7 @@ pub fn canonicalize_defs<'a>(
                 match iter.peek() {
                     Some(Located {
                         value: Body(body_pattern, body_expr),
-                        ..
+                        region: body_region,
                     }) => {
                         if pattern.value.equivalent(&body_pattern.value) {
                             iter.next();
@@ -165,6 +165,10 @@ pub fn canonicalize_defs<'a>(
                                 &mut scope,
                                 pattern_type,
                             )
+                        } else if loc_def.region.lines_between(body_region) > 0 {
+                            // there is a line of whitespace between the annotation and the body
+                            // treat annotation and body separately
+                            to_pending_def(env, var_store, &loc_def.value, &mut scope, pattern_type)
                         } else {
                             // the pattern of the annotation does not match the pattern of the body directly below it
                             env.problems.push(Problem::SignatureDefMismatch {
