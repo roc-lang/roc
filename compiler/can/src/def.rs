@@ -719,6 +719,7 @@ fn pattern_to_vars_by_symbol(
         | FloatLiteral(_)
         | StrLiteral(_)
         | Underscore
+        | MalformedPattern(_, _)
         | UnsupportedPattern(_) => {}
 
         Shadowed(_, _) => {}

@@ -342,7 +342,7 @@ fn constrain_pattern(
             state.constraints.push(tag_con);
         }
 
-        Underscore | Shadowed(_, _) | UnsupportedPattern(_) => {
+        Underscore | Shadowed(_, _) | MalformedPattern(_, _) | UnsupportedPattern(_) => {
             // no constraints
         }
     }

@@ -1469,6 +1469,131 @@ mod test_reporting {
     }
 
     #[test]
+    fn malformed_int_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 1 is
+                    100A -> 3
+                    _ -> 4
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This integer pattern is malformed:
+
+                2 ┆      100A -> 3
+                  ┆      ^^^^
+
+                Hint: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn malformed_float_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 1 is
+                    2.X -> 3
+                    _ -> 4
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This float pattern is malformed:
+
+                2 ┆      2.X -> 3
+                  ┆      ^^^
+
+                Hint: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn malformed_hex_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 1 is
+                    0xZ -> 3
+                    _ -> 4
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This hex integer pattern is malformed:
+
+                2 ┆      0xZ -> 3
+                  ┆      ^^^
+
+                Hint: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn malformed_oct_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 1 is
+                    0o9 -> 3
+                    _ -> 4
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This octal integer pattern is malformed:
+
+                2 ┆      0o9 -> 3
+                  ┆      ^^^
+
+                Hint: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn malformed_bin_pattern() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 1 is
+                    0b4 -> 3
+                    _ -> 4
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This binary integer pattern is malformed:
+
+                2 ┆      0b4 -> 3
+                  ┆      ^^^
+
+                Hint: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn missing_fields() {
         report_problem_as(
             indoc!(

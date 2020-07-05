@@ -338,6 +338,41 @@ fn pretty_runtime_error<'b>(
                 ])
             }
         }
+        RuntimeError::MalformedPattern(problem, region) => {
+            use roc_parse::ast::Base;
+            use roc_problem::can::MalformedPatternProblem::*;
+
+            let name = match problem {
+                MalformedInt => " integer ",
+                MalformedFloat => " float ",
+                MalformedBase(Base::Hex) => " hex integer ",
+                MalformedBase(Base::Binary) => " binary integer ",
+                MalformedBase(Base::Octal) => " octal integer ",
+                Unknown => " ",
+                QualifiedIdentifier => " qualified ",
+            };
+
+            let hint = match problem {
+                MalformedInt | MalformedFloat | MalformedBase(_) => alloc
+                    .hint()
+                    .append(alloc.reflow("Learn more about number literals at TODO")),
+                Unknown => alloc.nil(),
+                QualifiedIdentifier => alloc.hint().append(
+                    alloc.reflow("In patterns, only private and global tags can be qualified"),
+                ),
+            };
+
+            alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This"),
+                    alloc.text(name),
+                    alloc.reflow("pattern is malformed:"),
+                ]),
+                alloc.region(region),
+                hint,
+            ])
+        }
+
         other => {
             //    // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
             //    UnsupportedPattern(Region),
