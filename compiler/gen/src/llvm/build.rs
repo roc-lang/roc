@@ -1618,8 +1618,6 @@ fn call_with_args<'a, 'ctx, 'env>(
                 match list_layout {
                     Layout::Builtin(Builtin::List(elem_layout)) => {
                         // Allocate space for the new array that we'll copy into.
-                        let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-
                         let elem_type =
                             basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
 
