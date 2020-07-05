@@ -3,6 +3,7 @@ use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::operator::BinOp;
 use roc_module::symbol::{ModuleId, Symbol};
+use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
 use roc_region::all::{Located, Region};
 
@@ -69,6 +70,8 @@ pub enum RuntimeError {
     },
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
+    // Example: when 1 is 1.X -> 32
+    MalformedPattern(MalformedPatternProblem, Region),
     UnrecognizedFunctionName(Located<InlinableString>),
     LookupNotInScope(Located<InlinableString>, MutSet<Box<str>>),
     ValueNotExposed {
@@ -89,9 +92,17 @@ pub enum RuntimeError {
     InvalidHex(std::num::ParseIntError, Box<str>),
     InvalidOctal(std::num::ParseIntError, Box<str>),
     InvalidBinary(std::num::ParseIntError, Box<str>),
-    QualifiedPatternIdent(InlinableString),
     CircularDef(Vec<Symbol>, Vec<(Region /* pattern */, Region /* expr */)>),
 
     /// When the author specifies a type annotation but no implementation
     NoImplementation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MalformedPatternProblem {
+    MalformedInt,
+    MalformedFloat,
+    MalformedBase(Base),
+    Unknown,
+    QualifiedIdentifier,
 }
