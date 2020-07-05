@@ -495,9 +495,27 @@ mod gen_builtins {
         assert_evals_to!("List.push [1, 1] 2", &[1, 1, 2], &'static [i64]);
         assert_evals_to!("List.push [] 3", &[3], &'static [i64]);
         assert_evals_to!(
+            indoc!(
+                r#"
+                    initThrees : List Int
+                    initThrees = 
+                        []
+                        
+                    List.push (List.push initThrees 3) 3
+                "#
+            ),
+            &[3, 3],
+            &'static [i64]
+        );
+        assert_evals_to!(
             "List.push [ True, False ] True",
             &[true, false, true],
             &'static [bool]
+        );
+        assert_evals_to!(
+            "List.push [ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22 ] 23",
+            &[11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
+            &'static [i64]
         );
     }
 
