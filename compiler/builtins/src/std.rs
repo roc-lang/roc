@@ -522,6 +522,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // reverse : List elem -> List elem
+    add_type(
+        Symbol::LIST_REVERSE,
+        SolvedType::Func(
+            vec![list_type(flex(TVAR1))],
+            Box::new(list_type(flex(TVAR1))),
+        ),
+    );
+
     // len : List * -> Int
     add_type(
         Symbol::LIST_LEN,
