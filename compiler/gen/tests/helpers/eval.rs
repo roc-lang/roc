@@ -145,7 +145,7 @@ macro_rules! assert_llvm_evals_to {
         if main_fn.verify(true) {
             fpm.run_on(&main_fn);
         } else {
-            panic!("Function {} failed LLVM verification.", main_fn_name);
+            panic!("Main function {} failed LLVM verification in NON-OPTIMIZED build. Uncomment things nearby to see more details.", main_fn_name);
         }
 
         // Verify the module
@@ -317,7 +317,7 @@ macro_rules! assert_opt_evals_to {
         if main_fn.verify(true) {
             fpm.run_on(&main_fn);
         } else {
-            panic!("Function {} failed LLVM verification.", main_fn_name);
+            panic!("main function {} failed LLVM verification in OPTIMIZED build. Uncomment nearby statements to see more details.", main_fn_name);
         }
 
         // Verify the module

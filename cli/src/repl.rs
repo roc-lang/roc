@@ -329,7 +329,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
     if main_fn.verify(true) {
         fpm.run_on(&main_fn);
     } else {
-        panic!("Function {} failed LLVM verification.", main_fn_name);
+        panic!("Main function {} failed LLVM verification. Uncomment things near this error message for more details.", main_fn_name);
     }
 
     // Verify the module
