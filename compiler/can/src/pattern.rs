@@ -96,7 +96,7 @@ pub fn canonicalize_pattern<'a>(
     use roc_parse::ast::Pattern::*;
     use PatternType::*;
 
-    let can_pattern = match pattern {
+    let can_pattern = match dbg!(pattern) {
         Identifier(name) => match scope.introduce(
             (*name).into(),
             &env.exposed_ident_ids,

@@ -72,7 +72,6 @@ pub enum RuntimeError {
     UnsupportedPattern(Region),
     // Example: when 1 is 1.X -> 32
     MalformedPattern(MalformedPatternProblem, Region),
-    UnrecognizedFunctionName(Located<InlinableString>),
     LookupNotInScope(Located<InlinableString>, MutSet<Box<str>>),
     ValueNotExposed {
         module_name: InlinableString,
@@ -87,8 +86,8 @@ pub enum RuntimeError {
     InvalidPrecedence(PrecedenceProblem, Region),
     MalformedIdentifier(Box<str>, Region),
     MalformedClosure(Region),
-    FloatOutsideRange(Box<str>),
-    IntOutsideRange(Box<str>),
+    FloatOutsideRange(Box<str>, Region),
+    IntOutsideRange(Box<str>, Region),
     InvalidHex(std::num::ParseIntError, Box<str>),
     InvalidOctal(std::num::ParseIntError, Box<str>),
     InvalidBinary(std::num::ParseIntError, Box<str>),

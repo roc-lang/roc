@@ -372,39 +372,46 @@ fn pretty_runtime_error<'b>(
                 hint,
             ])
         }
-
-        other => {
-            //    // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
-            //    UnsupportedPattern(Region),
-            //    UnrecognizedFunctionName(Located<InlinableString>),
-            //    SymbolNotExposed {
-            //        module_name: InlinableString,
-            //        ident: InlinableString,
-            //        region: Region,
-            //    },
-            //    ModuleNotImported {
-            //        module_name: InlinableString,
-            //        ident: InlinableString,
-            //        region: Region,
-            //    },
-            //    InvalidPrecedence(PrecedenceProblem, Region),
-            //    MalformedIdentifier(Box<str>, Region),
-            //    MalformedClosure(Region),
-            //    FloatOutsideRange(Box<str>),
-            //    IntOutsideRange(Box<str>),
-            //    InvalidHex(std::num::ParseIntError, Box<str>),
-            //    InvalidOctal(std::num::ParseIntError, Box<str>),
-            //    InvalidBinary(std::num::ParseIntError, Box<str>),
-            //    QualifiedPatternIdent(InlinableString),
-            //    CircularDef(
-            //        Vec<Located<Ident>>,
-            //        Vec<(Region /* pattern */, Region /* expr */)>,
-            //    ),
-            //
-            //    /// When the author specifies a type annotation but no implementation
-            //    NoImplementation,
-            todo!("TODO implement run time error reporting for {:?}", other)
+        RuntimeError::UnsupportedPattern(_) => {
+            todo!("unsupported patterns are currently not parsed!")
         }
+        RuntimeError::ValueNotExposed { .. } => todo!("value not exposed"),
+        RuntimeError::ModuleNotImported { .. } => todo!("module not imported"),
+        RuntimeError::InvalidPrecedence(_, _) => {
+            // do nothing, reported with PrecedenceProblem
+            unreachable!()
+        }
+        RuntimeError::MalformedIdentifier(_, _) => {
+            todo!("malformed identifier, currently gives a parse error and thus is unreachable")
+        }
+        RuntimeError::MalformedClosure(_) => todo!(""),
+        RuntimeError::FloatOutsideRange(_raw_str, _region) => todo!(""),
+        RuntimeError::IntOutsideRange(raw_str, region) => {
+            let big_or_small = if raw_str.starts_with('-') {
+                "small"
+            } else {
+                "big"
+            };
+
+            let hint = alloc
+                .hint()
+                .append(alloc.reflow("Learn more about number literals at TODO"));
+
+            alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This integer literal is too "),
+                    alloc.text(big_or_small),
+                    alloc.reflow(":"),
+                ]),
+                alloc.region(region),
+                alloc.reflow("Roc uses signed 64-bit integers, allowing values between −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807."),
+                hint,
+            ])
+        }
+        RuntimeError::InvalidHex(_, _) => todo!("invalid hex, unreachable"),
+        RuntimeError::InvalidOctal(_, _) => todo!("invalid octal, unreachable"),
+        RuntimeError::InvalidBinary(_, _) => todo!("invalid binary, unreachable"),
+        RuntimeError::NoImplementation => todo!("no implementation, unreachable"),
     }
 }
 
