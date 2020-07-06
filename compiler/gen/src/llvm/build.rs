@@ -632,19 +632,29 @@ pub fn build_expr<'a, 'ctx, 'env>(
             is_unwrapped,
             ..
         } if *is_unwrapped => {
+            use inkwell::values::BasicValueEnum::*;
+
             let builder = env.builder;
 
             // Get Struct val
-            // Since this is a one-element tag union, we get the correct struct immediately
-            let argument = build_expr(env, layout_ids, &scope, parent, expr).into_struct_value();
-
-            builder
-                .build_extract_value(
-                    argument,
-                    *index as u32,
-                    env.arena.alloc(format!("tag_field_access_{}_", index)),
-                )
-                .unwrap()
+            // Since this is a one-element tag union, we get the underlying value
+            // right away. However, that struct might have only one field which
+            // is not zero-sized, which would make it unwrapped. If that happens,
+            // we must be
+            match build_expr(env, layout_ids, &scope, parent, expr) {
+                StructValue(argument) => builder
+                    .build_extract_value(
+                        argument,
+                        *index as u32,
+                        env.arena.alloc(format!("tag_field_access_{}_", index)),
+                    )
+                    .unwrap(),
+                other => {
+                    // If it's not a Struct, that means it was unwrapped,
+                    // so we should return it directly.
+                    other
+                }
+            }
         }
 
         AccessAtIndex {
