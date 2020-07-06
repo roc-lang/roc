@@ -140,6 +140,11 @@ fn find_names_needed(
             // We must not accidentally generate names that collide with them!
             names_taken.insert(name);
         }
+        Structure(Apply(Symbol::ATTR_ATTR, args)) => {
+            // assign uniqueness var names based on when they occur in the base type
+            find_names_needed(args[1], subs, roots, root_appearances, names_taken);
+            find_names_needed(args[0], subs, roots, root_appearances, names_taken);
+        }
         Structure(Apply(_, args)) => {
             for var in args {
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
@@ -153,21 +158,30 @@ fn find_names_needed(
             find_names_needed(ret_var, subs, roots, root_appearances, names_taken);
         }
         Structure(Record(fields, ext_var)) => {
-            for (_, var) in fields {
-                find_names_needed(var, subs, roots, root_appearances, names_taken);
+            let mut sorted_fields: Vec<_> = fields.iter().collect();
+            sorted_fields.sort();
+
+            for (_, var) in sorted_fields {
+                find_names_needed(*var, subs, roots, root_appearances, names_taken);
             }
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(TagUnion(tags, ext_var)) => {
-            for var in tags.values().flatten() {
+            let mut sorted_tags: Vec<_> = tags.iter().collect();
+            sorted_tags.sort();
+
+            for var in sorted_tags.into_iter().map(|(_, v)| v).flatten() {
                 find_names_needed(*var, subs, roots, root_appearances, names_taken);
             }
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(RecursiveTagUnion(rec_var, tags, ext_var)) => {
-            for var in tags.values().flatten() {
+            let mut sorted_tags: Vec<_> = tags.iter().collect();
+            sorted_tags.sort();
+
+            for var in sorted_tags.into_iter().map(|(_, v)| v).flatten() {
                 find_names_needed(*var, subs, roots, root_appearances, names_taken);
             }
 
@@ -178,6 +192,7 @@ fn find_names_needed(
             Bool::Shared => {}
             Bool::Container(cvar, mvars) => {
                 find_names_needed(cvar, subs, roots, root_appearances, names_taken);
+
                 for var in mvars {
                     find_names_needed(var, subs, roots, root_appearances, names_taken);
                 }
