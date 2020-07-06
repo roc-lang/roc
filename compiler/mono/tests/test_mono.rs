@@ -552,11 +552,8 @@ mod test_mono {
             CallByName {
                 name: Symbol::LIST_GET,
                 layout: Layout::FunctionPointer(
-                    &[
-                        Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
-                        Layout::Builtin(Builtin::Int64),
-                    ],
-                    &Layout::Builtin(Builtin::Int64),
+                    &[Layout::Builtin(Builtin::List(&I64_LAYOUT)), I64_LAYOUT],
+                    &Layout::Union(&[&[I64_LAYOUT], &[I64_LAYOUT, I64_LAYOUT]]),
                 ),
                 args: &vec![
                     (
@@ -564,31 +561,27 @@ mod test_mono {
                             name: Symbol::LIST_SET,
                             layout: Layout::FunctionPointer(
                                 &[
-                                    Layout::Builtin(Builtin::List(&Layout::Builtin(
-                                        Builtin::Int64,
-                                    ))),
-                                    Layout::Builtin(Builtin::Int64),
-                                    Layout::Builtin(Builtin::Int64),
+                                    Layout::Builtin(Builtin::List(&I64_LAYOUT)),
+                                    I64_LAYOUT,
+                                    I64_LAYOUT,
                                 ],
-                                &Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
+                                &Layout::Builtin(Builtin::List(&I64_LAYOUT)),
                             ),
                             args: &vec![
                                 (
                                     Array {
-                                        elem_layout: Layout::Builtin(Builtin::Int64),
+                                        elem_layout: I64_LAYOUT,
                                         elems: &vec![Int(12), Int(9), Int(7), Int(3)],
                                     },
-                                    Layout::Builtin(Builtin::List(&Layout::Builtin(
-                                        Builtin::Int64,
-                                    ))),
+                                    Layout::Builtin(Builtin::List(&I64_LAYOUT)),
                                 ),
-                                (Int(1), Layout::Builtin(Builtin::Int64)),
-                                (Int(42), Layout::Builtin(Builtin::Int64)),
+                                (Int(1), I64_LAYOUT),
+                                (Int(42), I64_LAYOUT),
                             ],
                         },
-                        Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
+                        Layout::Builtin(Builtin::List(&I64_LAYOUT)),
                     ),
-                    (Int(1), Layout::Builtin(Builtin::Int64)),
+                    (Int(1), I64_LAYOUT),
                 ],
             }
         });
