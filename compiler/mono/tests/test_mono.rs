@@ -20,6 +20,9 @@ mod test_mono {
 
     // HELPERS
 
+    const I64_LAYOUT: Layout<'static> = Layout::Builtin(Builtin::Int64);
+    const F64_LAYOUT: Layout<'static> = Layout::Builtin(Builtin::Float64);
+
     fn compiles_to(src: &str, expected: Expr<'_>) {
         compiles_to_with_interns(src, |_| expected)
     }
@@ -344,35 +347,35 @@ mod test_mono {
     fn polymorphic_identity() {
         compiles_to(
             r#"
-            id = \x -> x
+                id = \x -> x
 
-            id { x: id 0x4 }
+                id { x: id 0x4, y: 0.1 }
             "#,
             {
-                use self::Builtin::*;
                 let home = test_home();
 
                 let gen_symbol_0 = Interns::from_index(home, 0);
+                let struct_layout = Layout::Struct(&[I64_LAYOUT, F64_LAYOUT]);
 
                 CallByName {
                     name: gen_symbol_0,
                     layout: Layout::FunctionPointer(
-                        &[Layout::Struct(&[Layout::Builtin(Builtin::Int64)])],
-                        &Layout::Struct(&[Layout::Builtin(Builtin::Int64)]),
+                        &[struct_layout.clone()],
+                        &struct_layout.clone(),
                     ),
                     args: &[(
-                        Struct(&[(
-                            CallByName {
-                                name: gen_symbol_0,
-                                layout: Layout::FunctionPointer(
-                                    &[Layout::Builtin(Builtin::Int64)],
-                                    &Layout::Builtin(Builtin::Int64),
-                                ),
-                                args: &[(Int(4), Layout::Builtin(Int64))],
-                            },
-                            Layout::Builtin(Int64),
-                        )]),
-                        Layout::Struct(&[Layout::Builtin(Int64)]),
+                        Struct(&[
+                            (
+                                CallByName {
+                                    name: gen_symbol_0,
+                                    layout: Layout::FunctionPointer(&[I64_LAYOUT], &I64_LAYOUT),
+                                    args: &[(Int(4), I64_LAYOUT)],
+                                },
+                                I64_LAYOUT,
+                            ),
+                            (Float(0.1), F64_LAYOUT),
+                        ]),
+                        struct_layout,
                     )],
                 }
             },
