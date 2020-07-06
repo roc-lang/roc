@@ -460,6 +460,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
         Struct(sorted_fields) => {
             let ctx = env.context;
             let builder = env.builder;
+            let ptr_bytes = env.ptr_bytes;
 
             // Determine types
             let num_fields = sorted_fields.len();
@@ -467,26 +468,38 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
             for (field_expr, field_layout) in sorted_fields.iter() {
-                let val = build_expr(env, layout_ids, &scope, parent, field_expr);
-                let field_type =
-                    basic_type_from_layout(env.arena, env.context, &field_layout, env.ptr_bytes);
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if field_layout.stack_size(ptr_bytes) != 0 {
+                    field_types.push(basic_type_from_layout(
+                        env.arena,
+                        env.context,
+                        &field_layout,
+                        env.ptr_bytes,
+                    ));
 
-                field_types.push(field_type);
-                field_vals.push(val);
+                    field_vals.push(build_expr(env, layout_ids, &scope, parent, field_expr));
+                }
             }
 
-            // Create the struct_type
-            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let mut struct_val = struct_type.const_zero().into();
+            // If the record has only one field that isn't zero-sized,
+            // unwrap it. This is what the layout expects us to do.
+            if field_vals.len() == 1 {
+                field_vals.pop().unwrap()
+            } else {
+                // Create the struct_type
+                let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+                let mut struct_val = struct_type.const_zero().into();
 
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                struct_val = builder
-                    .build_insert_value(struct_val, field_val, index as u32, "insert_field")
-                    .unwrap();
+                // Insert field exprs into struct_val
+                for (index, field_val) in field_vals.into_iter().enumerate() {
+                    struct_val = builder
+                        .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                        .unwrap();
+                }
+
+                BasicValueEnum::StructValue(struct_val.into_struct_value())
             }
-
-            BasicValueEnum::StructValue(struct_val.into_struct_value())
         }
         Tag {
             union_size,
