@@ -58,6 +58,12 @@ mod gen_num {
     fn i64_abs() {
         assert_evals_to!("Num.abs -6", 6, i64);
         assert_evals_to!("Num.abs 7", 7, i64);
+        assert_evals_to!("Num.abs 0", 0, i64);
+        assert_evals_to!("Num.abs -0", 0, i64);
+        assert_evals_to!("Num.abs -1", 1, i64);
+        assert_evals_to!("Num.abs 1", 1, i64);
+        assert_evals_to!("Num.abs 9_000_000_000_000", 9_000_000_000_000, i64);
+        assert_evals_to!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
     }
 
     #[test]
