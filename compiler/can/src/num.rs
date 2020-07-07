@@ -8,9 +8,9 @@ use roc_region::all::Region;
 use roc_types::subs::VarStore;
 use std::i64;
 
-// TODO distinguish number parsing failures
+// TODO use rust's integer parsing again
 //
-// We're waiting for rust here, see https://github.com/rust-lang/rust/issues/22639
+// We're waiting for libcore here, see https://github.com/rust-lang/rust/issues/22639
 // There is a nightly API for exposing the parse error.
 
 #[inline(always)]
