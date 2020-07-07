@@ -355,10 +355,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // divFloat : Float, Float -> Float
     add_type(Symbol::NUM_DIV_FLOAT, {
-        let_tvars! { star1, star2, star3};
+        let_tvars! { star1, star2, star3, star4, star5};
         unique_function(
             vec![float_type(star1), float_type(star2)],
-            float_type(star3),
+            result_type(star3, float_type(star4), lift(star5, div_by_zero())),
         )
     });
 
