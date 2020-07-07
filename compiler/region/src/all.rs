@@ -78,6 +78,17 @@ impl Region {
             Self::zero()
         }
     }
+
+    pub fn lines_between(&self, other: &Region) -> u32 {
+        if self.end_line <= other.start_line {
+            other.start_line - self.end_line
+        } else if self.start_line >= other.end_line {
+            self.start_line - other.end_line
+        } else {
+            // intersection
+            0
+        }
+    }
 }
 
 #[test]

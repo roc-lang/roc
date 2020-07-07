@@ -2840,6 +2840,22 @@ mod test_reporting {
     }
 
     #[test]
+    fn annotation_newline_body_is_fine() {
+        report_problem_as(
+            indoc!(
+                r#"
+                bar : Int
+
+                foo = \x -> x
+
+                foo bar
+                "#
+            ),
+            indoc!(""),
+        )
+    }
+
+    #[test]
     fn invalid_alias_rigid_var_pattern() {
         report_problem_as(
             indoc!(
