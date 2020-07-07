@@ -1,13 +1,12 @@
 use crate::env::Env;
 use crate::expr::Expr;
 use roc_parse::ast::Base;
-use roc_problem::can::IntErrorKind;
 use roc_problem::can::Problem;
 use roc_problem::can::RuntimeError::*;
+use roc_problem::can::{FloatErrorKind, IntErrorKind};
 use roc_region::all::Region;
 use roc_types::subs::VarStore;
 use std::i64;
-use std::num::ParseFloatError;
 
 // TODO distinguish number parsing failures
 //
@@ -17,7 +16,7 @@ use std::num::ParseFloatError;
 #[inline(always)]
 pub fn num_expr_from_result(
     var_store: &mut VarStore,
-    result: Result<i64, (&str, ParseIntError)>,
+    result: Result<i64, (&str, IntErrorKind)>,
     region: Region,
     env: &mut Env,
 ) -> Expr {
@@ -27,7 +26,7 @@ pub fn num_expr_from_result(
             // (Num *) compiles to Int if it doesn't
             // get specialized to something else first,
             // so use int's overflow bounds here.
-            let runtime_error = InvalidInt(error.kind, Base::Decimal, region, raw.into());
+            let runtime_error = InvalidInt(error, Base::Decimal, region, raw.into());
 
             env.problem(Problem::RuntimeError(runtime_error.clone()));
 
@@ -39,7 +38,7 @@ pub fn num_expr_from_result(
 #[inline(always)]
 pub fn int_expr_from_result(
     var_store: &mut VarStore,
-    result: Result<i64, (&str, ParseIntError)>,
+    result: Result<i64, (&str, IntErrorKind)>,
     region: Region,
     base: Base,
     env: &mut Env,
@@ -48,7 +47,7 @@ pub fn int_expr_from_result(
     match result {
         Ok(int) => Expr::Int(var_store.fresh(), int),
         Err((raw, error)) => {
-            let runtime_error = InvalidInt(error.kind, base, region, raw.into());
+            let runtime_error = InvalidInt(error, base, region, raw.into());
 
             env.problem(Problem::RuntimeError(runtime_error.clone()));
 
@@ -60,15 +59,15 @@ pub fn int_expr_from_result(
 #[inline(always)]
 pub fn float_expr_from_result(
     var_store: &mut VarStore,
-    result: Result<f64, (&str, ParseFloatError)>,
+    result: Result<f64, (&str, FloatErrorKind)>,
     region: Region,
     env: &mut Env,
 ) -> Expr {
     // Float stores a variable to generate better error messages
     match result {
         Ok(float) => Expr::Float(var_store.fresh(), float),
-        Err((raw, _error)) => {
-            let runtime_error = FloatOutsideRange(raw.into(), region);
+        Err((raw, error)) => {
+            let runtime_error = InvalidFloat(error, region, raw.into());
 
             env.problem(Problem::RuntimeError(runtime_error.clone()));
 
@@ -78,10 +77,10 @@ pub fn float_expr_from_result(
 }
 
 #[inline(always)]
-pub fn finish_parsing_int(raw: &str) -> Result<i64, (&str, ParseIntError)> {
+pub fn finish_parsing_int(raw: &str) -> Result<i64, (&str, IntErrorKind)> {
     // Ignore underscores.
     let radix = 10;
-    from_str_radix::<i64>(raw.replace("_", "").as_str(), radix).map_err(|e| (raw, e))
+    from_str_radix::<i64>(raw.replace("_", "").as_str(), radix).map_err(|e| (raw, e.kind))
 }
 
 #[inline(always)]
@@ -89,7 +88,7 @@ pub fn finish_parsing_base(
     raw: &str,
     base: Base,
     is_negative: bool,
-) -> Result<i64, (&str, ParseIntError)> {
+) -> Result<i64, (&str, IntErrorKind)> {
     let radix = match base {
         Base::Hex => 16,
         Base::Decimal => 10,
@@ -103,16 +102,22 @@ pub fn finish_parsing_base(
     } else {
         from_str_radix::<i64>(raw.replace("_", "").as_str(), radix)
     })
-    .map_err(|e| (raw, e))
+    .map_err(|e| (raw, e.kind))
 }
 
 #[inline(always)]
-pub fn finish_parsing_float(raw: &str) -> Result<f64, (&str, ParseFloatError)> {
+pub fn finish_parsing_float(raw: &str) -> Result<f64, (&str, FloatErrorKind)> {
     // Ignore underscores.
     match raw.replace("_", "").parse::<f64>() {
         Ok(float) if float.is_finite() => Ok(float),
-        Ok(_float) => panic!("TODO handle infinite float literal"),
-        Err(e) => Err((raw, e)),
+        Ok(float) => {
+            if float.is_sign_positive() {
+                Err((raw, FloatErrorKind::PositiveInfinity))
+            } else {
+                Err((raw, FloatErrorKind::NegativeInfinity))
+            }
+        }
+        Err(_) => Err((raw, FloatErrorKind::Error)),
     }
 }
 
@@ -150,7 +155,9 @@ macro_rules! doit {
         }
     })*)
 }
-doit! { i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize }
+// We only need the i64 implementation, but libcore defines
+// doit! { i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize }
+doit! { i64 }
 
 fn from_str_radix<T: FromStrRadixHelper>(src: &str, radix: u32) -> Result<T, ParseIntError> {
     use self::IntErrorKind::*;

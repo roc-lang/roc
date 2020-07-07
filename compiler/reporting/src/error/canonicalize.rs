@@ -1,6 +1,6 @@
 use roc_collections::all::MutSet;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
-use roc_problem::can::{IntErrorKind, Problem, RuntimeError};
+use roc_problem::can::{FloatErrorKind, IntErrorKind, Problem, RuntimeError};
 use roc_region::all::Region;
 use std::path::PathBuf;
 
@@ -386,7 +386,50 @@ fn pretty_runtime_error<'b>(
             todo!("malformed identifier, currently gives a parse error and thus is unreachable")
         }
         RuntimeError::MalformedClosure(_) => todo!(""),
-        RuntimeError::FloatOutsideRange(_raw_str, _region) => todo!(""),
+        RuntimeError::InvalidFloat(sign @ FloatErrorKind::PositiveInfinity, region, _raw_str)
+        | RuntimeError::InvalidFloat(sign @ FloatErrorKind::NegativeInfinity, region, _raw_str) => {
+            let hint = alloc
+                .hint()
+                .append(alloc.reflow("Learn more about number literals at TODO"));
+
+            let big_or_small = if let FloatErrorKind::PositiveInfinity = sign {
+                "big"
+            } else {
+                "small"
+            };
+
+            alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This float literal is too "),
+                    alloc.text(big_or_small),
+                    alloc.reflow(":"),
+                ]),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow("Roc uses signed 64-bit floating points, allowing values between"),
+                    alloc.text(format!("{:e}", f64::MIN)),
+                    alloc.reflow(" and "),
+                    alloc.text(format!("{:e}", f64::MAX)),
+                ]),
+                hint,
+            ])
+        }
+        RuntimeError::InvalidFloat(FloatErrorKind::Error, region, _raw_str) => {
+            let hint = alloc
+                .hint()
+                .append(alloc.reflow("Learn more about number literals at TODO"));
+
+            alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This float literal contains an invalid digit:"),
+                ]),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow("Floating point literals can only contain the digits 0-9, or use scientific notation 10e4"),
+                ]),
+                hint,
+            ])
+        }
         RuntimeError::InvalidInt(IntErrorKind::Empty, _base, _region, _raw_str) => {
             unreachable!("would never parse an empty int literal")
         }

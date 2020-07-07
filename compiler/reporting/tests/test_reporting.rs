@@ -3182,6 +3182,49 @@ mod test_reporting {
     }
 
     #[test]
+    fn float_out_of_range() {
+        report_problem_as(
+            &format!(
+                r#"
+                overflow = 1{:e}
+                underflow = -1{:e}
+
+                overflow + underflow
+                "#,
+                f64::MAX,
+                f64::MAX,
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This float literal is too small:
+
+                3 ┆                  underflow = -11.7976931348623157e308
+                  ┆                              ^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Roc uses signed 64-bit floating points, allowing values
+                between-1.7976931348623157e308 and 1.7976931348623157e308
+
+                Hint: Learn more about number literals at TODO
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This float literal is too big:
+
+                2 ┆                  overflow = 11.7976931348623157e308
+                  ┆                             ^^^^^^^^^^^^^^^^^^^^^^^
+
+                Roc uses signed 64-bit floating points, allowing values
+                between-1.7976931348623157e308 and 1.7976931348623157e308
+
+                Hint: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn integer_malformed() {
         // the generated messages here are incorrect. Waiting for a rust nightly feature to land,
         // see https://github.com/rust-lang/rust/issues/22639
@@ -3244,6 +3287,34 @@ mod test_reporting {
                   ┆        ^^^^
 
                 Integer literals can only contain the digits 0-9.
+
+                Hint: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn float_malformed() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x = 3.0A
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This float literal contains an invalid digit:
+
+                1 ┆  x = 3.0A
+                  ┆      ^^^^
+
+                Floating point literals can only contain the digits 0-9, or use
+                scientific notation 10e4
 
                 Hint: Learn more about number literals at TODO
                 "#

@@ -80,6 +80,17 @@ pub enum IntErrorKind {
     Underflow,
 }
 
+/// Enum to store the various types of errors that can cause parsing a float to fail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FloatErrorKind {
+    /// Probably an invalid digit
+    Error,
+    /// the literal is too small for f64
+    NegativeInfinity,
+    /// the literal is too large for f64
+    PositiveInfinity,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum RuntimeError {
     Shadowing {
@@ -104,7 +115,7 @@ pub enum RuntimeError {
     InvalidPrecedence(PrecedenceProblem, Region),
     MalformedIdentifier(Box<str>, Region),
     MalformedClosure(Region),
-    FloatOutsideRange(Box<str>, Region),
+    InvalidFloat(FloatErrorKind, Region, Box<str>),
     InvalidInt(IntErrorKind, Base, Region, Box<str>),
     CircularDef(Vec<Symbol>, Vec<(Region /* pattern */, Region /* expr */)>),
 

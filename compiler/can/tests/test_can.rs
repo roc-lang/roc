@@ -16,7 +16,7 @@ mod test_can {
     use bumpalo::Bump;
     use roc_can::expr::Expr::{self, *};
     use roc_can::expr::Recursive;
-    use roc_problem::can::{IntErrorKind, Problem, RuntimeError};
+    use roc_problem::can::{FloatErrorKind, IntErrorKind, Problem, RuntimeError};
     use roc_region::all::Region;
     use std::{f64, i64};
 
@@ -112,7 +112,11 @@ mod test_can {
 
         assert_can(
             &string.clone(),
-            RuntimeError(RuntimeError::FloatOutsideRange(string.into(), region)),
+            RuntimeError(RuntimeError::InvalidFloat(
+                FloatErrorKind::PositiveInfinity,
+                region,
+                string.into(),
+            )),
         );
     }
 
@@ -123,7 +127,11 @@ mod test_can {
 
         assert_can(
             &string.clone(),
-            RuntimeError(RuntimeError::FloatOutsideRange(string.into(), region)),
+            RuntimeError(RuntimeError::InvalidFloat(
+                FloatErrorKind::NegativeInfinity,
+                region,
+                string.into(),
+            )),
         );
     }
 
