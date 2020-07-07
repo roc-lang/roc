@@ -39,7 +39,7 @@ macro_rules! assert_llvm_evals_to {
 
         // Compute main_fn_type before moving subs to Env
         let layout = Layout::new(&arena, content, &subs, ptr_bytes)
-    .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?}", err));
+    .unwrap_or_else(|err| panic!("Code gen error in NON-OPTIMIZED test: could not convert to layout. Err was {:?}", err));
         let execution_engine =
             module
             .create_jit_execution_engine(OptimizationLevel::None)
@@ -211,7 +211,7 @@ macro_rules! assert_opt_evals_to {
 
         // Compute main_fn_type before moving subs to Env
         let layout = Layout::new(&arena, content, &subs, ptr_bytes)
-    .unwrap_or_else(|err| panic!("Code gen error in test: could not convert to layout. Err was {:?}", err));
+    .unwrap_or_else(|err| panic!("Code gen error in OPTIMIZED test: could not convert to layout. Err was {:?}", err));
 
         let execution_engine =
             module
