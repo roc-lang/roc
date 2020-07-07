@@ -1904,7 +1904,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
 fn build_int_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: IntValue<'ctx>,
-    _arg_layout: &Layout<'a>,
+    arg_layout: &Layout<'a>,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     use roc_module::low_level::LowLevel::*;
@@ -1914,7 +1914,41 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
     match op {
         NumNeg => bd.build_int_neg(arg, "negate_int").into(),
         NumAbs => {
-            todo!("build_int_unary_op for integer absolute value. (possibly bitwise AND with 0b0111_1111_...)");
+            // This is how libc's abs() is implemented - it uses no branching!
+            //
+            //     abs = \arg ->
+            //         shifted = arg >>> 63
+            //
+            //         (xor arg shifted) - shifted
+
+            let ctx = env.context;
+            let shifted_name = "abs_shift_right";
+            let shifted_alloca = {
+                let bits_to_shift = ((arg_layout.stack_size(env.ptr_bytes) as u64) * 8) - 1;
+                let shift_val = ctx.i64_type().const_int(bits_to_shift, false);
+                let shifted = bd.build_right_shift(arg, shift_val, true, shifted_name);
+                let alloca = bd.build_alloca(
+                    basic_type_from_layout(env.arena, ctx, arg_layout, env.ptr_bytes),
+                    "#int_abs_help",
+                );
+
+                // shifted = arg >>> 63
+                bd.build_store(alloca, shifted);
+
+                alloca
+            };
+
+            let xored_arg = bd.build_xor(
+                arg,
+                bd.build_load(shifted_alloca, shifted_name).into_int_value(),
+                "xor_arg_shifted",
+            );
+
+            BasicValueEnum::IntValue(bd.build_int_sub(
+                xored_arg.into(),
+                bd.build_load(shifted_alloca, shifted_name).into_int_value(),
+                "sub_xored_shifted",
+            ))
         }
         NumToFloat => {
             // TODO specialize this to be not just for i64!
