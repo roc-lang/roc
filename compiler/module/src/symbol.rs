@@ -694,6 +694,7 @@ define_builtins! {
         16 LIST_FIRST_ARG: "first#list"
         17 LIST_SINGLE: "single"
         18 LIST_REPEAT: "repeat"
+        19 LIST_REVERSE: "reverse"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

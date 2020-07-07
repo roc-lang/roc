@@ -1041,7 +1041,8 @@ mod test_uniq_solve {
                     \{ left, right } -> { left, right }
                 "#
             ),
-            "Attr * (Attr (* | a | b) { left : (Attr a c), right : (Attr b d) }* -> Attr * { left : (Attr a c), right : (Attr b d) })"
+            // "Attr * (Attr (* | a | b) { left : (Attr a c), right : (Attr b d) }* -> Attr * { left : (Attr a c), right : (Attr b d) })"
+            "Attr * (Attr (* | a | b) { left : (Attr b c), right : (Attr a d) }* -> Attr * { left : (Attr b c), right : (Attr a d) })"
         );
     }
 
@@ -1083,7 +1084,9 @@ mod test_uniq_solve {
             // TODO: is it safe to ignore uniqueness constraints from patterns that bind no identifiers?
             // i.e. the `b` could be ignored in this example, is that true in general?
             // seems like it because we don't really extract anything.
-            "Attr * (Attr (* | a | b) [ Foo (Attr b c) (Attr a *) ]* -> Attr * [ Foo (Attr b c) (Attr * Str) ]*)"
+            //
+            // "Attr * (Attr (* | a | b) [ Foo (Attr b c) (Attr a *) ]* -> Attr * [ Foo (Attr b c) (Attr * Str) ]*)"
+            "Attr * (Attr (* | a | b) [ Foo (Attr a c) (Attr b *) ]* -> Attr * [ Foo (Attr a c) (Attr * Str) ]*)"
         );
     }
 
@@ -1359,7 +1362,9 @@ mod test_uniq_solve {
                             r.tic.tac.toe
                 "#
             ),
-            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (d | b | e) { bar : (Attr (e | b) { baz : (Attr b f) }*) }*), tic : (Attr (a | b | c) { tac : (Attr (c | b) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
+            // "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (d | b | e) { bar : (Attr (e | b) { baz : (Attr b f) }*) }*), tic : (Attr (a | b | c) { tac : (Attr (c | b) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
+            "Attr * (Attr (* | a | b | c | d | e) { foo : (Attr (a | b | e) { bar : (Attr (e | b) { baz : (Attr b f) }*) }*), tic : (Attr (d | b | c) { tac : (Attr (c | b) { toe : (Attr b f) }*) }*) }* -> Attr b f)"
+
         );
     }
 
@@ -2557,7 +2562,8 @@ mod test_uniq_solve {
                 map
                 "#
             ),
-            "Attr * (Attr (* | c | d) (Result (Attr c a) (Attr d e)), Attr * (Attr c a -> Attr f b) -> Attr * (Result (Attr f b) (Attr d e)))"
+            // "Attr * (Attr (* | c | d) (Result (Attr c a) (Attr d e)), Attr * (Attr c a -> Attr f b) -> Attr * (Result (Attr f b) (Attr d e)))"
+            "Attr * (Attr (* | c | d) (Result (Attr d a) (Attr c e)), Attr * (Attr d a -> Attr f b) -> Attr * (Result (Attr f b) (Attr c e)))"
         );
     }
 
@@ -2575,7 +2581,8 @@ mod test_uniq_solve {
                 withDefault
                 "#
             ),
-            "Attr * (Attr (* | b | c) (Result (Attr b a) (Attr c e)), Attr b a -> Attr b a)",
+            // "Attr * (Attr (* | b | c) (Result (Attr b a) (Attr c e)), Attr b a -> Attr b a)",
+            "Attr * (Attr (* | b | c) (Result (Attr c a) (Attr b e)), Attr c a -> Attr c a)",
         );
     }
 
@@ -2724,7 +2731,7 @@ mod test_uniq_solve {
                 "#
             ),
             //"Attr * (Attr (* | a | b) { p : (Attr a *), q : (Attr b *) }* -> Attr * (Num (Attr * *)))",
-            "Attr * (Attr (* | a | b) { p : (Attr b *), q : (Attr a *) }* -> Attr * (Num (Attr * *)))"
+            "Attr * (Attr (* | a | b) { p : (Attr a *), q : (Attr b *) }* -> Attr * (Num (Attr * *)))"
         );
     }
 
