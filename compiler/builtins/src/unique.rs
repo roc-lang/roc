@@ -412,6 +412,36 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         float_type(star)
     });
 
+    // isNegative : Num a -> Bool
+    add_type(Symbol::NUM_IS_NEGATIVE, {
+        let_tvars! { star1, star2, a };
+        unique_function(vec![num_type(star1, a)], bool_type(star2))
+    });
+
+    // isPositive : Num a -> Bool
+    add_type(Symbol::NUM_IS_POSITIVE, {
+        let_tvars! { star1, star2, a };
+        unique_function(vec![num_type(star1, a)], bool_type(star2))
+    });
+
+    // isZero : Num a -> Bool
+    add_type(Symbol::NUM_IS_ZERO, {
+        let_tvars! { star1, star2, a };
+        unique_function(vec![num_type(star1, a)], bool_type(star2))
+    });
+
+    // isEven : Num a -> Bool
+    add_type(Symbol::NUM_IS_EVEN, {
+        let_tvars! { star1, star2, a };
+        unique_function(vec![num_type(star1, a)], bool_type(star2))
+    });
+
+    // isOdd : Num a -> Bool
+    add_type(Symbol::NUM_IS_ODD, {
+        let_tvars! { star1, star2, a };
+        unique_function(vec![num_type(star1, a)], bool_type(star2))
+    });
+
     // Bool module
 
     // isEq or (==) : Attr * a, Attr * a -> Attr * Bool
