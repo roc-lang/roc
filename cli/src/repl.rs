@@ -221,8 +221,8 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
     // Compute main_fn_type before moving subs to Env
     let layout = Layout::new(&arena, content, &subs, ptr_bytes).unwrap_or_else(|err| {
         panic!(
-            "Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}",
-            err, subs
+            "Code gen error in test: could not convert to layout. Err was {:?}",
+            err
         )
     });
     let execution_engine = module

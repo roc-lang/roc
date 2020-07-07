@@ -364,8 +364,8 @@ fn gen(
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
     let layout = Layout::new(&arena, content, &subs, ptr_bytes).unwrap_or_else(|err| {
         panic!(
-            "Code gen error in test: could not convert to layout. Err was {:?} and Subs were {:?}",
-            err, subs
+            "Code gen error in CLI: could not convert to layout. Err was {:?}",
+            err
         )
     });
 
