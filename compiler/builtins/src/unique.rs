@@ -369,9 +369,17 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     });
 
     // sqrt : Float -> Float
+    let sqrt_of_negative = SolvedType::TagUnion(
+        vec![(TagName::Global("SqrtOfNegative".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
     add_type(Symbol::NUM_SQRT, {
-        let_tvars! { star1, star2 };
-        unique_function(vec![float_type(star1)], float_type(star2))
+        let_tvars! { star1, star2, star3, star4 };
+        unique_function(
+            vec![float_type(star1)],
+            result_type(star2, float_type(star3), lift(star4, sqrt_of_negative)),
+        )
     });
 
     // sin : Float -> Float
