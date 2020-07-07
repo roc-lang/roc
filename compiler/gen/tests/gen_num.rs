@@ -29,18 +29,18 @@ mod gen_num {
 
     #[test]
     fn f64_sqrt() {
-        todo!("if I change Num.sqrt 1000 to Num.sqrt 144 I get a BadPattern error?!");
-        // assert_evals_to!(
-        //     indoc!(
-        //         r#"
-        //             when Num.sqrt 100 is
-        //                 Ok val -> val
-        //                 Err _ -> -1
-        //         "#
-        //     ),
-        //     12.0,
-        //     f64
-        // );
+        // FIXME this works with normal types, but fails when checking uniqueness types
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Num.sqrt 100 is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            10.0,
+            f64
+        );
     }
 
     #[test]
@@ -109,18 +109,18 @@ mod gen_num {
 
     #[test]
     fn gen_div_f64() {
-        todo!("if I change 1000 / 10 to 48 / 2 I get a BadPattern error?!");
-        // assert_evals_to!(
-        //     indoc!(
-        //         r#"
-        //             when 1000 / 10 is
-        //                 Ok val -> val
-        //                 Err _ -> -1
-        //         "#
-        //     ),
-        //     24.0,
-        //     f64
-        // );
+        // FIXME this works with normal types, but fails when checking uniqueness types
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when 48 / 2 is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            24.0,
+            f64
+        );
     }
 
     #[test]
