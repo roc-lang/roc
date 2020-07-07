@@ -1,6 +1,6 @@
 use roc_collections::all::MutSet;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
-use roc_problem::can::{Problem, RuntimeError};
+use roc_problem::can::{IntErrorKind, Problem, RuntimeError};
 use roc_region::all::Region;
 use std::path::PathBuf;
 
@@ -348,6 +348,7 @@ fn pretty_runtime_error<'b>(
                 MalformedBase(Base::Hex) => " hex integer ",
                 MalformedBase(Base::Binary) => " binary integer ",
                 MalformedBase(Base::Octal) => " octal integer ",
+                MalformedBase(Base::Decimal) => " integer ",
                 Unknown => " ",
                 QualifiedIdentifier => " qualified ",
             };
@@ -386,8 +387,56 @@ fn pretty_runtime_error<'b>(
         }
         RuntimeError::MalformedClosure(_) => todo!(""),
         RuntimeError::FloatOutsideRange(_raw_str, _region) => todo!(""),
-        RuntimeError::IntOutsideRange(raw_str, region) => {
-            let big_or_small = if raw_str.starts_with('-') {
+        RuntimeError::InvalidInt(IntErrorKind::Empty, _base, _region, _raw_str) => {
+            unreachable!("would never parse an empty int literal")
+        }
+        RuntimeError::InvalidInt(IntErrorKind::InvalidDigit, base, region, _raw_str) => {
+            use roc_parse::ast::Base::*;
+
+            let name = match base {
+                Decimal => "integer",
+                Octal => "octal integer",
+                Hex => "hex integer",
+                Binary => "binary integer",
+            };
+
+            let plurals = match base {
+                Decimal => "Integer literals",
+                Octal => "Octal (base-8) integer literals",
+                Hex => "Hexadecimal (base-16) integer literals",
+                Binary => "Binary (base-2) integer literals",
+            };
+
+            let charset = match base {
+                Decimal => "0-9",
+                Octal => "0-7",
+                Hex => "0-9, a-f and A-F",
+                Binary => "0 and 1",
+            };
+
+            let hint = alloc
+                .hint()
+                .append(alloc.reflow("Learn more about number literals at TODO"));
+
+            alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This "),
+                    alloc.text(name),
+                    alloc.reflow(" literal contains an invalid digit:"),
+                ]),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.text(plurals),
+                    alloc.reflow(" can only contain the digits "),
+                    alloc.text(charset),
+                    alloc.text("."),
+                ]),
+                hint,
+            ])
+        }
+        RuntimeError::InvalidInt(error_kind @ IntErrorKind::Underflow, _base, region, _raw_str)
+        | RuntimeError::InvalidInt(error_kind @ IntErrorKind::Overflow, _base, region, _raw_str) => {
+            let big_or_small = if let IntErrorKind::Underflow = error_kind {
                 "small"
             } else {
                 "big"
@@ -408,9 +457,6 @@ fn pretty_runtime_error<'b>(
                 hint,
             ])
         }
-        RuntimeError::InvalidHex(_, _) => todo!("invalid hex, unreachable"),
-        RuntimeError::InvalidOctal(_, _) => todo!("invalid octal, unreachable"),
-        RuntimeError::InvalidBinary(_, _) => todo!("invalid binary, unreachable"),
         RuntimeError::NoImplementation => todo!("no implementation, unreachable"),
     }
 }

@@ -62,6 +62,24 @@ pub enum PrecedenceProblem {
     BothNonAssociative(Region, Located<BinOp>, Located<BinOp>),
 }
 
+/// Enum to store the various types of errors that can cause parsing an integer to fail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntErrorKind {
+    /// Value being parsed is empty.
+    ///
+    /// Among other causes, this variant will be constructed when parsing an empty string.
+    Empty,
+    /// Contains an invalid digit.
+    ///
+    /// Among other causes, this variant will be constructed when parsing a string that
+    /// contains a letter.
+    InvalidDigit,
+    /// Integer is too large to store in target integer type.
+    Overflow,
+    /// Integer is too small to store in target integer type.
+    Underflow,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum RuntimeError {
     Shadowing {
@@ -87,10 +105,7 @@ pub enum RuntimeError {
     MalformedIdentifier(Box<str>, Region),
     MalformedClosure(Region),
     FloatOutsideRange(Box<str>, Region),
-    IntOutsideRange(Box<str>, Region),
-    InvalidHex(std::num::ParseIntError, Box<str>),
-    InvalidOctal(std::num::ParseIntError, Box<str>),
-    InvalidBinary(std::num::ParseIntError, Box<str>),
+    InvalidInt(IntErrorKind, Base, Region, Box<str>),
     CircularDef(Vec<Symbol>, Vec<(Region /* pattern */, Region /* expr */)>),
 
     /// When the author specifies a type annotation but no implementation

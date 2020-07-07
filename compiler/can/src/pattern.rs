@@ -96,7 +96,7 @@ pub fn canonicalize_pattern<'a>(
     use roc_parse::ast::Pattern::*;
     use PatternType::*;
 
-    let can_pattern = match dbg!(pattern) {
+    let can_pattern = match pattern {
         Identifier(name) => match scope.introduce(
             (*name).into(),
             &env.exposed_ident_ids,
@@ -199,7 +199,7 @@ pub fn canonicalize_pattern<'a>(
             base,
             is_negative,
         } => match pattern_type {
-            WhenBranch => match finish_parsing_base(string, *base) {
+            WhenBranch => match finish_parsing_base(string, *base, *is_negative) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedBase(*base);
                     malformed_pattern(env, problem, region)

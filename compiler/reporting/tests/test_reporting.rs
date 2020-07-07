@@ -3118,7 +3118,13 @@ mod test_reporting {
 
                 y = -9_223_372_036_854_775_807_000
 
-                x + y
+                h = 0x8FFF_FFFF_FFFF_FFFF
+                l = -0x8FFF_FFFF_FFFF_FFFF
+
+                minlit = -9_223_372_036_854_775_808
+                maxlit =  9_223_372_036_854_775_807
+
+                x + y + h + l + minlit + maxlit
                 "#
             ),
             indoc!(
@@ -3129,6 +3135,30 @@ mod test_reporting {
 
                 3 ┆  y = -9_223_372_036_854_775_807_000
                   ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Roc uses signed 64-bit integers, allowing values between
+                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+
+                Hint: Learn more about number literals at TODO
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This integer literal is too big:
+
+                5 ┆  h = 0x8FFF_FFFF_FFFF_FFFF
+                  ┆      ^^^^^^^^^^^^^^^^^^^^^
+
+                Roc uses signed 64-bit integers, allowing values between
+                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+
+                Hint: Learn more about number literals at TODO
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This integer literal is too small:
+
+                6 ┆  l = -0x8FFF_FFFF_FFFF_FFFF
+                  ┆      ^^^^^^^^^^^^^^^^^^^^^^
 
                 Roc uses signed 64-bit integers, allowing values between
                 −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
@@ -3174,75 +3204,46 @@ mod test_reporting {
                 r#"
                 -- SYNTAX PROBLEM --------------------------------------------------------------
 
-                This integer literal is too big:
+                This hex integer literal contains an invalid digit:
 
                 3 ┆  hex = 0xZZZ
                   ┆        ^^^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                Hexadecimal (base-16) integer literals can only contain the digits
+                0-9, a-f and A-F.
 
                 Hint: Learn more about number literals at TODO
 
                 -- SYNTAX PROBLEM --------------------------------------------------------------
 
-                This integer literal is too big:
+                This octal integer literal contains an invalid digit:
 
                 5 ┆  oct = 0o9
                   ┆        ^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                Octal (base-8) integer literals can only contain the digits 0-7.
 
                 Hint: Learn more about number literals at TODO
 
                 -- SYNTAX PROBLEM --------------------------------------------------------------
 
-                This integer literal is too big:
+                This binary integer literal contains an invalid digit:
 
                 7 ┆  bin = 0b2
                   ┆        ^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                Binary (base-2) integer literals can only contain the digits 0 and 1.
 
                 Hint: Learn more about number literals at TODO
 
                 -- SYNTAX PROBLEM --------------------------------------------------------------
 
-                This integer literal is too big:
+                This integer literal contains an invalid digit:
 
                 1 ┆  dec = 100A
                   ┆        ^^^^
 
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
-
-                Hint: Learn more about number literals at TODO
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn precedence_conflict() {
-        report_problem_as(
-            indoc!(
-                r#"
-                foo@bar
-                "#
-            ),
-            indoc!(
-                r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
-
-                This integer literal is too big:
-
-                1 ┆  dec = 100A
-                  ┆        ^^^^
-
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+                Integer literals can only contain the digits 0-9.
 
                 Hint: Learn more about number literals at TODO
                 "#
