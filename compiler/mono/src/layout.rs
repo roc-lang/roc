@@ -547,7 +547,13 @@ pub fn layout_from_tag_union<'a>(
             Unit => Layout::Struct(&[]),
             BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
             ByteUnion(_) => Layout::Builtin(Builtin::Int8),
-            Unwrapped(field_layouts) => Layout::Struct(field_layouts.into_bump_slice()),
+            Unwrapped(mut field_layouts) => {
+                if field_layouts.len() == 1 {
+                    field_layouts.pop().unwrap()
+                } else {
+                    Layout::Struct(field_layouts.into_bump_slice())
+                }
+            }
             Wrapped(tags) => {
                 let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
 
