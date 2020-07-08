@@ -3124,4 +3124,217 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn integer_out_of_range() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x = 9_223_372_036_854_775_807_000
+
+                y = -9_223_372_036_854_775_807_000
+
+                h = 0x8FFF_FFFF_FFFF_FFFF
+                l = -0x8FFF_FFFF_FFFF_FFFF
+
+                minlit = -9_223_372_036_854_775_808
+                maxlit =  9_223_372_036_854_775_807
+
+                x + y + h + l + minlit + maxlit
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This integer literal is too small:
+
+                3 ┆  y = -9_223_372_036_854_775_807_000
+                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Roc uses signed 64-bit integers, allowing values between
+                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+
+                Hint: Learn more about number literals at TODO
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This integer literal is too big:
+
+                5 ┆  h = 0x8FFF_FFFF_FFFF_FFFF
+                  ┆      ^^^^^^^^^^^^^^^^^^^^^
+
+                Roc uses signed 64-bit integers, allowing values between
+                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+
+                Hint: Learn more about number literals at TODO
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This integer literal is too small:
+
+                6 ┆  l = -0x8FFF_FFFF_FFFF_FFFF
+                  ┆      ^^^^^^^^^^^^^^^^^^^^^^
+
+                Roc uses signed 64-bit integers, allowing values between
+                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+
+                Hint: Learn more about number literals at TODO
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This integer literal is too big:
+
+                1 ┆  x = 9_223_372_036_854_775_807_000
+                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Roc uses signed 64-bit integers, allowing values between
+                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+
+                Hint: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn float_out_of_range() {
+        report_problem_as(
+            &format!(
+                r#"
+                overflow = 1{:e}
+                underflow = -1{:e}
+
+                overflow + underflow
+                "#,
+                f64::MAX,
+                f64::MAX,
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This float literal is too small:
+
+                3 ┆                  underflow = -11.7976931348623157e308
+                  ┆                              ^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Roc uses signed 64-bit floating points, allowing values
+                between-1.7976931348623157e308 and 1.7976931348623157e308
+
+                Hint: Learn more about number literals at TODO
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This float literal is too big:
+
+                2 ┆                  overflow = 11.7976931348623157e308
+                  ┆                             ^^^^^^^^^^^^^^^^^^^^^^^
+
+                Roc uses signed 64-bit floating points, allowing values
+                between-1.7976931348623157e308 and 1.7976931348623157e308
+
+                Hint: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn integer_malformed() {
+        // the generated messages here are incorrect. Waiting for a rust nightly feature to land,
+        // see https://github.com/rust-lang/rust/issues/22639
+        // this test is here to spot regressions in error reporting
+        report_problem_as(
+            indoc!(
+                r#"
+                dec = 100A
+
+                hex = 0xZZZ
+
+                oct = 0o9
+
+                bin = 0b2
+
+                dec + hex + oct + bin
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This hex integer literal contains an invalid digit:
+
+                3 ┆  hex = 0xZZZ
+                  ┆        ^^^^^
+
+                Hexadecimal (base-16) integer literals can only contain the digits
+                0-9, a-f and A-F.
+
+                Hint: Learn more about number literals at TODO
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This octal integer literal contains an invalid digit:
+
+                5 ┆  oct = 0o9
+                  ┆        ^^^
+
+                Octal (base-8) integer literals can only contain the digits 0-7.
+
+                Hint: Learn more about number literals at TODO
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This binary integer literal contains an invalid digit:
+
+                7 ┆  bin = 0b2
+                  ┆        ^^^
+
+                Binary (base-2) integer literals can only contain the digits 0 and 1.
+
+                Hint: Learn more about number literals at TODO
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This integer literal contains an invalid digit:
+
+                1 ┆  dec = 100A
+                  ┆        ^^^^
+
+                Integer literals can only contain the digits 0-9.
+
+                Hint: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn float_malformed() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x = 3.0A
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This float literal contains an invalid digit:
+
+                1 ┆  x = 3.0A
+                  ┆      ^^^^
+
+                Floating point literals can only contain the digits 0-9, or use
+                scientific notation 10e4
+
+                Hint: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
 }

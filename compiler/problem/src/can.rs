@@ -62,6 +62,35 @@ pub enum PrecedenceProblem {
     BothNonAssociative(Region, Located<BinOp>, Located<BinOp>),
 }
 
+/// Enum to store the various types of errors that can cause parsing an integer to fail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntErrorKind {
+    /// Value being parsed is empty.
+    ///
+    /// Among other causes, this variant will be constructed when parsing an empty string.
+    Empty,
+    /// Contains an invalid digit.
+    ///
+    /// Among other causes, this variant will be constructed when parsing a string that
+    /// contains a letter.
+    InvalidDigit,
+    /// Integer is too large to store in target integer type.
+    Overflow,
+    /// Integer is too small to store in target integer type.
+    Underflow,
+}
+
+/// Enum to store the various types of errors that can cause parsing a float to fail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FloatErrorKind {
+    /// Probably an invalid digit
+    Error,
+    /// the literal is too small for f64
+    NegativeInfinity,
+    /// the literal is too large for f64
+    PositiveInfinity,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum RuntimeError {
     Shadowing {
@@ -72,7 +101,6 @@ pub enum RuntimeError {
     UnsupportedPattern(Region),
     // Example: when 1 is 1.X -> 32
     MalformedPattern(MalformedPatternProblem, Region),
-    UnrecognizedFunctionName(Located<InlinableString>),
     LookupNotInScope(Located<InlinableString>, MutSet<Box<str>>),
     ValueNotExposed {
         module_name: InlinableString,
@@ -87,11 +115,8 @@ pub enum RuntimeError {
     InvalidPrecedence(PrecedenceProblem, Region),
     MalformedIdentifier(Box<str>, Region),
     MalformedClosure(Region),
-    FloatOutsideRange(Box<str>),
-    IntOutsideRange(Box<str>),
-    InvalidHex(std::num::ParseIntError, Box<str>),
-    InvalidOctal(std::num::ParseIntError, Box<str>),
-    InvalidBinary(std::num::ParseIntError, Box<str>),
+    InvalidFloat(FloatErrorKind, Region, Box<str>),
+    InvalidInt(IntErrorKind, Base, Region, Box<str>),
     CircularDef(Vec<Symbol>, Vec<(Region /* pattern */, Region /* expr */)>),
 
     /// When the author specifies a type annotation but no implementation

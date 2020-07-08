@@ -16,7 +16,7 @@ mod test_can {
     use bumpalo::Bump;
     use roc_can::expr::Expr::{self, *};
     use roc_can::expr::Recursive;
-    use roc_problem::can::{Problem, RuntimeError};
+    use roc_problem::can::{FloatErrorKind, IntErrorKind, Problem, RuntimeError};
     use roc_region::all::Region;
     use std::{f64, i64};
 
@@ -73,41 +73,65 @@ mod test_can {
 
     #[test]
     fn int_too_large() {
+        use roc_parse::ast::Base;
+
         let string = (i64::MAX as i128 + 1).to_string();
 
         assert_can(
             &string.clone(),
-            RuntimeError(RuntimeError::IntOutsideRange(string.into())),
+            RuntimeError(RuntimeError::InvalidInt(
+                IntErrorKind::Overflow,
+                Base::Decimal,
+                Region::zero(),
+                string.into(),
+            )),
         );
     }
 
     #[test]
     fn int_too_small() {
+        use roc_parse::ast::Base;
+
         let string = (i64::MIN as i128 - 1).to_string();
 
         assert_can(
             &string.clone(),
-            RuntimeError(RuntimeError::IntOutsideRange(string.into())),
+            RuntimeError(RuntimeError::InvalidInt(
+                IntErrorKind::Underflow,
+                Base::Decimal,
+                Region::zero(),
+                string.into(),
+            )),
         );
     }
 
     #[test]
     fn float_too_large() {
         let string = format!("{}1.0", f64::MAX);
+        let region = Region::zero();
 
         assert_can(
             &string.clone(),
-            RuntimeError(RuntimeError::FloatOutsideRange(string.into())),
+            RuntimeError(RuntimeError::InvalidFloat(
+                FloatErrorKind::PositiveInfinity,
+                region,
+                string.into(),
+            )),
         );
     }
 
     #[test]
     fn float_too_small() {
         let string = format!("{}1.0", f64::MIN);
+        let region = Region::zero();
 
         assert_can(
             &string.clone(),
-            RuntimeError(RuntimeError::FloatOutsideRange(string.into())),
+            RuntimeError(RuntimeError::InvalidFloat(
+                FloatErrorKind::NegativeInfinity,
+                region,
+                string.into(),
+            )),
         );
     }
 
@@ -129,6 +153,46 @@ mod test_can {
     #[test]
     fn minus_zero_point_zero() {
         assert_can_float("-0.0", -0.0);
+    }
+
+    #[test]
+    fn num_max() {
+        assert_can_num(&(i64::MAX.to_string()), i64::MAX);
+    }
+
+    #[test]
+    fn num_min() {
+        assert_can_num(&(i64::MIN.to_string()), i64::MIN);
+    }
+
+    #[test]
+    fn hex_max() {
+        assert_can_int(&format!("0x{:x}", i64::MAX), i64::MAX);
+    }
+
+    #[test]
+    fn hex_min() {
+        assert_can_int(&format!("-0x{:x}", i64::MAX as i128 + 1), i64::MIN);
+    }
+
+    #[test]
+    fn oct_max() {
+        assert_can_int(&format!("0o{:o}", i64::MAX), i64::MAX);
+    }
+
+    #[test]
+    fn oct_min() {
+        assert_can_int(&format!("-0o{:o}", i64::MAX as i128 + 1), i64::MIN);
+    }
+
+    #[test]
+    fn bin_max() {
+        assert_can_int(&format!("0b{:b}", i64::MAX), i64::MAX);
+    }
+
+    #[test]
+    fn bin_min() {
+        assert_can_int(&format!("-0b{:b}", i64::MAX as i128 + 1), i64::MIN);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use roc_collections::all::MutSet;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
-use roc_problem::can::{Problem, RuntimeError};
+use roc_problem::can::{FloatErrorKind, IntErrorKind, Problem, RuntimeError};
 use roc_region::all::Region;
 use std::path::PathBuf;
 
@@ -348,6 +348,7 @@ fn pretty_runtime_error<'b>(
                 MalformedBase(Base::Hex) => " hex integer ",
                 MalformedBase(Base::Binary) => " binary integer ",
                 MalformedBase(Base::Octal) => " octal integer ",
+                MalformedBase(Base::Decimal) => " integer ",
                 Unknown => " ",
                 QualifiedIdentifier => " qualified ",
             };
@@ -372,39 +373,134 @@ fn pretty_runtime_error<'b>(
                 hint,
             ])
         }
-
-        other => {
-            //    // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
-            //    UnsupportedPattern(Region),
-            //    UnrecognizedFunctionName(Located<InlinableString>),
-            //    SymbolNotExposed {
-            //        module_name: InlinableString,
-            //        ident: InlinableString,
-            //        region: Region,
-            //    },
-            //    ModuleNotImported {
-            //        module_name: InlinableString,
-            //        ident: InlinableString,
-            //        region: Region,
-            //    },
-            //    InvalidPrecedence(PrecedenceProblem, Region),
-            //    MalformedIdentifier(Box<str>, Region),
-            //    MalformedClosure(Region),
-            //    FloatOutsideRange(Box<str>),
-            //    IntOutsideRange(Box<str>),
-            //    InvalidHex(std::num::ParseIntError, Box<str>),
-            //    InvalidOctal(std::num::ParseIntError, Box<str>),
-            //    InvalidBinary(std::num::ParseIntError, Box<str>),
-            //    QualifiedPatternIdent(InlinableString),
-            //    CircularDef(
-            //        Vec<Located<Ident>>,
-            //        Vec<(Region /* pattern */, Region /* expr */)>,
-            //    ),
-            //
-            //    /// When the author specifies a type annotation but no implementation
-            //    NoImplementation,
-            todo!("TODO implement run time error reporting for {:?}", other)
+        RuntimeError::UnsupportedPattern(_) => {
+            todo!("unsupported patterns are currently not parsed!")
         }
+        RuntimeError::ValueNotExposed { .. } => todo!("value not exposed"),
+        RuntimeError::ModuleNotImported { .. } => todo!("module not imported"),
+        RuntimeError::InvalidPrecedence(_, _) => {
+            // do nothing, reported with PrecedenceProblem
+            unreachable!()
+        }
+        RuntimeError::MalformedIdentifier(_, _) => {
+            todo!("malformed identifier, currently gives a parse error and thus is unreachable")
+        }
+        RuntimeError::MalformedClosure(_) => todo!(""),
+        RuntimeError::InvalidFloat(sign @ FloatErrorKind::PositiveInfinity, region, _raw_str)
+        | RuntimeError::InvalidFloat(sign @ FloatErrorKind::NegativeInfinity, region, _raw_str) => {
+            let hint = alloc
+                .hint()
+                .append(alloc.reflow("Learn more about number literals at TODO"));
+
+            let big_or_small = if let FloatErrorKind::PositiveInfinity = sign {
+                "big"
+            } else {
+                "small"
+            };
+
+            alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This float literal is too "),
+                    alloc.text(big_or_small),
+                    alloc.reflow(":"),
+                ]),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow("Roc uses signed 64-bit floating points, allowing values between"),
+                    alloc.text(format!("{:e}", f64::MIN)),
+                    alloc.reflow(" and "),
+                    alloc.text(format!("{:e}", f64::MAX)),
+                ]),
+                hint,
+            ])
+        }
+        RuntimeError::InvalidFloat(FloatErrorKind::Error, region, _raw_str) => {
+            let hint = alloc
+                .hint()
+                .append(alloc.reflow("Learn more about number literals at TODO"));
+
+            alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This float literal contains an invalid digit:"),
+                ]),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.reflow("Floating point literals can only contain the digits 0-9, or use scientific notation 10e4"),
+                ]),
+                hint,
+            ])
+        }
+        RuntimeError::InvalidInt(IntErrorKind::Empty, _base, _region, _raw_str) => {
+            unreachable!("would never parse an empty int literal")
+        }
+        RuntimeError::InvalidInt(IntErrorKind::InvalidDigit, base, region, _raw_str) => {
+            use roc_parse::ast::Base::*;
+
+            let name = match base {
+                Decimal => "integer",
+                Octal => "octal integer",
+                Hex => "hex integer",
+                Binary => "binary integer",
+            };
+
+            let plurals = match base {
+                Decimal => "Integer literals",
+                Octal => "Octal (base-8) integer literals",
+                Hex => "Hexadecimal (base-16) integer literals",
+                Binary => "Binary (base-2) integer literals",
+            };
+
+            let charset = match base {
+                Decimal => "0-9",
+                Octal => "0-7",
+                Hex => "0-9, a-f and A-F",
+                Binary => "0 and 1",
+            };
+
+            let hint = alloc
+                .hint()
+                .append(alloc.reflow("Learn more about number literals at TODO"));
+
+            alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This "),
+                    alloc.text(name),
+                    alloc.reflow(" literal contains an invalid digit:"),
+                ]),
+                alloc.region(region),
+                alloc.concat(vec![
+                    alloc.text(plurals),
+                    alloc.reflow(" can only contain the digits "),
+                    alloc.text(charset),
+                    alloc.text("."),
+                ]),
+                hint,
+            ])
+        }
+        RuntimeError::InvalidInt(error_kind @ IntErrorKind::Underflow, _base, region, _raw_str)
+        | RuntimeError::InvalidInt(error_kind @ IntErrorKind::Overflow, _base, region, _raw_str) => {
+            let big_or_small = if let IntErrorKind::Underflow = error_kind {
+                "small"
+            } else {
+                "big"
+            };
+
+            let hint = alloc
+                .hint()
+                .append(alloc.reflow("Learn more about number literals at TODO"));
+
+            alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow("This integer literal is too "),
+                    alloc.text(big_or_small),
+                    alloc.reflow(":"),
+                ]),
+                alloc.region(region),
+                alloc.reflow("Roc uses signed 64-bit integers, allowing values between −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807."),
+                hint,
+            ])
+        }
+        RuntimeError::NoImplementation => todo!("no implementation, unreachable"),
     }
 }
 

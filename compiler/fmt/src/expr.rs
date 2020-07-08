@@ -100,13 +100,12 @@ pub fn fmt_expr<'a>(
                 buf.push('-');
             }
 
-            buf.push('0');
-
-            buf.push(match base {
-                Base::Hex => 'x',
-                Base::Octal => 'o',
-                Base::Binary => 'b',
-            });
+            match base {
+                Base::Hex => buf.push_str("0x"),
+                Base::Octal => buf.push_str("0o"),
+                Base::Binary => buf.push_str("0b"),
+                Base::Decimal => { /* nothing */ }
+            }
 
             buf.push_str(string);
         }
