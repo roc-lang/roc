@@ -362,7 +362,7 @@ Now let's say I do a pattern match with no type annotations.
 ```elm
 when foo is
     MyInt num -> num + 1
-    MyFloat float -> Float.round float
+    MyFloat float -> Num.round float
 ```
 
 The inferred type of this expression would be `[ MyInt Int, MyFloat Float ]`,
@@ -386,7 +386,7 @@ toInt : [ Foo, Bar Float ] -> Int
 toInt = \tag ->
     when tag is
         Foo -> 1
-        Bar float -> Float.round float
+        Bar float -> Num.round float
 ```
 
 Each of these type annotations involves a *tag union* - a collection of tags bracketed by `[` and `]`.
@@ -837,7 +837,7 @@ If you put these into a hypothetical Roc REPL, here's what you'd see:
 In Elm, operators are functions. In Roc, all operators are syntax sugar.
 
 This means, for example, that you cannot write `(/)` in Roc; that would be a syntax
-error. However, the `/` operator in Roc is infix syntax sugar for `Float.div`,
+error. However, the `/` operator in Roc is infix syntax sugar for `Num.div`,
 which is a normal function you can pass to anything you like.
 
 Elm has one unary operator, namely `-`. (In Elm, `-x` means
@@ -915,11 +915,11 @@ a b c
 In Roc, the `|>` operator inserts the previous expression as the *first* argument
 to the subsequent expression, rather than as the *last* argument as it does in Elm.
 
-This makes a number of operations more useful in pipelines. For example, in Roc, `|> Float.div 2.0` divides by 2:
+This makes a number of operations more useful in pipelines. For example, in Roc, `|> Num.div 2.0` divides by 2:
 
 ```elixir
 2000
-  |> Float.div 2.0
+  |> Num.div 2.0
 
 # 1000.0 : Float
 ```
@@ -1032,11 +1032,11 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `a + b`           | `Num.add a b`      |
 | `a - b`           | `Num.sub a b`      |
 | `a * b`           | `Num.mul a b`      |
-| `a / b`           | `Float.div a b`    |
-| `a // b`          | `Int.div a b`      |
+| `a / b`           | `Num.div a b`    |
+| `a // b`          | `Num.divFloor a b`      |
 | `a ^ b`           | `Num.pow a b`      |
-| `a % b`           | `Float.rem a b`    |
-| `a %% b`          | `Float.mod a b`    |
+| `a % b`           | `Num.rem a b`    |
+| `a %% b`          | `Num.mod a b`    |
 | `-a`              | `Num.neg a`        |
 | `-f x y`          | `Num.neg (f x y)`  |
 | `a == b`          | `Bool.isEq a b`    |

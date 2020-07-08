@@ -132,10 +132,7 @@ pub fn can_expr_with(
     let loc_expr = match parse_loc_with(&arena, expr_str) {
         Ok(e) => e,
         Err(fail) => {
-            let interns = Interns {
-                module_ids: ModuleIds::default(),
-                all_ident_ids: MutMap::default(),
-            };
+            let interns = Interns::default();
 
             return Err(ParseErrOut {
                 fail,

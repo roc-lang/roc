@@ -300,7 +300,7 @@ fn desugar_field<'a>(
     }
 }
 
-// TODO move this desugaring to canonicalization, to avoid dealing with strings as much
+// TODO move this desugaring to canonicalization, so we can use Symbols instead of strings
 #[inline(always)]
 fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
     use self::BinOp::*;
@@ -308,8 +308,8 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
     match binop {
         Caret => (ModuleName::NUM, "pow"),
         Star => (ModuleName::NUM, "mul"),
-        Slash => (ModuleName::FLOAT, "div"),
-        DoubleSlash => (ModuleName::INT, "div"),
+        Slash => (ModuleName::NUM, "div"),
+        DoubleSlash => (ModuleName::NUM, "divFloor"),
         Percent => (ModuleName::NUM, "rem"),
         DoublePercent => (ModuleName::NUM, "mod"),
         Plus => (ModuleName::NUM, "add"),

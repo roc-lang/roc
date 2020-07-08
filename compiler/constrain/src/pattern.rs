@@ -147,7 +147,7 @@ pub fn constrain_pattern(
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Float,
-                builtins::builtin_type(Symbol::INT_INT, vec![]),
+                builtins::builtin_type(Symbol::NUM_INT, vec![]),
                 expected,
             ));
         }
@@ -156,7 +156,7 @@ pub fn constrain_pattern(
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Float,
-                builtins::builtin_type(Symbol::FLOAT_FLOAT, vec![]),
+                builtins::builtin_type(Symbol::NUM_FLOAT, vec![]),
                 expected,
             ));
         }

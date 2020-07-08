@@ -1,7 +1,5 @@
 #[macro_use]
 extern crate pretty_assertions;
-// #[macro_use]
-// extern crate indoc;
 
 extern crate bumpalo;
 extern crate roc_mono;
@@ -17,10 +15,13 @@ mod test_mono {
     use roc_mono::expr::Expr::{self, *};
     use roc_mono::expr::Procs;
     use roc_mono::layout;
-    use roc_mono::layout::{Builtin, Layout};
+    use roc_mono::layout::{Builtin, Layout, LayoutCache};
     use roc_types::subs::Subs;
 
     // HELPERS
+
+    const I64_LAYOUT: Layout<'static> = Layout::Builtin(Builtin::Int64);
+    const F64_LAYOUT: Layout<'static> = Layout::Builtin(Builtin::Float64);
 
     fn compiles_to(src: &str, expected: Expr<'_>) {
         compiles_to_with_interns(src, |_| expected)
@@ -40,6 +41,7 @@ mod test_mono {
             mut interns,
             ..
         } = can_expr(src);
+
         let subs = Subs::new(var_store.into());
         let mut unify_problems = Vec::new();
         let (_content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
@@ -64,6 +66,11 @@ mod test_mono {
         };
         let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
+        let (_, runtime_errors) =
+            roc_mono::expr::specialize_all(&mut mono_env, procs, &mut LayoutCache::default());
+
+        assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
+
         // Put this module's ident_ids back in the interns
         interns.all_ident_ids.insert(home, ident_ids);
 
@@ -85,7 +92,7 @@ mod test_mono {
         compiles_to(
             "3.0 + 4",
             CallByName {
-                name: Symbol::FLOAT_ADD,
+                name: Symbol::NUM_ADD,
                 layout: Layout::FunctionPointer(
                     &[
                         Layout::Builtin(Builtin::Float64),
@@ -106,7 +113,7 @@ mod test_mono {
         compiles_to(
             "0xDEADBEEF + 4",
             CallByName {
-                name: Symbol::INT_ADD,
+                name: Symbol::NUM_ADD,
                 layout: Layout::FunctionPointer(
                     &[
                         Layout::Builtin(Builtin::Int64),
@@ -128,7 +135,7 @@ mod test_mono {
         compiles_to(
             "3 + 5",
             CallByName {
-                name: Symbol::INT_ADD,
+                name: Symbol::NUM_ADD,
                 layout: Layout::FunctionPointer(
                     &[
                         Layout::Builtin(Builtin::Int64),
@@ -201,13 +208,13 @@ mod test_mono {
                 Store(
                     &[(
                         gen_symbol_0,
-                        Layout::Builtin(layout::Builtin::Bool),
+                        Layout::Builtin(layout::Builtin::Int1),
                         Expr::Bool(true),
                     )],
                     &Cond {
                         cond_symbol: gen_symbol_0,
                         branch_symbol: gen_symbol_0,
-                        cond_layout: Builtin(Bool),
+                        cond_layout: Builtin(Int1),
                         pass: (&[] as &[_], &Expr::Str("bar")),
                         fail: (&[] as &[_], &Expr::Str("foo")),
                         ret_layout: Builtin(Str),
@@ -239,26 +246,26 @@ mod test_mono {
                 Store(
                     &[(
                         gen_symbol_0,
-                        Layout::Builtin(layout::Builtin::Bool),
+                        Layout::Builtin(layout::Builtin::Int1),
                         Expr::Bool(true),
                     )],
                     &Cond {
                         cond_symbol: gen_symbol_0,
                         branch_symbol: gen_symbol_0,
-                        cond_layout: Builtin(Bool),
+                        cond_layout: Builtin(Int1),
                         pass: (&[] as &[_], &Expr::Str("bar")),
                         fail: (
                             &[] as &[_],
                             &Store(
                                 &[(
                                     gen_symbol_1,
-                                    Layout::Builtin(layout::Builtin::Bool),
+                                    Layout::Builtin(layout::Builtin::Int1),
                                     Expr::Bool(false),
                                 )],
                                 &Cond {
                                     cond_symbol: gen_symbol_1,
                                     branch_symbol: gen_symbol_1,
-                                    cond_layout: Builtin(Bool),
+                                    cond_layout: Builtin(Int1),
                                     pass: (&[] as &[_], &Expr::Str("foo")),
                                     fail: (&[] as &[_], &Expr::Str("baz")),
                                     ret_layout: Builtin(Str),
@@ -297,13 +304,13 @@ mod test_mono {
                         Store(
                             &[(
                                 gen_symbol_0,
-                                Layout::Builtin(layout::Builtin::Bool),
+                                Layout::Builtin(layout::Builtin::Int1),
                                 Expr::Bool(true),
                             )],
                             &Cond {
                                 cond_symbol: gen_symbol_0,
                                 branch_symbol: gen_symbol_0,
-                                cond_layout: Builtin(Bool),
+                                cond_layout: Builtin(Int1),
                                 pass: (&[] as &[_], &Expr::Str("bar")),
                                 fail: (&[] as &[_], &Expr::Str("foo")),
                                 ret_layout: Builtin(Str),
@@ -340,40 +347,77 @@ mod test_mono {
     fn polymorphic_identity() {
         compiles_to(
             r#"
-            id = \x -> x
+                id = \x -> x
 
-            id { x: id 0x4 }
+                id { x: id 0x4, y: 0.1 }
             "#,
             {
-                use self::Builtin::*;
                 let home = test_home();
 
                 let gen_symbol_0 = Interns::from_index(home, 0);
+                let struct_layout = Layout::Struct(&[I64_LAYOUT, F64_LAYOUT]);
 
                 CallByName {
                     name: gen_symbol_0,
                     layout: Layout::FunctionPointer(
-                        &[Layout::Struct(&[Layout::Builtin(Builtin::Int64)])],
-                        &Layout::Struct(&[Layout::Builtin(Builtin::Int64)]),
+                        &[struct_layout.clone()],
+                        &struct_layout.clone(),
                     ),
                     args: &[(
-                        Struct(&[(
-                            CallByName {
-                                name: gen_symbol_0,
-                                layout: Layout::FunctionPointer(
-                                    &[Layout::Builtin(Builtin::Int64)],
-                                    &Layout::Builtin(Builtin::Int64),
-                                ),
-                                args: &[(Int(4), Layout::Builtin(Int64))],
-                            },
-                            Layout::Builtin(Int64),
-                        )]),
-                        Layout::Struct(&[Layout::Builtin(Int64)]),
+                        Struct(&[
+                            (
+                                CallByName {
+                                    name: gen_symbol_0,
+                                    layout: Layout::FunctionPointer(&[I64_LAYOUT], &I64_LAYOUT),
+                                    args: &[(Int(4), I64_LAYOUT)],
+                                },
+                                I64_LAYOUT,
+                            ),
+                            (Float(0.1), F64_LAYOUT),
+                        ]),
+                        struct_layout,
                     )],
                 }
             },
         )
     }
+
+    // #[test]
+    // fn list_get_unique() {
+    //     compiles_to(
+    //         r#"
+    //             unique = [ 2, 4 ]
+
+    //             List.get unique 1
+    //         "#,
+    //         {
+    //             use self::Builtin::*;
+    //             let home = test_home();
+
+    //             let gen_symbol_0 = Interns::from_index(home, 0);
+    //             let list_layout = Layout::Builtin(Builtin::List(&I64_LAYOUT));
+
+    //             CallByName {
+    //                 name: gen_symbol_0,
+    //                 layout: Layout::FunctionPointer(&[list_layout.clone()], &list_layout.clone()),
+    //                 args: &[(
+    //                     Struct(&[(
+    //                         CallByName {
+    //                             name: gen_symbol_0,
+    //                             layout: Layout::FunctionPointer(
+    //                                 &[Layout::Builtin(Builtin::Int64)],
+    //                                 &Layout::Builtin(Builtin::Int64),
+    //                             ),
+    //                             args: &[(Int(4), Layout::Builtin(Int64))],
+    //                         },
+    //                         Layout::Builtin(Int64),
+    //                     )]),
+    //                     Layout::Struct(&[Layout::Builtin(Int64)]),
+    //                 )],
+    //             }
+    //         },
+    //     )
+    // }
 
     // needs LetRec to be converted to mono
     //    #[test]
@@ -443,7 +487,7 @@ mod test_mono {
                 let home = test_home();
                 let var_x = interns.symbol(home, "x".into());
 
-                let stores = [(var_x, Layout::Builtin(Builtin::Bool), Bool(true))];
+                let stores = [(var_x, Layout::Builtin(Builtin::Int1), Bool(true))];
 
                 let load = Load(var_x);
 
@@ -467,7 +511,7 @@ mod test_mono {
                 let home = test_home();
                 let var_x = interns.symbol(home, "x".into());
 
-                let stores = [(var_x, Layout::Builtin(Builtin::Bool), Bool(false))];
+                let stores = [(var_x, Layout::Builtin(Builtin::Int1), Bool(false))];
 
                 let load = Load(var_x);
 
@@ -493,7 +537,7 @@ mod test_mono {
                 let var_x = interns.symbol(home, "x".into());
 
                 // orange gets index (and therefore tag_id) 1
-                let stores = [(var_x, Layout::Builtin(Builtin::Byte), Byte(2))];
+                let stores = [(var_x, Layout::Builtin(Builtin::Int8), Byte(2))];
 
                 let load = Load(var_x);
 
@@ -504,15 +548,12 @@ mod test_mono {
 
     #[test]
     fn set_unique_int_list() {
-        compiles_to("List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1", {
+        compiles_to("List.get (List.set [ 12, 9, 7, 3 ] 1 42) 1", {
             CallByName {
-                name: Symbol::LIST_GET_UNSAFE,
+                name: Symbol::LIST_GET,
                 layout: Layout::FunctionPointer(
-                    &[
-                        Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
-                        Layout::Builtin(Builtin::Int64),
-                    ],
-                    &Layout::Builtin(Builtin::Int64),
+                    &[Layout::Builtin(Builtin::List(&I64_LAYOUT)), I64_LAYOUT],
+                    &Layout::Union(&[&[I64_LAYOUT], &[I64_LAYOUT, I64_LAYOUT]]),
                 ),
                 args: &vec![
                     (
@@ -520,31 +561,27 @@ mod test_mono {
                             name: Symbol::LIST_SET,
                             layout: Layout::FunctionPointer(
                                 &[
-                                    Layout::Builtin(Builtin::List(&Layout::Builtin(
-                                        Builtin::Int64,
-                                    ))),
-                                    Layout::Builtin(Builtin::Int64),
-                                    Layout::Builtin(Builtin::Int64),
+                                    Layout::Builtin(Builtin::List(&I64_LAYOUT)),
+                                    I64_LAYOUT,
+                                    I64_LAYOUT,
                                 ],
-                                &Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
+                                &Layout::Builtin(Builtin::List(&I64_LAYOUT)),
                             ),
                             args: &vec![
                                 (
                                     Array {
-                                        elem_layout: Layout::Builtin(Builtin::Int64),
+                                        elem_layout: I64_LAYOUT,
                                         elems: &vec![Int(12), Int(9), Int(7), Int(3)],
                                     },
-                                    Layout::Builtin(Builtin::List(&Layout::Builtin(
-                                        Builtin::Int64,
-                                    ))),
+                                    Layout::Builtin(Builtin::List(&I64_LAYOUT)),
                                 ),
-                                (Int(1), Layout::Builtin(Builtin::Int64)),
-                                (Int(42), Layout::Builtin(Builtin::Int64)),
+                                (Int(1), I64_LAYOUT),
+                                (Int(42), I64_LAYOUT),
                             ],
                         },
-                        Layout::Builtin(Builtin::List(&Layout::Builtin(Builtin::Int64))),
+                        Layout::Builtin(Builtin::List(&I64_LAYOUT)),
                     ),
-                    (Int(1), Layout::Builtin(Builtin::Int64)),
+                    (Int(1), I64_LAYOUT),
                 ],
             }
         });

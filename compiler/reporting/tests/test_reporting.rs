@@ -1058,7 +1058,7 @@ mod test_reporting {
 
                     Int
 
-                Hint: Convert between Int and Float with `Num.toFloat` and `Float.round`.
+                Hint: Convert between Int and Float with `Num.toFloat` and `Num.round`.
                 "#
             ),
         )
@@ -1094,7 +1094,7 @@ mod test_reporting {
 
                     Int
 
-                Hint: Convert between Int and Float with `Num.toFloat` and `Float.round`.
+                Hint: Convert between Int and Float with `Num.toFloat` and `Num.round`.
                 "#
             ),
         )
@@ -1129,7 +1129,7 @@ mod test_reporting {
 
                     Int -> Int
 
-                Hint: Convert between Int and Float with `Num.toFloat` and `Float.round`.
+                Hint: Convert between Int and Float with `Num.toFloat` and `Num.round`.
                 "#
             ),
         )
@@ -1462,7 +1462,7 @@ mod test_reporting {
 
                     { x : Int }
 
-                Hint: Convert between Int and Float with `Num.toFloat` and `Float.round`.
+                Hint: Convert between Int and Float with `Num.toFloat` and `Num.round`.
                 "#
             ),
         )
@@ -2074,7 +2074,7 @@ mod test_reporting {
 
                     Num Integer
 
-                Hint: Convert between Int and Float with `Num.toFloat` and `Float.round`.
+                Hint: Convert between Int and Float with `Num.toFloat` and `Num.round`.
                 "#
             ),
         )
@@ -2536,7 +2536,7 @@ mod test_reporting {
     }
 
     #[test]
-    fn circular_alias() {
+    fn cyclic_alias() {
         report_problem_as(
             indoc!(
                 r#"
@@ -2553,18 +2553,18 @@ mod test_reporting {
                 r#"
                 -- CYCLIC ALIAS ----------------------------------------------------------------
 
-                The `Bar` alias is recursive in an invalid way:
+                The `Foo` alias is recursive in an invalid way:
 
-                2 ┆  Bar : { y : Foo }
+                1 ┆  Foo : { x : Bar }
                   ┆        ^^^^^^^^^^^
 
-                The `Bar` alias depends on itself through the following chain of
+                The `Foo` alias depends on itself through the following chain of
                 definitions:
 
                     ┌─────┐
-                    │     Bar
-                    │     ↓
                     │     Foo
+                    │     ↓
+                    │     Bar
                     └─────┘
 
                 Recursion in aliases is only allowed if recursion happens behind a

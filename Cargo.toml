@@ -19,11 +19,11 @@ members = [
     "compiler/mono",
     "compiler/load",
     "compiler/gen",
+    "compiler/build",
     "vendor/ena",
     "vendor/pathfinding",
     "vendor/pretty",
-    "editor",
-    "cli"
+    "editor"
 ]
 
 # Optimizations based on https://deterministic.space/high-performance-rust.html

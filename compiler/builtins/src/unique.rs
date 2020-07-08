@@ -153,27 +153,27 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
 
     // Integer : [ @Integer ]
     add_alias(
-        Symbol::INT_INTEGER,
+        Symbol::NUM_INTEGER,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: single_private_tag(Symbol::INT_AT_INTEGER, Vec::new()),
+            typ: single_private_tag(Symbol::NUM_AT_INTEGER, Vec::new()),
         },
     );
 
     // FloatingPoint : [ @FloatingPoint ]
     add_alias(
-        Symbol::FLOAT_FLOATINGPOINT,
+        Symbol::NUM_FLOATINGPOINT,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: single_private_tag(Symbol::FLOAT_AT_FLOATINGPOINT, Vec::new()),
+            typ: single_private_tag(Symbol::NUM_AT_FLOATINGPOINT, Vec::new()),
         },
     );
 
     // Int : Num Integer
     add_alias(
-        Symbol::INT_INT,
+        Symbol::NUM_INT,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
@@ -181,7 +181,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
                 Symbol::NUM_NUM,
                 vec![lift(
                     star,
-                    SolvedType::Apply(Symbol::INT_INTEGER, Vec::new()),
+                    SolvedType::Apply(Symbol::NUM_INTEGER, Vec::new()),
                 )],
             ),
         },
@@ -189,7 +189,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
 
     // Float : Num FloatingPoint
     add_alias(
-        Symbol::FLOAT_FLOAT,
+        Symbol::NUM_FLOAT,
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
@@ -197,7 +197,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
                 Symbol::NUM_NUM,
                 vec![lift(
                     star,
-                    SolvedType::Apply(Symbol::FLOAT_FLOATINGPOINT, Vec::new()),
+                    SolvedType::Apply(Symbol::NUM_FLOATINGPOINT, Vec::new()),
                 )],
             ),
         },
@@ -323,34 +323,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![num_type(star1, a)], float_type(star2))
     });
 
-    // Int module
-
-    // isLt or (<) : Num a, Num a -> Bool
-    add_type(Symbol::INT_LT, {
-        let_tvars! { u, v, w };
-        unique_function(vec![int_type(u), int_type(v)], bool_type(w))
-    });
-
-    // equals or (==) : Int, Int -> Bool
-    add_type(Symbol::INT_EQ_I64, {
-        let_tvars! { u, v, w };
-        unique_function(vec![int_type(u), int_type(v)], bool_type(w))
-    });
-
-    // not equals or (!=) : Int, Int -> Bool
-    add_type(Symbol::INT_NEQ_I64, {
-        let_tvars! { u, v, w };
-        unique_function(vec![int_type(u), int_type(v)], bool_type(w))
-    });
-
-    // abs : Int -> Int
-    add_type(Symbol::INT_ABS, {
-        let_tvars! { u, v };
-        unique_function(vec![int_type(u)], int_type(v))
-    });
-
     // rem : Attr * Int, Attr * Int -> Attr * (Result (Attr * Int) (Attr * [ DivByZero ]*))
-    add_type(Symbol::INT_REM, {
+    add_type(Symbol::NUM_REM, {
         let_tvars! { star1, star2, star3, star4, star5 };
         unique_function(
             vec![int_type(star1), int_type(star2)],
@@ -358,25 +332,20 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    add_type(Symbol::INT_REM_UNSAFE, {
-        let_tvars! { star1, star2, star3, };
-        unique_function(vec![int_type(star1), int_type(star2)], int_type(star3))
-    });
-
-    // highest : Int
-    add_type(Symbol::INT_HIGHEST, {
+    // maxInt : Int
+    add_type(Symbol::NUM_MAX_INT, {
         let_tvars! { star };
         int_type(star)
     });
 
-    // lowest : Int
-    add_type(Symbol::INT_LOWEST, {
+    // minInt : Int
+    add_type(Symbol::NUM_MIN_INT, {
         let_tvars! { star };
         int_type(star)
     });
 
-    // div or (//) : Int, Int -> Result Int [ DivByZero ]*
-    add_type(Symbol::INT_DIV, {
+    // divFloor or (//) : Int, Int -> Result Int [ DivByZero ]*
+    add_type(Symbol::NUM_DIV_INT, {
         let_tvars! { star1, star2, star3, star4, star5 };
         unique_function(
             vec![int_type(star1), int_type(star2)],
@@ -384,95 +353,93 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    add_type(Symbol::INT_DIV_UNSAFE, {
-        let_tvars! { star1, star2, star3, };
-        unique_function(vec![int_type(star1), int_type(star2)], int_type(star3))
-    });
-
-    // mod : Int, Int -> Int
-    add_type(Symbol::INT_MOD, {
-        let_tvars! { star1, star2, star3, };
-        unique_function(vec![int_type(star1), int_type(star2)], int_type(star3))
-    });
-
-    // Float module
-
-    // isGt or (>) : Num a, Num a -> Bool
-    add_type(Symbol::FLOAT_GT, {
-        let_tvars! { star1, star2, star3}
-        unique_function(vec![float_type(star1), float_type(star2)], bool_type(star3))
-    });
-
-    // eq or (==) : Num a, Num a -> Bool
-    add_type(Symbol::FLOAT_EQ, {
-        let_tvars! { star1, star2, star3}
-        unique_function(vec![float_type(star1), float_type(star2)], bool_type(star3))
-    });
-
-    // div : Float, Float -> Float
-    add_type(Symbol::FLOAT_DIV, {
-        let_tvars! { star1, star2, star3};
+    // divFloat : Float, Float -> Float
+    add_type(Symbol::NUM_DIV_FLOAT, {
+        let_tvars! { star1, star2, star3, star4, star5};
         unique_function(
             vec![float_type(star1), float_type(star2)],
-            float_type(star3),
-        )
-    });
-
-    // mod : Float, Float -> Float
-    add_type(Symbol::FLOAT_MOD, {
-        let_tvars! { star1, star2, star3};
-        unique_function(
-            vec![float_type(star1), float_type(star2)],
-            float_type(star3),
+            result_type(star3, float_type(star4), lift(star5, div_by_zero())),
         )
     });
 
     // round : Float -> Int
-    add_type(Symbol::FLOAT_ROUND, {
+    add_type(Symbol::NUM_ROUND, {
         let_tvars! { star1, star2 };
         unique_function(vec![float_type(star1)], int_type(star2))
     });
 
     // sqrt : Float -> Float
-    add_type(Symbol::FLOAT_SQRT, {
-        let_tvars! { star1, star2 };
-        unique_function(vec![float_type(star1)], float_type(star2))
-    });
+    let sqrt_of_negative = SolvedType::TagUnion(
+        vec![(TagName::Global("SqrtOfNegative".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
 
-    // abs : Float -> Float
-    add_type(Symbol::FLOAT_ABS, {
-        let_tvars! { star1, star2 };
-        unique_function(vec![float_type(star1)], float_type(star2))
+    add_type(Symbol::NUM_SQRT, {
+        let_tvars! { star1, star2, star3, star4 };
+        unique_function(
+            vec![float_type(star1)],
+            result_type(star2, float_type(star3), lift(star4, sqrt_of_negative)),
+        )
     });
 
     // sin : Float -> Float
-    add_type(Symbol::FLOAT_SIN, {
+    add_type(Symbol::NUM_SIN, {
         let_tvars! { star1, star2 };
         unique_function(vec![float_type(star1)], float_type(star2))
     });
 
     // cos : Float -> Float
-    add_type(Symbol::FLOAT_COS, {
+    add_type(Symbol::NUM_COS, {
         let_tvars! { star1, star2 };
         unique_function(vec![float_type(star1)], float_type(star2))
     });
 
     // tan : Float -> Float
-    add_type(Symbol::FLOAT_TAN, {
+    add_type(Symbol::NUM_TAN, {
         let_tvars! { star1, star2 };
         unique_function(vec![float_type(star1)], float_type(star2))
     });
 
-    // highest : Float
-    add_type(Symbol::FLOAT_HIGHEST, {
+    // maxFloat : Float
+    add_type(Symbol::NUM_MAX_FLOAT, {
         let_tvars! { star };
         float_type(star)
     });
 
-    // lowest : Float
-    add_type(Symbol::FLOAT_LOWEST, {
+    // minFloat : Float
+    add_type(Symbol::NUM_MIN_FLOAT, {
         let_tvars! { star };
         float_type(star)
+    });
+
+    // isNegative : Num a -> Bool
+    add_type(Symbol::NUM_IS_NEGATIVE, {
+        let_tvars! { star1, star2, a };
+        unique_function(vec![num_type(star1, a)], bool_type(star2))
+    });
+
+    // isPositive : Num a -> Bool
+    add_type(Symbol::NUM_IS_POSITIVE, {
+        let_tvars! { star1, star2, a };
+        unique_function(vec![num_type(star1, a)], bool_type(star2))
+    });
+
+    // isZero : Num a -> Bool
+    add_type(Symbol::NUM_IS_ZERO, {
+        let_tvars! { star1, star2, a };
+        unique_function(vec![num_type(star1, a)], bool_type(star2))
+    });
+
+    // isEven : Num a -> Bool
+    add_type(Symbol::NUM_IS_EVEN, {
+        let_tvars! { star1, star2, a };
+        unique_function(vec![num_type(star1, a)], bool_type(star2))
+    });
+
+    // isOdd : Num a -> Bool
+    add_type(Symbol::NUM_IS_ODD, {
+        let_tvars! { star1, star2, a };
+        unique_function(vec![num_type(star1, a)], bool_type(star2))
     });
 
     // Bool module
@@ -559,12 +526,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // is LIST_GET_UNSAFE still used?
-    add_type(Symbol::LIST_GET_UNSAFE, {
-        let_tvars! { star1, star2, a };
-        unique_function(vec![list_type(star1, a), int_type(star2)], flex(a))
-    });
-
     // set : Attr (w | u | v) (List (Attr u a))
     //     , Attr * Int
     //     , Attr (u | v) a
@@ -610,26 +571,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // To repeat an item, it must be shared!
-    //
-    // repeat : Attr * Int
-    //        , Attr Shared a
-    //       -> Attr * (List (Attr Shared a))
-    add_type(Symbol::LIST_REPEAT, {
-        let_tvars! { a, star1, star2 };
-
-        unique_function(
-            vec![int_type(star1), shared(flex(a))],
-            SolvedType::Apply(
-                Symbol::ATTR_ATTR,
-                vec![
-                    boolean(star2),
-                    SolvedType::Apply(Symbol::LIST_LIST, vec![shared(flex(a))]),
-                ],
-            ),
-        )
-    });
-
     // reverse : Attr * (List (Attr * a)) -> Attr * (List (Attr * a))
     add_type(Symbol::LIST_REVERSE, {
         let_tvars! { a, star1, star2 };
@@ -647,6 +588,26 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 vec![
                     boolean(star2),
                     SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)]),
+                ],
+            ),
+        )
+    });
+
+    // To repeat an item, it must be shared!
+    //
+    // repeat : Attr * Int
+    //        , Attr Shared a
+    //       -> Attr * (List (Attr Shared a))
+    add_type(Symbol::LIST_REPEAT, {
+        let_tvars! { a, star1, star2 };
+
+        unique_function(
+            vec![int_type(star1), shared(flex(a))],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    boolean(star2),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![shared(flex(a))]),
                 ],
             ),
         )
@@ -1044,7 +1005,7 @@ fn lift(u: VarId, a: SolvedType) -> SolvedType {
 fn float_type(u: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![flex(u), SolvedType::Apply(Symbol::FLOAT_FLOAT, Vec::new())],
+        vec![flex(u), SolvedType::Apply(Symbol::NUM_FLOAT, Vec::new())],
     )
 }
 
@@ -1052,7 +1013,7 @@ fn float_type(u: VarId) -> SolvedType {
 fn int_type(u: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![flex(u), SolvedType::Apply(Symbol::INT_INT, Vec::new())],
+        vec![flex(u), SolvedType::Apply(Symbol::NUM_INT, Vec::new())],
     )
 }
 

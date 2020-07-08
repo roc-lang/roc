@@ -299,8 +299,8 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
 
                     match &content {
                         Alias(nested, _, _) => match *nested {
-                            Symbol::INT_INTEGER => buf.push_str("Int"),
-                            Symbol::FLOAT_FLOATINGPOINT => buf.push_str("Float"),
+                            Symbol::NUM_INTEGER => buf.push_str("Int"),
+                            Symbol::NUM_FLOATINGPOINT => buf.push_str("Float"),
 
                             _ => write_parens!(write_parens, buf, {
                                 buf.push_str("Num ");
@@ -312,8 +312,8 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
                             let attr_content = subs.get_without_compacting(nested_args[1]).content;
                             match &attr_content {
                                 Alias(nested, _, _) => match *nested {
-                                    Symbol::INT_INTEGER => buf.push_str("Int"),
-                                    Symbol::FLOAT_FLOATINGPOINT => buf.push_str("Float"),
+                                    Symbol::NUM_INTEGER => buf.push_str("Int"),
+                                    Symbol::NUM_FLOATINGPOINT => buf.push_str("Float"),
                                     _ => write_parens!(write_parens, buf, {
                                         buf.push_str("Num ");
                                         write_content(env, content, subs, buf, parens);
@@ -704,10 +704,10 @@ fn write_apply(
 
             match &arg_content {
                 Content::Structure(FlatType::Apply(symbol, nested_args)) => match *symbol {
-                    Symbol::INT_INTEGER if nested_args.is_empty() => {
+                    Symbol::NUM_INTEGER if nested_args.is_empty() => {
                         buf.push_str("Int");
                     }
-                    Symbol::FLOAT_FLOATINGPOINT if nested_args.is_empty() => {
+                    Symbol::NUM_FLOATINGPOINT if nested_args.is_empty() => {
                         buf.push_str("Float");
                     }
                     Symbol::ATTR_ATTR => match nested_args
@@ -718,10 +718,10 @@ fn write_apply(
                             double_nested_symbol,
                             double_nested_args,
                         ))) => match double_nested_symbol {
-                            Symbol::INT_INTEGER if double_nested_args.is_empty() => {
+                            Symbol::NUM_INTEGER if double_nested_args.is_empty() => {
                                 buf.push_str("Int");
                             }
-                            Symbol::FLOAT_FLOATINGPOINT if double_nested_args.is_empty() => {
+                            Symbol::NUM_FLOATINGPOINT if double_nested_args.is_empty() => {
                                 buf.push_str("Float");
                             }
                             _ => default_case(subs, arg_content),

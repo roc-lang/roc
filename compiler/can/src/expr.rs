@@ -11,6 +11,7 @@ use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
+use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
@@ -89,6 +90,11 @@ pub enum Expr {
         Vec<(Variable, Located<Expr>)>,
         CalledVia,
     ),
+    RunLowLevel {
+        op: LowLevel,
+        args: Vec<(Variable, Expr)>,
+        ret_var: Variable,
+    },
 
     Closure(
         Variable,
@@ -1021,7 +1027,8 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ EmptyRecord
         | other @ Accessor { .. }
         | other @ Update { .. }
-        | other @ Var(_) => other,
+        | other @ Var(_)
+        | other @ RunLowLevel { .. } => other,
 
         List {
             elem_var,
@@ -1122,12 +1129,48 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             }
         }
 
-        LetRec(_, _, _, _ /*Vec<Def>, Box<Located<Expr>>, Variable, Aliases */) => {
-            todo!("inline for LetRec");
+        LetRec(defs, loc_expr, var, aliases) => {
+            let mut new_defs = Vec::with_capacity(defs.len());
+
+            for def in defs {
+                new_defs.push(Def {
+                    loc_pattern: def.loc_pattern,
+                    loc_expr: Located {
+                        region: def.loc_expr.region,
+                        value: inline_calls(var_store, scope, def.loc_expr.value),
+                    },
+                    expr_var: def.expr_var,
+                    pattern_vars: def.pattern_vars,
+                    annotation: def.annotation,
+                });
+            }
+
+            let loc_expr = Located {
+                region: loc_expr.region,
+                value: inline_calls(var_store, scope, loc_expr.value),
+            };
+
+            LetRec(new_defs, Box::new(loc_expr), var, aliases)
         }
 
-        LetNonRec(_, _, _, _ /*Box<Def>, Box<Located<Expr>>, Variable, Aliases*/) => {
-            todo!("inline for LetNonRec");
+        LetNonRec(def, loc_expr, var, aliases) => {
+            let def = Def {
+                loc_pattern: def.loc_pattern,
+                loc_expr: Located {
+                    region: def.loc_expr.region,
+                    value: inline_calls(var_store, scope, def.loc_expr.value),
+                },
+                expr_var: def.expr_var,
+                pattern_vars: def.pattern_vars,
+                annotation: def.annotation,
+            };
+
+            let loc_expr = Located {
+                region: loc_expr.region,
+                value: inline_calls(var_store, scope, loc_expr.value),
+            };
+
+            LetNonRec(Box::new(def), Box::new(loc_expr), var, aliases)
         }
 
         Closure(var, symbol, recursive, patterns, boxed_expr) => {
@@ -1184,7 +1227,14 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
 
             match loc_expr.value {
                 Var(symbol) if symbol.is_builtin() => match builtin_defs(var_store).get(&symbol) {
-                    Some(Closure(_var, _, recursive, params, boxed_body)) => {
+                    Some(Def {
+                        loc_expr:
+                            Located {
+                                value: Closure(_var, _, recursive, params, boxed_body),
+                                ..
+                            },
+                        ..
+                    }) => {
                         debug_assert_eq!(*recursive, Recursive::NotRecursive);
 
                         // Since this is a canonicalized Expr, we should have

@@ -8,7 +8,7 @@ extern crate bumpalo;
 mod helpers;
 
 #[cfg(test)]
-mod test_uniq_solve {
+mod solve_uniq_expr {
     use crate::helpers::{
         assert_correct_variable_usage, infer_expr, uniq_expr, with_larger_debug_stack,
     };
@@ -1118,7 +1118,7 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                    x : Num.Num Int.Integer
+                    x : Num.Num Num.Integer
                     x = 4
 
                     x
@@ -1368,7 +1368,7 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                    x : Num.Num Int.Integer
+                    x : Num.Num Num.Integer
                     x =
                         when 2 is
                             3 -> 4
@@ -1807,7 +1807,7 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                    { x, y } : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+                    { x, y } : { x : Str.Str, y : Num.Num Num.FloatingPoint }
                     { x, y } = { x : "foo", y : 3.14 }
 
                     x
@@ -2094,10 +2094,10 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                Float.highest / Float.highest
-               "#
+                    Num.maxFloat / Num.maxFloat
+                "#
             ),
-            "Attr * Float",
+            "Attr * (Result (Attr * Float) (Attr * [ DivByZero ]*))",
         );
     }
 
@@ -2106,10 +2106,10 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                3.0 / 4.0
-               "#
+                    3.0 / 4.0
+                "#
             ),
-            "Attr * Float",
+            "Attr * (Result (Attr * Float) (Attr * [ DivByZero ]*))",
         );
     }
 
@@ -2118,10 +2118,10 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                3.0 / Float.highest
-               "#
+                    3.0 / Num.maxFloat
+                "#
             ),
-            "Attr * Float",
+            "Attr * (Result (Attr * Float) (Attr * [ DivByZero ]*))",
         );
     }
 
@@ -2130,8 +2130,8 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                Int.highest // Int.highest
-               "#
+                    Num.maxInt // Num.maxInt
+                "#
             ),
             "Attr * (Result (Attr * Int) (Attr * [ DivByZero ]*))",
         );
@@ -2142,8 +2142,8 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                3 // 4
-               "#
+                    3 // 4
+                "#
             ),
             "Attr * (Result (Attr * Int) (Attr * [ DivByZero ]*))",
         );
@@ -2154,8 +2154,8 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                3 // Int.highest
-               "#
+                    3 // Num.maxInt
+                "#
             ),
             "Attr * (Result (Attr * Int) (Attr * [ DivByZero ]*))",
         );
@@ -2166,12 +2166,12 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                \list ->
-                    p = List.get list 1
-                    q = List.get list 1
+                    \list ->
+                        p = List.get list 1
+                        q = List.get list 1
 
-                    { p, q }
-               "#
+                        { p, q }
+                "#
             ),
             "Attr * (Attr * (List (Attr Shared a)) -> Attr * { p : (Attr * (Result (Attr Shared a) (Attr * [ OutOfBounds ]*))), q : (Attr * (Result (Attr Shared a) (Attr * [ OutOfBounds ]*))) })"
         );
@@ -2331,7 +2331,9 @@ mod test_uniq_solve {
         infer_eq(
             indoc!(
                 r#"
-                    List.getUnsafe (List.set [ 12, 9, 7, 3 ] 1 42) 1
+                    when List.get (List.set [ 12, 9, 7, 3 ] 1 42) 1 is
+                        Ok num -> num
+                        Err OutOfBounds -> 0
                 "#
             ),
             "Attr * (Num (Attr * *))",

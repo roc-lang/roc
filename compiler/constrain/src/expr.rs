@@ -774,7 +774,52 @@ pub fn constrain_expr(
 
             exists(vars, And(arg_cons))
         }
-        RuntimeError(_) => True,
+        RunLowLevel { args, ret_var, op } => {
+            // This is a modified version of what we do for function calls.
+
+            // The operation's return type
+            let ret_type = Variable(*ret_var);
+
+            // This will be used in the occurs check
+            let mut vars = Vec::with_capacity(1 + args.len());
+
+            vars.push(*ret_var);
+
+            let mut arg_types = Vec::with_capacity(args.len());
+            let mut arg_cons = Vec::with_capacity(args.len());
+
+            let mut add_arg = |index, arg_type: Type, arg| {
+                let reason = Reason::LowLevelOpArg {
+                    op: *op,
+                    arg_index: Index::zero_based(index),
+                };
+                let expected_arg = ForReason(reason, arg_type.clone(), Region::zero());
+                let arg_con = constrain_expr(env, Region::zero(), arg, expected_arg);
+
+                arg_types.push(arg_type);
+                arg_cons.push(arg_con);
+            };
+
+            for (index, (arg_var, arg)) in args.iter().enumerate() {
+                vars.push(*arg_var);
+
+                add_arg(index, Variable(*arg_var), arg);
+            }
+
+            let category = Category::LowLevelOpResult(*op);
+
+            exists(
+                vars,
+                And(vec![
+                    And(arg_cons),
+                    Eq(ret_type, expected, category, region),
+                ]),
+            )
+        }
+        RuntimeError(_) => {
+            // Runtime Errors have no constraints because they're going to crash.
+            True
+        }
     }
 }
 
@@ -878,7 +923,7 @@ pub fn constrain_decls(
         env.rigids.clear();
 
         match decl {
-            Declaration::Declare(def) => {
+            Declaration::Declare(def) | Declaration::Builtin(def) => {
                 constraint = exists_with_aliases(
                     aliases.clone(),
                     Vec::new(),

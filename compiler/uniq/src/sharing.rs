@@ -527,7 +527,8 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
         | Str(_)
         | BlockStr(_)
         | EmptyRecord
-        | Accessor { .. } => {}
+        | Accessor { .. }
+        | RunLowLevel { .. } => {}
 
         Var(symbol) => usage.register_unique(*symbol),
 

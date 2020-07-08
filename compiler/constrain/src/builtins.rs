@@ -13,7 +13,7 @@ use roc_types::types::Type::{self, *};
 pub fn int_literal(num_var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
     let num_type = Variable(num_var);
     let reason = Reason::IntLiteral;
-    let expected_literal = ForReason(reason, Type::Apply(Symbol::INT_INT, vec![]), region);
+    let expected_literal = ForReason(reason, Type::Apply(Symbol::NUM_INT, vec![]), region);
 
     exists(
         vec![num_var],
@@ -28,7 +28,7 @@ pub fn int_literal(num_var: Variable, expected: Expected<Type>, region: Region) 
 pub fn float_literal(num_var: Variable, expected: Expected<Type>, region: Region) -> Constraint {
     let num_type = Variable(num_var);
     let reason = Reason::FloatLiteral;
-    let expected_literal = ForReason(reason, Type::Apply(Symbol::FLOAT_FLOAT, vec![]), region);
+    let expected_literal = ForReason(reason, Type::Apply(Symbol::NUM_FLOAT, vec![]), region);
 
     exists(
         vec![num_var],

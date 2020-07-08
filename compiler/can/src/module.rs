@@ -137,8 +137,13 @@ pub fn canonicalize_module_defs<'a>(
 
     let mut references = MutSet::default();
 
-    // Gather up all the symbols that were referenced across all the defs.
+    // Gather up all the symbols that were referenced across all the defs' lookups.
     for symbol in output.references.lookups.iter() {
+        references.insert(*symbol);
+    }
+
+    // Gather up all the symbols that were referenced across all the defs' calls.
+    for symbol in output.references.calls.iter() {
         references.insert(*symbol);
     }
 
@@ -151,6 +156,7 @@ pub fn canonicalize_module_defs<'a>(
         (Ok(declarations), output) => {
             use crate::def::Declaration::*;
 
+            // Record the variables for all exposed symbols.
             let mut exposed_vars_by_symbol = Vec::with_capacity(exposed_symbols.len());
 
             for decl in declarations.iter() {
@@ -193,6 +199,14 @@ pub fn canonicalize_module_defs<'a>(
                     InvalidCycle(identifiers, _) => {
                         panic!("TODO gracefully handle potentially attempting to expose invalid cyclic defs {:?}" , identifiers);
                     }
+                    Builtin(def) => {
+                        // Builtins cannot be exposed in module declarations.
+                        // This should never happen!
+                        debug_assert!(def
+                            .pattern_vars
+                            .iter()
+                            .all(|(symbol, _)| !exposed_symbols.contains(symbol)));
+                    }
                 }
             }
 
@@ -219,6 +233,11 @@ pub fn canonicalize_module_defs<'a>(
 
             // Incorporate any remaining output.lookups entries into references.
             for symbol in output.references.lookups {
+                references.insert(symbol);
+            }
+
+            // Incorporate any remaining output.calls entries into references.
+            for symbol in output.references.calls {
                 references.insert(symbol);
             }
 

@@ -8,7 +8,7 @@ extern crate bumpalo;
 mod helpers;
 
 #[cfg(test)]
-mod test_solve {
+mod solve_expr {
     use crate::helpers::{
         assert_correct_variable_usage, can_expr, infer_expr, with_larger_debug_stack, CanExprOut,
     };
@@ -1214,7 +1214,7 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-                   int : Num.Num Int.Integer
+                   int : Num.Num Num.Integer
 
                    int
                 "#
@@ -1243,7 +1243,7 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-                   int : Int.Int
+                   int : Num.Int
                    int = 5
 
                    int
@@ -1273,7 +1273,7 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-                   int : Num.Num Int.Integer
+                   int : Num.Num Num.Integer
                    int = 5.5
 
                    int
@@ -1316,7 +1316,7 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-                   float : Float.Float
+                   float : Num.Float
                    float = 5.5
 
                    float
@@ -1446,7 +1446,7 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-                   float : Num.Num Float.FloatingPoint
+                   float : Num.Num Num.FloatingPoint
                    float = 5.5
 
                    float
@@ -1496,7 +1496,7 @@ mod test_solve {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    x : Num.Num Int.Integer
+                    x : Num.Num Num.Integer
                     x =
                         when 2 is
                             3 -> 4
@@ -1708,7 +1708,7 @@ mod test_solve {
                 r#"
                 Foo a : { foo : a }
 
-                v : Foo (Num.Num Int.Integer)
+                v : Foo (Num.Num Num.Integer)
                 v = { foo: 42 }
 
                 v
@@ -1772,7 +1772,7 @@ mod test_solve {
                 r#"
                     Peano : [ S Peano, Z ]
 
-                    length : Peano -> Num.Num Int.Integer
+                    length : Peano -> Num.Num Num.Integer
                     length = \peano ->
                         when peano is
                             Z -> 0
@@ -1872,10 +1872,10 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-                r : { x : (Num.Num Int.Integer) }
+                r : { x : (Num.Num Num.Integer) }
                 r = { x : 1 }
 
-                s : { left : { x : Num.Num Float.FloatingPoint } }
+                s : { left : { x : Num.Num Num.FloatingPoint } }
                 s = { left: { x : 3.14 } }
 
                 when 0 is
@@ -2010,7 +2010,7 @@ mod test_solve {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    { x, y } : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+                    { x, y } : { x : Str.Str, y : Num.Num Num.FloatingPoint }
                     { x, y } = { x : "foo", y : 3.14 }
 
                     x
@@ -2025,7 +2025,7 @@ mod test_solve {
         infer_eq(
             indoc!(
                 r#"
-                    Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+                    Foo : { x : Str.Str, y : Num.Num Num.FloatingPoint }
 
                     { x, y } : Foo
                     { x, y } = { x : "foo", y : 3.14 }
@@ -2061,7 +2061,7 @@ mod test_solve {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    Foo : { x : Str.Str, y : Num.Num Float.FloatingPoint }
+                    Foo : { x : Str.Str, y : Num.Num Num.FloatingPoint }
 
                     { x, y } : Foo
                     { x, y } = { x : "foo", y : 3.14 }
@@ -2163,7 +2163,7 @@ mod test_solve {
                     ListB a : [ Cons a (ListC a) ]
                     ListC a : [ Cons a (ListA a), Nil ]
 
-                    val : ListC Int.Int
+                    val : ListC Num.Int
                     val = Cons 1 (Cons 2 (Cons 3 Nil))
 
                     val
@@ -2524,7 +2524,7 @@ mod test_solve {
 
     #[test]
     fn rigids() {
-        // I was sligtly surprised this works
+        // I was slightly surprised this works
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -2533,10 +2533,9 @@ mod test_solve {
                     x : List b
                     x = []
 
-                    v = List.getUnsafe input 0
-
-                    List.push x v
-
+                    when List.get input 0 is
+                        Ok val -> List.push x val
+                        Err _ -> f input
                 f
                 "#
             ),
@@ -2549,7 +2548,7 @@ mod test_solve {
     #[should_panic]
     fn rigid_record_quantification() {
         // the ext here is qualified on the outside (because we have rank 1 types, not rank 2).
-        // That means e.g. `f : { bar : String, foo : Int } -> Bool }` is a valid argument. but
+        // That means e.g. `f : { bar : String, foo : Int } -> Bool }` is a valid argument, but
         // that function could not be applied to the `{ foo : Int }` list. Therefore, this function
         // is not allowed.
         //

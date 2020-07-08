@@ -18,19 +18,14 @@ mod test_usage_analysis {
     use roc_collections::all::{ImMap, ImSet};
     use roc_module::ident::Lowercase;
     use roc_module::symbol::{Interns, Symbol};
-    use roc_uniq::sharing;
-    use roc_uniq::sharing::FieldAccess;
-    use roc_uniq::sharing::VarUsage;
-    use roc_uniq::sharing::{Container, Mark, Usage};
+    use roc_uniq::sharing::{self, Container, FieldAccess, Mark, Usage, VarUsage};
+    use std::collections::HashMap;
 
     use Container::*;
     use Mark::*;
     use Usage::*;
 
-    fn field_access_seq(
-        accesses: Vec<Vec<&str>>,
-        expected_ref: std::collections::HashMap<&str, Usage>,
-    ) {
+    fn field_access_seq(accesses: Vec<Vec<&str>>, expected_ref: HashMap<&str, Usage>) {
         use Mark::*;
         use Usage::*;
 
@@ -43,13 +38,12 @@ mod test_usage_analysis {
 
         match usage {
             Usage::Access(_, _, fields) => {
-                let mut actual: std::collections::HashMap<Lowercase, Usage> =
-                    std::collections::HashMap::default();
+                let mut actual: HashMap<Lowercase, Usage> = HashMap::default();
                 for (k, v) in fields.into_iter() {
                     actual.insert(k, v);
                 }
 
-                let mut expected = std::collections::HashMap::default();
+                let mut expected = HashMap::default();
                 for (k, v) in expected_ref {
                     expected.insert(k.into(), v);
                 }
@@ -60,10 +54,7 @@ mod test_usage_analysis {
         }
     }
 
-    fn field_access_par(
-        accesses: Vec<Vec<&str>>,
-        expected_ref: std::collections::HashMap<&str, Usage>,
-    ) {
+    fn field_access_par(accesses: Vec<Vec<&str>>, expected_ref: HashMap<&str, Usage>) {
         use Mark::*;
         use Usage::*;
 
@@ -76,13 +67,12 @@ mod test_usage_analysis {
 
         match usage {
             Usage::Access(_, _, fields) => {
-                let mut actual: std::collections::HashMap<Lowercase, Usage> =
-                    std::collections::HashMap::default();
+                let mut actual: HashMap<Lowercase, Usage> = HashMap::default();
                 for (k, v) in fields.into_iter() {
                     actual.insert(k, v);
                 }
 
-                let mut expected = std::collections::HashMap::default();
+                let mut expected = HashMap::default();
                 for (k, v) in expected_ref {
                     expected.insert(k.into(), v);
                 }
@@ -93,7 +83,7 @@ mod test_usage_analysis {
         }
     }
 
-    fn field_access(fields: std::collections::HashMap<&str, Usage>) -> FieldAccess {
+    fn field_access(fields: HashMap<&str, Usage>) -> FieldAccess {
         let mut new_fields = ImMap::default();
 
         for (k, v) in fields {
