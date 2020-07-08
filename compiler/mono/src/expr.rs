@@ -438,6 +438,12 @@ fn pattern_to_when<'a>(
             (env.unique_symbol(), Located::at_zero(RuntimeError(error)))
         }
 
+        MalformedPattern(problem, region) => {
+            // create the runtime error here, instead of delegating to When.
+            let error = roc_problem::can::RuntimeError::MalformedPattern(*problem, *region);
+            (env.unique_symbol(), Located::at_zero(RuntimeError(error)))
+        }
+
         AppliedTag { .. } | RecordDestructure { .. } => {
             let symbol = env.unique_symbol();
 
@@ -1512,7 +1518,10 @@ fn from_can_pattern<'a>(
         StrLiteral(v) => Pattern::StrLiteral(v.clone()),
         Shadowed(region, ident) => Pattern::Shadowed(*region, ident.clone()),
         UnsupportedPattern(region) => Pattern::UnsupportedPattern(*region),
-
+        MalformedPattern(_problem, region) => {
+            // TODO preserve malformed problem information here?
+            Pattern::UnsupportedPattern(*region)
+        }
         NumLiteral(var, num) => match num_argument_to_int_or_float(env.subs, *var) {
             IntOrFloat::IntType => Pattern::IntLiteral(*num),
             IntOrFloat::FloatType => Pattern::FloatLiteral(*num as u64),

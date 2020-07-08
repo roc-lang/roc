@@ -200,12 +200,12 @@ mod test_uniq_load {
                 loaded_module,
                 hashmap! {
                     "floatTest" => "Attr Shared Float",
-                    "divisionFn" => "Attr Shared (Attr * Float, Attr * Float -> Attr * Float)",
-                    "divisionTest" => "Attr * Float",
+                    "divisionFn" => "Attr Shared (Attr * Float, Attr * Float -> Attr * (Result (Attr * Float) (Attr * [ DivByZero ]*)))",
+                    "divisionTest" =>  "Attr * (Result (Attr * Float) (Attr * [ DivByZero ]*))",
                     "intTest" => "Attr * Int",
                     "x" => "Attr * Float",
                     "constantNum" => "Attr * (Num (Attr * *))",
-                    "divDep1ByDep2" => "Attr * Float",
+                    "divDep1ByDep2" => "Attr * (Result (Attr * Float) (Attr * [ DivByZero ]*))",
                     "fromDep2" => "Attr * Float",
                 },
             );
@@ -287,7 +287,24 @@ mod test_uniq_load {
                     "w" => "Attr * (Dep1.Identity (Attr * {}))",
                     "succeed" => "Attr * (Attr b a -> Attr * (Dep1.Identity (Attr b a)))",
                     "yay" => "Attr * (Res.Res (Attr * {}) (Attr * err))",
-                    "withDefault" => "Attr * (Attr (* | * | *) (Res.Res (Attr * a) (Attr * *)), Attr * a -> Attr * a)",
+                    "withDefault" => "Attr * (Attr (* | b | c) (Res.Res (Attr b a) (Attr c *)), Attr b a -> Attr b a)",
+                },
+            );
+        });
+    }
+
+    #[test]
+    fn load_custom_res() {
+        test_async(async {
+            let subs_by_module = MutMap::default();
+            let loaded_module = load_fixture("interface_with_deps", "Res", subs_by_module).await;
+
+            expect_types(
+                loaded_module,
+                hashmap! {
+                    "withDefault" =>"Attr * (Attr (* | b | c) (Res (Attr b a) (Attr c err)), Attr b a -> Attr b a)",
+                    "map" => "Attr * (Attr (* | c | d) (Res (Attr c a) (Attr d err)), Attr * (Attr c a -> Attr e b) -> Attr * (Res (Attr e b) (Attr d err)))",
+                    "andThen" => "Attr * (Attr (* | c | d) (Res (Attr c a) (Attr d err)), Attr * (Attr c a -> Attr f (Res (Attr e b) (Attr d err))) -> Attr f (Res (Attr e b) (Attr d err)))",
                 },
             );
         });

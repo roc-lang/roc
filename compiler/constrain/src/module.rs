@@ -207,16 +207,7 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &mut V
                 Type::Variable(var)
             }
         }
-        Flex(var_id) => {
-            if let Some(var) = free_vars.unnamed_vars.get(&var_id) {
-                Type::Variable(*var)
-            } else {
-                let var = var_store.fresh();
-                free_vars.unnamed_vars.insert(*var_id, var);
-
-                Type::Variable(var)
-            }
-        }
+        Flex(var_id) => Type::Variable(var_id_to_flex_var(*var_id, free_vars, var_store)),
         Wildcard => {
             let var = var_store.fresh();
             free_vars.wildcards.push(var);
@@ -274,11 +265,11 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &mut V
         }
         Boolean(SolvedBool::SolvedShared) => Type::Boolean(Bool::Shared),
         Boolean(SolvedBool::SolvedContainer(solved_cvar, solved_mvars)) => {
-            let cvar = var_id_to_var(*solved_cvar, free_vars, var_store);
+            let cvar = var_id_to_flex_var(*solved_cvar, free_vars, var_store);
 
             let mvars = solved_mvars
                 .iter()
-                .map(|var_id| var_id_to_var(*var_id, free_vars, var_store));
+                .map(|var_id| var_id_to_flex_var(*var_id, free_vars, var_store));
 
             Type::Boolean(Bool::container(cvar, mvars))
         }
@@ -298,7 +289,11 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &mut V
     }
 }
 
-fn var_id_to_var(var_id: VarId, free_vars: &mut FreeVars, var_store: &mut VarStore) -> Variable {
+fn var_id_to_flex_var(
+    var_id: VarId,
+    free_vars: &mut FreeVars,
+    var_store: &mut VarStore,
+) -> Variable {
     if let Some(var) = free_vars.unnamed_vars.get(&var_id) {
         *var
     } else {

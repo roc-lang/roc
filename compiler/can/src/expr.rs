@@ -22,7 +22,6 @@ use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;
 use std::fmt::Debug;
 use std::i64;
-use std::ops::Neg;
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct Output {
@@ -184,12 +183,13 @@ pub fn canonicalize_expr<'a>(
 
     let (expr, output) = match expr {
         ast::Expr::Num(string) => {
-            let answer = num_expr_from_result(var_store, finish_parsing_int(*string), env);
+            let answer = num_expr_from_result(var_store, finish_parsing_int(*string), region, env);
 
             (answer, Output::default())
         }
         ast::Expr::Float(string) => {
-            let answer = float_expr_from_result(var_store, finish_parsing_float(string), env);
+            let answer =
+                float_expr_from_result(var_store, finish_parsing_float(string), region, env);
 
             (answer, Output::default())
         }
@@ -630,13 +630,9 @@ pub fn canonicalize_expr<'a>(
             base,
             is_negative,
         } => {
-            let mut result = finish_parsing_base(string, *base);
-
-            if *is_negative {
-                result = result.map(i64::neg);
-            }
-
-            let answer = int_expr_from_result(var_store, result, env);
+            // the minus sign is added before parsing, to get correct overflow/underflow behavior
+            let result = finish_parsing_base(string, *base, *is_negative);
+            let answer = int_expr_from_result(var_store, result, region, *base, env);
 
             (answer, Output::default())
         }

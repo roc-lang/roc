@@ -346,6 +346,7 @@ pub enum Base {
     Octal,
     Binary,
     Hex,
+    Decimal,
 }
 
 impl<'a> Pattern<'a> {

@@ -301,12 +301,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         SolvedType::Func(vec![num_type(flex(TVAR1))], Box::new(bool_type())),
     );
 
-    // Int module
-
-    // highest : Int
+    // maxInt : Int
     add_type(Symbol::NUM_MAX_INT, int_type());
 
-    // lowest : Int
+    // minInt : Int
     add_type(Symbol::NUM_MIN_INT, int_type());
 
     // div : Int, Int -> Result Int [ DivByZero ]*
@@ -399,10 +397,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         SolvedType::Func(vec![float_type()], Box::new(float_type())),
     );
 
-    // highest : Float
+    // maxFloat : Float
     add_type(Symbol::NUM_MAX_FLOAT, float_type());
 
-    // lowest : Float
+    // minFloat : Float
     add_type(Symbol::NUM_MIN_FLOAT, float_type());
 
     // Bool module
@@ -532,6 +530,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::LIST_REPEAT,
         SolvedType::Func(
             vec![int_type(), flex(TVAR1)],
+            Box::new(list_type(flex(TVAR1))),
+        ),
+    );
+
+    // reverse : List elem -> List elem
+    add_type(
+        Symbol::LIST_REVERSE,
+        SolvedType::Func(
+            vec![list_type(flex(TVAR1))],
             Box::new(list_type(flex(TVAR1))),
         ),
     );

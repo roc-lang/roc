@@ -140,6 +140,11 @@ fn find_names_needed(
             // We must not accidentally generate names that collide with them!
             names_taken.insert(name);
         }
+        Structure(Apply(Symbol::ATTR_ATTR, args)) => {
+            // assign uniqueness var names based on when they occur in the base type
+            find_names_needed(args[1], subs, roots, root_appearances, names_taken);
+            find_names_needed(args[0], subs, roots, root_appearances, names_taken);
+        }
         Structure(Apply(_, args)) => {
             for var in args {
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
@@ -153,21 +158,30 @@ fn find_names_needed(
             find_names_needed(ret_var, subs, roots, root_appearances, names_taken);
         }
         Structure(Record(fields, ext_var)) => {
-            for (_, var) in fields {
-                find_names_needed(var, subs, roots, root_appearances, names_taken);
+            let mut sorted_fields: Vec<_> = fields.iter().collect();
+            sorted_fields.sort();
+
+            for (_, var) in sorted_fields {
+                find_names_needed(*var, subs, roots, root_appearances, names_taken);
             }
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(TagUnion(tags, ext_var)) => {
-            for var in tags.values().flatten() {
+            let mut sorted_tags: Vec<_> = tags.iter().collect();
+            sorted_tags.sort();
+
+            for var in sorted_tags.into_iter().map(|(_, v)| v).flatten() {
                 find_names_needed(*var, subs, roots, root_appearances, names_taken);
             }
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(RecursiveTagUnion(rec_var, tags, ext_var)) => {
-            for var in tags.values().flatten() {
+            let mut sorted_tags: Vec<_> = tags.iter().collect();
+            sorted_tags.sort();
+
+            for var in sorted_tags.into_iter().map(|(_, v)| v).flatten() {
                 find_names_needed(*var, subs, roots, root_appearances, names_taken);
             }
 
@@ -178,6 +192,7 @@ fn find_names_needed(
             Bool::Shared => {}
             Bool::Container(cvar, mvars) => {
                 find_names_needed(cvar, subs, roots, root_appearances, names_taken);
+
                 for var in mvars {
                     find_names_needed(var, subs, roots, root_appearances, names_taken);
                 }
@@ -188,10 +203,11 @@ fn find_names_needed(
                 find_names_needed(args[0].1, subs, roots, root_appearances, names_taken);
                 find_names_needed(args[1].1, subs, roots, root_appearances, names_taken);
             } else {
-                // TODO should we also look in the actual variable?
                 for (_, var) in args {
                     find_names_needed(var, subs, roots, root_appearances, names_taken);
                 }
+                // TODO should we also look in the actual variable?
+                // find_names_needed(_actual, subs, roots, root_appearances, names_taken);
             }
         }
         Error | Structure(Erroneous(_)) | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
@@ -211,7 +227,7 @@ pub fn name_all_type_vars(variable: Variable, subs: &mut Subs) {
 
     for root in roots {
         // show the type variable number instead of `*`. useful for debugging
-        // set_root_name(root, &(format!("<{:?}>", root).into()), subs);
+        // set_root_name(root, (format!("<{:?}>", root).into()), subs);
         if let Some(Appearances::Multiple) = appearances.get(&root) {
             letters_used = name_root(letters_used, root, subs, &mut taken);
         }
@@ -226,21 +242,19 @@ fn name_root(
 ) -> u32 {
     let (generated_name, new_letters_used) = name_type_var(letters_used, taken);
 
-    set_root_name(root, &generated_name, subs);
+    set_root_name(root, generated_name, subs);
 
     new_letters_used
 }
 
-fn set_root_name(root: Variable, name: &Lowercase, subs: &mut Subs) {
+fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
     use crate::subs::Content::*;
 
     let mut descriptor = subs.get_without_compacting(root);
 
     match descriptor.content {
         FlexVar(None) => {
-            descriptor.content = FlexVar(Some(name.clone()));
-
-            // TODO is this necessary, or was mutating descriptor in place sufficient?
+            descriptor.content = FlexVar(Some(name));
             subs.set(root, descriptor);
         }
         FlexVar(Some(_existing)) => {
@@ -334,8 +348,7 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
                     }
 
                     // useful for debugging
-                    let write_out_alias = false;
-                    if write_out_alias {
+                    if false {
                         buf.push_str("[[ but really ");
                         let content = subs.get_without_compacting(_actual).content;
                         write_content(env, content, subs, buf, parens);
