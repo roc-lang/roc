@@ -1140,24 +1140,22 @@ fn list_repeat<'a, 'ctx, 'env>(
 
     let build_then = || {
         // Allocate space for the new array that we'll copy into.
-        let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+        let list_ptr = builder
+            .build_array_malloc(elem_type, list_len, "create_list_ptr")
+            .unwrap();
 
-        let list_ptr = {
-            let bytes_len = elem_bytes;
-            let len_type = env.ptr_int();
-            let len = len_type.const_int(bytes_len, false);
-
-            env.builder
-                .build_array_malloc(elem_type, len, "create_list_ptr")
-                .unwrap()
-
-            // TODO check if malloc returned null; if so, runtime error for OOM!
-        };
+        // TODO check if malloc returned null; if so, runtime error for OOM!
 
         let index_name = "#index";
         let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
 
-        builder.build_store(start_alloca, list_len);
+        // Start at the last element in the list.
+        let last_elem_index = builder.build_int_sub(
+            list_len,
+            ctx.i64_type().const_int(1, false),
+            "lastelemindex",
+        );
+        builder.build_store(start_alloca, last_elem_index);
 
         let loop_bb = ctx.append_basic_block(parent, "loop");
         builder.build_unconditional_branch(loop_bb);
@@ -1171,7 +1169,6 @@ fn list_repeat<'a, 'ctx, 'env>(
             builder.build_int_sub(curr_index, ctx.i64_type().const_int(1, false), "nextindex");
 
         builder.build_store(start_alloca, next_index);
-
         let elem_ptr =
             unsafe { builder.build_in_bounds_gep(list_ptr, &[curr_index], "load_index") };
 
@@ -1631,6 +1628,169 @@ fn run_low_level<'a, 'ctx, 'env>(
             let elem_layout = &args[1].1;
 
             list_repeat(env, parent, list_len, elem, elem_layout)
+        }
+        ListReverse => {
+            // List.reverse : List elem -> List elem
+            debug_assert_eq!(args.len(), 1);
+
+            let (list, list_layout) = &args[0];
+
+            let wrapper_struct =
+                build_expr(env, layout_ids, scope, parent, list).into_struct_value();
+
+            let builder = env.builder;
+            let ctx = env.context;
+
+            let list_len = load_list_len(builder, wrapper_struct);
+
+            // list_len > 0
+            // We do this check to avoid allocating memory. If the input
+            // list is empty, then we can just return an empty list.
+            let comparison = builder.build_int_compare(
+                IntPredicate::UGT,
+                list_len,
+                ctx.i64_type().const_int(0, false),
+                "greaterthanzero",
+            );
+
+            let build_then = || {
+                match list_layout {
+                    Layout::Builtin(Builtin::List(elem_layout)) => {
+                        // Allocate space for the new array that we'll copy into.
+                        let elem_type =
+                            basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+
+                        let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                        let reversed_list_ptr = env
+                            .builder
+                            .build_array_malloc(elem_type, list_len, "create_reversed_list_ptr")
+                            .unwrap();
+
+                        // TODO check if malloc returned null; if so, runtime error for OOM!
+
+                        let index_name = "#index";
+                        let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
+
+                        // Start at the last element in the list.
+                        let last_elem_index = builder.build_int_sub(
+                            list_len,
+                            ctx.i64_type().const_int(1, false),
+                            "lastelemindex",
+                        );
+                        builder.build_store(start_alloca, last_elem_index);
+
+                        let loop_bb = ctx.append_basic_block(parent, "loop");
+                        builder.build_unconditional_branch(loop_bb);
+                        builder.position_at_end(loop_bb);
+
+                        // #index = #index - 1
+                        let curr_index = builder
+                            .build_load(start_alloca, index_name)
+                            .into_int_value();
+                        let next_index = builder.build_int_sub(
+                            curr_index,
+                            ctx.i64_type().const_int(1, false),
+                            "nextindex",
+                        );
+
+                        builder.build_store(start_alloca, next_index);
+
+                        let list_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
+
+                        // The pointer to the element in the input list
+                        let elem_ptr = unsafe {
+                            builder.build_in_bounds_gep(list_ptr, &[curr_index], "load_index")
+                        };
+
+                        // The pointer to the element in the reversed list
+                        let reverse_elem_ptr = unsafe {
+                            builder.build_in_bounds_gep(
+                                reversed_list_ptr,
+                                &[builder.build_int_sub(
+                                    list_len,
+                                    builder.build_int_add(
+                                        curr_index,
+                                        ctx.i64_type().const_int(1, false),
+                                        "curr_index_plus_one",
+                                    ),
+                                    "next_index",
+                                )],
+                                "load_index_reversed_list",
+                            )
+                        };
+
+                        let elem = builder.build_load(elem_ptr, "get_elem");
+
+                        // Mutate the new array in-place to change the element.
+                        builder.build_store(reverse_elem_ptr, elem);
+
+                        // #index != 0
+                        let end_cond = builder.build_int_compare(
+                            IntPredicate::NE,
+                            ctx.i64_type().const_int(0, false),
+                            curr_index,
+                            "loopcond",
+                        );
+
+                        let after_bb = ctx.append_basic_block(parent, "afterloop");
+
+                        builder.build_conditional_branch(end_cond, loop_bb, after_bb);
+                        builder.position_at_end(after_bb);
+
+                        let ptr_bytes = env.ptr_bytes;
+                        let int_type = ptr_int(ctx, ptr_bytes);
+                        let ptr_as_int =
+                            builder.build_ptr_to_int(reversed_list_ptr, int_type, "list_cast_ptr");
+                        let struct_type = collection(ctx, ptr_bytes);
+
+                        let mut struct_val;
+
+                        // Store the pointer
+                        struct_val = builder
+                            .build_insert_value(
+                                struct_type.get_undef(),
+                                ptr_as_int,
+                                Builtin::WRAPPER_PTR,
+                                "insert_ptr",
+                            )
+                            .unwrap();
+
+                        // Store the length
+                        struct_val = builder
+                            .build_insert_value(
+                                struct_val,
+                                list_len,
+                                Builtin::WRAPPER_LEN,
+                                "insert_len",
+                            )
+                            .unwrap();
+
+                        builder.build_bitcast(
+                            struct_val.into_struct_value(),
+                            collection(ctx, ptr_bytes),
+                            "cast_collection",
+                        )
+                    }
+                    Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                    _ => {
+                        unreachable!("Invalid List layout for List.get: {:?}", list_layout);
+                    }
+                }
+            };
+
+            let build_else = || empty_list(env);
+
+            let struct_type = collection(ctx, env.ptr_bytes);
+
+            build_basic_phi2(
+                env,
+                parent,
+                comparison,
+                build_then,
+                build_else,
+                BasicTypeEnum::StructType(struct_type),
+            )
         }
         ListPush => {
             // List.push List elem, elem -> List elem
