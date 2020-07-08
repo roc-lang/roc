@@ -2111,7 +2111,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             );
 
             BasicValueEnum::IntValue(bd.build_int_sub(
-                xored_arg.into(),
+                xored_arg,
                 bd.build_load(shifted_alloca, shifted_name).into_int_value(),
                 "sub_xored_shifted",
             ))
