@@ -314,6 +314,8 @@ fn layout_from_flat_type<'a>(
             let mut layouts = Vec::with_capacity_in(sorted_fields.len(), arena);
 
             for (_, field_var) in sorted_fields {
+                use LayoutProblem::*;
+
                 let field_content = subs.get_without_compacting(field_var).content;
 
                 match Layout::new(arena, field_content, subs, pointer_size) {
@@ -323,7 +325,7 @@ fn layout_from_flat_type<'a>(
                             layouts.push(layout);
                         }
                     }
-                    Err(_) => {
+                    Err(UnresolvedTypeVar) | Err(Erroneous) => {
                         // Invalid field!
                         panic!("TODO gracefully handle record with invalid field.var");
                     }
