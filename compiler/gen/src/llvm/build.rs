@@ -509,6 +509,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let it = arguments.iter();
 
             let ctx = env.context;
+            let ptr_bytes = env.ptr_bytes;
             let builder = env.builder;
 
             // Determine types
@@ -517,12 +518,20 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
             for (field_expr, field_layout) in it {
-                let val = build_expr(env, layout_ids, &scope, parent, field_expr);
-                let field_type =
-                    basic_type_from_layout(env.arena, env.context, &field_layout, env.ptr_bytes);
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if field_layout.stack_size(ptr_bytes) != 0 {
+                    let val = build_expr(env, layout_ids, &scope, parent, field_expr);
+                    let field_type = basic_type_from_layout(
+                        env.arena,
+                        env.context,
+                        &field_layout,
+                        env.ptr_bytes,
+                    );
 
-                field_types.push(field_type);
-                field_vals.push(val);
+                    field_types.push(field_type);
+                    field_vals.push(val);
+                }
             }
 
             // If the struct has only one field that isn't zero-sized,
@@ -563,15 +572,20 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
             for (field_expr, field_layout) in arguments.iter() {
-                let val = build_expr(env, layout_ids, &scope, parent, field_expr);
-                let field_type =
-                    basic_type_from_layout(env.arena, env.context, &field_layout, ptr_size);
-
-                field_types.push(field_type);
-                field_vals.push(val);
-
                 let field_size = field_layout.stack_size(ptr_size);
-                filler -= field_size;
+
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if field_size != 0 {
+                    let val = build_expr(env, layout_ids, &scope, parent, field_expr);
+                    let field_type =
+                        basic_type_from_layout(env.arena, env.context, &field_layout, ptr_size);
+
+                    field_types.push(field_type);
+                    field_vals.push(val);
+
+                    filler -= field_size;
+                }
             }
 
             // TODO verify that this is required (better safe than sorry)
