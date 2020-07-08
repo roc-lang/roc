@@ -586,6 +586,12 @@ fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
     }
 }
 
+#[cfg(not(debug_assertions))]
+fn ext_var_is_empty_tag_union(_: &Subs, _: Variable) -> bool {
+    // This should only ever be used in debug_assert! macros
+    unreachable!();
+}
+
 #[cfg(debug_assertions)]
 fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
@@ -594,6 +600,12 @@ fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
         Ok(()) | Err((_, Content::FlexVar(_))) => ext_fields.is_empty(),
         Err((_, content)) => panic!("invalid content in ext_var: {:?}", content),
     }
+}
+
+#[cfg(not(debug_assertions))]
+fn ext_var_is_empty_record(_: &Subs, _: Variable) -> bool {
+    // This should only ever be used in debug_assert! macros
+    unreachable!();
 }
 
 fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutProblem> {
