@@ -430,11 +430,21 @@ fn pretty_runtime_error<'b>(
                 hint,
             ])
         }
-        RuntimeError::InvalidInt(IntErrorKind::Empty, _base, _region, _raw_str) => {
-            unreachable!("would never parse an empty int literal")
-        }
-        RuntimeError::InvalidInt(IntErrorKind::InvalidDigit, base, region, _raw_str) => {
+        RuntimeError::InvalidInt(error @ IntErrorKind::InvalidDigit, base, region, _raw_str)
+        | RuntimeError::InvalidInt(error @ IntErrorKind::Empty, base, region, _raw_str) => {
             use roc_parse::ast::Base::*;
+
+            let (problem, contains) = if let IntErrorKind::InvalidDigit = error {
+                (
+                    "an invalid digit",
+                    alloc.reflow(" can only contain the digits "),
+                )
+            } else {
+                (
+                    "no digits",
+                    alloc.reflow(" must contain at least one of the digits "),
+                )
+            };
 
             let name = match base {
                 Decimal => "integer",
@@ -465,12 +475,14 @@ fn pretty_runtime_error<'b>(
                 alloc.concat(vec![
                     alloc.reflow("This "),
                     alloc.text(name),
-                    alloc.reflow(" literal contains an invalid digit:"),
+                    alloc.reflow(" literal contains "),
+                    alloc.text(problem),
+                    alloc.text(":"),
                 ]),
                 alloc.region(region),
                 alloc.concat(vec![
                     alloc.text(plurals),
-                    alloc.reflow(" can only contain the digits "),
+                    contains,
                     alloc.text(charset),
                     alloc.text("."),
                 ]),

@@ -68,6 +68,7 @@ pub enum IntErrorKind {
     /// Value being parsed is empty.
     ///
     /// Among other causes, this variant will be constructed when parsing an empty string.
+    /// In roc, this can happen with non-base-10 literals, e.g. `0x` or `0b` without any digits
     Empty,
     /// Contains an invalid digit.
     ///

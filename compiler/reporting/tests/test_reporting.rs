@@ -3311,6 +3311,64 @@ mod test_reporting {
     }
 
     #[test]
+    fn integer_empty() {
+        report_problem_as(
+            indoc!(
+                r#"
+                dec = 20
+
+                hex = 0x
+
+                oct = 0o
+
+                bin = 0b
+
+                dec + hex + oct + bin
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This hex integer literal contains no digits:
+
+                3 ┆  hex = 0x
+                  ┆        ^^
+
+                Hexadecimal (base-16) integer literals must contain at least one of
+                the digits 0-9, a-f and A-F.
+
+                Hint: Learn more about number literals at TODO
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This octal integer literal contains no digits:
+
+                5 ┆  oct = 0o
+                  ┆        ^^
+
+                Octal (base-8) integer literals must contain at least one of the
+                digits 0-7.
+
+                Hint: Learn more about number literals at TODO
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This binary integer literal contains no digits:
+
+                7 ┆  bin = 0b
+                  ┆        ^^
+
+                Binary (base-2) integer literals must contain at least one of the
+                digits 0 and 1.
+
+                Hint: Learn more about number literals at TODO
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn float_malformed() {
         report_problem_as(
             indoc!(
