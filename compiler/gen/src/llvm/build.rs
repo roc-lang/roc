@@ -5,7 +5,6 @@ use crate::llvm::convert::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use either::Either::{self, *};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::memory_buffer::MemoryBuffer;
@@ -14,7 +13,7 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, PointerType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicValue, FloatValue, FunctionValue, InstructionValue, IntValue, PointerValue, StructValue,
+    FloatValue, FunctionValue, InstructionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::AddressSpace;
 use inkwell::{IntPredicate, OptimizationLevel};
@@ -174,14 +173,14 @@ pub fn build_expr<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     expr: &Expr<'a>,
-) -> Either<BasicValueEnum<'ctx>, InstructionValue<'ctx>> {
+) -> BasicValueEnum<'ctx> {
     use roc_mono::expr::Expr::*;
 
     match expr {
-        Int(num) => Left(env.context.i64_type().const_int(*num as u64, true).into()),
-        Float(num) => Left(env.context.f64_type().const_float(*num).into()),
-        Bool(b) => Left(env.context.bool_type().const_int(*b as u64, false).into()),
-        Byte(b) => Left(env.context.i8_type().const_int(*b as u64, false).into()),
+        Int(num) => env.context.i64_type().const_int(*num as u64, true).into(),
+        Float(num) => env.context.f64_type().const_float(*num).into(),
+        Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
+        Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Cond {
             branch_symbol,
             pass: (pass_stores, pass_expr),
@@ -213,11 +212,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                     // build then block
                     builder.position_at_end(then_block);
-                    let then_val: &'a dyn BasicValue<'ctx> =
-                        match build_expr(env, layout_ids, scope, parent, pass) {
-                            Left(val) => env.arena.alloc(val),
-                            Right(inst) => env.arena.alloc(inst),
-                        };
+                    let then_val = build_expr(env, layout_ids, scope, parent, pass);
                     builder.build_unconditional_branch(cont_block);
 
                     let then_block = builder.get_insert_block().unwrap();
@@ -234,9 +229,9 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
                     let phi = builder.build_phi(ret_type, "branch");
 
-                    phi.add_incoming(&[(then_val, then_block), (&else_val, else_block)]);
+                    phi.add_incoming(&[(&then_val, then_block), (&else_val, else_block)]);
 
-                    Left(phi.as_basic_value())
+                    phi.as_basic_value()
                 }
                 _ => panic!(
                     "Tried to make a branch out of an invalid condition: cond_expr = {:?}",
