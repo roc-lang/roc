@@ -1930,6 +1930,7 @@ name = "roc_gen"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "either",
  "im",
  "im-rc",
  "indoc",

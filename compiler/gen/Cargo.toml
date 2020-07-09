@@ -40,6 +40,7 @@ inlinable_string = "0.1"
 # This way, GitHub Actions works and nobody's builds get broken.
 inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm10-0.release1" }
 target-lexicon = "0.10"
+either = "1.5" # this should be the same version as the one Inkwell uses
 
 [dev-dependencies]
 roc_can = { path = "../can" }
