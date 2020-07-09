@@ -12,9 +12,7 @@ use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, PointerType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
-use inkwell::values::{
-    FloatValue, FunctionValue, InstructionValue, IntValue, PointerValue, StructValue,
-};
+use inkwell::values::{FloatValue, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
 use inkwell::{IntPredicate, OptimizationLevel};
 use roc_collections::all::ImMap;
@@ -73,9 +71,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
     let i64_type = ctx.i64_type();
     let f64_type = ctx.f64_type();
-    let void_type = ctx.void_type();
-
-    add_intrinsic(module, LLVM_TRAP, void_type.fn_type(&[], false));
 
     add_intrinsic(
         module,
@@ -108,9 +103,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     );
 }
 
-// Intrinsics
-
-static LLVM_TRAP: &str = "llvm.trap";
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
 static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
 static LLVM_FABS_F64: &str = "llvm.fabs.f64";
@@ -1293,36 +1285,6 @@ fn call_with_args<'a, 'ctx, 'env>(
         .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
 }
 
-fn call_void_intrinsic<'a, 'ctx, 'env>(
-    intrinsic_name: &'static str,
-    env: &Env<'a, 'ctx, 'env>,
-    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
-) -> InstructionValue<'ctx> {
-    let fn_val = env
-        .module
-        .get_function(intrinsic_name)
-        .unwrap_or_else(|| panic!("Unrecognized void intrinsic function: {}", intrinsic_name));
-
-    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
-
-    for (arg, _layout) in args.iter() {
-        arg_vals.push(*arg);
-    }
-
-    let call = env
-        .builder
-        .build_call(fn_val, arg_vals.into_bump_slice(), "call");
-
-    call.set_call_convention(fn_val.get_call_conventions());
-
-    call.try_as_basic_value().right().unwrap_or_else(|| {
-        panic!(
-            "LLVM error: Intrinsic {} was called with call_void_intrinsic, but it did not return void. (Use call_intrinsic instead.)",
-            intrinsic_name
-        )
-    })
-}
-
 fn call_intrinsic<'a, 'ctx, 'env>(
     intrinsic_name: &'static str,
     env: &Env<'a, 'ctx, 'env>,
@@ -1347,7 +1309,7 @@ fn call_intrinsic<'a, 'ctx, 'env>(
 
     call.try_as_basic_value().left().unwrap_or_else(|| {
         panic!(
-            "LLVM error: Intrinsic {} was called with call_intrinsic, but it returned void. (Use call_void_intrinsic instead.)",
+            "LLVM error: Invalid call by name for intrinsic {}",
             intrinsic_name
         )
     })
@@ -2012,17 +1974,6 @@ fn run_low_level<'a, 'ctx, 'env>(
 
                     builder.build_load(elem_ptr, "List.get")
                 }
-                Layout::Builtin(Builtin::EmptyList) => {
-                    // This can happen in scenarios like the following:
-                    //
-                    //     when List.first [] is
-                    //         Ok val -> val
-                    //         Err _ -> -1
-                    //
-                    //  Here, we still have to code gen the Ok branch even
-                    //  though it will never be executed in practice at runtime.
-                    build_trap(env);
-                }
                 _ => {
                     unreachable!(
                         "Invalid List layout for ListGetUnsafe operation: {:?}",
@@ -2202,10 +2153,6 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }
     }
-}
-
-fn build_trap<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> InstructionValue<'ctx> {
-    call_void_intrinsic(LLVM_TRAP, env, &[])
 }
 
 fn build_float_unary_op<'a, 'ctx, 'env>(
