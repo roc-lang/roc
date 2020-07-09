@@ -2055,4 +2055,121 @@ mod test_fmt {
             "#
         ));
     }
+
+    /// Annotations and aliases
+
+    #[test]
+    fn list_alias() {
+        expr_formats_same(indoc!(
+            r#"
+            ConsList a : [ Cons a (ConsList a), Nil ]
+
+            f : ConsList a -> ConsList a
+            f = \_ -> Nil
+
+            f
+            "#
+        ));
+    }
+
+    #[test]
+    fn wildcard() {
+        expr_formats_same(indoc!(
+            r#"
+            f : List *
+            f = []
+
+            a
+            "#
+        ));
+    }
+
+    #[test]
+    fn identity() {
+        expr_formats_same(indoc!(
+            r#"
+            f : a -> a
+            f = []
+
+            a
+            "#
+        ));
+    }
+
+    #[test]
+    fn tag_union() {
+        expr_formats_same(indoc!(
+            r#"
+            f : [ True, False ] -> [ True, False ]
+            f = \x -> x
+
+            a
+            "#
+        ));
+    }
+
+    #[test]
+    fn recursive_tag_union() {
+        expr_formats_same(indoc!(
+            r#"
+            f : [ Cons a (ConsList a), Nil ] as ConsList a -> [ Just a, Nothing ]
+            f = \list ->
+                when list is
+                    Nil ->
+                        Nothing
+
+                    Cons first _ ->
+                        Just first
+
+            f
+            "#
+        ));
+    }
+
+    #[test]
+    fn record_type() {
+        expr_formats_same(indoc!(
+            r#"
+            f : { foo : Int }
+            f = { foo: 1000 }
+
+            a
+            "#
+        ));
+    }
+
+    #[test]
+    fn applied_tags() {
+        expr_formats_same(indoc!(
+            r#"
+            x = Foo 1 2
+
+            # well, that's wrong
+            y = 
+            Foo
+                1
+                2
+
+            { x, y }
+            "#
+        ));
+    }
+
+    // this is a parse error atm
+    //    #[test]
+    //    fn multiline_apply() {
+    //        expr_formats_same(indoc!(
+    //            r#"
+    //            f :
+    //                Result a
+    //                    { x : Int
+    //                    , y : Float
+    //                    }
+    //                    c
+    //                -> Int
+    //            f =
+    //                \_ -> 4
+    //            "#
+    //        ));
+    //    }
 }

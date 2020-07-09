@@ -124,14 +124,31 @@ pub fn fmt_expr<'a>(
             // with .push() for efficiency. (The order of parsed defs doesn't
             // matter because canonicalization sorts them anyway.)
             // The other defs in the list are in their usual order.
-            if let Some(loc_first_def) = defs.last() {
-                let other_spaced_defs = &defs[0..defs.len() - 1];
+            //
+            // But, the first element of `defs` could be the annotation belonging to the final
+            // element, so format the annotation first.
+            let it = defs.iter().peekable();
 
+            /*
+            // so if it exists, format the annotation
+            if let Some(Located {
+                value: Def::Annotation(_, _),
+                ..
+            }) = it.peek()
+            {
+                let def = it.next().unwrap();
+                fmt_def(buf, &def.value, indent);
+            }
+
+            // then (using iter_back to get the last value of the `defs` vec) format the first body
+            if let Some(loc_first_def) = it.next_back() {
                 fmt_def(buf, &loc_first_def.value, indent);
+            }
+            */
 
-                for loc_def in other_spaced_defs.iter() {
-                    fmt_def(buf, &loc_def.value, indent);
-                }
+            // then format the other defs in order
+            for loc_def in it {
+                fmt_def(buf, &loc_def.value, indent);
             }
 
             let empty_line_before_return = empty_line_before_expr(&ret.value);
