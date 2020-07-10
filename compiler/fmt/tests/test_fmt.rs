@@ -11,8 +11,8 @@ extern crate roc_parse;
 mod test_fmt {
     use bumpalo::collections::String;
     use bumpalo::Bump;
+    use roc_fmt::annotation::{Formattable, Newlines, Parens};
     use roc_fmt::def::fmt_def;
-    use roc_fmt::expr::fmt_expr;
     use roc_fmt::module::fmt_module;
     use roc_parse::ast::{Attempting, Expr};
     use roc_parse::blankspace::space0_before;
@@ -38,7 +38,7 @@ mod test_fmt {
             Ok(actual) => {
                 let mut buf = String::new_in(&arena);
 
-                fmt_expr(&mut buf, &actual, 0, false, true);
+                actual.format_with_options(&mut buf, Parens::NotNeeded, Newlines::Yes, 0);
 
                 assert_eq!(buf, expected)
             }
@@ -2187,18 +2187,15 @@ mod test_fmt {
     }
 
     #[test]
-    fn applied_tags() {
+    fn body_starts_with_spaces_multiline() {
         expr_formats_same(indoc!(
             r#"
-            x = Foo 1 2
+            y =
+                Foo
+                    1
+                    2
 
-            # well, that's wrong
-            y = 
-            Foo
-                1
-                2
-
-            { x, y }
+            y
             "#
         ));
     }

@@ -3,7 +3,7 @@ use bumpalo::collections::String;
 use roc_parse::ast::{AssignedField, Expr, Tag, TypeAnnotation};
 use roc_region::all::Located;
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Parens {
     NotNeeded,
     InFunctionType,

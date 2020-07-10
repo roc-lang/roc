@@ -1,5 +1,4 @@
-use crate::annotation::{fmt_annotation, Formattable, Newlines, Parens};
-use crate::expr::fmt_expr;
+use crate::annotation::{Formattable, Newlines, Parens};
 use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_spaces, is_comment, newline, INDENT};
 use bumpalo::collections::String;
@@ -88,21 +87,24 @@ pub fn fmt_body<'a>(
     body: &'a Expr<'a>,
     indent: u16,
 ) {
-    fmt_pattern(buf, pattern, indent, Parens::InApply);
+    pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
     buf.push_str(" =");
     if body.is_multiline() {
         match body {
+            Expr::SpaceBefore(_, _) => {
+                body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
+            }
             Expr::Record { .. } | Expr::List(_) => {
                 newline(buf, indent + INDENT);
-                fmt_expr(buf, body, indent + INDENT, false, true);
+                body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
             }
             _ => {
                 buf.push(' ');
-                fmt_expr(buf, body, indent, false, true);
+                body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
             }
         }
     } else {
         buf.push(' ');
-        fmt_expr(buf, body, indent, false, true);
+        body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
     }
 }
