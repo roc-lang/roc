@@ -291,7 +291,8 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
 
             match symbol {
                 Symbol::NUM_NUM => {
-                    debug_assert!(args.len() == 1);
+                    debug_assert_eq!(args.len(), 1);
+
                     let (_, arg_var) = args
                         .get(0)
                         .expect("Num was not applied to a type argument!");
@@ -569,7 +570,8 @@ pub fn chase_ext_tag_union(
             chase_ext_tag_union(subs, ext_var, fields)
         }
         Content::Structure(Apply(Symbol::ATTR_ATTR, arguments)) => {
-            debug_assert!(arguments.len() == 2);
+            debug_assert_eq!(arguments.len(), 2);
+
             chase_ext_tag_union(subs, arguments[1], fields)
         }
         Content::Alias(_, _, var) => chase_ext_tag_union(subs, var, fields),
@@ -596,7 +598,8 @@ pub fn chase_ext_record(
         Structure(EmptyRecord) => Ok(()),
 
         Content::Structure(Apply(Symbol::ATTR_ATTR, arguments)) => {
-            debug_assert!(arguments.len() == 2);
+            debug_assert_eq!(arguments.len(), 2);
+
             chase_ext_record(subs, arguments[1], fields)
         }
 
