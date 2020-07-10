@@ -1,4 +1,4 @@
-use crate::annotation::fmt_annotation;
+use crate::annotation::{fmt_annotation, Parens};
 use crate::expr::{fmt_expr, is_multiline_expr};
 use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_spaces, newline, INDENT};
@@ -20,7 +20,7 @@ pub fn fmt_def<'a>(buf: &mut String<'a>, def: &'a Def<'a>, indent: u16) {
             } else {
                 for var in *vars {
                     buf.push(' ');
-                    fmt_pattern(buf, &var.value, indent, false, false);
+                    fmt_pattern(buf, &var.value, indent, Parens::NotNeeded, false);
                 }
             }
 
@@ -53,7 +53,7 @@ pub fn fmt_body<'a>(
     body: &'a Expr<'a>,
     indent: u16,
 ) {
-    fmt_pattern(buf, pattern, indent, true, false);
+    fmt_pattern(buf, pattern, indent, Parens::InApply, false);
     buf.push_str(" =");
     if is_multiline_expr(body) {
         match body {
@@ -78,7 +78,7 @@ pub fn fmt_type_annotation<'a>(
     annotation: &'a TypeAnnotation<'a>,
     indent: u16,
 ) {
-    fmt_pattern(buf, pattern, indent, true, false);
+    fmt_pattern(buf, pattern, indent, Parens::NotNeeded, false);
     buf.push_str(" : ");
     fmt_annotation(buf, annotation, indent);
 }

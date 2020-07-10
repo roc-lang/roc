@@ -1,3 +1,4 @@
+use crate::annotation::Parens;
 use crate::def::fmt_def;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{
@@ -604,7 +605,13 @@ fn fmt_when<'a>(
             Some(last_pattern) => first_pattern.region.start_line != last_pattern.region.end_line,
         };
 
-        fmt_pattern(buf, &first_pattern.value, indent + INDENT, false, true);
+        fmt_pattern(
+            buf,
+            &first_pattern.value,
+            indent + INDENT,
+            Parens::NotNeeded,
+            true,
+        );
         for when_pattern in rest {
             if is_multiline {
                 buf.push_str("\n");
@@ -613,7 +620,13 @@ fn fmt_when<'a>(
             } else {
                 buf.push_str(" | ");
             }
-            fmt_pattern(buf, &when_pattern.value, indent + INDENT, false, true);
+            fmt_pattern(
+                buf,
+                &when_pattern.value,
+                indent + INDENT,
+                Parens::NotNeeded,
+                true,
+            );
         }
 
         if let Some(guard_expr) = &branch.guard {
@@ -782,7 +795,7 @@ pub fn fmt_closure<'a>(
             any_args_printed = true;
         }
 
-        fmt_pattern(buf, &loc_pattern.value, indent, false, false);
+        fmt_pattern(buf, &loc_pattern.value, indent, Parens::NotNeeded, false);
     }
 
     if !arguments_are_multiline {

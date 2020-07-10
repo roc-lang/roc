@@ -7,7 +7,7 @@ use roc_region::all::Located;
 pub enum Parens {
     NotNeeded,
     InFunctionType,
-    InTypeParam,
+    InApply,
 }
 
 pub fn fmt_annotation<'a>(buf: &mut String<'a>, annotation: &'a TypeAnnotation<'a>, indent: u16) {
@@ -98,7 +98,7 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
             }
             Apply(_, name, arguments) => {
                 // NOTE apply is never multiline
-                let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
+                let write_parens = parens == Parens::InApply && !arguments.is_empty();
 
                 if write_parens {
                     buf.push('(')
@@ -108,7 +108,7 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
 
                 for argument in *arguments {
                     buf.push(' ');
-                    (&argument.value).format_with_parens(buf, Parens::InTypeParam, indent);
+                    (&argument.value).format_with_parens(buf, Parens::InApply, indent);
                 }
 
                 if write_parens {
@@ -209,12 +209,12 @@ impl<'a> Formattable<'a> for Tag<'a> {
 
                     for arg in *args {
                         newline(buf, arg_indent);
-                        (&arg.value).format_with_parens(buf, Parens::InTypeParam, arg_indent);
+                        (&arg.value).format_with_parens(buf, Parens::InApply, arg_indent);
                     }
                 } else {
                     for arg in *args {
                         buf.push(' ');
-                        (&arg.value).format_with_parens(buf, Parens::InTypeParam, indent);
+                        (&arg.value).format_with_parens(buf, Parens::InApply, indent);
                     }
                 }
             }
@@ -226,12 +226,12 @@ impl<'a> Formattable<'a> for Tag<'a> {
 
                     for arg in *args {
                         newline(buf, arg_indent);
-                        (&arg.value).format_with_parens(buf, Parens::InTypeParam, arg_indent);
+                        (&arg.value).format_with_parens(buf, Parens::InApply, arg_indent);
                     }
                 } else {
                     for arg in *args {
                         buf.push(' ');
-                        (&arg.value).format_with_parens(buf, Parens::InTypeParam, indent);
+                        (&arg.value).format_with_parens(buf, Parens::InApply, indent);
                     }
                 }
             }

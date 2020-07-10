@@ -2139,6 +2139,28 @@ mod test_fmt {
     }
 
     #[test]
+    fn record_pattern_with_apply_guard() {
+        expr_formats_same(indoc!(
+            r#"
+            when { x: 1 } is
+                { x: Just 4 } ->
+                    4
+            "#
+        ));
+    }
+
+    #[test]
+    fn record_pattern_with_record_guard() {
+        expr_formats_same(indoc!(
+            r#"
+            when { x: 1 } is
+                { x: { x: True } } ->
+                    4
+            "#
+        ));
+    }
+
+    #[test]
     fn applied_tags() {
         expr_formats_same(indoc!(
             r#"
