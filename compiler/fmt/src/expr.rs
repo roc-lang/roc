@@ -1,4 +1,4 @@
-use crate::annotation::{Formattable, Parens};
+use crate::annotation::{Formattable, Newlines, Parens};
 use crate::def::fmt_def;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{
@@ -9,6 +9,292 @@ use roc_module::operator::{self, BinOp};
 use roc_parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern, WhenBranch};
 use roc_region::all::Located;
 
+impl<'a> Formattable<'a> for Expr<'a> {
+    fn is_multiline(&self) -> bool {
+        use roc_parse::ast::Expr::*;
+        // TODO cache these answers using a Map<Pointer, bool>, so
+        // we don't have to traverse subexpressions repeatedly
+
+        match self {
+            // Return whether these spaces contain any Newlines
+            SpaceBefore(_sub_expr, spaces) | SpaceAfter(_sub_expr, spaces) => {
+                debug_assert!(!spaces.is_empty());
+
+                // "spaces" always contain either a newline or comment, and comments have newlines
+                true
+            }
+
+            // These expressions never have newlines
+            Float(_)
+            | Num(_)
+            | NonBase10Int { .. }
+            | Str(_)
+            | Access(_, _)
+            | AccessorFunction(_)
+            | Var { .. }
+            | MalformedIdent(_)
+            | MalformedClosure
+            | GlobalTag(_)
+            | PrivateTag(_) => false,
+
+            // These expressions always have newlines
+            Defs(_, _) | When(_, _) => true,
+
+            List(elems) => elems.iter().any(|loc_expr| loc_expr.is_multiline()),
+
+            BlockStr(lines) => lines.len() > 1,
+            Apply(loc_expr, args, _) => {
+                loc_expr.is_multiline() || args.iter().any(|loc_arg| loc_arg.is_multiline())
+            }
+
+            If(loc_cond, loc_if_true, loc_if_false) => {
+                loc_cond.is_multiline() || loc_if_true.is_multiline() || loc_if_false.is_multiline()
+            }
+
+            BinOp((loc_left, _, loc_right)) => {
+                let next_is_multiline_bin_op: bool = match &loc_right.value {
+                    Expr::BinOp((_, _, nested_loc_right)) => nested_loc_right.is_multiline(),
+                    _ => false,
+                };
+
+                next_is_multiline_bin_op || loc_left.is_multiline() || loc_right.is_multiline()
+            }
+
+            UnaryOp(loc_subexpr, _) | PrecedenceConflict(_, _, _, loc_subexpr) => {
+                loc_subexpr.is_multiline()
+            }
+
+            ParensAround(subexpr) | Nested(subexpr) => subexpr.is_multiline(),
+
+            Closure(loc_patterns, loc_body) => {
+                // check the body first because it's more likely to be multiline
+                loc_body.is_multiline()
+                    || loc_patterns
+                        .iter()
+                        .any(|loc_pattern| loc_pattern.is_multiline())
+            }
+
+            Record { fields, .. } => fields
+                .iter()
+                .any(|loc_field| is_multiline_field(&loc_field.value)),
+        }
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut String<'a>,
+        parens: Parens,
+        newlines: Newlines,
+        indent: u16,
+    ) {
+        use self::Expr::*;
+
+        let format_newlines = newlines == Newlines::Yes;
+        let apply_needs_parens = parens == Parens::InApply;
+
+        match self {
+            SpaceBefore(sub_expr, spaces) => {
+                if format_newlines {
+                    fmt_spaces(buf, spaces.iter(), indent);
+                } else {
+                    fmt_comments_only(buf, spaces.iter(), indent);
+                }
+                fmt_expr(buf, sub_expr, indent, apply_needs_parens, format_newlines);
+            }
+            SpaceAfter(sub_expr, spaces) => {
+                fmt_expr(buf, sub_expr, indent, apply_needs_parens, format_newlines);
+                if format_newlines {
+                    fmt_spaces(buf, spaces.iter(), indent);
+                } else {
+                    fmt_comments_only(buf, spaces.iter(), indent);
+                }
+            }
+            ParensAround(sub_expr) => {
+                buf.push('(');
+                fmt_expr(buf, sub_expr, indent, false, true);
+                buf.push(')');
+            }
+            Str(string) => {
+                buf.push('"');
+                buf.push_str(string);
+                buf.push('"');
+            }
+            Var { module_name, ident } => {
+                if !module_name.is_empty() {
+                    buf.push_str(module_name);
+                    buf.push('.');
+                }
+
+                buf.push_str(ident);
+            }
+            Apply(loc_expr, loc_args, _) => {
+                if apply_needs_parens {
+                    buf.push('(');
+                }
+
+                fmt_expr(buf, &loc_expr.value, indent, true, true);
+
+                let multiline_args = loc_args
+                    .iter()
+                    .any(|loc_arg| is_multiline_expr(&loc_arg.value));
+
+                if multiline_args {
+                    let arg_indent = indent + INDENT;
+
+                    for loc_arg in loc_args {
+                        newline(buf, arg_indent);
+                        fmt_expr(buf, &loc_arg.value, arg_indent, true, false);
+                    }
+                } else {
+                    for loc_arg in loc_args {
+                        buf.push(' ');
+                        fmt_expr(buf, &loc_arg.value, indent, true, true);
+                    }
+                }
+
+                if apply_needs_parens {
+                    buf.push(')');
+                }
+            }
+            BlockStr(lines) => {
+                buf.push_str("\"\"\"");
+                for line in lines.iter() {
+                    buf.push_str(line);
+                }
+                buf.push_str("\"\"\"");
+            }
+            Num(string) | Float(string) | GlobalTag(string) | PrivateTag(string) => {
+                buf.push_str(string)
+            }
+            NonBase10Int {
+                base,
+                string,
+                is_negative,
+            } => {
+                if *is_negative {
+                    buf.push('-');
+                }
+
+                match base {
+                    Base::Hex => buf.push_str("0x"),
+                    Base::Octal => buf.push_str("0o"),
+                    Base::Binary => buf.push_str("0b"),
+                    Base::Decimal => { /* nothing */ }
+                }
+
+                buf.push_str(string);
+            }
+            Record { fields, update } => {
+                fmt_record(buf, *update, fields, indent, parens);
+            }
+            Closure(loc_patterns, loc_ret) => {
+                fmt_closure(buf, loc_patterns, loc_ret, indent);
+            }
+            Defs(defs, ret) => {
+                // It should theoretically be impossible to *parse* an empty defs list.
+                // (Canonicalization can remove defs later, but that hasn't happened yet!)
+                debug_assert!(!defs.is_empty());
+
+                // The first def is located last in the list, because it gets added there
+                // with .push() for efficiency. (The order of parsed defs doesn't
+                // matter because canonicalization sorts them anyway.)
+                // The other defs in the list are in their usual order.
+                //
+                // But, the first element of `defs` could be the annotation belonging to the final
+                // element, so format the annotation first.
+                let it = defs.iter().peekable();
+
+                /*
+                // so if it exists, format the annotation
+                if let Some(Located {
+                    value: Def::Annotation(_, _),
+                    ..
+                }) = it.peek()
+                {
+                    let def = it.next().unwrap();
+                    fmt_def(buf, &def.value, indent);
+                }
+
+                // then (using iter_back to get the last value of the `defs` vec) format the first body
+                if let Some(loc_first_def) = it.next_back() {
+                    fmt_def(buf, &loc_first_def.value, indent);
+                }
+                */
+
+                // then format the other defs in order
+                for loc_def in it {
+                    fmt_def(buf, &loc_def.value, indent);
+                }
+
+                let empty_line_before_return = empty_line_before_expr(&ret.value);
+
+                if !empty_line_before_return {
+                    buf.push('\n');
+                }
+
+                // Even if there were no defs, which theoretically should never happen,
+                // still print the return value.
+                fmt_expr(buf, &ret.value, indent, false, true);
+            }
+            If(loc_condition, loc_then, loc_else) => {
+                fmt_if(buf, loc_condition, loc_then, loc_else, indent);
+            }
+            When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
+            List(loc_items) => {
+                fmt_list(buf, &loc_items, indent);
+            }
+            BinOp((loc_left_side, bin_op, loc_right_side)) => fmt_bin_op(
+                buf,
+                loc_left_side,
+                bin_op,
+                loc_right_side,
+                false,
+                apply_needs_parens,
+                indent,
+            ),
+            UnaryOp(sub_expr, unary_op) => {
+                match &unary_op.value {
+                    operator::UnaryOp::Negate => {
+                        buf.push('-');
+                    }
+                    operator::UnaryOp::Not => {
+                        buf.push('!');
+                    }
+                }
+
+                fmt_expr(
+                    buf,
+                    &sub_expr.value,
+                    indent,
+                    apply_needs_parens,
+                    format_newlines,
+                );
+            }
+            Nested(nested_expr) => {
+                fmt_expr(
+                    buf,
+                    nested_expr,
+                    indent,
+                    apply_needs_parens,
+                    format_newlines,
+                );
+            }
+            AccessorFunction(key) => {
+                buf.push('.');
+                buf.push_str(key);
+            }
+            Access(expr, key) => {
+                fmt_expr(buf, expr, indent, apply_needs_parens, true);
+                buf.push('.');
+                buf.push_str(key);
+            }
+            MalformedIdent(_) => {}
+            MalformedClosure => {}
+            PrecedenceConflict(_, _, _, _) => {}
+        }
+    }
+}
+
 pub fn fmt_expr<'a>(
     buf: &mut String<'a>,
     expr: &'a Expr<'a>,
@@ -16,208 +302,19 @@ pub fn fmt_expr<'a>(
     apply_needs_parens: bool,
     format_newlines: bool,
 ) {
-    use self::Expr::*;
+    let parens = if apply_needs_parens {
+        Parens::InApply
+    } else {
+        Parens::NotNeeded
+    };
 
-    match expr {
-        SpaceBefore(sub_expr, spaces) => {
-            if format_newlines {
-                fmt_spaces(buf, spaces.iter(), indent);
-            } else {
-                fmt_comments_only(buf, spaces.iter(), indent);
-            }
-            fmt_expr(buf, sub_expr, indent, apply_needs_parens, format_newlines);
-        }
-        SpaceAfter(sub_expr, spaces) => {
-            fmt_expr(buf, sub_expr, indent, apply_needs_parens, format_newlines);
-            if format_newlines {
-                fmt_spaces(buf, spaces.iter(), indent);
-            } else {
-                fmt_comments_only(buf, spaces.iter(), indent);
-            }
-        }
-        ParensAround(sub_expr) => {
-            buf.push('(');
-            fmt_expr(buf, sub_expr, indent, false, true);
-            buf.push(')');
-        }
-        Str(string) => {
-            buf.push('"');
-            buf.push_str(string);
-            buf.push('"');
-        }
-        Var { module_name, ident } => {
-            if !module_name.is_empty() {
-                buf.push_str(module_name);
-                buf.push('.');
-            }
+    let newlines = if format_newlines {
+        Newlines::Yes
+    } else {
+        Newlines::No
+    };
 
-            buf.push_str(ident);
-        }
-        Apply(loc_expr, loc_args, _) => {
-            if apply_needs_parens {
-                buf.push('(');
-            }
-
-            fmt_expr(buf, &loc_expr.value, indent, true, true);
-
-            let multiline_args = loc_args
-                .iter()
-                .any(|loc_arg| is_multiline_expr(&loc_arg.value));
-
-            if multiline_args {
-                let arg_indent = indent + INDENT;
-
-                for loc_arg in loc_args {
-                    newline(buf, arg_indent);
-                    fmt_expr(buf, &loc_arg.value, arg_indent, true, false);
-                }
-            } else {
-                for loc_arg in loc_args {
-                    buf.push(' ');
-                    fmt_expr(buf, &loc_arg.value, indent, true, true);
-                }
-            }
-
-            if apply_needs_parens {
-                buf.push(')');
-            }
-        }
-        BlockStr(lines) => {
-            buf.push_str("\"\"\"");
-            for line in lines.iter() {
-                buf.push_str(line);
-            }
-            buf.push_str("\"\"\"");
-        }
-        Num(string) | Float(string) | GlobalTag(string) | PrivateTag(string) => {
-            buf.push_str(string)
-        }
-        NonBase10Int {
-            base,
-            string,
-            is_negative,
-        } => {
-            if *is_negative {
-                buf.push('-');
-            }
-
-            match base {
-                Base::Hex => buf.push_str("0x"),
-                Base::Octal => buf.push_str("0o"),
-                Base::Binary => buf.push_str("0b"),
-                Base::Decimal => { /* nothing */ }
-            }
-
-            buf.push_str(string);
-        }
-        Record { fields, update } => {
-            fmt_record(buf, *update, fields, indent, apply_needs_parens);
-        }
-        Closure(loc_patterns, loc_ret) => {
-            fmt_closure(buf, loc_patterns, loc_ret, indent);
-        }
-        Defs(defs, ret) => {
-            // It should theoretically be impossible to *parse* an empty defs list.
-            // (Canonicalization can remove defs later, but that hasn't happened yet!)
-            debug_assert!(!defs.is_empty());
-
-            // The first def is located last in the list, because it gets added there
-            // with .push() for efficiency. (The order of parsed defs doesn't
-            // matter because canonicalization sorts them anyway.)
-            // The other defs in the list are in their usual order.
-            //
-            // But, the first element of `defs` could be the annotation belonging to the final
-            // element, so format the annotation first.
-            let it = defs.iter().peekable();
-
-            /*
-            // so if it exists, format the annotation
-            if let Some(Located {
-                value: Def::Annotation(_, _),
-                ..
-            }) = it.peek()
-            {
-                let def = it.next().unwrap();
-                fmt_def(buf, &def.value, indent);
-            }
-
-            // then (using iter_back to get the last value of the `defs` vec) format the first body
-            if let Some(loc_first_def) = it.next_back() {
-                fmt_def(buf, &loc_first_def.value, indent);
-            }
-            */
-
-            // then format the other defs in order
-            for loc_def in it {
-                fmt_def(buf, &loc_def.value, indent);
-            }
-
-            let empty_line_before_return = empty_line_before_expr(&ret.value);
-
-            if !empty_line_before_return {
-                buf.push('\n');
-            }
-
-            // Even if there were no defs, which theoretically should never happen,
-            // still print the return value.
-            fmt_expr(buf, &ret.value, indent, false, true);
-        }
-        If(loc_condition, loc_then, loc_else) => {
-            fmt_if(buf, loc_condition, loc_then, loc_else, indent);
-        }
-        When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
-        List(loc_items) => {
-            fmt_list(buf, &loc_items, indent);
-        }
-        BinOp((loc_left_side, bin_op, loc_right_side)) => fmt_bin_op(
-            buf,
-            loc_left_side,
-            bin_op,
-            loc_right_side,
-            false,
-            apply_needs_parens,
-            indent,
-        ),
-        UnaryOp(sub_expr, unary_op) => {
-            match &unary_op.value {
-                operator::UnaryOp::Negate => {
-                    buf.push('-');
-                }
-                operator::UnaryOp::Not => {
-                    buf.push('!');
-                }
-            }
-
-            fmt_expr(
-                buf,
-                &sub_expr.value,
-                indent,
-                apply_needs_parens,
-                format_newlines,
-            );
-        }
-        Nested(nested_expr) => {
-            fmt_expr(
-                buf,
-                nested_expr,
-                indent,
-                apply_needs_parens,
-                format_newlines,
-            );
-        }
-        AccessorFunction(key) => {
-            buf.push('.');
-            buf.push_str(key);
-        }
-        Access(expr, key) => {
-            fmt_expr(buf, expr, indent, apply_needs_parens, true);
-            buf.push('.');
-            buf.push_str(key);
-        }
-        MalformedIdent(_) => {}
-        MalformedClosure => {}
-        PrecedenceConflict(_, _, _, _) => {}
-    }
+    expr.format_with_options(buf, parens, newlines, indent)
 }
 
 fn fmt_bin_op<'a>(
@@ -282,11 +379,7 @@ fn fmt_bin_op<'a>(
     }
 }
 
-pub fn fmt_list<'a>(
-    buf: &mut String<'a>,
-    loc_items: &'a Vec<'a, &'a Located<Expr<'a>>>,
-    indent: u16,
-) {
+pub fn fmt_list<'a>(buf: &mut String<'a>, loc_items: &[&Located<Expr<'a>>], indent: u16) {
     buf.push('[');
 
     let mut iter = loc_items.iter().peekable();
@@ -339,7 +432,7 @@ pub fn fmt_list<'a>(
 
                 _ => {
                     newline(buf, item_indent);
-                    fmt_expr(buf, &item.value, item_indent, false, true);
+                    item.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, item_indent);
                     if iter.peek().is_some() {
                         buf.push(',');
                     }
@@ -347,7 +440,7 @@ pub fn fmt_list<'a>(
             }
         } else {
             buf.push(' ');
-            fmt_expr(buf, &item.value, item_indent, false, true);
+            item.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, item_indent);
             if iter.peek().is_some() {
                 buf.push(',');
             }
@@ -532,7 +625,7 @@ pub fn is_multiline_field<'a, Val>(field: &'a AssignedField<'a, Val>) -> bool {
 fn fmt_when<'a>(
     buf: &mut String<'a>,
     loc_condition: &'a Located<Expr<'a>>,
-    branches: &'a Vec<'a, &'a WhenBranch<'a>>,
+    branches: &[&'a WhenBranch<'a>],
     indent: u16,
 ) {
     let is_multiline_condition = is_multiline_expr(&loc_condition.value);
@@ -804,9 +897,9 @@ pub fn fmt_closure<'a>(
 pub fn fmt_record<'a>(
     buf: &mut String<'a>,
     update: Option<&'a Located<Expr<'a>>>,
-    loc_fields: &'a Vec<'a, Located<AssignedField<'a, Expr<'a>>>>,
+    loc_fields: &[Located<AssignedField<'a, Expr<'a>>>],
     indent: u16,
-    apply_needs_parens: bool,
+    apply_needs_parens: Parens,
 ) {
     buf.push('{');
 
@@ -818,7 +911,7 @@ pub fn fmt_record<'a>(
         // doesnt make sense.
         Some(record_var) => {
             buf.push(' ');
-            fmt_expr(buf, &record_var.value, indent, false, false);
+            record_var.format(buf, indent);
             buf.push_str(" &");
         }
     }
@@ -838,14 +931,14 @@ pub fn fmt_record<'a>(
         indent
     };
 
+    let newlines = if is_multiline {
+        Newlines::Yes
+    } else {
+        Newlines::No
+    };
+
     while let Some(field) = iter.next() {
-        fmt_field(
-            buf,
-            &field.value,
-            is_multiline,
-            field_indent,
-            apply_needs_parens,
-        );
+        field.format_with_options(buf, Parens::NotNeeded, newlines, field_indent);
 
         if iter.peek().is_some() {
             buf.push(',');

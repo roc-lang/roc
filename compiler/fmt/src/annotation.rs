@@ -1,4 +1,4 @@
-use crate::spaces::{fmt_comments_only, fmt_condition_spaces, newline, INDENT};
+use crate::spaces::{fmt_comments_only, fmt_condition_spaces, fmt_spaces, newline, INDENT};
 use bumpalo::collections::String;
 use roc_parse::ast::{AssignedField, Expr, Tag, TypeAnnotation};
 use roc_region::all::Located;
@@ -10,7 +10,7 @@ pub enum Parens {
     InApply,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Newlines {
     Yes,
     No,
@@ -224,10 +224,10 @@ impl<'a> Formattable<'a> for AssignedField<'a, TypeAnnotation<'a>> {
         &self,
         buf: &mut String<'a>,
         parens: Parens,
-        _newlines: Newlines,
+        newlines: Newlines,
         indent: u16,
     ) {
-        format_assigned_field_help(self, buf, parens, indent, " : ");
+        format_assigned_field_help(self, buf, parens, indent, " : ", newlines == Newlines::Yes);
     }
 }
 
@@ -247,19 +247,20 @@ impl<'a> Formattable<'a> for AssignedField<'a, Expr<'a>> {
         &self,
         buf: &mut String<'a>,
         parens: Parens,
-        _newlines: Newlines,
+        newlines: Newlines,
         indent: u16,
     ) {
-        format_assigned_field_help(self, buf, parens, indent, ": ");
+        format_assigned_field_help(self, buf, parens, indent, ": ", newlines == Newlines::Yes);
     }
 }
 
 fn format_assigned_field_help<'a, T>(
     zelf: &AssignedField<'a, T>,
     buf: &mut String<'a>,
-    _parens: Parens,
+    parens: Parens,
     indent: u16,
     separator: &str,
+    is_multiline: bool,
 ) where
     T: Formattable<'a>,
 {
@@ -268,16 +269,35 @@ fn format_assigned_field_help<'a, T>(
     use self::AssignedField::*;
 
     match zelf {
-        LabeledValue(name, _spaces, ann) => {
-            // TODO use spaces?
+        LabeledValue(name, spaces, ann) => {
+            if is_multiline {
+                newline(buf, indent);
+            }
+
             buf.push_str(name.value);
+
+            if !spaces.is_empty() {
+                fmt_spaces(buf, spaces.iter(), indent);
+            }
+
             buf.push_str(separator);
             ann.value.format(buf, indent);
         }
         LabelOnly(name) => {
+            if is_multiline {
+                newline(buf, indent);
+            }
+
             buf.push_str(name.value);
         }
-        AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => unreachable!(),
+        AssignedField::SpaceBefore(sub_field, spaces) => {
+            fmt_comments_only(buf, spaces.iter(), indent);
+            format_assigned_field_help(sub_field, buf, parens, indent, separator, is_multiline);
+        }
+        AssignedField::SpaceAfter(sub_field, spaces) => {
+            format_assigned_field_help(sub_field, buf, parens, indent, separator, is_multiline);
+            fmt_comments_only(buf, spaces.iter(), indent);
+        }
         Malformed(raw) => {
             buf.push_str(raw);
         }
