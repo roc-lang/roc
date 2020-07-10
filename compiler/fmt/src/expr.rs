@@ -1,4 +1,4 @@
-use crate::annotation::Parens;
+use crate::annotation::{Formattable, Parens};
 use crate::def::fmt_def;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{
@@ -438,30 +438,7 @@ pub fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
 }
 
 pub fn is_multiline_pattern<'a>(pattern: &'a Pattern<'a>) -> bool {
-    match pattern {
-        Pattern::SpaceBefore(_, spaces) | Pattern::SpaceAfter(_, spaces) => {
-            debug_assert!(!spaces.is_empty());
-
-            // "spaces" always contain either a newline or comment, and comments have newlines
-            true
-        }
-
-        Pattern::Nested(nested_pat) => is_multiline_pattern(nested_pat),
-        Pattern::Identifier(_)
-        | Pattern::GlobalTag(_)
-        | Pattern::PrivateTag(_)
-        | Pattern::Apply(_, _)
-        | Pattern::RecordDestructure(_)
-        | Pattern::RecordField(_, _)
-        | Pattern::NumLiteral(_)
-        | Pattern::NonBase10Literal { .. }
-        | Pattern::FloatLiteral(_)
-        | Pattern::StrLiteral(_)
-        | Pattern::BlockStrLiteral(_)
-        | Pattern::Underscore
-        | Pattern::Malformed(_)
-        | Pattern::QualifiedIdentifier { .. } => false,
-    }
+    pattern.is_multiline()
 }
 
 pub fn is_multiline_expr<'a>(expr: &'a Expr<'a>) -> bool {
@@ -782,23 +759,24 @@ pub fn fmt_closure<'a>(
         indent
     };
 
-    let mut any_args_printed = false;
+    let mut it = loc_patterns.iter().peekable();
 
-    for loc_pattern in loc_patterns.iter() {
-        if any_args_printed {
-            buf.push(',');
-
-            if !arguments_are_multiline {
-                buf.push(' ');
-            }
-        } else {
-            any_args_printed = true;
-        }
-
+    while let Some(loc_pattern) = it.next() {
         fmt_pattern(buf, &loc_pattern.value, indent, Parens::NotNeeded, false);
+
+        if it.peek().is_some() {
+            if arguments_are_multiline {
+                buf.push(',');
+                newline(buf, indent);
+            } else {
+                buf.push_str(", ");
+            }
+        }
     }
 
-    if !arguments_are_multiline {
+    if arguments_are_multiline {
+        newline(buf, indent);
+    } else {
         buf.push(' ');
     }
 
@@ -807,23 +785,27 @@ pub fn fmt_closure<'a>(
     let is_multiline = is_multiline_expr(&loc_ret.value);
 
     // If the body is multiline, go down a line and indent.
-    let indent = if is_multiline {
+    let body_indent = if is_multiline {
         indent + INDENT
     } else {
         indent
     };
 
-    let newline_is_next = match &loc_ret.value {
-        SpaceBefore(_, _) => true,
-        _ => false,
+    // the body of the Closure can be on the same line, or
+    // on a new line. If it's on the same line, insert a space.
+
+    match &loc_ret.value {
+        SpaceBefore(_, _) => {
+            // the body starts with (first comment and then) a newline
+            // do nothing
+        }
+        _ => {
+            // add a space after the `->`
+            buf.push(' ');
+        }
     };
 
-    if !newline_is_next {
-        // Push a space after the "->" preceding this.
-        buf.push(' ');
-    }
-
-    fmt_expr(buf, &loc_ret.value, indent, false, true);
+    fmt_expr(buf, &loc_ret.value, body_indent, false, true);
 }
 
 pub fn fmt_record<'a>(

@@ -14,7 +14,7 @@ pub fn fmt_annotation<'a>(buf: &mut String<'a>, annotation: &'a TypeAnnotation<'
     annotation.format_with_parens(buf, Parens::NotNeeded, indent);
 }
 
-trait Formattable<'a> {
+pub trait Formattable<'a> {
     fn is_multiline(&self) -> bool;
 
     fn format_with_parens(&self, buf: &mut String<'a>, _parens: Parens, indent: u16) {

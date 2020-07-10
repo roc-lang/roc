@@ -665,14 +665,40 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r#"
-            identity = \a,
-                b
-                -> a
+            identity = \a, b -> a
 
             identity 43
             "#
         ));
 
+        //        expr_formats_same(indoc!(
+        //            r#"
+        //            identity =
+        //                \{
+        //                    x,
+        //                    y
+        //                 }
+        //                -> a
+        //
+        //            identity 43
+        //            "#
+        //        ));
+        //
+        expr_formats_same(indoc!(
+            r#"
+            identity = \a,
+                b,
+                # it's c!!
+                c
+                -> a
+
+            identity 43
+            "#
+        ));
+    }
+
+    #[test]
+    fn closure_multiline_pattern() {
         expr_formats_same(indoc!(
             r#"
             identity = \a,
