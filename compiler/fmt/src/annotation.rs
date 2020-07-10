@@ -3,6 +3,21 @@ use bumpalo::collections::String;
 use roc_parse::ast::{AssignedField, Expr, Tag, TypeAnnotation};
 use roc_region::all::Located;
 
+/// Does an AST node need parens around it?
+///
+/// Usually not, but there are two cases where it may be required
+///
+/// 1. In a function type, function types are in parens
+///
+///      a -> b,  c -> d
+///     (a -> b), c -> d
+///
+/// 2. In applications, applications are in brackets
+///     This is true in patterns, type annotations and expressions
+///
+///     Just (Just a)
+///     List (List a)
+///     reverse (reverse l)
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Parens {
     NotNeeded,
@@ -10,6 +25,12 @@ pub enum Parens {
     InApply,
 }
 
+/// In an AST node, do we show newlines around it
+///
+/// Sometimes, we only want to show comments, at other times
+/// we also want to show newlines. By default the formatter
+/// takes care of inserting newlines, but sometimes the user's
+/// newlines are taken into account.
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Newlines {
     Yes,
@@ -208,16 +229,15 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
     }
 }
 
+/// Fields are subtly different on the type and term level:
+///
+///     type: { x : Int, y : Bool }
+///     term: { x: 100, y: True }
+///
+/// So we need two instances, each having the specific separator
 impl<'a> Formattable<'a> for AssignedField<'a, TypeAnnotation<'a>> {
     fn is_multiline(&self) -> bool {
-        use self::AssignedField::*;
-
-        match self {
-            LabeledValue(_, spaces, ann) => !spaces.is_empty() || ann.value.is_multiline(),
-            LabelOnly(_) => false,
-            AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => true,
-            Malformed(text) => text.chars().any(|c| c == '\n'),
-        }
+        is_multiline_assigned_field_help(self)
     }
 
     fn format_with_options(
@@ -227,20 +247,14 @@ impl<'a> Formattable<'a> for AssignedField<'a, TypeAnnotation<'a>> {
         newlines: Newlines,
         indent: u16,
     ) {
+        // we abuse the `Newlines` type to decide between multiline or single-line layout
         format_assigned_field_help(self, buf, parens, indent, " : ", newlines == Newlines::Yes);
     }
 }
 
 impl<'a> Formattable<'a> for AssignedField<'a, Expr<'a>> {
     fn is_multiline(&self) -> bool {
-        use self::AssignedField::*;
-
-        match self {
-            LabeledValue(_, spaces, ann) => !spaces.is_empty() || ann.value.is_multiline(),
-            LabelOnly(_) => false,
-            AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => true,
-            Malformed(text) => text.chars().any(|c| c == '\n'),
-        }
+        is_multiline_assigned_field_help(self)
     }
 
     fn format_with_options(
@@ -250,7 +264,19 @@ impl<'a> Formattable<'a> for AssignedField<'a, Expr<'a>> {
         newlines: Newlines,
         indent: u16,
     ) {
+        // we abuse the `Newlines` type to decide between multiline or single-line layout
         format_assigned_field_help(self, buf, parens, indent, ": ", newlines == Newlines::Yes);
+    }
+}
+
+fn is_multiline_assigned_field_help<'a, T: Formattable<'a>>(afield: &AssignedField<'a, T>) -> bool {
+    use self::AssignedField::*;
+
+    match afield {
+        LabeledValue(_, spaces, ann) => !spaces.is_empty() || ann.value.is_multiline(),
+        LabelOnly(_) => false,
+        AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => true,
+        Malformed(text) => text.chars().any(|c| c == '\n'),
     }
 }
 

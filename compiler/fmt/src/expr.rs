@@ -560,9 +560,9 @@ fn fmt_if<'a>(
     loc_else: &'a Located<Expr<'a>>,
     indent: u16,
 ) {
-    let is_multiline_then = (&loc_then.value).is_multiline();
-    let is_multiline_else = (&loc_else.value).is_multiline();
-    let is_multiline_condition = (&loc_condition.value).is_multiline();
+    let is_multiline_then = loc_then.is_multiline();
+    let is_multiline_else = loc_else.is_multiline();
+    let is_multiline_condition = loc_condition.is_multiline();
     let is_multiline = is_multiline_then || is_multiline_else || is_multiline_condition;
 
     let return_indent = if is_multiline {
@@ -616,17 +616,9 @@ fn fmt_if<'a>(
     if is_multiline {
         match &loc_then.value {
             Expr::SpaceBefore(expr_below, spaces_below) => {
-                let any_comments_below = spaces_below.iter().any(is_comment);
-
-                if !any_comments_below {
-                    newline(buf, return_indent);
-                }
-
-                fmt_condition_spaces(buf, spaces_below.iter(), return_indent);
-
-                if any_comments_below {
-                    newline(buf, return_indent);
-                }
+                // we want exactly one newline, user-inserted extra newlines are ignored.
+                newline(buf, return_indent);
+                fmt_comments_only(buf, spaces_below.iter(), return_indent);
 
                 match &expr_below {
                     Expr::SpaceAfter(expr_above, spaces_above) => {
@@ -764,6 +756,7 @@ pub fn fmt_record<'a>(
         indent
     };
 
+    // we abuse the `Newlines` type to decide between multiline or single-line layout
     let newlines = if is_multiline {
         Newlines::Yes
     } else {
