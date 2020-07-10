@@ -1,5 +1,4 @@
-use crate::annotation::{Formattable, Parens};
-use crate::expr::is_multiline_pattern;
+use crate::annotation::{Formattable, Newlines, Parens};
 use crate::spaces::{fmt_comments_only, fmt_spaces, is_comment};
 use bumpalo::collections::String;
 use roc_parse::ast::{Base, Pattern};
@@ -10,7 +9,7 @@ pub fn fmt_pattern<'a>(
     indent: u16,
     parens: Parens,
 ) {
-    pattern.format_with_parens(buf, parens, indent);
+    pattern.format_with_options(buf, parens, Newlines::No, indent);
 }
 
 impl<'a> Formattable<'a> for Pattern<'a> {
@@ -23,7 +22,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                 spaces.iter().any(|s| is_comment(s))
             }
 
-            Pattern::Nested(nested_pat) => is_multiline_pattern(nested_pat),
+            Pattern::Nested(nested_pat) => nested_pat.is_multiline(),
 
             Pattern::RecordDestructure(fields) => fields.iter().any(|f| f.is_multiline()),
             Pattern::RecordField(_, subpattern) => subpattern.is_multiline(),
@@ -43,7 +42,13 @@ impl<'a> Formattable<'a> for Pattern<'a> {
         }
     }
 
-    fn format_with_parens(&self, buf: &mut String<'a>, parens: Parens, indent: u16) {
+    fn format_with_options(
+        &self,
+        buf: &mut String<'a>,
+        parens: Parens,
+        newlines: Newlines,
+        indent: u16,
+    ) {
         use self::Pattern::*;
 
         match self {
@@ -60,11 +65,11 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                     buf.push('(');
                 }
 
-                loc_pattern.format_with_parens(buf, Parens::InApply, indent);
+                loc_pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
 
                 for loc_arg in loc_arg_patterns.iter() {
                     buf.push(' ');
-                    loc_arg.format_with_parens(buf, Parens::InApply, indent);
+                    loc_arg.format_with_options(buf, Parens::InApply, Newlines::No, indent);
                 }
 
                 if parens {
@@ -77,7 +82,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                 let mut it = loc_patterns.iter().peekable();
 
                 while let Some(loc_pattern) = it.next() {
-                    loc_pattern.format_with_parens(buf, Parens::NotNeeded, indent);
+                    loc_pattern.format(buf, indent);
 
                     if it.peek().is_some() {
                         buf.push_str(", ");
@@ -90,7 +95,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             RecordField(name, loc_pattern) => {
                 buf.push_str(name);
                 buf.push_str(": ");
-                loc_pattern.format_with_parens(buf, Parens::NotNeeded, indent);
+                loc_pattern.format(buf, indent);
             }
 
             NumLiteral(string) => buf.push_str(string),
@@ -128,10 +133,10 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                 } else {
                     fmt_spaces(buf, spaces.iter(), indent);
                 }
-                sub_pattern.format_with_parens(buf, parens, indent);
+                sub_pattern.format_with_options(buf, parens, newlines, indent);
             }
             SpaceAfter(sub_pattern, spaces) => {
-                sub_pattern.format_with_parens(buf, parens, indent);
+                sub_pattern.format_with_options(buf, parens, newlines, indent);
                 // if only_comments {
                 if !sub_pattern.is_multiline() {
                     fmt_comments_only(buf, spaces.iter(), indent)
@@ -141,7 +146,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             }
 
             Nested(sub_pattern) => {
-                sub_pattern.format_with_parens(buf, parens, indent);
+                sub_pattern.format_with_options(buf, parens, newlines, indent);
             }
 
             // Malformed
