@@ -587,7 +587,6 @@ fn fmt_when<'a>(
             &first_pattern.value,
             indent + INDENT,
             Parens::NotNeeded,
-            true,
         );
         for when_pattern in rest {
             if is_multiline {
@@ -597,13 +596,7 @@ fn fmt_when<'a>(
             } else {
                 buf.push_str(" | ");
             }
-            fmt_pattern(
-                buf,
-                &when_pattern.value,
-                indent + INDENT,
-                Parens::NotNeeded,
-                true,
-            );
+            fmt_pattern(buf, &when_pattern.value, indent + INDENT, Parens::NotNeeded);
         }
 
         if let Some(guard_expr) = &branch.guard {
@@ -762,7 +755,7 @@ pub fn fmt_closure<'a>(
     let mut it = loc_patterns.iter().peekable();
 
     while let Some(loc_pattern) = it.next() {
-        fmt_pattern(buf, &loc_pattern.value, indent, Parens::NotNeeded, false);
+        fmt_pattern(buf, &loc_pattern.value, indent, Parens::NotNeeded);
 
         if it.peek().is_some() {
             if arguments_are_multiline {

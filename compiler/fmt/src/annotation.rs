@@ -26,6 +26,24 @@ pub trait Formattable<'a> {
     }
 }
 
+/// A Located formattable value is also formattable
+impl<'a, T> Formattable<'a> for Located<T>
+where
+    T: Formattable<'a>,
+{
+    fn is_multiline(&self) -> bool {
+        self.value.is_multiline()
+    }
+
+    fn format_with_parens(&self, buf: &mut String<'a>, parens: Parens, indent: u16) {
+        self.value.format_with_parens(buf, parens, indent)
+    }
+
+    fn format(&self, buf: &mut String<'a>, indent: u16) {
+        self.value.format(buf, indent)
+    }
+}
+
 impl<'a> Formattable<'a> for TypeAnnotation<'a> {
     fn is_multiline(&self) -> bool {
         use roc_parse::ast::TypeAnnotation::*;

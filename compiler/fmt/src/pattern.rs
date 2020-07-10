@@ -9,7 +9,6 @@ pub fn fmt_pattern<'a>(
     pattern: &'a Pattern<'a>,
     indent: u16,
     parens: Parens,
-    _only_comments: bool,
 ) {
     pattern.format_with_parens(buf, parens, indent);
 }
@@ -26,8 +25,8 @@ impl<'a> Formattable<'a> for Pattern<'a> {
 
             Pattern::Nested(nested_pat) => is_multiline_pattern(nested_pat),
 
-            Pattern::RecordDestructure(fields) => fields.iter().any(|f| f.value.is_multiline()),
-            Pattern::RecordField(_, subpattern) => subpattern.value.is_multiline(),
+            Pattern::RecordDestructure(fields) => fields.iter().any(|f| f.is_multiline()),
+            Pattern::RecordField(_, subpattern) => subpattern.is_multiline(),
 
             Pattern::Identifier(_)
             | Pattern::GlobalTag(_)
@@ -61,15 +60,11 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                     buf.push('(');
                 }
 
-                loc_pattern
-                    .value
-                    .format_with_parens(buf, Parens::InApply, indent);
+                loc_pattern.format_with_parens(buf, Parens::InApply, indent);
 
                 for loc_arg in loc_arg_patterns.iter() {
                     buf.push(' ');
-                    loc_arg
-                        .value
-                        .format_with_parens(buf, Parens::InApply, indent);
+                    loc_arg.format_with_parens(buf, Parens::InApply, indent);
                 }
 
                 if parens {
@@ -82,9 +77,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                 let mut it = loc_patterns.iter().peekable();
 
                 while let Some(loc_pattern) = it.next() {
-                    loc_pattern
-                        .value
-                        .format_with_parens(buf, Parens::NotNeeded, indent);
+                    loc_pattern.format_with_parens(buf, Parens::NotNeeded, indent);
 
                     if it.peek().is_some() {
                         buf.push_str(", ");
@@ -97,9 +90,7 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             RecordField(name, loc_pattern) => {
                 buf.push_str(name);
                 buf.push_str(": ");
-                loc_pattern
-                    .value
-                    .format_with_parens(buf, Parens::NotNeeded, indent);
+                loc_pattern.format_with_parens(buf, Parens::NotNeeded, indent);
             }
 
             NumLiteral(string) => buf.push_str(string),
