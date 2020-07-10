@@ -721,7 +721,7 @@ fn special_case_builtins(
         }
 
         Symbol::LIST_SET => {
-            debug_assert!(loc_args.len() == 3);
+            debug_assert_eq!(loc_args.len(), 3);
 
             let loc_list = &loc_args[0].1;
             let loc_index = &loc_args[1].1;
