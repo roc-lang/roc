@@ -698,7 +698,7 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     // Perform a bounds check. If it passes, run LowLevel::ListGetUnsafe
     let body = If {
         cond_var: bool_var,
-        branch_var: ret_var,
+        branch_var: var_store.fresh(),
         branches: vec![(
             // if-condition
             no_region(
@@ -771,15 +771,15 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_elem = Symbol::ARG_3;
     let bool_var = var_store.fresh();
     let len_var = var_store.fresh();
-    let list_var = var_store.fresh();
     let elem_var = var_store.fresh();
-    let ret_var = var_store.fresh();
+    let list_arg_var = var_store.fresh(); // Uniqueness type Attr differs between
+    let list_ret_var = var_store.fresh(); // the arg list and the returned list
 
     // Perform a bounds check. If it passes, run LowLevel::ListSet.
     // Otherwise, return the list unmodified.
     let body = If {
         cond_var: bool_var,
-        branch_var: ret_var,
+        branch_var: list_ret_var,
         branches: vec![(
             // if-condition
             no_region(
@@ -792,7 +792,7 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
                             len_var,
                             RunLowLevel {
                                 op: LowLevel::ListLen,
-                                args: vec![(list_var, Var(arg_list))],
+                                args: vec![(list_arg_var, Var(arg_list))],
                                 ret_var: len_var,
                             },
                         ),
@@ -806,11 +806,11 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::ListSet,
                     args: vec![
-                        (list_var, Var(arg_list)),
+                        (list_arg_var, Var(arg_list)),
                         (len_var, Var(arg_index)),
                         (elem_var, Var(arg_elem)),
                     ],
-                    ret_var: list_var,
+                    ret_var: list_ret_var,
                 },
             ),
         )],
@@ -823,13 +823,13 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
     defn(
         symbol,
         vec![
-            (list_var, Symbol::ARG_1),
+            (list_arg_var, Symbol::ARG_1),
             (len_var, Symbol::ARG_2),
             (elem_var, Symbol::ARG_3),
         ],
         var_store,
         body,
-        ret_var,
+        list_ret_var,
     )
 }
 
@@ -1093,7 +1093,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     // Perform a bounds check. If it passes, delegate to List.getUnsafe.
     let body = If {
         cond_var: bool_var,
-        branch_var: ret_var,
+        branch_var: var_store.fresh(),
         branches: vec![(
             // if-condition
             no_region(
