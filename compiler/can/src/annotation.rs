@@ -1,6 +1,6 @@
 use crate::env::Env;
 use crate::scope::Scope;
-use roc_collections::all::{MutMap, MutSet, SendMap};
+use roc_collections::all::{MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{AssignedField, Tag, TypeAnnotation};
@@ -294,33 +294,16 @@ fn can_annotation_help(
         },
 
         Record { fields, ext } => {
-            let mut field_types = SendMap::default();
-            let mut seen = MutMap::default();
-
-            for field in fields.iter() {
-                let opt_field_name = can_assigned_field(
-                    env,
-                    &field.value,
-                    region,
-                    scope,
-                    var_store,
-                    introduced_variables,
-                    local_aliases,
-                    &mut field_types,
-                    references,
-                );
-
-                if let Some(added) = opt_field_name {
-                    if let Some(replaced_region) = seen.insert(added.clone(), field.region) {
-                        env.problem(roc_problem::can::Problem::DuplicateRecordFieldType {
-                            field_name: added.clone(),
-                            field_region: field.region,
-                            record_region: region,
-                            replaced_region,
-                        });
-                    }
-                }
-            }
+            let field_types = can_assigned_fields(
+                env,
+                fields,
+                region,
+                scope,
+                var_store,
+                introduced_variables,
+                local_aliases,
+                references,
+            );
 
             let ext_type = match ext {
                 Some(loc_ann) => can_annotation_help(
@@ -339,39 +322,22 @@ fn can_annotation_help(
             Type::Record(field_types, Box::new(ext_type))
         }
         TagUnion { tags, ext } => {
-            let mut tag_types = Vec::with_capacity(tags.len());
-            let mut seen = MutMap::default();
-
-            for tag in tags.iter() {
-                let opt_tag_name = can_tag(
-                    env,
-                    &tag.value,
-                    region,
-                    scope,
-                    var_store,
-                    introduced_variables,
-                    local_aliases,
-                    &mut tag_types,
-                    references,
-                );
-
-                if let Some(added) = opt_tag_name {
-                    if let Some(replaced_region) = seen.insert(added.clone(), tag.region) {
-                        env.problem(roc_problem::can::Problem::DuplicateTag {
-                            tag_name: added.clone(),
-                            tag_region: tag.region,
-                            tag_union_region: region,
-                            replaced_region,
-                        });
-                    }
-                }
-            }
+            let tag_types = can_tags(
+                env,
+                tags,
+                region,
+                scope,
+                var_store,
+                introduced_variables,
+                local_aliases,
+                references,
+            );
 
             let ext_type = match ext {
                 Some(loc_ann) => can_annotation_help(
                     env,
                     &loc_ann.value,
-                    region,
+                    loc_ann.region,
                     scope,
                     var_store,
                     introduced_variables,
@@ -405,143 +371,194 @@ fn can_annotation_help(
 
 // TODO trim down these arguments!
 #[allow(clippy::too_many_arguments)]
-fn can_assigned_field<'a>(
+fn can_assigned_fields<'a>(
     env: &mut Env,
-    field: &AssignedField<'a, TypeAnnotation<'a>>,
+    fields: &&[Located<AssignedField<'a, TypeAnnotation<'a>>>],
     region: Region,
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
-    field_types: &mut SendMap<Lowercase, Type>,
     references: &mut MutSet<Symbol>,
-) -> Option<Lowercase> {
+) -> SendMap<Lowercase, Type> {
     use roc_parse::ast::AssignedField::*;
 
-    match field {
-        LabeledValue(field_name, _, annotation) => {
-            let field_type = can_annotation_help(
-                env,
-                &annotation.value,
-                annotation.region,
-                scope,
-                var_store,
-                introduced_variables,
-                local_aliases,
-                references,
-            );
+    // SendMap doesn't have a `with_capacity`
+    let mut field_types = SendMap::default();
 
-            let label = Lowercase::from(field_name.value);
-            field_types.insert(label.clone(), field_type);
+    // field names we've seen so far in this record
+    let mut seen = std::collections::HashMap::with_capacity(fields.len());
 
-            Some(label)
-        }
-        LabelOnly(loc_field_name) => {
-            // Interpret { a, b } as { a : a, b : b }
-            let field_name = Lowercase::from(loc_field_name.value);
-            let field_type = {
-                if let Some(var) = introduced_variables.var_by_name(&field_name) {
-                    Type::Variable(*var)
-                } else {
-                    let field_var = var_store.fresh();
-                    introduced_variables.insert_named(field_name.clone(), field_var);
-                    Type::Variable(field_var)
+    'outer: for loc_field in fields.iter() {
+        let mut field = &loc_field.value;
+
+        // use this inner loop to unwrap the SpaceAfter/SpaceBefore
+        // when we find the name of this field, break out of the loop
+        // with that value, so we can check whether the field name is
+        // a duplicate
+        let new_name = 'inner: loop {
+            match field {
+                LabeledValue(field_name, _, annotation) => {
+                    let field_type = can_annotation_help(
+                        env,
+                        &annotation.value,
+                        annotation.region,
+                        scope,
+                        var_store,
+                        introduced_variables,
+                        local_aliases,
+                        references,
+                    );
+
+                    let label = Lowercase::from(field_name.value);
+                    field_types.insert(label.clone(), field_type);
+
+                    break 'inner label;
                 }
-            };
+                LabelOnly(loc_field_name) => {
+                    // Interpret { a, b } as { a : a, b : b }
+                    let field_name = Lowercase::from(loc_field_name.value);
+                    let field_type = {
+                        if let Some(var) = introduced_variables.var_by_name(&field_name) {
+                            Type::Variable(*var)
+                        } else {
+                            let field_var = var_store.fresh();
+                            introduced_variables.insert_named(field_name.clone(), field_var);
+                            Type::Variable(field_var)
+                        }
+                    };
 
-            field_types.insert(field_name.clone(), field_type);
+                    field_types.insert(field_name.clone(), field_type);
 
-            Some(field_name)
+                    break 'inner field_name;
+                }
+                SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
+                    // check the nested field instead
+                    field = nested;
+                    continue 'inner;
+                }
+                Malformed(_) => {
+                    // TODO report this?
+                    // completely skip this element, advance to the next tag
+                    continue 'outer;
+                }
+            }
+        };
+
+        // ensure that the new name is not already in this record:
+        // note that the right-most tag wins when there are two with the same name
+        if let Some(replaced_region) = seen.insert(new_name.clone(), loc_field.region) {
+            env.problem(roc_problem::can::Problem::DuplicateRecordFieldType {
+                field_name: new_name,
+                record_region: region,
+                field_region: loc_field.region,
+                replaced_region,
+            });
         }
-        SpaceBefore(nested, _) | SpaceAfter(nested, _) => can_assigned_field(
-            env,
-            nested,
-            region,
-            scope,
-            var_store,
-            introduced_variables,
-            local_aliases,
-            field_types,
-            references,
-        ),
-        Malformed(_) => None,
     }
+
+    field_types
 }
 
 // TODO trim down these arguments!
 #[allow(clippy::too_many_arguments)]
-fn can_tag<'a>(
+fn can_tags<'a>(
     env: &mut Env,
-    tag: &Tag<'a>,
+    tags: &'a [Located<Tag<'a>>],
     region: Region,
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
-    tag_types: &mut Vec<(TagName, Vec<Type>)>,
     references: &mut MutSet<Symbol>,
-) -> Option<TagName> {
-    match tag {
-        Tag::Global { name, args } => {
-            let name = name.value.into();
-            let mut arg_types = Vec::with_capacity(args.len());
+) -> Vec<(TagName, Vec<Type>)> {
+    let mut tag_types = Vec::with_capacity(tags.len());
 
-            for arg in args.iter() {
-                let ann = can_annotation_help(
-                    env,
-                    &arg.value,
-                    region,
-                    scope,
-                    var_store,
-                    introduced_variables,
-                    local_aliases,
-                    references,
-                );
+    // tag names we've seen so far in this tag union
+    let mut seen = std::collections::HashMap::with_capacity(tags.len());
 
-                arg_types.push(ann);
+    'outer: for loc_tag in tags.iter() {
+        let mut tag = &loc_tag.value;
+
+        // use this inner loop to unwrap the SpaceAfter/SpaceBefore
+        // when we find the name of this tag, break out of the loop
+        // with that value, so we can check whether the tag name is
+        // a duplicate
+        let new_name = 'inner: loop {
+            match tag {
+                Tag::Global { name, args } => {
+                    let name = name.value.into();
+                    let mut arg_types = Vec::with_capacity(args.len());
+
+                    for arg in args.iter() {
+                        let ann = can_annotation_help(
+                            env,
+                            &arg.value,
+                            arg.region,
+                            scope,
+                            var_store,
+                            introduced_variables,
+                            local_aliases,
+                            references,
+                        );
+
+                        arg_types.push(ann);
+                    }
+
+                    let tag_name = TagName::Global(name);
+                    tag_types.push((tag_name.clone(), arg_types));
+
+                    break 'inner tag_name;
+                }
+                Tag::Private { name, args } => {
+                    let ident_id = env.ident_ids.get_or_insert(&name.value.into());
+                    let symbol = Symbol::new(env.home, ident_id);
+                    let mut arg_types = Vec::with_capacity(args.len());
+
+                    for arg in args.iter() {
+                        let ann = can_annotation_help(
+                            env,
+                            &arg.value,
+                            arg.region,
+                            scope,
+                            var_store,
+                            introduced_variables,
+                            local_aliases,
+                            references,
+                        );
+
+                        arg_types.push(ann);
+                    }
+
+                    let tag_name = TagName::Private(symbol);
+                    tag_types.push((tag_name.clone(), arg_types));
+
+                    break 'inner tag_name;
+                }
+                Tag::SpaceBefore(nested, _) | Tag::SpaceAfter(nested, _) => {
+                    // check the nested tag instead
+                    tag = nested;
+                    continue 'inner;
+                }
+                Tag::Malformed(_) => {
+                    // TODO report this?
+                    // completely skip this element, advance to the next tag
+                    continue 'outer;
+                }
             }
+        };
 
-            let tag_name = TagName::Global(name);
-            tag_types.push((tag_name.clone(), arg_types));
-
-            Some(tag_name)
+        // ensure that the new name is not already in this tag union:
+        // note that the right-most tag wins when there are two with the same name
+        if let Some(replaced_region) = seen.insert(new_name.clone(), loc_tag.region) {
+            env.problem(roc_problem::can::Problem::DuplicateTag {
+                tag_name: new_name,
+                tag_region: loc_tag.region,
+                tag_union_region: region,
+                replaced_region,
+            });
         }
-        Tag::Private { name, args } => {
-            let ident_id = env.ident_ids.get_or_insert(&name.value.into());
-            let symbol = Symbol::new(env.home, ident_id);
-            let mut arg_types = Vec::with_capacity(args.len());
-
-            for arg in args.iter() {
-                let ann = can_annotation_help(
-                    env,
-                    &arg.value,
-                    region,
-                    scope,
-                    var_store,
-                    introduced_variables,
-                    local_aliases,
-                    references,
-                );
-
-                arg_types.push(ann);
-            }
-
-            let tag_name = TagName::Private(symbol);
-            tag_types.push((tag_name.clone(), arg_types));
-
-            Some(tag_name)
-        }
-        Tag::SpaceBefore(nested, _) | Tag::SpaceAfter(nested, _) => can_tag(
-            env,
-            nested,
-            region,
-            scope,
-            var_store,
-            introduced_variables,
-            local_aliases,
-            tag_types,
-            references,
-        ),
-        Tag::Malformed(_) => None,
     }
+
+    tag_types
 }
