@@ -191,34 +191,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 // (Canonicalization can remove defs later, but that hasn't happened yet!)
                 debug_assert!(!defs.is_empty());
 
-                // The first def is located last in the list, because it gets added there
-                // with .push() for efficiency. (The order of parsed defs doesn't
-                // matter because canonicalization sorts them anyway.)
-                // The other defs in the list are in their usual order.
-                //
-                // But, the first element of `defs` could be the annotation belonging to the final
-                // element, so format the annotation first.
-                let it = defs.iter().peekable();
-
-                /*
-                // so if it exists, format the annotation
-                if let Some(Located {
-                    value: Def::Annotation(_, _),
-                    ..
-                }) = it.peek()
-                {
-                    let def = it.next().unwrap();
-                    fmt_def(buf, &def.value, indent);
-                }
-
-                // then (using iter_back to get the last value of the `defs` vec) format the first body
-                if let Some(loc_first_def) = it.next_back() {
-                    fmt_def(buf, &loc_first_def.value, indent);
-                }
-                */
-
-                // then format the other defs in order
-                for loc_def in it {
+                for loc_def in defs.iter() {
                     fmt_def(buf, &loc_def.value, indent);
                 }
 
