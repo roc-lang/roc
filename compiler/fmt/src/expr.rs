@@ -2,7 +2,7 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::def::fmt_def;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{
-    add_spaces, fmt_comments_only, fmt_condition_spaces, fmt_spaces, is_comment, newline, INDENT,
+    add_spaces, fmt_comments_only, fmt_condition_spaces, fmt_spaces, newline, INDENT,
 };
 use bumpalo::collections::{String, Vec};
 use roc_module::operator::{self, BinOp};

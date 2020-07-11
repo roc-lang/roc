@@ -231,8 +231,8 @@ impl<'a> Formattable<'a> for TypeAnnotation<'a> {
 
 /// Fields are subtly different on the type and term level:
 ///
-///     type: { x : Int, y : Bool }
-///     term: { x: 100, y: True }
+/// >   type: { x : Int, y : Bool }
+/// >   term: { x: 100, y: True }
 ///
 /// So we need two instances, each having the specific separator
 impl<'a> Formattable<'a> for AssignedField<'a, TypeAnnotation<'a>> {

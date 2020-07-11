@@ -1414,10 +1414,7 @@ mod test_parse {
             newline.into_bump_slice(),
         );
         let loc_def2 = &*arena.alloc(Located::new(2, 2, 0, 5, def2));
-        // NOTE: The first def always gets reordered to the end (because it
-        // gets added by .push(), since that's more efficient and since
-        // canonicalization is going to re-sort these all anyway.)
-        let defs = bumpalo::vec![in &arena; loc_def2, loc_def1];
+        let defs = bumpalo::vec![in &arena; loc_def1, loc_def2];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(4, 4, 0, 2, ret);
         let reset_indentation = bumpalo::vec![in &arena; LineComment(" leading comment")];
@@ -1467,10 +1464,7 @@ mod test_parse {
             newline.into_bump_slice(),
         );
         let loc_def2 = &*arena.alloc(Located::new(2, 2, 0, 5, def2));
-        // NOTE: The first def always gets reordered to the end (because it
-        // gets added by .push(), since that's more efficient and since
-        // canonicalization is going to re-sort these all anyway.)
-        let defs = bumpalo::vec![in &arena; loc_def2, loc_def1];
+        let defs = bumpalo::vec![in &arena; loc_def1, loc_def2 ];
         let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
         let loc_ret = Located::new(4, 4, 0, 2, ret);
         let reset_indentation = bumpalo::vec![in &arena; LineComment(" leading comment")];
