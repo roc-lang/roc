@@ -681,6 +681,11 @@ fn list_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
 }
 
 /// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
+///
+/// List.get :
+///     Attr (* | u) (List (Attr u a)),
+///     Attr * Int
+///     -> Attr * (Result (Attr u a) (Attr * [ OutOfBounds ]*))
 fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_list = Symbol::ARG_1;
     let arg_index = Symbol::ARG_2;
@@ -754,6 +759,12 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
 }
 
 /// List.set : List elem, Int, elem -> List elem
+///
+/// List.set :
+///     Attr (w | u | v) (List (Attr u a)),
+///     Attr * Int,
+///     Attr (u | v) a
+///     -> Attr * (List (Attr u  a))
 fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_list = Symbol::ARG_1;
     let arg_index = Symbol::ARG_2;
@@ -1067,6 +1078,10 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
 }
 
 /// List.first : List elem -> Result elem [ ListWasEmpty ]*
+///
+/// List.first :
+///     Attr (* | u) (List (Attr u a)),
+///     -> Attr * (Result (Attr u a) (Attr * [ OutOfBounds ]*))
 fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let list_var = var_store.fresh();

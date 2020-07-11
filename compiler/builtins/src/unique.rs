@@ -550,10 +550,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // set : Attr (w | u | v) (List (Attr u a))
-    //     , Attr * Int
-    //     , Attr (u | v) a
-    //    -> List a
+    // List.set :
+    //     Attr (w | u | v) (List (Attr u a)),
+    //     Attr * Int,
+    //     Attr (u | v) a
+    //     -> Attr * (List (Attr u  a))
     add_type(Symbol::LIST_SET, {
         let_tvars! { u, v, w, star1, star2, a };
 
