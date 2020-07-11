@@ -11,8 +11,8 @@ extern crate roc_parse;
 mod test_fmt {
     use bumpalo::collections::String;
     use bumpalo::Bump;
+    use roc_fmt::annotation::{Formattable, Newlines, Parens};
     use roc_fmt::def::fmt_def;
-    use roc_fmt::expr::fmt_expr;
     use roc_fmt::module::fmt_module;
     use roc_parse::ast::{Attempting, Expr};
     use roc_parse::blankspace::space0_before;
@@ -38,7 +38,7 @@ mod test_fmt {
             Ok(actual) => {
                 let mut buf = String::new_in(&arena);
 
-                fmt_expr(&mut buf, &actual, 0, false, true);
+                actual.format_with_options(&mut buf, Parens::NotNeeded, Newlines::Yes, 0);
 
                 assert_eq!(buf, expected)
             }
@@ -665,14 +665,40 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r#"
-            identity = \a,
-                b
-                -> a
+            identity = \a, b -> a
 
             identity 43
             "#
         ));
 
+        //        expr_formats_same(indoc!(
+        //            r#"
+        //            identity =
+        //                \{
+        //                    x,
+        //                    y
+        //                 }
+        //                -> a
+        //
+        //            identity 43
+        //            "#
+        //        ));
+        //
+        expr_formats_same(indoc!(
+            r#"
+            identity = \a,
+                b,
+                # it's c!!
+                c
+                -> a
+
+            identity 43
+            "#
+        ));
+    }
+
+    #[test]
+    fn closure_multiline_pattern() {
         expr_formats_same(indoc!(
             r#"
             identity = \a,
@@ -2055,4 +2081,140 @@ mod test_fmt {
             "#
         ));
     }
+
+    /// Annotations and aliases
+
+    #[test]
+    fn list_alias() {
+        expr_formats_same(indoc!(
+            r#"
+            ConsList a : [ Cons a (ConsList a), Nil ]
+
+            f : ConsList a -> ConsList a
+            f = \_ -> Nil
+
+            f
+            "#
+        ));
+    }
+
+    #[test]
+    fn wildcard() {
+        expr_formats_same(indoc!(
+            r#"
+            f : List *
+            f = []
+
+            a
+            "#
+        ));
+    }
+
+    #[test]
+    fn identity() {
+        expr_formats_same(indoc!(
+            r#"
+            f : a -> a
+            f = []
+
+            a
+            "#
+        ));
+    }
+
+    #[test]
+    fn tag_union() {
+        expr_formats_same(indoc!(
+            r#"
+            f : [ True, False ] -> [ True, False ]
+            f = \x -> x
+
+            a
+            "#
+        ));
+    }
+
+    #[test]
+    fn recursive_tag_union() {
+        expr_formats_same(indoc!(
+            r#"
+            f : [ Cons a (ConsList a), Nil ] as ConsList a -> [ Just a, Nothing ]
+            f = \list ->
+                when list is
+                    Nil ->
+                        Nothing
+
+                    Cons first _ ->
+                        Just first
+
+            f
+            "#
+        ));
+    }
+
+    #[test]
+    fn record_type() {
+        expr_formats_same(indoc!(
+            r#"
+            f : { foo : Int }
+            f = { foo: 1000 }
+
+            a
+            "#
+        ));
+    }
+
+    #[test]
+    fn record_pattern_with_apply_guard() {
+        expr_formats_same(indoc!(
+            r#"
+            when { x: 1 } is
+                { x: Just 4 } ->
+                    4
+            "#
+        ));
+    }
+
+    #[test]
+    fn record_pattern_with_record_guard() {
+        expr_formats_same(indoc!(
+            r#"
+            when { x: 1 } is
+                { x: { x: True } } ->
+                    4
+            "#
+        ));
+    }
+
+    #[test]
+    fn body_starts_with_spaces_multiline() {
+        expr_formats_same(indoc!(
+            r#"
+            y =
+                Foo
+                    1
+                    2
+
+            y
+            "#
+        ));
+    }
+
+    // this is a parse error atm
+    //    #[test]
+    //    fn multiline_apply() {
+    //        expr_formats_same(indoc!(
+    //            r#"
+    //            f :
+    //                Result a
+    //                    { x : Int
+    //                    , y : Float
+    //                    }
+    //                    c
+    //                -> Int
+    //            f =
+    //                \_ -> 4
+    //            "#
+    //        ));
+    //    }
 }

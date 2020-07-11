@@ -3147,6 +3147,18 @@ mod test_reporting {
                 r#"
                 -- SYNTAX PROBLEM --------------------------------------------------------------
 
+                This integer literal is too big:
+
+                1 ┆  x = 9_223_372_036_854_775_807_000
+                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Roc uses signed 64-bit integers, allowing values between
+                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
+
+                Hint: Learn more about number literals at TODO
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
                 This integer literal is too small:
 
                 3 ┆  y = -9_223_372_036_854_775_807_000
@@ -3180,18 +3192,6 @@ mod test_reporting {
                 −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
 
                 Hint: Learn more about number literals at TODO
-
-                -- SYNTAX PROBLEM --------------------------------------------------------------
-
-                This integer literal is too big:
-
-                1 ┆  x = 9_223_372_036_854_775_807_000
-                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-                Roc uses signed 64-bit integers, allowing values between
-                −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
-
-                Hint: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -3214,10 +3214,10 @@ mod test_reporting {
                 r#"
                 -- SYNTAX PROBLEM --------------------------------------------------------------
 
-                This float literal is too small:
+                This float literal is too big:
 
-                3 ┆                  underflow = -11.7976931348623157e308
-                  ┆                              ^^^^^^^^^^^^^^^^^^^^^^^^
+                2 ┆                  overflow = 11.7976931348623157e308
+                  ┆                             ^^^^^^^^^^^^^^^^^^^^^^^
 
                 Roc uses signed 64-bit floating points, allowing values
                 between-1.7976931348623157e308 and 1.7976931348623157e308
@@ -3226,10 +3226,10 @@ mod test_reporting {
 
                 -- SYNTAX PROBLEM --------------------------------------------------------------
 
-                This float literal is too big:
+                This float literal is too small:
 
-                2 ┆                  overflow = 11.7976931348623157e308
-                  ┆                             ^^^^^^^^^^^^^^^^^^^^^^^
+                3 ┆                  underflow = -11.7976931348623157e308
+                  ┆                              ^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Roc uses signed 64-bit floating points, allowing values
                 between-1.7976931348623157e308 and 1.7976931348623157e308
@@ -3263,6 +3263,17 @@ mod test_reporting {
                 r#"
                 -- SYNTAX PROBLEM --------------------------------------------------------------
 
+                This integer literal contains an invalid digit:
+
+                1 ┆  dec = 100A
+                  ┆        ^^^^
+
+                Integer literals can only contain the digits 0-9.
+
+                Hint: Learn more about number literals at TODO
+
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
                 This hex integer literal contains an invalid digit:
 
                 3 ┆  hex = 0xZZZ
@@ -3292,17 +3303,6 @@ mod test_reporting {
                   ┆        ^^^
 
                 Binary (base-2) integer literals can only contain the digits 0 and 1.
-
-                Hint: Learn more about number literals at TODO
-
-                -- SYNTAX PROBLEM --------------------------------------------------------------
-
-                This integer literal contains an invalid digit:
-
-                1 ┆  dec = 100A
-                  ┆        ^^^^
-
-                Integer literals can only contain the digits 0-9.
 
                 Hint: Learn more about number literals at TODO
                 "#
