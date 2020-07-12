@@ -290,8 +290,6 @@ fn format_assigned_field_help<'a, T>(
 ) where
     T: Formattable<'a>,
 {
-    // TODO multiline?
-
     use self::AssignedField::*;
 
     match zelf {
