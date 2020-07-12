@@ -121,10 +121,16 @@ pub fn basic_type_from_layout<'ctx>(
         }
 
         Builtin(builtin) => match builtin {
+            Int128 => context.i128_type().as_basic_type_enum(),
             Int64 => context.i64_type().as_basic_type_enum(),
+            Int32 => context.i32_type().as_basic_type_enum(),
+            Int16 => context.i16_type().as_basic_type_enum(),
+            Int8 => context.i8_type().as_basic_type_enum(),
+            Int1 => context.bool_type().as_basic_type_enum(),
+            Float128 => context.f128_type().as_basic_type_enum(),
             Float64 => context.f64_type().as_basic_type_enum(),
-            Bool => context.bool_type().as_basic_type_enum(),
-            Byte => context.i8_type().as_basic_type_enum(),
+            Float32 => context.f32_type().as_basic_type_enum(),
+            Float16 => context.f16_type().as_basic_type_enum(),
             Str | EmptyStr => context
                 .i8_type()
                 .ptr_type(AddressSpace::Generic)

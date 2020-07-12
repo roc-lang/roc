@@ -1,4 +1,5 @@
 use crate::layout_id::LayoutIds;
+use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
     basic_type_from_layout, collection, get_fn_type, get_ptr_type, ptr_int,
 };
@@ -11,10 +12,11 @@ use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, PointerType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
-use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{FloatValue, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
-use inkwell::{FloatPredicate, IntPredicate, OptimizationLevel};
+use inkwell::{IntPredicate, OptimizationLevel};
 use roc_collections::all::ImMap;
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc};
 use roc_mono::layout::{Builtin, Layout};
@@ -33,7 +35,7 @@ pub enum OptLevel {
     Optimize,
 }
 
-type Scope<'a, 'ctx> = ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>;
+pub type Scope<'a, 'ctx> = ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>;
 
 pub struct Env<'a, 'ctx, 'env> {
     pub arena: &'a Bump,
@@ -285,66 +287,23 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
             build_expr(env, layout_ids, &scope, parent, ret)
         }
-        CallByName { name, layout, args } => match *name {
-            Symbol::BOOL_OR => {
-                // The (||) operator
-                debug_assert!(args.len() == 2);
+        CallByName { name, layout, args } => {
+            let mut arg_tuples: Vec<(BasicValueEnum, &'a Layout<'a>)> =
+                Vec::with_capacity_in(args.len(), env.arena);
 
-                let comparison =
-                    build_expr(env, layout_ids, scope, parent, &args[0].0).into_int_value();
-                let build_then = || env.context.bool_type().const_int(true as u64, false).into();
-                let build_else = || build_expr(env, layout_ids, scope, parent, &args[1].0);
-
-                let ret_type = env.context.bool_type().into();
-
-                build_basic_phi2(env, parent, comparison, build_then, build_else, ret_type)
+            for (arg, arg_layout) in args.iter() {
+                arg_tuples.push((build_expr(env, layout_ids, scope, parent, arg), arg_layout));
             }
-            Symbol::BOOL_AND => {
-                // The (&&) operator
-                debug_assert!(args.len() == 2);
 
-                let comparison =
-                    build_expr(env, layout_ids, scope, parent, &args[0].0).into_int_value();
-                let build_then = || build_expr(env, layout_ids, scope, parent, &args[1].0);
-                let build_else = || {
-                    env.context
-                        .bool_type()
-                        .const_int(false as u64, false)
-                        .into()
-                };
-
-                let ret_type = env.context.bool_type().into();
-
-                build_basic_phi2(env, parent, comparison, build_then, build_else, ret_type)
-            }
-            Symbol::BOOL_NOT => {
-                // The (!) operator
-                debug_assert!(args.len() == 1);
-
-                let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
-
-                let int_val = env.builder.build_not(arg.into_int_value(), "bool_not");
-
-                BasicValueEnum::IntValue(int_val)
-            }
-            _ => {
-                let mut arg_tuples: Vec<(BasicValueEnum, &'a Layout<'a>)> =
-                    Vec::with_capacity_in(args.len(), env.arena);
-
-                for (arg, arg_layout) in args.iter() {
-                    arg_tuples.push((build_expr(env, layout_ids, scope, parent, arg), arg_layout));
-                }
-
-                call_with_args(
-                    env,
-                    layout_ids,
-                    layout,
-                    *name,
-                    parent,
-                    arg_tuples.into_bump_slice(),
-                )
-            }
-        },
+            call_with_args(
+                env,
+                layout_ids,
+                layout,
+                *name,
+                parent,
+                arg_tuples.into_bump_slice(),
+            )
+        }
         FunctionPointer(symbol, layout) => {
             let fn_name = layout_ids
                 .get(*symbol, layout)
@@ -427,6 +386,13 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 BasicValueEnum::PointerValue(ptr)
             }
         }
+        EmptyArray => {
+            let struct_type = collection(env.context, env.ptr_bytes);
+
+            // The pointer should be null (aka zero) and the length should be zero,
+            // so the whole struct should be a const_zero
+            BasicValueEnum::StructValue(struct_type.const_zero())
+        }
         Array { elem_layout, elems } => {
             let ctx = env.context;
             let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
@@ -482,7 +448,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
                     .unwrap();
 
-                //
+                // Bitcast to an array of raw bytes
                 builder.build_bitcast(
                     struct_val.into_struct_value(),
                     collection(ctx, ptr_bytes),
@@ -494,6 +460,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
         Struct(sorted_fields) => {
             let ctx = env.context;
             let builder = env.builder;
+            let ptr_bytes = env.ptr_bytes;
 
             // Determine types
             let num_fields = sorted_fields.len();
@@ -501,26 +468,38 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
             for (field_expr, field_layout) in sorted_fields.iter() {
-                let val = build_expr(env, layout_ids, &scope, parent, field_expr);
-                let field_type =
-                    basic_type_from_layout(env.arena, env.context, &field_layout, env.ptr_bytes);
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if field_layout.stack_size(ptr_bytes) != 0 {
+                    field_types.push(basic_type_from_layout(
+                        env.arena,
+                        env.context,
+                        &field_layout,
+                        env.ptr_bytes,
+                    ));
 
-                field_types.push(field_type);
-                field_vals.push(val);
+                    field_vals.push(build_expr(env, layout_ids, &scope, parent, field_expr));
+                }
             }
 
-            // Create the struct_type
-            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let mut struct_val = struct_type.const_zero().into();
+            // If the record has only one field that isn't zero-sized,
+            // unwrap it. This is what the layout expects us to do.
+            if field_vals.len() == 1 {
+                field_vals.pop().unwrap()
+            } else {
+                // Create the struct_type
+                let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+                let mut struct_val = struct_type.const_zero().into();
 
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                struct_val = builder
-                    .build_insert_value(struct_val, field_val, index as u32, "insert_field")
-                    .unwrap();
+                // Insert field exprs into struct_val
+                for (index, field_val) in field_vals.into_iter().enumerate() {
+                    struct_val = builder
+                        .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                        .unwrap();
+                }
+
+                BasicValueEnum::StructValue(struct_val.into_struct_value())
             }
-
-            BasicValueEnum::StructValue(struct_val.into_struct_value())
         }
         Tag {
             union_size,
@@ -530,6 +509,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let it = arguments.iter();
 
             let ctx = env.context;
+            let ptr_bytes = env.ptr_bytes;
             let builder = env.builder;
 
             // Determine types
@@ -538,26 +518,40 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
             for (field_expr, field_layout) in it {
-                let val = build_expr(env, layout_ids, &scope, parent, field_expr);
-                let field_type =
-                    basic_type_from_layout(env.arena, env.context, &field_layout, env.ptr_bytes);
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if field_layout.stack_size(ptr_bytes) != 0 {
+                    let val = build_expr(env, layout_ids, &scope, parent, field_expr);
+                    let field_type = basic_type_from_layout(
+                        env.arena,
+                        env.context,
+                        &field_layout,
+                        env.ptr_bytes,
+                    );
 
-                field_types.push(field_type);
-                field_vals.push(val);
+                    field_types.push(field_type);
+                    field_vals.push(val);
+                }
             }
 
-            // Create the struct_type
-            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let mut struct_val = struct_type.const_zero().into();
+            // If the struct has only one field that isn't zero-sized,
+            // unwrap it. This is what the layout expects us to do.
+            if field_vals.len() == 1 {
+                field_vals.pop().unwrap()
+            } else {
+                // Create the struct_type
+                let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+                let mut struct_val = struct_type.const_zero().into();
 
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                struct_val = builder
-                    .build_insert_value(struct_val, field_val, index as u32, "insert_field")
-                    .unwrap();
+                // Insert field exprs into struct_val
+                for (index, field_val) in field_vals.into_iter().enumerate() {
+                    struct_val = builder
+                        .build_insert_value(struct_val, field_val, index as u32, "insert_field")
+                        .unwrap();
+                }
+
+                BasicValueEnum::StructValue(struct_val.into_struct_value())
             }
-
-            BasicValueEnum::StructValue(struct_val.into_struct_value())
         }
         Tag {
             arguments,
@@ -578,15 +572,20 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
             for (field_expr, field_layout) in arguments.iter() {
-                let val = build_expr(env, layout_ids, &scope, parent, field_expr);
-                let field_type =
-                    basic_type_from_layout(env.arena, env.context, &field_layout, ptr_size);
-
-                field_types.push(field_type);
-                field_vals.push(val);
-
                 let field_size = field_layout.stack_size(ptr_size);
-                filler -= field_size;
+
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if field_size != 0 {
+                    let val = build_expr(env, layout_ids, &scope, parent, field_expr);
+                    let field_type =
+                        basic_type_from_layout(env.arena, env.context, &field_layout, ptr_size);
+
+                    field_types.push(field_type);
+                    field_vals.push(val);
+
+                    filler -= field_size;
+                }
             }
 
             // TODO verify that this is required (better safe than sorry)
@@ -644,6 +643,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             wrapper_val = builder
                 .build_insert_value(wrapper_val, result, 0, "insert_field")
                 .unwrap();
+
             wrapper_val.into_struct_value().into()
         }
         AccessAtIndex {
@@ -652,19 +652,29 @@ pub fn build_expr<'a, 'ctx, 'env>(
             is_unwrapped,
             ..
         } if *is_unwrapped => {
+            use inkwell::values::BasicValueEnum::*;
+
             let builder = env.builder;
 
             // Get Struct val
-            // Since this is a one-element tag union, we get the correct struct immediately
-            let argument = build_expr(env, layout_ids, &scope, parent, expr).into_struct_value();
-
-            builder
-                .build_extract_value(
-                    argument,
-                    *index as u32,
-                    env.arena.alloc(format!("tag_field_access_{}_", index)),
-                )
-                .unwrap()
+            // Since this is a one-element tag union, we get the underlying value
+            // right away. However, that struct might have only one field which
+            // is not zero-sized, which would make it unwrapped. If that happens,
+            // we must be
+            match build_expr(env, layout_ids, &scope, parent, expr) {
+                StructValue(argument) => builder
+                    .build_extract_value(
+                        argument,
+                        *index as u32,
+                        env.arena.alloc(format!("tag_field_access_{}_", index)),
+                    )
+                    .unwrap(),
+                other => {
+                    // If it's not a Struct, that means it was unwrapped,
+                    // so we should return it directly.
+                    other
+                }
+            }
         }
 
         AccessAtIndex {
@@ -700,9 +710,13 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .build_extract_value(struct_value, *index as u32, "")
                 .expect("desired field did not decode")
         }
-        _ => {
-            panic!("I don't yet know how to LLVM build {:?}", expr);
+        RuntimeErrorFunction(_) => {
+            todo!("LLVM build runtime error function of {:?}", expr);
         }
+        RuntimeError(_) => {
+            todo!("LLVM build runtime error of {:?}", expr);
+        }
+        RunLowLevel(op, args) => run_low_level(env, layout_ids, scope, parent, *op, args),
     }
 }
 
@@ -715,7 +729,7 @@ fn load_symbol<'a, 'ctx, 'env>(
         Some((_, ptr)) => env
             .builder
             .build_load(*ptr, symbol.ident_string(&env.interns)),
-        None => panic!("Could not find a var for {:?} in scope {:?}", symbol, scope),
+        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
     }
 }
 
@@ -837,9 +851,12 @@ fn build_switch<'a, 'ctx, 'env>(
         //
         // they either need to all be i8, or i64
         let int_val = match cond_layout {
+            Layout::Builtin(Builtin::Int128) => context.i128_type().const_int(*int as u64, false), /* TODO file an issue: you can't currently have an int literal bigger than 64 bits long, and also (as we see here), you can't currently have (at least in Inkwell) a when-branch with an i128 literal in its pattren  */
             Layout::Builtin(Builtin::Int64) => context.i64_type().const_int(*int as u64, false),
-            Layout::Builtin(Builtin::Bool) => context.bool_type().const_int(*int as u64, false),
-            Layout::Builtin(Builtin::Byte) => context.i8_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Int32) => context.i32_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Int16) => context.i16_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Int8) => context.i8_type().const_int(*int as u64, false),
+            Layout::Builtin(Builtin::Int1) => context.bool_type().const_int(*int as u64, false),
             _ => panic!("Can't cast to cond_layout = {:?}", cond_layout),
         };
         let block = context.append_basic_block(parent, format!("branch{}", int).as_str());
@@ -924,6 +941,42 @@ where
     let phi = builder.build_phi(ret_type, "branch");
 
     phi.add_incoming(&[(&then_val, then_block), (&else_val, else_block)]);
+
+    phi.as_basic_value()
+}
+
+fn build_basic_phi1<'a, 'ctx, 'env, PassFn>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    comparison: IntValue<'ctx>,
+    mut build_pass: PassFn,
+    ret_type: BasicTypeEnum<'ctx>,
+) -> BasicValueEnum<'ctx>
+where
+    PassFn: FnMut() -> BasicValueEnum<'ctx>,
+{
+    let builder = env.builder;
+    let context = env.context;
+
+    // build blocks
+    let then_block = context.append_basic_block(parent, "then");
+    let cont_block = context.append_basic_block(parent, "branchcont");
+
+    builder.build_conditional_branch(comparison, then_block, cont_block);
+
+    // build then block
+    builder.position_at_end(then_block);
+    let then_val = build_pass();
+    builder.build_unconditional_branch(cont_block);
+
+    let then_block = builder.get_insert_block().unwrap();
+
+    // emit merge block
+    builder.position_at_end(cont_block);
+
+    let phi = builder.build_phi(ret_type, "branch");
+
+    phi.add_incoming(&[(&then_val, then_block)]);
 
     phi.as_basic_value()
 }
@@ -1040,6 +1093,194 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
     }
 }
 
+/// List.single : a -> List a
+fn list_single<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    elem: BasicValueEnum<'ctx>,
+    elem_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+
+    let ptr = {
+        let bytes_len = elem_bytes;
+        let len_type = env.ptr_int();
+        let len = len_type.const_int(bytes_len, false);
+
+        env.builder
+            .build_array_malloc(elem_type, len, "create_list_ptr")
+            .unwrap()
+
+        // TODO check if malloc returned null; if so, runtime error for OOM!
+    };
+
+    // Put the element into the list
+    let elem_ptr = unsafe {
+        builder.build_in_bounds_gep(
+            ptr,
+            &[ctx.i64_type().const_int(
+                // 0 as in 0 index of our new list
+                0 as u64, false,
+            )],
+            "index",
+        )
+    };
+
+    builder.build_store(elem_ptr, elem);
+
+    let ptr_bytes = env.ptr_bytes;
+    let int_type = ptr_int(ctx, ptr_bytes);
+    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+    let struct_type = collection(ctx, ptr_bytes);
+    let len = BasicValueEnum::IntValue(env.ptr_int().const_int(1, false));
+
+    let mut struct_val;
+
+    // Store the pointer
+    struct_val = builder
+        .build_insert_value(
+            struct_type.get_undef(),
+            ptr_as_int,
+            Builtin::WRAPPER_PTR,
+            "insert_ptr",
+        )
+        .unwrap();
+
+    // Store the length
+    struct_val = builder
+        .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
+        .unwrap();
+
+    //
+    builder.build_bitcast(
+        struct_val.into_struct_value(),
+        collection(ctx, ptr_bytes),
+        "cast_collection",
+    )
+}
+
+/// List.repeat : Int, elem -> List elem
+fn list_repeat<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    list_len: IntValue<'ctx>,
+    elem: BasicValueEnum<'ctx>,
+    elem_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+
+    // list_len > 0
+    // We have to do a loop below, continuously adding the `elem`
+    // to the output list `List elem` until we have reached the
+    // number of repeats. This `comparison` is used to check
+    // if we need to do any looping; because if we dont, then we
+    // dont need to allocate memory for the index or the check
+    // if index != 0
+    let comparison = builder.build_int_compare(
+        IntPredicate::UGT,
+        list_len,
+        ctx.i64_type().const_int(0, false),
+        "atleastzero",
+    );
+
+    let build_then = || {
+        // Allocate space for the new array that we'll copy into.
+        let list_ptr = builder
+            .build_array_malloc(elem_type, list_len, "create_list_ptr")
+            .unwrap();
+
+        // TODO check if malloc returned null; if so, runtime error for OOM!
+
+        let index_name = "#index";
+        let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
+
+        // Start at the last element in the list.
+        let last_elem_index = builder.build_int_sub(
+            list_len,
+            ctx.i64_type().const_int(1, false),
+            "lastelemindex",
+        );
+        builder.build_store(start_alloca, last_elem_index);
+
+        let loop_bb = ctx.append_basic_block(parent, "loop");
+        builder.build_unconditional_branch(loop_bb);
+        builder.position_at_end(loop_bb);
+
+        // #index = #index - 1
+        let curr_index = builder
+            .build_load(start_alloca, index_name)
+            .into_int_value();
+        let next_index =
+            builder.build_int_sub(curr_index, ctx.i64_type().const_int(1, false), "nextindex");
+
+        builder.build_store(start_alloca, next_index);
+        let elem_ptr =
+            unsafe { builder.build_in_bounds_gep(list_ptr, &[curr_index], "load_index") };
+
+        // Mutate the new array in-place to change the element.
+        builder.build_store(elem_ptr, elem);
+
+        // #index != 0
+        let end_cond = builder.build_int_compare(
+            IntPredicate::NE,
+            ctx.i64_type().const_int(0, false),
+            curr_index,
+            "loopcond",
+        );
+
+        let after_bb = ctx.append_basic_block(parent, "afterloop");
+
+        builder.build_conditional_branch(end_cond, loop_bb, after_bb);
+        builder.position_at_end(after_bb);
+
+        let ptr_bytes = env.ptr_bytes;
+        let int_type = ptr_int(ctx, ptr_bytes);
+        let ptr_as_int = builder.build_ptr_to_int(list_ptr, int_type, "list_cast_ptr");
+        let struct_type = collection(ctx, ptr_bytes);
+
+        let mut struct_val;
+
+        // Store the pointer
+        struct_val = builder
+            .build_insert_value(
+                struct_type.get_undef(),
+                ptr_as_int,
+                Builtin::WRAPPER_PTR,
+                "insert_ptr",
+            )
+            .unwrap();
+
+        // Store the length
+        struct_val = builder
+            .build_insert_value(struct_val, list_len, Builtin::WRAPPER_LEN, "insert_len")
+            .unwrap();
+
+        builder.build_bitcast(
+            struct_val.into_struct_value(),
+            collection(ctx, ptr_bytes),
+            "cast_collection",
+        )
+    };
+
+    let build_else = || empty_list(env);
+
+    let struct_type = collection(ctx, env.ptr_bytes);
+
+    build_basic_phi2(
+        env,
+        parent,
+        comparison,
+        build_then,
+        build_else,
+        BasicTypeEnum::StructType(struct_type),
+    )
+}
+
 #[inline(always)]
 #[allow(clippy::cognitive_complexity)]
 fn call_with_args<'a, 'ctx, 'env>(
@@ -1047,788 +1288,37 @@ fn call_with_args<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
     symbol: Symbol,
-    parent: FunctionValue<'ctx>,
+    _parent: FunctionValue<'ctx>,
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
 ) -> BasicValueEnum<'ctx> {
-    match symbol {
-        Symbol::INT_ADD | Symbol::NUM_ADD => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_add(
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "add_i64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::FLOAT_ADD => {
-            debug_assert!(args.len() == 2);
-
-            let float_val = env.builder.build_float_add(
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "add_f64",
-            );
-
-            BasicValueEnum::FloatValue(float_val)
-        }
-        Symbol::INT_SUB | Symbol::NUM_SUB => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_sub(
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "sub_i64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::FLOAT_DIV => {
-            debug_assert!(args.len() == 2);
-
-            let float_val = env.builder.build_float_div(
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "div_f64",
-            );
-
-            BasicValueEnum::FloatValue(float_val)
-        }
-        Symbol::FLOAT_SUB => {
-            debug_assert!(args.len() == 2);
-
-            let float_val = env.builder.build_float_sub(
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "sub_f64",
-            );
-
-            BasicValueEnum::FloatValue(float_val)
-        }
-        Symbol::FLOAT_ABS => call_intrinsic(LLVM_FABS_F64, env, args),
-        Symbol::INT_GTE | Symbol::NUM_GTE => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_int_compare(
-                IntPredicate::SGE,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "gte_i64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Symbol::FLOAT_GTE => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_float_compare(
-                FloatPredicate::OGE,
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "gte_F64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Symbol::INT_GT | Symbol::NUM_GT => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_int_compare(
-                IntPredicate::SGT,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "gt_i64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Symbol::FLOAT_GT => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_float_compare(
-                FloatPredicate::OGT,
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "gt_f64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Symbol::INT_LTE | Symbol::NUM_LTE => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_int_compare(
-                IntPredicate::SLE,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "lte_i64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Symbol::FLOAT_LTE => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_float_compare(
-                FloatPredicate::OLE,
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "lte_f64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Symbol::INT_LT | Symbol::NUM_LT => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_int_compare(
-                IntPredicate::SLT,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "lt_i64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Symbol::FLOAT_LT => {
-            debug_assert!(args.len() == 2);
-
-            let bool_val = env.builder.build_float_compare(
-                FloatPredicate::OLT,
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "lt_f64",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Symbol::FLOAT_SIN => call_intrinsic(LLVM_SIN_F64, env, args),
-        Symbol::FLOAT_COS => call_intrinsic(LLVM_COS_F64, env, args),
-        Symbol::NUM_MUL => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_mul(
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "mul_i64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::NUM_NEG => {
-            debug_assert!(args.len() == 1);
-
-            let int_val = env
-                .builder
-                .build_int_neg(args[0].0.into_int_value(), "negate_i64");
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::LIST_LEN => {
-            debug_assert!(args.len() == 1);
-
-            BasicValueEnum::IntValue(load_list_len(env.builder, args[0].0.into_struct_value()))
-        }
-        Symbol::LIST_IS_EMPTY => {
-            debug_assert!(args.len() == 1);
-
-            let list_struct = args[0].0.into_struct_value();
-            let builder = env.builder;
-            let list_len = load_list_len(builder, list_struct);
-            let zero = env.ptr_int().const_zero();
-            let answer = builder.build_int_compare(IntPredicate::EQ, list_len, zero, "is_zero");
-
-            BasicValueEnum::IntValue(answer)
-        }
-        Symbol::INT_REM_UNSAFE => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_unsigned_rem(
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "rem_i64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::INT_EQ_I64 => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_compare(
-                IntPredicate::EQ,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "cmp_i64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::INT_NEQ_I64 => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_compare(
-                IntPredicate::NE,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "cmp_i64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::INT_EQ_I1 => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_compare(
-                IntPredicate::EQ,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "cmp_i1",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::INT_NEQ_I1 => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_compare(
-                IntPredicate::NE,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "cmp_i1",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::INT_EQ_I8 => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_compare(
-                IntPredicate::EQ,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "cmp_i8",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::INT_NEQ_I8 => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_compare(
-                IntPredicate::NE,
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "cmp_i8",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::NUM_TO_FLOAT => {
-            // TODO specialize this to be not just for i64!
-            let builtin_fn_name = "i64_to_f64_";
-
-            let fn_val = env
-                .module
-                .get_function(builtin_fn_name)
-                .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", builtin_fn_name));
-
-            let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
-
-            for (arg, _layout) in args.iter() {
-                arg_vals.push(*arg);
+    let fn_name = layout_ids
+        .get(symbol, layout)
+        .to_symbol_string(symbol, &env.interns);
+    let fn_val = env
+        .module
+        .get_function(fn_name.as_str())
+        .unwrap_or_else(|| {
+            if symbol.is_builtin() {
+                panic!("Unrecognized builtin function: {:?}", symbol)
+            } else {
+                panic!("Unrecognized non-builtin function: {:?}", symbol)
             }
-
-            let call = env
-                .builder
-                .build_call(fn_val, arg_vals.into_bump_slice(), "call_builtin");
-
-            call.set_call_convention(fn_val.get_call_conventions());
-
-            call.try_as_basic_value()
-                .left()
-                .unwrap_or_else(|| panic!("LLVM error: Invalid call for builtin {:?}", symbol))
-        }
-        Symbol::FLOAT_EQ => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_float_compare(
-                FloatPredicate::OEQ,
-                args[0].0.into_float_value(),
-                args[1].0.into_float_value(),
-                "cmp_f64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        Symbol::LIST_GET_UNSAFE => {
-            let builder = env.builder;
-
-            // List.get : List elem, Int -> [ Ok elem, OutOfBounds ]*
-            debug_assert!(args.len() == 2);
-
-            let (_, list_layout) = &args[0];
-
-            let wrapper_struct = args[0].0.into_struct_value();
-            let elem_index = args[1].0.into_int_value();
-
-            match list_layout {
-                Layout::Builtin(Builtin::List(elem_layout)) => {
-                    let ctx = env.context;
-                    let elem_type =
-                        basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-                    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-                    // Load the pointer to the array data
-                    let array_data_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
-
-                    // Assume the bounds have already been checked earlier
-                    // (e.g. by List.get or List.first, which wrap List.#getUnsafe)
-                    let elem_ptr = unsafe {
-                        builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem")
-                    };
-
-                    builder.build_load(elem_ptr, "List.get")
-                }
-                _ => {
-                    unreachable!("Invalid List layout for List.get: {:?}", list_layout);
-                }
-            }
-        }
-        Symbol::FLOAT_SQRT => call_intrinsic(LLVM_SQRT_F64, env, args),
-        Symbol::FLOAT_ROUND => call_intrinsic(LLVM_LROUND_I64_F64, env, args),
-        Symbol::LIST_SET => list_set(parent, args, env, InPlace::Clone),
-        Symbol::LIST_SET_IN_PLACE => list_set(parent, args, env, InPlace::InPlace),
-        Symbol::LIST_PUSH => list_push(args, env),
-        Symbol::LIST_SINGLE => {
-            // List.single : a -> List a
-            debug_assert!(args.len() == 1);
-
-            let (elem, elem_layout) = args[0];
-
-            let builder = env.builder;
-            let ctx = env.context;
-
-            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-            let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-
-            let ptr = {
-                let bytes_len = elem_bytes;
-                let len_type = env.ptr_int();
-                let len = len_type.const_int(bytes_len, false);
-
-                env.builder
-                    .build_array_malloc(elem_type, len, "create_list_ptr")
-                    .unwrap()
-
-                // TODO check if malloc returned null; if so, runtime error for OOM!
-            };
-
-            // Put the element into the list
-            let elem_ptr = unsafe {
-                builder.build_in_bounds_gep(
-                    ptr,
-                    &[ctx.i64_type().const_int(
-                        // 0 as in 0 index of our new list
-                        0 as u64, false,
-                    )],
-                    "index",
-                )
-            };
-
-            builder.build_store(elem_ptr, elem);
-
-            let ptr_bytes = env.ptr_bytes;
-            let int_type = ptr_int(ctx, ptr_bytes);
-            let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
-            let struct_type = collection(ctx, ptr_bytes);
-            let len = BasicValueEnum::IntValue(env.ptr_int().const_int(1, false));
-
-            let mut struct_val;
-
-            // Store the pointer
-            struct_val = builder
-                .build_insert_value(
-                    struct_type.get_undef(),
-                    ptr_as_int,
-                    Builtin::WRAPPER_PTR,
-                    "insert_ptr",
-                )
-                .unwrap();
-
-            // Store the length
-            struct_val = builder
-                .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
-                .unwrap();
-
-            //
-            builder.build_bitcast(
-                struct_val.into_struct_value(),
-                collection(ctx, ptr_bytes),
-                "cast_collection",
-            )
-        }
-        Symbol::LIST_REPEAT => {
-            // List.repeat : Int, elem -> List elem
-            debug_assert!(args.len() == 2);
-
-            // Number of repeats
-            let list_len = args[0].0.into_int_value();
-
-            let builder = env.builder;
-            let ctx = env.context;
-
-            let (elem, elem_layout) = args[1];
-            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-
-            // list_len > 0
-            // We have to do a loop below, continuously adding the `elem`
-            // to the output list `List elem` until we have reached the
-            // number of repeats. This `comparison` is used to check
-            // if we need to do any looping; because if we dont, then we
-            // dont need to allocate memory for the index or the check
-            // if index != 0
-            let comparison = builder.build_int_compare(
-                IntPredicate::UGT,
-                list_len,
-                ctx.i64_type().const_int(0, false),
-                "atleastzero",
-            );
-
-            let build_then = || {
-                // Allocate space for the new array that we'll copy into.
-                let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-
-                let list_ptr = {
-                    let bytes_len = elem_bytes;
-                    let len_type = env.ptr_int();
-                    let len = len_type.const_int(bytes_len, false);
-
-                    env.builder
-                        .build_array_malloc(elem_type, len, "create_list_ptr")
-                        .unwrap()
-
-                    // TODO check if malloc returned null; if so, runtime error for OOM!
-                };
-
-                let index_name = "#index";
-                let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
-
-                builder.build_store(start_alloca, list_len);
-
-                let loop_bb = ctx.append_basic_block(parent, "loop");
-                builder.build_unconditional_branch(loop_bb);
-                builder.position_at_end(loop_bb);
-
-                // #index = #index - 1
-                let curr_index = builder
-                    .build_load(start_alloca, index_name)
-                    .into_int_value();
-                let next_index = builder.build_int_sub(
-                    curr_index,
-                    ctx.i64_type().const_int(1, false),
-                    "nextindex",
-                );
-
-                builder.build_store(start_alloca, next_index);
-                let elem_ptr =
-                    unsafe { builder.build_in_bounds_gep(list_ptr, &[curr_index], "load_index") };
-
-                // Mutate the new array in-place to change the element.
-                builder.build_store(elem_ptr, elem);
-
-                // #index != 0
-                let end_cond = builder.build_int_compare(
-                    IntPredicate::NE,
-                    ctx.i64_type().const_int(0, false),
-                    curr_index,
-                    "loopcond",
-                );
-
-                let after_bb = ctx.append_basic_block(parent, "afterloop");
-
-                builder.build_conditional_branch(end_cond, loop_bb, after_bb);
-                builder.position_at_end(after_bb);
-
-                let ptr_bytes = env.ptr_bytes;
-                let int_type = ptr_int(ctx, ptr_bytes);
-                let ptr_as_int = builder.build_ptr_to_int(list_ptr, int_type, "list_cast_ptr");
-                let struct_type = collection(ctx, ptr_bytes);
-
-                let mut struct_val;
-
-                // Store the pointer
-                struct_val = builder
-                    .build_insert_value(
-                        struct_type.get_undef(),
-                        ptr_as_int,
-                        Builtin::WRAPPER_PTR,
-                        "insert_ptr",
-                    )
-                    .unwrap();
-
-                // Store the length
-                struct_val = builder
-                    .build_insert_value(struct_val, list_len, Builtin::WRAPPER_LEN, "insert_len")
-                    .unwrap();
-
-                builder.build_bitcast(
-                    struct_val.into_struct_value(),
-                    collection(ctx, ptr_bytes),
-                    "cast_collection",
-                )
-            };
-
-            let build_else = || empty_list(env);
-
-            let struct_type = collection(ctx, env.ptr_bytes);
-
-            build_basic_phi2(
-                env,
-                parent,
-                comparison,
-                build_then,
-                build_else,
-                BasicTypeEnum::StructType(struct_type),
-            )
-        }
-        Symbol::LIST_REVERSE => {
-            // List.reverse : List elem -> List elem
-            debug_assert_eq!(args.len(), 1);
-
-            let (list, list_layout) = &args[0];
-
-            let wrapper_struct = list.into_struct_value();
-
-            let builder = env.builder;
-            let ctx = env.context;
-
-            let list_len = load_list_len(builder, wrapper_struct);
-
-            match list_layout {
-                Layout::Builtin(Builtin::List(elem_layout)) => {
-                    // Allocate space for the new array that we'll copy into.
-                    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-
-                    let elem_type =
-                        basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-
-                    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-                    let reversed_list_ptr = {
-                        let len_type = env.ptr_int();
-                        let len = len_type.const_int(elem_bytes, false);
-
-                        env.builder
-                            .build_array_malloc(elem_type, len, "create_reversed_list_ptr")
-                            .unwrap()
-
-                        // TODO check if malloc returned null; if so, runtime error for OOM!
-                    };
-
-                    let index_name = "#index";
-                    let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
-
-                    builder.build_store(start_alloca, list_len);
-
-                    let loop_bb = ctx.append_basic_block(parent, "loop");
-                    builder.build_unconditional_branch(loop_bb);
-                    builder.position_at_end(loop_bb);
-
-                    // #index = #index - 1
-                    let curr_index = builder
-                        .build_load(start_alloca, index_name)
-                        .into_int_value();
-                    let next_index = builder.build_int_sub(
-                        curr_index,
-                        ctx.i64_type().const_int(1, false),
-                        "nextindex",
-                    );
-
-                    builder.build_store(start_alloca, next_index);
-
-                    let list_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
-
-                    // The pointer to the element in the input list
-                    let elem_ptr = unsafe {
-                        builder.build_in_bounds_gep(list_ptr, &[curr_index], "load_index")
-                    };
-
-                    // The pointer to the element in the reversed list
-                    let reverse_elem_ptr = unsafe {
-                        builder.build_in_bounds_gep(
-                            reversed_list_ptr,
-                            &[builder.build_int_sub(
-                                list_len,
-                                builder.build_int_add(
-                                    curr_index,
-                                    ctx.i64_type().const_int(1, false),
-                                    "curr_index_plus_one",
-                                ),
-                                "next_index",
-                            )],
-                            "load_index_reversed_list",
-                        )
-                    };
-
-                    let elem = builder.build_load(elem_ptr, "get_elem");
-
-                    // Mutate the new array in-place to change the element.
-                    builder.build_store(reverse_elem_ptr, elem);
-
-                    // #index != 0
-                    let end_cond = builder.build_int_compare(
-                        IntPredicate::NE,
-                        ctx.i64_type().const_int(0, false),
-                        curr_index,
-                        "loopcond",
-                    );
-
-                    let after_bb = ctx.append_basic_block(parent, "afterloop");
-
-                    builder.build_conditional_branch(end_cond, loop_bb, after_bb);
-                    builder.position_at_end(after_bb);
-
-                    let ptr_bytes = env.ptr_bytes;
-                    let int_type = ptr_int(ctx, ptr_bytes);
-                    let ptr_as_int =
-                        builder.build_ptr_to_int(reversed_list_ptr, int_type, "list_cast_ptr");
-                    let struct_type = collection(ctx, ptr_bytes);
-
-                    let mut struct_val;
-
-                    // Store the pointer
-                    struct_val = builder
-                        .build_insert_value(
-                            struct_type.get_undef(),
-                            ptr_as_int,
-                            Builtin::WRAPPER_PTR,
-                            "insert_ptr",
-                        )
-                        .unwrap();
-
-                    // Store the length
-                    struct_val = builder
-                        .build_insert_value(
-                            struct_val,
-                            list_len,
-                            Builtin::WRAPPER_LEN,
-                            "insert_len",
-                        )
-                        .unwrap();
-
-                    builder.build_bitcast(
-                        struct_val.into_struct_value(),
-                        collection(ctx, ptr_bytes),
-                        "cast_collection",
-                    )
-                }
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                _ => {
-                    unreachable!("Invalid List layout for List.get: {:?}", list_layout);
-                }
-            }
-        }
-        Symbol::LIST_APPEND => {
-            // List.append : List elem, List elem -> List elem
-            debug_assert_eq!(args.len(), 2);
-
-            let (first_list, first_list_layout) = &args[0];
-            let (second_list, second_list_layout) = &args[1];
-
-            let builder = env.builder;
-
-            let ctx = env.context;
-
-            let first_wrapper_struct = first_list.into_struct_value();
-            let second_wrapper_struct = second_list.into_struct_value();
-
-            let first_list_len = load_list_len(builder, first_wrapper_struct);
-            let second_list_len = load_list_len(builder, second_wrapper_struct);
-
-            match first_list_layout {
-                Layout::Builtin(Builtin::List(elem_layout)) => match second_list_layout {
-                    Layout::Builtin(Builtin::List(_)) => {}
-
-                    Layout::Builtin(Builtin::EmptyList) => {
-                        let elem_type =
-                            basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-
-                        let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-                        clone_nonempty_list(
-                            env,
-                            first_list_len,
-                            load_list_ptr(builder, first_wrapper_struct, ptr_type),
-                            elem_layout,
-                        )
-                    }
-
-                    _ => {
-                        unreachable!("Invalid List layout for List.get: {:?}", second_list_layout);
-                    }
-                },
-
-                Layout::Builtin(Builtin::EmptyList) => match second_list_layout {
-                    Layout::Builtin(Builtin::List(elem_layout)) => {
-                        let elem_type =
-                            basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-
-                        let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-                        clone_nonempty_list(
-                            env,
-                            second_list_len,
-                            load_list_ptr(builder, second_wrapper_struct, ptr_type),
-                            elem_layout,
-                        )
-                    }
-                    Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                    _ => {
-                        unreachable!("Invalid List layout for List.get: {:?}", second_list_layout);
-                    }
-                },
-                _ => {
-                    unreachable!("Invalid List layout for List.get: {:?}", first_list_layout);
-                }
-            }
-        }
-        Symbol::INT_DIV_UNSAFE => {
-            debug_assert!(args.len() == 2);
-
-            let int_val = env.builder.build_int_signed_div(
-                args[0].0.into_int_value(),
-                args[1].0.into_int_value(),
-                "div_i64",
-            );
-
-            BasicValueEnum::IntValue(int_val)
-        }
-        _ => {
-            let fn_name = layout_ids
-                .get(symbol, layout)
-                .to_symbol_string(symbol, &env.interns);
-            let fn_val = env
-                .module
-                .get_function(fn_name.as_str())
-                .unwrap_or_else(|| panic!("Unrecognized function: {:?}", symbol));
-
-            let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
-
-            for (arg, _layout) in args.iter() {
-                arg_vals.push(*arg);
-            }
-
-            let call = env
-                .builder
-                .build_call(fn_val, arg_vals.into_bump_slice(), "call");
-
-            call.set_call_convention(fn_val.get_call_conventions());
-
-            call.try_as_basic_value()
-                .left()
-                .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
-        }
+        });
+    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
+
+    for (arg, _layout) in args.iter() {
+        arg_vals.push(*arg);
     }
+
+    let call = env
+        .builder
+        .build_call(fn_val, arg_vals.into_bump_slice(), "call");
+
+    call.set_call_convention(fn_val.get_call_conventions());
+
+    call.try_as_basic_value()
+        .left()
+        .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
 }
 
 fn call_intrinsic<'a, 'ctx, 'env>(
@@ -1861,7 +1351,7 @@ fn call_intrinsic<'a, 'ctx, 'env>(
     })
 }
 
-fn load_list_len<'ctx>(
+pub fn load_list_len<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
@@ -1869,6 +1359,19 @@ fn load_list_len<'ctx>(
         .build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "list_len")
         .unwrap()
         .into_int_value()
+}
+
+fn list_is_not_empty<'ctx>(
+    builder: &Builder<'ctx>,
+    ctx: &'ctx Context,
+    list_len: IntValue<'ctx>,
+) -> IntValue<'ctx> {
+    builder.build_int_compare(
+        IntPredicate::UGT,
+        list_len,
+        ctx.i64_type().const_int(0, false),
+        "greaterthanzero",
+    )
 }
 
 fn load_list_ptr<'ctx>(
@@ -1980,22 +1483,18 @@ fn bounds_check_comparison<'ctx>(
     builder.build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
 }
 
+/// List.push List elem, elem -> List elem
 fn list_push<'a, 'ctx, 'env>(
-    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
     env: &Env<'a, 'ctx, 'env>,
+    original_wrapper: StructValue<'ctx>,
+    elem: BasicValueEnum<'ctx>,
+    elem_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    // List.push List elem, elem -> List elem
     let builder = env.builder;
     let ctx = env.context;
 
-    debug_assert!(args.len() == 2);
-
-    let original_wrapper = args[0].0.into_struct_value();
-
     // Load the usize length from the wrapper.
     let list_len = load_list_len(builder, original_wrapper);
-
-    let (elem, elem_layout) = args[1];
     let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
     let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
@@ -2083,7 +1582,7 @@ fn list_set<'a, 'ctx, 'env>(
     // List.set : List elem, Int, elem -> List elem
     let builder = env.builder;
 
-    debug_assert!(args.len() == 3);
+    debug_assert_eq!(args.len(), 3);
 
     let original_wrapper = args[0].0.into_struct_value();
     let elem_index = args[1].0.into_int_value();
@@ -2155,3 +1654,676 @@ pub fn get_call_conventions(cc: CallingConvention) -> u32 {
 /// Source: https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
 pub static C_CALL_CONV: u32 = 0;
 pub static COLD_CALL_CONV: u32 = 9;
+
+fn run_low_level<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    op: LowLevel,
+    args: &[(Expr<'a>, Layout<'a>)],
+) -> BasicValueEnum<'ctx> {
+    use LowLevel::*;
+
+    match op {
+        ListLen => {
+            // List.len : List * -> Int
+            debug_assert_eq!(args.len(), 1);
+
+            let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+
+            load_list_len(env.builder, arg.into_struct_value()).into()
+        }
+        ListSingle => {
+            // List.single : a -> List a
+            debug_assert_eq!(args.len(), 1);
+
+            let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+
+            list_single(env, arg, &args[0].1)
+        }
+        ListRepeat => {
+            // List.repeat : Int, elem -> List elem
+            debug_assert_eq!(args.len(), 2);
+
+            let list_len = build_expr(env, layout_ids, scope, parent, &args[0].0).into_int_value();
+            let elem = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let elem_layout = &args[1].1;
+
+            list_repeat(env, parent, list_len, elem, elem_layout)
+        }
+        ListReverse => {
+            // List.reverse : List elem -> List elem
+            debug_assert_eq!(args.len(), 1);
+
+            let (list, list_layout) = &args[0];
+
+            let wrapper_struct =
+                build_expr(env, layout_ids, scope, parent, list).into_struct_value();
+
+            let builder = env.builder;
+            let ctx = env.context;
+
+            let list_len = load_list_len(builder, wrapper_struct);
+
+            // list_len > 0
+            // We do this check to avoid allocating memory. If the input
+            // list is empty, then we can just return an empty list.
+            let comparison = builder.build_int_compare(
+                IntPredicate::UGT,
+                list_len,
+                ctx.i64_type().const_int(0, false),
+                "greaterthanzero",
+            );
+
+            let build_then = || {
+                match list_layout {
+                    Layout::Builtin(Builtin::List(elem_layout)) => {
+                        // Allocate space for the new array that we'll copy into.
+                        let elem_type =
+                            basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+
+                        let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                        let reversed_list_ptr = env
+                            .builder
+                            .build_array_malloc(elem_type, list_len, "create_reversed_list_ptr")
+                            .unwrap();
+
+                        // TODO check if malloc returned null; if so, runtime error for OOM!
+
+                        let index_name = "#index";
+                        let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
+
+                        // Start at the last element in the list.
+                        let last_elem_index = builder.build_int_sub(
+                            list_len,
+                            ctx.i64_type().const_int(1, false),
+                            "lastelemindex",
+                        );
+                        builder.build_store(start_alloca, last_elem_index);
+
+                        let loop_bb = ctx.append_basic_block(parent, "loop");
+                        builder.build_unconditional_branch(loop_bb);
+                        builder.position_at_end(loop_bb);
+
+                        // #index = #index - 1
+                        let curr_index = builder
+                            .build_load(start_alloca, index_name)
+                            .into_int_value();
+                        let next_index = builder.build_int_sub(
+                            curr_index,
+                            ctx.i64_type().const_int(1, false),
+                            "nextindex",
+                        );
+
+                        builder.build_store(start_alloca, next_index);
+
+                        let list_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
+
+                        // The pointer to the element in the input list
+                        let elem_ptr = unsafe {
+                            builder.build_in_bounds_gep(list_ptr, &[curr_index], "load_index")
+                        };
+
+                        // The pointer to the element in the reversed list
+                        let reverse_elem_ptr = unsafe {
+                            builder.build_in_bounds_gep(
+                                reversed_list_ptr,
+                                &[builder.build_int_sub(
+                                    list_len,
+                                    builder.build_int_add(
+                                        curr_index,
+                                        ctx.i64_type().const_int(1, false),
+                                        "curr_index_plus_one",
+                                    ),
+                                    "next_index",
+                                )],
+                                "load_index_reversed_list",
+                            )
+                        };
+
+                        let elem = builder.build_load(elem_ptr, "get_elem");
+
+                        // Mutate the new array in-place to change the element.
+                        builder.build_store(reverse_elem_ptr, elem);
+
+                        // #index != 0
+                        let end_cond = builder.build_int_compare(
+                            IntPredicate::NE,
+                            ctx.i64_type().const_int(0, false),
+                            curr_index,
+                            "loopcond",
+                        );
+
+                        let after_bb = ctx.append_basic_block(parent, "afterloop");
+
+                        builder.build_conditional_branch(end_cond, loop_bb, after_bb);
+                        builder.position_at_end(after_bb);
+
+                        let ptr_bytes = env.ptr_bytes;
+                        let int_type = ptr_int(ctx, ptr_bytes);
+                        let ptr_as_int =
+                            builder.build_ptr_to_int(reversed_list_ptr, int_type, "list_cast_ptr");
+                        let struct_type = collection(ctx, ptr_bytes);
+
+                        let mut struct_val;
+
+                        // Store the pointer
+                        struct_val = builder
+                            .build_insert_value(
+                                struct_type.get_undef(),
+                                ptr_as_int,
+                                Builtin::WRAPPER_PTR,
+                                "insert_ptr",
+                            )
+                            .unwrap();
+
+                        // Store the length
+                        struct_val = builder
+                            .build_insert_value(
+                                struct_val,
+                                list_len,
+                                Builtin::WRAPPER_LEN,
+                                "insert_len",
+                            )
+                            .unwrap();
+
+                        builder.build_bitcast(
+                            struct_val.into_struct_value(),
+                            collection(ctx, ptr_bytes),
+                            "cast_collection",
+                        )
+                    }
+                    Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                    _ => {
+                        unreachable!("Invalid List layout for List.get: {:?}", list_layout);
+                    }
+                }
+            };
+
+            let build_else = || empty_list(env);
+
+            let struct_type = collection(ctx, env.ptr_bytes);
+
+            build_basic_phi2(
+                env,
+                parent,
+                comparison,
+                build_then,
+                build_else,
+                BasicTypeEnum::StructType(struct_type),
+            )
+        }
+        ListAppend => {
+            // List.append : List elem, List elem -> List elem
+            debug_assert_eq!(args.len(), 2);
+
+            let (first_list, first_list_layout) = &args[0];
+
+            match first_list_layout {
+                Layout::Builtin(Builtin::EmptyList) => {
+                    // In practice, this code cannot be reached, because if a list
+                    // did have the layout of `EmptyList`, then it would not make
+                    // it here. But this code is still run, in the sense that this
+                    // LLVM is still built this case.
+                    empty_list(env)
+                }
+                Layout::Builtin(Builtin::List(elem_layout)) => {
+                    let first_list_wrapper_struct =
+                        build_expr(env, layout_ids, scope, parent, first_list).into_struct_value();
+
+                    let builder = env.builder;
+                    let ctx = env.context;
+
+                    let first_list_len = load_list_len(builder, first_list_wrapper_struct);
+
+                    // first_list_len > 0
+                    // We do this check to avoid allocating memory. If the first input
+                    // list is empty, then we can just return the second list cloned
+                    let first_list_empty_comparison =
+                        list_is_not_empty(builder, ctx, first_list_len);
+
+                    let build_first_list_non_empty_then = || {
+                        let (second_list, second_list_layout) = &args[1];
+                        let second_list_wrapper_struct =
+                            build_expr(env, layout_ids, scope, parent, second_list)
+                                .into_struct_value();
+
+                        let second_list_len = load_list_len(builder, second_list_wrapper_struct);
+
+                        match second_list_layout {
+                            Layout::Builtin(Builtin::EmptyList) => {
+                                let elem_type = basic_type_from_layout(
+                                    env.arena,
+                                    ctx,
+                                    elem_layout,
+                                    env.ptr_bytes,
+                                );
+                                let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                                let (new_wrapper, _) = clone_nonempty_list(
+                                    env,
+                                    first_list_len,
+                                    load_list_ptr(builder, first_list_wrapper_struct, ptr_type),
+                                    elem_layout,
+                                );
+
+                                BasicValueEnum::StructValue(new_wrapper)
+                            }
+                            Layout::Builtin(Builtin::List(_)) => {
+                                // second_list_len > 0
+                                // We do this check to avoid allocating memory. If the second input
+                                // list is empty, then we can just return the first list cloned
+                                let second_list_empty_comparison =
+                                    list_is_not_empty(builder, ctx, second_list_len);
+
+                                let build_second_list_non_empty_then = || {};
+                                let elem_type = basic_type_from_layout(
+                                    env.arena,
+                                    ctx,
+                                    elem_layout,
+                                    env.ptr_bytes,
+                                );
+
+                                empty_list(env)
+                            }
+                            _ => {
+                                unreachable!(
+                                    "Invalid List layout for List.get: {:?}",
+                                    first_list_layout
+                                );
+                            }
+                        }
+                    };
+
+                    let struct_type = collection(ctx, env.ptr_bytes);
+
+                    let build_first_list_non_empty_else = || empty_list(env);
+
+                    build_basic_phi2(
+                        env,
+                        parent,
+                        first_list_empty_comparison,
+                        build_first_list_non_empty_then,
+                        build_first_list_non_empty_else,
+                        BasicTypeEnum::StructType(struct_type),
+                    )
+                }
+                _ => {
+                    unreachable!("Invalid List layout for List.get: {:?}", first_list_layout);
+                }
+            }
+        }
+        ListPush => {
+            // List.push List elem, elem -> List elem
+            debug_assert_eq!(args.len(), 2);
+
+            let original_wrapper =
+                build_expr(env, layout_ids, scope, parent, &args[0].0).into_struct_value();
+            let elem = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let elem_layout = &args[1].1;
+
+            list_push(env, original_wrapper, elem, elem_layout)
+        }
+        NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumToFloat => {
+            debug_assert_eq!(args.len(), 1);
+
+            let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let arg_layout = &args[0].1;
+
+            match arg_layout {
+                Layout::Builtin(arg_builtin) => {
+                    use roc_mono::layout::Builtin::*;
+
+                    match arg_builtin {
+                        Int128 | Int64 | Int32 | Int16 | Int8 => {
+                            build_int_unary_op(env, arg.into_int_value(), arg_layout, op)
+                        }
+                        Float128 | Float64 | Float32 | Float16 => {
+                            build_float_unary_op(env, arg.into_float_value(), arg_layout, op)
+                        }
+                        _ => {
+                            unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, arg_layout);
+                        }
+                    }
+                }
+                _ => {
+                    unreachable!(
+                        "Compiler bug: tried to run numeric operation {:?} on invalid layout: {:?}",
+                        op, arg_layout
+                    );
+                }
+            }
+        }
+        NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
+        | NumDivUnchecked => {
+            debug_assert_eq!(args.len(), 2);
+
+            let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let lhs_layout = &args[0].1;
+            let rhs_arg = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let rhs_layout = &args[1].1;
+
+            match (lhs_layout, rhs_layout) {
+                (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
+                    if lhs_builtin == rhs_builtin =>
+                {
+                    use roc_mono::layout::Builtin::*;
+
+                    match lhs_builtin {
+                        Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
+                            env,
+                            lhs_arg.into_int_value(),
+                            lhs_layout,
+                            rhs_arg.into_int_value(),
+                            rhs_layout,
+                            op,
+                        ),
+                        Float128 | Float64 | Float32 | Float16 => build_float_binop(
+                            env,
+                            lhs_arg.into_float_value(),
+                            lhs_layout,
+                            rhs_arg.into_float_value(),
+                            rhs_layout,
+                            op,
+                        ),
+                        _ => {
+                            unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, lhs_layout);
+                        }
+                    }
+                }
+                _ => {
+                    unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid layouts. The 2 layouts were: ({:?}) and ({:?})", op, lhs_layout, rhs_layout);
+                }
+            }
+        }
+        Eq => {
+            debug_assert_eq!(args.len(), 2);
+
+            let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let lhs_layout = &args[0].1;
+            let rhs_arg = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let rhs_layout = &args[1].1;
+
+            build_eq(env, lhs_arg, rhs_arg, lhs_layout, rhs_layout)
+        }
+        NotEq => {
+            debug_assert_eq!(args.len(), 2);
+
+            let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let lhs_layout = &args[0].1;
+            let rhs_arg = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let rhs_layout = &args[1].1;
+
+            build_neq(env, lhs_arg, rhs_arg, lhs_layout, rhs_layout)
+        }
+        And => {
+            // The (&&) operator
+            debug_assert_eq!(args.len(), 2);
+
+            let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let rhs_arg = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let bool_val = env.builder.build_and(
+                lhs_arg.into_int_value(),
+                rhs_arg.into_int_value(),
+                "bool_and",
+            );
+
+            BasicValueEnum::IntValue(bool_val)
+        }
+        Or => {
+            // The (||) operator
+            debug_assert_eq!(args.len(), 2);
+
+            let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let rhs_arg = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let bool_val = env.builder.build_or(
+                lhs_arg.into_int_value(),
+                rhs_arg.into_int_value(),
+                "bool_or",
+            );
+
+            BasicValueEnum::IntValue(bool_val)
+        }
+        Not => {
+            // The (!) operator
+            debug_assert_eq!(args.len(), 1);
+
+            let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let bool_val = env.builder.build_not(arg.into_int_value(), "bool_not");
+
+            BasicValueEnum::IntValue(bool_val)
+        }
+        ListGetUnsafe => {
+            // List.get : List elem, Int -> [ Ok elem, OutOfBounds ]*
+            debug_assert_eq!(args.len(), 2);
+
+            let builder = env.builder;
+            let (_, list_layout) = &args[0];
+            let wrapper_struct =
+                build_expr(env, layout_ids, scope, parent, &args[0].0).into_struct_value();
+            let elem_index =
+                build_expr(env, layout_ids, scope, parent, &args[1].0).into_int_value();
+
+            match list_layout {
+                Layout::Builtin(Builtin::List(elem_layout)) => {
+                    let ctx = env.context;
+                    let elem_type =
+                        basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+                    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+                    // Load the pointer to the array data
+                    let array_data_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
+
+                    // Assume the bounds have already been checked earlier
+                    // (e.g. by List.get or List.first, which wrap List.#getUnsafe)
+                    let elem_ptr = unsafe {
+                        builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "elem")
+                    };
+
+                    builder.build_load(elem_ptr, "List.get")
+                }
+                _ => {
+                    unreachable!(
+                        "Invalid List layout for ListGetUnsafe operation: {:?}",
+                        list_layout
+                    );
+                }
+            }
+        }
+        ListSet => list_set(
+            parent,
+            &[
+                (
+                    build_expr(env, layout_ids, scope, parent, &args[0].0),
+                    &args[0].1,
+                ),
+                (
+                    build_expr(env, layout_ids, scope, parent, &args[1].0),
+                    &args[1].1,
+                ),
+                (
+                    build_expr(env, layout_ids, scope, parent, &args[2].0),
+                    &args[2].1,
+                ),
+            ],
+            env,
+            InPlace::Clone,
+        ),
+        ListSetInPlace => list_set(
+            parent,
+            &[
+                (
+                    build_expr(env, layout_ids, scope, parent, &args[0].0),
+                    &args[0].1,
+                ),
+                (
+                    build_expr(env, layout_ids, scope, parent, &args[1].0),
+                    &args[1].1,
+                ),
+                (
+                    build_expr(env, layout_ids, scope, parent, &args[2].0),
+                    &args[2].1,
+                ),
+            ],
+            env,
+            InPlace::InPlace,
+        ),
+    }
+}
+
+fn build_int_binop<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    lhs: IntValue<'ctx>,
+    _lhs_layout: &Layout<'a>,
+    rhs: IntValue<'ctx>,
+    _rhs_layout: &Layout<'a>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    use inkwell::IntPredicate::*;
+    use roc_module::low_level::LowLevel::*;
+
+    let bd = env.builder;
+
+    match op {
+        NumAdd => bd.build_int_add(lhs, rhs, "add_int").into(),
+        NumSub => bd.build_int_sub(lhs, rhs, "sub_int").into(),
+        NumMul => bd.build_int_mul(lhs, rhs, "mul_int").into(),
+        NumGt => bd.build_int_compare(SGT, lhs, rhs, "int_gt").into(),
+        NumGte => bd.build_int_compare(SGE, lhs, rhs, "int_gte").into(),
+        NumLt => bd.build_int_compare(SLT, lhs, rhs, "int_lt").into(),
+        NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
+        NumRemUnchecked => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
+        NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
+        _ => {
+            unreachable!("Unrecognized int binary operation: {:?}", op);
+        }
+    }
+}
+
+fn build_float_binop<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    lhs: FloatValue<'ctx>,
+    _lhs_layout: &Layout<'a>,
+    rhs: FloatValue<'ctx>,
+    _rhs_layout: &Layout<'a>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    use inkwell::FloatPredicate::*;
+    use roc_module::low_level::LowLevel::*;
+
+    let bd = env.builder;
+
+    match op {
+        NumAdd => bd.build_float_add(lhs, rhs, "add_float").into(),
+        NumSub => bd.build_float_sub(lhs, rhs, "sub_float").into(),
+        NumMul => bd.build_float_mul(lhs, rhs, "mul_float").into(),
+        NumGt => bd.build_float_compare(OGT, lhs, rhs, "float_gt").into(),
+        NumGte => bd.build_float_compare(OGE, lhs, rhs, "float_gte").into(),
+        NumLt => bd.build_float_compare(OLT, lhs, rhs, "float_lt").into(),
+        NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
+        NumRemUnchecked => bd.build_float_rem(lhs, rhs, "rem_float").into(),
+        NumDivUnchecked => bd.build_float_div(lhs, rhs, "div_float").into(),
+        _ => {
+            unreachable!("Unrecognized int binary operation: {:?}", op);
+        }
+    }
+}
+
+fn build_int_unary_op<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    arg: IntValue<'ctx>,
+    arg_layout: &Layout<'a>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    use roc_module::low_level::LowLevel::*;
+
+    let bd = env.builder;
+
+    match op {
+        NumNeg => bd.build_int_neg(arg, "negate_int").into(),
+        NumAbs => {
+            // This is how libc's abs() is implemented - it uses no branching!
+            //
+            //     abs = \arg ->
+            //         shifted = arg >>> 63
+            //
+            //         (xor arg shifted) - shifted
+
+            let ctx = env.context;
+            let shifted_name = "abs_shift_right";
+            let shifted_alloca = {
+                let bits_to_shift = ((arg_layout.stack_size(env.ptr_bytes) as u64) * 8) - 1;
+                let shift_val = ctx.i64_type().const_int(bits_to_shift, false);
+                let shifted = bd.build_right_shift(arg, shift_val, true, shifted_name);
+                let alloca = bd.build_alloca(
+                    basic_type_from_layout(env.arena, ctx, arg_layout, env.ptr_bytes),
+                    "#int_abs_help",
+                );
+
+                // shifted = arg >>> 63
+                bd.build_store(alloca, shifted);
+
+                alloca
+            };
+
+            let xored_arg = bd.build_xor(
+                arg,
+                bd.build_load(shifted_alloca, shifted_name).into_int_value(),
+                "xor_arg_shifted",
+            );
+
+            BasicValueEnum::IntValue(bd.build_int_sub(
+                xored_arg,
+                bd.build_load(shifted_alloca, shifted_name).into_int_value(),
+                "sub_xored_shifted",
+            ))
+        }
+        NumToFloat => {
+            // TODO specialize this to be not just for i64!
+            let builtin_fn_name = "i64_to_f64_";
+
+            let fn_val = env
+                .module
+                .get_function(builtin_fn_name)
+                .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", builtin_fn_name));
+
+            let call = env
+                .builder
+                .build_call(fn_val, &[arg.into()], "call_builtin");
+
+            call.set_call_convention(fn_val.get_call_conventions());
+
+            call.try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| panic!("LLVM error: Invalid call for low-level op {:?}", op))
+        }
+        _ => {
+            unreachable!("Unrecognized int unary operation: {:?}", op);
+        }
+    }
+}
+
+fn build_float_unary_op<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    arg: FloatValue<'ctx>,
+    arg_layout: &Layout<'a>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    use roc_module::low_level::LowLevel::*;
+
+    let bd = env.builder;
+
+    match op {
+        NumNeg => bd.build_float_neg(arg, "negate_float").into(),
+        NumAbs => call_intrinsic(LLVM_FABS_F64, env, &[(arg.into(), arg_layout)]),
+        NumSqrtUnchecked => call_intrinsic(LLVM_SQRT_F64, env, &[(arg.into(), arg_layout)]),
+        NumRound => call_intrinsic(LLVM_LROUND_I64_F64, env, &[(arg.into(), arg_layout)]),
+        NumSin => call_intrinsic(LLVM_SIN_F64, env, &[(arg.into(), arg_layout)]),
+        NumCos => call_intrinsic(LLVM_COS_F64, env, &[(arg.into(), arg_layout)]),
+        NumToFloat => arg.into(), /* Converting from Float to Float is a no-op */
+        _ => {
+            unreachable!("Unrecognized int unary operation: {:?}", op);
+        }
+    }
+}

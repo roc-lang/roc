@@ -46,25 +46,6 @@ pub fn infer_expr(
     (content, solved.into_inner())
 }
 
-/// Used in the with_larger_debug_stack() function, for tests that otherwise
-/// run out of stack space in debug builds (but don't in --release builds)
-#[allow(dead_code)]
-const EXPANDED_STACK_SIZE: usize = 4 * 1024 * 1024;
-
-/// In --release builds, don't increase the stack size. Run the test normally.
-/// This way, we find out if any of our tests are blowing the stack even after
-/// optimizations in release builds.
-#[cfg(not(debug_assertions))]
-#[inline(always)]
-pub fn with_larger_debug_stack<F>(run_test: F)
-where
-    F: FnOnce() -> (),
-    F: Send,
-    F: 'static,
-{
-    run_test()
-}
-
 #[allow(dead_code)]
 pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, Fail> {
     parse_loc_with(arena, input).map(|loc_expr| loc_expr.value)
@@ -216,6 +197,33 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         Region::zero(),
         &loc_expr.value,
     );
+
+    // Add the builtins' defs.
+    let mut with_builtins = loc_expr.value;
+
+    // Add builtin defs (e.g. List.get) directly to the canonical Expr,
+    // since we aren't using modules here.
+    let builtin_defs = roc_can::builtins::builtin_defs(&mut var_store);
+
+    for (symbol, def) in builtin_defs {
+        if output.references.lookups.contains(&symbol) || output.references.calls.contains(&symbol)
+        {
+            with_builtins = roc_can::expr::Expr::LetNonRec(
+                Box::new(def),
+                Box::new(Located {
+                    region: Region::zero(),
+                    value: with_builtins,
+                }),
+                var_store.fresh(),
+                SendMap::default(),
+            );
+        }
+    }
+
+    let loc_expr = Located {
+        region: loc_expr.region,
+        value: with_builtins,
+    };
 
     let constraint = constrain_expr(
         &roc_constrain::expr::Env {

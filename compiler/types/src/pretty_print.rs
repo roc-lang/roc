@@ -140,6 +140,11 @@ fn find_names_needed(
             // We must not accidentally generate names that collide with them!
             names_taken.insert(name);
         }
+        Structure(Apply(Symbol::ATTR_ATTR, args)) => {
+            // assign uniqueness var names based on when they occur in the base type
+            find_names_needed(args[1], subs, roots, root_appearances, names_taken);
+            find_names_needed(args[0], subs, roots, root_appearances, names_taken);
+        }
         Structure(Apply(_, args)) => {
             for var in args {
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
@@ -153,21 +158,30 @@ fn find_names_needed(
             find_names_needed(ret_var, subs, roots, root_appearances, names_taken);
         }
         Structure(Record(fields, ext_var)) => {
-            for (_, var) in fields {
-                find_names_needed(var, subs, roots, root_appearances, names_taken);
+            let mut sorted_fields: Vec<_> = fields.iter().collect();
+            sorted_fields.sort();
+
+            for (_, var) in sorted_fields {
+                find_names_needed(*var, subs, roots, root_appearances, names_taken);
             }
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(TagUnion(tags, ext_var)) => {
-            for var in tags.values().flatten() {
+            let mut sorted_tags: Vec<_> = tags.iter().collect();
+            sorted_tags.sort();
+
+            for var in sorted_tags.into_iter().map(|(_, v)| v).flatten() {
                 find_names_needed(*var, subs, roots, root_appearances, names_taken);
             }
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(RecursiveTagUnion(rec_var, tags, ext_var)) => {
-            for var in tags.values().flatten() {
+            let mut sorted_tags: Vec<_> = tags.iter().collect();
+            sorted_tags.sort();
+
+            for var in sorted_tags.into_iter().map(|(_, v)| v).flatten() {
                 find_names_needed(*var, subs, roots, root_appearances, names_taken);
             }
 
@@ -178,6 +192,7 @@ fn find_names_needed(
             Bool::Shared => {}
             Bool::Container(cvar, mvars) => {
                 find_names_needed(cvar, subs, roots, root_appearances, names_taken);
+
                 for var in mvars {
                     find_names_needed(var, subs, roots, root_appearances, names_taken);
                 }
@@ -276,7 +291,8 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
 
             match symbol {
                 Symbol::NUM_NUM => {
-                    debug_assert!(args.len() == 1);
+                    debug_assert_eq!(args.len(), 1);
+
                     let (_, arg_var) = args
                         .get(0)
                         .expect("Num was not applied to a type argument!");
@@ -284,8 +300,8 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
 
                     match &content {
                         Alias(nested, _, _) => match *nested {
-                            Symbol::INT_INTEGER => buf.push_str("Int"),
-                            Symbol::FLOAT_FLOATINGPOINT => buf.push_str("Float"),
+                            Symbol::NUM_INTEGER => buf.push_str("Int"),
+                            Symbol::NUM_FLOATINGPOINT => buf.push_str("Float"),
 
                             _ => write_parens!(write_parens, buf, {
                                 buf.push_str("Num ");
@@ -297,8 +313,8 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
                             let attr_content = subs.get_without_compacting(nested_args[1]).content;
                             match &attr_content {
                                 Alias(nested, _, _) => match *nested {
-                                    Symbol::INT_INTEGER => buf.push_str("Int"),
-                                    Symbol::FLOAT_FLOATINGPOINT => buf.push_str("Float"),
+                                    Symbol::NUM_INTEGER => buf.push_str("Int"),
+                                    Symbol::NUM_FLOATINGPOINT => buf.push_str("Float"),
                                     _ => write_parens!(write_parens, buf, {
                                         buf.push_str("Num ");
                                         write_content(env, content, subs, buf, parens);
@@ -554,7 +570,8 @@ pub fn chase_ext_tag_union(
             chase_ext_tag_union(subs, ext_var, fields)
         }
         Content::Structure(Apply(Symbol::ATTR_ATTR, arguments)) => {
-            debug_assert!(arguments.len() == 2);
+            debug_assert_eq!(arguments.len(), 2);
+
             chase_ext_tag_union(subs, arguments[1], fields)
         }
         Content::Alias(_, _, var) => chase_ext_tag_union(subs, var, fields),
@@ -581,7 +598,8 @@ pub fn chase_ext_record(
         Structure(EmptyRecord) => Ok(()),
 
         Content::Structure(Apply(Symbol::ATTR_ATTR, arguments)) => {
-            debug_assert!(arguments.len() == 2);
+            debug_assert_eq!(arguments.len(), 2);
+
             chase_ext_record(subs, arguments[1], fields)
         }
 
@@ -689,10 +707,10 @@ fn write_apply(
 
             match &arg_content {
                 Content::Structure(FlatType::Apply(symbol, nested_args)) => match *symbol {
-                    Symbol::INT_INTEGER if nested_args.is_empty() => {
+                    Symbol::NUM_INTEGER if nested_args.is_empty() => {
                         buf.push_str("Int");
                     }
-                    Symbol::FLOAT_FLOATINGPOINT if nested_args.is_empty() => {
+                    Symbol::NUM_FLOATINGPOINT if nested_args.is_empty() => {
                         buf.push_str("Float");
                     }
                     Symbol::ATTR_ATTR => match nested_args
@@ -703,10 +721,10 @@ fn write_apply(
                             double_nested_symbol,
                             double_nested_args,
                         ))) => match double_nested_symbol {
-                            Symbol::INT_INTEGER if double_nested_args.is_empty() => {
+                            Symbol::NUM_INTEGER if double_nested_args.is_empty() => {
                                 buf.push_str("Int");
                             }
-                            Symbol::FLOAT_FLOATINGPOINT if double_nested_args.is_empty() => {
+                            Symbol::NUM_FLOATINGPOINT if double_nested_args.is_empty() => {
                                 buf.push_str("Float");
                             }
                             _ => default_case(subs, arg_content),

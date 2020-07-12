@@ -765,6 +765,13 @@ fn to_expr_report<'b>(
                     None,
                 )
             }
+            Reason::LowLevelOpArg { op, arg_index } => {
+                panic!(
+                    "Compiler bug: argument #{} to low-level operation {:?} was the wrong type!",
+                    arg_index.ordinal(),
+                    op
+                );
+            }
             Reason::FloatLiteral | Reason::IntLiteral | Reason::NumLiteral => {
                 unreachable!("I don't think these can be reached")
             }
@@ -892,6 +899,12 @@ fn add_category<'b>(
             alloc.text(" call produces:"),
         ]),
         CallResult(None) => alloc.concat(vec![this_is, alloc.text(":")]),
+        LowLevelOpResult(op) => {
+            panic!(
+                "Compiler bug: invalid return type from low-level op {:?}",
+                op
+            );
+        }
 
         Uniqueness => alloc.concat(vec![
             this_is,
@@ -1478,24 +1491,24 @@ fn to_diff<'b>(
             let right = to_doc(alloc, Parens::Unnecessary, type2);
 
             let is_int = |t: &ErrorType| match t {
-                ErrorType::Type(Symbol::INT_INT, _) => true,
-                ErrorType::Alias(Symbol::INT_INT, _, _) => true,
+                ErrorType::Type(Symbol::NUM_INT, _) => true,
+                ErrorType::Alias(Symbol::NUM_INT, _, _) => true,
 
                 ErrorType::Type(Symbol::NUM_NUM, args) => match &args.get(0) {
-                    Some(ErrorType::Type(Symbol::INT_INTEGER, _)) => true,
-                    Some(ErrorType::Alias(Symbol::INT_INTEGER, _, _)) => true,
+                    Some(ErrorType::Type(Symbol::NUM_INTEGER, _)) => true,
+                    Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _)) => true,
                     _ => false,
                 },
                 ErrorType::Alias(Symbol::NUM_NUM, args, _) => match &args.get(0) {
-                    Some((_, ErrorType::Type(Symbol::INT_INTEGER, _))) => true,
-                    Some((_, ErrorType::Alias(Symbol::INT_INTEGER, _, _))) => true,
+                    Some((_, ErrorType::Type(Symbol::NUM_INTEGER, _))) => true,
+                    Some((_, ErrorType::Alias(Symbol::NUM_INTEGER, _, _))) => true,
                     _ => false,
                 },
                 _ => false,
             };
             let is_float = |t: &ErrorType| match t {
-                ErrorType::Type(Symbol::FLOAT_FLOAT, _) => true,
-                ErrorType::Alias(Symbol::FLOAT_FLOAT, _, _) => true,
+                ErrorType::Type(Symbol::NUM_FLOAT, _) => true,
+                ErrorType::Alias(Symbol::NUM_FLOAT, _, _) => true,
 
                 _ => false,
             };
@@ -2284,7 +2297,7 @@ fn type_problem_to_pretty<'b>(
             alloc.reflow(" with "),
             alloc.symbol_qualified(Symbol::NUM_TO_FLOAT),
             alloc.reflow(" and "),
-            alloc.symbol_qualified(Symbol::FLOAT_ROUND),
+            alloc.symbol_qualified(Symbol::NUM_ROUND),
             alloc.reflow("."),
         ])),
 

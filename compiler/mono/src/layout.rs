@@ -4,9 +4,17 @@ use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::{Content, FlatType, Subs, Variable};
-use std::collections::BTreeMap;
 
 pub const MAX_ENUM_SIZE: usize = (std::mem::size_of::<u8>() * 8) as usize;
+
+/// If a (Num *) gets translated to a Layout, this is the numeric type it defaults to.
+const DEFAULT_NUM_BUILTIN: Builtin<'_> = Builtin::Int64;
+
+#[derive(Debug, Clone)]
+pub enum LayoutProblem {
+    UnresolvedTypeVar,
+    Erroneous,
+}
 
 /// Types for code gen must be monomorphic. No type variables allowed!
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -21,10 +29,16 @@ pub enum Layout<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Builtin<'a> {
+    Int128,
     Int64,
+    Int32,
+    Int16,
+    Int8,
+    Int1,
+    Float128,
     Float64,
-    Bool,
-    Byte,
+    Float32,
+    Float16,
     Str,
     Map(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
@@ -41,23 +55,18 @@ impl<'a> Layout<'a> {
         content: Content,
         subs: &Subs,
         pointer_size: u32,
-    ) -> Result<Self, ()> {
+    ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
 
         match content {
-            var @ FlexVar(_) | var @ RigidVar(_) => {
-                panic!(
-                    "Layout::new encountered an unresolved {:?} - subs was {:?}",
-                    var, subs
-                );
-            }
+            FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar),
             Structure(flat_type) => layout_from_flat_type(arena, flat_type, subs, pointer_size),
 
-            Alias(Symbol::INT_INT, args, _) => {
+            Alias(Symbol::NUM_INT, args, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Int64))
             }
-            Alias(Symbol::FLOAT_FLOAT, args, _) => {
+            Alias(Symbol::NUM_FLOAT, args, _) => {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Float64))
             }
@@ -67,7 +76,7 @@ impl<'a> Layout<'a> {
                 subs,
                 pointer_size,
             ),
-            Error => Err(()),
+            Error => Err(LayoutProblem::Erroneous),
         }
     }
 
@@ -79,7 +88,7 @@ impl<'a> Layout<'a> {
         var: Variable,
         subs: &Subs,
         pointer_size: u32,
-    ) -> Result<Self, ()> {
+    ) -> Result<Self, LayoutProblem> {
         let content = subs.get_without_compacting(var).content;
 
         Self::new(arena, content, subs, pointer_size)
@@ -140,7 +149,7 @@ impl<'a> Layout<'a> {
 /// Avoid recomputing Layout from Variable multiple times.
 #[derive(Default)]
 pub struct LayoutCache<'a> {
-    layouts: MutMap<Variable, Result<Layout<'a>, ()>>,
+    layouts: MutMap<Variable, Result<Layout<'a>, LayoutProblem>>,
 }
 
 impl<'a> LayoutCache<'a> {
@@ -153,7 +162,7 @@ impl<'a> LayoutCache<'a> {
         var: Variable,
         subs: &Subs,
         pointer_size: u32,
-    ) -> Result<Layout<'a>, ()> {
+    ) -> Result<Layout<'a>, LayoutProblem> {
         // Store things according to the root Variable, to avoid duplicate work.
         let var = subs.get_root_key_without_compacting(var);
 
@@ -169,10 +178,16 @@ impl<'a> LayoutCache<'a> {
 }
 
 impl<'a> Builtin<'a> {
+    const I128_SIZE: u32 = std::mem::size_of::<i128>() as u32;
     const I64_SIZE: u32 = std::mem::size_of::<i64>() as u32;
+    const I32_SIZE: u32 = std::mem::size_of::<i32>() as u32;
+    const I16_SIZE: u32 = std::mem::size_of::<i16>() as u32;
+    const I8_SIZE: u32 = std::mem::size_of::<i8>() as u32;
+    const I1_SIZE: u32 = std::mem::size_of::<bool>() as u32;
+    const F128_SIZE: u32 = 16;
     const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
-    const BOOL_SIZE: u32 = std::mem::size_of::<bool>() as u32;
-    const BYTE_SIZE: u32 = std::mem::size_of::<u8>() as u32;
+    const F32_SIZE: u32 = std::mem::size_of::<f32>() as u32;
+    const F16_SIZE: u32 = 2;
 
     /// Number of machine words in an empty one of these
     pub const STR_WORDS: u32 = 2;
@@ -180,7 +195,7 @@ impl<'a> Builtin<'a> {
     pub const SET_WORDS: u32 = Builtin::MAP_WORDS; // Set is an alias for Map with {} for value
     pub const LIST_WORDS: u32 = 2;
 
-    /// Layout of collection wrapper for List and Str - a struct of (pointre, length).
+    /// Layout of collection wrapper for List and Str - a struct of (pointer, length).
     ///
     /// We choose this layout (with pointer first) because it's how
     /// Rust slices are laid out, meaning we can cast to/from them for free.
@@ -191,10 +206,16 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
+            Int128 => Builtin::I128_SIZE,
             Int64 => Builtin::I64_SIZE,
+            Int32 => Builtin::I32_SIZE,
+            Int16 => Builtin::I16_SIZE,
+            Int8 => Builtin::I8_SIZE,
+            Int1 => Builtin::I1_SIZE,
+            Float128 => Builtin::F128_SIZE,
             Float64 => Builtin::F64_SIZE,
-            Bool => Builtin::BOOL_SIZE,
-            Byte => Builtin::BYTE_SIZE,
+            Float32 => Builtin::F32_SIZE,
+            Float16 => Builtin::F16_SIZE,
             Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
             Map(_, _) | EmptyMap => Builtin::MAP_WORDS * pointer_size,
             Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
@@ -206,7 +227,8 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int64 | Float64 | Bool | Byte | EmptyStr | EmptyMap | EmptyList | EmptySet => true,
+            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Float128 | Float64 | Float32
+            | Float16 | EmptyStr | EmptyMap | EmptyList | EmptySet => true,
             Str | Map(_, _) | Set(_) | List(_) => false,
         }
     }
@@ -217,23 +239,23 @@ fn layout_from_flat_type<'a>(
     flat_type: FlatType,
     subs: &Subs,
     pointer_size: u32,
-) -> Result<Layout<'a>, ()> {
+) -> Result<Layout<'a>, LayoutProblem> {
     use roc_types::subs::FlatType::*;
 
     match flat_type {
         Apply(symbol, args) => {
             match symbol {
-                Symbol::INT_INT => {
-                    debug_assert!(args.is_empty());
+                Symbol::NUM_INT => {
+                    debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Int64))
                 }
-                Symbol::FLOAT_FLOAT => {
-                    debug_assert!(args.is_empty());
+                Symbol::NUM_FLOAT => {
+                    debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Float64))
                 }
-                Symbol::NUM_NUM => {
+                Symbol::NUM_NUM | Symbol::NUM_AT_NUM => {
                     // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
-                    debug_assert!(args.len() == 1);
+                    debug_assert_eq!(args.len(), 1);
 
                     let var = args.iter().next().unwrap();
                     let content = subs.get_without_compacting(*var).content;
@@ -241,20 +263,9 @@ fn layout_from_flat_type<'a>(
                     layout_from_num_content(content)
                 }
                 Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
-                Symbol::LIST_LIST => {
-                    use roc_types::subs::Content::*;
-
-                    match subs.get_without_compacting(args[0]).content {
-                        FlexVar(_) | RigidVar(_) => Ok(Layout::Builtin(Builtin::EmptyList)),
-                        content => {
-                            let elem_layout = Layout::new(arena, content, subs, pointer_size)?;
-
-                            Ok(Layout::Builtin(Builtin::List(arena.alloc(elem_layout))))
-                        }
-                    }
-                }
+                Symbol::LIST_LIST => list_layout_from_elem(arena, subs, args[0], pointer_size),
                 Symbol::ATTR_ATTR => {
-                    debug_assert!(args.len() == 2);
+                    debug_assert_eq!(args.len(), 2);
 
                     // The first argument is the uniqueness info;
                     // that doesn't affect layout, so we don't need it here.
@@ -290,26 +301,44 @@ fn layout_from_flat_type<'a>(
         Record(fields, ext_var) => {
             debug_assert!(ext_var_is_empty_record(subs, ext_var));
 
-            let btree = fields
-                .into_iter()
-                .collect::<BTreeMap<Lowercase, Variable>>();
+            // Sort the fields by label
+            let mut sorted_fields = Vec::with_capacity_in(fields.len(), arena);
 
-            let mut layouts = Vec::with_capacity_in(btree.len(), arena);
+            for tuple in fields {
+                sorted_fields.push(tuple);
+            }
 
-            for (_, field_var) in btree {
+            sorted_fields.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
+
+            // Determine the layouts of the fields, maintaining sort order
+            let mut layouts = Vec::with_capacity_in(sorted_fields.len(), arena);
+
+            for (_, field_var) in sorted_fields {
+                use LayoutProblem::*;
+
                 let field_content = subs.get_without_compacting(field_var).content;
-                let field_layout = match Layout::new(arena, field_content, subs, pointer_size) {
-                    Ok(layout) => layout,
-                    Err(()) => {
+
+                match Layout::new(arena, field_content, subs, pointer_size) {
+                    Ok(layout) => {
+                        // Drop any zero-sized fields like {}
+                        if layout.stack_size(pointer_size) != 0 {
+                            layouts.push(layout);
+                        }
+                    }
+                    Err(UnresolvedTypeVar) | Err(Erroneous) => {
                         // Invalid field!
                         panic!("TODO gracefully handle record with invalid field.var");
                     }
-                };
-
-                layouts.push(field_layout);
+                }
             }
 
-            Ok(Layout::Struct(layouts.into_bump_slice()))
+            if layouts.len() == 1 {
+                // If the record has only one field that isn't zero-sized,
+                // unwrap it.
+                Ok(layouts.pop().unwrap())
+            } else {
+                Ok(Layout::Struct(layouts.into_bump_slice()))
+            }
         }
         TagUnion(tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
@@ -325,36 +354,43 @@ fn layout_from_flat_type<'a>(
         Boolean(_) => {
             panic!("TODO make Layout for Boolean");
         }
-        Erroneous(_) => Err(()),
+        Erroneous(_) => Err(LayoutProblem::Erroneous),
         EmptyRecord => Ok(Layout::Struct(&[])),
     }
 }
 
-pub fn record_fields_btree<'a>(
+pub fn sort_record_fields<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
     pointer_size: u32,
-) -> BTreeMap<Lowercase, Layout<'a>> {
+) -> Vec<'a, (Lowercase, Layout<'a>)> {
     let mut fields_map = MutMap::default();
+
     match roc_types::pretty_print::chase_ext_record(subs, var, &mut fields_map) {
         Ok(()) | Err((_, Content::FlexVar(_))) => {
-            // collect into btreemap to sort
-            fields_map
-                .into_iter()
-                .map(|(label, var)| {
-                    (
-                        label,
-                        Layout::from_var(arena, var, subs, pointer_size)
-                            .expect("invalid layout from var"),
-                    )
-                })
-                .collect::<BTreeMap<Lowercase, Layout<'a>>>()
+            // Sort the fields by label
+            let mut sorted_fields = Vec::with_capacity_in(fields_map.len(), arena);
+
+            for (label, var) in fields_map {
+                let layout = Layout::from_var(arena, var, subs, pointer_size)
+                    .expect("invalid layout from var");
+
+                // Drop any zero-sized fields like {}
+                if layout.stack_size(pointer_size) != 0 {
+                    sorted_fields.push((label, layout));
+                }
+            }
+
+            sorted_fields.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
+
+            sorted_fields
         }
         Err(other) => panic!("invalid content in record variable: {:?}", other),
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum UnionVariant<'a> {
     Never,
     Unit,
@@ -375,7 +411,7 @@ pub fn union_sorted_tags<'a>(
         Ok(()) | Err((_, Content::FlexVar(_))) => {
             union_sorted_tags_help(arena, tags_vec, subs, pointer_size)
         }
-        Err(other) => panic!("invalid content in record variable: {:?}", other),
+        Err(other) => panic!("invalid content in tag union variable: {:?}", other),
     }
 }
 
@@ -385,10 +421,7 @@ fn union_sorted_tags_help<'a>(
     subs: &Subs,
     pointer_size: u32,
 ) -> UnionVariant<'a> {
-    // for this union be be an enum, none of the tags may have any arguments
-    let has_no_arguments = tags_vec.iter().all(|(_, args)| args.is_empty());
-
-    // sort up-front, make sure the ordering stays intact!
+    // sort up front; make sure the ordering stays intact!
     tags_vec.sort();
 
     match tags_vec.len() {
@@ -396,72 +429,104 @@ fn union_sorted_tags_help<'a>(
             // trying to instantiate a type with no values
             UnionVariant::Never
         }
-        1 if has_no_arguments => {
-            // a unit type
-            UnionVariant::Unit
-        }
-        2 if has_no_arguments => {
-            // type can be stored in a boolean
-
-            // tags_vec is sorted,
-            let ttrue = tags_vec.remove(1).0;
-            let ffalse = tags_vec.remove(0).0;
-
-            UnionVariant::BoolUnion { ffalse, ttrue }
-        }
-        3..=MAX_ENUM_SIZE if has_no_arguments => {
-            // type can be stored in a byte
-            // needs the sorted tag names to determine the tag_id
-            let mut tag_names = Vec::with_capacity_in(tags_vec.len(), arena);
-
-            for (label, _) in tags_vec {
-                tag_names.push(label);
-            }
-
-            UnionVariant::ByteUnion(tag_names)
-        }
         1 => {
-            // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
             let (tag_name, arguments) = tags_vec.remove(0);
 
             // just one tag in the union (but with arguments) can be a struct
             let mut layouts = Vec::with_capacity_in(tags_vec.len(), arena);
 
+            // special-case NUM_AT_NUM: if its argument is a FlexVar, make it Int
             match tag_name {
                 TagName::Private(Symbol::NUM_AT_NUM) => {
                     layouts.push(unwrap_num_tag(subs, arguments[0]).expect("invalid num layout"));
                 }
                 _ => {
-                    for var in arguments.iter() {
-                        let layout = Layout::from_var(arena, *var, subs, pointer_size)
-                            .expect("invalid layout from var");
-                        layouts.push(layout);
+                    for var in arguments {
+                        match Layout::from_var(arena, var, subs, pointer_size) {
+                            Ok(layout) => {
+                                // Drop any zero-sized arguments like {}
+                                if layout.stack_size(pointer_size) != 0 {
+                                    layouts.push(layout);
+                                }
+                            }
+                            Err(LayoutProblem::UnresolvedTypeVar) => {
+                                // If we encounter an unbound type var (e.g. `Ok *`)
+                                // then it's zero-sized; drop the argument.
+                            }
+                            Err(LayoutProblem::Erroneous) => {
+                                // An erroneous type var will code gen to a runtime
+                                // error, so we don't need to store any data for it.
+                            }
+                        }
                     }
                 }
             }
-            UnionVariant::Unwrapped(layouts)
-        }
 
-        _ => {
+            if layouts.is_empty() {
+                UnionVariant::Unit
+            } else {
+                UnionVariant::Unwrapped(layouts)
+            }
+        }
+        num_tags => {
             // default path
-            let mut result = Vec::with_capacity_in(tags_vec.len(), arena);
+            let mut answer = Vec::with_capacity_in(tags_vec.len(), arena);
+            let mut has_any_arguments = false;
 
             for (tag_name, arguments) in tags_vec {
-                // resverse space for the tag discriminant
+                // reserve space for the tag discriminant
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
 
-                // add the tag discriminant
+                // add the tag discriminant (size currently always hardcoded to i64)
                 arg_layouts.push(Layout::Builtin(Builtin::Int64));
 
                 for var in arguments {
-                    let layout = Layout::from_var(arena, var, subs, pointer_size)
-                        .expect("invalid layout from var");
-                    arg_layouts.push(layout);
+                    match Layout::from_var(arena, var, subs, pointer_size) {
+                        Ok(layout) => {
+                            // Drop any zero-sized arguments like {}
+                            if layout.stack_size(pointer_size) != 0 {
+                                has_any_arguments = true;
+
+                                arg_layouts.push(layout);
+                            }
+                        }
+                        Err(LayoutProblem::UnresolvedTypeVar) => {
+                            // If we encounter an unbound type var (e.g. `Ok *`)
+                            // then it's zero-sized; drop the argument.
+                        }
+                        Err(LayoutProblem::Erroneous) => {
+                            // An erroneous type var will code gen to a runtime
+                            // error, so we don't need to store any data for it.
+                        }
+                    }
                 }
 
-                result.push((tag_name, arg_layouts.into_bump_slice()));
+                answer.push((tag_name, arg_layouts.into_bump_slice()));
             }
-            UnionVariant::Wrapped(result)
+
+            match num_tags {
+                2 if !has_any_arguments => {
+                    // type can be stored in a boolean
+
+                    // tags_vec is sorted, and answer is sorted the same way
+                    let ttrue = answer.remove(1).0;
+                    let ffalse = answer.remove(0).0;
+
+                    UnionVariant::BoolUnion { ffalse, ttrue }
+                }
+                3..=MAX_ENUM_SIZE if !has_any_arguments => {
+                    // type can be stored in a byte
+                    // needs the sorted tag names to determine the tag_id
+                    let mut tag_names = Vec::with_capacity_in(answer.len(), arena);
+
+                    for (tag_name, _) in answer {
+                        tag_names.push(tag_name);
+                    }
+
+                    UnionVariant::ByteUnion(tag_names)
+                }
+                _ => UnionVariant::Wrapped(answer),
+            }
         }
     }
 }
@@ -475,35 +540,43 @@ pub fn layout_from_tag_union<'a>(
     use UnionVariant::*;
 
     let tags_vec: std::vec::Vec<_> = tags.into_iter().collect();
-    let first_tag = tags_vec[0].clone();
-    let variant = union_sorted_tags_help(arena, tags_vec, subs, pointer_size);
 
-    match variant {
-        Never => panic!("TODO gracefully handle trying to instantiate Never"),
-        Unit => Layout::Struct(&[]),
-        BoolUnion { .. } => Layout::Builtin(Builtin::Bool),
-        ByteUnion(_) => Layout::Builtin(Builtin::Byte),
-        Unwrapped(field_layouts) => match first_tag.0 {
-            TagName::Private(Symbol::NUM_AT_NUM) => {
-                let arguments = first_tag.1;
-                debug_assert!(arguments.len() == 1);
-                let var = arguments.iter().next().unwrap();
+    if tags_vec[0].0 != TagName::Private(Symbol::NUM_AT_NUM) {
+        let variant = union_sorted_tags_help(arena, tags_vec, subs, pointer_size);
 
-                unwrap_num_tag(subs, *var).expect("invalid Num argument")
+        match variant {
+            Never => panic!("TODO gracefully handle trying to instantiate Never"),
+            Unit => Layout::Struct(&[]),
+            BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
+            ByteUnion(_) => Layout::Builtin(Builtin::Int8),
+            Unwrapped(mut field_layouts) => {
+                if field_layouts.len() == 1 {
+                    field_layouts.pop().unwrap()
+                } else {
+                    Layout::Struct(field_layouts.into_bump_slice())
+                }
             }
-            _ => Layout::Struct(field_layouts.into_bump_slice()),
-        },
-        Wrapped(tags) => {
-            let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
+            Wrapped(tags) => {
+                let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
 
-            for (_, tag_layout) in tags {
-                tag_layouts.push(tag_layout);
+                for (_, tag_layout) in tags {
+                    tag_layouts.push(tag_layout);
+                }
+                Layout::Union(tag_layouts.into_bump_slice())
             }
-            Layout::Union(tag_layouts.into_bump_slice())
         }
+    } else {
+        let arguments = &tags_vec[0].1;
+
+        debug_assert_eq!(arguments.len(), 1);
+
+        let var = arguments.iter().next().unwrap();
+
+        unwrap_num_tag(subs, *var).expect("invalid Num argument")
     }
 }
 
+#[cfg(debug_assertions)]
 fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
     let mut ext_fields = std::vec::Vec::new();
@@ -513,6 +586,13 @@ fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
     }
 }
 
+#[cfg(not(debug_assertions))]
+fn ext_var_is_empty_tag_union(_: &Subs, _: Variable) -> bool {
+    // This should only ever be used in debug_assert! macros
+    unreachable!();
+}
+
+#[cfg(debug_assertions)]
 fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
     let mut ext_fields = MutMap::default();
@@ -522,20 +602,27 @@ fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
     }
 }
 
-fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, ()> {
+#[cfg(not(debug_assertions))]
+fn ext_var_is_empty_record(_: &Subs, _: Variable) -> bool {
+    // This should only ever be used in debug_assert! macros
+    unreachable!();
+}
+
+fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutProblem> {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
     match content {
-        var @ FlexVar(_) | var @ RigidVar(_) => {
-            panic!(
-                "Layout::from_num_content encountered an unresolved {:?}",
-                var
-            );
+        FlexVar(_) | RigidVar(_) => {
+            // If a Num makes it all the way through type checking with an unbound
+            // type variable, then assume it's a 64-bit integer.
+            //
+            // (e.g. for (5 + 5) assume both 5s are 64-bit integers.)
+            Ok(Layout::Builtin(DEFAULT_NUM_BUILTIN))
         }
         Structure(Apply(symbol, args)) => match symbol {
-            Symbol::INT_INTEGER => Ok(Layout::Builtin(Builtin::Int64)),
-            Symbol::FLOAT_FLOATINGPOINT => Ok(Layout::Builtin(Builtin::Float64)),
+            Symbol::NUM_INTEGER => Ok(Layout::Builtin(Builtin::Int64)),
+            Symbol::NUM_FLOATINGPOINT => Ok(Layout::Builtin(Builtin::Float64)),
             _ => {
                 panic!(
                     "Invalid Num.Num type application: {:?}",
@@ -543,44 +630,71 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, ()> {
                 );
             }
         },
+        Alias(_, _, _) => {
+            todo!("TODO recursively resolve type aliases in num_from_content");
+        }
         Structure(_) => {
             panic!("Invalid Num.Num type application: {:?}", content);
         }
-        Alias(_, _, _) => {
-            panic!("TODO recursively resolve type aliases in num_from_content");
-        }
-        Error => Err(()),
+        Error => Err(LayoutProblem::Erroneous),
     }
 }
 
-fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, ()> {
+fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutProblem> {
     match subs.get_without_compacting(var).content {
         Content::Structure(flat_type) => match flat_type {
             FlatType::Apply(Symbol::ATTR_ATTR, args) => {
-                debug_assert!(args.len() == 2);
+                debug_assert_eq!(args.len(), 2);
 
                 let arg_var = args.get(1).unwrap();
 
                 unwrap_num_tag(subs, *arg_var)
             }
             _ => {
-                panic!("TODO handle Num.@Num flat_type {:?}", flat_type);
+                todo!("TODO handle Num.@Num flat_type {:?}", flat_type);
             }
         },
-        Content::Alias(Symbol::INT_INTEGER, args, _) => {
+        Content::Alias(Symbol::NUM_INTEGER, args, _) => {
             debug_assert!(args.is_empty());
             Ok(Layout::Builtin(Builtin::Int64))
         }
-        Content::Alias(Symbol::FLOAT_FLOATINGPOINT, args, _) => {
+        Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _) => {
             debug_assert!(args.is_empty());
             Ok(Layout::Builtin(Builtin::Float64))
         }
-        Content::FlexVar(_) => {
+        Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (Num *) then default to compiling it to i64
-            Ok(Layout::Builtin(Builtin::Int64))
+            Ok(Layout::Builtin(DEFAULT_NUM_BUILTIN))
         }
         other => {
-            panic!("TODO non structure Num.@Num flat_type {:?}", other);
+            todo!("TODO non structure Num.@Num flat_type {:?}", other);
+        }
+    }
+}
+
+pub fn list_layout_from_elem<'a>(
+    arena: &'a Bump,
+    subs: &Subs,
+    var: Variable,
+    pointer_size: u32,
+) -> Result<Layout<'a>, LayoutProblem> {
+    match subs.get_without_compacting(var).content {
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
+            debug_assert_eq!(args.len(), 2);
+
+            let arg_var = args.get(1).unwrap();
+
+            list_layout_from_elem(arena, subs, *arg_var, pointer_size)
+        }
+        Content::FlexVar(_) | Content::RigidVar(_) => {
+            // If this was still a (List *) then it must have been an empty list
+            Ok(Layout::Builtin(Builtin::EmptyList))
+        }
+        content => {
+            let elem_layout = Layout::new(arena, content, subs, pointer_size)?;
+
+            // This is a normal list.
+            Ok(Layout::Builtin(Builtin::List(arena.alloc(elem_layout))))
         }
     }
 }

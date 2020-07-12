@@ -1,15 +1,15 @@
 use crate::expr::constrain_decls;
-use roc_builtins::std::Mode;
+use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::{Constraint, LetConstraint};
 use roc_can::module::ModuleOutput;
 use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{ModuleId, Symbol};
-use roc_region::all::Located;
+use roc_region::all::{Located, Region};
 use roc_types::boolean_algebra::Bool;
 use roc_types::solved_types::{BuiltinAlias, SolvedBool, SolvedType};
 use roc_types::subs::{VarId, VarStore, Variable};
-use roc_types::types::{Alias, Type};
+use roc_types::types::{Alias, Problem, Type};
 
 pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
 
@@ -284,7 +284,7 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &mut V
 
             Type::Alias(*symbol, type_variables, Box::new(actual))
         }
-        Error => Type::Erroneous(roc_types::types::Problem::SolvedTypeError),
+        Error => Type::Erroneous(Problem::SolvedTypeError),
         Erroneous(problem) => Type::Erroneous(problem.clone()),
     }
 }
@@ -348,4 +348,135 @@ pub fn constrain_imported_aliases(
         defs_constraint: True,
         ret_constraint: body_con,
     }))
+}
+
+/// Run pre_constrain_imports to get imported_symbols and imported_aliases.
+pub fn constrain_imports(
+    imported_symbols: Vec<Import>,
+    imported_aliases: MutMap<Symbol, Alias>,
+    constraint: Constraint,
+    var_store: &mut VarStore,
+) -> Constraint {
+    let (_introduced_rigids, constraint) =
+        constrain_imported_values(imported_symbols, constraint, var_store);
+
+    // TODO determine what to do with those rigids
+    //    for var in introduced_rigids {
+    //        output.ftv.insert(var, format!("internal_{:?}", var).into());
+    //    }
+
+    constrain_imported_aliases(imported_aliases, constraint, var_store)
+}
+
+pub struct ConstrainableImports {
+    pub imported_symbols: Vec<Import>,
+    pub imported_aliases: MutMap<Symbol, Alias>,
+    pub unused_imports: MutSet<ModuleId>,
+}
+
+/// Run this before constraining imports.
+///
+/// Constraining imports is split into two different functions, because this
+/// part of the work needs to be done on the main thread, whereas the rest of it
+/// can be done on a different thread.
+pub fn pre_constrain_imports(
+    home: ModuleId,
+    references: &MutSet<Symbol>,
+    imported_modules: MutSet<ModuleId>,
+    exposed_types: &mut SubsByModule,
+    stdlib: &StdLib,
+) -> ConstrainableImports {
+    let mut imported_symbols = Vec::with_capacity(references.len());
+    let mut imported_aliases = MutMap::default();
+    let mut unused_imports = imported_modules; // We'll remove these as we encounter them.
+
+    // Translate referenced symbols into constraints. We do this on the main
+    // thread because we need exclusive access to the exposed_types map, in order
+    // to get the necessary constraint info for any aliases we imported. We also
+    // resolve builtin types now, so we can use a refernce to stdlib instead of
+    // having to either clone it or recreate it from scratch on the other thread.
+    for &symbol in references.iter() {
+        let module_id = symbol.module_id();
+
+        // We used this module, so clearly it is not unused!
+        unused_imports.remove(&module_id);
+
+        if module_id.is_builtin() {
+            // For builtin modules, we create imports from the
+            // hardcoded builtin map.
+            match stdlib.types.get(&symbol) {
+                Some((solved_type, region)) => {
+                    let loc_symbol = Located {
+                        value: symbol,
+                        region: *region,
+                    };
+
+                    imported_symbols.push(Import {
+                        loc_symbol,
+                        solved_type: solved_type.clone(),
+                    });
+                }
+                None => {
+                    let is_valid_alias = stdlib.applies.contains(&symbol)
+                        // This wasn't a builtin value or Apply; maybe it was a builtin alias.
+                        || stdlib.aliases.contains_key(&symbol);
+
+                    if !is_valid_alias {
+                        panic!(
+                            "Could not find {:?} in builtin types {:?} or aliases {:?}",
+                            symbol, stdlib.types, stdlib.aliases
+                        );
+                    }
+                }
+            }
+        } else if module_id != home {
+            // We already have constraints for our own symbols.
+            let region = Region::zero(); // TODO this should be the region where this symbol was declared in its home module. Look that up!
+            let loc_symbol = Located {
+                value: symbol,
+                region,
+            };
+
+            match exposed_types.get(&module_id) {
+                Some(ExposedModuleTypes::Valid(solved_types, new_aliases)) => {
+                    let solved_type = solved_types.get(&symbol).unwrap_or_else(|| {
+                        panic!(
+                            "Could not find {:?} in solved_types {:?}",
+                            loc_symbol.value, solved_types
+                        )
+                    });
+
+                    // TODO should this be a union?
+                    for (k, v) in new_aliases.clone() {
+                        imported_aliases.insert(k, v);
+                    }
+
+                    imported_symbols.push(Import {
+                        loc_symbol,
+                        solved_type: solved_type.clone(),
+                    });
+                }
+                Some(ExposedModuleTypes::Invalid) => {
+                    // If that module was invalid, use True constraints
+                    // for everything imported from it.
+                    imported_symbols.push(Import {
+                        loc_symbol,
+                        solved_type: SolvedType::Erroneous(Problem::InvalidModule),
+                    });
+                }
+                None => {
+                    panic!(
+                        "Could not find module {:?} in exposed_types {:?}",
+                        module_id, exposed_types
+                    );
+                }
+            }
+        }
+    }
+
+    ConstrainableImports {
+        imported_symbols,
+        imported_aliases,
+        unused_imports,
+    }
 }

@@ -52,6 +52,7 @@ fn headers_from_annotation_help(
         }
         Underscore
         | Shadowed(_, _)
+        | MalformedPattern(_, _)
         | UnsupportedPattern(_)
         | NumLiteral(_, _)
         | IntLiteral(_)
@@ -117,7 +118,7 @@ pub fn constrain_pattern(
     state: &mut PatternState,
 ) {
     match pattern {
-        Underscore | UnsupportedPattern(_) | Shadowed(_, _) => {
+        Underscore | UnsupportedPattern(_) | MalformedPattern(_, _) | Shadowed(_, _) => {
             // Neither the _ pattern nor erroneous ones add any constraints.
         }
 
@@ -146,7 +147,7 @@ pub fn constrain_pattern(
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Float,
-                builtins::builtin_type(Symbol::INT_INT, vec![]),
+                builtins::builtin_type(Symbol::NUM_INT, vec![]),
                 expected,
             ));
         }
@@ -155,7 +156,7 @@ pub fn constrain_pattern(
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Float,
-                builtins::builtin_type(Symbol::FLOAT_FLOAT, vec![]),
+                builtins::builtin_type(Symbol::NUM_FLOAT, vec![]),
                 expected,
             ));
         }

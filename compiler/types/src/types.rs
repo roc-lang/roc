@@ -4,6 +4,7 @@ use crate::subs::{Subs, VarStore, Variable};
 use inlinable_string::InlinableString;
 use roc_collections::all::{union, ImMap, ImSet, Index, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use std::fmt;
@@ -747,6 +748,10 @@ pub enum Reason {
         name: Option<Symbol>,
         arity: u8,
     },
+    LowLevelOpArg {
+        op: LowLevel,
+        arg_index: Index,
+    },
     FloatLiteral,
     IntLiteral,
     NumLiteral,
@@ -771,6 +776,7 @@ pub enum Reason {
 pub enum Category {
     Lookup(Symbol),
     CallResult(Option<Symbol>),
+    LowLevelOpResult(LowLevel),
     TagApply(TagName),
     Lambda,
     Uniqueness,
@@ -919,10 +925,10 @@ fn write_error_type_help(
             let argument = arguments.remove(0).1;
 
             match argument {
-                Type(Symbol::INT_INTEGER, _) => {
+                Type(Symbol::NUM_INTEGER, _) => {
                     buf.push_str("Int");
                 }
-                Type(Symbol::FLOAT_FLOATINGPOINT, _) => {
+                Type(Symbol::NUM_FLOATINGPOINT, _) => {
                     buf.push_str("Float");
                 }
                 other => {
@@ -1020,10 +1026,10 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             let argument = arguments.remove(0).1;
 
             match argument {
-                Type(Symbol::INT_INTEGER, _) => {
+                Type(Symbol::NUM_INTEGER, _) => {
                     buf.push_str("Int");
                 }
-                Type(Symbol::FLOAT_FLOATINGPOINT, _) => {
+                Type(Symbol::NUM_FLOATINGPOINT, _) => {
                     buf.push_str("Float");
                 }
                 other => {

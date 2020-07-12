@@ -545,6 +545,22 @@ impl Content {
             _ => false,
         }
     }
+
+    #[cfg(debug_assertions)]
+    #[allow(dead_code)]
+    pub fn dbg(self, subs: &Subs) -> Self {
+        let home = roc_module::symbol::ModuleIds::default().get_or_insert(&"#Dbg".into());
+        let mut interns = roc_module::symbol::Interns::default();
+
+        interns.all_ident_ids = roc_module::symbol::IdentIds::exposed_builtins(0);
+
+        eprintln!(
+            "{}",
+            crate::pretty_print::content_to_string(self.clone(), subs, home, &interns)
+        );
+
+        self
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

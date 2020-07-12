@@ -1,4 +1,5 @@
 use crate::annotation::IntroducedVariables;
+use crate::builtins::builtin_defs;
 use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
@@ -10,6 +11,7 @@ use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
+use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
@@ -20,7 +22,6 @@ use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;
 use std::fmt::Debug;
 use std::i64;
-use std::ops::Neg;
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct Output {
@@ -89,6 +90,11 @@ pub enum Expr {
         Vec<(Variable, Located<Expr>)>,
         CalledVia,
     ),
+    RunLowLevel {
+        op: LowLevel,
+        args: Vec<(Variable, Expr)>,
+        ret_var: Variable,
+    },
 
     Closure(
         Variable,
@@ -177,12 +183,13 @@ pub fn canonicalize_expr<'a>(
 
     let (expr, output) = match expr {
         ast::Expr::Num(string) => {
-            let answer = num_expr_from_result(var_store, finish_parsing_int(*string), env);
+            let answer = num_expr_from_result(var_store, finish_parsing_int(*string), region, env);
 
             (answer, Output::default())
         }
         ast::Expr::Float(string) => {
-            let answer = float_expr_from_result(var_store, finish_parsing_float(string), env);
+            let answer =
+                float_expr_from_result(var_store, finish_parsing_float(string), region, env);
 
             (answer, Output::default())
         }
@@ -623,13 +630,9 @@ pub fn canonicalize_expr<'a>(
             base,
             is_negative,
         } => {
-            let mut result = finish_parsing_base(string, *base);
-
-            if *is_negative {
-                result = result.map(i64::neg);
-            }
-
-            let answer = int_expr_from_result(var_store, result, env);
+            // the minus sign is added before parsing, to get correct overflow/underflow behavior
+            let result = finish_parsing_base(string, *base, *is_negative);
+            let answer = int_expr_from_result(var_store, result, region, *base, env);
 
             (answer, Output::default())
         }
@@ -1006,4 +1009,291 @@ fn canonicalize_lookup(
     // If it's valid, this ident should be in scope already.
 
     (can_expr, output)
+}
+
+/// Currently uses the heuristic of "only inline if it's a builtin"
+pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> Expr {
+    use Expr::*;
+
+    match expr {
+        // Num stores the `a` variable in `Num a`. Not the same as the variable
+        // stored in Int and Float below, which is strictly for better error messages
+        other @ Num(_, _)
+        | other @ Int(_, _)
+        | other @ Float(_, _)
+        | other @ Str(_)
+        | other @ BlockStr(_)
+        | other @ RuntimeError(_)
+        | other @ EmptyRecord
+        | other @ Accessor { .. }
+        | other @ Update { .. }
+        | other @ Var(_)
+        | other @ RunLowLevel { .. } => other,
+
+        List {
+            elem_var,
+            loc_elems,
+        } => {
+            let mut new_elems = Vec::with_capacity(loc_elems.len());
+
+            for loc_elem in loc_elems {
+                let value = inline_calls(var_store, scope, loc_elem.value);
+
+                new_elems.push(Located {
+                    value,
+                    region: loc_elem.region,
+                });
+            }
+
+            List {
+                elem_var,
+                loc_elems: new_elems,
+            }
+        }
+        // Branching
+        When {
+            cond_var,
+            expr_var,
+            region,
+            loc_cond,
+            branches,
+        } => {
+            let loc_cond = Box::new(Located {
+                region: loc_cond.region,
+                value: inline_calls(var_store, scope, loc_cond.value),
+            });
+
+            let mut new_branches = Vec::with_capacity(branches.len());
+
+            for branch in branches {
+                let value = Located {
+                    value: inline_calls(var_store, scope, branch.value.value),
+                    region: branch.value.region,
+                };
+                let guard = match branch.guard {
+                    Some(loc_expr) => Some(Located {
+                        region: loc_expr.region,
+                        value: inline_calls(var_store, scope, loc_expr.value),
+                    }),
+                    None => None,
+                };
+                let new_branch = WhenBranch {
+                    patterns: branch.patterns,
+                    value,
+                    guard,
+                };
+
+                new_branches.push(new_branch);
+            }
+
+            When {
+                cond_var,
+                expr_var,
+                region,
+                loc_cond,
+                branches: new_branches,
+            }
+        }
+        If {
+            cond_var,
+            branch_var,
+            branches,
+            final_else,
+        } => {
+            let mut new_branches = Vec::with_capacity(branches.len());
+
+            for (loc_cond, loc_expr) in branches {
+                let loc_cond = Located {
+                    value: inline_calls(var_store, scope, loc_cond.value),
+                    region: loc_cond.region,
+                };
+
+                let loc_expr = Located {
+                    value: inline_calls(var_store, scope, loc_expr.value),
+                    region: loc_expr.region,
+                };
+
+                new_branches.push((loc_cond, loc_expr));
+            }
+
+            let final_else = Box::new(Located {
+                region: final_else.region,
+                value: inline_calls(var_store, scope, final_else.value),
+            });
+
+            If {
+                cond_var,
+                branch_var,
+                branches: new_branches,
+                final_else,
+            }
+        }
+
+        LetRec(defs, loc_expr, var, aliases) => {
+            let mut new_defs = Vec::with_capacity(defs.len());
+
+            for def in defs {
+                new_defs.push(Def {
+                    loc_pattern: def.loc_pattern,
+                    loc_expr: Located {
+                        region: def.loc_expr.region,
+                        value: inline_calls(var_store, scope, def.loc_expr.value),
+                    },
+                    expr_var: def.expr_var,
+                    pattern_vars: def.pattern_vars,
+                    annotation: def.annotation,
+                });
+            }
+
+            let loc_expr = Located {
+                region: loc_expr.region,
+                value: inline_calls(var_store, scope, loc_expr.value),
+            };
+
+            LetRec(new_defs, Box::new(loc_expr), var, aliases)
+        }
+
+        LetNonRec(def, loc_expr, var, aliases) => {
+            let def = Def {
+                loc_pattern: def.loc_pattern,
+                loc_expr: Located {
+                    region: def.loc_expr.region,
+                    value: inline_calls(var_store, scope, def.loc_expr.value),
+                },
+                expr_var: def.expr_var,
+                pattern_vars: def.pattern_vars,
+                annotation: def.annotation,
+            };
+
+            let loc_expr = Located {
+                region: loc_expr.region,
+                value: inline_calls(var_store, scope, loc_expr.value),
+            };
+
+            LetNonRec(Box::new(def), Box::new(loc_expr), var, aliases)
+        }
+
+        Closure(var, symbol, recursive, patterns, boxed_expr) => {
+            let (loc_expr, expr_var) = *boxed_expr;
+            let loc_expr = Located {
+                value: inline_calls(var_store, scope, loc_expr.value),
+                region: loc_expr.region,
+            };
+
+            Closure(
+                var,
+                symbol,
+                recursive,
+                patterns,
+                Box::new((loc_expr, expr_var)),
+            )
+        }
+
+        Record { record_var, fields } => {
+            todo!(
+                "Inlining for Record with record_var {:?} and fields {:?}",
+                record_var,
+                fields
+            );
+        }
+
+        Access {
+            record_var,
+            ext_var,
+            field_var,
+            loc_expr,
+            field,
+        } => {
+            todo!("Inlining for Access with record_var {:?}, ext_var {:?}, field_var {:?}, loc_expr {:?}, field {:?}", record_var, ext_var, field_var, loc_expr, field);
+        }
+
+        Tag {
+            variant_var,
+            ext_var,
+            name,
+            arguments,
+        } => {
+            todo!(
+                "Inlining for Tag with variant_var {:?}, ext_var {:?}, name {:?}, arguments {:?}",
+                variant_var,
+                ext_var,
+                name,
+                arguments
+            );
+        }
+
+        Call(boxed_tuple, args, called_via) => {
+            let (fn_var, loc_expr, expr_var) = *boxed_tuple;
+
+            match loc_expr.value {
+                Var(symbol) if symbol.is_builtin() => match builtin_defs(var_store).get(&symbol) {
+                    Some(Def {
+                        loc_expr:
+                            Located {
+                                value: Closure(_var, _, recursive, params, boxed_body),
+                                ..
+                            },
+                        ..
+                    }) => {
+                        debug_assert_eq!(*recursive, Recursive::NotRecursive);
+
+                        // Since this is a canonicalized Expr, we should have
+                        // already detected any arity mismatches and replaced this
+                        // with a RuntimeError if there was a mismatch.
+                        debug_assert_eq!(params.len(), args.len());
+
+                        // Start with the function's body as the answer.
+                        let (mut loc_answer, _body_var) = *boxed_body.clone();
+
+                        // Wrap the body in one LetNonRec for each argument,
+                        // such that at the end we have all the arguments in
+                        // scope with the values the caller provided.
+                        for ((_param_var, loc_pattern), (expr_var, loc_expr)) in
+                            params.iter().cloned().zip(args.into_iter()).rev()
+                        {
+                            // TODO get the correct vars into here.
+                            // Not sure if param_var should be involved.
+                            let pattern_vars = SendMap::default();
+
+                            // TODO get the actual correct aliases
+                            let aliases = SendMap::default();
+
+                            let def = Def {
+                                loc_pattern,
+                                loc_expr,
+                                expr_var,
+                                pattern_vars,
+                                annotation: None,
+                            };
+
+                            loc_answer = Located {
+                                region: Region::zero(),
+                                value: LetNonRec(
+                                    Box::new(def),
+                                    Box::new(loc_answer),
+                                    var_store.fresh(),
+                                    aliases,
+                                ),
+                            };
+                        }
+
+                        loc_answer.value
+                    }
+                    Some(_) => {
+                        unreachable!("Tried to inline a non-function");
+                    }
+                    None => {
+                        unreachable!(
+                            "Tried to inline a builtin that wasn't registered: {:?}",
+                            symbol
+                        );
+                    }
+                },
+                _ => {
+                    // For now, we only inline calls to builtins. Leave this alone!
+                    Call(Box::new((fn_var, loc_expr, expr_var)), args, called_via)
+                }
+            }
+        }
+    }
 }

@@ -51,14 +51,13 @@ impl TagName {
 impl ModuleName {
     // NOTE: After adding one of these, go to `impl ModuleId` and
     // add a corresponding ModuleId to there!
-    pub const FLOAT: &'static str = "Float";
     pub const BOOL: &'static str = "Bool";
-    pub const INT: &'static str = "Int";
     pub const STR: &'static str = "Str";
+    pub const NUM: &'static str = "Num";
     pub const LIST: &'static str = "List";
     pub const MAP: &'static str = "Map";
     pub const SET: &'static str = "Set";
-    pub const NUM: &'static str = "Num";
+    pub const RESULT: &'static str = "Result";
 
     pub fn as_str(&self) -> &str {
         &*self.0

@@ -258,15 +258,12 @@ Int size : Num [ @Int size ]
 ## decimal floats have [some hardware support](http://speleotrove.com/decimal/)
 ## among the rare processors which support decimal float instructions at all.
 ##
-## This specification covers these float formats, all of which Roc supports:
+## This specification covers several float formats. Here are the ones Roc supports:
 ##
-## - #F16 (16-bit binary float) # TODO show a table like we do with ints, with the min/max ranges
 ## - #F32 (32-bit binary float)
 ## - #F64 (64-bit binary float)
-## - #F128 (128-bit binary float)
 ## - #D32 (32-bit decimal float)
-## - #D64 (64-bit decimal float)
-## - #D128 (128-bit decimal float)
+## - #D64 (64-bit decimal float) # TODO show a table like we do with ints, with the min/max ranges
 ##
 ## Like #Int, it's possible for #Float operations to overflow. Like with ints,
 ## you'll typically get a crash when this happens.
@@ -495,12 +492,21 @@ toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
 
-## Convert a #Num to a #F16. If the given number can't be precisely represented in a #F16,
+## Convert a #Num to a #F32. If the given number can't be precisely represented in a #F32,
 ## there will be a loss of precision.
-toF16 : Num * -> F16
 toF32 : Num * -> F32
+
+## Convert a #Num to a #F64. If the given number can't be precisely represented in a #F64,
+## there will be a loss of precision.
 toF64 : Num * -> F64
-toF128 : Num * -> F128
+
+## Convert a #Num to a #D32. If the given number can't be precisely represented in a #D32,
+## there will be a loss of precision.
+toD32 : Num * -> D32
+
+## Convert a #Num to a #D64. If the given number can't be precisely represented in a #D64,
+## there will be a loss of precision.
+toD64 : Num * -> D64
 
 ## Divide two integers and #Num.round  the resulut.
 ##
@@ -708,7 +714,7 @@ pi : Float *
 
 ## Divide two #Float numbers.
 ##
-## `a / b` is shorthand for `Float.div a b`.
+## `a / b` is shorthand for `Num.div a b`.
 ##
 ## Division by zero is undefined in mathematics. As such, you should make
 ## sure never to pass zero as the denomaintor to this function!
@@ -722,12 +728,12 @@ pi : Float *
 ##
 ## >>> 5.0 / 7.0
 ##
-## >>> Float.div 5 7
+## >>> Num.div 5 7
 ##
-## `Float.div` can be convenient in pipelines.
+## `Num.div` can be convenient in pipelines.
 ##
 ## >>> Float.pi
-## >>>     |> Float.div 2.0
+## >>>     |> Num.div 2.0
 #div : Float, Float -> Result Float DivByZero
 div = \numerator, denominator ->
     when numerator is

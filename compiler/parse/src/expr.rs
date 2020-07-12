@@ -660,11 +660,8 @@ fn parse_def_expr<'a>(
                     region: loc_first_pattern.region,
                 };
 
-                // Add the first def to the end of the defs. (It's fine that we
-                // reorder the first one to the end, because canonicalize will
-                // sort all these defs based on their mutual dependencies anyway. Only
-                // their regions will ever be visible to the user.)
-                defs.push(arena.alloc(loc_first_def));
+                // for formatting reasons, we must insert the first def first!
+                defs.insert(0, arena.alloc(loc_first_def));
 
                 Ok((Expr::Defs(defs, arena.alloc(loc_ret)), state))
             },

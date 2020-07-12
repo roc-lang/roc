@@ -3,6 +3,5 @@ interface Defaults
     imports [
         Map.{ Map },
         Set.{ Set },
-        Float.{ Float },
-        Int.{ Int }
+        Num.{ Num, Int, Float }
     ]

@@ -58,7 +58,7 @@ impl Symbol {
             .get_name(self.module_id())
             .unwrap_or_else(|| {
                 panic!(
-                    "module_string could not find IdentIds for {:?} in interns {:?}",
+                    "module_string could not find IdentIds for module {:?} in {:?}",
                     self.module_id(),
                     interns
                 )
@@ -71,7 +71,7 @@ impl Symbol {
             .get(&self.module_id())
             .unwrap_or_else(|| {
                 panic!(
-                    "ident_string could not find IdentIds for {:?} in interns {:?}",
+                    "ident_string could not find IdentIds for module {:?} in {:?}",
                     self.module_id(),
                     interns
                 )
@@ -177,7 +177,7 @@ lazy_static! {
         std::sync::Mutex::new(roc_collections::all::MutMap::default());
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Interns {
     pub module_ids: ModuleIds,
     pub all_ident_ids: MutMap<ModuleId, IdentIds>,
@@ -575,91 +575,55 @@ define_builtins! {
     0 ATTR: "#Attr" => {
         0 UNDERSCORE: "_" // the _ used in pattern matches. This is Symbol 0.
         1 ATTR_ATTR: "Attr" // the #Attr.Attr type alias, used in uniqueness types.
+        2 ARG_1: "#arg1"
+        3 ARG_2: "#arg2"
+        4 ARG_3: "#arg3"
+        5 ARG_4: "#arg4"
+        6 ARG_5: "#arg5"
+        7 ARG_6: "#arg6"
+        8 ARG_7: "#arg7"
+        9 ARG_8: "#arg8"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
         1 NUM_AT_NUM: "@Num" // the Num.@Num private tag
-        2 NUM_ABS: "abs"
-        3 NUM_NEG: "neg"
-        4 NUM_ADD: "add"
-        5 NUM_SUB: "sub"
-        6 NUM_MUL: "mul"
-        7 NUM_LT: "isLt"
-        8 NUM_LTE: "isLte"
-        9 NUM_GT: "isGt"
-        10 NUM_GTE: "isGte"
-        11 NUM_TO_FLOAT: "toFloat"
+        2 NUM_INT: "Int" imported // the Int.Int type alias
+        3 NUM_INTEGER: "Integer" imported // Int : Num Integer
+        4 NUM_AT_INTEGER: "@Integer" // the Int.@Integer private tag
+        5 NUM_FLOAT: "Float" imported // the Float.Float type alias
+        6 NUM_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
+        7 NUM_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
+        8 NUM_MAX_INT: "maxInt"
+        9 NUM_MIN_INT: "minInt"
+        10 NUM_MAX_FLOAT: "maxFloat"
+        11 NUM_MIN_FLOAT: "minFloat"
+        12 NUM_ABS: "abs"
+        13 NUM_NEG: "neg"
+        14 NUM_ADD: "add"
+        15 NUM_SUB: "sub"
+        16 NUM_MUL: "mul"
+        17 NUM_LT: "isLt"
+        18 NUM_LTE: "isLte"
+        19 NUM_GT: "isGt"
+        20 NUM_GTE: "isGte"
+        21 NUM_TO_FLOAT: "toFloat"
+        22 NUM_SIN: "sin"
+        23 NUM_COS: "cos"
+        24 NUM_TAN: "tan"
+        25 NUM_IS_ZERO: "isZero"
+        26 NUM_IS_EVEN: "isEven"
+        27 NUM_IS_ODD: "isOdd"
+        28 NUM_IS_POSITIVE: "isPositive"
+        29 NUM_IS_NEGATIVE: "isNegative"
+        30 NUM_REM: "rem"
+        31 NUM_DIV_FLOAT: "div"
+        32 NUM_DIV_INT: "divFloor"
+        33 NUM_MOD_INT: "modInt"
+        34 NUM_MOD_FLOAT: "modFloat"
+        35 NUM_SQRT: "sqrt"
+        36 NUM_ROUND: "round"
     }
-    2 INT: "Int" => {
-        0 INT_INT: "Int" imported // the Int.Int type alias
-        1 INT_INTEGER: "Integer" imported // Int : Num Integer
-        2 INT_AT_INTEGER: "@Integer" // the Int.@Integer private tag
-        3 INT_DIV: "div"
-        4 INT_MOD: "mod"
-        5 INT_HIGHEST: "highest"
-        6 INT_LOWEST: "lowest"
-        7 INT_ADD: "#add"
-        8 INT_SUB: "#sub"
-        9 INT_EQ_I64: "#eqi64" // Equality on 64-bit integers, the standard in Roc
-        10 INT_EQ_I1: "#eqi1" // Equality on boolean (theoretically i1) values
-        11 INT_EQ_I8: "#eqi8" // Equality on byte (theoretically i8) values
-        12 INT_DIV_UNSAFE: "divUnsafe" // TODO remove once we can code gen Result
-        13 INT_LT: "#lt"
-        14 INT_LTE: "#lte"
-        15 INT_GT: "#gt"
-        16 INT_GTE: "#gte"
-        17 INT_DIV_ARG_NUMERATOR: "div#numerator" // The first argument to `//`, the numerator
-        18 INT_DIV_ARG_DENOMINATOR: "div#denominator" // The first argument to `//`, the denominator
-        19 INT_NEQ_I64: "#neqi64"
-        20 INT_NEQ_I1: "#neqi1"
-        21 INT_NEQ_I8: "#neqi8"
-        22 INT_ABS: "abs"
-        23 INT_ABS_ARG: "abs#arg"
-        24 INT_REM_UNSAFE: "remUnsafe"
-        25 INT_REM: "rem"
-        26 INT_REM_ARG_0: "rem#arg0"
-        27 INT_REM_ARG_1: "rem#arg1"
-        28 INT_IS_ODD: "isOdd"
-        29 INT_IS_ODD_ARG: "isOdd#arg"
-        30 INT_IS_EVEN: "isEven"
-        31 INT_IS_EVEN_ARG: "isEven#arg"
-        32 INT_IS_ZERO: "isZero"
-        33 INT_IS_ZERO_ARG: "isZero#arg"
-        34 INT_IS_POSITIVE: "isPositive"
-        35 INT_IS_POSITIVE_ARG: "isPositive#arg"
-        36 INT_IS_NEGATIVE: "isNegative"
-        37 INT_IS_NEGATIVE_ARG: "isNegative#arg"
-    }
-    3 FLOAT: "Float" => {
-        0 FLOAT_FLOAT: "Float" imported // the Float.Float type alias
-        1 FLOAT_FLOATINGPOINT: "FloatingPoint" imported // Float : Num FloatingPoint
-        2 FLOAT_AT_FLOATINGPOINT: "@FloatingPoint" // the Float.@FloatingPoint private tag
-        3 FLOAT_DIV: "div"
-        4 FLOAT_MOD: "mod"
-        5 FLOAT_SQRT: "sqrt"
-        6 FLOAT_HIGHEST: "highest"
-        7 FLOAT_LOWEST: "lowest"
-        8 FLOAT_ADD: "#add"
-        9 FLOAT_SUB: "#sub"
-        10 FLOAT_EQ: "eq"
-        11 FLOAT_ROUND: "round"
-        12 FLOAT_LT: "#lt"
-        13 FLOAT_LTE: "#lte"
-        14 FLOAT_GT: "gt"
-        15 FLOAT_GTE: "#gte"
-        16 FLOAT_ABS: "abs"
-        17 FLOAT_IS_POSITIVE: "isPositive"
-        18 FLOAT_IS_POSITIVE_ARG: "isPositive#arg"
-        19 FLOAT_IS_NEGATIVE: "isNegative"
-        20 FLOAT_IS_NEGATIVE_ARG: "isNegative#arg"
-        21 FLOAT_IS_ZERO: "isZero"
-        22 FLOAT_IS_ZERO_ARG: "isZero#arg"
-        23 FLOAT_SIN: "sin"
-        24 FLOAT_COS: "cos"
-        25 FLOAT_TAN: "tan"
-        26 FLOAT_TAN_ARG: "tan#arg"
-    }
-    4 BOOL: "Bool" => {
+    2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
         1 BOOL_AND: "and"
         2 BOOL_OR: "or"
@@ -668,40 +632,35 @@ define_builtins! {
         5 BOOL_EQ: "isEq"
         6 BOOL_NEQ: "isNotEq"
     }
-    5 STR: "Str" => {
+    3 STR: "Str" => {
         0 STR_STR: "Str" imported // the Str.Str type alias
         1 STR_AT_STR: "@Str" // the Str.@Str private tag
         2 STR_ISEMPTY: "isEmpty"
         3 STR_APPEND: "append"
     }
-    6 LIST: "List" => {
+    4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
         1 LIST_AT_LIST: "@List" // the List.@List private tag
         2 LIST_IS_EMPTY: "isEmpty"
         3 LIST_GET: "get"
-        4 LIST_GET_ARG_LIST: "get#list"
-        5 LIST_GET_ARG_INDEX: "get#index"
-        6 LIST_SET: "set"
-        7 LIST_SET_IN_PLACE: "#setInPlace"
-        8 LIST_PUSH: "push"
-        9 LIST_MAP: "map"
-        10 LIST_LEN: "len"
-        11 LIST_FOLDL: "foldl"
-        12 LIST_FOLDR: "foldr"
-        13 LIST_GET_UNSAFE: "getUnsafe"
-        14 LIST_CONCAT: "concat"
-        15 LIST_FIRST: "first"
-        16 LIST_FIRST_ARG: "first#list"
-        17 LIST_SINGLE: "single"
-        18 LIST_REPEAT: "repeat"
-        19 LIST_REVERSE: "reverse"
-        20 LIST_APPEND: "append"
+        4 LIST_SET: "set"
+        5 LIST_PUSH: "push"
+        6 LIST_MAP: "map"
+        7 LIST_LEN: "len"
+        8 LIST_FOLDL: "foldl"
+        9 LIST_FOLDR: "foldr"
+        10 LIST_CONCAT: "concat"
+        11 LIST_FIRST: "first"
+        12 LIST_SINGLE: "single"
+        13 LIST_REPEAT: "repeat"
+        14 LIST_REVERSE: "reverse"
+        15 LIST_APPEND: "append"
     }
-    7 RESULT: "Result" => {
+    5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
         1 RESULT_MAP: "map"
     }
-    8 MAP: "Map" => {
+    6 MAP: "Map" => {
         0 MAP_MAP: "Map" imported // the Map.Map type alias
         1 MAP_AT_MAP: "@Map" // the Map.@Map private tag
         2 MAP_EMPTY: "empty"
@@ -709,7 +668,7 @@ define_builtins! {
         4 MAP_GET: "get"
         5 MAP_INSERT: "insert"
     }
-    9 SET: "Set" => {
+    7 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias
         1 SET_AT_SET: "@Set" // the Set.@Set private tag
         2 SET_EMPTY: "empty"
@@ -721,5 +680,5 @@ define_builtins! {
         8 SET_DIFF: "diff"
     }
 
-    num_modules: 10 // Keep this count up to date by hand! (Rust macros can't do arithmetic.)
+    num_modules: 8 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

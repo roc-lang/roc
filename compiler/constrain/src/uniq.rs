@@ -70,7 +70,7 @@ pub fn constrain_decls(
     for decl in decls.iter().rev() {
         // NOTE: rigids are empty because they are not shared between top-level definitions
         match decl {
-            Declaration::Declare(def) => {
+            Declaration::Declare(def) | Declaration::Builtin(def) => {
                 sharing::annotate_usage(&def.loc_expr.value, &mut var_usage);
             }
             Declaration::DeclareRec(defs) => {
@@ -78,24 +78,33 @@ pub fn constrain_decls(
                     sharing::annotate_usage(&def.loc_expr.value, &mut var_usage);
                 }
             }
-            Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),
+            Declaration::InvalidCycle(_, _) => {
+                // any usage of a value defined in an invalid cycle will blow up
+                // so for the analysis usage by such values doesn't count
+                continue;
+            }
         }
     }
 
     aliases_to_attr_type(var_store, &mut aliases);
 
+    let mut env = Env {
+        home,
+        rigids: ImMap::default(),
+    };
+
     for decl in decls.iter().rev() {
-        // NOTE: rigids are empty because they are not shared between top-level definitions
+        // clear the set of rigids from the previous iteration.
+        // rigids are not shared between top-level definitions.
+        env.rigids.clear();
+
         match decl {
-            Declaration::Declare(def) => {
+            Declaration::Declare(def) | Declaration::Builtin(def) => {
                 constraint = exists_with_aliases(
                     aliases.clone(),
                     Vec::new(),
                     constrain_def(
-                        &Env {
-                            home,
-                            rigids: ImMap::default(),
-                        },
+                        &env,
                         var_store,
                         &var_usage,
                         &mut ImSet::default(),
@@ -109,10 +118,7 @@ pub fn constrain_decls(
                     aliases.clone(),
                     Vec::new(),
                     constrain_recursive_defs(
-                        &Env {
-                            home,
-                            rigids: ImMap::default(),
-                        },
+                        &env,
                         var_store,
                         &var_usage,
                         &mut ImSet::default(),
@@ -121,7 +127,10 @@ pub fn constrain_decls(
                     ),
                 );
             }
-            Declaration::InvalidCycle(_, _) => panic!("TODO handle invalid cycle"),
+            Declaration::InvalidCycle(_, _) => {
+                // invalid cycles give a canonicalization error. we skip them here.
+                continue;
+            }
         }
     }
 
@@ -333,7 +342,7 @@ fn constrain_pattern(
             state.constraints.push(tag_con);
         }
 
-        Underscore | Shadowed(_, _) | UnsupportedPattern(_) => {
+        Underscore | Shadowed(_, _) | MalformedPattern(_, _) | UnsupportedPattern(_) => {
             // no constraints
         }
     }
@@ -370,11 +379,11 @@ fn unique_num(var_store: &mut VarStore, symbol: Symbol) -> (Variable, Variable, 
 }
 
 fn unique_int(var_store: &mut VarStore) -> (Variable, Variable, Type) {
-    unique_num(var_store, Symbol::INT_INTEGER)
+    unique_num(var_store, Symbol::NUM_INTEGER)
 }
 
 fn unique_float(var_store: &mut VarStore) -> (Variable, Variable, Type) {
-    unique_num(var_store, Symbol::FLOAT_FLOATINGPOINT)
+    unique_num(var_store, Symbol::NUM_FLOATINGPOINT)
 }
 
 pub fn constrain_expr(
@@ -792,6 +801,54 @@ pub fn constrain_expr(
                     ),
                     And(arg_cons),
                     Eq(ret_type, expected, Category::CallResult(opt_symbol), region),
+                ]),
+            )
+        }
+        RunLowLevel { op, args, ret_var } => {
+            // This is a modified version of what we do for function calls.
+
+            let ret_type = Variable(*ret_var);
+            let mut vars = Vec::with_capacity(1 + args.len());
+
+            vars.push(*ret_var);
+
+            // Canonicalize the function expression and its arguments
+
+            let mut arg_types = Vec::with_capacity(args.len());
+            let mut arg_cons = Vec::with_capacity(args.len());
+
+            for (index, (arg_var, arg_expr)) in args.iter().enumerate() {
+                let arg_type = Variable(*arg_var);
+
+                let reason = Reason::LowLevelOpArg {
+                    op: *op,
+                    arg_index: Index::zero_based(index),
+                };
+
+                let expected_arg = Expected::ForReason(reason, arg_type.clone(), region);
+                let arg_con = constrain_expr(
+                    env,
+                    var_store,
+                    var_usage,
+                    applied_usage_constraint,
+                    Region::zero(),
+                    arg_expr,
+                    expected_arg,
+                );
+
+                vars.push(*arg_var);
+                arg_types.push(arg_type);
+                arg_cons.push(arg_con);
+            }
+
+            let expected_uniq_type = var_store.fresh();
+            vars.push(expected_uniq_type);
+
+            exists(
+                vars,
+                And(vec![
+                    And(arg_cons),
+                    Eq(ret_type, expected, Category::LowLevelOpResult(*op), region),
                 ]),
             )
         }
