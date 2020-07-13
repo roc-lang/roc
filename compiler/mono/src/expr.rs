@@ -91,6 +91,14 @@ impl<'a> Procs<'a> {
             .from_var(env.arena, annotation, env.subs, env.pointer_size)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
+        let pending = PendingSpecialization {
+            ret_var,
+            fn_var: annotation,
+            pattern_vars,
+        };
+
+        self.add_pending_specialization(symbol, layout.clone(), pending);
+
         debug_assert!(!self.partial_procs.contains_key(&symbol), "Procs was told to insert a value for symbol {:?}, but there was already an entry for that key! Procs should never attempt to insert duplicates.", symbol);
 
         self.partial_procs.insert(
