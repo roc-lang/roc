@@ -75,8 +75,14 @@ macro_rules! assert_llvm_evals_to {
         };
 
         let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
+        let mut headers = {
+            let num_headers = match &procs.pending_specializations {
+                Some(map) => map.len(),
+                None => 0
+            };
 
-        let mut headers = Vec::with_capacity(procs.pending_specializations.len());
+            Vec::with_capacity(num_headers)
+        };
         let mut layout_cache = roc_mono::layout::LayoutCache::default();
         let mut procs = roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
@@ -246,7 +252,14 @@ macro_rules! assert_opt_evals_to {
         };
         let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
-        let mut headers = Vec::with_capacity(procs.pending_specializations.len());
+        let mut headers = {
+            let num_headers = match &procs.pending_specializations {
+                Some(map) => map.len(),
+                None => 0
+            };
+
+            Vec::with_capacity(num_headers)
+        };
         let mut layout_cache = roc_mono::layout::LayoutCache::default();
         let mut procs = roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
 

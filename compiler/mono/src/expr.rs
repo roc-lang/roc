@@ -38,7 +38,8 @@ pub struct Proc<'a> {
 pub struct Procs<'a> {
     pub partial_procs: MutMap<Symbol, PartialProc<'a>>,
     pub module_thunks: MutSet<Symbol>,
-    pub pending_specializations: MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>,
+    pub pending_specializations:
+        Option<MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>>,
     pub specialized: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
     pub runtime_errors: MutSet<Symbol>,
 }
@@ -81,8 +82,7 @@ impl<'a> Procs<'a> {
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
     ) -> Layout<'a> {
-        let (pattern_vars, pattern_symbols, body) =
-            patterns_to_when(env, loc_args, ret_var, loc_body);
+        let (_, pattern_symbols, body) = patterns_to_when(env, loc_args, ret_var, loc_body);
 
         // an anonymous closure. These will always be specialized already
         // by the surrounding context, so we can add pending specializations
@@ -104,20 +104,19 @@ impl<'a> Procs<'a> {
 
         layout
     }
+}
 
-    fn add_pending_specialization(
-        &mut self,
-        symbol: Symbol,
-        layout: Layout<'a>,
-        pending: PendingSpecialization<'a>,
-    ) {
-        let all_pending = self
-            .pending_specializations
-            .entry(symbol)
-            .or_insert_with(|| HashMap::with_capacity_and_hasher(1, default_hasher()));
+fn add_pending<'a>(
+    pending_specializations: &mut MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>,
+    symbol: Symbol,
+    layout: Layout<'a>,
+    pending: PendingSpecialization<'a>,
+) {
+    let all_pending = pending_specializations
+        .entry(symbol)
+        .or_insert_with(|| HashMap::with_capacity_and_hasher(1, default_hasher()));
 
-        all_pending.insert(layout, pending);
-    }
+    all_pending.insert(layout, pending);
 }
 
 #[derive(Default)]
@@ -1319,19 +1318,40 @@ fn call_by_name<'a>(
                 fn_var,
             };
 
-            // TODO should pending_procs hold a Rc<Proc>?
-            let partial_proc = procs
-                .partial_procs
-                .get(&proc_name)
-                .unwrap_or_else(|| panic!("Could not find partial_proc for {:?}", proc_name))
-                .clone();
-
-            match specialize(env, procs, proc_name, layout_cache, pending, partial_proc) {
-                Ok(proc) => {
-                    procs.specialized.insert((proc_name, layout.clone()), proc);
+            // When requested (that is, when procs.pending_specializations is `Some`),
+            // store a pending specialization rather than specializing immediately.
+            //
+            // We do this so that we can do specialization in two passes: first,
+            // build the mono_expr with all the specialized calls in place (but
+            // no specializations performed yet), and then second, *after*
+            // de-duplicating requested specializations (since multiple modules
+            // which could be getting monomorphized in parallel might request
+            // the same specialization independently), we work through the
+            // queue of pending specializations to complete each specialization
+            // exactly once.
+            match &mut procs.pending_specializations {
+                Some(pending_specializations) => {
+                    // register the pending specialization, so this gets code genned later
+                    add_pending(pending_specializations, proc_name, layout.clone(), pending);
                 }
-                Err(_) => {
-                    procs.runtime_errors.insert(proc_name);
+                None => {
+                    // TODO should pending_procs hold a Rc<Proc>?
+                    let partial_proc = procs
+                        .partial_procs
+                        .get(&proc_name)
+                        .unwrap_or_else(|| {
+                            panic!("Could not find partial_proc for {:?}", proc_name)
+                        })
+                        .clone();
+
+                    match specialize(env, procs, proc_name, layout_cache, pending, partial_proc) {
+                        Ok(proc) => {
+                            procs.specialized.insert((proc_name, layout.clone()), proc);
+                        }
+                        Err(_) => {
+                            procs.runtime_errors.insert(proc_name);
+                        }
+                    }
                 }
             }
 
@@ -1354,61 +1374,39 @@ pub fn specialize_all<'a>(
     mut procs: Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
-    let mut is_finished = procs.pending_specializations.is_empty();
+    let mut pending_specializations = procs.pending_specializations.unwrap_or(MutMap::default());
 
-    // TODO replace this synchronous loop with a work-stealing queue which
-    // processes each entry in pending_specializations in parallel, one
-    // module at a time (because the &mut env will need exclusive access to
-    // that module's IdentIds; the only reason Env is &mut in specialize is
-    // that we need to generate unique symbols and register them in them module's
-    // IdentIds).
-    while !is_finished {
-        let Procs {
-            partial_procs,
-            module_thunks,
-            mut pending_specializations,
-            specialized,
-            runtime_errors,
-        } = procs;
+    // When calling from_can, pending_specializations should be unavailable.
+    // This must be a single pass, and we must not add any more entries to it!
+    procs.pending_specializations = None;
 
-        procs = Procs {
-            partial_procs,
-            module_thunks,
-            pending_specializations: MutMap::default(),
-            specialized,
-            runtime_errors,
-        };
+    for (name, mut by_layout) in pending_specializations.drain() {
+        // Use the function's symbol's home module as the home module
+        // when doing canonicalization. This will be important to determine
+        // whether or not it's safe to defer specialization.
+        env.home = name.module_id();
 
-        for (name, mut by_layout) in pending_specializations.drain() {
-            // Use the function's symbol's home module as the home module
-            // when doing canonicalization. This will be important to determine
-            // whether or not it's safe to defer specialization.
-            env.home = name.module_id();
+        for (layout, pending) in by_layout.drain() {
+            // If we've already seen this (Symbol, Layout) combination before,
+            // don't try to specialize it again. If we do, we'll loop forever!
+            if !procs.specialized.contains_key(&(name, layout.clone())) {
+                // TODO should pending_procs hold a Rc<Proc>?
+                let partial_proc = procs
+                    .partial_procs
+                    .get(&name)
+                    .unwrap_or_else(|| panic!("Could not find partial_proc for {:?}", name))
+                    .clone();
 
-            for (layout, pending) in by_layout.drain() {
-                // If we've already seen this (Symbol, Layout) combination before,
-                // don't try to specialize it again. If we do, we'll loop forever!
-                if !procs.specialized.contains_key(&(name, layout.clone())) {
-                    // TODO should pending_procs hold a Rc<Proc>?
-                    let partial_proc = procs
-                        .partial_procs
-                        .get(&name)
-                        .unwrap_or_else(|| panic!("Could not find partial_proc for {:?}", name))
-                        .clone();
-
-                    match specialize(env, &mut procs, name, layout_cache, pending, partial_proc) {
-                        Ok(proc) => {
-                            procs.specialized.insert((name, layout), proc);
-                        }
-                        Err(_) => {
-                            procs.runtime_errors.insert(name);
-                        }
+                match specialize(env, &mut procs, name, layout_cache, pending, partial_proc) {
+                    Ok(proc) => {
+                        procs.specialized.insert((name, layout), proc);
+                    }
+                    Err(_) => {
+                        procs.runtime_errors.insert(name);
                     }
                 }
             }
         }
-
-        is_finished = procs.pending_specializations.is_empty();
     }
 
     procs
