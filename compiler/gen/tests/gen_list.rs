@@ -410,7 +410,7 @@ mod gen_list {
             indoc!(
                 r#"
                     wrapFirst = \list ->
-                        List.first list
+                        [ List.first list ]
 
                     wrapFirst [ 1, 2 ]
                 "#
