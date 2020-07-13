@@ -65,11 +65,13 @@ mod test_mono {
             jump_counter: arena.alloc(0),
         };
         let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
-
-        let (_, runtime_errors) =
+        let procs =
             roc_mono::expr::specialize_all(&mut mono_env, procs, &mut LayoutCache::default());
 
-        assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
+        assert_eq!(
+            procs.runtime_errors,
+            roc_collections::all::MutSet::default()
+        );
 
         // Put this module's ident_ids back in the interns
         interns.all_ident_ids.insert(home, ident_ids);

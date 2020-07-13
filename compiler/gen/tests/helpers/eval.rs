@@ -78,11 +78,9 @@ macro_rules! assert_llvm_evals_to {
 
         let mut headers = Vec::with_capacity(procs.pending_specializations.len());
         let mut layout_cache = roc_mono::layout::LayoutCache::default();
+        let mut procs = roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
-        let (mut specializations, runtime_errors) =
-            roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
-
-        assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
+        assert_eq!(procs.runtime_errors, roc_collections::all::MutSet::default());
 
         // Put this module's ident_ids back in the interns, so we can use them in env.
         // This must happen *after* building the headers, because otherwise there's
@@ -92,7 +90,7 @@ macro_rules! assert_llvm_evals_to {
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
-        for ((symbol, layout), proc) in specializations.drain() {
+        for ((symbol, layout), proc) in procs.specialized.drain() {
             let (fn_val, arg_basic_types) =
                 build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
@@ -250,11 +248,9 @@ macro_rules! assert_opt_evals_to {
 
         let mut headers = Vec::with_capacity(procs.pending_specializations.len());
         let mut layout_cache = roc_mono::layout::LayoutCache::default();
+        let mut procs = roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
-        let (mut specializations, runtime_errors) =
-            roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
-
-        assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
+        assert_eq!(procs.runtime_errors, roc_collections::all::MutSet::default());
 
         // Put this module's ident_ids back in the interns, so we can use them in env.
         // This must happen *after* building the headers, because otherwise there's
@@ -264,7 +260,7 @@ macro_rules! assert_opt_evals_to {
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
-        for ((symbol, layout), proc) in specializations.drain() {
+        for ((symbol, layout), proc) in procs.specialized.drain() {
             let (fn_val, arg_basic_types) =
                 build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
