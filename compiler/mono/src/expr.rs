@@ -1327,39 +1327,20 @@ fn call_by_name<'a>(
                 fn_var,
             };
 
-            // If this is a function in the home module, specialize it
-            // immediately. This must be done right away, because deferring
-            // it in pending_specializations means that when it gets processed
-            // later, we may have already rolled env.subs back to a state
-            // where we've undone specializations that were necessary to
-            // complete this one!
-            //
-            // However, it's safe to defer specializations for other modules,
-            // because when we go through and do those, we'll do them in with
-            // env.home set to *their* home modules, so when this code path
-            // gets reached, they'll also get the correct answers.
-            //
-            // Put together, this lets us parallelize specializations between
-            // modules instead of having to do them all at once, synchronously.
-            if proc_name.module_id() == env.home {
-                // TODO should pending_procs hold a Rc<Proc>?
-                let partial_proc = procs
-                    .partial_procs
-                    .get(&proc_name)
-                    .unwrap_or_else(|| panic!("Could not find partial_proc for {:?}", proc_name))
-                    .clone();
+            // TODO should pending_procs hold a Rc<Proc>?
+            let partial_proc = procs
+                .partial_procs
+                .get(&proc_name)
+                .unwrap_or_else(|| panic!("Could not find partial_proc for {:?}", proc_name))
+                .clone();
 
-                match specialize(env, procs, proc_name, layout_cache, pending, partial_proc) {
-                    Ok(proc) => {
-                        procs.specialized.insert((proc_name, layout.clone()), proc);
-                    }
-                    Err(_) => {
-                        procs.runtime_errors.insert(proc_name);
-                    }
+            match specialize(env, procs, proc_name, layout_cache, pending, partial_proc) {
+                Ok(proc) => {
+                    procs.specialized.insert((proc_name, layout.clone()), proc);
                 }
-            } else {
-                // register the pending specialization, so this gets code genned later
-                procs.add_pending_specialization(proc_name, layout.clone(), pending);
+                Err(_) => {
+                    procs.runtime_errors.insert(proc_name);
+                }
             }
 
             Expr::CallByName {
