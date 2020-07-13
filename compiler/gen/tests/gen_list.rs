@@ -389,6 +389,59 @@ mod gen_list {
     }
 
     #[test]
+    fn gen_wrap_len() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    wrapLen = \list ->
+                        [ List.len list ]
+
+                    wrapLen [ 1, 7, 9 ]
+                "#
+            ),
+            &[3],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn gen_wrap_first() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    wrapFirst = \list ->
+                        List.first list
+
+                    wrapFirst [ 1, 2 ]
+                "#
+            ),
+            &[1],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn gen_swap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    swap = \list ->
+                        when List.first list is
+                            Ok elem ->
+                                List.set list 0 elem
+
+                            _ ->
+                                []
+
+                    swap [ 1, 2 ]
+                "#
+            ),
+            &[2, 1],
+            &'static [i64]
+        );
+    }
+
+    #[test]
     fn gen_quicksort() {
         with_larger_debug_stack(|| {
             assert_evals_to!(
