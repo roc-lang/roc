@@ -82,7 +82,8 @@ impl<'a> Procs<'a> {
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
     ) -> Layout<'a> {
-        let (_, pattern_symbols, body) = patterns_to_when(env, loc_args, ret_var, loc_body);
+        let (pattern_vars, pattern_symbols, body) =
+            patterns_to_when(env, loc_args, ret_var, loc_body);
 
         // an anonymous closure. These will always be specialized already
         // by the surrounding context, so we can add pending specializations
@@ -97,18 +98,40 @@ impl<'a> Procs<'a> {
             pattern_vars,
         };
 
-        self.add_pending_specialization(symbol, layout.clone(), pending);
+        match &mut self.pending_specializations {
+            Some(pending_specializations) => {
+                // register the pending specialization, so this gets code genned later
+                add_pending(pending_specializations, symbol, layout.clone(), pending);
 
-        debug_assert!(!self.partial_procs.contains_key(&symbol), "Procs was told to insert a value for symbol {:?}, but there was already an entry for that key! Procs should never attempt to insert duplicates.", symbol);
+                debug_assert!(!self.partial_procs.contains_key(&symbol), "Procs was told to insert a value for symbol {:?}, but there was already an entry for that key! Procs should never attempt to insert duplicates.", symbol);
 
-        self.partial_procs.insert(
-            symbol,
-            PartialProc {
-                annotation,
-                pattern_symbols,
-                body: body.value,
-            },
-        );
+                self.partial_procs.insert(
+                    symbol,
+                    PartialProc {
+                        annotation,
+                        pattern_symbols,
+                        body: body.value,
+                    },
+                );
+            }
+            None => {
+                // TODO should pending_procs hold a Rc<Proc>?
+                let partial_proc = PartialProc {
+                    annotation,
+                    pattern_symbols,
+                    body: body.value,
+                };
+
+                match specialize(env, self, symbol, layout_cache, pending, partial_proc) {
+                    Ok(proc) => {
+                        self.specialized.insert((symbol, layout.clone()), proc);
+                    }
+                    Err(_) => {
+                        self.runtime_errors.insert(symbol);
+                    }
+                }
+            }
+        }
 
         layout
     }
