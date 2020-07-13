@@ -421,22 +421,23 @@ mod gen_list {
     }
 
     #[test]
-    fn gen_swap() {
+    fn gen_duplicate() {
         assert_evals_to!(
             indoc!(
                 r#"
-                    swap = \list ->
+                    # Duplicate the first element into the second index
+                    dupe = \list ->
                         when List.first list is
                             Ok elem ->
-                                List.set list 0 elem
+                                List.set list 1 elem
 
                             _ ->
                                 []
 
-                    swap [ 1, 2 ]
+                    dupe [ 1, 2 ]
                 "#
             ),
-            &[2, 1],
+            &[1, 1],
             &'static [i64]
         );
     }
