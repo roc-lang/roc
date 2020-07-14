@@ -475,6 +475,23 @@ ceil : Float * -> Int *
 floor : Float * -> Int *
 trunc : Float * -> Int *
 
+## Convert an #Int to a #Len. If the given number doesn't fit in #Len, it will be truncated.
+## Since #Len has a different maximum number depending on the system you're building
+## for, this may give a different answer on different systems.
+##
+## For example, on a 32-bit sytem, #Num.maxLen will return the same answer as
+## #Num.maxU32. This means that calling `Num.toLen 9_000_000_000` on a 32-bit
+## system will return #Num.maxU32 instead of 9 billion, because 9 billion is
+## higher than #Num.maxU32 and will not fit in a #Len on a 32-bit system.
+##
+## However, calling `Num.toLen 9_000_000_000` on a 64-bit system will return
+## the #Len value of 9_000_000_000. This is because on a 64-bit system, #Len can
+## hold up to #Num.maxU64, and 9_000_000_000 is lower than #Num.maxU64.
+##
+## To convert a #Float to a #Len, first call either #Num.round, #Num.ceil, or #Num.floor
+## on it, then call this on the resulting #Int.
+toLen : Int * -> Len
+
 ## Convert an #Int to an #I8. If the given number doesn't fit in #I8, it will be truncated.
 ##
 ## To convert a #Float to an #I8, first call either #Num.round, #Num.ceil, or #Num.floor
@@ -484,6 +501,7 @@ toI16 : Int * -> I16
 toI32 : Int * -> I32
 toI64 : Int * -> I64
 toI128 : Int * -> I128
+
 ## Convert an #Int to an #U8. If the given number doesn't fit in #U8, it will be truncated.
 ## Crashes if the given number is negative.
 toU8 : Int * -> U8
