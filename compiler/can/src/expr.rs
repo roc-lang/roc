@@ -214,10 +214,17 @@ pub fn canonicalize_expr<'a>(
 
                 (answer, output)
             } else {
-                panic!(
-                    "TODO canonicalize invalid record update (non-Var in update position)\n{:?}",
-                    can_update.value
-                );
+                // only (optionally qualified) variables can be updated, not arbitrary expressions
+
+                let error = roc_problem::can::RuntimeError::InvalidRecordUpdate {
+                    region: can_update.region,
+                };
+
+                let answer = Expr::RuntimeError(error.clone());
+
+                env.problems.push(Problem::RuntimeError(error));
+
+                (answer, Output::default())
             }
         }
         ast::Expr::Record {

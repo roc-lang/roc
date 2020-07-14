@@ -115,7 +115,11 @@ impl<'a> Env<'a> {
             }
             None => Err(RuntimeError::ModuleNotImported {
                 module_name,
-                ident: ident.into(),
+                imported_modules: self
+                    .module_ids
+                    .available_modules()
+                    .map(|string| string.as_ref().into())
+                    .collect(),
                 region,
             }),
         }

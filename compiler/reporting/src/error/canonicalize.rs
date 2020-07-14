@@ -377,7 +377,11 @@ fn pretty_runtime_error<'b>(
             todo!("unsupported patterns are currently not parsed!")
         }
         RuntimeError::ValueNotExposed { .. } => todo!("value not exposed"),
-        RuntimeError::ModuleNotImported { .. } => todo!("module not imported"),
+        RuntimeError::ModuleNotImported {
+            module_name,
+            imported_modules,
+            region,
+        } => module_not_found(alloc, region, &module_name, imported_modules),
         RuntimeError::InvalidPrecedence(_, _) => {
             // do nothing, reported with PrecedenceProblem
             unreachable!()
@@ -512,6 +516,14 @@ fn pretty_runtime_error<'b>(
                 hint,
             ])
         }
+        RuntimeError::InvalidRecordUpdate { region } => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("This expression cannot be updated"),
+                alloc.reflow(":"),
+            ]),
+            alloc.region(region),
+            alloc.reflow("Only variables can be updated with record update syntax."),
+        ]),
         RuntimeError::NoImplementation => todo!("no implementation, unreachable"),
     }
 }
@@ -557,6 +569,52 @@ fn not_found<'b>(
             alloc.string(name.to_string()),
             alloc.reflow("` "),
             alloc.reflow(thing),
+        ]),
+        alloc.region(region),
+        to_details(default_no, default_yes),
+    ])
+}
+
+fn module_not_found<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    region: roc_region::all::Region,
+    name: &str,
+    options: MutSet<Box<str>>,
+) -> RocDocBuilder<'b> {
+    use crate::error::r#type::suggest;
+
+    let mut suggestions = suggest::sort(name, options.iter().map(|v| v.as_ref()).collect());
+    suggestions.truncate(4);
+
+    let default_no = alloc.concat(vec![
+        alloc.reflow("Is there an "),
+        alloc.keyword("import"),
+        alloc.reflow(" or "),
+        alloc.keyword("exposing"),
+        alloc.reflow(" missing up-top"),
+    ]);
+
+    let default_yes = alloc
+        .reflow("Is there an import missing? Perhaps there is a typo, these names seem close:");
+
+    let to_details = |no_suggestion_details, yes_suggestion_details| {
+        if suggestions.is_empty() {
+            no_suggestion_details
+        } else {
+            alloc.stack(vec![
+                yes_suggestion_details,
+                alloc
+                    .vcat(suggestions.into_iter().map(|v| alloc.string(v.to_string())))
+                    .indent(4),
+            ])
+        }
+    };
+
+    alloc.stack(vec![
+        alloc.concat(vec![
+            alloc.reflow("The `"),
+            alloc.string(name.to_string()),
+            alloc.reflow("` module is not imported:"),
         ]),
         alloc.region(region),
         to_details(default_no, default_yes),
