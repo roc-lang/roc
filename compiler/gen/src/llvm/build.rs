@@ -1870,27 +1870,27 @@ fn run_low_level<'a, 'ctx, 'env>(
                     empty_list(env)
                 }
                 Layout::Builtin(Builtin::List(elem_layout)) => {
-                    let first_list_wrapper_struct =
+                    let first_list_wrapper =
                         build_expr(env, layout_ids, scope, parent, first_list).into_struct_value();
 
                     let builder = env.builder;
                     let ctx = env.context;
 
-                    let first_list_len = load_list_len(builder, first_list_wrapper_struct);
+                    let first_list_len = load_list_len(builder, first_list_wrapper);
 
                     // first_list_len > 0
                     // We do this check to avoid allocating memory. If the first input
                     // list is empty, then we can just return the second list cloned
-                    let first_list_empty_comparison =
+                    let first_list_length_comparison =
                         list_is_not_empty(builder, ctx, first_list_len);
 
-                    let build_first_list_non_empty_then = || {
+                    let build_first_list_then = || {
                         let (second_list, second_list_layout) = &args[1];
-                        let second_list_wrapper_struct =
+                        let second_list_wrapper =
                             build_expr(env, layout_ids, scope, parent, second_list)
                                 .into_struct_value();
 
-                        let second_list_len = load_list_len(builder, second_list_wrapper_struct);
+                        let second_list_len = load_list_len(builder, second_list_wrapper);
 
                         match second_list_layout {
                             Layout::Builtin(Builtin::EmptyList) => {
@@ -1905,7 +1905,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                                 let (new_wrapper, _) = clone_nonempty_list(
                                     env,
                                     first_list_len,
-                                    load_list_ptr(builder, first_list_wrapper_struct, ptr_type),
+                                    load_list_ptr(builder, first_list_wrapper, ptr_type),
                                     elem_layout,
                                 );
 
@@ -1915,18 +1915,256 @@ fn run_low_level<'a, 'ctx, 'env>(
                                 // second_list_len > 0
                                 // We do this check to avoid allocating memory. If the second input
                                 // list is empty, then we can just return the first list cloned
-                                let second_list_empty_comparison =
+                                let second_list_length_comparison =
                                     list_is_not_empty(builder, ctx, second_list_len);
 
-                                let build_second_list_non_empty_then = || {};
-                                let elem_type = basic_type_from_layout(
-                                    env.arena,
-                                    ctx,
-                                    elem_layout,
-                                    env.ptr_bytes,
-                                );
+                                let build_second_list_then = || {
+                                    // Allocate space for the new array that we'll copy into.
+                                    let elem_type = basic_type_from_layout(
+                                        env.arena,
+                                        ctx,
+                                        elem_layout,
+                                        env.ptr_bytes,
+                                    );
 
-                                empty_list(env)
+                                    let combined_list_len = builder.build_int_add(
+                                        first_list_len,
+                                        second_list_len,
+                                        "add_list_lenghts",
+                                    );
+
+                                    let index_name = "#index";
+
+                                    // FIRST LOOP
+                                    let first_start_alloca =
+                                        builder.build_alloca(ctx.i64_type(), index_name);
+
+                                    let first_index = ctx.i64_type().const_int(0, false);
+                                    builder.build_store(first_start_alloca, first_index);
+
+                                    let first_loop_bb =
+                                        ctx.append_basic_block(parent, "first_list_append_loop");
+
+                                    builder.build_unconditional_branch(first_loop_bb);
+                                    builder.position_at_end(first_loop_bb);
+
+                                    // #index = #index + 1
+                                    let curr_first_index = builder
+                                        .build_load(first_start_alloca, index_name)
+                                        .into_int_value();
+                                    let next_first_index = builder.build_int_add(
+                                        curr_first_index,
+                                        ctx.i64_type().const_int(1, false),
+                                        "nextindex",
+                                    );
+
+                                    builder.build_store(first_start_alloca, next_first_index);
+
+                                    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                                    let first_list_ptr =
+                                        load_list_ptr(builder, first_list_wrapper, ptr_type);
+
+                                    // The pointer to the element in the first list
+                                    let first_list_elem_ptr = unsafe {
+                                        builder.build_in_bounds_gep(
+                                            first_list_ptr,
+                                            &[curr_first_index],
+                                            "load_index",
+                                        )
+                                    };
+
+                                    // The pointer to the element from the first list
+                                    // in the combined list
+                                    let first_combined_list_ptr = unsafe {
+                                        builder.build_in_bounds_gep(
+                                            first_list_ptr,
+                                            &[curr_first_index],
+                                            "load_index_reversed_list",
+                                        )
+                                    };
+
+                                    let elem_from_first_list =
+                                        builder.build_load(first_list_elem_ptr, "get_elem");
+
+                                    // Mutate the new array in-place to change the element.
+                                    builder
+                                        .build_store(first_combined_list_ptr, elem_from_first_list);
+
+                                    // #index < first_list_len
+                                    let first_loop_end_cond = builder.build_int_compare(
+                                        IntPredicate::ULT,
+                                        first_list_len,
+                                        curr_first_index,
+                                        "loopcond",
+                                    );
+
+                                    let after_first_loop_bb =
+                                        ctx.append_basic_block(parent, "after_first_loop");
+
+                                    builder.build_conditional_branch(
+                                        first_loop_end_cond,
+                                        first_loop_bb,
+                                        after_first_loop_bb,
+                                    );
+                                    builder.position_at_end(after_first_loop_bb);
+
+                                    // SECOND LOOP
+                                    let second_index_name = "#secondindex";
+                                    let second_start_alloca =
+                                        builder.build_alloca(ctx.i64_type(), second_index_name);
+
+                                    let second_index = ctx.i64_type().const_int(0, false);
+                                    builder.build_store(second_start_alloca, second_index);
+
+                                    let second_loop_bb =
+                                        ctx.append_basic_block(parent, "second_list_append_loop");
+
+                                    builder.build_unconditional_branch(second_loop_bb);
+                                    builder.position_at_end(second_loop_bb);
+
+                                    // #index = #index + 1
+                                    let curr_second_index = builder
+                                        .build_load(second_start_alloca, second_index_name)
+                                        .into_int_value();
+                                    let next_second_index = builder.build_int_add(
+                                        curr_second_index,
+                                        ctx.i64_type().const_int(1, false),
+                                        "nextindex",
+                                    );
+
+                                    builder.build_store(second_start_alloca, next_second_index);
+
+                                    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                                    let second_list_ptr =
+                                        load_list_ptr(builder, second_list_wrapper, ptr_type);
+
+                                    // The pointer to the element in the second list
+                                    let second_list_elem_ptr = unsafe {
+                                        builder.build_in_bounds_gep(
+                                            second_list_ptr,
+                                            &[curr_second_index],
+                                            "load_index",
+                                        )
+                                    };
+
+                                    // The pointer to the element from the second list
+                                    // in the combined list
+                                    let second_combined_list_ptr = unsafe {
+                                        builder.build_in_bounds_gep(
+                                            second_list_ptr,
+                                            &[builder.build_int_add(
+                                                curr_second_index,
+                                                first_list_len,
+                                                "second_index_plus_first_list_len",
+                                            )],
+                                            "load_index_reversed_list",
+                                        )
+                                    };
+
+                                    let elem_from_second_list =
+                                        builder.build_load(second_list_elem_ptr, "get_elem");
+
+                                    // Mutate the new array in-place to change the element.
+                                    builder.build_store(
+                                        second_combined_list_ptr,
+                                        elem_from_second_list,
+                                    );
+
+                                    // #index < second_list_len
+                                    let second_loop_end_cond = builder.build_int_compare(
+                                        IntPredicate::ULT,
+                                        second_list_len,
+                                        curr_second_index,
+                                        "loopcond",
+                                    );
+
+                                    let after_second_loop_bb =
+                                        ctx.append_basic_block(parent, "after_second_loop");
+
+                                    builder.build_conditional_branch(
+                                        second_loop_end_cond,
+                                        second_loop_bb,
+                                        after_second_loop_bb,
+                                    );
+                                    builder.position_at_end(after_second_loop_bb);
+
+                                    // END
+                                    let combined_list_ptr = env
+                                        .builder
+                                        .build_array_malloc(
+                                            elem_type,
+                                            combined_list_len,
+                                            "create_combined_list_ptr",
+                                        )
+                                        .unwrap();
+
+                                    let ptr_bytes = env.ptr_bytes;
+                                    let int_type = ptr_int(ctx, ptr_bytes);
+                                    let ptr_as_int = builder.build_ptr_to_int(
+                                        combined_list_ptr,
+                                        int_type,
+                                        "list_cast_ptr",
+                                    );
+                                    let struct_type = collection(ctx, ptr_bytes);
+
+                                    let mut struct_val;
+
+                                    // Store the pointer
+                                    struct_val = builder
+                                        .build_insert_value(
+                                            struct_type.get_undef(),
+                                            ptr_as_int,
+                                            Builtin::WRAPPER_PTR,
+                                            "insert_ptr",
+                                        )
+                                        .unwrap();
+
+                                    // Store the length
+                                    struct_val = builder
+                                        .build_insert_value(
+                                            struct_val,
+                                            combined_list_len,
+                                            Builtin::WRAPPER_LEN,
+                                            "insert_len",
+                                        )
+                                        .unwrap();
+
+                                    builder.build_bitcast(
+                                        struct_val.into_struct_value(),
+                                        collection(ctx, ptr_bytes),
+                                        "cast_collection",
+                                    )
+                                };
+
+                                let build_second_list_else = || {
+                                    let elem_type = basic_type_from_layout(
+                                        env.arena,
+                                        ctx,
+                                        elem_layout,
+                                        env.ptr_bytes,
+                                    );
+                                    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                                    let (new_wrapper, _) = clone_nonempty_list(
+                                        env,
+                                        first_list_len,
+                                        load_list_ptr(builder, first_list_wrapper, ptr_type),
+                                        elem_layout,
+                                    );
+
+                                    BasicValueEnum::StructValue(new_wrapper)
+                                };
+
+                                build_basic_phi2(
+                                    env,
+                                    parent,
+                                    second_list_length_comparison,
+                                    build_second_list_then,
+                                    build_second_list_else,
+                                    BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
+                                )
                             }
                             _ => {
                                 unreachable!(
@@ -1937,17 +2175,13 @@ fn run_low_level<'a, 'ctx, 'env>(
                         }
                     };
 
-                    let struct_type = collection(ctx, env.ptr_bytes);
-
-                    let build_first_list_non_empty_else = || empty_list(env);
-
                     build_basic_phi2(
                         env,
                         parent,
-                        first_list_empty_comparison,
-                        build_first_list_non_empty_then,
-                        build_first_list_non_empty_else,
-                        BasicTypeEnum::StructType(struct_type),
+                        first_list_length_comparison,
+                        build_first_list_then,
+                        || empty_list(env),
+                        BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
                     )
                 }
                 _ => {

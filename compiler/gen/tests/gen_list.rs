@@ -129,6 +129,13 @@ mod gen_list {
     fn list_append() {
         assert_evals_to!("List.append [] []", &[], &'static [i64]);
         assert_evals_to!("List.append [ 12, 13 ] []", &[12, 13], &'static [i64]);
+        assert_evals_to!(
+            "List.append [ 34 ] [ 44, 55 ]",
+            &[34, 44, 55],
+            &'static [i64]
+        );
+
+        // assert_evals_to!("List.append [] [ 23, 24 ]", &[23, 24], &'static [i64]);
 
         // assert_evals_to!(
         //     "List.append [ 1, 2 ] [ 3, 4 ]",
