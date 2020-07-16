@@ -70,7 +70,7 @@ mod test_mono {
 
         assert_eq!(
             procs.runtime_errors,
-            roc_collections::all::MutSet::default()
+            roc_collections::all::MutMap::default()
         );
 
         // Put this module's ident_ids back in the interns

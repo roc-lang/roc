@@ -240,7 +240,7 @@ pub fn build(
 
     assert_eq!(
         procs.runtime_errors,
-        roc_collections::all::MutSet::default()
+        roc_collections::all::MutMap::default()
     );
 
     // Put this module's ident_ids back in the interns, so we can use them in env.
@@ -252,10 +252,19 @@ pub fn build(
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
     for ((symbol, layout), proc) in procs.specialized.drain() {
-        let (fn_val, arg_basic_types) =
-            build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+        use roc_mono::expr::InProgressProc::*;
 
-        headers.push((proc, fn_val, arg_basic_types));
+        match proc {
+            InProgress => {
+                panic!("A specialization was still marked InProgress after monomorphization had completed: {:?} with layout {:?}", symbol, layout);
+            }
+            Done(proc) => {
+                let (fn_val, arg_basic_types) =
+                    build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+
+                headers.push((proc, fn_val, arg_basic_types));
+            }
+        }
     }
 
     // Build each proc using its header info.
