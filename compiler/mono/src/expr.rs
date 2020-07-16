@@ -6,6 +6,7 @@ use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
@@ -373,14 +374,15 @@ fn patterns_to_when<'a>(
     env: &mut Env<'a, '_>,
     patterns: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
     body_var: Variable,
-    mut body: Located<roc_can::expr::Expr>,
+    body: Located<roc_can::expr::Expr>,
 ) -> (
     Vec<'a, Variable>,
     Vec<'a, Symbol>,
     Located<roc_can::expr::Expr>,
 ) {
     let mut arg_vars = Vec::with_capacity_in(patterns.len(), env.arena);
-    let mut symbols = Vec::with_capacity_in(patterns.len(), env.arena);
+    let mut arg_symbols = Vec::with_capacity_in(patterns.len(), env.arena);
+    let mut body = Ok(body);
 
     // patterns that are not yet in a when (e.g. in let or function arguments) must be irrefutable
     // to pass type checking. So the order in which we add them to the body does not matter: there
@@ -398,26 +400,51 @@ fn patterns_to_when<'a>(
             context,
         ) {
             Ok(_) => {
-                let (new_symbol, new_body) =
-                    pattern_to_when(env, pattern_var, pattern, body_var, body);
+                // Replace the body with a new one, but only if it was Ok.
+                match body {
+                    Ok(unwrapped_body) => {
+                        let (new_symbol, new_body) =
+                            pattern_to_when(env, pattern_var, pattern, body_var, unwrapped_body);
 
-                symbols.push(new_symbol);
-                body = new_body;
+                        arg_symbols.push(new_symbol);
+                        arg_vars.push(pattern_var);
+
+                        body = Ok(new_body)
+                    }
+                    Err(_) => {}
+                }
             }
             Err(errors) => {
                 for error in errors {
                     env.problems.push(MonoProblem::PatternProblem(error))
                 }
 
-                let error = roc_problem::can::RuntimeError::UnsupportedPattern(pattern.region);
-                body = Located::at(pattern.region, roc_can::expr::Expr::RuntimeError(error));
+                let value = RuntimeError::UnsupportedPattern(pattern.region);
+
+                // Even if the body was Ok, replace it with this Err.
+                // If it was already an Err, leave it at that Err, so the first
+                // RuntimeError we encountered remains the first.
+                body = body.and_then(|_| {
+                    Err(Located {
+                        region: pattern.region,
+                        value,
+                    })
+                });
             }
         }
-
-        arg_vars.push(pattern_var);
     }
 
-    (arg_vars, symbols, body)
+    match body {
+        Ok(body) => (arg_vars, arg_symbols, body),
+        Err(loc_error) => (
+            arg_vars,
+            arg_symbols,
+            Located {
+                region: loc_error.region,
+                value: roc_can::expr::Expr::RuntimeError(loc_error.value),
+            },
+        ),
+    }
 }
 
 /// turn irrefutable patterns into when. For example
