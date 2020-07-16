@@ -1392,7 +1392,7 @@ fn call_by_name<'a>(
                     add_pending(pending_specializations, proc_name, layout.clone(), pending);
                 }
                 None => {
-                    // TODO should pending_procs hold a Rc<Proc>?
+                    // TODO should pending_procs hold a Rc<Proc> to avoid this .clone()?
                     let partial_proc = procs
                         .partial_procs
                         .get(&proc_name)
