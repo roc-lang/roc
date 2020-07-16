@@ -1492,7 +1492,7 @@ fn call_by_name<'a>(
 
                             None => {
                                 // This must have been a runtime error.
-                                let error = procs.runtime_errors.get(&proc_name).unwrap().clone();
+                                let error = procs.runtime_errors.get(&proc_name).unwrap();
 
                                 Expr::RuntimeError(error)
                             }
@@ -1514,7 +1514,7 @@ pub fn specialize_all<'a>(
     mut procs: Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
-    let mut pending_specializations = procs.pending_specializations.unwrap_or(MutMap::default());
+    let mut pending_specializations = procs.pending_specializations.unwrap_or_default();
 
     // When calling from_can, pending_specializations should be unavailable.
     // This must be a single pass, and we must not add any more entries to it!
