@@ -1356,10 +1356,9 @@ fn call_by_name<'a>(
             let mut pattern_vars = Vec::with_capacity_in(loc_args.len(), arena);
 
             for (var, loc_arg) in loc_args {
-                pattern_vars.push(var);
-
                 match layout_cache.from_var(&env.arena, var, &env.subs, env.pointer_size) {
                     Ok(layout) => {
+                        pattern_vars.push(var);
                         args.push((from_can(env, loc_arg.value, procs, layout_cache), layout));
                     }
                     Err(_) => {
