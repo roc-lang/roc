@@ -1364,7 +1364,7 @@ fn call_by_name<'a>(
                     Err(_) => {
                         // One of this function's arguments code gens to a runtime error,
                         // so attempting to call it will immediately crash.
-                        return Expr::RuntimeError("");
+                        return Expr::RuntimeError("TODO runtime error for invalid layout");
                     }
                 }
             }
