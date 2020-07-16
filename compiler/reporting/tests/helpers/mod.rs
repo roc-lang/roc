@@ -145,7 +145,10 @@ pub fn can_expr_with(
     let mut var_store = VarStore::default();
     let var = var_store.fresh();
     let expected = Expected::NoExpectation(Type::Variable(var));
-    let module_ids = ModuleIds::default();
+    let mut module_ids = ModuleIds::default();
+
+    // ensure the Test module is accessible in our tests
+    module_ids.get_or_insert(&"Test".into());
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.

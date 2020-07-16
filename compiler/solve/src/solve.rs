@@ -16,6 +16,52 @@ use roc_unify::unify::Unified::*;
 // https://github.com/elm/compiler
 // Thank you, Evan!
 
+// A lot of energy was put into making type inference fast. That means it's pretty intimidating.
+//
+// Fundamentally, type inference assigns very general types based on syntax, and then tries to
+// make all the pieces fit together. For instance when writing
+//
+// > f x
+//
+// We know that `f` is a function, and thus must have some type `a -> b`.
+// `x` is just a variable, that gets the type `c`
+//
+// Next comes constraint generation. For `f x` to be well-typed,
+// it must be the case that `c = a`, So a constraint `Eq(c, a)` is generated.
+// But `Eq` is a bit special: `c` does not need to equal `a` exactly, but they need to be equivalent.
+// This allows for instance the use of aliases. `c` could be an alias, and so looks different from
+// `a`, but they still represent the same type.
+//
+// Then we get to solving, which happens in this file.
+//
+// When we hit an `Eq` constraint, then we check whether the two involved types are in fact
+// equivalent using unification, and when they are, we can substitute one for the other.
+//
+// When all constraints are processed, and no unification errors have occurred, then the program
+// is type-correct. Otherwise the errors are reported.
+//
+// Now, coming back to efficiency, this type checker uses *ranks* to optimize
+// The rank tracks the number of let-bindings a variable is "under". Top-level definitions
+// have rank 1. A let in a top-level definition gets rank 2, and so on.
+//
+// This has to do with generalization of type variables. This is described here
+//
+//      http://okmij.org/ftp/ML/generalization.html#levels
+//
+// The problem is that when doing inference naively, this program would fail to typecheck
+//
+//  f =
+//      id = \x -> x
+//
+//      { a: id 1, b: id "foo" }
+//
+// Because `id` is applied to an integer, the type `Int -> Int` is inferred, which then gives a
+// type error for `id "foo"`.
+//
+// Thus instead the inferred type for `id` is generalized (see the `generalize` function) to `a -> a`.
+// Ranks are used to limit the number of type variables considered for generalization. Only those inside
+// of the let (so those used in inferring the type of `\x -> x`) are considered.
+
 #[derive(PartialEq, Debug, Clone)]
 pub enum TypeError {
     BadExpr(Region, Category, ErrorType, Expected<ErrorType>),

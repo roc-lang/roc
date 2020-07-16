@@ -3395,4 +3395,65 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn invalid_record_update() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = { bar: 3 }
+                updateNestedRecord = { foo.bar & x: 4 }
+
+                example = { age: 42 }
+
+                # these should work
+                y = { Test.example & age: 3 }
+                x = { example & age: 4 }
+
+                { updateNestedRecord, foo, x, y }
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                This expression cannot be updated:
+
+                2 ┆  updateNestedRecord = { foo.bar & x: 4 }
+                  ┆                         ^^^^^^^
+
+                Only variables can be updated with record update syntax.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn module_not_imported() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo.test
+                "#
+            ),
+            indoc!(
+                r#"
+                -- SYNTAX PROBLEM --------------------------------------------------------------
+
+                The `Foo` module is not imported:
+
+                1 ┆  Foo.test
+                  ┆  ^^^^^^^^
+
+                Is there an import missing? Perhaps there is a typo, these names seem
+                close:
+
+                    Bool
+                    Num
+                    Map
+                    Set
+                "#
+            ),
+        )
+    }
 }

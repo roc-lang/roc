@@ -346,6 +346,10 @@ impl ModuleIds {
     pub fn get_name(&self, id: ModuleId) -> Option<&InlinableString> {
         self.by_id.get(id.0 as usize)
     }
+
+    pub fn available_modules(&self) -> impl Iterator<Item = &InlinableString> {
+        self.by_id.iter()
+    }
 }
 
 /// An ID that is assigned to interned string identifiers within a module.
