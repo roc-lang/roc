@@ -734,6 +734,8 @@ mod test_usage_analysis {
 
                 usage.register_with(r, &access);
 
+                usage.register_shared(Symbol::LIST_GET);
+
                 usage
             },
         );
@@ -771,8 +773,11 @@ mod test_usage_analysis {
 
                 usage.register_with(r, &access);
 
-                usage.register_unique(v);
+                usage.register_seen(v);
                 usage.register_unique(Symbol::NUM_ADD);
+
+                usage.register_unique(Symbol::LIST_SET);
+                usage.register_unique(Symbol::LIST_GET);
 
                 usage
             },
@@ -807,6 +812,9 @@ mod test_usage_analysis {
                 let r = interns.symbol(home, "list".into());
 
                 usage.register_with(r, &access);
+
+                usage.register_unique(Symbol::LIST_SET);
+                usage.register_unique(Symbol::LIST_IS_EMPTY);
 
                 usage
             },

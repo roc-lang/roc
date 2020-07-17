@@ -2,8 +2,6 @@ use roc_can::expr::Expr;
 use roc_collections::all::{ImMap, ImSet};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
-use roc_region::all::Located;
-use roc_types::subs::Variable;
 
 // fake field names for container elements
 // e.g. for lists, internally it's a record with a `list_elem` field
@@ -347,23 +345,55 @@ fn make_subtree_shared(usage: &mut Usage) {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct VarUsage {
-    usage: ImMap<Symbol, Usage>,
-}
-
-impl IntoIterator for VarUsage {
-    type Item = (Symbol, Usage);
-    type IntoIter = im_rc::hashmap::ConsumingIter<(Symbol, Usage)>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.usage.into_iter()
-    }
+    pub usage: ImMap<Symbol, Usage>,
+    pub closure_usage_signatures: ImMap<Symbol, Vec<Usage>>,
 }
 
 impl VarUsage {
     pub fn default() -> VarUsage {
-        let empty: ImMap<Symbol, Usage> = ImMap::default();
+        let mut closure_signatures = ImMap::default();
 
-        VarUsage { usage: empty }
+        closure_signatures.insert(
+            Symbol::NUM_ADD,
+            vec![Usage::Simple(Mark::Seen), Usage::Simple(Mark::Seen)],
+        );
+        closure_signatures.insert(
+            Symbol::LIST_GET,
+            vec![
+                // Usage::Apply(vec![Usage::Simple(Mark::Unique)]),
+                Usage::Access(Container::List, Mark::Seen, {
+                    let mut result = FieldAccess::default();
+                    result
+                        .fields
+                        .insert(LIST_ELEM.into(), Usage::Simple(Mark::Unique));
+                    result
+                }),
+                Usage::Simple(Mark::Seen),
+            ],
+        );
+
+        closure_signatures.insert(Symbol::LIST_IS_EMPTY, vec![Usage::Simple(Mark::Seen)]);
+
+        closure_signatures.insert(
+            Symbol::LIST_SET,
+            vec![
+                // Usage::Apply(vec![Usage::Simple(Mark::Unique)]),
+                Usage::Update(Container::List, ImSet::default(), {
+                    let mut result = FieldAccess::default();
+                    result
+                        .fields
+                        .insert(LIST_ELEM.into(), Usage::Simple(Mark::Seen));
+                    result
+                }),
+                Usage::Simple(Mark::Seen),
+                Usage::Simple(Mark::Unique),
+            ],
+        );
+
+        VarUsage {
+            usage: ImMap::default(),
+            closure_usage_signatures: closure_signatures,
+        }
     }
 
     pub fn register_with(&mut self, symbol: Symbol, rc: &Usage) {
@@ -387,6 +417,11 @@ impl VarUsage {
     pub fn register_unique(&mut self, symbol: Symbol) {
         use self::Usage::*;
         self.register_with(symbol, &Simple(Mark::Unique));
+    }
+
+    pub fn register_seen(&mut self, symbol: Symbol) {
+        use self::Usage::*;
+        self.register_with(symbol, &Simple(Mark::Seen));
     }
 
     pub fn unregister(&mut self, symbol: Symbol) {
@@ -619,16 +654,31 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
             annotate_usage(&loc_expr.value, usage);
         }
         Call(fun, loc_args, _) => {
+            annotate_usage(&fun.1.value, usage);
             if let Var(symbol) = fun.1.value {
                 // call by name
-                special_case_builtins(usage, symbol, loc_args);
-            } else {
-                // unknown call
-                annotate_usage(&fun.1.value, usage);
 
-                for (_, arg) in loc_args {
-                    annotate_usage(&arg.value, usage);
+                // TODO remove this clone
+                let foo = usage.closure_usage_signatures.clone();
+                let opt_signature = foo.get(&symbol);
+
+                if let Some(signature) = opt_signature {
+                    // we know the usage signature of this function
+                    for ((_, arg), annotated) in loc_args.iter().zip(signature.iter()) {
+                        if let Var(arg_symbol) = arg.value {
+                            usage.register_with(arg_symbol, &annotated);
+                        } else {
+                            annotate_usage(&arg.value, usage);
+                        }
+                    }
+
+                    return;
                 }
+            }
+
+            // unknown call
+            for (_, arg) in loc_args {
+                annotate_usage(&arg.value, usage);
             }
         }
         Closure(_, _, _, _, body) => {
@@ -691,79 +741,5 @@ fn get_access_chain<'a>(expr: &'a Expr, chain: &mut Vec<Lowercase>) -> Option<&'
         Var(symbol) => Some(symbol),
 
         _ => None,
-    }
-}
-
-fn special_case_builtins(
-    usage: &mut VarUsage,
-    symbol: Symbol,
-    loc_args: &[(Variable, Located<Expr>)],
-) {
-    use Expr::Var;
-    use Mark::*;
-    use Usage::*;
-    match symbol {
-        Symbol::LIST_GET => {
-            debug_assert!(loc_args.len() == 2);
-
-            let loc_list = &loc_args[0].1;
-            let loc_index = &loc_args[1].1;
-
-            if let Var(list_var) = loc_list.value {
-                usage.register_with(
-                    list_var,
-                    &Access(Container::List, Seen, FieldAccess::list_access()),
-                );
-            } else {
-                annotate_usage(&loc_list.value, usage);
-            }
-            annotate_usage(&loc_index.value, usage);
-        }
-
-        Symbol::LIST_SET => {
-            debug_assert_eq!(loc_args.len(), 3);
-
-            let loc_list = &loc_args[0].1;
-            let loc_index = &loc_args[1].1;
-            let loc_value = &loc_args[2].1;
-
-            if let Var(list_var) = loc_list.value {
-                usage.register_with(
-                    list_var,
-                    &Update(
-                        Container::List,
-                        ImSet::default(),
-                        FieldAccess::list_update(),
-                    ),
-                );
-            } else {
-                annotate_usage(&loc_list.value, usage);
-            }
-            annotate_usage(&loc_index.value, usage);
-            annotate_usage(&loc_value.value, usage);
-        }
-
-        Symbol::LIST_IS_EMPTY | Symbol::LIST_LEN => {
-            debug_assert!(loc_args.len() == 1);
-
-            let loc_list = &loc_args[0].1;
-
-            if let Var(list_var) = loc_list.value {
-                usage.register_with(
-                    list_var,
-                    &Access(Container::List, Seen, FieldAccess::list_seen()),
-                );
-            } else {
-                annotate_usage(&loc_list.value, usage);
-            }
-        }
-
-        _ => {
-            usage.register_unique(symbol);
-
-            for (_, arg) in loc_args {
-                annotate_usage(&arg.value, usage);
-            }
-        }
     }
 }
