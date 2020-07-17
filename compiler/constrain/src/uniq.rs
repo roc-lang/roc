@@ -1438,7 +1438,10 @@ fn constrain_var(
             // no additional constraints, keep uniqueness unbound
             Lookup(symbol_for_lookup, expected, region)
         }
-        Some(Usage::Access(_, _, _)) | Some(Usage::Update(_, _, _)) => {
+        Some(Usage::RecordAccess(_, _, _))
+        | Some(Usage::RecordUpdate(_, _, _))
+        | Some(Usage::ApplyAccess(_, _))
+        | Some(Usage::ApplyUpdate(_, _)) => {
             applied_usage_constraint.insert(symbol_for_lookup);
 
             let mut variables = Vec::new();
@@ -1484,12 +1487,12 @@ fn constrain_by_usage(
 
             (Bool::container(uvar, vec![]), Type::Variable(var))
         }
-        Usage::Access(Container::Record, mark, fields) => {
+        Usage::RecordAccess(_, mark, fields) => {
             let (record_bool, ext_type) = constrain_by_usage(&Simple(*mark), var_store, introduced);
 
             constrain_by_usage_record(fields, record_bool, ext_type, introduced, var_store)
         }
-        Usage::Update(Container::Record, _, fields) => {
+        Usage::RecordUpdate(_, _, fields) => {
             let record_uvar = var_store.fresh();
             introduced.push(record_uvar);
 
@@ -1501,7 +1504,7 @@ fn constrain_by_usage(
 
             constrain_by_usage_record(fields, record_bool, ext_type, introduced, var_store)
         }
-        Usage::Access(Container::List, mark, fields) => {
+        Usage::ApplyAccess(mark, fields) => {
             let (list_bool, _ext_type) = constrain_by_usage(&Simple(*mark), var_store, introduced);
 
             let field_usage = fields
@@ -1541,7 +1544,7 @@ fn constrain_by_usage(
             }
         }
 
-        Usage::Update(Container::List, _, fields) => {
+        Usage::ApplyUpdate(_, fields) => {
             let list_uvar = var_store.fresh();
             introduced.push(list_uvar);
 
