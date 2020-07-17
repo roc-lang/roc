@@ -116,6 +116,9 @@ impl<'a> Procs<'a> {
                     .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
                 // if we've already specialized this one, no further work is needed.
+                //
+                // NOTE: this #[allow(clippy::map_entry)] here is for correctness!
+                // Changing it to use .entry() would necessarily make it incorrect.
                 #[allow(clippy::map_entry)]
                 if !self.specialized.contains_key(&(symbol, layout.clone())) {
                     let pending = PendingSpecialization {
@@ -1531,6 +1534,9 @@ pub fn specialize_all<'a>(
         for (layout, pending) in by_layout.drain() {
             // If we've already seen this (Symbol, Layout) combination before,
             // don't try to specialize it again. If we do, we'll loop forever!
+            //
+            // NOTE: this #[allow(clippy::map_entry)] here is for correctness!
+            // Changing it to use .entry() would necessarily make it incorrect.
             #[allow(clippy::map_entry)]
             if !procs.specialized.contains_key(&(name, layout.clone())) {
                 // TODO should pending_procs hold a Rc<Proc>?
