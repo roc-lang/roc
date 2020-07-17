@@ -853,13 +853,18 @@ fn parse_closure_param<'a>(
 }
 
 fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
-    one_of!(
-        loc_parenthetical_pattern(min_indent),
-        loc!(underscore_pattern()),
-        loc_ident_pattern(min_indent),
-        loc!(record_destructure(min_indent)),
-        loc!(string_pattern()),
-        loc!(number_pattern())
+    skip_first!(
+        // If this is a reserved keyword ("if", "then", "case, "when"), then
+        // it is not a pattern!
+        not(reserved_keyword()),
+        one_of!(
+            loc_parenthetical_pattern(min_indent),
+            loc!(underscore_pattern()),
+            loc_ident_pattern(min_indent),
+            loc!(record_destructure(min_indent)),
+            loc!(string_pattern()),
+            loc!(number_pattern())
+        )
     )
 }
 
