@@ -37,8 +37,8 @@ pub enum Usage {
     ApplyUpdate(ImSet<usize>, FieldAccess),
 
     // Records
-    RecordAccess(Container, Mark, FieldAccess),
-    RecordUpdate(Container, ImSet<Lowercase>, FieldAccess),
+    RecordAccess(Mark, FieldAccess),
+    RecordUpdate(ImSet<Lowercase>, FieldAccess),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -108,78 +108,74 @@ impl Composable for Usage {
             }
 
             // Record Update
-            (RecordUpdate(c1, _, _), RecordUpdate(c2, _, _))
-            | (RecordUpdate(c1, _, _), RecordAccess(c2, _, _)) => {
-                debug_assert_eq!(c1, c2);
+            (RecordUpdate(_, _), RecordUpdate(_, _)) | (RecordUpdate(_, _), RecordAccess(_, _)) => {
                 *self = Simple(Shared);
             }
 
-            (RecordUpdate(_, _, _), Simple(Unique)) | (Simple(Unique), RecordUpdate(_, _, _)) => {
+            (RecordUpdate(_, _), Simple(Unique)) | (Simple(Unique), RecordUpdate(_, _)) => {
                 *self = Simple(Shared);
             }
 
-            (RecordAccess(c1, m1, fields1), RecordUpdate(c2, overwritten, fields2)) => {
-                debug_assert_eq!(c1, c2);
+            (RecordAccess(m1, fields1), RecordUpdate(overwritten, fields2)) => {
                 *self = correct_overwritten(*m1, fields1, Seen, fields2, overwritten);
             }
 
-            (Simple(Seen), RecordUpdate(c1, overwritten, fa)) => {
-                *self = RecordUpdate(*c1, overwritten.clone(), fa.clone());
+            (Simple(Seen), RecordUpdate(overwritten, fa)) => {
+                *self = RecordUpdate(overwritten.clone(), fa.clone());
             }
-            (RecordUpdate(c1, overwritten, fa), Simple(Seen)) => {
-                *self = RecordUpdate(*c1, overwritten.clone(), fa.clone());
+            (RecordUpdate(overwritten, fa), Simple(Seen)) => {
+                *self = RecordUpdate(overwritten.clone(), fa.clone());
             }
 
             // RecordAccess
-            (RecordAccess(c1, m1, fa1), RecordAccess(c2, m2, fa2)) => {
-                debug_assert_eq!(c1, c2);
+            (RecordAccess(m1, fa1), RecordAccess(m2, fa2)) => {
                 let mut fa = fa1.clone();
                 fa.sequential(fa2);
 
                 let mut m = *m1;
                 m.sequential(m2);
 
-                *self = RecordAccess(*c1, m, fa);
+                *self = RecordAccess(m, fa);
             }
-            (RecordAccess(c1, m, fa1), Simple(Unique)) => {
-                let mut copy = RecordAccess(*c1, *m, fa1.clone());
+            (RecordAccess(m, fa1), Simple(Unique)) => {
+                let mut copy = RecordAccess(*m, fa1.clone());
                 make_subtree_shared(&mut copy);
 
                 // correct the mark of the top-level access
-                *self = if let RecordAccess(c, _, fa) = copy {
+                *self = if let RecordAccess(_, fa) = copy {
                     let mut m = *m;
                     m.sequential(&Unique);
 
-                    RecordAccess(c, m, fa)
+                    RecordAccess(m, fa)
                 } else {
                     unreachable!()
                 };
             }
-            (Simple(Unique), RecordAccess(c, m, fa)) => {
-                let mut copy = RecordAccess(*c, *m, fa.clone());
+            (Simple(Unique), RecordAccess(m, fa)) => {
+                let mut copy = RecordAccess(*m, fa.clone());
                 make_subtree_shared(&mut copy);
 
                 // correct the mark of the top-level access
-                *self = if let RecordAccess(c, _, fa) = copy {
+                *self = if let RecordAccess(_, fa) = copy {
                     let mut m = *m;
                     m.sequential(&Unique);
 
-                    RecordAccess(c, m, fa)
+                    RecordAccess(m, fa)
                 } else {
                     unreachable!()
                 };
             }
 
-            (Simple(m1 @ Seen), RecordAccess(c1, m2, fa)) => {
+            (Simple(m1 @ Seen), RecordAccess(m2, fa)) => {
                 let mut m = *m1;
                 m.sequential(m2);
-                *self = RecordAccess(*c1, m, fa.clone())
+                *self = RecordAccess(m, fa.clone())
             }
 
-            (RecordAccess(c1, m1, fa), Simple(m2 @ Seen)) => {
+            (RecordAccess(m1, fa), Simple(m2 @ Seen)) => {
                 let mut m = *m1;
                 m.sequential(m2);
-                *self = RecordAccess(*c1, m, fa.clone());
+                *self = RecordAccess(m, fa.clone());
             }
 
             // Apply Update
@@ -254,14 +250,14 @@ impl Composable for Usage {
             }
 
             // Things cannot change type
-            (ApplyAccess(_, _), RecordAccess(_, _, _))
-            | (ApplyAccess(_, _), RecordUpdate(_, _, _))
-            | (ApplyUpdate(_, _), RecordAccess(_, _, _))
-            | (ApplyUpdate(_, _), RecordUpdate(_, _, _))
-            | (RecordAccess(_, _, _), ApplyAccess(_, _))
-            | (RecordUpdate(_, _, _), ApplyAccess(_, _))
-            | (RecordAccess(_, _, _), ApplyUpdate(_, _))
-            | (RecordUpdate(_, _, _), ApplyUpdate(_, _)) => {
+            (ApplyAccess(_, _), RecordAccess(_, _))
+            | (ApplyAccess(_, _), RecordUpdate(_, _))
+            | (ApplyUpdate(_, _), RecordAccess(_, _))
+            | (ApplyUpdate(_, _), RecordUpdate(_, _))
+            | (RecordAccess(_, _), ApplyAccess(_, _))
+            | (RecordUpdate(_, _), ApplyAccess(_, _))
+            | (RecordAccess(_, _), ApplyUpdate(_, _))
+            | (RecordUpdate(_, _), ApplyUpdate(_, _)) => {
                 unreachable!("applies cannot turn into records or vice versa!")
             }
 
@@ -290,59 +286,55 @@ impl Composable for Usage {
                 *self = Simple(Shared);
             }
             // Record update
-            (RecordUpdate(c1, w1, fa1), RecordUpdate(c2, w2, fa2)) => {
-                debug_assert_eq!(c1, c2);
+            (RecordUpdate(w1, fa1), RecordUpdate(w2, fa2)) => {
                 let mut fa = fa1.clone();
                 fa.parallel(fa2);
 
                 let w = w1.clone().intersection(w2.clone());
 
-                *self = RecordUpdate(*c1, w, fa);
+                *self = RecordUpdate(w, fa);
             }
 
-            (RecordUpdate(_, _, _), Simple(Unique)) | (RecordUpdate(_, _, _), Simple(Seen)) => {
-                //*self = RecordUpdate(*c1, w.clone(), fa.clone());
+            (RecordUpdate(_, _), Simple(Unique)) | (RecordUpdate(_, _), Simple(Seen)) => {
+                //*self = RecordUpdate( w.clone(), fa.clone());
             }
-            (Simple(Unique), RecordUpdate(c1, w, fa)) | (Simple(Seen), RecordUpdate(c1, w, fa)) => {
-                *self = RecordUpdate(*c1, w.clone(), fa.clone());
+            (Simple(Unique), RecordUpdate(w, fa)) | (Simple(Seen), RecordUpdate(w, fa)) => {
+                *self = RecordUpdate(w.clone(), fa.clone());
             }
 
-            (RecordUpdate(c1, w, fa1), RecordAccess(c2, _, fa2)) => {
-                debug_assert_eq!(c1, c2);
+            (RecordUpdate(w, fa1), RecordAccess(_, fa2)) => {
                 let mut fa = fa1.clone();
                 fa.parallel(&fa2.clone());
-                *self = RecordUpdate(*c1, w.clone(), fa);
+                *self = RecordUpdate(w.clone(), fa);
             }
-            (RecordAccess(c1, _, fa1), RecordUpdate(c2, w, fa2)) => {
-                debug_assert_eq!(c1, c2);
+            (RecordAccess(_, fa1), RecordUpdate(w, fa2)) => {
                 let mut fa = fa1.clone();
                 fa.parallel(&fa2.clone());
-                *self = RecordUpdate(*c1, w.clone(), fa);
+                *self = RecordUpdate(w.clone(), fa);
             }
 
             // Record Access
-            (RecordAccess(c1, m1, fa1), RecordAccess(c2, m2, fa2)) => {
-                debug_assert_eq!(c1, c2);
+            (RecordAccess(m1, fa1), RecordAccess(m2, fa2)) => {
                 let mut m = *m1;
                 m.parallel(m2);
 
                 let mut fa = fa1.clone();
                 fa.parallel(fa2);
-                *self = RecordAccess(*c1, m, fa)
+                *self = RecordAccess(m, fa)
             }
-            (RecordAccess(c, m, fa), Simple(Unique)) => {
+            (RecordAccess(m, fa), Simple(Unique)) => {
                 let mut m = *m;
                 m.parallel(&Unique);
-                *self = RecordAccess(*c, m, fa.clone());
+                *self = RecordAccess(m, fa.clone());
             }
-            (RecordAccess(_, _, _), Simple(Seen)) => {
-                // *self = RecordAccess(*c1, *m, fa.clone());
+            (RecordAccess(_, _), Simple(Seen)) => {
+                // *self = RecordAccess( *m, fa.clone());
             }
-            (Simple(m1 @ Unique), RecordAccess(c1, m2, fa))
-            | (Simple(m1 @ Seen), RecordAccess(c1, m2, fa)) => {
+            (Simple(m1 @ Unique), RecordAccess(m2, fa))
+            | (Simple(m1 @ Seen), RecordAccess(m2, fa)) => {
                 let mut m = *m1;
                 m.sequential(m2);
-                *self = RecordAccess(*c1, m, fa.clone());
+                *self = RecordAccess(m, fa.clone());
             }
 
             // Apply Update
@@ -398,14 +390,14 @@ impl Composable for Usage {
             }
 
             // Things cannot change type
-            (ApplyAccess(_, _), RecordAccess(_, _, _))
-            | (ApplyAccess(_, _), RecordUpdate(_, _, _))
-            | (ApplyUpdate(_, _), RecordAccess(_, _, _))
-            | (ApplyUpdate(_, _), RecordUpdate(_, _, _))
-            | (RecordAccess(_, _, _), ApplyAccess(_, _))
-            | (RecordUpdate(_, _, _), ApplyAccess(_, _))
-            | (RecordAccess(_, _, _), ApplyUpdate(_, _))
-            | (RecordUpdate(_, _, _), ApplyUpdate(_, _)) => {
+            (ApplyAccess(_, _), RecordAccess(_, _))
+            | (ApplyAccess(_, _), RecordUpdate(_, _))
+            | (ApplyUpdate(_, _), RecordAccess(_, _))
+            | (ApplyUpdate(_, _), RecordUpdate(_, _))
+            | (RecordAccess(_, _), ApplyAccess(_, _))
+            | (RecordUpdate(_, _), ApplyAccess(_, _))
+            | (RecordAccess(_, _), ApplyUpdate(_, _))
+            | (RecordUpdate(_, _), ApplyUpdate(_, _)) => {
                 unreachable!("applies cannot turn into records or vice versa!")
             }
         }
@@ -469,7 +461,7 @@ fn correct_overwritten(
         }
     }
 
-    RecordUpdate(Container::Record, overwritten.clone(), fa1)
+    RecordUpdate(overwritten.clone(), fa1)
 }
 
 fn correct_overwritten_apply(
@@ -508,12 +500,12 @@ fn make_subtree_shared(usage: &mut Usage) {
             *usage = Simple(Shared);
         }
 
-        RecordUpdate(_, _, fa) => {
+        RecordUpdate(_, fa) => {
             for nested in fa.fields.iter_mut() {
                 make_subtree_shared(nested);
             }
         }
-        RecordAccess(_, m, fa) => {
+        RecordAccess(m, fa) => {
             for nested in fa.fields.iter_mut() {
                 make_subtree_shared(nested);
             }
@@ -682,7 +674,7 @@ impl Usage {
         for field in access_chain.into_iter().rev() {
             let mut fa = FieldAccess::default();
             fa.fields.insert(field, accum);
-            accum = Usage::RecordAccess(Container::Record, Mark::Seen, fa);
+            accum = Usage::RecordAccess(Mark::Seen, fa);
         }
 
         accum
@@ -906,7 +898,7 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
 
             usage.register_with(
                 *symbol,
-                &Usage::RecordUpdate(Container::Record, labels, FieldAccess::default()),
+                &Usage::RecordUpdate(labels, FieldAccess::default()),
             );
         }
         Expr::Access {

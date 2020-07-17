@@ -37,7 +37,7 @@ mod test_usage_analysis {
         }
 
         match usage {
-            Usage::RecordAccess(_, _, fields) => {
+            Usage::RecordAccess(_, fields) => {
                 let mut actual: HashMap<Lowercase, Usage> = HashMap::default();
                 for (k, v) in fields.into_iter() {
                     actual.insert(k, v);
@@ -66,7 +66,7 @@ mod test_usage_analysis {
         }
 
         match usage {
-            Usage::RecordAccess(_, _, fields) => {
+            Usage::RecordAccess(_, fields) => {
                 let mut actual: HashMap<Lowercase, Usage> = HashMap::default();
                 for (k, v) in fields.into_iter() {
                     actual.insert(k, v);
@@ -135,14 +135,14 @@ mod test_usage_analysis {
         field_access_seq(
             vec![vec!["foo", "bar"], vec!["foo"]],
             hashmap![
-                "foo" => RecordAccess(Record, Unique, field_access(hashmap![ "bar" => Simple(Shared) ]))
+                "foo" => RecordAccess( Unique, field_access(hashmap![ "bar" => Simple(Shared) ]))
             ],
         );
 
         field_access_seq(
             vec![vec!["foo"], vec!["foo", "bar"]],
             hashmap![
-                "foo" => RecordAccess(Record, Unique, field_access(hashmap![ "bar" => Simple(Shared) ]))
+                "foo" => RecordAccess( Unique, field_access(hashmap![ "bar" => Simple(Shared) ]))
             ],
         );
     }
@@ -151,13 +151,13 @@ mod test_usage_analysis {
         field_access_par(
             vec![vec!["foo", "bar"], vec!["foo"]],
             hashmap![
-                "foo" => RecordAccess(Record, Unique, field_access(hashmap![ "bar" => Simple(Unique) ]))
+                "foo" => RecordAccess( Unique, field_access(hashmap![ "bar" => Simple(Unique) ]))
             ],
         );
         field_access_par(
             vec![vec!["foo"], vec!["foo", "bar"]],
             hashmap![
-                "foo" => RecordAccess(Record, Unique, field_access(hashmap![ "bar" => Simple(Unique) ]))
+                "foo" => RecordAccess( Unique, field_access(hashmap![ "bar" => Simple(Unique) ]))
             ],
         );
     }
@@ -167,13 +167,13 @@ mod test_usage_analysis {
         field_access_seq(
             vec![vec!["foo", "bar", "baz"], vec!["foo", "bar"]],
             hashmap![
-                "foo" => RecordAccess(Record, Seen, field_access(hashmap![ "bar" => RecordAccess(Record, Unique, field_access(hashmap![ "baz" => Simple(Shared) ]))]))
+                "foo" => RecordAccess( Seen, field_access(hashmap![ "bar" => RecordAccess( Unique, field_access(hashmap![ "baz" => Simple(Shared) ]))]))
             ],
         );
         field_access_seq(
             vec![vec!["foo", "bar"], vec!["foo", "bar", "baz"]],
             hashmap![
-                "foo" => RecordAccess(Record, Seen, field_access(hashmap![ "bar" => RecordAccess(Record, Unique, field_access(hashmap![ "baz" => Simple(Shared) ]))]))
+                "foo" => RecordAccess( Seen, field_access(hashmap![ "bar" => RecordAccess( Unique, field_access(hashmap![ "baz" => Simple(Shared) ]))]))
             ],
         );
     }
@@ -235,11 +235,7 @@ mod test_usage_analysis {
 
                 usage.register_with(
                     interns.symbol(home, "rec".into()),
-                    &RecordAccess(
-                        Record,
-                        Seen,
-                        field_access(hashmap![ "foo" => Simple(Unique) ]),
-                    ),
+                    &RecordAccess(Seen, field_access(hashmap![ "foo" => Simple(Unique) ])),
                 );
 
                 usage
@@ -264,7 +260,6 @@ mod test_usage_analysis {
                 usage.register_with(
                     interns.symbol(home, "rec".into()),
                     &RecordUpdate(
-                        Record,
                         overwritten,
                         field_access(hashmap![ "foo" => Simple(Unique) ]),
                     ),
@@ -313,11 +308,7 @@ mod test_usage_analysis {
 
                 usage.register_with(
                     interns.symbol(home, "rec".into()),
-                    &RecordAccess(
-                        Record,
-                        Unique,
-                        field_access(hashmap![ "foo" => Simple(Shared) ]),
-                    ),
+                    &RecordAccess(Unique, field_access(hashmap![ "foo" => Simple(Shared) ])),
                 );
 
                 usage
@@ -351,10 +342,7 @@ mod test_usage_analysis {
                 ]);
 
                 usage.register_unique(interns.symbol(home, "p".into()));
-                usage.register_with(
-                    interns.symbol(home, "r".into()),
-                    &RecordAccess(Record, Unique, fa),
-                );
+                usage.register_with(interns.symbol(home, "r".into()), &RecordAccess(Unique, fa));
 
                 usage
             },
@@ -379,16 +367,13 @@ mod test_usage_analysis {
 
                 let fa = field_access(hashmap![
                     "foo" =>
-                        RecordAccess(Record, Seen, field_access(hashmap![
+                        RecordAccess( Seen, field_access(hashmap![
                             "bar" => Simple(Shared),
                             "baz" => Simple(Shared),
                         ]))
                 ]);
 
-                usage.register_with(
-                    interns.symbol(home, "r".into()),
-                    &RecordAccess(Record, Unique, fa),
-                );
+                usage.register_with(interns.symbol(home, "r".into()), &RecordAccess(Unique, fa));
 
                 usage
             },
@@ -421,14 +406,14 @@ mod test_usage_analysis {
                     "x" => Simple(Shared),
                 ]);
 
-                usage.register_with(r, &RecordUpdate(Record, overwritten, fa));
+                usage.register_with(r, &RecordUpdate(overwritten, fa));
 
                 let fa = field_access(hashmap![
                     "x" => Simple(Unique),
                     "y" => Simple(Unique),
                 ]);
 
-                usage.register_with(s, &RecordAccess(Record, Seen, fa));
+                usage.register_with(s, &RecordAccess(Seen, fa));
                 usage
             },
         );
@@ -460,14 +445,14 @@ mod test_usage_analysis {
                     "x" => Simple(Unique),
                 ]);
 
-                usage.register_with(r, &RecordUpdate(Record, overwritten, fa));
+                usage.register_with(r, &RecordUpdate(overwritten, fa));
 
                 let fa = field_access(hashmap![
                     "x" => Simple(Unique),
                     "y" => Simple(Unique),
                 ]);
 
-                usage.register_with(s, &RecordAccess(Record, Seen, fa));
+                usage.register_with(s, &RecordAccess(Seen, fa));
 
                 usage
             },
@@ -496,7 +481,7 @@ mod test_usage_analysis {
                     "y" => Simple(Unique),
                 ]);
 
-                usage.register_with(r, &RecordAccess(Record, Seen, fa));
+                usage.register_with(r, &RecordAccess(Seen, fa));
 
                 usage
             },
@@ -525,7 +510,7 @@ mod test_usage_analysis {
 
                 let overwritten = hashset!["y".into()].into();
 
-                usage.register_with(r, &RecordUpdate(Record, overwritten, fa));
+                usage.register_with(r, &RecordUpdate(overwritten, fa));
 
                 usage
             },
@@ -547,7 +532,6 @@ mod test_usage_analysis {
                 let mut usage = VarUsage::default();
 
                 let access = RecordAccess(
-                    Record,
                     Seen,
                     field_access(hashmap![
                         "x" => Simple(Unique),
@@ -599,16 +583,8 @@ mod test_usage_analysis {
                 let mut usage = VarUsage::default();
                 let home = test_home();
 
-                let access_r = RecordAccess(
-                    Record,
-                    Seen,
-                    field_access(hashmap![ "y" => Simple(Unique) ]),
-                );
-                let access_s = RecordAccess(
-                    Record,
-                    Seen,
-                    field_access(hashmap![ "x" => Simple(Shared) ]),
-                );
+                let access_r = RecordAccess(Seen, field_access(hashmap![ "y" => Simple(Unique) ]));
+                let access_s = RecordAccess(Seen, field_access(hashmap![ "x" => Simple(Shared) ]));
 
                 let r = interns.symbol(home, "r".into());
                 let s = interns.symbol(home, "s".into());
@@ -640,16 +616,8 @@ mod test_usage_analysis {
                 let mut usage = VarUsage::default();
                 let home = test_home();
 
-                let access_r = RecordAccess(
-                    Record,
-                    Seen,
-                    field_access(hashmap![ "x" => Simple(Unique) ]),
-                );
-                let access_s = RecordAccess(
-                    Record,
-                    Seen,
-                    field_access(hashmap![ "x" => Simple(Shared) ]),
-                );
+                let access_r = RecordAccess(Seen, field_access(hashmap![ "x" => Simple(Unique) ]));
+                let access_s = RecordAccess(Seen, field_access(hashmap![ "x" => Simple(Shared) ]));
 
                 let r = interns.symbol(home, "r".into());
                 let s = interns.symbol(home, "s".into());
@@ -681,14 +649,10 @@ mod test_usage_analysis {
                 let home = test_home();
 
                 let overwritten = hashset!["y".into()].into();
-                let access_r = RecordUpdate(
-                    Record,
-                    overwritten,
-                    field_access(hashmap![ "x" => Simple(Shared) ]),
-                );
+                let access_r =
+                    RecordUpdate(overwritten, field_access(hashmap![ "x" => Simple(Shared) ]));
 
                 let access_s = RecordAccess(
-                    Record,
                     Unique,
                     field_access(hashmap![
                         "x" => Simple(Shared),
