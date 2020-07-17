@@ -1434,7 +1434,7 @@ fn constrain_var(
                 ]),
             )
         }
-        Some(Simple(Unique)) => {
+        Some(Simple(Unique)) | Some(Simple(Seen)) => {
             // no additional constraints, keep uniqueness unbound
             Lookup(symbol_for_lookup, expected, region)
         }
@@ -1457,8 +1457,6 @@ fn constrain_var(
                 ]),
             )
         }
-
-        Some(other) => panic!("some other rc value: {:?}", other),
     }
 }
 

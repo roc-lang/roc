@@ -221,12 +221,12 @@ mod test_uniq_load {
             expect_types(
                 loaded_module,
                 hashmap! {
-                    "findPath" => "Attr * (Attr * { costFunction : (Attr Shared (Attr Shared position, Attr Shared position -> Attr Shared Float)), end : (Attr Shared position), moveFunction : (Attr Shared (Attr Shared position -> Attr * (Set (Attr * position)))), start : (Attr Shared position) } -> Attr * (Result (Attr * (List (Attr Shared position))) (Attr * [ KeyNotFound ]*)))",
+                    "findPath" => "Attr * (Attr * { costFunction : (Attr Shared (Attr Shared position, Attr Shared position -> Attr * Float)), end : (Attr Shared position), moveFunction : (Attr Shared (Attr Shared position -> Attr * (Set (Attr * position)))), start : (Attr Shared position) } -> Attr * (Result (Attr * (List (Attr Shared position))) (Attr * [ KeyNotFound ]*)))",
                     "initialModel" => "Attr * (Attr Shared position -> Attr * (Model (Attr Shared position)))",
                     "reconstructPath" => "Attr Shared (Attr Shared (Map (Attr * position) (Attr Shared position)), Attr Shared position -> Attr * (List (Attr Shared position)))",
                     "updateCost" => "Attr * (Attr Shared position, Attr Shared position, Attr Shared (Model (Attr Shared position)) -> Attr Shared (Model (Attr Shared position)))",
-                    "cheapestOpen" => "Attr * (Attr * (Attr Shared position -> Attr Shared Float), Attr (* | a | b) (Model (Attr Shared position)) -> Attr * (Result (Attr Shared position) (Attr * [ KeyNotFound ]*)))",
-                    "astar" => "Attr Shared (Attr Shared (Attr Shared position, Attr Shared position -> Attr Shared Float), Attr Shared (Attr Shared position -> Attr * (Set (Attr * position))), Attr Shared position, Attr Shared (Model (Attr Shared position)) -> Attr * [ Err (Attr * [ KeyNotFound ]*), Ok (Attr * (List (Attr Shared position))) ]*)",
+                    "cheapestOpen" => "Attr * (Attr * (Attr Shared position -> Attr * Float), Attr (* | a | b | c) (Model (Attr Shared position)) -> Attr * (Result (Attr Shared position) (Attr * [ KeyNotFound ]*)))",
+                    "astar" => "Attr Shared (Attr Shared (Attr Shared position, Attr Shared position -> Attr * Float), Attr Shared (Attr Shared position -> Attr * (Set (Attr * position))), Attr Shared position, Attr Shared (Model (Attr Shared position)) -> Attr * [ Err (Attr * [ KeyNotFound ]*), Ok (Attr * (List (Attr Shared position))) ]*)",
                 },
             );
         });
@@ -242,7 +242,7 @@ mod test_uniq_load {
             expect_types(
                 loaded_module,
                 hashmap! {
-                    "swap" => "Attr * (Attr Shared Int, Attr Shared Int, Attr * (List (Attr Shared a)) -> Attr * (List (Attr Shared a)))",
+                    "swap" => "Attr * (Attr * Int, Attr * Int, Attr * (List (Attr Shared a)) -> Attr * (List (Attr Shared a)))",
                     "partition" => "Attr * (Attr Shared Int, Attr Shared Int, Attr b (List (Attr Shared (Num (Attr Shared a)))) -> Attr * [ Pair (Attr * Int) (Attr b (List (Attr Shared (Num (Attr Shared a))))) ])",
                     "quicksort" => "Attr Shared (Attr b (List (Attr Shared (Num (Attr Shared a)))), Attr Shared Int, Attr Shared Int -> Attr b (List (Attr Shared (Num (Attr Shared a)))))",
                 },

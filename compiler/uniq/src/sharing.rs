@@ -658,9 +658,11 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
             if let Var(symbol) = fun.1.value {
                 // call by name
 
-                // TODO remove this clone
-                let foo = usage.closure_usage_signatures.clone();
-                let opt_signature = foo.get(&symbol);
+                // fetch the signature
+                let opt_signature = match usage.closure_usage_signatures.get(&symbol) {
+                    Some(v) => Some(v.clone()),
+                    None => None,
+                };
 
                 if let Some(signature) = opt_signature {
                     // we know the usage signature of this function
