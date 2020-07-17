@@ -16,7 +16,7 @@ use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{Alias, Category, PReason, Reason};
 use roc_uniq::builtins::{attr_type, empty_list_type, list_type, str_type};
-use roc_uniq::sharing::{self, Container, FieldAccess, Mark, Usage, VarUsage};
+use roc_uniq::sharing::{self, FieldAccess, Mark, Usage, VarUsage};
 
 pub struct Env {
     /// Whenever we encounter a user-defined type variable (a "rigid" var for short),
@@ -1507,9 +1507,8 @@ fn constrain_by_usage(
         Usage::ApplyAccess(mark, fields) => {
             let (list_bool, _ext_type) = constrain_by_usage(&Simple(*mark), var_store, introduced);
 
-            let field_usage = fields
-                .get(&sharing::LIST_ELEM.into())
-                .expect("no LIST_ELEM key");
+            // TODO reconsier this for multi-value applies
+            let field_usage = fields.get(0).expect("no LIST_ELEM key");
 
             let (elem_bool, elem_type) = constrain_by_usage(field_usage, var_store, introduced);
 
@@ -1548,9 +1547,8 @@ fn constrain_by_usage(
             let list_uvar = var_store.fresh();
             introduced.push(list_uvar);
 
-            let field_usage = fields
-                .get(&sharing::LIST_ELEM.into())
-                .expect("no LIST_ELEM key");
+            // TODO reconsier this for multi-value applies
+            let field_usage = fields.get(0).expect("no LIST_ELEM key");
 
             let (elem_bool, elem_type) = constrain_by_usage(field_usage, var_store, introduced);
 

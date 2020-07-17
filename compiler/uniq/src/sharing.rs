@@ -33,8 +33,8 @@ pub enum Usage {
     Simple(Mark),
 
     // Lists, Sets, ADTs
-    ApplyAccess(Mark, FieldAccess),
-    ApplyUpdate(ImSet<usize>, FieldAccess),
+    ApplyAccess(Mark, Vec<Usage>),
+    ApplyUpdate(ImSet<usize>, Vec<Usage>),
 
     // Records
     RecordAccess(Mark, FieldAccess),
@@ -92,6 +92,58 @@ impl Composable for FieldAccess {
             } else {
                 self.fields.insert(field_name, other_usage.clone());
             }
+        }
+    }
+}
+
+impl Composable for Vec<Usage> {
+    fn sequential(&mut self, other: &Self) {
+        // NOTE we don't know they have the same length
+
+        let mut it_other = other.iter();
+        {
+            for (self_usage, other_usage) in self.iter_mut().zip(&mut it_other) {
+                self_usage.sequential(&other_usage);
+
+                if *self_usage != Usage::Simple(Mark::Seen) {
+                    // e.g. we access `rec.foo` and `rec.foo.bar`.
+                    // Since a reference to `rec.foo` exists, there are at least two references to `foo.bar`
+                    // (`foo.bar` itself and `.bar rec.foo`)
+                    // Therefore fields of the subtrees must be shared!
+
+                    // TODO make this work? Seems to function well without it
+                    // self_nested.or_subtree(&Usage::Shared);
+                    // other_nested.or_subtree(&Usage::Shared);
+                    //
+                    // member function on FieldAccess
+                    //    fn or_subtree(&mut self, constraint: &Usage) {
+                    //        for field_usage in self.fields.iter_mut() {
+                    //            field_usage.parallel(constraint);
+                    //        }
+                    //    }
+                }
+            }
+        }
+
+        // if there are remaining elements in other, push them onto self
+        for other_usage in it_other {
+            self.push(other_usage.clone());
+        }
+    }
+
+    fn parallel(&mut self, other: &Self) {
+        // NOTE we don't know they have the same length
+
+        let mut it_other = other.iter();
+        {
+            for (self_usage, other_usage) in self.iter_mut().zip(&mut it_other) {
+                self_usage.parallel(&other_usage);
+            }
+        }
+
+        // if there are remaining elements in other, push them onto self
+        for other_usage in it_other {
+            self.push(other_usage.clone());
         }
     }
 }
@@ -466,22 +518,24 @@ fn correct_overwritten(
 
 fn correct_overwritten_apply(
     mut mark1: Mark,
-    fa1: &FieldAccess,
+    fa1: &[Usage],
     mark2: Mark,
-    fa2: &FieldAccess,
+    fa2: &[Usage],
     overwritten: &ImSet<usize>,
 ) -> Usage {
     use Usage::*;
 
-    let mut fa1 = fa1.clone();
+    let mut fa1 = fa1.to_owned();
+    // TODO fix this cloning
+    // tricky because Composable is defined on Vec, not &[]
+    let fa2 = fa2.to_owned();
 
     mark1.sequential(&mark2);
-    fa1.sequential(fa2);
+    fa1.sequential(&fa2);
 
     // fields that are accessed, but not overwritten in the update, must be shared!
-    for (label, usage) in fa1.fields.clone().keys().zip(fa1.fields.iter_mut()) {
-        // if !overwritten.contains(&label.clone()) {
-        if true {
+    for (index, usage) in fa1.iter_mut().enumerate() {
+        if !overwritten.contains(&index) {
             make_subtree_shared(usage);
         }
     }
@@ -515,13 +569,13 @@ fn make_subtree_shared(usage: &mut Usage) {
             };
         }
         ApplyUpdate(_, fa) => {
-            for nested in fa.fields.iter_mut() {
+            for nested in fa.iter_mut() {
                 make_subtree_shared(nested);
             }
         }
 
         ApplyAccess(m, fa) => {
-            for nested in fa.fields.iter_mut() {
+            for nested in fa.iter_mut() {
                 make_subtree_shared(nested);
             }
             *m = match &m {
@@ -549,14 +603,7 @@ impl VarUsage {
         closure_signatures.insert(
             Symbol::LIST_GET,
             vec![
-                // Usage::Apply(vec![Usage::Simple(Mark::Unique)]),
-                Usage::ApplyAccess(Mark::Seen, {
-                    let mut result = FieldAccess::default();
-                    result
-                        .fields
-                        .insert(LIST_ELEM.into(), Usage::Simple(Mark::Unique));
-                    result
-                }),
+                Usage::ApplyAccess(Mark::Seen, vec![Usage::Simple(Mark::Unique)]),
                 Usage::Simple(Mark::Seen),
             ],
         );
@@ -566,14 +613,7 @@ impl VarUsage {
         closure_signatures.insert(
             Symbol::LIST_SET,
             vec![
-                // Usage::Apply(vec![Usage::Simple(Mark::Unique)]),
-                Usage::ApplyUpdate(ImSet::default(), {
-                    let mut result = FieldAccess::default();
-                    result
-                        .fields
-                        .insert(LIST_ELEM.into(), Usage::Simple(Mark::Seen));
-                    result
-                }),
+                Usage::ApplyUpdate(ImSet::default(), vec![Usage::Simple(Mark::Seen)]),
                 Usage::Simple(Mark::Seen),
                 Usage::Simple(Mark::Unique),
             ],

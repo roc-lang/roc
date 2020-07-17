@@ -18,10 +18,9 @@ mod test_usage_analysis {
     use roc_collections::all::{ImMap, ImSet};
     use roc_module::ident::Lowercase;
     use roc_module::symbol::{Interns, Symbol};
-    use roc_uniq::sharing::{self, Container, FieldAccess, Mark, Usage, VarUsage};
+    use roc_uniq::sharing::{FieldAccess, Mark, Usage, VarUsage};
     use std::collections::HashMap;
 
-    use Container::*;
     use Mark::*;
     use Usage::*;
 
@@ -686,12 +685,7 @@ mod test_usage_analysis {
                 let mut usage = VarUsage::default();
                 let home = test_home();
 
-                let access = ApplyAccess(
-                    Unique,
-                    field_access(hashmap![
-                        sharing::LIST_ELEM => Simple(Shared),
-                    ]),
-                );
+                let access = ApplyAccess(Unique, vec![Simple(Shared)]);
 
                 let r = interns.symbol(home, "r".into());
 
@@ -723,12 +717,7 @@ mod test_usage_analysis {
                 let mut usage = VarUsage::default();
                 let home = test_home();
 
-                let access = ApplyUpdate(
-                    ImSet::default(),
-                    field_access(hashmap![
-                        sharing::LIST_ELEM => Simple(Shared),
-                    ]),
-                );
+                let access = ApplyUpdate(ImSet::default(), vec![Simple(Shared)]);
 
                 let r = interns.symbol(home, "list".into());
                 let v = interns.symbol(home, "v".into());
@@ -763,12 +752,7 @@ mod test_usage_analysis {
                 let mut usage = VarUsage::default();
                 let home = test_home();
 
-                let access = ApplyUpdate(
-                    ImSet::default(),
-                    field_access(hashmap![
-                        sharing::LIST_ELEM => Simple(Seen),
-                    ]),
-                );
+                let access = ApplyUpdate(ImSet::default(), vec![Simple(Seen)]);
 
                 let r = interns.symbol(home, "list".into());
 
