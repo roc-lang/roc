@@ -114,6 +114,21 @@ mod gen_num {
     }
 
     #[test]
+    fn gen_wrap_add_nums() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    add2 = \num1, num2 -> num1 + num2
+
+                    add2 4 5
+                "#
+            ),
+            9,
+            i64
+        );
+    }
+
+    #[test]
     fn gen_div_f64() {
         // FIXME this works with normal types, but fails when checking uniqueness types
         assert_evals_to!(
@@ -148,6 +163,23 @@ mod gen_num {
             indoc!(
                 r#"
                     4 != 5
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn gen_wrap_int_neq() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    wrappedNotEq : a, a -> Bool
+                    wrappedNotEq = \num1, num2 ->
+                        num1 != num2
+
+                    wrappedNotEq 2 3
                 "#
             ),
             true,
@@ -477,6 +509,21 @@ mod gen_num {
     #[test]
     fn int_negate() {
         assert_evals_to!("Num.neg 123", -123, i64);
+    }
+
+    #[test]
+    fn gen_wrap_int_neg() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    wrappedNeg = \num -> -num
+
+                    wrappedNeg 3
+                "#
+            ),
+            -3,
+            i64
+        );
     }
 
     #[test]

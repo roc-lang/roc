@@ -211,7 +211,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             let value = match op {
                 Negate => Var {
                     module_name: ModuleName::NUM,
-                    ident: "negate",
+                    ident: "neg",
                 },
                 Not => Var {
                     module_name: ModuleName::BOOL,

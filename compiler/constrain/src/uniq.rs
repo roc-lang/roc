@@ -2397,7 +2397,7 @@ fn fix_mutual_recursive_alias(typ: &mut Type, attribute: &Bool) {
 fn fix_mutual_recursive_alias_help(rec_var: Variable, attribute: &Type, into_type: &mut Type) {
     if into_type.contains_variable(rec_var) {
         if let Type::Apply(Symbol::ATTR_ATTR, args) = into_type {
-            std::mem::replace(&mut args[0], attribute.clone());
+            args[0] = attribute.clone();
 
             fix_mutual_recursive_alias_help_help(rec_var, attribute, &mut args[1]);
         }
