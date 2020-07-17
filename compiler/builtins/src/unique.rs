@@ -500,9 +500,33 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![list_type(star1, a)], int_type(star2))
     });
 
-    // get : Attr (* | u) (List (Attr u a))
-    //     , Attr * Int
-    //    -> Attr * (Result (Attr u a) (Attr * [ OutOfBounds ]*))
+    // List.first :
+    //     Attr (* | u) (List (Attr u a)),
+    //     -> Attr * (Result (Attr u a) (Attr * [ OutOfBounds ]*))
+    let list_was_empty = SolvedType::TagUnion(
+        vec![(TagName::Global("ListWasEmpty".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    add_type(Symbol::LIST_FIRST, {
+        let_tvars! { a, u, star1, star2, star3 };
+
+        unique_function(
+            vec![SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    container(star1, vec![u]),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![attr_type(u, a)]),
+                ],
+            )],
+            result_type(star2, attr_type(u, a), lift(star3, list_was_empty)),
+        )
+    });
+
+    // List.get :
+    //     Attr (* | u) (List (Attr u a)),
+    //     Attr * Int
+    //     -> Attr * (Result (Attr u a) (Attr * [ OutOfBounds ]*))
     let index_out_of_bounds = SolvedType::TagUnion(
         vec![(TagName::Global("OutOfBounds".into()), vec![])],
         Box::new(SolvedType::Wildcard),
@@ -526,10 +550,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // set : Attr (w | u | v) (List (Attr u a))
-    //     , Attr * Int
-    //     , Attr (u | v) a
-    //    -> List a
+    // List.set :
+    //     Attr (w | u | v) (List (Attr u a)),
+    //     Attr * Int,
+    //     Attr (u | v) a
+    //     -> Attr * (List (Attr u  a))
     add_type(Symbol::LIST_SET, {
         let_tvars! { u, v, w, star1, star2, a };
 
