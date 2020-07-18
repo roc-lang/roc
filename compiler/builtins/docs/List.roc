@@ -208,9 +208,9 @@ mapWithIndex : List before, (before, Int -> after) -> List after
 ##
 mapOrDrop : List before, (before -> [ Keep after, Drop ]) -> List after
 
-## This works like #List.map, except at any time you can return `Abort` to
-## cancel the operation - or wrap the element in `Continue` to continue.
-mapOrCancel : List before, (before -> [ Continue after, Cancel ]) -> Result (List after) MapCanceled
+## This works like #List.map, except at any time you can return `Err` to
+## cancel the operation and return an error, or `Ok` to continue.
+mapOrCancel : List before, (before -> Result after err) -> Result (List after) err
 
 ## If all the elements in the list are #Ok,
 checkOk : List (Result ok err) -> Result (List ok) err
