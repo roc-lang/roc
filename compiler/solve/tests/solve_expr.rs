@@ -2583,6 +2583,23 @@ mod solve_expr {
     }
 
     #[test]
+    fn open_optional_field_unifies_with_missing() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    negatePoint : { x : Int, y : Int, z ? Num c }r -> { x : Int, y : Int, z : Num c }r
+
+                    a = negatePoint { x: 1, y: 2 }
+                    b = negatePoint { x: 1, y: 2, blah : "hi" }
+
+                    { a, b }
+                "#
+            ),
+            "{ a : { x : Int, y : Int, z : Num c }, b : { blah : Str, x : Int, y : Int, z : Num c } }",
+        );
+    }
+
+    #[test]
     fn optional_field_unifies_with_present() {
         infer_eq_without_problem(
             indoc!(
@@ -2593,6 +2610,23 @@ mod solve_expr {
                 "#
             ),
             "{ x : Num a, y : Float, z : Int }",
+        );
+    }
+
+    #[test]
+    fn open_optional_field_unifies_with_present() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    negatePoint : { x : Num a, y : Num b, z ? c }r -> { x : Num a, y : Num b, z : c }r
+
+                    a = negatePoint { x: 1, y: 2.1 }
+                    b = negatePoint { x: 1, y: 2.1, blah : "hi" }
+
+                    { a, b }
+                "#
+            ),
+            "{ a : { x : Num a, y : Float, z : c }, b : { blah : Str, x : Num a, y : Float, z : c } }",
         );
     }
 }
