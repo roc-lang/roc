@@ -258,12 +258,12 @@ mod test_parse {
     #[test]
     fn record_update() {
         let arena = Bump::new();
-        let label1 = LabeledValue(
+        let label1 = RequiredValue(
             Located::new(0, 0, 16, 17, "x"),
             &[],
             arena.alloc(Located::new(0, 0, 19, 20, Num("5"))),
         );
-        let label2 = LabeledValue(
+        let label2 = RequiredValue(
             Located::new(0, 0, 22, 23, "y"),
             &[],
             arena.alloc(Located::new(0, 0, 25, 26, Num("0"))),
