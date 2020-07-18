@@ -16,7 +16,7 @@ use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
 use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
-use roc_types::types::{Alias, Category, PReason, Reason};
+use roc_types::types::{Alias, Category, PReason, Reason, RecordField};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]
@@ -110,7 +110,7 @@ pub fn constrain_expr(
 
                     field_vars.push(field_var);
                     field_exprs.insert(label.clone(), loc_field_expr);
-                    field_types.insert(label.clone(), field_type);
+                    field_types.insert(label.clone(), RecordField::Required(field_type));
 
                     constraints.push(field_con);
                 }
@@ -145,7 +145,7 @@ pub fn constrain_expr(
             symbol,
             updates,
         } => {
-            let mut fields: SendMap<Lowercase, Type> = SendMap::default();
+            let mut fields: SendMap<Lowercase, RecordField<Type>> = SendMap::default();
             let mut vars = Vec::with_capacity(updates.len() + 2);
             let mut cons = Vec::with_capacity(updates.len() + 1);
             for (field_name, Field { var, loc_expr, .. }) in updates.clone() {
@@ -156,7 +156,7 @@ pub fn constrain_expr(
                     field_name.clone(),
                     &loc_expr,
                 );
-                fields.insert(field_name, tipe);
+                fields.insert(field_name, RecordField::Required(tipe));
                 vars.push(var);
                 cons.push(con);
             }
@@ -618,7 +618,7 @@ pub fn constrain_expr(
             let mut rec_field_types = SendMap::default();
 
             let label = field.clone();
-            rec_field_types.insert(label, field_type.clone());
+            rec_field_types.insert(label, RecordField::Required(field_type.clone()));
 
             let record_type = Type::Record(rec_field_types, Box::new(ext_type));
             let record_expected = Expected::NoExpectation(record_type);
@@ -664,7 +664,7 @@ pub fn constrain_expr(
 
             let mut field_types = SendMap::default();
             let label = field.clone();
-            field_types.insert(label, field_type.clone());
+            field_types.insert(label, RecordField::Required(field_type.clone()));
             let record_type = Type::Record(field_types, Box::new(ext_type));
 
             let category = Category::Accessor(field.clone());
