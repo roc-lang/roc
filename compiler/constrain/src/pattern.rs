@@ -1,4 +1,5 @@
 use crate::builtins;
+use crate::expr::{constrain_expr, Env};
 use roc_can::constraint::Constraint;
 use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
@@ -8,7 +9,7 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
-use roc_types::types::{Category, PReason, PatternCategory, RecordField, Type};
+use roc_types::types::{Category, PReason, PatternCategory, Reason, RecordField, Type};
 
 pub struct PatternState {
     pub headers: SendMap<Symbol, Located<Type>>,
@@ -120,6 +121,7 @@ fn headers_from_annotation_help(
 /// intiialize the Vecs in PatternState using with_capacity
 /// based on its knowledge of their lengths.
 pub fn constrain_pattern(
+    env: &Env,
     pattern: &Pattern,
     region: Region,
     expected: PExpected<Type>,
@@ -223,14 +225,30 @@ pub fn constrain_pattern(
                         ));
                         state.vars.push(*guard_var);
 
-                        constrain_pattern(&loc_guard.value, loc_guard.region, expected, state);
+                        constrain_pattern(env, &loc_guard.value, loc_guard.region, expected, state);
 
                         RecordField::Required(pat_type)
                     }
-                    DestructType::Optional(_var) => {
-                        todo!("Add a constraint for the default value.");
+                    DestructType::Optional(expr_var, loc_expr) => {
+                        // Eq(Type, Expected<Type>, Category, Region),
+                        let expr_expected = Expected::ForReason(
+                            Reason::RecordDefaultField(label.clone()),
+                            pat_type.clone(),
+                            loc_expr.region,
+                        );
 
-                        // RecordField::Optional(pat_type)
+                        state.constraints.push(Constraint::Eq(
+                            Type::Variable(*expr_var),
+                            expr_expected.clone(),
+                            Category::DefaultValue(label.clone()),
+                            region,
+                        ));
+
+                        state.vars.push(*expr_var);
+
+                        constrain_expr(env, loc_expr.region, &loc_expr.value, expr_expected);
+
+                        RecordField::Optional(pat_type)
                     }
                     DestructType::Required => {
                         // No extra constraints necessary.
@@ -283,7 +301,7 @@ pub fn constrain_pattern(
                     pattern_type,
                     region,
                 );
-                constrain_pattern(&loc_pattern.value, loc_pattern.region, expected, state);
+                constrain_pattern(env, &loc_pattern.value, loc_pattern.region, expected, state);
             }
 
             let whole_con = Constraint::Eq(

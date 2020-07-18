@@ -1,4 +1,5 @@
 use crate::env::Env;
+use crate::expr::Expr;
 use crate::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use crate::scope::Scope;
 use roc_module::ident::{Ident, Lowercase, TagName};
@@ -50,7 +51,7 @@ pub struct RecordDestruct {
 #[derive(Clone, Debug, PartialEq)]
 pub enum DestructType {
     Required,
-    Optional(Variable),
+    Optional(Variable, Located<Expr>),
     Guard(Variable, Located<Pattern>),
 }
 
