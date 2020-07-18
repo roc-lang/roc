@@ -941,7 +941,7 @@ fn canonicalize_field<'a>(
 
     match field {
         // Both a label and a value, e.g. `{ name: "blah" }`
-        LabeledValue(label, _, loc_expr) => {
+        RequiredValue(label, _, loc_expr) => {
             let field_var = var_store.fresh();
             let (loc_can_expr, output) =
                 canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
@@ -952,6 +952,10 @@ fn canonicalize_field<'a>(
                 output,
                 field_var,
             )
+        }
+
+        OptionalValue(_, _, _) => {
+            todo!("TODO gracefully handle an optional field being used in an Expr");
         }
 
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
