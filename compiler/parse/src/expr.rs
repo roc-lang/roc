@@ -332,17 +332,32 @@ pub fn assigned_expr_field_to_pattern<'a>(
 ) -> Result<Pattern<'a>, Fail> {
     // the assigned fields always store spaces, but this slice is often empty
     Ok(match assigned_field {
-        AssignedField::LabeledValue(name, spaces, value) => {
+        AssignedField::RequiredValue(name, spaces, value) => {
             let pattern = expr_to_pattern(arena, &value.value)?;
             let result = arena.alloc(Located {
                 region: value.region,
                 value: pattern,
             });
             if spaces.is_empty() {
-                Pattern::RecordField(name.value, result)
+                Pattern::RequiredField(name.value, result)
             } else {
                 Pattern::SpaceAfter(
-                    arena.alloc(Pattern::RecordField(name.value, result)),
+                    arena.alloc(Pattern::RequiredField(name.value, result)),
+                    spaces,
+                )
+            }
+        }
+        AssignedField::OptionalValue(name, spaces, value) => {
+            let pattern = expr_to_pattern(arena, &value.value)?;
+            let result = arena.alloc(Located {
+                region: value.region,
+                value: pattern,
+            });
+            if spaces.is_empty() {
+                Pattern::OptionalField(name.value, result)
+            } else {
+                Pattern::SpaceAfter(
+                    arena.alloc(Pattern::OptionalField(name.value, result)),
                     spaces,
                 )
             }
@@ -368,7 +383,7 @@ pub fn assigned_pattern_field_to_pattern<'a>(
 ) -> Result<Located<Pattern<'a>>, Fail> {
     // the assigned fields always store spaces, but this slice is often empty
     Ok(match assigned_field {
-        AssignedField::LabeledValue(name, spaces, value) => {
+        AssignedField::RequiredValue(name, spaces, value) => {
             let pattern = value.value.clone();
             let region = Region::span_across(&value.region, &value.region);
             let result = arena.alloc(Located {
@@ -376,12 +391,31 @@ pub fn assigned_pattern_field_to_pattern<'a>(
                 value: pattern,
             });
             if spaces.is_empty() {
-                Located::at(region, Pattern::RecordField(name.value, result))
+                Located::at(region, Pattern::RequiredField(name.value, result))
             } else {
                 Located::at(
                     region,
                     Pattern::SpaceAfter(
-                        arena.alloc(Pattern::RecordField(name.value, result)),
+                        arena.alloc(Pattern::RequiredField(name.value, result)),
+                        spaces,
+                    ),
+                )
+            }
+        }
+        AssignedField::OptionalValue(name, spaces, value) => {
+            let pattern = value.value.clone();
+            let region = Region::span_across(&value.region, &value.region);
+            let result = arena.alloc(Located {
+                region: value.region,
+                value: pattern,
+            });
+            if spaces.is_empty() {
+                Located::at(region, Pattern::OptionalField(name.value, result))
+            } else {
+                Located::at(
+                    region,
+                    Pattern::SpaceAfter(
+                        arena.alloc(Pattern::OptionalField(name.value, result)),
                         spaces,
                     ),
                 )
@@ -580,7 +614,7 @@ fn annotation_or_alias<'a>(
                 loc_ann,
             )
         }
-        RecordField(_, _) => {
+        RequiredField(_, _) | OptionalField(_, _) => {
             unreachable!("This should only be possible inside a record destruture.");
         }
     }

@@ -1,5 +1,5 @@
 use crate::boolean_algebra;
-use crate::types::{name_type_var, ErrorType, Problem, TypeExt};
+use crate::types::{name_type_var, ErrorType, Problem, RecordField, TypeExt};
 use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -567,7 +567,7 @@ impl Content {
 pub enum FlatType {
     Apply(Symbol, Vec<Variable>),
     Func(Vec<Variable>, Variable),
-    Record(MutMap<Lowercase, Variable>, Variable),
+    Record(MutMap<Lowercase, RecordField<Variable>>, Variable),
     TagUnion(MutMap<TagName, Vec<Variable>>, Variable),
     RecursiveTagUnion(Variable, MutMap<TagName, Vec<Variable>>, Variable),
     Erroneous(Problem),
@@ -612,7 +612,11 @@ fn occurs(
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     Record(vars_by_field, ext_var) => {
-                        let it = once(&ext_var).chain(vars_by_field.values());
+                        let it =
+                            once(&ext_var).chain(vars_by_field.values().map(|field| match field {
+                                RecordField::Optional(var) => var,
+                                RecordField::Required(var) => var,
+                            }));
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     TagUnion(tags, ext_var) => {
@@ -729,8 +733,17 @@ fn explicit_substitute(
                         Record(mut vars_by_field, ext_var) => {
                             let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
 
-                            for (_, var) in vars_by_field.iter_mut() {
-                                *var = explicit_substitute(subs, from, to, *var, seen);
+                            for (_, field) in vars_by_field.iter_mut() {
+                                use RecordField::*;
+
+                                *field = match field {
+                                    Optional(var) => {
+                                        Optional(explicit_substitute(subs, from, to, *var, seen))
+                                    }
+                                    Required(var) => {
+                                        Required(explicit_substitute(subs, from, to, *var, seen))
+                                    }
+                                };
                             }
                             subs.set_content(in_var, Structure(Record(vars_by_field, new_ext_var)));
                         }
@@ -805,8 +818,8 @@ fn get_var_names(
 
                     vars_by_field
                         .into_iter()
-                        .fold(taken_names, |answer, (_, arg_var)| {
-                            get_var_names(subs, arg_var, answer)
+                        .fold(taken_names, |answer, (_, field)| {
+                            get_var_names(subs, field.into_inner(), answer)
                         })
                 }
                 FlatType::TagUnion(tags, ext_var) => {
@@ -998,8 +1011,15 @@ fn flat_type_to_err_type(
         Record(vars_by_field, ext_var) => {
             let mut err_fields = SendMap::default();
 
-            for (field, var) in vars_by_field.into_iter() {
-                err_fields.insert(field, var_to_err_type(subs, state, var));
+            for (field, field_var) in vars_by_field.into_iter() {
+                use RecordField::*;
+
+                let err_type = match field_var {
+                    Optional(var) => Optional(var_to_err_type(subs, state, var)),
+                    Required(var) => Required(var_to_err_type(subs, state, var)),
+                };
+
+                err_fields.insert(field, err_type);
             }
 
             match var_to_err_type(subs, state, ext_var).unwrap_alias() {
@@ -1133,8 +1153,8 @@ fn restore_content(subs: &mut Subs, content: &Content) {
             EmptyTagUnion => (),
 
             Record(fields, ext_var) => {
-                for var in fields.values() {
-                    subs.restore(*var);
+                for field in fields.values() {
+                    subs.restore(field.into_inner());
                 }
 
                 subs.restore(*ext_var);
