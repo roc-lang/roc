@@ -1,6 +1,6 @@
 use crate::boolean_algebra;
 use crate::subs::{FlatType, Subs, VarId, Variable};
-use crate::types::{Problem, Type};
+use crate::types::{Problem, RecordField, Type};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
@@ -33,7 +33,7 @@ pub enum SolvedType {
     Wildcard,
     /// Inline type alias, e.g. `as List a` in `[ Cons a (List a), Nil ] as List a`
     Record {
-        fields: Vec<(Lowercase, SolvedType)>,
+        fields: Vec<(Lowercase, RecordField<SolvedType>)>,
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
         /// This is None if it's a closed record annotation like `{ name: Str }`.
         ext: Box<SolvedType>,
@@ -122,8 +122,14 @@ impl SolvedType {
             Record(fields, box_ext) => {
                 let solved_ext = Self::from_type(solved_subs, *box_ext);
                 let mut solved_fields = Vec::with_capacity(fields.len());
-                for (label, typ) in fields {
-                    let solved_type = Self::from_type(solved_subs, typ);
+
+                for (label, field) in fields {
+                    use crate::types::RecordField::*;
+
+                    let solved_type = match field {
+                        Optional(typ) => RecordField::Optional(Self::from_type(solved_subs, typ)),
+                        Required(typ) => RecordField::Required(Self::from_type(solved_subs, typ)),
+                    };
 
                     solved_fields.push((label.clone(), solved_type));
                 }
@@ -234,10 +240,15 @@ impl SolvedType {
             Record(fields, ext_var) => {
                 let mut new_fields = Vec::with_capacity(fields.len());
 
-                for (label, var) in fields {
-                    let field = Self::from_var(subs, var);
+                for (label, field) in fields {
+                    use RecordField::*;
 
-                    new_fields.push((label, field));
+                    let solved_type = match field {
+                        Optional(var) => Optional(Self::from_var(subs, var)),
+                        Required(var) => Required(Self::from_var(subs, var)),
+                    };
+
+                    new_fields.push((label, solved_type));
                 }
 
                 let ext = Self::from_var(subs, ext_var);

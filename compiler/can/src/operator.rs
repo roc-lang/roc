@@ -266,7 +266,15 @@ fn desugar_field<'a>(
     use roc_parse::ast::AssignedField::*;
 
     match field {
-        LabeledValue(loc_str, spaces, loc_expr) => AssignedField::LabeledValue(
+        RequiredValue(loc_str, spaces, loc_expr) => RequiredValue(
+            Located {
+                value: loc_str.value,
+                region: loc_str.region,
+            },
+            spaces,
+            desugar_expr(arena, loc_expr),
+        ),
+        OptionalValue(loc_str, spaces, loc_expr) => OptionalValue(
             Located {
                 value: loc_str.value,
                 region: loc_str.region,
@@ -284,7 +292,7 @@ fn desugar_field<'a>(
                 region: loc_str.region,
             };
 
-            AssignedField::LabeledValue(
+            RequiredValue(
                 Located {
                     value: loc_str.value,
                     region: loc_str.region,

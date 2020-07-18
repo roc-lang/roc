@@ -1,6 +1,6 @@
 use crate::boolean_algebra::Bool;
 use crate::subs::{Content, FlatType, Subs, Variable};
-use crate::types::name_type_var;
+use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -159,10 +159,17 @@ fn find_names_needed(
         }
         Structure(Record(fields, ext_var)) => {
             let mut sorted_fields: Vec<_> = fields.iter().collect();
-            sorted_fields.sort();
 
-            for (_, var) in sorted_fields {
-                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            sorted_fields.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
+
+            for (_, field) in sorted_fields {
+                find_names_needed(
+                    field.into_inner(),
+                    subs,
+                    roots,
+                    root_appearances,
+                    names_taken,
+                );
             }
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
@@ -391,6 +398,8 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                 let mut any_written_yet = false;
 
                 for (label, field_var) in sorted_fields {
+                    use RecordField::*;
+
                     if any_written_yet {
                         buf.push_str(", ");
                     } else {
@@ -398,10 +407,20 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                     }
                     buf.push_str(label.as_str());
 
-                    buf.push_str(" : ");
+                    let var = match field_var {
+                        Optional(var) => {
+                            buf.push_str(" ? ");
+                            var
+                        }
+                        Required(var) => {
+                            buf.push_str(" : ");
+                            var
+                        }
+                    };
+
                     write_content(
                         env,
-                        subs.get_without_compacting(field_var).content,
+                        subs.get_without_compacting(var).content,
                         subs,
                         buf,
                         parens,
@@ -583,7 +602,7 @@ pub fn chase_ext_tag_union(
 pub fn chase_ext_record(
     subs: &Subs,
     var: Variable,
-    fields: &mut MutMap<Lowercase, Variable>,
+    fields: &mut MutMap<Lowercase, RecordField<Variable>>,
 ) -> Result<(), (Variable, Content)> {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
