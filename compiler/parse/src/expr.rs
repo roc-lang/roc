@@ -836,7 +836,7 @@ fn parse_closure_param<'a>(
 ) -> ParseResult<'a, Located<Pattern<'a>>> {
     one_of!(
         // An ident is the most common param, e.g. \foo -> ...
-        loc!(ident_pattern()),
+        loc_ident_pattern(min_indent),
         // Underscore is also common, e.g. \_ -> ...
         loc!(underscore_pattern()),
         // You can destructure records in params, e.g. \{ x, y } -> ...
@@ -847,22 +847,24 @@ fn parse_closure_param<'a>(
             char('('),
             space0_around(loc_pattern(min_indent), min_indent),
             char(')')
-        ),
-        // The least common, but still allowed, e.g. \Foo -> ...
-        loc_tag_pattern(min_indent)
+        )
     )
     .parse(arena, state)
 }
 
 fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
-    one_of!(
-        loc_parenthetical_pattern(min_indent),
-        loc!(underscore_pattern()),
-        loc_tag_pattern(min_indent),
-        loc!(ident_pattern()),
-        loc!(record_destructure(min_indent)),
-        loc!(string_pattern()),
-        loc!(number_pattern())
+    skip_first!(
+        // If this is a reserved keyword ("if", "then", "case, "when"), then
+        // it is not a pattern!
+        not(reserved_keyword()),
+        one_of!(
+            loc_parenthetical_pattern(min_indent),
+            loc!(underscore_pattern()),
+            loc_ident_pattern(min_indent),
+            loc!(record_destructure(min_indent)),
+            loc!(string_pattern()),
+            loc!(number_pattern())
+        )
     )
 }
 
@@ -915,34 +917,97 @@ fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
     )
 }
 
-fn loc_tag_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
-    map_with_arena!(
-        and!(
-            loc!(one_of!(
-                map!(private_tag(), Pattern::PrivateTag),
-                map!(global_tag(), Pattern::GlobalTag)
-            )),
-            // This can optionally be an applied pattern, e.g. (Foo bar) instead of (Foo)
-            zero_or_more!(space1_before(loc_pattern(min_indent), min_indent))
-        ),
-        |arena: &'a Bump,
-         (loc_tag, loc_args): (Located<Pattern<'a>>, Vec<'a, Located<Pattern<'a>>>)| {
-            if loc_args.is_empty() {
-                loc_tag
-            } else {
-                // TODO FIME this region doesn't cover the tag's
-                // arguments; need to add them to the region!
-                let region = loc_tag.region;
-                let value = Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
+fn loc_ident_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
+    move |arena: &'a Bump, state: State<'a>| {
+        let (loc_ident, state) = loc!(ident()).parse(arena, state)?;
 
-                Located { region, value }
+        match loc_ident.value {
+            Ident::GlobalTag(tag) => {
+                let (loc_args, state) =
+                    zero_or_more!(space1_before(loc_pattern(min_indent), min_indent))
+                        .parse(arena, state)?;
+                let loc_tag = Located {
+                    region: loc_ident.region,
+                    value: Pattern::GlobalTag(tag),
+                };
+
+                if loc_args.is_empty() {
+                    Ok((loc_tag, state))
+                } else {
+                    let region = Region::across_all(
+                        std::iter::once(&loc_ident.region)
+                            .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
+                    );
+                    let value = Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
+
+                    Ok((Located { region, value }, state))
+                }
+            }
+            Ident::PrivateTag(tag) => {
+                let (loc_args, state) =
+                    zero_or_more!(space1_before(loc_pattern(min_indent), min_indent))
+                        .parse(arena, state)?;
+                let loc_tag = Located {
+                    region: loc_ident.region,
+                    value: Pattern::PrivateTag(tag),
+                };
+
+                if loc_args.is_empty() {
+                    Ok((loc_tag, state))
+                } else {
+                    let region = Region::across_all(
+                        std::iter::once(&loc_ident.region)
+                            .chain(loc_args.iter().map(|loc_arg| &loc_arg.region)),
+                    );
+                    let value = Pattern::Apply(&*arena.alloc(loc_tag), loc_args.into_bump_slice());
+
+                    Ok((Located { region, value }, state))
+                }
+            }
+            Ident::Access { module_name, parts } => {
+                // Plain identifiers (e.g. `foo`) are allowed in patterns, but
+                // more complex ones (e.g. `Foo.bar` or `foo.bar.baz`) are not.
+                if module_name.is_empty() && parts.len() == 1 {
+                    Ok((
+                        Located {
+                            region: loc_ident.region,
+                            value: Pattern::Identifier(parts[0]),
+                        },
+                        state,
+                    ))
+                } else {
+                    let malformed_str = if module_name.is_empty() {
+                        parts.join(".")
+                    } else {
+                        format!("{}.{}", module_name, parts.join("."))
+                    };
+
+                    Ok((
+                        Located {
+                            region: loc_ident.region,
+                            value: Pattern::Malformed(arena.alloc(malformed_str)),
+                        },
+                        state,
+                    ))
+                }
+            }
+            Ident::AccessorFunction(string) => Ok((
+                Located {
+                    region: loc_ident.region,
+                    value: Pattern::Malformed(string),
+                },
+                state,
+            )),
+            Ident::Malformed(_) => {
+                let fail = Fail {
+                    attempting: state.attempting,
+                    reason: FailReason::InvalidPattern,
+                };
+
+                Err((fail, state))
             }
         }
-    )
-}
-
-fn ident_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
-    map!(lowercase_ident(), Pattern::Identifier)
+    }
 }
 
 mod when {
