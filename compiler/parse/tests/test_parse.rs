@@ -2328,9 +2328,106 @@ mod test_parse {
         );
     }
 
+    #[test]
+    fn malformed_pattern_field_access() {
+        // See https://github.com/rtfeldman/roc/issues/399
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let pattern1 = Pattern::SpaceBefore(
+            arena.alloc(Pattern::Malformed("bar.and")),
+            newlines.into_bump_slice(),
+        );
+        let loc_pattern1 = Located::new(1, 1, 4, 11, pattern1);
+        let expr1 = Num("1");
+        let loc_expr1 = Located::new(1, 1, 15, 16, expr1);
+        let branch1 = &*arena.alloc(WhenBranch {
+            patterns: bumpalo::vec![in &arena;loc_pattern1],
+            value: loc_expr1,
+            guard: None,
+        });
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let pattern2 = Pattern::SpaceBefore(arena.alloc(Underscore), newlines.into_bump_slice());
+        let loc_pattern2 = Located::new(2, 2, 4, 5, pattern2);
+        let expr2 = Num("4");
+        let loc_expr2 = Located::new(2, 2, 9, 10, expr2);
+        let branch2 = &*arena.alloc(WhenBranch {
+            patterns: bumpalo::vec![in &arena;loc_pattern2 ],
+            value: loc_expr2,
+            guard: None,
+        });
+        let branches = bumpalo::vec![in &arena; branch1, branch2];
+        let var = Var {
+            module_name: "",
+            ident: "x",
+        };
+        let loc_cond = Located::new(0, 0, 5, 6, var);
+        let expected = Expr::When(arena.alloc(loc_cond), branches);
+        let actual = parse_with(
+            &arena,
+            indoc!(
+                r#"
+                    when x is
+                        bar.and -> 1
+                        _ -> 4
+                "#
+            ),
+        );
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn malformed_pattern_module_name() {
+        // See https://github.com/rtfeldman/roc/issues/399
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let pattern1 = Pattern::SpaceBefore(
+            arena.alloc(Pattern::Malformed("Foo.and")),
+            newlines.into_bump_slice(),
+        );
+        let loc_pattern1 = Located::new(1, 1, 4, 11, pattern1);
+        let expr1 = Num("1");
+        let loc_expr1 = Located::new(1, 1, 15, 16, expr1);
+        let branch1 = &*arena.alloc(WhenBranch {
+            patterns: bumpalo::vec![in &arena;loc_pattern1],
+            value: loc_expr1,
+            guard: None,
+        });
+        let newlines = bumpalo::vec![in &arena; Newline];
+        let pattern2 = Pattern::SpaceBefore(arena.alloc(Underscore), newlines.into_bump_slice());
+        let loc_pattern2 = Located::new(2, 2, 4, 5, pattern2);
+        let expr2 = Num("4");
+        let loc_expr2 = Located::new(2, 2, 9, 10, expr2);
+        let branch2 = &*arena.alloc(WhenBranch {
+            patterns: bumpalo::vec![in &arena;loc_pattern2 ],
+            value: loc_expr2,
+            guard: None,
+        });
+        let branches = bumpalo::vec![in &arena; branch1, branch2];
+        let var = Var {
+            module_name: "",
+            ident: "x",
+        };
+        let loc_cond = Located::new(0, 0, 5, 6, var);
+        let expected = Expr::When(arena.alloc(loc_cond), branches);
+        let actual = parse_with(
+            &arena,
+            indoc!(
+                r#"
+                    when x is
+                        Foo.and -> 1
+                        _ -> 4
+                "#
+            ),
+        );
+
+        assert_eq!(Ok(expected), actual);
+    }
+
     // PARSE ERROR
 
     // TODO this should be parse error, but isn't!
+    // #[test]
     // fn trailing_paren() {
     //     assert_parses_to(
     //         indoc!(

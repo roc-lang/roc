@@ -2195,7 +2195,7 @@ mod test_reporting {
                 This pattern does not cover all the possibilities:
 
                 7 ┆  f = \Left v -> v
-                  ┆       ^^^^
+                  ┆       ^^^^^^
 
                 Other possibilities include:
 
@@ -2230,7 +2230,7 @@ mod test_reporting {
                 This pattern does not cover all the possibilities:
 
                 5 ┆  (Left y) = x
-                  ┆   ^^^^
+                  ┆   ^^^^^^
 
                 Other possibilities include:
 
