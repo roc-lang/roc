@@ -130,8 +130,8 @@ mod gen_list {
         assert_evals_to!("List.append [] []", &[], &'static [i64]);
         assert_evals_to!("List.append [ 12, 13 ] []", &[12, 13], &'static [i64]);
         assert_evals_to!(
-            "List.append [ 34 ] [ 44, 55 ]",
-            &[34, 44, 55],
+            "List.append [ 34, 43 ] [ 64, 55, 66 ]",
+            &[34, 43, 64, 55, 66],
             &'static [i64]
         );
 

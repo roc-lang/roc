@@ -1826,13 +1826,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (first_list, first_list_layout) = &args[0];
 
             match first_list_layout {
-                Layout::Builtin(Builtin::EmptyList) => {
-                    // In practice, this code cannot be reached, because if a list
-                    // did have the layout of `EmptyList`, then it would not make
-                    // it here. But this code is still run, in the sense that this
-                    // LLVM is still built this case.
-                    empty_list(env)
-                }
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(elem_layout)) => {
                     let first_list_wrapper =
                         build_expr(env, layout_ids, scope, parent, first_list).into_struct_value();
@@ -1947,8 +1941,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                                         )
                                     };
 
-                                    // The pointer to the element from the first list
-                                    // in the combined list
+                                    // The pointer to the element in the combined list
                                     let combined_list_elem_ptr = unsafe {
                                         builder.build_in_bounds_gep(
                                             combined_list_ptr,
@@ -1965,8 +1958,8 @@ fn run_low_level<'a, 'ctx, 'env>(
                                     // #index < first_list_len
                                     let loop_end_cond = builder.build_int_compare(
                                         IntPredicate::ULT,
-                                        first_list_len,
                                         curr_index,
+                                        first_list_len,
                                         "loopcond",
                                     );
 
@@ -1980,8 +1973,83 @@ fn run_low_level<'a, 'ctx, 'env>(
                                     );
                                     builder.position_at_end(after_loop_bb);
 
-                                    // END
+                                    // SECOND LOOP
 
+                                    let index = ctx.i64_type().const_int(0, false);
+                                    builder.build_store(start_alloca, index);
+
+                                    let second_loop_bb =
+                                        ctx.append_basic_block(parent, "first_list_append_loop");
+
+                                    builder.build_unconditional_branch(second_loop_bb);
+                                    builder.position_at_end(second_loop_bb);
+
+                                    // #index = #index + 1
+                                    let curr_second_index = builder
+                                        .build_load(start_alloca, index_name)
+                                        .into_int_value();
+                                    let next_second_index = builder.build_int_add(
+                                        curr_second_index,
+                                        ctx.i64_type().const_int(1, false),
+                                        "nextindex",
+                                    );
+
+                                    builder.build_store(start_alloca, next_second_index);
+
+                                    let second_list_ptr =
+                                        load_list_ptr(builder, second_list_wrapper, ptr_type);
+
+                                    // The pointer to the element in the first list
+                                    let second_list_elem_ptr = unsafe {
+                                        builder.build_in_bounds_gep(
+                                            second_list_ptr,
+                                            &[curr_second_index],
+                                            "load_index",
+                                        )
+                                    };
+
+                                    let offset_combined_list_elem_ptr = unsafe {
+                                        builder.build_in_bounds_gep(
+                                            combined_list_ptr,
+                                            &[first_list_len],
+                                            "elem",
+                                        )
+                                    };
+
+                                    // The pointer to the element from the second list
+                                    // in the combined list
+                                    let combined_list_elem_ptr = unsafe {
+                                        builder.build_in_bounds_gep(
+                                            offset_combined_list_elem_ptr,
+                                            &[curr_second_index],
+                                            "load_index_reversed_list",
+                                        )
+                                    };
+
+                                    let elem = builder.build_load(second_list_elem_ptr, "get_elem");
+
+                                    // Mutate the new array in-place to change the element.
+                                    builder.build_store(combined_list_elem_ptr, elem);
+
+                                    // #index < first_list_len
+                                    let second_loop_end_cond = builder.build_int_compare(
+                                        IntPredicate::ULT,
+                                        curr_second_index,
+                                        second_list_len,
+                                        "loopcond",
+                                    );
+
+                                    let second_after_loop_bb =
+                                        ctx.append_basic_block(parent, "after_first_loop");
+
+                                    builder.build_conditional_branch(
+                                        second_loop_end_cond,
+                                        second_loop_bb,
+                                        second_after_loop_bb,
+                                    );
+                                    builder.position_at_end(second_after_loop_bb);
+
+                                    // END
                                     let ptr_bytes = env.ptr_bytes;
                                     let int_type = ptr_int(ctx, ptr_bytes);
                                     let ptr_as_int = builder.build_ptr_to_int(
