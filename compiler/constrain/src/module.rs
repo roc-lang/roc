@@ -9,7 +9,7 @@ use roc_region::all::{Located, Region};
 use roc_types::boolean_algebra::Bool;
 use roc_types::solved_types::{BuiltinAlias, SolvedBool, SolvedType};
 use roc_types::subs::{VarId, VarStore, Variable};
-use roc_types::types::{Alias, Problem, Type};
+use roc_types::types::{Alias, Problem, RecordField, Type};
 
 pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
 
@@ -214,10 +214,17 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &mut V
             Type::Variable(var)
         }
         Record { fields, ext } => {
+            use RecordField::*;
+
             let mut new_fields = SendMap::default();
 
-            for (label, typ) in fields {
-                new_fields.insert(label.clone(), to_type(&typ, free_vars, var_store));
+            for (label, field) in fields {
+                let field_val = match field {
+                    Required(typ) => Required(to_type(&typ, free_vars, var_store)),
+                    Optional(typ) => Optional(to_type(&typ, free_vars, var_store)),
+                };
+
+                new_fields.insert(label.clone(), field_val);
             }
 
             Type::Record(new_fields, Box::new(to_type(ext, free_vars, var_store)))
