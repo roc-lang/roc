@@ -945,42 +945,6 @@ where
     phi.as_basic_value()
 }
 
-fn build_basic_phi1<'a, 'ctx, 'env, PassFn>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    comparison: IntValue<'ctx>,
-    mut build_pass: PassFn,
-    ret_type: BasicTypeEnum<'ctx>,
-) -> BasicValueEnum<'ctx>
-where
-    PassFn: FnMut() -> BasicValueEnum<'ctx>,
-{
-    let builder = env.builder;
-    let context = env.context;
-
-    // build blocks
-    let then_block = context.append_basic_block(parent, "then");
-    let cont_block = context.append_basic_block(parent, "branchcont");
-
-    builder.build_conditional_branch(comparison, then_block, cont_block);
-
-    // build then block
-    builder.position_at_end(then_block);
-    let then_val = build_pass();
-    builder.build_unconditional_branch(cont_block);
-
-    let then_block = builder.get_insert_block().unwrap();
-
-    // emit merge block
-    builder.position_at_end(cont_block);
-
-    let phi = builder.build_phi(ret_type, "branch");
-
-    phi.add_incoming(&[(&then_val, then_block)]);
-
-    phi.as_basic_value()
-}
-
 /// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
 fn set_name(bv_enum: BasicValueEnum<'_>, name: &str) {
     match bv_enum {
