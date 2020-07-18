@@ -614,6 +614,17 @@ fn unify_shared_tags(
     }
 }
 
+fn has_no_required_fields<'a, I, T>(fields: &mut I) -> bool
+where
+    I: Iterator<Item = &'a RecordField<T>>,
+    T: 'a,
+{
+    fields.all(|field| match field {
+        RecordField::Required(_) => false,
+        RecordField::Optional(_) => true,
+    })
+}
+
 #[inline(always)]
 fn unify_flat_type(
     subs: &mut Subs,
@@ -627,11 +638,11 @@ fn unify_flat_type(
     match (left, right) {
         (EmptyRecord, EmptyRecord) => merge(subs, ctx, Structure(left.clone())),
 
-        (Record(fields, ext), EmptyRecord) if fields.is_empty() => {
+        (Record(fields, ext), EmptyRecord) if has_no_required_fields(&mut fields.values()) => {
             unify_pool(subs, pool, *ext, ctx.second)
         }
 
-        (EmptyRecord, Record(fields, ext)) if fields.is_empty() => {
+        (EmptyRecord, Record(fields, ext)) if has_no_required_fields(&mut fields.values()) => {
             unify_pool(subs, pool, ctx.first, *ext)
         }
 
