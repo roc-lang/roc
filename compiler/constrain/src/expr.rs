@@ -327,6 +327,7 @@ pub fn constrain_expr(
                 pattern_types.push(pattern_type);
 
                 constrain_pattern(
+                    env,
                     &loc_pattern.value,
                     loc_pattern.region,
                     pattern_expected,
@@ -843,6 +844,7 @@ fn constrain_when_branch(
     // then unify that variable with the expectation?
     for loc_pattern in &when_branch.patterns {
         constrain_pattern(
+            env,
             &loc_pattern.value,
             loc_pattern.region,
             pattern_expected.clone(),
@@ -947,7 +949,11 @@ pub fn constrain_decls(
     constraint
 }
 
-fn constrain_def_pattern(loc_pattern: &Located<Pattern>, expr_type: Type) -> PatternState {
+fn constrain_def_pattern(
+    env: &Env,
+    loc_pattern: &Located<Pattern>,
+    expr_type: Type,
+) -> PatternState {
     let pattern_expected = PExpected::NoExpectation(expr_type);
 
     let mut state = PatternState {
@@ -957,6 +963,7 @@ fn constrain_def_pattern(loc_pattern: &Located<Pattern>, expr_type: Type) -> Pat
     };
 
     constrain_pattern(
+        env,
         &loc_pattern.value,
         loc_pattern.region,
         pattern_expected,
@@ -970,7 +977,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
     let expr_var = def.expr_var;
     let expr_type = Type::Variable(expr_var);
 
-    let mut pattern_state = constrain_def_pattern(&def.loc_pattern, expr_type.clone());
+    let mut pattern_state = constrain_def_pattern(env, &def.loc_pattern, expr_type.clone());
 
     pattern_state.vars.push(expr_var);
 
@@ -1117,6 +1124,7 @@ pub fn rec_defs_help(
         };
 
         constrain_pattern(
+            env,
             &def.loc_pattern.value,
             def.loc_pattern.region,
             pattern_expected,

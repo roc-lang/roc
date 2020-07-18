@@ -250,7 +250,7 @@ fn constrain_pattern(
 
                         RecordField::Required(pat_type)
                     }
-                    DestructType::Optional(_var) => {
+                    DestructType::Optional(_expr_var, _loc_expr) => {
                         todo!("Add a constraint for the default value.");
 
                         // RecordField::Optional(pat_type)

@@ -864,6 +864,7 @@ pub enum Reason {
     },
     RecordUpdateValue(Lowercase),
     RecordUpdateKeys(Symbol, SendMap<Lowercase, Region>),
+    RecordDefaultField(Lowercase),
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -893,6 +894,7 @@ pub enum Category {
     Record,
     Accessor(Lowercase),
     Access(Lowercase),
+    DefaultValue(Lowercase), // for setting optional fields
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
