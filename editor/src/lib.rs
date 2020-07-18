@@ -131,10 +131,8 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 match ch {
                     '\u{8}' | '\u{7f}' => {
                         // In Linux, we get a '\u{8}' when you press backspace,
-                        // but in macOS we get '\u{7f}'. In both, we
-                        // get a Back keydown event. Therefore, we use the
-                        // Back keydown event and ignore these, resulting
-                        // in a system that works in both Linux and macOS.
+                        // but in macOS we get '\u{7f}'.
+                        text_state.pop();
                     }
                     '\u{e000}'..='\u{f8ff}'
                     | '\u{f0000}'..='\u{ffffd}'
@@ -240,12 +238,6 @@ fn handle_keydown(
     }
 
     match virtual_keycode {
-        Back => {
-            // Backspace deletes a character.
-            // In Linux, we get a Unicode character for backspace events
-            // (which is handled elsewhere), but on macOS we only get one of these.
-            text_state.pop();
-        }
         Copy => {
             todo!("copy");
         }
