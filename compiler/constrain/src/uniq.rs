@@ -16,7 +16,7 @@ use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{Alias, Category, PReason, Reason};
 use roc_uniq::builtins::{attr_type, empty_list_type, list_type, str_type};
-use roc_uniq::sharing::{self, Container, FieldAccess, Mark, Usage, VarUsage};
+use roc_uniq::sharing::{self, FieldAccess, Mark, Usage, VarUsage};
 
 pub struct Env {
     /// Whenever we encounter a user-defined type variable (a "rigid" var for short),
@@ -1434,11 +1434,14 @@ fn constrain_var(
                 ]),
             )
         }
-        Some(Simple(Unique)) => {
+        Some(Simple(Unique)) | Some(Simple(Seen)) => {
             // no additional constraints, keep uniqueness unbound
             Lookup(symbol_for_lookup, expected, region)
         }
-        Some(Usage::Access(_, _, _)) | Some(Usage::Update(_, _, _)) => {
+        Some(Usage::RecordAccess(_, _))
+        | Some(Usage::RecordUpdate(_, _))
+        | Some(Usage::ApplyAccess(_, _))
+        | Some(Usage::ApplyUpdate(_, _)) => {
             applied_usage_constraint.insert(symbol_for_lookup);
 
             let mut variables = Vec::new();
@@ -1457,8 +1460,6 @@ fn constrain_var(
                 ]),
             )
         }
-
-        Some(other) => panic!("some other rc value: {:?}", other),
     }
 }
 
@@ -1486,12 +1487,12 @@ fn constrain_by_usage(
 
             (Bool::container(uvar, vec![]), Type::Variable(var))
         }
-        Usage::Access(Container::Record, mark, fields) => {
+        Usage::RecordAccess(mark, fields) => {
             let (record_bool, ext_type) = constrain_by_usage(&Simple(*mark), var_store, introduced);
 
             constrain_by_usage_record(fields, record_bool, ext_type, introduced, var_store)
         }
-        Usage::Update(Container::Record, _, fields) => {
+        Usage::RecordUpdate(_, fields) => {
             let record_uvar = var_store.fresh();
             introduced.push(record_uvar);
 
@@ -1503,12 +1504,11 @@ fn constrain_by_usage(
 
             constrain_by_usage_record(fields, record_bool, ext_type, introduced, var_store)
         }
-        Usage::Access(Container::List, mark, fields) => {
+        Usage::ApplyAccess(mark, fields) => {
             let (list_bool, _ext_type) = constrain_by_usage(&Simple(*mark), var_store, introduced);
 
-            let field_usage = fields
-                .get(&sharing::LIST_ELEM.into())
-                .expect("no LIST_ELEM key");
+            // TODO reconsier this for multi-value applies
+            let field_usage = fields.get(0).expect("no LIST_ELEM key");
 
             let (elem_bool, elem_type) = constrain_by_usage(field_usage, var_store, introduced);
 
@@ -1543,13 +1543,12 @@ fn constrain_by_usage(
             }
         }
 
-        Usage::Update(Container::List, _, fields) => {
+        Usage::ApplyUpdate(_, fields) => {
             let list_uvar = var_store.fresh();
             introduced.push(list_uvar);
 
-            let field_usage = fields
-                .get(&sharing::LIST_ELEM.into())
-                .expect("no LIST_ELEM key");
+            // TODO reconsier this for multi-value applies
+            let field_usage = fields.get(0).expect("no LIST_ELEM key");
 
             let (elem_bool, elem_type) = constrain_by_usage(field_usage, var_store, introduced);
 

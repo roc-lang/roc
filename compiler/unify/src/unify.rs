@@ -1,11 +1,10 @@
-use roc_collections::all::{relative_complement, union, MutMap, SendSet};
+use roc_collections::all::{get_shared, relative_complement, union, MutMap, SendSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::boolean_algebra::Bool;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
 use roc_types::types::{gather_fields, ErrorType, Mismatch, RecordStructure};
-use std::hash::Hash;
 
 macro_rules! mismatch {
     () => {{
@@ -221,28 +220,6 @@ fn unify_structure(
         Alias(_, _, real_var) => unify_pool(subs, pool, ctx.first, *real_var),
         Error => merge(subs, ctx, Error),
     }
-}
-
-/// Like intersection_with, except for MutMap and specialized to return
-/// a tuple. Also, only clones the values that will be actually returned,
-/// rather than cloning everything.
-fn get_shared<K, V>(map1: &MutMap<K, V>, map2: &MutMap<K, V>) -> MutMap<K, (V, V)>
-where
-    K: Clone + Eq + Hash,
-    V: Clone,
-{
-    let mut answer = MutMap::default();
-
-    for (key, right_value) in map2 {
-        match std::collections::HashMap::get(map1, &key) {
-            None => (),
-            Some(left_value) => {
-                answer.insert(key.clone(), (left_value.clone(), right_value.clone()));
-            }
-        }
-    }
-
-    answer
 }
 
 fn unify_record(
