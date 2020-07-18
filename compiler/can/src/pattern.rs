@@ -44,7 +44,14 @@ pub struct RecordDestruct {
     pub var: Variable,
     pub label: Lowercase,
     pub symbol: Symbol,
-    pub guard: Option<(Variable, Located<Pattern>)>,
+    pub typ: DestructType,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum DestructType {
+    Required,
+    Optional(Variable),
+    Guard(Variable, Located<Pattern>),
 }
 
 pub fn symbols_from_pattern(pattern: &Pattern) -> Vec<Symbol> {
@@ -253,7 +260,7 @@ pub fn canonicalize_pattern<'a>(
                                         var: var_store.fresh(),
                                         label: Lowercase::from(label),
                                         symbol,
-                                        guard: None,
+                                        typ: DestructType::Required,
                                     },
                                 });
                             }
@@ -271,7 +278,8 @@ pub fn canonicalize_pattern<'a>(
                             }
                         };
                     }
-                    RecordField(label, loc_guard) => {
+
+                    RequiredField(label, loc_guard) => {
                         // a guard does not introduce the label into scope!
                         let symbol = scope.ignore(label.into(), &mut env.ident_ids);
                         let can_guard = canonicalize_pattern(
@@ -289,7 +297,7 @@ pub fn canonicalize_pattern<'a>(
                                 var: var_store.fresh(),
                                 label: Lowercase::from(label),
                                 symbol,
-                                guard: Some((var_store.fresh(), can_guard)),
+                                typ: DestructType::Guard(var_store.fresh(), can_guard),
                             },
                         });
                     }
@@ -305,7 +313,8 @@ pub fn canonicalize_pattern<'a>(
                 destructs,
             })
         }
-        RecordField(_name, _loc_pattern) => {
+
+        RequiredField(_name, _loc_pattern) | OptionalField(_name, _loc_pattern) => {
             unreachable!("should have been handled in RecordDestructure");
         }
 
