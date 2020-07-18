@@ -5,8 +5,7 @@ interface List
 ## Types
 
 ## A sequential list of values.
-##
-## >>> [ 1, 2, 3 ] # a list of numbers
+## # >>> [ 1, 2, 3 ] # a list of numbers
 ##
 ## >>> [ "a", "b", "c" ] # a list of strings
 ##
@@ -34,13 +33,119 @@ interface List
 ## ## Performance Details
 ##
 ## Under the hood, a list is a record containing a `len : Len` field as well
-## as a pointer to a flat list of bytes.
+## as a pointer to a reference count and a flat array of bytes. Unique lists
+## store a capacity #Len instead of a reference count.
 ##
-## This is not a [persistent data structure](https://en.wikipedia.org/wiki/Persistent_data_structure),
-## so copying it is not cheap! The reason #List is designed this way is because:
+## ## Shared Lists
 ##
-## * Copying small lists is typically slightly faster than copying small persistent data structures. This is because, at small sizes, persistent data structures are usually thin wrappers around flat lists anyway. They don't start conferring copying advantages until crossing a certain minimum size threshold.
-## Many list operations are no faster with persistent data structures. For example, even if it were a persistent data structure, #List.map, #List.fold, and #List.keepIf would all need to traverse every element in the list and build up the result from scratch.
+## Shared lists are [reference counted](https://en.wikipedia.org/wiki/Reference_counting).
+##
+## Each time a given list gets referenced, its reference count ("refcount" for short)
+## gets incremented. Each time a list goes out of scope, its refcount count gets
+## decremented. Once a refcount, has been decremented more times than it has been
+## incremented, we know nothing is referencing it anymore, and the list's memory
+## will be immediately freed.
+##
+## Let's look at an example.
+##
+##     ratings = [ 5, 4, 3 ]
+##
+##     { foo: ratings, bar: ratings }
+##
+## The first line binds the name `ratings` to the list `[ 5, 4, 3 ]`. The list
+## begins with a refcount of 1, because so far only `ratings` is referencing it.
+##
+## The second line alters this refcount. `{ foo: ratings` references
+## the `ratings` list, which will result in its refcount getting incremented
+## from 0 to 1. Similarly, `bar: ratings }` also references the `ratings` list,
+## which will result in its refcount getting incremented from 1 to 2.
+##
+## Let's turn this example into a function.
+##
+##     getRatings = \first ->
+##         ratings = [ first, 4, 3 ]
+##
+##         { foo: ratings, bar: ratings }
+##
+##     getRatings 5
+##
+## At the end of the `getRatings` function, when the record gets returned,
+## the original `ratings =` binding has gone out of scope and is no longer
+## accessible. (Trying to reference `ratings` outside the scope of the
+## `getRatings` function would be an error!)
+##
+## Since `ratings` represented a way to reference the list, and that way is no
+## longer accessible, the list's refcount gets decremented when `ratings` goes
+## out of scope. It will decrease from 2 back down to 1.
+##
+## Putting these together, when we call `getRatings 5`, what we get back is
+## a record with two fields, `foo`, and `bar`, each of which refers to the same
+## list, and that list has a refcount of 1.
+##
+## Let's change the last line to be `(getRatings 5).bar` instead of `getRatings 5`:
+##
+##     getRatings = \first ->
+##         ratings = [ first, 4, 3 ]
+##
+##         { foo: ratings, bar: ratings }
+##
+##     (getRatings 5).bar
+##
+## Now, when this expression returns, only the `bar` field of the record will
+## be returned. This will mean that the `foo` field becomes inaccessible, causing
+## the list's refcount to get decremented from 2 to 1. At this point, the list is back
+## where it started: there is only 1 reference to it.
+##
+## Finally let's suppose the final line were changed to this:
+##
+##     List.first (getRatings 5).bar
+##
+## This call to #List.first means that even the list in the `bar` field has become
+## inaccessible. As such, this line will cause the list's refcount to get
+## decremented all the way to 0. At that point, nothing is referencing the list
+## anymore, and its memory will get freed.
+##
+## Things are different if this is a list of lists instead of a list of numbers.
+## Let's look at a simpler example using #List.first - first with a list of numbers,
+## and then with a list of lists, to see how they differ.
+##
+## Here's the example using a list of numbers.
+##
+##     nums = [ 1, 2, 3, 4, 5, 6, 7 ]
+##
+##     first = List.first nums
+##     last = List.last nums
+##
+##     first
+##
+## It makes a list, calls #List.first and #List.last on it, and then returns `first`.
+##
+## Here's the equivalent code with a list of lists:
+##
+##     lists = [ [ 1 ], [ 2, 3 ], [], [ 4, 5, 6, 7 ] ]
+##
+##     first = List.first lists
+##     last = List.last lists
+##
+##     first
+##
+## TODO explain how in the former example, when we go to free `nums` at the end,
+## we can free it immediately because there are no other refcounts. However,
+## in the case of `lists`, we have to iterate through the list and decrement
+## the refcounts of each of its contained lists - because they, too, have
+## refcounts! Importantly, beacuse the first element had its refcount incremented
+## because the function returned `first`, that element will actually end up
+## *not* getting freed at the end - but all the others will be.
+##
+## In the `lists` example, `lists = [ ... ]` also creates a list with an initial
+## refcount of 1. Separately, it also creates several other lists - each with
+## their own refcounts - to go inside that list. (The empty list at the end
+## does not use heap memory, and thus has no refcount.)
+##
+## At the end, we once again call #List.first on the list, but this time
+##
+## * Copying small lists (64 elements or fewer) is typically slightly faster than copying small persistent data structures. This is because, at small sizes, persistent data structures tend to be thin wrappers around flat arrays anyway. They don't have any copying advantage until crossing a certain minimum size threshold.
+## * Even when copying is faster, other list operations may still be slightly slower with persistent data structures. For example, even if it were a persistent data structure, #List.map, #List.fold, and #List.keepIf would all need to traverse every element in the list and build up the result from scratch. These operations are all
 ## * Roc's compiler optimizes many list operations into in-place mutations behind the scenes, depending on how the list is being used. For example, #List.map, #List.keepIf, and #List.set can all be optimized to perform in-place mutations.
 ## * If possible, it is usually best for performance to use large lists in a way where the optimizer can turn them into in-place mutations. If this is not possible, a persistent data structure might be faster - but this is a rare enough scenario that it would not be good for the average Roc program's performance if this were the way #List worked by default. Instead, you can look outside Roc's standard modules for an implementation of a persistent data structure - likely built using #List under the hood!
 List elem : @List elem
@@ -94,9 +199,21 @@ sort : List elem, (elem, elem -> [ Lt, Eq, Gt ]) -> List elem
 ## See for example #Result.map, #Set.map, and #Map.map.
 map : List before, (before -> after) -> List after
 
-## This works the same way as #List.map, except it also passes the index
+## This works like #List.map, except it also passes the index
 ## of the element to the conversion function.
-indexedMap : List before, (before, Int -> after) -> List after
+mapWithIndex : List before, (before, Int -> after) -> List after
+
+## This works like #List.map, except the given function can return `Drop` to
+## drop the transformed element - or wrap it in `Keep` to keep it.
+##
+mapOrDrop : List before, (before -> [ Keep after, Drop ]) -> List after
+
+## This works like #List.map, except at any time you can return `Abort` to
+## cancel the operation - or wrap the element in `Continue` to continue.
+mapOrCancel : List before, (before -> [ Continue after, Cancel ]) -> Result (List after) MapCanceled
+
+## If all the elements in the list are #Ok,
+checkOk : List (Result ok err) -> Result (List ok) err
 
 ## Add a single element to the end of a list.
 ##
