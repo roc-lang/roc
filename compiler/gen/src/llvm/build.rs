@@ -1850,16 +1850,15 @@ fn run_low_level<'a, 'ctx, 'env>(
 
                         let second_list_len = load_list_len(builder, second_list_wrapper);
 
+                        let elem_type =
+                            basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+                        let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                        let elem_type =
+                            basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+
                         match second_list_layout {
                             Layout::Builtin(Builtin::EmptyList) => {
-                                let elem_type = basic_type_from_layout(
-                                    env.arena,
-                                    ctx,
-                                    elem_layout,
-                                    env.ptr_bytes,
-                                );
-                                let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
                                 let (new_wrapper, _) = clone_nonempty_list(
                                     env,
                                     first_list_len,
@@ -1877,14 +1876,6 @@ fn run_low_level<'a, 'ctx, 'env>(
                                     list_is_not_empty(builder, ctx, second_list_len);
 
                                 let build_second_list_then = || {
-                                    // Allocate space for the new array that we'll copy into.
-                                    let elem_type = basic_type_from_layout(
-                                        env.arena,
-                                        ctx,
-                                        elem_layout,
-                                        env.ptr_bytes,
-                                    );
-
                                     let combined_list_len = builder.build_int_add(
                                         first_list_len,
                                         second_list_len,
@@ -1926,8 +1917,6 @@ fn run_low_level<'a, 'ctx, 'env>(
                                     );
 
                                     builder.build_store(start_alloca, next_index);
-
-                                    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
                                     let list_ptr =
                                         load_list_ptr(builder, first_list_wrapper, ptr_type);
