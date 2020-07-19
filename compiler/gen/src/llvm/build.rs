@@ -2079,7 +2079,7 @@ fn list_append<'a, 'ctx, 'env>(
     // This implementation is quite long, let me explain what is complicating it. Here are our
     // contraints:
     //
-    // constraint 1. lists might be empty because they have tje layout `EmptyList`, or they might
+    // constraint 1. lists might be empty because they have the layout `EmptyList`, or they might
     // be empty because they have a `List` layout, but happen to be empty, such as in this code:
     //
     //     list : List Int
@@ -2092,7 +2092,7 @@ fn list_append<'a, 'ctx, 'env>(
     // a loop, and allocating memory is costly, so we dont want to even try to iterate over empty
     // lists.
     //
-    // Accounting for all the possibilities in the two contraints above gives us 9 code paths:
+    // Accounting for all the possibilities in the two constraints above gives us 9 code paths:
     //
     //           first list     EmptyList          List(list)               List(list)
     // second list                                 where list.length = 0   where list.length > 0
