@@ -307,7 +307,7 @@ fn format_assigned_field_help<'a, T>(
             }
 
             buf.push_str(separator_prefix);
-            buf.push(':');
+            buf.push_str(": ");
             ann.value.format(buf, indent);
         }
         OptionalValue(name, spaces, ann) => {
