@@ -52,6 +52,8 @@ pub enum InProgressProc<'a> {
 }
 
 impl<'a> Procs<'a> {
+    // TODO trim down these arguments!
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_named(
         &mut self,
         env: &mut Env<'a, '_>,
