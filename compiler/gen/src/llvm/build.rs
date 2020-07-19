@@ -1662,27 +1662,27 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = &args[0];
 
-            let wrapper_struct =
-                build_expr(env, layout_ids, scope, parent, list).into_struct_value();
+            match list_layout {
+                Layout::Builtin(Builtin::List(elem_layout)) => {
+                    let wrapper_struct =
+                        build_expr(env, layout_ids, scope, parent, list).into_struct_value();
 
-            let builder = env.builder;
-            let ctx = env.context;
+                    let builder = env.builder;
+                    let ctx = env.context;
 
-            let list_len = load_list_len(builder, wrapper_struct);
+                    let list_len = load_list_len(builder, wrapper_struct);
 
-            // list_len > 0
-            // We do this check to avoid allocating memory. If the input
-            // list is empty, then we can just return an empty list.
-            let comparison = builder.build_int_compare(
-                IntPredicate::UGT,
-                list_len,
-                ctx.i64_type().const_int(0, false),
-                "greaterthanzero",
-            );
+                    // list_len > 0
+                    // We do this check to avoid allocating memory. If the input
+                    // list is empty, then we can just return an empty list.
+                    let comparison = builder.build_int_compare(
+                        IntPredicate::UGT,
+                        list_len,
+                        ctx.i64_type().const_int(0, false),
+                        "greaterthanzero",
+                    );
 
-            let build_then = || {
-                match list_layout {
-                    Layout::Builtin(Builtin::List(elem_layout)) => {
+                    let build_then = || {
                         // Allocate space for the new array that we'll copy into.
                         let elem_type =
                             basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
@@ -1798,26 +1798,26 @@ fn run_low_level<'a, 'ctx, 'env>(
                             collection(ctx, ptr_bytes),
                             "cast_collection",
                         )
-                    }
-                    Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                    _ => {
-                        unreachable!("Invalid List layout for List.get: {:?}", list_layout);
-                    }
+                    };
+
+                    let build_else = || empty_list(env);
+
+                    let struct_type = collection(ctx, env.ptr_bytes);
+
+                    build_basic_phi2(
+                        env,
+                        parent,
+                        comparison,
+                        build_then,
+                        build_else,
+                        BasicTypeEnum::StructType(struct_type),
+                    )
                 }
-            };
-
-            let build_else = || empty_list(env);
-
-            let struct_type = collection(ctx, env.ptr_bytes);
-
-            build_basic_phi2(
-                env,
-                parent,
-                comparison,
-                build_then,
-                build_else,
-                BasicTypeEnum::StructType(struct_type),
-            )
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                _ => {
+                    unreachable!("Invalid List layout for List.reverse {:?}", list_layout);
+                }
+            }
         }
         ListAppend => list_append(env, layout_ids, scope, parent, args),
         ListPush => {

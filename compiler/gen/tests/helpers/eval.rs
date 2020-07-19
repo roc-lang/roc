@@ -75,14 +75,18 @@ macro_rules! assert_llvm_evals_to {
         };
 
         let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
+        let mut headers = {
+            let num_headers = match &procs.pending_specializations {
+                Some(map) => map.len(),
+                None => 0
+            };
 
-        let mut headers = Vec::with_capacity(procs.pending_specializations.len());
+            Vec::with_capacity(num_headers)
+        };
         let mut layout_cache = roc_mono::layout::LayoutCache::default();
+        let mut procs = roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
-        let (mut specializations, runtime_errors) =
-            roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
-
-        assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
+        assert_eq!(procs.runtime_errors, roc_collections::all::MutMap::default());
 
         // Put this module's ident_ids back in the interns, so we can use them in env.
         // This must happen *after* building the headers, because otherwise there's
@@ -92,11 +96,20 @@ macro_rules! assert_llvm_evals_to {
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
-        for ((symbol, layout), proc) in specializations.drain() {
-            let (fn_val, arg_basic_types) =
-                build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+        for ((symbol, layout), proc) in procs.specialized.drain() {
+            use roc_mono::expr::InProgressProc::*;
 
-            headers.push((proc, fn_val, arg_basic_types));
+            match proc {
+                InProgress => {
+                    panic!("A specialization was still marked InProgress after monomorphization had completed: {:?} with layout {:?}", symbol, layout);
+                }
+                Done(proc) => {
+                    let (fn_val, arg_basic_types) =
+                        build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+
+                    headers.push((proc, fn_val, arg_basic_types));
+                }
+            }
         }
 
         // Build each proc using its header info.
@@ -248,13 +261,18 @@ macro_rules! assert_opt_evals_to {
         };
         let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
 
-        let mut headers = Vec::with_capacity(procs.pending_specializations.len());
+        let mut headers = {
+            let num_headers = match &procs.pending_specializations {
+                Some(map) => map.len(),
+                None => 0
+            };
+
+            Vec::with_capacity(num_headers)
+        };
         let mut layout_cache = roc_mono::layout::LayoutCache::default();
+        let mut procs = roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
-        let (mut specializations, runtime_errors) =
-            roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
-
-        assert_eq!(runtime_errors, roc_collections::all::MutSet::default());
+        assert_eq!(procs.runtime_errors, roc_collections::all::MutMap::default());
 
         // Put this module's ident_ids back in the interns, so we can use them in env.
         // This must happen *after* building the headers, because otherwise there's
@@ -264,11 +282,20 @@ macro_rules! assert_opt_evals_to {
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
-        for ((symbol, layout), proc) in specializations.drain() {
-            let (fn_val, arg_basic_types) =
-                build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+        for ((symbol, layout), proc) in procs.specialized.drain() {
+            use roc_mono::expr::InProgressProc::*;
 
-            headers.push((proc, fn_val, arg_basic_types));
+            match proc {
+                InProgress => {
+                    panic!("A specialization was still marked InProgress after monomorphization had completed: {:?} with layout {:?}", symbol, layout);
+                }
+                Done(proc) => {
+                    let (fn_val, arg_basic_types) =
+                        build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+
+                    headers.push((proc, fn_val, arg_basic_types));
+                }
+            }
         }
 
         // Build each proc using its header info.

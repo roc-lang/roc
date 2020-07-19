@@ -110,12 +110,15 @@ pub enum RuntimeError {
     },
     ModuleNotImported {
         module_name: InlinableString,
-        ident: InlinableString,
+        imported_modules: MutSet<Box<str>>,
         region: Region,
     },
     InvalidPrecedence(PrecedenceProblem, Region),
     MalformedIdentifier(Box<str>, Region),
     MalformedClosure(Region),
+    InvalidRecordUpdate {
+        region: Region,
+    },
     InvalidFloat(FloatErrorKind, Region, Box<str>),
     InvalidInt(IntErrorKind, Base, Region, Box<str>),
     CircularDef(Vec<Symbol>, Vec<(Region /* pattern */, Region /* expr */)>),

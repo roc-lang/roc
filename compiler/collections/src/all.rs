@@ -78,6 +78,28 @@ where
     answer
 }
 
+/// Like intersection_with, except for MutMap and specialized to return
+/// a tuple. Also, only clones the values that will be actually returned,
+/// rather than cloning everything.
+pub fn get_shared<K, V>(map1: &MutMap<K, V>, map2: &MutMap<K, V>) -> MutMap<K, (V, V)>
+where
+    K: Clone + Eq + Hash,
+    V: Clone,
+{
+    let mut answer = MutMap::default();
+
+    for (key, right_value) in map2 {
+        match std::collections::HashMap::get(map1, &key) {
+            None => (),
+            Some(left_value) => {
+                answer.insert(key.clone(), (left_value.clone(), right_value.clone()));
+            }
+        }
+    }
+
+    answer
+}
+
 /// Like im's union, but for MutMap.
 pub fn union<K, V>(mut map: MutMap<K, V>, other: &MutMap<K, V>) -> MutMap<K, V>
 where
