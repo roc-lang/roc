@@ -4,7 +4,7 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_solve::solve;
 use roc_types::pretty_print::Parens;
-use roc_types::types::{Category, ErrorType, PatternCategory, Reason, TypeExt};
+use roc_types::types::{Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt};
 use std::path::PathBuf;
 
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
@@ -779,6 +779,10 @@ fn to_expr_report<'b>(
             Reason::InterpolatedStringVar => {
                 unimplemented!("string interpolation is not implemented yet")
             }
+
+            Reason::RecordDefaultField(_) => {
+                unimplemented!("record default field is not implemented yet")
+            }
         },
     }
 }
@@ -911,6 +915,8 @@ fn add_category<'b>(
             alloc.text(" an uniqueness attribute of type:"),
         ]),
         Storage => alloc.concat(vec![this_is, alloc.text(" a value of type:")]),
+
+        DefaultValue(_) => alloc.concat(vec![this_is, alloc.text(" a default field of type:")]),
     }
 }
 
@@ -1292,7 +1298,7 @@ pub fn to_doc<'b>(
                     .map(|(k, v)| {
                         (
                             alloc.string(k.as_str().to_string()),
-                            to_doc(alloc, Parens::Unnecessary, v),
+                            to_doc(alloc, Parens::Unnecessary, v.into_inner()),
                         )
                     })
                     .collect(),
@@ -1570,33 +1576,39 @@ fn ext_has_fixed_fields(ext: &TypeExt) -> bool {
 
 fn diff_record<'b>(
     alloc: &'b RocDocAllocator<'b>,
-    fields1: SendMap<Lowercase, ErrorType>,
+    fields1: SendMap<Lowercase, RecordField<ErrorType>>,
     ext1: TypeExt,
-    fields2: SendMap<Lowercase, ErrorType>,
+    fields2: SendMap<Lowercase, RecordField<ErrorType>>,
     ext2: TypeExt,
 ) -> Diff<RocDocBuilder<'b>> {
-    let to_overlap_docs = |(field, (t1, t2)): &(Lowercase, (ErrorType, ErrorType))| {
-        let diff = to_diff(alloc, Parens::Unnecessary, t1.clone(), t2.clone());
+    let to_overlap_docs =
+        |(field, (t1, t2)): &(Lowercase, (RecordField<ErrorType>, RecordField<ErrorType>))| {
+            let diff = to_diff(
+                alloc,
+                Parens::Unnecessary,
+                t1.clone().into_inner(),
+                t2.clone().into_inner(),
+            );
 
-        Diff {
-            left: (
-                field.clone(),
-                alloc.string(field.as_str().to_string()),
-                diff.left,
-            ),
-            right: (
-                field.clone(),
-                alloc.string(field.as_str().to_string()),
-                diff.right,
-            ),
-            status: diff.status,
-        }
-    };
-    let to_unknown_docs = |(field, tipe): &(Lowercase, ErrorType)| {
+            Diff {
+                left: (
+                    field.clone(),
+                    alloc.string(field.as_str().to_string()),
+                    diff.left,
+                ),
+                right: (
+                    field.clone(),
+                    alloc.string(field.as_str().to_string()),
+                    diff.right,
+                ),
+                status: diff.status,
+            }
+        };
+    let to_unknown_docs = |(field, tipe): &(Lowercase, RecordField<ErrorType>)| {
         (
             field.clone(),
             alloc.string(field.as_str().to_string()),
-            to_doc(alloc, Parens::Unnecessary, tipe.clone()),
+            to_doc(alloc, Parens::Unnecessary, tipe.clone().into_inner()),
         )
     };
     let shared_keys = fields1
@@ -1874,7 +1886,7 @@ mod report_text {
     use crate::report::{Annotation, RocDocAllocator, RocDocBuilder};
     use roc_module::ident::Lowercase;
     use roc_types::pretty_print::Parens;
-    use roc_types::types::{ErrorType, TypeExt};
+    use roc_types::types::{ErrorType, RecordField, TypeExt};
     use ven_pretty::DocAllocator;
 
     fn with_parens<'b>(
@@ -1959,16 +1971,16 @@ mod report_text {
 
     pub fn to_suggestion_record<'b>(
         alloc: &'b RocDocAllocator<'b>,
-        f: (Lowercase, ErrorType),
-        fs: Vec<(Lowercase, ErrorType)>,
+        f: (Lowercase, RecordField<ErrorType>),
+        fs: Vec<(Lowercase, RecordField<ErrorType>)>,
         ext: TypeExt,
     ) -> RocDocBuilder<'b> {
         use crate::error::r#type::{ext_to_doc, to_doc};
 
-        let entry_to_doc = |(name, tipe): (Lowercase, ErrorType)| {
+        let entry_to_doc = |(name, tipe): (Lowercase, RecordField<ErrorType>)| {
             (
                 alloc.string(name.as_str().to_string()),
-                to_doc(alloc, Parens::Unnecessary, tipe),
+                to_doc(alloc, Parens::Unnecessary, tipe.into_inner()),
             )
         };
 

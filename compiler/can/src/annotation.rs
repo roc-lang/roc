@@ -6,7 +6,7 @@ use roc_module::symbol::Symbol;
 use roc_parse::ast::{AssignedField, Tag, TypeAnnotation};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, Problem, Type};
+use roc_types::types::{Alias, Problem, RecordField, Type};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
@@ -380,8 +380,9 @@ fn can_assigned_fields<'a>(
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut SendMap<Symbol, Alias>,
     references: &mut MutSet<Symbol>,
-) -> SendMap<Lowercase, Type> {
+) -> SendMap<Lowercase, RecordField<Type>> {
     use roc_parse::ast::AssignedField::*;
+    use roc_types::types::RecordField::*;
 
     // SendMap doesn't have a `with_capacity`
     let mut field_types = SendMap::default();
@@ -398,7 +399,7 @@ fn can_assigned_fields<'a>(
         // a duplicate
         let new_name = 'inner: loop {
             match field {
-                LabeledValue(field_name, _, annotation) => {
+                RequiredValue(field_name, _, annotation) => {
                     let field_type = can_annotation_help(
                         env,
                         &annotation.value,
@@ -411,7 +412,24 @@ fn can_assigned_fields<'a>(
                     );
 
                     let label = Lowercase::from(field_name.value);
-                    field_types.insert(label.clone(), field_type);
+                    field_types.insert(label.clone(), Required(field_type));
+
+                    break 'inner label;
+                }
+                OptionalValue(field_name, _, annotation) => {
+                    let field_type = can_annotation_help(
+                        env,
+                        &annotation.value,
+                        annotation.region,
+                        scope,
+                        var_store,
+                        introduced_variables,
+                        local_aliases,
+                        references,
+                    );
+
+                    let label = Lowercase::from(field_name.value);
+                    field_types.insert(label.clone(), Optional(field_type));
 
                     break 'inner label;
                 }
@@ -428,7 +446,7 @@ fn can_assigned_fields<'a>(
                         }
                     };
 
-                    field_types.insert(field_name.clone(), field_type);
+                    field_types.insert(field_name.clone(), Required(field_type));
 
                     break 'inner field_name;
                 }

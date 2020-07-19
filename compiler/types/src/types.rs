@@ -14,12 +14,94 @@ pub const TYPE_INTEGER: &str = "Integer";
 pub const TYPE_FLOATINGPOINT: &str = "FloatingPoint";
 
 #[derive(PartialEq, Eq, Clone)]
+pub enum RecordField<T> {
+    Optional(T),
+    Required(T),
+}
+
+impl<T: Copy> Copy for RecordField<T> {}
+
+impl<T: fmt::Debug> fmt::Debug for RecordField<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use RecordField::*;
+
+        match self {
+            Optional(typ) => typ.fmt(f),
+            Required(typ) => typ.fmt(f),
+        }
+    }
+}
+
+impl<T> RecordField<T> {
+    pub fn into_inner(self) -> T {
+        use RecordField::*;
+
+        match self {
+            Optional(t) => t,
+            Required(t) => t,
+        }
+    }
+}
+
+impl RecordField<Type> {
+    pub fn substitute(&mut self, substitutions: &ImMap<Variable, Type>) {
+        use RecordField::*;
+
+        match self {
+            Optional(typ) => typ.substitute(substitutions),
+            Required(typ) => typ.substitute(substitutions),
+        }
+    }
+
+    pub fn substitute_alias(&mut self, rep_symbol: Symbol, actual: &Type) {
+        use RecordField::*;
+
+        match self {
+            Optional(typ) => typ.substitute_alias(rep_symbol, actual),
+            Required(typ) => typ.substitute_alias(rep_symbol, actual),
+        }
+    }
+
+    pub fn instantiate_aliases(
+        &mut self,
+        region: Region,
+        aliases: &ImMap<Symbol, Alias>,
+        var_store: &mut VarStore,
+        introduced: &mut ImSet<Variable>,
+    ) {
+        use RecordField::*;
+
+        match self {
+            Optional(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
+            Required(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
+        }
+    }
+
+    pub fn contains_symbol(&self, rep_symbol: Symbol) -> bool {
+        use RecordField::*;
+
+        match self {
+            Optional(typ) => typ.contains_symbol(rep_symbol),
+            Required(typ) => typ.contains_symbol(rep_symbol),
+        }
+    }
+    pub fn contains_variable(&self, rep_variable: Variable) -> bool {
+        use RecordField::*;
+
+        match self {
+            Optional(typ) => typ.contains_variable(rep_variable),
+            Required(typ) => typ.contains_variable(rep_variable),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Clone)]
 pub enum Type {
     EmptyRec,
     EmptyTagUnion,
     /// A function. The types of its arguments, then the type of its return value.
     Function(Vec<Type>, Box<Type>),
-    Record(SendMap<Lowercase, Type>, Box<Type>),
+    Record(SendMap<Lowercase, RecordField<Type>>, Box<Type>),
     TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
     Alias(Symbol, Vec<(Lowercase, Type)>, Box<Type>),
     RecursiveTagUnion(Variable, Vec<(TagName, Vec<Type>)>, Box<Type>),
@@ -615,7 +697,14 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
 
         Record(fields, ext) => {
             symbols_help(&ext, accum);
-            fields.values().for_each(|arg| symbols_help(arg, accum));
+            fields.values().for_each(|field| {
+                use RecordField::*;
+
+                match field {
+                    Optional(arg) => symbols_help(arg, accum),
+                    Required(arg) => symbols_help(arg, accum),
+                }
+            });
         }
         Alias(alias_symbol, _, actual_type) => {
             accum.insert(*alias_symbol);
@@ -650,8 +739,13 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             variables_help(ret, accum);
         }
         Record(fields, ext) => {
-            for (_, x) in fields {
-                variables_help(x, accum);
+            use RecordField::*;
+
+            for (_, field) in fields {
+                match field {
+                    Optional(x) => variables_help(x, accum),
+                    Required(x) => variables_help(x, accum),
+                };
             }
             variables_help(ext, accum);
         }
@@ -720,7 +814,7 @@ fn find_rec_var_uniqueness(
 }
 
 pub struct RecordStructure {
-    pub fields: MutMap<Lowercase, Variable>,
+    pub fields: MutMap<Lowercase, RecordField<Variable>>,
     pub ext: Variable,
 }
 
@@ -770,6 +864,7 @@ pub enum Reason {
     },
     RecordUpdateValue(Lowercase),
     RecordUpdateKeys(Symbol, SendMap<Lowercase, Region>),
+    RecordDefaultField(Lowercase),
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -799,6 +894,7 @@ pub enum Category {
     Record,
     Accessor(Lowercase),
     Access(Lowercase),
+    DefaultValue(Lowercase), // for setting optional fields
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -855,7 +951,7 @@ pub enum ErrorType {
     Type(Symbol, Vec<ErrorType>),
     FlexVar(Lowercase),
     RigidVar(Lowercase),
-    Record(SendMap<Lowercase, ErrorType>, TypeExt),
+    Record(SendMap<Lowercase, RecordField<ErrorType>>, TypeExt),
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
     RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>),
@@ -973,9 +1069,22 @@ fn write_error_type_help(
         Record(fields, ext) => {
             buf.push('{');
 
-            for (label, content) in fields {
+            for (label, field) in fields {
+                use RecordField::*;
+
                 buf.push_str(label.as_str());
-                buf.push_str(": ");
+
+                let content = match field {
+                    Optional(content) => {
+                        buf.push_str(" ? ");
+                        content
+                    }
+                    Required(content) => {
+                        buf.push_str(" : ");
+                        content
+                    }
+                };
+
                 write_error_type_help(home, interns, content, buf, Parens::Unnecessary);
             }
 
@@ -1100,9 +1209,22 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
         Record(fields, ext) => {
             buf.push('{');
 
-            for (label, content) in fields {
+            for (label, field) in fields {
+                use RecordField::*;
+
                 buf.push_str(label.as_str());
-                buf.push_str(": ");
+
+                let content = match field {
+                    Optional(content) => {
+                        buf.push_str(" ? ");
+                        content
+                    }
+                    Required(content) => {
+                        buf.push_str(" : ");
+                        content
+                    }
+                };
+
                 write_debug_error_type_help(content, buf, Parens::Unnecessary);
             }
 
@@ -1204,7 +1326,7 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
 
 pub fn gather_fields(
     subs: &Subs,
-    fields: MutMap<Lowercase, Variable>,
+    fields: MutMap<Lowercase, RecordField<Variable>>,
     var: Variable,
 ) -> RecordStructure {
     use crate::subs::Content::*;

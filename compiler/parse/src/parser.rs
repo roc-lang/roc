@@ -912,21 +912,26 @@ macro_rules! record_field {
             use $crate::ast::AssignedField::*;
             use $crate::blankspace::{space0, space0_before};
             use $crate::ident::lowercase_ident;
+            use $crate::parser::Either::*;
 
             // You must have a field name, e.g. "email"
             let (loc_label, state) = loc!(lowercase_ident()).parse(arena, state)?;
 
             let (spaces, state) = space0($min_indent).parse(arena, state)?;
+
             // Having a value is optional; both `{ email }` and `{ email: blah }` work.
             // (This is true in both literals and types.)
-            let (opt_loc_val, state) = $crate::parser::optional(skip_first!(
-                char(':'),
-                space0_before($val_parser, $min_indent)
+            let (opt_loc_val, state) = $crate::parser::optional(either!(
+                skip_first!(char(':'), space0_before($val_parser, $min_indent)),
+                skip_first!(char('?'), space0_before($val_parser, $min_indent))
             ))
             .parse(arena, state)?;
 
             let answer = match opt_loc_val {
-                Some(loc_val) => LabeledValue(loc_label, spaces, arena.alloc(loc_val)),
+                Some(either) => match either {
+                    First(loc_val) => RequiredValue(loc_label, spaces, arena.alloc(loc_val)),
+                    Second(loc_val) => OptionalValue(loc_label, spaces, arena.alloc(loc_val)),
+                },
                 // If no value was provided, record it as a Var.
                 // Canonicalize will know what to do with a Var later.
                 None => {

@@ -4,7 +4,7 @@ use roc_module::symbol::Symbol;
 use roc_types::boolean_algebra::Bool;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
-use roc_types::types::{gather_fields, ErrorType, Mismatch, RecordStructure};
+use roc_types::types::{gather_fields, ErrorType, Mismatch, RecordField, RecordStructure};
 
 macro_rules! mismatch {
     () => {{
@@ -319,17 +319,27 @@ fn unify_shared_fields(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    shared_fields: MutMap<Lowercase, (Variable, Variable)>,
-    other_fields: MutMap<Lowercase, Variable>,
+    shared_fields: MutMap<Lowercase, (RecordField<Variable>, RecordField<Variable>)>,
+    other_fields: MutMap<Lowercase, RecordField<Variable>>,
     ext: Variable,
 ) -> Outcome {
     let mut matching_fields = MutMap::default();
     let num_shared_fields = shared_fields.len();
 
     for (name, (actual, expected)) in shared_fields {
-        let problems = unify_pool(subs, pool, actual, expected);
+        let problems = unify_pool(subs, pool, actual.into_inner(), expected.into_inner());
 
         if problems.is_empty() {
+            use RecordField::*;
+
+            // If either field is Required, both are Required.
+            let actual = match (actual, expected) {
+                (Required(val), Required(_)) => Required(val),
+                (Required(val), Optional(_)) => Required(val),
+                (Optional(val), Required(_)) => Required(val),
+                (Optional(val), Optional(_)) => Optional(val),
+            };
+
             matching_fields.insert(name, actual);
         }
     }
@@ -604,6 +614,17 @@ fn unify_shared_tags(
     }
 }
 
+fn has_no_required_fields<'a, I, T>(fields: &mut I) -> bool
+where
+    I: Iterator<Item = &'a RecordField<T>>,
+    T: 'a,
+{
+    fields.all(|field| match field {
+        RecordField::Required(_) => false,
+        RecordField::Optional(_) => true,
+    })
+}
+
 #[inline(always)]
 fn unify_flat_type(
     subs: &mut Subs,
@@ -617,11 +638,11 @@ fn unify_flat_type(
     match (left, right) {
         (EmptyRecord, EmptyRecord) => merge(subs, ctx, Structure(left.clone())),
 
-        (Record(fields, ext), EmptyRecord) if fields.is_empty() => {
+        (Record(fields, ext), EmptyRecord) if has_no_required_fields(&mut fields.values()) => {
             unify_pool(subs, pool, *ext, ctx.second)
         }
 
-        (EmptyRecord, Record(fields, ext)) if fields.is_empty() => {
+        (EmptyRecord, Record(fields, ext)) if has_no_required_fields(&mut fields.values()) => {
             unify_pool(subs, pool, ctx.first, *ext)
         }
 
