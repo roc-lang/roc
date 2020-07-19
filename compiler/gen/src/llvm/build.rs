@@ -2221,20 +2221,11 @@ fn list_append<'a, 'ctx, 'env>(
                                 "add_list_lengths",
                             );
 
-                            let elem_bytes = env
-                                .ptr_int()
-                                .const_int(elem_layout.stack_size(env.ptr_bytes) as u64, false);
-                            let combined_bytes = builder.build_int_mul(
-                                combined_list_len,
-                                elem_bytes,
-                                "add_list_lengths",
-                            );
-
                             let combined_list_ptr = env
                                 .builder
                                 .build_array_malloc(
                                     elem_type,
-                                    combined_bytes,
+                                    combined_list_len,
                                     "create_combined_list_ptr",
                                 )
                                 .unwrap();
