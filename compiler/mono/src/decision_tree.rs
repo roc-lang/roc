@@ -1,8 +1,5 @@
-use crate::expr::Env;
-use crate::expr::Expr;
-use crate::expr::Pattern;
-use crate::layout::Builtin;
-use crate::layout::Layout;
+use crate::expr::{DestructType, Env, Expr, Pattern};
+use crate::layout::{Builtin, Layout};
 use crate::pattern::{Ctor, RenderAs, TagId, Union};
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
@@ -393,10 +390,16 @@ fn test_at_path<'a>(selected_path: &Path, branch: Branch<'a>, all_tests: &mut Ve
                     let mut arguments = std::vec::Vec::new();
 
                     for destruct in destructs {
-                        if let Some(guard) = &destruct.guard {
-                            arguments.push((guard.clone(), destruct.layout.clone()));
-                        } else {
-                            arguments.push((Pattern::Underscore, destruct.layout.clone()));
+                        match &destruct.typ {
+                            DestructType::Guard(guard) => {
+                                arguments.push((guard.clone(), destruct.layout.clone()));
+                            }
+                            DestructType::Required => {
+                                arguments.push((Pattern::Underscore, destruct.layout.clone()));
+                            }
+                            DestructType::Optional(_expr) => {
+                                todo!("test_at_type for optional destruct");
+                            }
                         }
                     }
 
@@ -524,10 +527,12 @@ fn to_relevant_branch_help<'a>(
             } => {
                 debug_assert!(test_name == &TagName::Global("#Record".into()));
                 let sub_positions = destructs.into_iter().enumerate().map(|(index, destruct)| {
-                    let pattern = if let Some(guard) = destruct.guard {
-                        guard.clone()
-                    } else {
-                        Pattern::Underscore
+                    let pattern = match destruct.typ {
+                        DestructType::Guard(guard) => guard.clone(),
+                        DestructType::Required => Pattern::Underscore,
+                        DestructType::Optional(_expr) => {
+                            todo!("TODO decision tree for optional field branch");
+                        }
                     };
 
                     (
