@@ -1,5 +1,5 @@
 use crate::env::Env;
-use crate::expr::Expr;
+use crate::expr::{canonicalize_expr, Expr};
 use crate::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use crate::scope::Scope;
 use roc_module::ident::{Ident, Lowercase, TagName};
@@ -302,6 +302,48 @@ pub fn canonicalize_pattern<'a>(
                             },
                         });
                     }
+                    OptionalField(label, loc_default) => {
+                        // an optional DOES introduce the label into scope!
+                        match scope.introduce(
+                            label.into(),
+                            &env.exposed_ident_ids,
+                            &mut env.ident_ids,
+                            region,
+                        ) {
+                            Ok(symbol) => {
+                                // TODO use output?
+                                let (can_default, _output) = canonicalize_expr(
+                                    env,
+                                    var_store,
+                                    scope,
+                                    loc_default.region,
+                                    &loc_default.value,
+                                );
+
+                                destructs.push(Located {
+                                    region: loc_pattern.region,
+                                    value: RecordDestruct {
+                                        var: var_store.fresh(),
+                                        label: Lowercase::from(label),
+                                        symbol,
+                                        typ: DestructType::Optional(var_store.fresh(), can_default),
+                                    },
+                                });
+                            }
+                            Err((original_region, shadow)) => {
+                                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                                    original_region,
+                                    shadow: shadow.clone(),
+                                }));
+
+                                // No matter what the other patterns
+                                // are, we're definitely shadowed and will
+                                // get a runtime exception as soon as we
+                                // encounter the first bad pattern.
+                                opt_erroneous = Some(Pattern::Shadowed(original_region, shadow));
+                            }
+                        };
+                    }
                     _ => unreachable!("Any other pattern should have given a parse error"),
                 }
             }
@@ -315,7 +357,10 @@ pub fn canonicalize_pattern<'a>(
             })
         }
 
-        RequiredField(_name, _loc_pattern) | OptionalField(_name, _loc_pattern) => {
+        RequiredField(_name, _loc_pattern) => {
+            unreachable!("should have been handled in RecordDestructure");
+        }
+        OptionalField(_name, _loc_pattern) => {
             unreachable!("should have been handled in RecordDestructure");
         }
 
