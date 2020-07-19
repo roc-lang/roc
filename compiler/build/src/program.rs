@@ -162,6 +162,7 @@ pub fn build(
     let mut layout_ids = LayoutIds::default();
     let mut procs = Procs::default();
     let mut mono_problems = std::vec::Vec::new();
+    let mut layout_cache = LayoutCache::default();
     let mut mono_env = Env {
         arena,
         subs: &mut subs,
@@ -191,6 +192,7 @@ pub fn build(
 
                                 procs.insert_named(
                                     &mut mono_env,
+                                    &mut layout_cache,
                                     symbol,
                                     annotation,
                                     loc_args,
@@ -235,7 +237,6 @@ pub fn build(
 
         Vec::with_capacity(num_headers)
     };
-    let mut layout_cache = LayoutCache::default();
     let mut procs = roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
     assert_eq!(

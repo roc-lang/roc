@@ -11,7 +11,6 @@ use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
-use std::hash::Hash;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartialProc<'a> {
@@ -56,13 +55,14 @@ impl<'a> Procs<'a> {
     pub fn insert_named(
         &mut self,
         env: &mut Env<'a, '_>,
+        layout_cache: &mut LayoutCache<'a>,
         name: Symbol,
         annotation: Variable,
         loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
         loc_body: Located<roc_can::expr::Expr>,
         ret_var: Variable,
     ) {
-        match patterns_to_when(env, loc_args, ret_var, loc_body) {
+        match patterns_to_when(env, self, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
                 // a named closure. Since these aren't specialized by the surrounding
                 // context, we can't add pending specializations for them yet.
@@ -106,7 +106,7 @@ impl<'a> Procs<'a> {
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
     ) -> Result<Layout<'a>, RuntimeError> {
-        match patterns_to_when(env, loc_args, ret_var, loc_body) {
+        match patterns_to_when(env, self, layout_cache, loc_args, ret_var, loc_body) {
             Ok((pattern_vars, pattern_symbols, body)) => {
                 // an anonymous closure. These will always be specialized already
                 // by the surrounding context, so we can add pending specializations
@@ -418,6 +418,8 @@ fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
 #[allow(clippy::type_complexity)]
 fn patterns_to_when<'a>(
     env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
     patterns: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
     body_var: Variable,
     body: Located<roc_can::expr::Expr>,
@@ -438,7 +440,7 @@ fn patterns_to_when<'a>(
     // are only stores anyway, no branches.
     for (pattern_var, pattern) in patterns.into_iter() {
         let context = crate::pattern::Context::BadArg;
-        let mono_pattern = from_can_pattern(env, &pattern.value);
+        let mono_pattern = from_can_pattern(env, procs, layout_cache, &pattern.value);
 
         match crate::pattern::check(
             pattern.region,
@@ -1023,11 +1025,14 @@ fn store_record_destruct<'a>(
         is_unwrapped: true,
     };
 
-    match &destruct.guard {
-        None => {
+    match &destruct.typ {
+        DestructType::Required => {
             stored.push((destruct.symbol, destruct.layout.clone(), load));
         }
-        Some(guard_pattern) => match &guard_pattern {
+        DestructType::Optional(_expr) => {
+            todo!("TODO monomorphize optional field destructure's default expr");
+        }
+        DestructType::Guard(guard_pattern) => match &guard_pattern {
             Identifier(symbol) => {
                 stored.push((*symbol, destruct.layout.clone(), load));
             }
@@ -1097,7 +1102,15 @@ fn from_can_defs<'a>(
 
                         let (loc_body, ret_var) = *boxed_body;
 
-                        procs.insert_named(env, *symbol, ann, loc_args, loc_body, ret_var);
+                        procs.insert_named(
+                            env,
+                            layout_cache,
+                            *symbol,
+                            ann,
+                            loc_args,
+                            loc_body,
+                            ret_var,
+                        );
 
                         continue;
                     }
@@ -1107,7 +1120,7 @@ fn from_can_defs<'a>(
         }
 
         // If it wasn't specifically an Identifier & Closure, proceed as normal.
-        let mono_pattern = from_can_pattern(env, &loc_pattern.value);
+        let mono_pattern = from_can_pattern(env, procs, layout_cache, &loc_pattern.value);
 
         let layout = layout_cache
             .from_var(env.arena, def.expr_var, env.subs, env.pointer_size)
@@ -1195,7 +1208,7 @@ fn from_can_when<'a>(
 
         let loc_when_pattern = &first.patterns[0];
 
-        let mono_pattern = from_can_pattern(env, &loc_when_pattern.value);
+        let mono_pattern = from_can_pattern(env, procs, layout_cache, &loc_when_pattern.value);
 
         // record pattern matches can have 1 branch and typecheck, but may still not be exhaustive
         let guard = if first.guard.is_some() {
@@ -1259,7 +1272,7 @@ fn from_can_when<'a>(
             };
 
             for loc_pattern in when_branch.patterns {
-                let mono_pattern = from_can_pattern(env, &loc_pattern.value);
+                let mono_pattern = from_can_pattern(env, procs, layout_cache, &loc_pattern.value);
 
                 loc_branches.push((
                     Located::at(loc_pattern.region, mono_pattern.clone()),
@@ -1632,7 +1645,7 @@ fn specialize<'a>(
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
@@ -1666,12 +1679,19 @@ pub enum Pattern<'a> {
     UnsupportedPattern(Region),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RecordDestruct<'a> {
     pub label: Lowercase,
     pub layout: Layout<'a>,
     pub symbol: Symbol,
-    pub guard: Option<Pattern<'a>>,
+    pub typ: DestructType<'a>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum DestructType<'a> {
+    Required,
+    Optional(Expr<'a>),
+    Guard(Pattern<'a>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1683,6 +1703,8 @@ pub struct WhenBranch<'a> {
 
 fn from_can_pattern<'a>(
     env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
     can_pattern: &roc_can::pattern::Pattern,
 ) -> Pattern<'a> {
     use roc_can::pattern::Pattern::*;
@@ -1786,7 +1808,10 @@ fn from_can_pattern<'a>(
 
                     let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
                     for ((_, loc_pat), layout) in arguments.iter().zip(field_layouts.iter()) {
-                        mono_args.push((from_can_pattern(env, &loc_pat.value), layout.clone()));
+                        mono_args.push((
+                            from_can_pattern(env, procs, layout_cache, &loc_pat.value),
+                            layout.clone(),
+                        ));
                     }
 
                     let layout = Layout::Struct(field_layouts.into_bump_slice());
@@ -1825,7 +1850,10 @@ fn from_can_pattern<'a>(
                     // disregard the tag discriminant layout
                     let it = argument_layouts[1..].iter();
                     for ((_, loc_pat), layout) in arguments.iter().zip(it) {
-                        mono_args.push((from_can_pattern(env, &loc_pat.value), layout.clone()));
+                        mono_args.push((
+                            from_can_pattern(env, procs, layout_cache, &loc_pat.value),
+                            layout.clone(),
+                        ));
                     }
 
                     let mut layouts: Vec<&'a [Layout<'a>]> =
@@ -1876,6 +1904,8 @@ fn from_can_pattern<'a>(
 
                         mono_destructs.push(from_can_record_destruct(
                             env,
+                            procs,
+                            layout_cache,
                             &destruct.value,
                             field_layout.clone(),
                         ));
@@ -1885,7 +1915,7 @@ fn from_can_pattern<'a>(
                             label: label.clone(),
                             symbol: env.unique_symbol(),
                             layout: field_layout.clone(),
-                            guard: Some(Pattern::Underscore),
+                            typ: DestructType::Guard(Pattern::Underscore),
                         });
                     }
                 } else {
@@ -1894,7 +1924,7 @@ fn from_can_pattern<'a>(
                         label: label.clone(),
                         symbol: env.unique_symbol(),
                         layout: field_layout.clone(),
-                        guard: Some(Pattern::Underscore),
+                        typ: DestructType::Guard(Pattern::Underscore),
                     });
                 }
                 field_layouts.push(field_layout);
@@ -1910,6 +1940,8 @@ fn from_can_pattern<'a>(
 
 fn from_can_record_destruct<'a>(
     env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
     can_rd: &roc_can::pattern::RecordDestruct,
     field_layout: Layout<'a>,
 ) -> RecordDestruct<'a> {
@@ -1917,9 +1949,14 @@ fn from_can_record_destruct<'a>(
         label: can_rd.label.clone(),
         symbol: can_rd.symbol,
         layout: field_layout,
-        guard: match &can_rd.guard {
-            None => None,
-            Some((_, loc_pattern)) => Some(from_can_pattern(env, &loc_pattern.value)),
+        typ: match &can_rd.typ {
+            roc_can::pattern::DestructType::Required => DestructType::Required,
+            roc_can::pattern::DestructType::Optional(_, loc_expr) => {
+                DestructType::Optional(from_can(env, loc_expr.value.clone(), procs, layout_cache))
+            }
+            roc_can::pattern::DestructType::Guard(_, loc_pattern) => DestructType::Guard(
+                from_can_pattern(env, procs, layout_cache, &loc_pattern.value),
+            ),
         },
     }
 }

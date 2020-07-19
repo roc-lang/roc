@@ -313,9 +313,10 @@ fn layout_from_flat_type<'a>(
             // Determine the layouts of the fields, maintaining sort order
             let mut layouts = Vec::with_capacity_in(sorted_fields.len(), arena);
 
-            for (_, field_var) in sorted_fields {
+            for (_, field) in sorted_fields {
                 use LayoutProblem::*;
 
+                let field_var = field.into_inner();
                 let field_content = subs.get_without_compacting(field_var).content;
 
                 match Layout::new(arena, field_content, subs, pointer_size) {
@@ -372,7 +373,8 @@ pub fn sort_record_fields<'a>(
             // Sort the fields by label
             let mut sorted_fields = Vec::with_capacity_in(fields_map.len(), arena);
 
-            for (label, var) in fields_map {
+            for (label, field) in fields_map {
+                let var = field.into_inner();
                 let layout = Layout::from_var(arena, var, subs, pointer_size)
                     .expect("invalid layout from var");
 
