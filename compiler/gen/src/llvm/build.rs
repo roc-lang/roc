@@ -2118,51 +2118,6 @@ fn list_append<'a, 'ctx, 'env>(
 
     let second_list_len = load_list_len(builder, second_list_wrapper);
 
-    let if_first_list_is_empty = || {
-        match second_list_layout {
-            Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-            Layout::Builtin(Builtin::List(elem_layout)) => {
-                // second_list_len > 0
-                // We do this check to avoid allocating memory. If the second input
-                // list is empty, then we can just return the first list cloned
-                let second_list_length_comparison =
-                    list_is_not_empty(builder, ctx, second_list_len);
-
-                let build_second_list_then = || {
-                    let elem_type =
-                        basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-                    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-                    let (new_wrapper, _) = clone_nonempty_list(
-                        env,
-                        second_list_len,
-                        load_list_ptr(builder, second_list_wrapper, ptr_type),
-                        elem_layout,
-                    );
-
-                    BasicValueEnum::StructValue(new_wrapper)
-                };
-
-                let build_second_list_else = || empty_list(env);
-
-                build_basic_phi2(
-                    env,
-                    parent,
-                    second_list_length_comparison,
-                    build_second_list_then,
-                    build_second_list_else,
-                    BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
-                )
-            }
-            _ => {
-                unreachable!(
-                    "Invalid List layout for second input list of List.append: {:?}",
-                    second_list_layout
-                );
-            }
-        }
-    };
-
     match first_list_layout {
         Layout::Builtin(Builtin::EmptyList) => {
             match second_list_layout {
@@ -2468,6 +2423,51 @@ fn list_append<'a, 'ctx, 'env>(
                             second_list_length_comparison,
                             if_second_list_is_not_empty,
                             if_second_list_is_empty,
+                            BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
+                        )
+                    }
+                    _ => {
+                        unreachable!(
+                            "Invalid List layout for second input list of List.append: {:?}",
+                            second_list_layout
+                        );
+                    }
+                }
+            };
+
+            let if_first_list_is_empty = || {
+                match second_list_layout {
+                    Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                    Layout::Builtin(Builtin::List(elem_layout)) => {
+                        // second_list_len > 0
+                        // We do this check to avoid allocating memory. If the second input
+                        // list is empty, then we can just return the first list cloned
+                        let second_list_length_comparison =
+                            list_is_not_empty(builder, ctx, second_list_len);
+
+                        let build_second_list_then = || {
+                            let elem_type =
+                                basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+                            let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                            let (new_wrapper, _) = clone_nonempty_list(
+                                env,
+                                second_list_len,
+                                load_list_ptr(builder, second_list_wrapper, ptr_type),
+                                elem_layout,
+                            );
+
+                            BasicValueEnum::StructValue(new_wrapper)
+                        };
+
+                        let build_second_list_else = || empty_list(env);
+
+                        build_basic_phi2(
+                            env,
+                            parent,
+                            second_list_length_comparison,
+                            build_second_list_then,
+                            build_second_list_else,
                             BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
                         )
                     }
