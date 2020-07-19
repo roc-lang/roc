@@ -2467,8 +2467,8 @@ fn list_append<'a, 'ctx, 'env>(
                     }
                     _ => {
                         unreachable!(
-                            "Invalid List layout for first input list of List.append: {:?}",
-                            first_list_layout
+                            "Invalid List layout for second input list of List.append: {:?}",
+                            second_list_layout
                         );
                     }
                 }
@@ -2484,7 +2484,10 @@ fn list_append<'a, 'ctx, 'env>(
             )
         }
         _ => {
-            unreachable!("Invalid List layout for List.get: {:?}", first_list_layout);
+            unreachable!(
+                "Invalid List layout for first list in List.append : {:?}",
+                first_list_layout
+            );
         }
     }
 }
