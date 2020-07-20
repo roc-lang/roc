@@ -2641,4 +2641,32 @@ mod solve_expr {
             "{ x : Num a, y ? Num a }* -> Num a",
         );
     }
+
+    #[test]
+    fn optional_field_let() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                { x, y ? 0 } = { x: 32 }
+
+                x + y
+                "#
+            ),
+            "Num *",
+        );
+    }
+
+    #[test]
+    fn optional_field_when() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                \r ->
+                    when r is
+                        { x, y ? 0 } -> x + y
+                "#
+            ),
+            "{ x : Num a, y ? Num a }* -> Num a",
+        );
+    }
 }
