@@ -41,6 +41,17 @@ impl<T> RecordField<T> {
             Required(t) => t,
         }
     }
+
+    pub fn map<F, U>(&self, mut f: F) -> RecordField<U>
+    where
+        F: FnMut(&T) -> U,
+    {
+        use RecordField::*;
+        match self {
+            Optional(t) => Optional(f(t)),
+            Required(t) => Required(f(t)),
+        }
+    }
 }
 
 impl RecordField<Type> {
@@ -820,8 +831,17 @@ pub struct RecordStructure {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PReason {
-    WhenMatch { index: Index },
-    TagArg { tag_name: TagName, index: Index },
+    TypedArg {
+        opt_name: Option<Symbol>,
+        index: Index,
+    },
+    WhenMatch {
+        index: Index,
+    },
+    TagArg {
+        tag_name: TagName,
+        index: Index,
+    },
     PatternGuard,
 }
 
