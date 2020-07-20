@@ -4,10 +4,6 @@ use roc_collections::all::{ImMap, ImSet};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 
-// fake field names for container elements
-// e.g. for lists, internally it's a record with a `list_elem` field
-pub const LIST_ELEM: &str = "@list_elem";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mark {
     Seen,
@@ -747,37 +743,6 @@ impl FieldAccess {
 
     pub fn get(&self, key: &Lowercase) -> Option<&Usage> {
         self.fields.get(key)
-    }
-
-    pub fn list_access() -> Self {
-        use Mark::*;
-        use Usage::*;
-
-        let mut result = Self::default();
-        result.fields.insert(LIST_ELEM.into(), Simple(Unique));
-
-        result
-    }
-
-    pub fn list_seen() -> Self {
-        use Mark::*;
-        use Usage::*;
-
-        let mut result = Self::default();
-        result.fields.insert(LIST_ELEM.into(), Simple(Seen));
-
-        result
-    }
-
-    pub fn list_update() -> Self {
-        use Mark::*;
-        use Usage::*;
-
-        // TODO maybe this should be a different key so accessed items are never in overwritten and kept unique
-        let mut result = Self::default();
-        result.fields.insert(LIST_ELEM.into(), Simple(Seen));
-
-        result
     }
 }
 
