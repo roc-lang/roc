@@ -3075,4 +3075,44 @@ mod solve_uniq_expr {
             "Attr * { a : (Attr * { x : (Attr * (Num (Attr * a))), y : (Attr * Float), z : (Attr * c) }), b : (Attr * { blah : (Attr * Str), x : (Attr * (Num (Attr * a))), y : (Attr * Float), z : (Attr * c) }) }"
         );
     }
+
+    #[test]
+    fn optional_field_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                \{ x, y ? 0 } -> x + y
+                "#
+            ),
+            "Attr * (Attr (* | b | c) { x : (Attr b (Num (Attr b a))), y ? (Attr c (Num (Attr c a))) }* -> Attr d (Num (Attr d a)))"
+        );
+    }
+
+    #[test]
+    fn optional_field_let() {
+        infer_eq(
+            indoc!(
+                r#"
+                { x, y ? 0 } = { x: 32 }
+
+                x + y
+                "#
+            ),
+            "Attr a (Num (Attr a *))",
+        );
+    }
+
+    #[test]
+    fn optional_field_when() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r ->
+                    when r is
+                        { x, y ? 0 } -> x + y
+                "#
+            ),
+            "Attr * (Attr (* | b | c) { x : (Attr b (Num (Attr b a))), y ? (Attr c (Num (Attr c a))) }* -> Attr d (Num (Attr d a)))"
+        );
+    }
 }
