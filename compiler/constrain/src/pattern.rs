@@ -230,7 +230,6 @@ pub fn constrain_pattern(
                         RecordField::Required(pat_type)
                     }
                     DestructType::Optional(expr_var, loc_expr) => {
-                        // Eq(Type, Expected<Type>, Category, Region),
                         let expr_expected = Expected::ForReason(
                             Reason::RecordDefaultField(label.clone()),
                             pat_type.clone(),
