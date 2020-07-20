@@ -3112,13 +3112,13 @@ mod test_reporting {
                   ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 This `ACons` global tag application has the type:
-                
+
                     [ ACons (Num Integer) [ BCons (Num Integer) [ ACons Str [
                     BCons Int [ ACons Int (BList Int Int), ANil ] as a, BNil ], ANil
                     ], BNil ], ANil ]
 
                 But the type annotation on `x` says it should be:
-                
+
                     [ ACons Int (BList Int Int), ANil ] as a
                 "#
             ),
@@ -3452,6 +3452,148 @@ mod test_reporting {
                     Num
                     Map
                     Set
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn optional_record_default_type_error() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \{ x, y ? True } -> x + y
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                The 2nd argument to `add` is not what I expect:
+
+                1 ┆  \{ x, y ? True } -> x + y
+                  ┆                          ^
+
+                This `y` value is a:
+
+                    [ True ]a
+
+                But `add` needs the 2nd argument to be:
+
+                    Num a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn optional_record_default_with_signature() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { x : Int, y ? Int } -> Int
+                f = \{ x, y ? "foo" } -> x + y
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                The 2nd argument to `add` is not what I expect:
+
+                2 ┆  f = \{ x, y ? "foo" } -> x + y
+                  ┆                               ^
+
+                This `y` value is a:
+
+                    Str
+
+                But `add` needs the 2nd argument to be:
+
+                    Num a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn guard_mismatch_with_annotation() {
+        // TODO improve this message
+        // The problem is the guard, and the message should point to that
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { x : Int, y : Int } -> Int
+                f = \r ->
+                        when r is
+                            { x, y : "foo" } -> x + 0
+                            _ -> 0
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                Something is off with the body of the `f` definition:
+
+                1 ┆   f : { x : Int, y : Int } -> Int
+                2 ┆>  f = \r ->
+                3 ┆>          when r is
+                4 ┆>              { x, y : "foo" } -> x + 0
+                5 ┆>              _ -> 0
+
+                The body is an anonymous function of type:
+
+                    { x : Num Integer, y : Str } -> Num Integer
+
+                But the type annotation on `f` says it should be:
+
+                    { x : Int, y : Int } -> Int
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn optional_field_mismatch_with_annotation() {
+        // TODO improve this message
+        // The problem is the pattern match default
+        // the message should point to that.
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { x : Int, y ? Int } -> Int
+                f = \r ->
+                        when r is
+                            { x, y ? "foo" } -> (\g, _ -> g) x y
+                            _ -> 0
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                Something is off with the body of the `f` definition:
+
+                1 ┆   f : { x : Int, y ? Int } -> Int
+                2 ┆>  f = \r ->
+                3 ┆>          when r is
+                4 ┆>              { x, y ? "foo" } -> (\g, _ -> g) x y
+                5 ┆>              _ -> 0
+
+                The body is an anonymous function of type:
+
+                    { x : Num Integer, y : Str } -> Num Integer
+
+                But the type annotation on `f` says it should be:
+
+                    { x : Int, y : Int } -> Int
                 "#
             ),
         )
