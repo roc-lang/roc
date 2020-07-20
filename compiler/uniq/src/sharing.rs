@@ -1,4 +1,5 @@
 use roc_can::expr::Expr;
+use roc_can::pattern::{DestructType, Pattern};
 use roc_collections::all::{ImMap, ImSet};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
@@ -780,6 +781,38 @@ impl FieldAccess {
     }
 }
 
+fn annotate_usage_pattern(pattern: &Pattern, usage: &mut VarUsage) {
+    use Pattern::*;
+
+    match pattern {
+        Identifier(_)
+        | IntLiteral(_)
+        | NumLiteral(_, _)
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | Underscore
+        | Shadowed(_, _)
+        | UnsupportedPattern(_)
+        | MalformedPattern(_, _) => {}
+
+        AppliedTag { arguments, .. } => {
+            for (_, loc_pattern) in arguments {
+                annotate_usage_pattern(&loc_pattern.value, usage);
+            }
+        }
+        RecordDestructure { destructs, .. } => {
+            use DestructType::*;
+
+            for loc_destruct in destructs {
+                match &loc_destruct.value.typ {
+                    Required | Guard(_, _) => {}
+                    Optional(_, loc_expr) => annotate_usage(&loc_expr.value, usage),
+                }
+            }
+        }
+    }
+}
+
 pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
     use Expr::*;
 
@@ -825,9 +858,13 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
 
             let mut branches_usage = VarUsage::default();
             for branch in branches {
-                let loc_branch = &branch.value;
                 let mut current_usage = VarUsage::default();
+                // annotate defaults of optional record fields
+                for loc_pattern in &branch.patterns {
+                    annotate_usage_pattern(&loc_pattern.value, usage);
+                }
 
+                let loc_branch = &branch.value;
                 annotate_usage(&loc_branch.value, &mut current_usage);
 
                 branches_usage.parallel(&current_usage);
@@ -844,6 +881,9 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
         LetNonRec(def, loc_expr, _, _) => {
             annotate_usage(&def.loc_expr.value, usage);
             annotate_usage(&loc_expr.value, usage);
+
+            // annotate defaults of optional record fields
+            annotate_usage_pattern(&def.loc_pattern.value, usage)
         }
         LetRec(defs, loc_expr, _, _) => {
             // TODO test this with a practical example.
@@ -853,6 +893,9 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
                 for (symbol, _) in def.pattern_vars.clone() {
                     usage.register_shared(symbol);
                 }
+                // annotate defaults of optional record fields
+                annotate_usage_pattern(&def.loc_pattern.value, usage);
+
                 annotate_usage(&def.loc_expr.value, usage);
             } else {
                 let mut rec_usage = VarUsage::default();
@@ -866,6 +909,9 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
 
                     let mut current_usage = VarUsage::default();
                     annotate_usage(&def.loc_expr.value, &mut current_usage);
+
+                    // annotate defaults of optional record fields
+                    annotate_usage_pattern(&def.loc_pattern.value, usage);
 
                     let mut a = rec_usage.clone();
                     let b = rec_usage.clone();
@@ -912,7 +958,12 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
                 annotate_usage(&arg.value, usage);
             }
         }
-        Closure(_, _, _, _, body) => {
+        Closure(_, _, _, args, body) => {
+            // annotate defaults of optional record fields
+            for (_, loc_pattern) in args {
+                annotate_usage_pattern(&loc_pattern.value, usage);
+            }
+
             annotate_usage(&body.0.value, usage);
         }
 
