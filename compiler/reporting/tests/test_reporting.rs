@@ -1630,6 +1630,21 @@ mod test_reporting {
 
     #[test]
     fn bad_double_rigid() {
+        // this previously reported the message below, not sure which is better
+        //
+        //                Something is off with the body of the `f` definition:
+        //
+        //                1 ┆  f : a, b -> a
+        //                2 ┆  f = \x, y -> if True then x else y
+        //                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        //
+        //                The body is an anonymous function of type:
+        //
+        //                    a, a -> a
+        //
+        //                But the type annotation on `f` says it should be:
+        //
+        //                    a, b -> a
         report_problem_as(
             indoc!(
                 r#"
@@ -1643,21 +1658,22 @@ mod test_reporting {
                 r#"
                 -- TYPE MISMATCH ---------------------------------------------------------------
 
-                Something is off with the body of the `f` definition:
+                This `if` has an `else` branch with a different type from its `then` branch:
 
-                1 ┆  f : a, b -> a
                 2 ┆  f = \x, y -> if True then x else y
-                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                  ┆                                   ^
 
-                The body is an anonymous function of type:
+                This `y` value is a:
 
-                    a, a -> a
+                    b
 
-                But the type annotation on `f` says it should be:
+                but the `then` branch has the type:
 
-                    a, b -> a
+                    a
 
-                Hint: Your type annotation uses `a` and `b` as separate type variables.
+                I need all branches in an `if` to have the same type!
+
+                Hint: Your type annotation uses `b` and `a` as separate type variables.
                 Your code seems to be saying they are the same though. Maybe they
                 should be the same your type annotation? Maybe your code uses them in
                 a weird way?
@@ -1958,27 +1974,17 @@ mod test_reporting {
                 r#"
                 -- TYPE MISMATCH ---------------------------------------------------------------
 
-                Something is off with the body of the `f` definition:
+                The `r` record does not have a `.foo` field:
 
-                1 ┆   f : { fo: Int }ext -> Int
-                2 ┆>  f = \r ->
-                3 ┆>      r2 = { r & foo: r.fo }
-                4 ┆>
-                5 ┆>      r2.fo
+                3 ┆      r2 = { r & foo: r.fo }
+                  ┆                 ^^^^^^^^^
 
-                The body is an anonymous function of type:
+                This is usually a typo. Here are the `r` fields that are most similar:
 
-                    { fo : Int, foo : Int }a -> Int
+                    { fo : Int
+                    }ext
 
-                But the type annotation on `f` says it should be:
-
-                    { fo : Int }ext -> Int
-
-                Hint: Seems like a record field typo. Maybe `foo` should be `fo`?
-
-                Hint: Can more type annotations be added? Type annotations always help
-                me give more specific messages, and I think they could help a lot in
-                this case
+                So maybe `.foo` should be `.fo`?
                 "#
             ),
         )
@@ -3492,7 +3498,7 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : { x : Int, y ? Int } -> Int
-                f = \{ x, y ? "foo" } -> x + y
+                f = \{ x, y ? "foo" } -> (\g, _ -> g) x y
 
                 f
                 "#
@@ -3501,18 +3507,18 @@ mod test_reporting {
                 r#"
                 -- TYPE MISMATCH ---------------------------------------------------------------
 
-                The 2nd argument to `add` is not what I expect:
+                The 1st argument to `f` is weird:
 
-                2 ┆  f = \{ x, y ? "foo" } -> x + y
-                  ┆                               ^
+                2 ┆  f = \{ x, y ? "foo" } -> (\g, _ -> g) x y
+                  ┆       ^^^^^^^^^^^^^^^^
 
-                This `y` value is a:
+                The argument is a pattern that matches record values of type:
 
-                    Str
+                    { x : Int, y ? Str }
 
-                But `add` needs the 2nd argument to be:
+                But the annotation on `f` says the 1st argument should be:
 
-                    Num a
+                    { x : Int, y ? Int }
                 "#
             ),
         )
@@ -3538,21 +3544,18 @@ mod test_reporting {
                 r#"
                 -- TYPE MISMATCH ---------------------------------------------------------------
 
-                Something is off with the body of the `f` definition:
+                The 1st pattern in this `when` is causing a mismatch:
 
-                1 ┆   f : { x : Int, y : Int } -> Int
-                2 ┆>  f = \r ->
-                3 ┆>          when r is
-                4 ┆>              { x, y : "foo" } -> x + 0
-                5 ┆>              _ -> 0
+                4 ┆              { x, y : "foo" } -> x + 0
+                  ┆              ^^^^^^^^^^^^^^^^
 
-                The body is an anonymous function of type:
+                The first pattern is trying to match record values of type:
 
-                    { x : Num Integer, y : Str } -> Num Integer
+                    { x : Int, y : Str }
 
-                But the type annotation on `f` says it should be:
+                But the expression between `when` and `is` has the type:
 
-                    { x : Int, y : Int } -> Int
+                    { x : Int, y : Int }
                 "#
             ),
         )
@@ -3579,21 +3582,18 @@ mod test_reporting {
                 r#"
                 -- TYPE MISMATCH ---------------------------------------------------------------
 
-                Something is off with the body of the `f` definition:
+                The 1st pattern in this `when` is causing a mismatch:
 
-                1 ┆   f : { x : Int, y ? Int } -> Int
-                2 ┆>  f = \r ->
-                3 ┆>          when r is
-                4 ┆>              { x, y ? "foo" } -> (\g, _ -> g) x y
-                5 ┆>              _ -> 0
+                4 ┆              { x, y ? "foo" } -> (\g, _ -> g) x y
+                  ┆              ^^^^^^^^^^^^^^^^
 
-                The body is an anonymous function of type:
+                The first pattern is trying to match record values of type:
 
-                    { x : Num Integer, y : Str } -> Num Integer
+                    { x : Int, y ? Str }
 
-                But the type annotation on `f` says it should be:
+                But the expression between `when` and `is` has the type:
 
-                    { x : Int, y : Int } -> Int
+                    { x : Int, y ? Int }
                 "#
             ),
         )
