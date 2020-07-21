@@ -3542,8 +3542,8 @@ mod test_reporting {
 
                 Something is off with the body of this definition:
 
-                2 ┆      { x, y } : { x : Int, y ? Bool }
-                  ┆                 ^^^^^^^^^^^^^^^^^^^^^
+                2 ┆>      { x, y } : { x : Int, y ? Bool }
+                3 ┆>      { x, y } = rec
 
                 The body is a value of type:
 

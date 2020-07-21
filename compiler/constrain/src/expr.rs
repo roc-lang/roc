@@ -1019,7 +1019,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                 expr_type,
                 annotation_expected.clone(),
                 Category::Storage,
-                annotation.region,
+                Region::span_across(&annotation.region, &def.loc_expr.region),
             ));
 
             // when a def is annotated, and it's body is a closure, treat this
