@@ -5,9 +5,7 @@ interface List
 ## Types
 
 ## A sequential list of values.
-## # >>> [ 1, 2, 3 ] # a list of numbers
-##
-## >>> [ "a", "b", "c" ] # a list of strings
+## # >>> [ 1, 2, 3 ] # a list of numbers # # >>> [ "a", "b", "c" ] # a list of strings
 ##
 ## >>> [ [ 1.1 ], [], [ 2.2, 3.3 ] ] # a list of lists of floats
 ##
@@ -203,17 +201,23 @@ map : List before, (before -> after) -> List after
 ## of the element to the conversion function.
 mapWithIndex : List before, (before, Int -> after) -> List after
 
-## This works like #List.map, except the given function can return `Drop` to
-## drop the transformed element - or wrap it in `Keep` to keep it.
-##
-mapOrDrop : List before, (before -> [ Keep after, Drop ]) -> List after
-
 ## This works like #List.map, except at any time you can return `Err` to
-## cancel the operation and return an error, or `Ok` to continue.
+## cancel the entire operation immediately, and return that #Err.
 mapOrCancel : List before, (before -> Result after err) -> Result (List after) err
 
-## If all the elements in the list are #Ok,
-checkOk : List (Result ok err) -> Result (List ok) err
+## This works like #List.map, except only the transformed values that are
+## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
+##
+## >>> List.mapOks [ [ "a", "b" ], [], [], [ "c", "d", "e" ] ] List.last
+##
+## >>> fn = \str -> if Str.isEmpty str then Err StrWasEmpty else Ok (Str.len str)
+## >>>
+## >>> List.mapOks [ "", "a", "bc", "", "d", "ef", "" ]
+mapOks : List before, (before -> Result after *) -> List after
+
+## If all the elements in the list are #Ok, return a new list containing the
+## contents of those #Ok tags. If any elements are #Err, return #Err.
+allOks : List (Result ok err) -> Result (List ok) err
 
 ## Add a single element to the end of a list.
 ##
@@ -248,6 +252,8 @@ concat : List elem, List elem -> List elem
 ## >>> List.join []
 join : List (List elem) -> List elem
 
+## Like #List.map, except the transformation function wraps the return value
+## in a list. At the end, all the lists get joined together into one list.
 joinMap : List before, (before -> List after) -> List after
 
 ## Like #List.join, but only keeps elements tagged with `Ok`. Elements
@@ -263,7 +269,7 @@ joinOks : List (Result elem *) -> List elem
 
 ## Iterates over the shortest of the given lists and returns a list of `Pair`
 ## tags, each wrapping one of the elements in that list, along with the elements
-## in the same position in # the other lists.
+## in the same index in # the other lists.
 ##
 ## >>> List.zip [ "a1", "b1" "c1" ] [ "a2", "b2" ] [ "a3", "b3", "c3" ]
 ##
@@ -271,10 +277,7 @@ joinOks : List (Result elem *) -> List elem
 ##
 ## > For a generalized version that returns whatever you like, instead of a `Pair`,
 ## > see `zipMap`.
-zip :
-    List a, List b, -> List [ Pair a b ]*
-    List a, List b, List c, -> List [ Pair a b c ]*
-    List a, List b, List c, List d  -> List [ Pair a b c d ]*
+zip : List a, List b, -> List [ Pair a b ]*
 
 ## Like `zip` but you can specify what to do with each element.
 ##
@@ -283,10 +286,7 @@ zip :
 ## >>> List.zipMap [ 1, 2, 3 ] [ 0, 5, 4 ] [ 2, 1 ] \num1 num2 num3 -> num1 + num2 - num3
 ##
 ## Accepts up to 8 lists.
-zipMap :
-    List a, List b, (a, b) -> List c |
-    List a, List b, List c, (a, b, c) -> List d |
-    List a, List b, List c, List d, (a, b, c, d) -> List e
+zipMap : List a, List b, (a, b) -> List c
 
 
 ## Filter
@@ -312,7 +312,7 @@ zipMap :
 ## If all elements in the list end up being kept, Roc will return the original
 ## list unaltered.
 ##
-keepIf : List elem, (elem -> [True, False]) -> List elem
+keepIf : List elem, (elem -> Bool) -> List elem
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `False`.
@@ -323,30 +323,16 @@ keepIf : List elem, (elem -> [True, False]) -> List elem
 ##
 ## #List.dropIf has the same performance characteristics as #List.keepIf.
 ## See its documentation for details on those characteristics!
-dropIf : List elem, (elem -> [True, False]) -> List elem
-
-## Takes the requested number of elements from the front of a list
-## and returns them.
-##
-## >>> take 5 [ 1, 2, 3, 4, 5, 6, 7, 8 ]
-##
-## If there are fewer elements in the list than the requeted number,
-## returns the entire list.
-##
-## >>> take 5 [ 1, 2 ]
-take : List elem, Int -> List elem
+dropIf : List elem, (elem -> Bool) -> List elem
 
 ## Access
 
-## Returns the first element in the list, or `ListWasEmpty` if the list was empty.
+## Returns the first element in the list, or `ListWasEmpty` if it was empty.
 first : List elem -> Result elem [ ListWasEmpty ]*
 
-## Returns the last element in the list, or `ListWasEmpty` if the list was empty.
+## Returns the last element in the list, or `ListWasEmpty` if it was empty.
 last : List elem -> Result elem [ ListWasEmpty ]*
 
-## This takes a #Len because the maximum length of a #List is a #Len value,
-## so #Len lets you specify any position up to the maximum length of
-## the list.
 get : List elem, Len -> Result elem [ OutOfBounds ]*
 
 max : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
@@ -355,14 +341,17 @@ min : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 
 ## Modify
 
-## This takes a #Len because the maximum length of a #List is a #Len value,
-## so #Len lets you specify any position up to the maximum length of
-## the list.
-set : List elem, Len, elem -> List elem
-
-## Add a new element to the end of a list.
+## Replaces the element at the given index with a replacement.
 ##
-## Returns a new list with the given element as its last element.
+## >>> List.put [ "a", "b", "c" ] 1 "B"
+##
+## If the given index is outside the bounds of the list, returns the original
+## list unmodified.
+put : List elem, Len, elem -> List elem
+
+## Adds a new element to the end of the list.
+##
+## >>> List.append [ "a", "b" ] "c"
 ##
 ## ## Performance Details
 ##
@@ -372,9 +361,9 @@ set : List elem, Len, elem -> List elem
 ## module's documentation.
 append : List elem, elem -> List elem
 
-## Add a new element to the beginning of a list.
+## Adds a new element to the beginning of the list.
 ##
-## Returns a new list with the given element as its first element.
+## >>> List.prepend [ "b", "c" ] "a"
 ##
 ## ## Performance Details
 ##
@@ -428,7 +417,7 @@ dropLast : List elem -> Result { others : List elem, last : elem } [ ListWasEmpt
 ## runs *much* faster. This is because for #List.dropLast, removing the last element
 ## in-place is as easy as reducing the length of the list by 1. In contrast,
 ## removing the first element from the list involves copying every other element
-## in the list into the position before it - which is massively more costly.
+## in the list into the index before it - which is massively more costly.
 ##
 ## In the case of a Shared list,
 ##
@@ -438,41 +427,60 @@ dropLast : List elem -> Result { others : List elem, last : elem } [ ListWasEmpt
 ## dropLast  | #List.last + clone rest of list  | #List.last + clone rest of list |
 dropFirst : List elem -> Result { first: elem, others : List elem } [ ListWasEmpty ]*
 
-## Drops the given number of elements from the end of the list.
+## Returns the given number of elements from the beginning of the list.
 ##
-## Returns a new list without the dropped elements.
+## >>> List.takeFirst 4 [ 1, 2, 3, 4, 5, 6, 7, 8 ]
 ##
-## To remove elements from a list while also returning a list of the removed
-## elements, use #List.split.
+## If there are fewer elements in the list than the requested number,
+## returns the entire list.
 ##
-## To remove elements from the beginning of the list, use #List.dropFromFront.
+## >>> List.takeFirst 5 [ 1, 2 ]
+##
+## To *remove* elements from the beginning of the list, use #List.takeLast.
+##
+## To remove elements from both the beginning and end of the list,
+## use #List.sublist.
+##
+## To split the list into two lists, use #List.split.
 ##
 ## ## Performance Details
 ##
-## When given a Unique list, this runs extremely fast. It subtracts the given
-## number from the list's length (down to a minimum of 0) in-place, and that's it.
+## When given a Unique list, this runs extremely fast. It sets the list's length
+## to the given length value, and frees the leftover elements. This runs very
+## slightly faster than #List.takeLast.
 ##
-## In fact, `List.drop 1 list` runs faster than `List.dropLast list` when given
-## a Unique list, because #List.dropLast returns the element it dropped -
+## In fact, `List.takeFirst 1 list` runs faster than `List.first list` when given
+## a Unique list, because #List.first returns the first element as well -
 ## which introduces a conditional bounds check as well as a memory load.
-drop : List elem, Len -> List elem
+takeFirst : List elem, Len -> List elem
 
-## Drops the given number of elements from the front of the list.
+## Returns the given number of elements from the end of the list.
 ##
-## Returns a new list without the dropped elements.
+## >>> List.takeLast 4 [ 1, 2, 3, 4, 5, 6, 7, 8 ]
 ##
-## To remove elements from a list while also returning a list of the removed
-## elements, use #List.split.
+## If there are fewer elements in the list than the requested number,
+## returns the entire list.
+##
+## >>> List.takeLast 5 [ 1, 2 ]
+##
+## To *remove* elements from the end of the list, use #List.takeFirst.
+##
+## To remove elements from both the beginning and end of the list,
+## use #List.sublist.
+##
+## To split the list into two lists, use #List.split.
 ##
 ## ## Performance Details
 ##
-## When given a Unique list, this runs extremely fast. It subtracts the given
-## number from the list's length (down to a minimum of 0) in-place, and that's it.
+## When given a Unique list, this runs extremely fast. It moves the list's
+## pointer to the index at the given length value, updates its length,
+## and frees the leftover elements. This runs very nearly as fast as
+## #List.takeFirst on a Unique list.
 ##
-## In fact, `List.drop 1 list` runs faster than `List.dropLast list` when given
-## a Unique list, because #List.dropLast returns the element it dropped -
+## In fact, `List.takeLast 1 list` runs faster than `List.first list` when given
+## a Unique list, because #List.first returns the first element as well -
 ## which introduces a conditional bounds check as well as a memory load.
-dropFromFront : List elem, Len -> List elem
+takeLast : List elem, Len -> List elem
 
 ## Deconstruct
 
@@ -484,6 +492,23 @@ dropFromFront : List elem, Len -> List elem
 ## means if you give an index of 0, the `before` list will be empty and the
 ## `others` list will have the same elements as the original list.)
 split : List elem, Len -> { before: List elem, others: List elem }
+
+## Returns a subsection of the given list, beginning at the `start` index and
+## including a total of `len` elements.
+##
+## If `start` is outside the bounds of the given list, returns the empty list.
+##
+## >>> List.sublist { start: 4, len: 0 } [ 1, 2, 3 ]
+##
+## If more elements are requested than exist in the list, returns as many as it can.
+##
+## >>> List.sublist { start: 2, len: 10 } [ 1, 2, 3, 4, 5 ]
+##
+## > If you want a sublist which goes all the way to the end of the list, no
+## > matter how long the list is, #List.takeLast can do that more efficiently.
+##
+## Some languages have a function called **`slice`** which works similarly to this.
+sublist : List elem, { start : Len, len : Len } -> List elem
 
 ## Build a value using each element in the list.
 ##
