@@ -13,10 +13,20 @@ pub const TYPE_NUM: &str = "Num";
 pub const TYPE_INTEGER: &str = "Integer";
 pub const TYPE_FLOATINGPOINT: &str = "FloatingPoint";
 
+///
+/// Intuitively
+///
+/// - Demanded: only introduced by pattern matches, e.g. { x } ->
+///     Cannot unify with an Optional field, but can unify with a Required field
+/// - Required: introduced by record literals and type annotations.
+///     Can unify with Optional and Demanded
+/// - Optional: introduced by pattern matches and annotations.
+///     Can unify with Required, but not with Demanded
 #[derive(PartialEq, Eq, Clone)]
 pub enum RecordField<T> {
     Optional(T),
     Required(T),
+    Demanded(T),
 }
 
 impl<T: Copy> Copy for RecordField<T> {}
@@ -26,8 +36,9 @@ impl<T: fmt::Debug> fmt::Debug for RecordField<T> {
         use RecordField::*;
 
         match self {
-            Optional(typ) => typ.fmt(f),
-            Required(typ) => typ.fmt(f),
+            Optional(typ) => write!(f, "Optional({:?})", typ),
+            Required(typ) => write!(f, "Required({:?})", typ),
+            Demanded(typ) => write!(f, "Demanded({:?})", typ),
         }
     }
 }
@@ -39,6 +50,7 @@ impl<T> RecordField<T> {
         match self {
             Optional(t) => t,
             Required(t) => t,
+            Demanded(t) => t,
         }
     }
 
@@ -50,6 +62,7 @@ impl<T> RecordField<T> {
         match self {
             Optional(t) => Optional(f(t)),
             Required(t) => Required(f(t)),
+            Demanded(t) => Demanded(f(t)),
         }
     }
 }
@@ -61,6 +74,7 @@ impl RecordField<Type> {
         match self {
             Optional(typ) => typ.substitute(substitutions),
             Required(typ) => typ.substitute(substitutions),
+            Demanded(typ) => typ.substitute(substitutions),
         }
     }
 
@@ -70,6 +84,7 @@ impl RecordField<Type> {
         match self {
             Optional(typ) => typ.substitute_alias(rep_symbol, actual),
             Required(typ) => typ.substitute_alias(rep_symbol, actual),
+            Demanded(typ) => typ.substitute_alias(rep_symbol, actual),
         }
     }
 
@@ -85,6 +100,7 @@ impl RecordField<Type> {
         match self {
             Optional(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
             Required(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
+            Demanded(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
         }
     }
 
@@ -94,6 +110,7 @@ impl RecordField<Type> {
         match self {
             Optional(typ) => typ.contains_symbol(rep_symbol),
             Required(typ) => typ.contains_symbol(rep_symbol),
+            Demanded(typ) => typ.contains_symbol(rep_symbol),
         }
     }
     pub fn contains_variable(&self, rep_variable: Variable) -> bool {
@@ -102,6 +119,7 @@ impl RecordField<Type> {
         match self {
             Optional(typ) => typ.contains_variable(rep_variable),
             Required(typ) => typ.contains_variable(rep_variable),
+            Demanded(typ) => typ.contains_variable(rep_variable),
         }
     }
 }
@@ -187,7 +205,11 @@ impl fmt::Debug for Type {
                 let mut any_written_yet = false;
 
                 for (label, field_type) in fields {
-                    write!(f, "{:?} : {:?}", label, field_type)?;
+                    match field_type {
+                        RecordField::Optional(_) => write!(f, "{:?} ? {:?}", label, field_type)?,
+                        RecordField::Required(_) => write!(f, "{:?} : {:?}", label, field_type)?,
+                        RecordField::Demanded(_) => write!(f, "{:?} : {:?}", label, field_type)?,
+                    }
 
                     if any_written_yet {
                         write!(f, ", ")?;
@@ -714,6 +736,7 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
                 match field {
                     Optional(arg) => symbols_help(arg, accum),
                     Required(arg) => symbols_help(arg, accum),
+                    Demanded(arg) => symbols_help(arg, accum),
                 }
             });
         }
@@ -756,6 +779,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                 match field {
                     Optional(x) => variables_help(x, accum),
                     Required(x) => variables_help(x, accum),
+                    Demanded(x) => variables_help(x, accum),
                 };
             }
             variables_help(ext, accum);
@@ -843,6 +867,7 @@ pub enum PReason {
         index: Index,
     },
     PatternGuard,
+    OptionalField,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -922,6 +947,7 @@ pub enum PatternCategory {
     Record,
     EmptyRecord,
     PatternGuard,
+    PatternDefault,
     Set,
     Map,
     Ctor(TagName),
@@ -1103,6 +1129,10 @@ fn write_error_type_help(
                         buf.push_str(" : ");
                         content
                     }
+                    Demanded(content) => {
+                        buf.push_str(" : ");
+                        content
+                    }
                 };
 
                 write_error_type_help(home, interns, content, buf, Parens::Unnecessary);
@@ -1240,6 +1270,10 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                         content
                     }
                     Required(content) => {
+                        buf.push_str(" : ");
+                        content
+                    }
+                    Demanded(content) => {
                         buf.push_str(" : ");
                         content
                     }

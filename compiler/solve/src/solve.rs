@@ -620,6 +620,7 @@ fn type_to_variable(
                 let field_var = match field_type {
                     Required(typ) => Required(type_to_variable(subs, rank, pools, cached, typ)),
                     Optional(typ) => Optional(type_to_variable(subs, rank, pools, cached, typ)),
+                    Demanded(typ) => Demanded(type_to_variable(subs, rank, pools, cached, typ)),
                 };
 
                 field_vars.insert(field.clone(), field_var);
@@ -1257,6 +1258,9 @@ fn deep_copy_var_help(
                         use RecordField::*;
 
                         let new_field = match field {
+                            Demanded(var) => {
+                                Demanded(deep_copy_var_help(subs, max_rank, pools, var))
+                            }
                             Required(var) => {
                                 Required(deep_copy_var_help(subs, max_rank, pools, var))
                             }

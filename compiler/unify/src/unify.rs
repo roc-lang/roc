@@ -327,13 +327,24 @@ fn unify_shared_fields(
     let num_shared_fields = shared_fields.len();
 
     for (name, (actual, expected)) in shared_fields {
-        let problems = unify_pool(subs, pool, actual.into_inner(), expected.into_inner());
+        let local_problems = unify_pool(subs, pool, actual.into_inner(), expected.into_inner());
 
-        if problems.is_empty() {
+        if local_problems.is_empty() {
             use RecordField::*;
 
-            // If either field is Required, both are Required.
+            // Unification of optional fields
+            //
+            // Demanded does not unify with Optional
+            // Unifying Required with Demanded => Demanded
+            // Unifying Optional with Required => Required
+            // Unifying X with X => X
             let actual = match (actual, expected) {
+                (Demanded(_), Optional(_)) | (Optional(_), Demanded(_)) => {
+                    continue;
+                }
+                (Demanded(val), Required(_))
+                | (Required(val), Demanded(_))
+                | (Demanded(val), Demanded(_)) => Demanded(val),
                 (Required(val), Required(_)) => Required(val),
                 (Required(val), Optional(_)) => Required(val),
                 (Optional(val), Required(_)) => Required(val),
@@ -614,13 +625,14 @@ fn unify_shared_tags(
     }
 }
 
-fn has_no_required_fields<'a, I, T>(fields: &mut I) -> bool
+fn has_only_optional_fields<'a, I, T>(fields: &mut I) -> bool
 where
     I: Iterator<Item = &'a RecordField<T>>,
     T: 'a,
 {
     fields.all(|field| match field {
         RecordField::Required(_) => false,
+        RecordField::Demanded(_) => false,
         RecordField::Optional(_) => true,
     })
 }
@@ -638,11 +650,11 @@ fn unify_flat_type(
     match (left, right) {
         (EmptyRecord, EmptyRecord) => merge(subs, ctx, Structure(left.clone())),
 
-        (Record(fields, ext), EmptyRecord) if has_no_required_fields(&mut fields.values()) => {
+        (Record(fields, ext), EmptyRecord) if has_only_optional_fields(&mut fields.values()) => {
             unify_pool(subs, pool, *ext, ctx.second)
         }
 
-        (EmptyRecord, Record(fields, ext)) if has_no_required_fields(&mut fields.values()) => {
+        (EmptyRecord, Record(fields, ext)) if has_only_optional_fields(&mut fields.values()) => {
             unify_pool(subs, pool, ctx.first, *ext)
         }
 

@@ -619,7 +619,7 @@ pub fn constrain_expr(
             let mut rec_field_types = SendMap::default();
 
             let label = field.clone();
-            rec_field_types.insert(label, RecordField::Required(field_type.clone()));
+            rec_field_types.insert(label, RecordField::Demanded(field_type.clone()));
 
             let record_type = Type::Record(rec_field_types, Box::new(ext_type));
             let record_expected = Expected::NoExpectation(record_type);
@@ -665,7 +665,7 @@ pub fn constrain_expr(
 
             let mut field_types = SendMap::default();
             let label = field.clone();
-            field_types.insert(label, RecordField::Required(field_type.clone()));
+            field_types.insert(label, RecordField::Demanded(field_type.clone()));
             let record_type = Type::Record(field_types, Box::new(ext_type));
 
             let category = Category::Accessor(field.clone());
@@ -1031,7 +1031,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                 (
                     Closure(fn_var, _symbol, _recursive, args, boxed),
                     Type::Function(arg_types, _),
-                ) if true => {
+                ) => {
                     let expected = annotation_expected;
                     let region = def.loc_expr.region;
 

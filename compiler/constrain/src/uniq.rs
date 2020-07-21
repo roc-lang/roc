@@ -259,7 +259,7 @@ fn constrain_pattern(
                             expected,
                         );
 
-                        RecordField::Required(pat_type)
+                        RecordField::Demanded(pat_type)
                     }
                     DestructType::Optional(expr_var, loc_expr) => {
                         let expr_expected = Expected::ForReason(
@@ -292,7 +292,7 @@ fn constrain_pattern(
                     }
                     DestructType::Required => {
                         // No extra constraints necessary.
-                        RecordField::Required(pat_type)
+                        RecordField::Demanded(pat_type)
                     }
                 };
 
@@ -1364,7 +1364,7 @@ pub fn constrain_expr(
             let field_uniq_type = Bool::variable(field_uniq_var);
             let field_type = attr_type(field_uniq_type, Type::Variable(*field_var));
 
-            field_types.insert(field.clone(), RecordField::Required(field_type.clone()));
+            field_types.insert(field.clone(), RecordField::Demanded(field_type.clone()));
 
             let record_uniq_var = var_store.fresh();
             let record_uniq_type = Bool::container(record_uniq_var, vec![field_uniq_var]);
@@ -1421,7 +1421,7 @@ pub fn constrain_expr(
             let field_uniq_type = Bool::variable(field_uniq_var);
             let field_type = attr_type(field_uniq_type, Type::Variable(*field_var));
 
-            field_types.insert(field.clone(), RecordField::Required(field_type.clone()));
+            field_types.insert(field.clone(), RecordField::Demanded(field_type.clone()));
 
             let record_uniq_var = var_store.fresh();
             let record_uniq_type = Bool::container(record_uniq_var, vec![field_uniq_var]);
@@ -1916,6 +1916,14 @@ fn annotation_to_attr_type(
                 use RecordField::*;
 
                 let lifted_field = match field {
+                    Demanded(tipe) => {
+                        let (new_vars, lifted_field) =
+                            annotation_to_attr_type(var_store, &tipe, rigids, change_var_kind);
+
+                        vars.extend(new_vars);
+
+                        Demanded(lifted_field)
+                    }
                     Required(tipe) => {
                         let (new_vars, lifted_field) =
                             annotation_to_attr_type(var_store, &tipe, rigids, change_var_kind);
@@ -2542,6 +2550,7 @@ fn fix_mutual_recursive_alias_help_help(rec_var: Variable, attribute: &Type, int
                 let arg = match field {
                     RecordField::Required(arg) => arg,
                     RecordField::Optional(arg) => arg,
+                    RecordField::Demanded(arg) => arg,
                 };
 
                 fix_mutual_recursive_alias_help(rec_var, attribute, arg);

@@ -2669,4 +2669,20 @@ mod solve_expr {
             "{ x : Num a, y ? Num a }* -> Num a",
         );
     }
+
+    #[test]
+    fn optional_field_let_with_signature() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                \rec ->
+                    { x, y } : { x : Int, y ? Bool }*
+                    { x, y ? False } = rec
+
+                    { x, y }
+                "#
+            ),
+            "{ x : Int, y ? Bool }* -> { x : Int, y : Bool }",
+        );
+    }
 }

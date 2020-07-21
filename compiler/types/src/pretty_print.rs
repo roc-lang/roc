@@ -416,6 +416,10 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                             buf.push_str(" : ");
                             var
                         }
+                        Demanded(var) => {
+                            buf.push_str(" : ");
+                            var
+                        }
                     };
 
                     write_content(
