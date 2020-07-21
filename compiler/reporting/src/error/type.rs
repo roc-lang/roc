@@ -953,6 +953,45 @@ fn to_pattern_report<'b>(
         }
 
         PExpected::ForReason(reason, expected_type, region) => match reason {
+            PReason::TypedArg { opt_name, index } => {
+                let name = match opt_name {
+                    Some(n) => alloc.symbol_unqualified(n),
+                    None => alloc.text(" this definition "),
+                };
+                let doc = alloc.stack(vec![
+                    alloc
+                        .text("The ")
+                        .append(alloc.text(index.ordinal()))
+                        .append(alloc.text(" argument to "))
+                        .append(name.clone())
+                        .append(alloc.text(" is weird:")),
+                    alloc.region(region),
+                    pattern_type_comparision(
+                        alloc,
+                        found,
+                        expected_type,
+                        add_pattern_category(
+                            alloc,
+                            alloc.text("The argument is a pattern that matches"),
+                            &category,
+                        ),
+                        alloc.concat(vec![
+                            alloc.text("But the annotation on "),
+                            name,
+                            alloc.text(" says the "),
+                            alloc.text(index.ordinal()),
+                            alloc.text(" argument should be:"),
+                        ]),
+                        vec![],
+                    ),
+                ]);
+
+                Report {
+                    filename,
+                    title: "TYPE MISMATCH".to_string(),
+                    doc,
+                }
+            }
             PReason::WhenMatch { index } => {
                 if index == Index::FIRST {
                     let doc = alloc.stack(vec![
@@ -1295,10 +1334,17 @@ pub fn to_doc<'b>(
                 alloc,
                 fields
                     .into_iter()
-                    .map(|(k, v)| {
+                    .map(|(k, value)| {
                         (
                             alloc.string(k.as_str().to_string()),
-                            to_doc(alloc, Parens::Unnecessary, v.into_inner()),
+                            match value {
+                                RecordField::Optional(v) => {
+                                    RecordField::Optional(to_doc(alloc, Parens::Unnecessary, v))
+                                }
+                                RecordField::Required(v) => {
+                                    RecordField::Required(to_doc(alloc, Parens::Unnecessary, v))
+                                }
+                            },
                         )
                     })
                     .collect(),
@@ -1594,12 +1640,18 @@ fn diff_record<'b>(
                 left: (
                     field.clone(),
                     alloc.string(field.as_str().to_string()),
-                    diff.left,
+                    match t1 {
+                        RecordField::Optional(_) => RecordField::Optional(diff.left),
+                        RecordField::Required(_) => RecordField::Required(diff.left),
+                    },
                 ),
                 right: (
                     field.clone(),
                     alloc.string(field.as_str().to_string()),
-                    diff.right,
+                    match t2 {
+                        RecordField::Optional(_) => RecordField::Optional(diff.right),
+                        RecordField::Required(_) => RecordField::Required(diff.right),
+                    },
                 ),
                 status: diff.status,
             }
@@ -1608,7 +1660,7 @@ fn diff_record<'b>(
         (
             field.clone(),
             alloc.string(field.as_str().to_string()),
-            to_doc(alloc, Parens::Unnecessary, tipe.clone().into_inner()),
+            tipe.map(|t| to_doc(alloc, Parens::Unnecessary, t.clone())),
         )
     };
     let shared_keys = fields1
@@ -1661,11 +1713,12 @@ fn diff_record<'b>(
 
     let ext_diff = ext_to_diff(alloc, ext1, ext2);
 
-    let mut fields_diff: Diff<Vec<(Lowercase, RocDocBuilder<'b>, RocDocBuilder<'b>)>> = Diff {
-        left: vec![],
-        right: vec![],
-        status: Status::Similar,
-    };
+    let mut fields_diff: Diff<Vec<(Lowercase, RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)>> =
+        Diff {
+            left: vec![],
+            right: vec![],
+            status: Status::Similar,
+        };
 
     for diff in both {
         fields_diff.left.push(diff.left);
@@ -1938,7 +1991,7 @@ mod report_text {
 
     pub fn record<'b>(
         alloc: &'b RocDocAllocator<'b>,
-        entries: Vec<(RocDocBuilder<'b>, RocDocBuilder<'b>)>,
+        entries: Vec<(RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)>,
         opt_ext: Option<RocDocBuilder<'b>>,
     ) -> RocDocBuilder<'b> {
         let ext_doc = if let Some(t) = opt_ext {
@@ -1951,8 +2004,15 @@ mod report_text {
             alloc.text("{}").append(ext_doc)
         } else {
             let entry_to_doc =
-                |(field_name, field_type): (RocDocBuilder<'b>, RocDocBuilder<'b>)| {
-                    field_name.append(alloc.text(" : ")).append(field_type)
+                |(field_name, field_type): (RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)| {
+                    match field_type {
+                        RecordField::Required(field) => {
+                            field_name.append(alloc.text(" : ")).append(field)
+                        }
+                        RecordField::Optional(field) => {
+                            field_name.append(alloc.text(" ? ")).append(field)
+                        }
+                    }
                 };
 
             let starts =

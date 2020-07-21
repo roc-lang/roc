@@ -322,7 +322,7 @@ pub enum Pattern<'a> {
 
     /// An optional field pattern, e.g. { x ? Just 0 } -> ...
     /// Can only occur inside of a RecordDestructure
-    OptionalField(&'a str, &'a Loc<Pattern<'a>>),
+    OptionalField(&'a str, &'a Loc<Expr<'a>>),
 
     /// This is used only to avoid cloning when reordering expressions (e.g. in desugar()).
     /// It lets us take an (&Expr) and create a plain (Expr) from it.
@@ -428,8 +428,21 @@ impl<'a> Pattern<'a> {
             (RequiredField(x, inner_x), RequiredField(y, inner_y)) => {
                 x == y && inner_x.value.equivalent(&inner_y.value)
             }
-            (OptionalField(x, inner_x), OptionalField(y, inner_y)) => {
-                x == y && inner_x.value.equivalent(&inner_y.value)
+            (OptionalField(x, _inner_x), OptionalField(y, _inner_y)) => {
+                x == y
+                // TODO
+                //
+                // We can give an annotation like so
+                //
+                // { x, y } : { x : Int, y : Bool }
+                // { x, y } = rec
+                //
+                // But what about:
+                //
+                // { x, y ? False } : { x : Int, y ? Bool }
+                // { x, y ? False } = rec
+                //
+                // inner_x.value.equivalent(&inner_y.value)
             }
             (Nested(x), Nested(y)) => x.equivalent(y),
 

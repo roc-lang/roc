@@ -1630,6 +1630,21 @@ mod test_reporting {
 
     #[test]
     fn bad_double_rigid() {
+        // this previously reported the message below, not sure which is better
+        //
+        //                Something is off with the body of the `f` definition:
+        //
+        //                1 ┆  f : a, b -> a
+        //                2 ┆  f = \x, y -> if True then x else y
+        //                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        //
+        //                The body is an anonymous function of type:
+        //
+        //                    a, a -> a
+        //
+        //                But the type annotation on `f` says it should be:
+        //
+        //                    a, b -> a
         report_problem_as(
             indoc!(
                 r#"
@@ -1643,21 +1658,22 @@ mod test_reporting {
                 r#"
                 -- TYPE MISMATCH ---------------------------------------------------------------
 
-                Something is off with the body of the `f` definition:
+                This `if` has an `else` branch with a different type from its `then` branch:
 
-                1 ┆  f : a, b -> a
                 2 ┆  f = \x, y -> if True then x else y
-                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                  ┆                                   ^
 
-                The body is an anonymous function of type:
+                This `y` value is a:
 
-                    a, a -> a
+                    b
 
-                But the type annotation on `f` says it should be:
+                but the `then` branch has the type:
 
-                    a, b -> a
+                    a
 
-                Hint: Your type annotation uses `a` and `b` as separate type variables.
+                I need all branches in an `if` to have the same type!
+
+                Hint: Your type annotation uses `b` and `a` as separate type variables.
                 Your code seems to be saying they are the same though. Maybe they
                 should be the same your type annotation? Maybe your code uses them in
                 a weird way?
@@ -1958,27 +1974,17 @@ mod test_reporting {
                 r#"
                 -- TYPE MISMATCH ---------------------------------------------------------------
 
-                Something is off with the body of the `f` definition:
+                The `r` record does not have a `.foo` field:
 
-                1 ┆   f : { fo: Int }ext -> Int
-                2 ┆>  f = \r ->
-                3 ┆>      r2 = { r & foo: r.fo }
-                4 ┆>
-                5 ┆>      r2.fo
+                3 ┆      r2 = { r & foo: r.fo }
+                  ┆                 ^^^^^^^^^
 
-                The body is an anonymous function of type:
+                This is usually a typo. Here are the `r` fields that are most similar:
 
-                    { fo : Int, foo : Int }a -> Int
+                    { fo : Int
+                    }ext
 
-                But the type annotation on `f` says it should be:
-
-                    { fo : Int }ext -> Int
-
-                Hint: Seems like a record field typo. Maybe `foo` should be `fo`?
-
-                Hint: Can more type annotations be added? Type annotations always help
-                me give more specific messages, and I think they could help a lot in
-                this case
+                So maybe `.foo` should be `.fo`?
                 "#
             ),
         )
@@ -3112,13 +3118,13 @@ mod test_reporting {
                   ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 This `ACons` global tag application has the type:
-                
+
                     [ ACons (Num Integer) [ BCons (Num Integer) [ ACons Str [
                     BCons Int [ ACons Int (BList Int Int), ANil ] as a, BNil ], ANil
                     ], BNil ], ANil ]
 
                 But the type annotation on `x` says it should be:
-                
+
                     [ ACons Int (BList Int Int), ANil ] as a
                 "#
             ),
@@ -3452,6 +3458,142 @@ mod test_reporting {
                     Num
                     Map
                     Set
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn optional_record_default_type_error() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \{ x, y ? True } -> x + y
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                The 2nd argument to `add` is not what I expect:
+
+                1 ┆  \{ x, y ? True } -> x + y
+                  ┆                          ^
+
+                This `y` value is a:
+
+                    [ True ]a
+
+                But `add` needs the 2nd argument to be:
+
+                    Num a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn optional_record_default_with_signature() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { x : Int, y ? Int } -> Int
+                f = \{ x, y ? "foo" } -> (\g, _ -> g) x y
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                The 1st argument to `f` is weird:
+
+                2 ┆  f = \{ x, y ? "foo" } -> (\g, _ -> g) x y
+                  ┆       ^^^^^^^^^^^^^^^^
+
+                The argument is a pattern that matches record values of type:
+
+                    { x : Int, y ? Str }
+
+                But the annotation on `f` says the 1st argument should be:
+
+                    { x : Int, y ? Int }
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn guard_mismatch_with_annotation() {
+        // TODO improve this message
+        // The problem is the guard, and the message should point to that
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { x : Int, y : Int } -> Int
+                f = \r ->
+                        when r is
+                            { x, y : "foo" } -> x + 0
+                            _ -> 0
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                The 1st pattern in this `when` is causing a mismatch:
+
+                4 ┆              { x, y : "foo" } -> x + 0
+                  ┆              ^^^^^^^^^^^^^^^^
+
+                The first pattern is trying to match record values of type:
+
+                    { x : Int, y : Str }
+
+                But the expression between `when` and `is` has the type:
+
+                    { x : Int, y : Int }
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn optional_field_mismatch_with_annotation() {
+        // TODO improve this message
+        // The problem is the pattern match default
+        // the message should point to that.
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { x : Int, y ? Int } -> Int
+                f = \r ->
+                        when r is
+                            { x, y ? "foo" } -> (\g, _ -> g) x y
+                            _ -> 0
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                The 1st pattern in this `when` is causing a mismatch:
+
+                4 ┆              { x, y ? "foo" } -> (\g, _ -> g) x y
+                  ┆              ^^^^^^^^^^^^^^^^
+
+                The first pattern is trying to match record values of type:
+
+                    { x : Int, y ? Str }
+
+                But the expression between `when` and `is` has the type:
+
+                    { x : Int, y ? Int }
                 "#
             ),
         )

@@ -2629,4 +2629,44 @@ mod solve_expr {
             "{ a : { x : Num a, y : Float, z : c }, b : { blah : Str, x : Num a, y : Float, z : c } }",
         );
     }
+
+    #[test]
+    fn optional_field_function() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                \{ x, y ? 0 } -> x + y
+                "#
+            ),
+            "{ x : Num a, y ? Num a }* -> Num a",
+        );
+    }
+
+    #[test]
+    fn optional_field_let() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                { x, y ? 0 } = { x: 32 }
+
+                x + y
+                "#
+            ),
+            "Num *",
+        );
+    }
+
+    #[test]
+    fn optional_field_when() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                \r ->
+                    when r is
+                        { x, y ? 0 } -> x + y
+                "#
+            ),
+            "{ x : Num a, y ? Num a }* -> Num a",
+        );
+    }
 }

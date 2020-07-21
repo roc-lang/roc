@@ -144,7 +144,10 @@ pub struct PatternState {
 }
 
 fn constrain_pattern(
+    env: &Env,
     var_store: &mut VarStore,
+    var_usage: &VarUsage,
+    applied_usage_constraint: &mut ImSet<Symbol>,
     state: &mut PatternState,
     pattern: &Located<Pattern>,
     expected: PExpected<Type>,
@@ -246,14 +249,46 @@ fn constrain_pattern(
                             PExpected::NoExpectation(pat_type.clone()),
                         ));
                         state.vars.push(*guard_var);
-                        constrain_pattern(var_store, state, loc_guard, expected);
+                        constrain_pattern(
+                            env,
+                            var_store,
+                            var_usage,
+                            applied_usage_constraint,
+                            state,
+                            loc_guard,
+                            expected,
+                        );
 
                         RecordField::Required(pat_type)
                     }
-                    DestructType::Optional(_expr_var, _loc_expr) => {
-                        todo!("Add a constraint for the default value.");
+                    DestructType::Optional(expr_var, loc_expr) => {
+                        let expr_expected = Expected::ForReason(
+                            Reason::RecordDefaultField(label.clone()),
+                            pat_type.clone(),
+                            loc_expr.region,
+                        );
 
-                        // RecordField::Optional(pat_type)
+                        state.constraints.push(Constraint::Eq(
+                            Type::Variable(*expr_var),
+                            expr_expected.clone(),
+                            Category::DefaultValue(label.clone()),
+                            region,
+                        ));
+
+                        state.vars.push(*expr_var);
+
+                        let expr_con = constrain_expr(
+                            env,
+                            var_store,
+                            var_usage,
+                            applied_usage_constraint,
+                            loc_expr.region,
+                            &loc_expr.value,
+                            expr_expected,
+                        );
+                        state.constraints.push(expr_con);
+
+                        RecordField::Optional(pat_type)
                     }
                     DestructType::Required => {
                         // No extra constraints necessary.
@@ -317,7 +352,15 @@ fn constrain_pattern(
                 argument_types.push(pattern_type.clone());
 
                 let expected = PExpected::NoExpectation(pattern_type);
-                constrain_pattern(var_store, state, loc_pattern, expected);
+                constrain_pattern(
+                    env,
+                    var_store,
+                    var_usage,
+                    applied_usage_constraint,
+                    state,
+                    loc_pattern,
+                    expected,
+                );
             }
 
             let tag_union_uniq_type = {
@@ -673,7 +716,15 @@ pub fn constrain_expr(
 
                 pattern_types.push(pattern_type);
 
-                constrain_pattern(var_store, &mut state, loc_pattern, pattern_expected);
+                constrain_pattern(
+                    env,
+                    var_store,
+                    var_usage,
+                    applied_usage_constraint,
+                    &mut state,
+                    loc_pattern,
+                    pattern_expected,
+                );
 
                 vars.push(*pattern_var);
             }
@@ -1690,7 +1741,10 @@ fn constrain_when_branch(
     for loc_pattern in &when_branch.patterns {
         // mutates the state, so return value is not used
         constrain_pattern(
+            env,
             var_store,
+            var_usage,
+            applied_usage_constraint,
             &mut state,
             &loc_pattern,
             pattern_expected.clone(),
@@ -1743,7 +1797,10 @@ fn constrain_when_branch(
 }
 
 fn constrain_def_pattern(
+    env: &Env,
     var_store: &mut VarStore,
+    var_usage: &VarUsage,
+    applied_usage_constraint: &mut ImSet<Symbol>,
     loc_pattern: &Located<Pattern>,
     expr_type: Type,
 ) -> PatternState {
@@ -1757,7 +1814,15 @@ fn constrain_def_pattern(
         constraints: Vec::with_capacity(1),
     };
 
-    constrain_pattern(var_store, &mut state, loc_pattern, pattern_expected);
+    constrain_pattern(
+        env,
+        var_store,
+        var_usage,
+        applied_usage_constraint,
+        &mut state,
+        loc_pattern,
+        pattern_expected,
+    );
 
     state
 }
@@ -2042,7 +2107,14 @@ fn constrain_def(
     let expr_var = def.expr_var;
     let expr_type = Type::Variable(expr_var);
 
-    let mut pattern_state = constrain_def_pattern(var_store, &def.loc_pattern, expr_type.clone());
+    let mut pattern_state = constrain_def_pattern(
+        env,
+        var_store,
+        var_usage,
+        applied_usage_constraint,
+        &def.loc_pattern,
+        expr_type.clone(),
+    );
 
     pattern_state.vars.push(expr_var);
 
@@ -2236,7 +2308,10 @@ pub fn rec_defs_help(
         pattern_state.vars.push(expr_var);
 
         constrain_pattern(
+            env,
             var_store,
+            var_usage,
+            applied_usage_constraint,
             &mut pattern_state,
             &def.loc_pattern,
             pattern_expected,

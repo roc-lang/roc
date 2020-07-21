@@ -765,4 +765,30 @@ mod test_usage_analysis {
             },
         );
     }
+
+    #[test]
+    fn record_pattern_optional_fields() {
+        usage_eq(
+            indoc!(
+                r#"
+                a = 34
+
+                when r is
+                    { x, y ? a, z ? a } -> x + y + z
+               "#
+            ),
+            |interns| {
+                let mut usage = VarUsage::default();
+                let home = test_home();
+
+                usage.register_with(interns.symbol(home, "a".into()), &Simple(Shared));
+                usage.register_with(interns.symbol(home, "x".into()), &Simple(Seen));
+                usage.register_with(interns.symbol(home, "y".into()), &Simple(Seen));
+                usage.register_with(interns.symbol(home, "z".into()), &Simple(Seen));
+                usage.register_shared(Symbol::NUM_ADD);
+
+                usage
+            },
+        );
+    }
 }

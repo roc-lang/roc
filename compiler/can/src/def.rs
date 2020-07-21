@@ -148,7 +148,7 @@ pub fn canonicalize_defs<'a>(
         // Any time we have an Annotation followed immediately by a Body,
         // check to see if their patterns are equivalent. If they are,
         // turn it into a TypedBody. Otherwise, give an error.
-        let pending_def = match &loc_def.value {
+        let (new_output, pending_def) = match &loc_def.value {
             Annotation(pattern, annotation) | Nested(Annotation(pattern, annotation)) => {
                 match iter.peek() {
                     Some(Located {
@@ -189,6 +189,8 @@ pub fn canonicalize_defs<'a>(
             _ => to_pending_def(env, var_store, &loc_def.value, &mut scope, pattern_type),
         };
 
+        output.union(new_output);
+
         // Record the ast::Expr for later. We'll do another pass through these
         // once we have the entire scope assembled. If we were to canonicalize
         // the exprs right now, they wouldn't have symbols in scope from defs
@@ -212,8 +214,8 @@ pub fn canonicalize_defs<'a>(
 
                 let mut can_vars: Vec<Located<(Lowercase, Variable)>> =
                     Vec::with_capacity(vars.len());
-
                 let mut is_phantom = false;
+
                 for loc_lowercase in vars {
                     if let Some(var) = can_ann
                         .introduced_variables
@@ -1288,13 +1290,13 @@ fn to_pending_def<'a>(
     def: &'a ast::Def<'a>,
     scope: &mut Scope,
     pattern_type: PatternType,
-) -> PendingDef<'a> {
+) -> (Output, PendingDef<'a>) {
     use roc_parse::ast::Def::*;
 
     match def {
         Annotation(loc_pattern, loc_ann) => {
             // This takes care of checking for shadowing and adding idents to scope.
-            let loc_can_pattern = canonicalize_pattern(
+            let (output, loc_can_pattern) = canonicalize_pattern(
                 env,
                 var_store,
                 scope,
@@ -1303,11 +1305,14 @@ fn to_pending_def<'a>(
                 loc_pattern.region,
             );
 
-            PendingDef::AnnotationOnly(loc_pattern, loc_can_pattern, loc_ann)
+            (
+                output,
+                PendingDef::AnnotationOnly(loc_pattern, loc_can_pattern, loc_ann),
+            )
         }
         Body(loc_pattern, loc_expr) => {
             // This takes care of checking for shadowing and adding idents to scope.
-            let loc_can_pattern = canonicalize_pattern(
+            let (output, loc_can_pattern) = canonicalize_pattern(
                 env,
                 var_store,
                 scope,
@@ -1316,7 +1321,10 @@ fn to_pending_def<'a>(
                 loc_pattern.region,
             );
 
-            PendingDef::Body(loc_pattern, loc_can_pattern, loc_expr)
+            (
+                output,
+                PendingDef::Body(loc_pattern, loc_can_pattern, loc_expr),
+            )
         }
         TypedBody(loc_pattern, loc_ann, loc_expr) => pending_typed_body(
             env,
@@ -1358,19 +1366,22 @@ fn to_pending_def<'a>(
                                     region: loc_var.region,
                                 });
 
-                                return PendingDef::InvalidAlias;
+                                return (Output::default(), PendingDef::InvalidAlias);
                             }
                         }
                     }
 
-                    PendingDef::Alias {
-                        name: Located {
-                            region: name.region,
-                            value: symbol,
+                    (
+                        Output::default(),
+                        PendingDef::Alias {
+                            name: Located {
+                                region: name.region,
+                                value: symbol,
+                            },
+                            vars: can_rigids,
+                            ann,
                         },
-                        vars: can_rigids,
-                        ann,
-                    }
+                    )
                 }
 
                 Err((original_region, loc_shadowed_symbol)) => {
@@ -1379,7 +1390,7 @@ fn to_pending_def<'a>(
                         shadow: loc_shadowed_symbol,
                     });
 
-                    PendingDef::InvalidAlias
+                    (Output::default(), PendingDef::InvalidAlias)
                 }
             }
         }
@@ -1398,9 +1409,9 @@ fn pending_typed_body<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     pattern_type: PatternType,
-) -> PendingDef<'a> {
+) -> (Output, PendingDef<'a>) {
     // This takes care of checking for shadowing and adding idents to scope.
-    let loc_can_pattern = canonicalize_pattern(
+    let (output, loc_can_pattern) = canonicalize_pattern(
         env,
         var_store,
         scope,
@@ -1409,7 +1420,10 @@ fn pending_typed_body<'a>(
         loc_pattern.region,
     );
 
-    PendingDef::TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr)
+    (
+        output,
+        PendingDef::TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr),
+    )
 }
 
 /// Make aliases recursive
