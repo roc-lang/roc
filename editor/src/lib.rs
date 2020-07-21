@@ -151,7 +151,6 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
             } => {
                 if let Some(virtual_keycode) = input.virtual_keycode {
                     handle_keydown(
-                        &mut text_state,
                         input.state,
                         virtual_keycode,
                         keyboard_modifiers,
@@ -226,7 +225,6 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 }
 
 fn handle_keydown(
-    text_state: &mut String,
     elem_state: ElementState,
     virtual_keycode: VirtualKeyCode,
     _modifiers: ModifiersState,
