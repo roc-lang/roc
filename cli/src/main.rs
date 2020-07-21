@@ -2,9 +2,9 @@
 extern crate clap;
 
 use bumpalo::Bump;
+use roc_build::program::gen;
 use roc_collections::all::MutMap;
 use roc_gen::llvm::build::OptLevel;
-use roc_build::program::gen;
 use roc_load::file::LoadingProblem;
 use std::time::SystemTime;
 
