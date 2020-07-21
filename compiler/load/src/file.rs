@@ -16,6 +16,7 @@ use roc_parse::parser::{Fail, Parser, State};
 use roc_region::all::{Located, Region};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
+use roc_mono::layout::LayoutCache;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
 use std::collections::{HashMap, HashSet};
@@ -85,6 +86,8 @@ enum Msg {
         solved_module: SolvedModule,
         solved_subs: Arc<Solved<Subs>>,
     },
+    PendingSpecializationsDone,
+    Specialized,
 }
 
 #[derive(Debug)]
@@ -104,6 +107,13 @@ pub enum LoadingProblem {
 enum MaybeShared<'a, 'b, A, B> {
     Shared(Arc<Mutex<A>>, Arc<Mutex<B>>),
     Unique(&'a mut A, &'b mut B),
+}
+
+pub enum Phases {
+    /// Parse, canonicalize, check types
+    TypeCheck, 
+    /// Parse, canonicalize, check types, monomorphize
+    Monomorphize
 }
 
 type SharedModules<'a, 'b> = MaybeShared<'a, 'b, ModuleIds, IdentIdsByModule>;
@@ -161,9 +171,20 @@ pub async fn load<'a>(
     src_dir: PathBuf,
     filename: PathBuf,
     mut exposed_types: SubsByModule,
+    phases: Phases
 ) -> Result<LoadedModule, LoadingProblem> {
     use self::MaybeShared::*;
 
+    // Initialize the need to specialize based on whether we're going all the
+    // way to that phase. This is mut because we switch it off after we're
+    // done specializing, and that indicates that all the pending specializations
+    // have been at least enqueued (even if they haven't all been specialized yet.)
+    let mut pending_specializations_needed = match phases {
+        Phases::TypeCheck => false,
+        Phases::Monomorphize => true,
+    };
+    let mut specializations_in_flight: u32 = 0;
+    let arena = Bump::new();
     let mut type_problems = Vec::new();
     let mut can_problems = Vec::new();
     let env = Env {
@@ -225,6 +246,22 @@ pub async fn load<'a>(
     // and remove that ModuleId from the appropriate waiting_for_solve entry.
     // If the relevant module's waiting_for_solve entry is now empty, solve the module.
     let mut solve_listeners: MutMap<ModuleId, Vec<ModuleId>> = MutMap::default();
+
+    // These are the modules which need to add their pending specializations to
+    // the queue. Adding specializations to the queue can be done completely in
+    // parallel, and order doesn't matter, so as soon as a module has been solved,
+    // it gets an entry in here, and then immediately begins working on its
+    // pending specializations in the same thread.
+    let mut needs_specialization: MutSet<ModuleId> = MutSet::default();
+
+    let mut all_pending_specializations: MutMap<(Symbol, Layout<'_>), PendingSpecialization> = MutMap::default();
+
+    // Each thread gets its own layout cache. When one "pending specializations"
+    // pass completes, it returns its layout cache so another thread can use it.
+    // We don't bother trying to union them all together to maximize cache hits,
+    // since the unioning process could potentially take longer than the savings.
+    // (Granted, this has not been attempted or measured!)
+    let mut layout_caches = bumpalo::collections::Vec::with_capacity_in(num_cpus::get(), &arena);
 
     #[allow(clippy::type_complexity)]
     let mut unsolved_modules: MutMap<
@@ -424,37 +461,46 @@ pub async fn load<'a>(
                 type_problems.extend(solved_module.problems);
 
                 if module_id == root_id {
-                    // Once we've solved the originally requested module, we're done!
-                    msg_rx.close();
+                    if !pending_specializations_needed {
+                        // If we don't need to specialize at this point, it's
+                        // because we aren't supposed to go past type-checking.
+                        // 
+                        // As far as type-checking goes, once we've solved 
+                        // the originally requested module, we're all done!
+                        msg_rx.close();
 
-                    let solved = Arc::try_unwrap(solved_subs).unwrap_or_else(|_| {
-                        panic!("There were still outstanding Arc references to Solved<Subs>")
-                    });
+                        let solved = Arc::try_unwrap(solved_subs).unwrap_or_else(|_| {
+                            panic!("There were still outstanding Arc references to Solved<Subs>")
+                        });
 
-                    let module_ids = Arc::try_unwrap(arc_modules)
-                        .unwrap_or_else(|_| {
-                            panic!("There were still outstanding Arc references to module_ids")
-                        })
-                        .into_inner()
-                        .expect("Unwrapping mutex for module_ids");
+                        let module_ids = Arc::try_unwrap(arc_modules)
+                            .unwrap_or_else(|_| {
+                                panic!("There were still outstanding Arc references to module_ids")
+                            })
+                            .into_inner()
+                            .expect("Unwrapping mutex for module_ids");
 
-                    let interns = Interns {
-                        module_ids,
-                        all_ident_ids: constrained_ident_ids,
-                    };
+                        let interns = Interns {
+                            module_ids,
+                            all_ident_ids: constrained_ident_ids,
+                        };
 
-                    return Ok(LoadedModule {
-                        module_id: root_id,
-                        interns,
-                        solved,
-                        can_problems,
-                        type_problems,
-                        declarations_by_id,
-                        exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
-                        src,
-                    });
+                        // Return early because we're now completely finished.
+                        // No further work needs to be done.
+                        return Ok(LoadedModule {
+                            module_id: root_id,
+                            interns,
+                            solved,
+                            can_problems,
+                            type_problems,
+                            declarations_by_id,
+                            exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
+                            src,
+                        });
+                    }
                 } else {
-                    // This was a dependency. Write it down and keep processing messages.
+                    // This was not the root module, but rather a dependency. 
+                    // Write it down and keep processing messages.
                     debug_assert!(!exposed_types.contains_key(&module_id));
                     exposed_types.insert(
                         module_id,
@@ -463,38 +509,158 @@ pub async fn load<'a>(
                             solved_module.aliases,
                         ),
                     );
+                }
 
-                    // Notify all the listeners that this solved.
-                    if let Some(listeners) = solve_listeners.remove(&module_id) {
-                        for listener_id in listeners {
-                            // This listener is longer waiting for this module,
-                            // because this module has now been solved!
-                            let waiting_for = waiting_for_solve
-                                .get_mut(&listener_id)
-                                .expect("Unable to find module ID in waiting_for_solve");
+                // If we're specializing, record that this module needs
+                // specialization. After we fire its listeners, we'll start 
+                // working on assembling its pending specializations.
+                if pending_specializations_needed {
+                    needs_specialization.insert(module_id);
+                }
 
-                            waiting_for.remove(&module_id);
+                // Notify all the listeners that this solved.
+                if let Some(listeners) = solve_listeners.remove(&module_id) {
+                    for listener_id in listeners {
+                        // This listener is longer waiting for this module,
+                        // because this module has now been solved!
+                        let waiting_for = waiting_for_solve
+                            .get_mut(&listener_id)
+                            .expect("Unable to find module ID in waiting_for_solve");
 
-                            // If it's no longer waiting for anything else, solve it.
-                            if waiting_for.is_empty() {
-                                let (module, src, imported_modules, constraint, var_store) =
-                                    unsolved_modules
-                                        .remove(&listener_id)
-                                        .expect("Could not find listener ID in unsolved_modules");
+                        waiting_for.remove(&module_id);
 
-                                spawn_solve_module(
-                                    module,
-                                    src,
-                                    constraint,
-                                    var_store,
-                                    imported_modules,
-                                    msg_tx.clone(),
-                                    &mut exposed_types,
-                                    stdlib,
-                                );
-                            }
+                        // If it's no longer waiting for anything else, solve it.
+                        if waiting_for.is_empty() {
+                            let (module, src, imported_modules, constraint, var_store) =
+                                unsolved_modules
+                                    .remove(&listener_id)
+                                    .expect("Could not find listener ID in unsolved_modules");
+
+                            spawn_solve_module(
+                                module,
+                                src,
+                                constraint,
+                                var_store,
+                                imported_modules,
+                                msg_tx.clone(),
+                                &mut exposed_types,
+                                stdlib,
+                            );
                         }
                     }
+                }
+
+                // If we're specializing, now we need to start building all the
+                // pending specializations
+                if pending_specializations_needed {
+                    // Reuse an existing layout cache if possible, since
+                    // it may have useful entries in there!
+                    let layout_cache = layout_caches.pop().unwrap_or_default();
+
+                    spawn_build_pending_specializations(
+                        module
+                    );
+                }
+            }
+            PendingSpecializationsDone {
+                module_id,
+                layout_cache,
+                pending_specializations
+            } => {
+                if module_id == root_id  {
+                    // If we just finished pending specializations for the root, 
+                    // then these will be the last specializations that we need! 
+                    //
+                    // This means once the current queue of specializations has 
+                    // been completely processed, we're all done, so change this
+                    // flag so that when we get a Specialized message we know
+                    // it's okay to stop - rather than continuing to wait for
+                    // more specializations to come in (if, for example, we
+                    // were still waiting on some other module to type-check).
+                    pending_specializations_needed = false;
+                }
+
+                // We're done with this layout cache, so return it to the pool.
+                // That way, other specialization processes can reuse it later.
+                layout_caches.insert(layout_cache);
+
+                // Did we actually get any pending specializations?
+                match pending_specializations.pop() {
+                    Some(pending_spec) => {
+                        specializations_in_flight += 1;
+
+                        // We got at least one! Spawn a process to specialize it.
+                        spawn_specialize(
+                            pending_specialization
+                        );
+
+                        // Add the others to the queue. Once the previous one
+                        // gets specialized, it will grab the next one from the
+                        // queue and specialize it too.
+                        for (key, value) in pending_specializations {
+                            all_pending_specializations.insert(key, value);
+                        }
+                    }
+                    None => {
+                        // If all of the following are true...
+                        //
+                        //     * We have no pending specializations in the queue
+                        //     * We aren't about to add any to the queue
+                        //     * There are no specializations in progress
+                        //
+                        // ...then we're done!
+                        //
+                        // It's important that we special-case this scenario,
+                        // because normally we rely on the handler for the
+                        // Specialized message to determine when we're done,
+                        // but in this case we're not kicking off any logic
+                        // that would lead to a Specialized message being
+                        // received ever again.
+                        //
+                        // So if we didn't handle this case here, 
+                        // we'd get stuck and never terminate!
+                        if all_pending_specializations.is_empty() && specializations_in_flight == 0 {
+                            we_are_done() // TODO look up what code gen needs, and make sure we have it at this point!
+                        }
+                    }
+                }
+            }
+            Specialized {
+                specialization
+            } => {
+                // We've just completed one!
+                specializations_in_flight -= 1;
+
+                // Add the specialization to the list, and grab another if
+                // there's one available.
+                match all_pending_specializations.pop() {
+                    Some(pending_spec) => {
+                        // This is the next pending_spec to process.
+                        // Specialize it!
+                        specializations_in_flight += 1;
+
+                        // We got at least one. Kick off a process to spawn that one,
+                        // and add the others to the queue.
+                        spawn_specialize(
+                            pending_specialization
+                        );
+                    }
+                    None => {
+                        if pending_specializations_needed {
+                            // If more pending specializations are still needed,
+                            // then this means something is still in an earlier
+                            // phase (e.g. type checking) and we need to wait
+                            // for it to introduce its pending specializations.
+                            //
+                            // Therefore, we keep waiting for more messages!
+                        } else {
+                            // This was the last one! We've now run out of 
+                            // specializations to process, and there are no 
+                            // more needed, so we're all done.
+                            we_are_done() // TODO look up what code gen needs, and make sure we have it at this point!
+                        }
+                    }
+
                 }
             }
         }
