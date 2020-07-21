@@ -1,5 +1,5 @@
 use crate::env::Env;
-use crate::expr::{canonicalize_expr, Expr};
+use crate::expr::{canonicalize_expr, Expr, Output};
 use crate::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use crate::scope::Scope;
 use roc_module::ident::{Ident, Lowercase, TagName};
@@ -100,10 +100,11 @@ pub fn canonicalize_pattern<'a>(
     pattern_type: PatternType,
     pattern: &ast::Pattern<'a>,
     region: Region,
-) -> Located<Pattern> {
+) -> (Output, Located<Pattern>) {
     use roc_parse::ast::Pattern::*;
     use PatternType::*;
 
+    let mut output = Output::default();
     let can_pattern = match pattern {
         Identifier(name) => match scope.introduce(
             (*name).into(),
@@ -154,17 +155,18 @@ pub fn canonicalize_pattern<'a>(
 
             let mut can_patterns = Vec::with_capacity(patterns.len());
             for loc_pattern in *patterns {
-                can_patterns.push((
-                    var_store.fresh(),
-                    canonicalize_pattern(
-                        env,
-                        var_store,
-                        scope,
-                        pattern_type,
-                        &loc_pattern.value,
-                        loc_pattern.region,
-                    ),
-                ));
+                let (new_output, can_pattern) = canonicalize_pattern(
+                    env,
+                    var_store,
+                    scope,
+                    pattern_type,
+                    &loc_pattern.value,
+                    loc_pattern.region,
+                );
+
+                output.union(new_output);
+
+                can_patterns.push((var_store.fresh(), can_pattern));
             }
 
             Pattern::AppliedTag {
@@ -283,7 +285,7 @@ pub fn canonicalize_pattern<'a>(
                     RequiredField(label, loc_guard) => {
                         // a guard does not introduce the label into scope!
                         let symbol = scope.ignore(label.into(), &mut env.ident_ids);
-                        let can_guard = canonicalize_pattern(
+                        let (new_output, can_guard) = canonicalize_pattern(
                             env,
                             var_store,
                             scope,
@@ -291,6 +293,8 @@ pub fn canonicalize_pattern<'a>(
                             &loc_guard.value,
                             loc_guard.region,
                         );
+
+                        output.union(new_output);
 
                         destructs.push(Located {
                             region: loc_pattern.region,
@@ -311,14 +315,15 @@ pub fn canonicalize_pattern<'a>(
                             region,
                         ) {
                             Ok(symbol) => {
-                                // TODO use output?
-                                let (can_default, _output) = canonicalize_expr(
+                                let (can_default, expr_output) = canonicalize_expr(
                                     env,
                                     var_store,
                                     scope,
                                     loc_default.region,
                                     &loc_default.value,
                                 );
+
+                                output.union(expr_output);
 
                                 destructs.push(Located {
                                     region: loc_pattern.region,
@@ -375,10 +380,13 @@ pub fn canonicalize_pattern<'a>(
         }
     };
 
-    Located {
-        region,
-        value: can_pattern,
-    }
+    (
+        output,
+        Located {
+            region,
+            value: can_pattern,
+        },
+    )
 }
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
