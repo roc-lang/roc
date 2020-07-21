@@ -4,7 +4,7 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_solve::solve;
 use roc_types::pretty_print::Parens;
-use roc_types::types::{Category, ErrorType, PatternCategory, Reason, TypeExt};
+use roc_types::types::{Category, ErrorType, PatternCategory, Reason, RecordField, TypeExt};
 use std::path::PathBuf;
 
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
@@ -779,6 +779,10 @@ fn to_expr_report<'b>(
             Reason::InterpolatedStringVar => {
                 unimplemented!("string interpolation is not implemented yet")
             }
+
+            Reason::RecordDefaultField(_) => {
+                unimplemented!("record default field is not implemented yet")
+            }
         },
     }
 }
@@ -911,6 +915,8 @@ fn add_category<'b>(
             alloc.text(" an uniqueness attribute of type:"),
         ]),
         Storage => alloc.concat(vec![this_is, alloc.text(" a value of type:")]),
+
+        DefaultValue(_) => alloc.concat(vec![this_is, alloc.text(" a default field of type:")]),
     }
 }
 
@@ -947,6 +953,45 @@ fn to_pattern_report<'b>(
         }
 
         PExpected::ForReason(reason, expected_type, region) => match reason {
+            PReason::TypedArg { opt_name, index } => {
+                let name = match opt_name {
+                    Some(n) => alloc.symbol_unqualified(n),
+                    None => alloc.text(" this definition "),
+                };
+                let doc = alloc.stack(vec![
+                    alloc
+                        .text("The ")
+                        .append(alloc.text(index.ordinal()))
+                        .append(alloc.text(" argument to "))
+                        .append(name.clone())
+                        .append(alloc.text(" is weird:")),
+                    alloc.region(region),
+                    pattern_type_comparision(
+                        alloc,
+                        found,
+                        expected_type,
+                        add_pattern_category(
+                            alloc,
+                            alloc.text("The argument is a pattern that matches"),
+                            &category,
+                        ),
+                        alloc.concat(vec![
+                            alloc.text("But the annotation on "),
+                            name,
+                            alloc.text(" says the "),
+                            alloc.text(index.ordinal()),
+                            alloc.text(" argument should be:"),
+                        ]),
+                        vec![],
+                    ),
+                ]);
+
+                Report {
+                    filename,
+                    title: "TYPE MISMATCH".to_string(),
+                    doc,
+                }
+            }
             PReason::WhenMatch { index } => {
                 if index == Index::FIRST {
                     let doc = alloc.stack(vec![
@@ -1289,10 +1334,17 @@ pub fn to_doc<'b>(
                 alloc,
                 fields
                     .into_iter()
-                    .map(|(k, v)| {
+                    .map(|(k, value)| {
                         (
                             alloc.string(k.as_str().to_string()),
-                            to_doc(alloc, Parens::Unnecessary, v),
+                            match value {
+                                RecordField::Optional(v) => {
+                                    RecordField::Optional(to_doc(alloc, Parens::Unnecessary, v))
+                                }
+                                RecordField::Required(v) => {
+                                    RecordField::Required(to_doc(alloc, Parens::Unnecessary, v))
+                                }
+                            },
                         )
                     })
                     .collect(),
@@ -1570,33 +1622,45 @@ fn ext_has_fixed_fields(ext: &TypeExt) -> bool {
 
 fn diff_record<'b>(
     alloc: &'b RocDocAllocator<'b>,
-    fields1: SendMap<Lowercase, ErrorType>,
+    fields1: SendMap<Lowercase, RecordField<ErrorType>>,
     ext1: TypeExt,
-    fields2: SendMap<Lowercase, ErrorType>,
+    fields2: SendMap<Lowercase, RecordField<ErrorType>>,
     ext2: TypeExt,
 ) -> Diff<RocDocBuilder<'b>> {
-    let to_overlap_docs = |(field, (t1, t2)): &(Lowercase, (ErrorType, ErrorType))| {
-        let diff = to_diff(alloc, Parens::Unnecessary, t1.clone(), t2.clone());
+    let to_overlap_docs =
+        |(field, (t1, t2)): &(Lowercase, (RecordField<ErrorType>, RecordField<ErrorType>))| {
+            let diff = to_diff(
+                alloc,
+                Parens::Unnecessary,
+                t1.clone().into_inner(),
+                t2.clone().into_inner(),
+            );
 
-        Diff {
-            left: (
-                field.clone(),
-                alloc.string(field.as_str().to_string()),
-                diff.left,
-            ),
-            right: (
-                field.clone(),
-                alloc.string(field.as_str().to_string()),
-                diff.right,
-            ),
-            status: diff.status,
-        }
-    };
-    let to_unknown_docs = |(field, tipe): &(Lowercase, ErrorType)| {
+            Diff {
+                left: (
+                    field.clone(),
+                    alloc.string(field.as_str().to_string()),
+                    match t1 {
+                        RecordField::Optional(_) => RecordField::Optional(diff.left),
+                        RecordField::Required(_) => RecordField::Required(diff.left),
+                    },
+                ),
+                right: (
+                    field.clone(),
+                    alloc.string(field.as_str().to_string()),
+                    match t2 {
+                        RecordField::Optional(_) => RecordField::Optional(diff.right),
+                        RecordField::Required(_) => RecordField::Required(diff.right),
+                    },
+                ),
+                status: diff.status,
+            }
+        };
+    let to_unknown_docs = |(field, tipe): &(Lowercase, RecordField<ErrorType>)| {
         (
             field.clone(),
             alloc.string(field.as_str().to_string()),
-            to_doc(alloc, Parens::Unnecessary, tipe.clone()),
+            tipe.map(|t| to_doc(alloc, Parens::Unnecessary, t.clone())),
         )
     };
     let shared_keys = fields1
@@ -1649,11 +1713,12 @@ fn diff_record<'b>(
 
     let ext_diff = ext_to_diff(alloc, ext1, ext2);
 
-    let mut fields_diff: Diff<Vec<(Lowercase, RocDocBuilder<'b>, RocDocBuilder<'b>)>> = Diff {
-        left: vec![],
-        right: vec![],
-        status: Status::Similar,
-    };
+    let mut fields_diff: Diff<Vec<(Lowercase, RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)>> =
+        Diff {
+            left: vec![],
+            right: vec![],
+            status: Status::Similar,
+        };
 
     for diff in both {
         fields_diff.left.push(diff.left);
@@ -1874,7 +1939,7 @@ mod report_text {
     use crate::report::{Annotation, RocDocAllocator, RocDocBuilder};
     use roc_module::ident::Lowercase;
     use roc_types::pretty_print::Parens;
-    use roc_types::types::{ErrorType, TypeExt};
+    use roc_types::types::{ErrorType, RecordField, TypeExt};
     use ven_pretty::DocAllocator;
 
     fn with_parens<'b>(
@@ -1926,7 +1991,7 @@ mod report_text {
 
     pub fn record<'b>(
         alloc: &'b RocDocAllocator<'b>,
-        entries: Vec<(RocDocBuilder<'b>, RocDocBuilder<'b>)>,
+        entries: Vec<(RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)>,
         opt_ext: Option<RocDocBuilder<'b>>,
     ) -> RocDocBuilder<'b> {
         let ext_doc = if let Some(t) = opt_ext {
@@ -1939,8 +2004,15 @@ mod report_text {
             alloc.text("{}").append(ext_doc)
         } else {
             let entry_to_doc =
-                |(field_name, field_type): (RocDocBuilder<'b>, RocDocBuilder<'b>)| {
-                    field_name.append(alloc.text(" : ")).append(field_type)
+                |(field_name, field_type): (RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)| {
+                    match field_type {
+                        RecordField::Required(field) => {
+                            field_name.append(alloc.text(" : ")).append(field)
+                        }
+                        RecordField::Optional(field) => {
+                            field_name.append(alloc.text(" ? ")).append(field)
+                        }
+                    }
                 };
 
             let starts =
@@ -1959,16 +2031,16 @@ mod report_text {
 
     pub fn to_suggestion_record<'b>(
         alloc: &'b RocDocAllocator<'b>,
-        f: (Lowercase, ErrorType),
-        fs: Vec<(Lowercase, ErrorType)>,
+        f: (Lowercase, RecordField<ErrorType>),
+        fs: Vec<(Lowercase, RecordField<ErrorType>)>,
         ext: TypeExt,
     ) -> RocDocBuilder<'b> {
         use crate::error::r#type::{ext_to_doc, to_doc};
 
-        let entry_to_doc = |(name, tipe): (Lowercase, ErrorType)| {
+        let entry_to_doc = |(name, tipe): (Lowercase, RecordField<ErrorType>)| {
             (
                 alloc.string(name.as_str().to_string()),
-                to_doc(alloc, Parens::Unnecessary, tipe),
+                to_doc(alloc, Parens::Unnecessary, tipe.into_inner()),
             )
         };
 

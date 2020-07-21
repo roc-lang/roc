@@ -1,14 +1,15 @@
 use crate::builtins;
+use crate::expr::{constrain_expr, Env};
 use roc_can::constraint::Constraint;
 use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
-use roc_can::pattern::RecordDestruct;
+use roc_can::pattern::{DestructType, RecordDestruct};
 use roc_collections::all::{Index, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
-use roc_types::types::{Category, PReason, PatternCategory, Type};
+use roc_types::types::{Category, PReason, PatternCategory, Reason, RecordField, Type};
 
 pub struct PatternState {
     pub headers: SendMap<Symbol, Located<Type>>,
@@ -61,12 +62,20 @@ fn headers_from_annotation_help(
 
         RecordDestructure { destructs, .. } => match annotation.value.shallow_dealias() {
             Type::Record(fields, _) => {
-                for destruct in destructs {
-                    // NOTE ignores the .guard field.
-                    if let Some(field_type) = fields.get(&destruct.value.label) {
+                for loc_destruct in destructs {
+                    let destruct = &loc_destruct.value;
+
+                    // NOTE: We ignore both Guard and optionality when
+                    // determining the type of the assigned def (which is what
+                    // gets added to the header here).
+                    //
+                    // For example, no matter whether it's `{ x } = rec` or
+                    // `{ x ? 0 } = rec` or `{ x: 5 } -> ...` in all cases
+                    // the type of `x` within the binding itself is the same.
+                    if let Some(field_type) = fields.get(&destruct.label) {
                         headers.insert(
-                            destruct.value.symbol,
-                            Located::at(annotation.region, field_type.clone()),
+                            destruct.symbol,
+                            Located::at(annotation.region, field_type.clone().into_inner()),
                         );
                     } else {
                         return false;
@@ -112,6 +121,7 @@ fn headers_from_annotation_help(
 /// intiialize the Vecs in PatternState using with_capacity
 /// based on its knowledge of their lengths.
 pub fn constrain_pattern(
+    env: &Env,
     pattern: &Pattern,
     region: Region,
     expected: PExpected<Type>,
@@ -179,7 +189,7 @@ pub fn constrain_pattern(
             state.vars.push(*ext_var);
             let ext_type = Type::Variable(*ext_var);
 
-            let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
+            let mut field_types: SendMap<Lowercase, RecordField<Type>> = SendMap::default();
 
             for Located {
                 value:
@@ -187,7 +197,7 @@ pub fn constrain_pattern(
                         var,
                         label,
                         symbol,
-                        guard,
+                        typ,
                     },
                 ..
             } in destructs
@@ -201,23 +211,53 @@ pub fn constrain_pattern(
                         .insert(*symbol, Located::at(region, pat_type.clone()));
                 }
 
-                field_types.insert(label.clone(), pat_type.clone());
+                let field_type = match typ {
+                    DestructType::Guard(guard_var, loc_guard) => {
+                        state.constraints.push(Constraint::Pattern(
+                            region,
+                            PatternCategory::PatternGuard,
+                            Type::Variable(*guard_var),
+                            PExpected::ForReason(
+                                PReason::PatternGuard,
+                                pat_type.clone(),
+                                loc_guard.region,
+                            ),
+                        ));
+                        state.vars.push(*guard_var);
 
-                if let Some((guard_var, loc_guard)) = guard {
-                    state.constraints.push(Constraint::Pattern(
-                        region,
-                        PatternCategory::PatternGuard,
-                        Type::Variable(*guard_var),
-                        PExpected::ForReason(
-                            PReason::PatternGuard,
+                        constrain_pattern(env, &loc_guard.value, loc_guard.region, expected, state);
+
+                        RecordField::Required(pat_type)
+                    }
+                    DestructType::Optional(expr_var, loc_expr) => {
+                        let expr_expected = Expected::ForReason(
+                            Reason::RecordDefaultField(label.clone()),
                             pat_type.clone(),
-                            loc_guard.region,
-                        ),
-                    ));
-                    state.vars.push(*guard_var);
+                            loc_expr.region,
+                        );
 
-                    constrain_pattern(&loc_guard.value, loc_guard.region, expected, state);
-                }
+                        state.constraints.push(Constraint::Eq(
+                            Type::Variable(*expr_var),
+                            expr_expected.clone(),
+                            Category::DefaultValue(label.clone()),
+                            region,
+                        ));
+
+                        state.vars.push(*expr_var);
+
+                        let expr_con =
+                            constrain_expr(env, loc_expr.region, &loc_expr.value, expr_expected);
+                        state.constraints.push(expr_con);
+
+                        RecordField::Optional(pat_type)
+                    }
+                    DestructType::Required => {
+                        // No extra constraints necessary.
+                        RecordField::Required(pat_type)
+                    }
+                };
+
+                field_types.insert(label.clone(), field_type);
 
                 state.vars.push(*var);
             }
@@ -262,7 +302,7 @@ pub fn constrain_pattern(
                     pattern_type,
                     region,
                 );
-                constrain_pattern(&loc_pattern.value, loc_pattern.region, expected, state);
+                constrain_pattern(env, &loc_pattern.value, loc_pattern.region, expected, state);
             }
 
             let whole_con = Constraint::Eq(

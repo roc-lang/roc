@@ -332,17 +332,31 @@ pub fn assigned_expr_field_to_pattern<'a>(
 ) -> Result<Pattern<'a>, Fail> {
     // the assigned fields always store spaces, but this slice is often empty
     Ok(match assigned_field {
-        AssignedField::LabeledValue(name, spaces, value) => {
+        AssignedField::RequiredValue(name, spaces, value) => {
             let pattern = expr_to_pattern(arena, &value.value)?;
             let result = arena.alloc(Located {
                 region: value.region,
                 value: pattern,
             });
             if spaces.is_empty() {
-                Pattern::RecordField(name.value, result)
+                Pattern::RequiredField(name.value, result)
             } else {
                 Pattern::SpaceAfter(
-                    arena.alloc(Pattern::RecordField(name.value, result)),
+                    arena.alloc(Pattern::RequiredField(name.value, result)),
+                    spaces,
+                )
+            }
+        }
+        AssignedField::OptionalValue(name, spaces, value) => {
+            let result = arena.alloc(Located {
+                region: value.region,
+                value: value.value.clone(),
+            });
+            if spaces.is_empty() {
+                Pattern::OptionalField(name.value, result)
+            } else {
+                Pattern::SpaceAfter(
+                    arena.alloc(Pattern::OptionalField(name.value, result)),
                     spaces,
                 )
             }
@@ -363,12 +377,31 @@ pub fn assigned_expr_field_to_pattern<'a>(
 /// Used for patterns like { x: Just _ }
 pub fn assigned_pattern_field_to_pattern<'a>(
     arena: &'a Bump,
-    assigned_field: &AssignedField<'a, Pattern<'a>>,
+    assigned_field: &AssignedField<'a, Expr<'a>>,
     backup_region: Region,
 ) -> Result<Located<Pattern<'a>>, Fail> {
     // the assigned fields always store spaces, but this slice is often empty
     Ok(match assigned_field {
-        AssignedField::LabeledValue(name, spaces, value) => {
+        AssignedField::RequiredValue(name, spaces, value) => {
+            let pattern = expr_to_pattern(arena, &value.value)?;
+            let region = Region::span_across(&value.region, &value.region);
+            let result = arena.alloc(Located {
+                region: value.region,
+                value: pattern,
+            });
+            if spaces.is_empty() {
+                Located::at(region, Pattern::RequiredField(name.value, result))
+            } else {
+                Located::at(
+                    region,
+                    Pattern::SpaceAfter(
+                        arena.alloc(Pattern::RequiredField(name.value, result)),
+                        spaces,
+                    ),
+                )
+            }
+        }
+        AssignedField::OptionalValue(name, spaces, value) => {
             let pattern = value.value.clone();
             let region = Region::span_across(&value.region, &value.region);
             let result = arena.alloc(Located {
@@ -376,12 +409,12 @@ pub fn assigned_pattern_field_to_pattern<'a>(
                 value: pattern,
             });
             if spaces.is_empty() {
-                Located::at(region, Pattern::RecordField(name.value, result))
+                Located::at(region, Pattern::OptionalField(name.value, result))
             } else {
                 Located::at(
                     region,
                     Pattern::SpaceAfter(
-                        arena.alloc(Pattern::RecordField(name.value, result)),
+                        arena.alloc(Pattern::OptionalField(name.value, result)),
                         spaces,
                     ),
                 )
@@ -580,7 +613,7 @@ fn annotation_or_alias<'a>(
                 loc_ann,
             )
         }
-        RecordField(_, _) => {
+        RequiredField(_, _) | OptionalField(_, _) => {
             unreachable!("This should only be possible inside a record destruture.");
         }
     }
@@ -895,22 +928,72 @@ fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 
 fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
     then(
-        record_without_update!(loc_pattern(min_indent), min_indent),
-        move |arena, state, assigned_fields| {
-            let mut patterns = Vec::with_capacity_in(assigned_fields.len(), arena);
-            for assigned_field in assigned_fields {
-                match assigned_pattern_field_to_pattern(
-                    arena,
-                    &assigned_field.value,
-                    assigned_field.region,
-                ) {
-                    Ok(pattern) => patterns.push(pattern),
-                    Err(e) => return Err((e, state)),
-                }
-            }
+        collection!(
+            char('{'),
+            move |arena: &'a bumpalo::Bump,
+                  state: crate::parser::State<'a>|
+                  -> crate::parser::ParseResult<'a, Located<crate::ast::Pattern<'a>>> {
+                use crate::blankspace::{space0, space0_before};
+                use crate::ident::lowercase_ident;
+                use crate::parser::Either::*;
+                use roc_region::all::Region;
 
+                // You must have a field name, e.g. "email"
+                let (loc_label, state) = loc!(lowercase_ident()).parse(arena, state)?;
+
+                let (spaces, state) = space0(min_indent).parse(arena, state)?;
+
+                // Having a value is optional; both `{ email }` and `{ email: blah }` work.
+                // (This is true in both literals and types.)
+                let (opt_loc_val, state) = crate::parser::optional(either!(
+                    skip_first!(
+                        char(':'),
+                        space0_before(loc_pattern(min_indent), min_indent)
+                    ),
+                    skip_first!(char('?'), space0_before(loc!(expr(min_indent)), min_indent))
+                ))
+                .parse(arena, state)?;
+
+                let answer = match opt_loc_val {
+                    Some(either) => match either {
+                        First(loc_val) => Located {
+                            region: Region::span_across(&loc_label.region, &loc_val.region),
+                            value: Pattern::RequiredField(loc_label.value, arena.alloc(loc_val)),
+                        },
+                        Second(loc_val) => Located {
+                            region: Region::span_across(&loc_label.region, &loc_val.region),
+                            value: Pattern::OptionalField(loc_label.value, arena.alloc(loc_val)),
+                        },
+                    },
+                    // If no value was provided, record it as a Var.
+                    // Canonicalize will know what to do with a Var later.
+                    None => {
+                        if !spaces.is_empty() {
+                            Located {
+                                region: loc_label.region,
+                                value: Pattern::SpaceAfter(
+                                    arena.alloc(Pattern::Identifier(loc_label.value)),
+                                    spaces,
+                                ),
+                            }
+                        } else {
+                            Located {
+                                region: loc_label.region,
+                                value: Pattern::Identifier(loc_label.value),
+                            }
+                        }
+                    }
+                };
+
+                Ok((answer, state))
+            },
+            char(','),
+            char('}'),
+            min_indent
+        ),
+        move |_arena, state, loc_patterns| {
             Ok((
-                Pattern::RecordDestructure(patterns.into_bump_slice()),
+                Pattern::RecordDestructure(loc_patterns.into_bump_slice()),
                 state,
             ))
         },

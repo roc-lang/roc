@@ -16,7 +16,7 @@ use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
 use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
-use roc_types::types::{Alias, Category, PReason, Reason};
+use roc_types::types::{Alias, Category, PReason, Reason, RecordField};
 
 /// This is for constraining Defs
 #[derive(Default, Debug)]
@@ -110,7 +110,7 @@ pub fn constrain_expr(
 
                     field_vars.push(field_var);
                     field_exprs.insert(label.clone(), loc_field_expr);
-                    field_types.insert(label.clone(), field_type);
+                    field_types.insert(label.clone(), RecordField::Required(field_type));
 
                     constraints.push(field_con);
                 }
@@ -145,7 +145,7 @@ pub fn constrain_expr(
             symbol,
             updates,
         } => {
-            let mut fields: SendMap<Lowercase, Type> = SendMap::default();
+            let mut fields: SendMap<Lowercase, RecordField<Type>> = SendMap::default();
             let mut vars = Vec::with_capacity(updates.len() + 2);
             let mut cons = Vec::with_capacity(updates.len() + 1);
             for (field_name, Field { var, loc_expr, .. }) in updates.clone() {
@@ -156,7 +156,7 @@ pub fn constrain_expr(
                     field_name.clone(),
                     &loc_expr,
                 );
-                fields.insert(field_name, tipe);
+                fields.insert(field_name, RecordField::Required(tipe));
                 vars.push(var);
                 cons.push(con);
             }
@@ -307,7 +307,7 @@ pub fn constrain_expr(
         }
         Var(symbol) => Lookup(*symbol, expected, region),
         Closure(fn_var, _symbol, _recursive, args, boxed) => {
-            let (loc_body_expr, ret_var) = &**boxed;
+            let (loc_body_expr, ret_var) = boxed.as_ref();
             let mut state = PatternState {
                 headers: SendMap::default(),
                 vars: Vec::with_capacity(args.len()),
@@ -327,6 +327,7 @@ pub fn constrain_expr(
                 pattern_types.push(pattern_type);
 
                 constrain_pattern(
+                    env,
                     &loc_pattern.value,
                     loc_pattern.region,
                     pattern_expected,
@@ -618,7 +619,7 @@ pub fn constrain_expr(
             let mut rec_field_types = SendMap::default();
 
             let label = field.clone();
-            rec_field_types.insert(label, field_type.clone());
+            rec_field_types.insert(label, RecordField::Required(field_type.clone()));
 
             let record_type = Type::Record(rec_field_types, Box::new(ext_type));
             let record_expected = Expected::NoExpectation(record_type);
@@ -664,7 +665,7 @@ pub fn constrain_expr(
 
             let mut field_types = SendMap::default();
             let label = field.clone();
-            field_types.insert(label, field_type.clone());
+            field_types.insert(label, RecordField::Required(field_type.clone()));
             let record_type = Type::Record(field_types, Box::new(ext_type));
 
             let category = Category::Accessor(field.clone());
@@ -843,6 +844,7 @@ fn constrain_when_branch(
     // then unify that variable with the expectation?
     for loc_pattern in &when_branch.patterns {
         constrain_pattern(
+            env,
             &loc_pattern.value,
             loc_pattern.region,
             pattern_expected.clone(),
@@ -947,7 +949,11 @@ pub fn constrain_decls(
     constraint
 }
 
-fn constrain_def_pattern(loc_pattern: &Located<Pattern>, expr_type: Type) -> PatternState {
+fn constrain_def_pattern(
+    env: &Env,
+    loc_pattern: &Located<Pattern>,
+    expr_type: Type,
+) -> PatternState {
     let pattern_expected = PExpected::NoExpectation(expr_type);
 
     let mut state = PatternState {
@@ -957,6 +963,7 @@ fn constrain_def_pattern(loc_pattern: &Located<Pattern>, expr_type: Type) -> Pat
     };
 
     constrain_pattern(
+        env,
         &loc_pattern.value,
         loc_pattern.region,
         pattern_expected,
@@ -970,7 +977,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
     let expr_var = def.expr_var;
     let expr_type = Type::Variable(expr_var);
 
-    let mut pattern_state = constrain_def_pattern(&def.loc_pattern, expr_type.clone());
+    let mut pattern_state = constrain_def_pattern(env, &def.loc_pattern, expr_type.clone());
 
     pattern_state.vars.push(expr_var);
 
@@ -994,13 +1001,18 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                 &mut pattern_state.headers,
             );
 
+            let env = &Env {
+                home: env.home,
+                rigids: ftv,
+            };
+
             let annotation_expected = FromAnnotation(
                 def.loc_pattern.clone(),
                 arity,
                 AnnotationSource::TypedBody {
                     region: annotation.region,
                 },
-                signature,
+                signature.clone(),
             );
 
             pattern_state.constraints.push(Eq(
@@ -1010,15 +1022,118 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                 annotation.region,
             ));
 
-            constrain_expr(
-                &Env {
-                    home: env.home,
-                    rigids: ftv,
-                },
-                def.loc_expr.region,
-                &def.loc_expr.value,
-                annotation_expected,
-            )
+            // when a def is annotated, and it's body is a closure, treat this
+            // as a named function (in elm terms) for error messages.
+            //
+            // This means we get errors like "the first argument of `f` is weird"
+            // instead of the more generic "something is wrong with the body of `f`"
+            match (&def.loc_expr.value, &signature) {
+                (
+                    Closure(fn_var, _symbol, _recursive, args, boxed),
+                    Type::Function(arg_types, _),
+                ) if true => {
+                    let expected = annotation_expected;
+                    let region = def.loc_expr.region;
+
+                    let (loc_body_expr, ret_var) = boxed.as_ref();
+                    let mut state = PatternState {
+                        headers: SendMap::default(),
+                        vars: Vec::with_capacity(args.len()),
+                        constraints: Vec::with_capacity(1),
+                    };
+                    let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
+                    let mut pattern_types = Vec::with_capacity(state.vars.capacity());
+                    let ret_var = *ret_var;
+                    let ret_type = Type::Variable(ret_var);
+
+                    vars.push(ret_var);
+
+                    let it = args.iter().zip(arg_types.iter()).enumerate();
+                    for (index, ((pattern_var, loc_pattern), loc_ann)) in it {
+                        {
+                            // ensure type matches the one in the annotation
+                            let opt_label =
+                                if let Pattern::Identifier(label) = def.loc_pattern.value {
+                                    Some(label)
+                                } else {
+                                    None
+                                };
+                            let pattern_type: &Type = loc_ann;
+
+                            let pattern_expected = PExpected::ForReason(
+                                PReason::TypedArg {
+                                    index: Index::zero_based(index),
+                                    opt_name: opt_label,
+                                },
+                                pattern_type.clone(),
+                                loc_pattern.region,
+                            );
+
+                            constrain_pattern(
+                                env,
+                                &loc_pattern.value,
+                                loc_pattern.region,
+                                pattern_expected,
+                                &mut state,
+                            );
+                        }
+
+                        {
+                            // record the correct type in pattern_var
+                            let pattern_type = Type::Variable(*pattern_var);
+                            pattern_types.push(pattern_type.clone());
+
+                            state.vars.push(*pattern_var);
+                            state.constraints.push(Constraint::Eq(
+                                pattern_type.clone(),
+                                Expected::NoExpectation(loc_ann.clone()),
+                                Category::Storage,
+                                loc_pattern.region,
+                            ));
+
+                            vars.push(*pattern_var);
+                        }
+                    }
+
+                    let fn_type = Type::Function(pattern_types, Box::new(ret_type.clone()));
+                    let body_type = NoExpectation(ret_type);
+                    let ret_constraint =
+                        constrain_expr(env, loc_body_expr.region, &loc_body_expr.value, body_type);
+
+                    vars.push(*fn_var);
+                    let defs_constraint = And(state.constraints);
+
+                    exists(
+                        vars,
+                        And(vec![
+                            Let(Box::new(LetConstraint {
+                                rigid_vars: Vec::new(),
+                                flex_vars: state.vars,
+                                def_types: state.headers,
+                                def_aliases: SendMap::default(),
+                                defs_constraint,
+                                ret_constraint,
+                            })),
+                            // "the closure's type is equal to expected type"
+                            Eq(fn_type.clone(), expected, Category::Lambda, region),
+                            // "fn_var is equal to the closure's type" - fn_var is used in code gen
+                            Eq(
+                                Type::Variable(*fn_var),
+                                NoExpectation(fn_type),
+                                Category::Storage,
+                                region,
+                            ),
+                        ]),
+                    )
+                }
+
+                _ => constrain_expr(
+                    &env,
+                    def.loc_expr.region,
+                    &def.loc_expr.value,
+                    annotation_expected,
+                ),
+            }
         }
         None => constrain_expr(
             env,
@@ -1117,6 +1232,7 @@ pub fn rec_defs_help(
         };
 
         constrain_pattern(
+            env,
             &def.loc_pattern.value,
             def.loc_pattern.region,
             pattern_expected,

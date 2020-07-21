@@ -276,8 +276,14 @@ pub enum Tag<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AssignedField<'a, Val> {
-    // Both a label and a value, e.g. `{ name: "blah" }`
-    LabeledValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
+    // A required field with a label, e.g. `{ name: "blah" }` or `{ name : Str }`
+    RequiredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
+
+    // An optional field with a label, e.g. `{ name ? "blah" }`
+    //
+    // NOTE: This only comes up in type annotations (e.g. `name ? Str`)
+    // and in destructuring patterns (e.g. `{ name ? "blah" }`)
+    OptionalValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
 
     // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
     LabelOnly(Loc<&'a str>),
@@ -309,9 +315,14 @@ pub enum Pattern<'a> {
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
     /// In practice, these patterns will always be Identifier
     RecordDestructure(&'a [Loc<Pattern<'a>>]),
-    /// A field pattern, e.g. { x: Just 0 } -> ...
-    /// can only occur inside of a RecordDestructure
-    RecordField(&'a str, &'a Loc<Pattern<'a>>),
+
+    /// A required field pattern, e.g. { x: Just 0 } -> ...
+    /// Can only occur inside of a RecordDestructure
+    RequiredField(&'a str, &'a Loc<Pattern<'a>>),
+
+    /// An optional field pattern, e.g. { x ? Just 0 } -> ...
+    /// Can only occur inside of a RecordDestructure
+    OptionalField(&'a str, &'a Loc<Expr<'a>>),
 
     /// This is used only to avoid cloning when reordering expressions (e.g. in desugar()).
     /// It lets us take an (&Expr) and create a plain (Expr) from it.
@@ -414,8 +425,24 @@ impl<'a> Pattern<'a> {
                 .iter()
                 .zip(fields_y.iter())
                 .all(|(p, q)| p.value.equivalent(&q.value)),
-            (RecordField(x, inner_x), RecordField(y, inner_y)) => {
+            (RequiredField(x, inner_x), RequiredField(y, inner_y)) => {
                 x == y && inner_x.value.equivalent(&inner_y.value)
+            }
+            (OptionalField(x, _inner_x), OptionalField(y, _inner_y)) => {
+                x == y
+                // TODO
+                //
+                // We can give an annotation like so
+                //
+                // { x, y } : { x : Int, y : Bool }
+                // { x, y } = rec
+                //
+                // But what about:
+                //
+                // { x, y ? False } : { x : Int, y ? Bool }
+                // { x, y ? False } = rec
+                //
+                // inner_x.value.equivalent(&inner_y.value)
             }
             (Nested(x), Nested(y)) => x.equivalent(y),
 

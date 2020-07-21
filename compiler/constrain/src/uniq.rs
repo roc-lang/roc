@@ -5,7 +5,7 @@ use roc_can::constraint::LetConstraint;
 use roc_can::def::{Declaration, Def};
 use roc_can::expected::{Expected, PExpected};
 use roc_can::expr::{Expr, Field, WhenBranch};
-use roc_can::pattern::{Pattern, RecordDestruct};
+use roc_can::pattern::{DestructType, Pattern, RecordDestruct};
 use roc_collections::all::{ImMap, ImSet, Index, SendMap};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{ModuleId, Symbol};
@@ -14,7 +14,7 @@ use roc_types::boolean_algebra::Bool;
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
-use roc_types::types::{Alias, Category, PReason, Reason};
+use roc_types::types::{Alias, Category, PReason, Reason, RecordField};
 use roc_uniq::builtins::{attr_type, empty_list_type, list_type, str_type};
 use roc_uniq::sharing::{self, FieldAccess, Mark, Usage, VarUsage};
 
@@ -144,7 +144,10 @@ pub struct PatternState {
 }
 
 fn constrain_pattern(
+    env: &Env,
     var_store: &mut VarStore,
+    var_usage: &VarUsage,
+    applied_usage_constraint: &mut ImSet<Symbol>,
     state: &mut PatternState,
     pattern: &Located<Pattern>,
     expected: PExpected<Type>,
@@ -213,14 +216,14 @@ fn constrain_pattern(
             state.vars.push(*ext_var);
             let ext_type = Type::Variable(*ext_var);
 
-            let mut field_types: SendMap<Lowercase, Type> = SendMap::default();
+            let mut field_types: SendMap<Lowercase, RecordField<Type>> = SendMap::default();
             for Located {
                 value:
                     RecordDestruct {
                         var,
                         label,
                         symbol,
-                        guard,
+                        typ,
                     },
                 ..
             } in destructs
@@ -237,18 +240,63 @@ fn constrain_pattern(
                         .insert(*symbol, Located::at(pattern.region, pat_type.clone()));
                 }
 
-                field_types.insert(label.clone(), pat_type.clone());
+                let field_type = match typ {
+                    DestructType::Guard(guard_var, loc_guard) => {
+                        state.constraints.push(Constraint::Pattern(
+                            pattern.region,
+                            PatternCategory::PatternGuard,
+                            Type::Variable(*guard_var),
+                            PExpected::NoExpectation(pat_type.clone()),
+                        ));
+                        state.vars.push(*guard_var);
+                        constrain_pattern(
+                            env,
+                            var_store,
+                            var_usage,
+                            applied_usage_constraint,
+                            state,
+                            loc_guard,
+                            expected,
+                        );
 
-                if let Some((guard_var, loc_guard)) = guard {
-                    state.constraints.push(Constraint::Pattern(
-                        pattern.region,
-                        PatternCategory::PatternGuard,
-                        Type::Variable(*guard_var),
-                        PExpected::NoExpectation(pat_type.clone()),
-                    ));
-                    state.vars.push(*guard_var);
-                    constrain_pattern(var_store, state, loc_guard, expected);
-                }
+                        RecordField::Required(pat_type)
+                    }
+                    DestructType::Optional(expr_var, loc_expr) => {
+                        let expr_expected = Expected::ForReason(
+                            Reason::RecordDefaultField(label.clone()),
+                            pat_type.clone(),
+                            loc_expr.region,
+                        );
+
+                        state.constraints.push(Constraint::Eq(
+                            Type::Variable(*expr_var),
+                            expr_expected.clone(),
+                            Category::DefaultValue(label.clone()),
+                            region,
+                        ));
+
+                        state.vars.push(*expr_var);
+
+                        let expr_con = constrain_expr(
+                            env,
+                            var_store,
+                            var_usage,
+                            applied_usage_constraint,
+                            loc_expr.region,
+                            &loc_expr.value,
+                            expr_expected,
+                        );
+                        state.constraints.push(expr_con);
+
+                        RecordField::Optional(pat_type)
+                    }
+                    DestructType::Required => {
+                        // No extra constraints necessary.
+                        RecordField::Required(pat_type)
+                    }
+                };
+
+                field_types.insert(label.clone(), field_type);
 
                 state.vars.push(*var);
             }
@@ -304,7 +352,15 @@ fn constrain_pattern(
                 argument_types.push(pattern_type.clone());
 
                 let expected = PExpected::NoExpectation(pattern_type);
-                constrain_pattern(var_store, state, loc_pattern, expected);
+                constrain_pattern(
+                    env,
+                    var_store,
+                    var_usage,
+                    applied_usage_constraint,
+                    state,
+                    loc_pattern,
+                    expected,
+                );
             }
 
             let tag_union_uniq_type = {
@@ -495,7 +551,7 @@ pub fn constrain_expr(
                 );
 
                 field_vars.push(field_var);
-                field_types.insert(label.clone(), field_type);
+                field_types.insert(label.clone(), RecordField::Required(field_type));
 
                 constraints.push(field_con);
             }
@@ -660,7 +716,15 @@ pub fn constrain_expr(
 
                 pattern_types.push(pattern_type);
 
-                constrain_pattern(var_store, &mut state, loc_pattern, pattern_expected);
+                constrain_pattern(
+                    env,
+                    var_store,
+                    var_usage,
+                    applied_usage_constraint,
+                    &mut state,
+                    loc_pattern,
+                    pattern_expected,
+                );
 
                 vars.push(*pattern_var);
             }
@@ -1224,7 +1288,7 @@ pub fn constrain_expr(
             symbol,
             updates,
         } => {
-            let mut fields: SendMap<Lowercase, Type> = SendMap::default();
+            let mut fields: SendMap<Lowercase, RecordField<Type>> = SendMap::default();
             let mut vars = Vec::with_capacity(updates.len() + 2);
             let mut cons = Vec::with_capacity(updates.len() + 3);
             for (field_name, Field { var, loc_expr, .. }) in updates.clone() {
@@ -1238,7 +1302,7 @@ pub fn constrain_expr(
                     field_name.clone(),
                     &loc_expr,
                 );
-                fields.insert(field_name, tipe);
+                fields.insert(field_name, RecordField::Required(tipe));
                 vars.push(var);
                 cons.push(con);
             }
@@ -1300,7 +1364,7 @@ pub fn constrain_expr(
             let field_uniq_type = Bool::variable(field_uniq_var);
             let field_type = attr_type(field_uniq_type, Type::Variable(*field_var));
 
-            field_types.insert(field.clone(), field_type.clone());
+            field_types.insert(field.clone(), RecordField::Required(field_type.clone()));
 
             let record_uniq_var = var_store.fresh();
             let record_uniq_type = Bool::container(record_uniq_var, vec![field_uniq_var]);
@@ -1357,7 +1421,7 @@ pub fn constrain_expr(
             let field_uniq_type = Bool::variable(field_uniq_var);
             let field_type = attr_type(field_uniq_type, Type::Variable(*field_var));
 
-            field_types.insert(field.clone(), field_type.clone());
+            field_types.insert(field.clone(), RecordField::Required(field_type.clone()));
 
             let record_uniq_var = var_store.fresh();
             let record_uniq_type = Bool::container(record_uniq_var, vec![field_uniq_var]);
@@ -1589,8 +1653,11 @@ fn constrain_by_usage_record(
 
                 let field_type = attr_type(Bool::Shared, nested_type);
 
-                field_types.insert(lowercase.clone(), field_type);
+                // In expressions, it's only possible to do record access on
+                // Required fields.
+                field_types.insert(lowercase.clone(), RecordField::Required(field_type));
             }
+
             (
                 Bool::Shared,
                 Type::Record(
@@ -1622,8 +1689,11 @@ fn constrain_by_usage_record(
                     Bool::Shared => attr_type(Bool::Shared, nested_type),
                 };
 
-                field_types.insert(lowercase.clone(), field_type);
+                // In expressions, it's only possible to do record access on
+                // Required fields.
+                field_types.insert(lowercase.clone(), RecordField::Required(field_type));
             }
+
             (
                 Bool::container(record_uniq_var, uniq_vars),
                 Type::Record(
@@ -1671,7 +1741,10 @@ fn constrain_when_branch(
     for loc_pattern in &when_branch.patterns {
         // mutates the state, so return value is not used
         constrain_pattern(
+            env,
             var_store,
+            var_usage,
+            applied_usage_constraint,
             &mut state,
             &loc_pattern,
             pattern_expected.clone(),
@@ -1724,7 +1797,10 @@ fn constrain_when_branch(
 }
 
 fn constrain_def_pattern(
+    env: &Env,
     var_store: &mut VarStore,
+    var_usage: &VarUsage,
+    applied_usage_constraint: &mut ImSet<Symbol>,
     loc_pattern: &Located<Pattern>,
     expr_type: Type,
 ) -> PatternState {
@@ -1738,7 +1814,15 @@ fn constrain_def_pattern(
         constraints: Vec::with_capacity(1),
     };
 
-    constrain_pattern(var_store, &mut state, loc_pattern, pattern_expected);
+    constrain_pattern(
+        env,
+        var_store,
+        var_usage,
+        applied_usage_constraint,
+        &mut state,
+        loc_pattern,
+        pattern_expected,
+    );
 
     state
 }
@@ -1828,10 +1912,28 @@ fn annotation_to_attr_type(
             let mut vars = Vec::with_capacity(fields.len());
             let mut lifted_fields = SendMap::default();
 
-            for (label, tipe) in fields.clone() {
-                let (new_vars, lifted_field) =
-                    annotation_to_attr_type(var_store, &tipe, rigids, change_var_kind);
-                vars.extend(new_vars);
+            for (label, field) in fields.clone() {
+                use RecordField::*;
+
+                let lifted_field = match field {
+                    Required(tipe) => {
+                        let (new_vars, lifted_field) =
+                            annotation_to_attr_type(var_store, &tipe, rigids, change_var_kind);
+
+                        vars.extend(new_vars);
+
+                        Required(lifted_field)
+                    }
+                    Optional(tipe) => {
+                        let (new_vars, lifted_field) =
+                            annotation_to_attr_type(var_store, &tipe, rigids, change_var_kind);
+
+                        vars.extend(new_vars);
+
+                        Optional(lifted_field)
+                    }
+                };
+
                 lifted_fields.insert(label, lifted_field);
             }
 
@@ -2005,7 +2107,14 @@ fn constrain_def(
     let expr_var = def.expr_var;
     let expr_type = Type::Variable(expr_var);
 
-    let mut pattern_state = constrain_def_pattern(var_store, &def.loc_pattern, expr_type.clone());
+    let mut pattern_state = constrain_def_pattern(
+        env,
+        var_store,
+        var_usage,
+        applied_usage_constraint,
+        &def.loc_pattern,
+        expr_type.clone(),
+    );
 
     pattern_state.vars.push(expr_var);
 
@@ -2199,7 +2308,10 @@ pub fn rec_defs_help(
         pattern_state.vars.push(expr_var);
 
         constrain_pattern(
+            env,
             var_store,
+            var_usage,
+            applied_usage_constraint,
             &mut pattern_state,
             &def.loc_pattern,
             pattern_expected,
@@ -2425,9 +2537,15 @@ fn fix_mutual_recursive_alias_help_help(rec_var: Variable, attribute: &Type, int
 
         Record(fields, ext) => {
             fix_mutual_recursive_alias_help(rec_var, attribute, ext);
-            fields
-                .iter_mut()
-                .for_each(|arg| fix_mutual_recursive_alias_help(rec_var, attribute, arg));
+
+            for field in fields.iter_mut() {
+                let arg = match field {
+                    RecordField::Required(arg) => arg,
+                    RecordField::Optional(arg) => arg,
+                };
+
+                fix_mutual_recursive_alias_help(rec_var, attribute, arg);
+            }
         }
         Alias(_, _, actual_type) => {
             // call help_help, because actual_type is not wrapped in ATTR

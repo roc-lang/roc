@@ -1,3 +1,4 @@
+use crate::expr::DestructType;
 use roc_collections::all::{Index, MutMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_region::all::{Located, Region};
@@ -66,9 +67,9 @@ fn simplify<'a>(pattern: &crate::expr::Pattern<'a>) -> Pattern {
             for destruct in destructures {
                 field_names.push(destruct.label.clone());
 
-                match &destruct.guard {
-                    None => patterns.push(Anything),
-                    Some(guard) => patterns.push(simplify(guard)),
+                match &destruct.typ {
+                    DestructType::Required | DestructType::Optional(_) => patterns.push(Anything),
+                    DestructType::Guard(guard) => patterns.push(simplify(guard)),
                 }
             }
 

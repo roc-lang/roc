@@ -8,7 +8,7 @@ use roc_types::boolean_algebra::{self, Bool};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use roc_types::types::Type::{self, *};
-use roc_types::types::{Alias, Category, ErrorType, PatternCategory};
+use roc_types::types::{Alias, Category, ErrorType, PatternCategory, RecordField};
 use roc_unify::unify::unify;
 use roc_unify::unify::Unified::*;
 
@@ -615,10 +615,14 @@ fn type_to_variable(
             let mut field_vars = MutMap::default();
 
             for (field, field_type) in fields {
-                field_vars.insert(
-                    field.clone(),
-                    type_to_variable(subs, rank, pools, cached, field_type),
-                );
+                use RecordField::*;
+
+                let field_var = match field_type {
+                    Required(typ) => Required(type_to_variable(subs, rank, pools, cached, typ)),
+                    Optional(typ) => Optional(type_to_variable(subs, rank, pools, cached, typ)),
+                };
+
+                field_vars.insert(field.clone(), field_var);
             }
 
             let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
@@ -1091,7 +1095,13 @@ fn adjust_rank_content(
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var);
 
                     for (_, var) in fields {
-                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                        rank = rank.max(adjust_rank(
+                            subs,
+                            young_mark,
+                            visit_mark,
+                            group_rank,
+                            var.into_inner(),
+                        ));
                     }
 
                     rank
@@ -1243,8 +1253,19 @@ fn deep_copy_var_help(
                 Record(fields, ext_var) => {
                     let mut new_fields = MutMap::default();
 
-                    for (label, var) in fields {
-                        new_fields.insert(label, deep_copy_var_help(subs, max_rank, pools, var));
+                    for (label, field) in fields {
+                        use RecordField::*;
+
+                        let new_field = match field {
+                            Required(var) => {
+                                Required(deep_copy_var_help(subs, max_rank, pools, var))
+                            }
+                            Optional(var) => {
+                                Optional(deep_copy_var_help(subs, max_rank, pools, var))
+                            }
+                        };
+
+                        new_fields.insert(label, new_field);
                     }
 
                     Record(

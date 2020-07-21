@@ -248,7 +248,7 @@ impl<'a> Formattable<'a> for AssignedField<'a, TypeAnnotation<'a>> {
         indent: u16,
     ) {
         // we abuse the `Newlines` type to decide between multiline or single-line layout
-        format_assigned_field_help(self, buf, parens, indent, " : ", newlines == Newlines::Yes);
+        format_assigned_field_help(self, buf, parens, indent, " ", newlines == Newlines::Yes);
     }
 }
 
@@ -265,7 +265,7 @@ impl<'a> Formattable<'a> for AssignedField<'a, Expr<'a>> {
         indent: u16,
     ) {
         // we abuse the `Newlines` type to decide between multiline or single-line layout
-        format_assigned_field_help(self, buf, parens, indent, ": ", newlines == Newlines::Yes);
+        format_assigned_field_help(self, buf, parens, indent, "", newlines == Newlines::Yes);
     }
 }
 
@@ -273,7 +273,9 @@ fn is_multiline_assigned_field_help<'a, T: Formattable<'a>>(afield: &AssignedFie
     use self::AssignedField::*;
 
     match afield {
-        LabeledValue(_, spaces, ann) => !spaces.is_empty() || ann.value.is_multiline(),
+        RequiredValue(_, spaces, ann) | OptionalValue(_, spaces, ann) => {
+            !spaces.is_empty() || ann.value.is_multiline()
+        }
         LabelOnly(_) => false,
         AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => true,
         Malformed(text) => text.chars().any(|c| c == '\n'),
@@ -285,7 +287,7 @@ fn format_assigned_field_help<'a, T>(
     buf: &mut String<'a>,
     parens: Parens,
     indent: u16,
-    separator: &str,
+    separator_prefix: &str,
     is_multiline: bool,
 ) where
     T: Formattable<'a>,
@@ -293,7 +295,7 @@ fn format_assigned_field_help<'a, T>(
     use self::AssignedField::*;
 
     match zelf {
-        LabeledValue(name, spaces, ann) => {
+        RequiredValue(name, spaces, ann) => {
             if is_multiline {
                 newline(buf, indent);
             }
@@ -304,7 +306,23 @@ fn format_assigned_field_help<'a, T>(
                 fmt_spaces(buf, spaces.iter(), indent);
             }
 
-            buf.push_str(separator);
+            buf.push_str(separator_prefix);
+            buf.push_str(": ");
+            ann.value.format(buf, indent);
+        }
+        OptionalValue(name, spaces, ann) => {
+            if is_multiline {
+                newline(buf, indent);
+            }
+
+            buf.push_str(name.value);
+
+            if !spaces.is_empty() {
+                fmt_spaces(buf, spaces.iter(), indent);
+            }
+
+            buf.push_str(separator_prefix);
+            buf.push('?');
             ann.value.format(buf, indent);
         }
         LabelOnly(name) => {
@@ -316,10 +334,24 @@ fn format_assigned_field_help<'a, T>(
         }
         AssignedField::SpaceBefore(sub_field, spaces) => {
             fmt_comments_only(buf, spaces.iter(), indent);
-            format_assigned_field_help(sub_field, buf, parens, indent, separator, is_multiline);
+            format_assigned_field_help(
+                sub_field,
+                buf,
+                parens,
+                indent,
+                separator_prefix,
+                is_multiline,
+            );
         }
         AssignedField::SpaceAfter(sub_field, spaces) => {
-            format_assigned_field_help(sub_field, buf, parens, indent, separator, is_multiline);
+            format_assigned_field_help(
+                sub_field,
+                buf,
+                parens,
+                indent,
+                separator_prefix,
+                is_multiline,
+            );
             fmt_comments_only(buf, spaces.iter(), indent);
         }
         Malformed(raw) => {

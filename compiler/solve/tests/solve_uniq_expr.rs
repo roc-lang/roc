@@ -3011,4 +3011,108 @@ mod solve_uniq_expr {
             "Attr * (Attr Shared (Num (Attr Shared *)) -> Attr * (Num (Attr * *)))",
         );
     }
+
+    // OPTIONAL RECORD FIELDS
+
+    #[test]
+    fn optional_field_unifies_with_missing() {
+        infer_eq(
+            indoc!(
+                r#"
+                    negatePoint : { x : Int, y : Int, z ? Num c } -> { x : Int, y : Int, z : Num c }
+
+                    negatePoint { x: 1, y: 2 }
+                "#
+            ),
+            "Attr * { x : (Attr * Int), y : (Attr * Int), z : (Attr * (Num (Attr * c))) }",
+        );
+    }
+
+    #[test]
+    fn open_optional_field_unifies_with_missing() {
+        infer_eq(
+            indoc!(
+                r#"
+                    negatePoint : { x : Int, y : Int, z ? Num c }r -> { x : Int, y : Int, z : Num c }r
+
+                    a = negatePoint { x: 1, y: 2 }
+                    b = negatePoint { x: 1, y: 2, blah : "hi" }
+
+                    { a, b }
+                "#
+            ),
+            "Attr * { a : (Attr * { x : (Attr * Int), y : (Attr * Int), z : (Attr * (Num (Attr * c))) }), b : (Attr * { blah : (Attr * Str), x : (Attr * Int), y : (Attr * Int), z : (Attr * (Num (Attr * c))) }) }"
+        );
+    }
+
+    #[test]
+    fn optional_field_unifies_with_present() {
+        infer_eq(
+            indoc!(
+                r#"
+                    negatePoint : { x : Num a, y : Num b, z ? c } -> { x : Num a, y : Num b, z : c }
+
+                    negatePoint { x: 1, y: 2.1, z: 0x3 }
+                "#
+            ),
+            "Attr * { x : (Attr * (Num (Attr * a))), y : (Attr * Float), z : (Attr * Int) }",
+        );
+    }
+
+    #[test]
+    fn open_optional_field_unifies_with_present() {
+        infer_eq(
+            indoc!(
+                r#"
+                    negatePoint : { x : Num a, y : Num b, z ? c }r -> { x : Num a, y : Num b, z : c }r
+
+                    a = negatePoint { x: 1, y: 2.1 }
+                    b = negatePoint { x: 1, y: 2.1, blah : "hi" }
+
+                    { a, b }
+                "#
+            ),
+            "Attr * { a : (Attr * { x : (Attr * (Num (Attr * a))), y : (Attr * Float), z : (Attr * c) }), b : (Attr * { blah : (Attr * Str), x : (Attr * (Num (Attr * a))), y : (Attr * Float), z : (Attr * c) }) }"
+        );
+    }
+
+    #[test]
+    fn optional_field_function() {
+        infer_eq(
+            indoc!(
+                r#"
+                \{ x, y ? 0 } -> x + y
+                "#
+            ),
+            "Attr * (Attr (* | b | c) { x : (Attr b (Num (Attr b a))), y ? (Attr c (Num (Attr c a))) }* -> Attr d (Num (Attr d a)))"
+        );
+    }
+
+    #[test]
+    fn optional_field_let() {
+        infer_eq(
+            indoc!(
+                r#"
+                { x, y ? 0 } = { x: 32 }
+
+                x + y
+                "#
+            ),
+            "Attr a (Num (Attr a *))",
+        );
+    }
+
+    #[test]
+    fn optional_field_when() {
+        infer_eq(
+            indoc!(
+                r#"
+                \r ->
+                    when r is
+                        { x, y ? 0 } -> x + y
+                "#
+            ),
+            "Attr * (Attr (* | b | c) { x : (Attr b (Num (Attr b a))), y ? (Attr c (Num (Attr c a))) }* -> Attr d (Num (Attr d a)))"
+        );
+    }
 }

@@ -25,7 +25,9 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             Pattern::Nested(nested_pat) => nested_pat.is_multiline(),
 
             Pattern::RecordDestructure(fields) => fields.iter().any(|f| f.is_multiline()),
-            Pattern::RecordField(_, subpattern) => subpattern.is_multiline(),
+            Pattern::RequiredField(_, subpattern) => subpattern.is_multiline(),
+
+            Pattern::OptionalField(_, expr) => expr.is_multiline(),
 
             Pattern::Identifier(_)
             | Pattern::GlobalTag(_)
@@ -92,9 +94,15 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                 buf.push_str(" }");
             }
 
-            RecordField(name, loc_pattern) => {
+            RequiredField(name, loc_pattern) => {
                 buf.push_str(name);
                 buf.push_str(": ");
+                loc_pattern.format(buf, indent);
+            }
+
+            OptionalField(name, loc_pattern) => {
+                buf.push_str(name);
+                buf.push_str(" ? ");
                 loc_pattern.format(buf, indent);
             }
 
