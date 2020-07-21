@@ -662,6 +662,24 @@ mod test_can {
         assert_eq!(problems, Vec::new());
     }
 
+    #[test]
+    fn optional_field_not_unused() {
+        let src = indoc!(
+            r#"
+                fallbackZ = 3
+
+                fn = \{ x, y, z ? fallbackZ } ->
+                    { x, y, z }
+
+                fn { x: 0, y: 1 }
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
     //#[test]
     //fn closing_over_locals() {
     //    // "local" should be used, because the closure used it.
