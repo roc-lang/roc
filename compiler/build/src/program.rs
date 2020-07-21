@@ -25,7 +25,7 @@ use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
 // TODO this should probably use more helper functions
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
 #[allow(clippy::cognitive_complexity)]
-pub fn build(
+pub fn gen(
     arena: &Bump,
     loaded: LoadedModule,
     filename: PathBuf,
