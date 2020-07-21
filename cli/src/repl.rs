@@ -20,7 +20,7 @@ use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::expr::Procs;
-use roc_mono::layout::Layout;
+use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::parser::{loc, Fail, FailReason, Parser, State};
@@ -257,29 +257,45 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
         pointer_size: ptr_bytes,
         jump_counter: arena.alloc(0),
     };
+
     let main_body = roc_mono::expr::Expr::new(&mut mono_env, loc_expr.value, &mut procs);
+    let mut headers = {
+        let num_headers = match &procs.pending_specializations {
+            Some(map) => map.len(),
+            None => 0,
+        };
 
-    // Put this module's ident_ids back in the interns, so we can use them in Env.
-    env.interns.all_ident_ids.insert(home, ident_ids);
-
-    let mut headers = Vec::with_capacity(procs.len());
-    let (mut proc_map, runtime_errors) = procs.into_map();
+        Vec::with_capacity(num_headers)
+    };
+    let mut layout_cache = LayoutCache::default();
+    let mut procs = roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
     assert_eq!(
-        runtime_errors,
-        roc_collections::all::MutSet::default(),
-        "TODO code gen runtime exception functions"
+        procs.runtime_errors,
+        roc_collections::all::MutMap::default()
     );
+
+    // Put this module's ident_ids back in the interns, so we can use them in env.
+    // This must happen *after* building the headers, because otherwise there's
+    // a conflicting mutable borrow on ident_ids.
+    env.interns.all_ident_ids.insert(home, ident_ids);
 
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    for (symbol, mut procs_by_layout) in proc_map.drain() {
-        for (layout, proc) in procs_by_layout.drain() {
-            let (fn_val, arg_basic_types) =
-                build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+    for ((symbol, layout), proc) in procs.specialized.drain() {
+        use roc_mono::expr::InProgressProc::*;
 
-            headers.push((proc, fn_val, arg_basic_types));
+        match proc {
+            InProgress => {
+                panic!("A specialization was still marked InProgress after monomorphization had completed: {:?} with layout {:?}", symbol, layout);
+            }
+            Done(proc) => {
+                let (fn_val, arg_basic_types) =
+                    build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+
+                headers.push((proc, fn_val, arg_basic_types));
+            }
         }
     }
 
