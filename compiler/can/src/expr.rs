@@ -427,9 +427,10 @@ pub fn canonicalize_expr<'a>(
             let original_scope = scope;
             let mut scope = original_scope.clone();
             let mut can_args = Vec::with_capacity(loc_arg_patterns.len());
+            let mut output = Output::default();
 
             for loc_pattern in loc_arg_patterns.into_iter() {
-                let can_arg = canonicalize_pattern(
+                let (new_output, can_arg) = canonicalize_pattern(
                     env,
                     var_store,
                     &mut scope,
@@ -438,16 +439,21 @@ pub fn canonicalize_expr<'a>(
                     loc_pattern.region,
                 );
 
+                output.union(new_output);
+
                 can_args.push((var_store.fresh(), can_arg));
             }
 
-            let (loc_body_expr, mut output) = canonicalize_expr(
+            let (loc_body_expr, new_output) = canonicalize_expr(
                 env,
                 var_store,
                 &mut scope,
                 loc_body_expr.region,
                 &loc_body_expr.value,
             );
+
+            output.union(new_output);
+
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
             for (sub_symbol, region) in scope.symbols() {
@@ -713,14 +719,18 @@ fn canonicalize_when_branch<'a>(
 
     // TODO report symbols not bound in all patterns
     for loc_pattern in &branch.patterns {
-        patterns.push(canonicalize_pattern(
+        let (new_output, can_pattern) = canonicalize_pattern(
             env,
             var_store,
             &mut scope,
             WhenBranch,
             &loc_pattern.value,
             loc_pattern.region,
-        ));
+        );
+
+        output.union(new_output);
+
+        patterns.push(can_pattern);
     }
 
     let (value, mut branch_output) = canonicalize_expr(
