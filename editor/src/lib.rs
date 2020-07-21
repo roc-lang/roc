@@ -150,11 +150,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 ..
             } => {
                 if let Some(virtual_keycode) = input.virtual_keycode {
-                    handle_keydown(
-                        input.state,
-                        virtual_keycode,
-                        keyboard_modifiers,
-                    );
+                    handle_keydown(input.state, virtual_keycode, keyboard_modifiers);
                 }
             }
             winit::event::Event::WindowEvent {
