@@ -133,13 +133,13 @@ mod gen_list {
             indoc!(
                 r#"
                     firstList : List Int
-                    firstList = 
+                    firstList =
                         []
-                        
+
                     secondList : List Int
                     secondList =
                         []
-                         
+
                     List.append firstList secondList
                 "#
             ),
