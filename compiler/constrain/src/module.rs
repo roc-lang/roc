@@ -222,6 +222,7 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &mut V
                 let field_val = match field {
                     Required(typ) => Required(to_type(&typ, free_vars, var_store)),
                     Optional(typ) => Optional(to_type(&typ, free_vars, var_store)),
+                    Demanded(typ) => Demanded(to_type(&typ, free_vars, var_store)),
                 };
 
                 new_fields.insert(label.clone(), field_val);

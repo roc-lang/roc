@@ -409,6 +409,7 @@ impl<'a> Pattern<'a> {
     /// different locations/whitespace
     pub fn equivalent(&self, other: &Self) -> bool {
         use Pattern::*;
+
         match (self, other) {
             (Identifier(x), Identifier(y)) => x == y,
             (GlobalTag(x), GlobalTag(y)) => x == y,
@@ -428,21 +429,13 @@ impl<'a> Pattern<'a> {
             (RequiredField(x, inner_x), RequiredField(y, inner_y)) => {
                 x == y && inner_x.value.equivalent(&inner_y.value)
             }
-            (OptionalField(x, _inner_x), OptionalField(y, _inner_y)) => {
+            (OptionalField(x, _), OptionalField(y, _))
+            | (OptionalField(x, _), Identifier(y))
+            | (Identifier(x), OptionalField(y, _)) => {
+                // optional record fields can be annotated as:
+                //      { x, y } : { x : Int, y ? Bool }
+                //      { x, y ? False } = rec
                 x == y
-                // TODO
-                //
-                // We can give an annotation like so
-                //
-                // { x, y } : { x : Int, y : Bool }
-                // { x, y } = rec
-                //
-                // But what about:
-                //
-                // { x, y ? False } : { x : Int, y ? Bool }
-                // { x, y ? False } = rec
-                //
-                // inner_x.value.equivalent(&inner_y.value)
             }
             (Nested(x), Nested(y)) => x.equivalent(y),
 

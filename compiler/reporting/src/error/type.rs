@@ -953,6 +953,7 @@ fn to_pattern_report<'b>(
         }
 
         PExpected::ForReason(reason, expected_type, region) => match reason {
+            PReason::OptionalField => unreachable!("this will never be reached I think"),
             PReason::TypedArg { opt_name, index } => {
                 let name = match opt_name {
                     Some(n) => alloc.symbol_unqualified(n),
@@ -1097,6 +1098,7 @@ fn add_pattern_category<'b>(
         Record => alloc.reflow(" record values of type:"),
         EmptyRecord => alloc.reflow(" an empty record:"),
         PatternGuard => alloc.reflow(" a pattern guard of type:"),
+        PatternDefault => alloc.reflow(" an optional field of type:"),
         Set => alloc.reflow(" sets of type:"),
         Map => alloc.reflow(" maps of type:"),
         Ctor(tag_name) => alloc.concat(vec![
@@ -1151,6 +1153,7 @@ pub enum Problem {
     TagTypo(TagName, Vec<TagName>),
     TagsMissing(Vec<TagName>),
     BadRigidVar(Lowercase, ErrorType),
+    OptionalRequiredMismatch(Lowercase),
 }
 
 fn problems_to_hint<'b>(
@@ -1245,6 +1248,7 @@ fn to_comparison<'b>(
     }
 }
 
+#[derive(Debug)]
 pub enum Status {
     Similar,                 // the structure is the same or e.g. record fields are different
     Different(Vec<Problem>), // e.g. found Bool, expected Int
@@ -1343,6 +1347,9 @@ pub fn to_doc<'b>(
                                 }
                                 RecordField::Required(v) => {
                                     RecordField::Required(to_doc(alloc, Parens::Unnecessary, v))
+                                }
+                                RecordField::Demanded(v) => {
+                                    RecordField::Demanded(to_doc(alloc, Parens::Unnecessary, v))
                                 }
                             },
                         )
@@ -1643,6 +1650,7 @@ fn diff_record<'b>(
                     match t1 {
                         RecordField::Optional(_) => RecordField::Optional(diff.left),
                         RecordField::Required(_) => RecordField::Required(diff.left),
+                        RecordField::Demanded(_) => RecordField::Demanded(diff.left),
                     },
                 ),
                 right: (
@@ -1651,11 +1659,31 @@ fn diff_record<'b>(
                     match t2 {
                         RecordField::Optional(_) => RecordField::Optional(diff.right),
                         RecordField::Required(_) => RecordField::Required(diff.right),
+                        RecordField::Demanded(_) => RecordField::Demanded(diff.right),
                     },
                 ),
-                status: diff.status,
+                status: {
+                    match (&t1, &t2) {
+                        (RecordField::Demanded(_), RecordField::Optional(_))
+                        | (RecordField::Optional(_), RecordField::Demanded(_)) => match diff.status
+                        {
+                            Status::Similar => {
+                                Status::Different(vec![Problem::OptionalRequiredMismatch(
+                                    field.clone(),
+                                )])
+                            }
+                            Status::Different(mut problems) => {
+                                problems.push(Problem::OptionalRequiredMismatch(field.clone()));
+
+                                Status::Different(problems)
+                            }
+                        },
+                        _ => diff.status,
+                    }
+                },
             }
         };
+
     let to_unknown_docs = |(field, tipe): &(Lowercase, RecordField<ErrorType>)| {
         (
             field.clone(),
@@ -2006,6 +2034,9 @@ mod report_text {
             let entry_to_doc =
                 |(field_name, field_type): (RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)| {
                     match field_type {
+                        RecordField::Demanded(field) => {
+                            field_name.append(alloc.text(" : ")).append(field)
+                        }
                         RecordField::Required(field) => {
                             field_name.append(alloc.text(" : ")).append(field)
                         }
@@ -2414,5 +2445,13 @@ fn type_problem_to_pretty<'b>(
                 alloc.stack(vec![hint1, hint2])
             }
         },
+        OptionalRequiredMismatch(field) => alloc.hint().append(alloc.concat(vec![
+            alloc.reflow("To extract the "),
+            alloc.record_field(field),
+            alloc.reflow(
+                " field it must be non-optional, but the type says this field is optional. ",
+            ),
+            alloc.reflow("Learn more about optional fields at TODO."),
+        ])),
     }
 }

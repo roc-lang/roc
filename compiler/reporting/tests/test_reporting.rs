@@ -3525,9 +3525,171 @@ mod test_reporting {
     }
 
     #[test]
+    fn optional_record_invalid_let_binding() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \rec ->
+                    { x, y } : { x : Int, y ? Bool }
+                    { x, y } = rec
+
+                    { x, y }
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                Something is off with the body of this definition:
+
+                2 ┆>      { x, y } : { x : Int, y ? Bool }
+                3 ┆>      { x, y } = rec
+
+                The body is a value of type:
+
+                    { x : Int, y : Bool }
+
+                But the type annotation says it should be:
+
+                    { x : Int, y ? Bool }
+
+                Hint: To extract the `.y` field it must be non-optional, but the type
+                says this field is optional. Learn more about optional fields at TODO.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn optional_record_invalid_function() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { x : Int, y ? Int } -> Int
+                f = \{ x, y } -> x + y
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                The 1st argument to `f` is weird:
+
+                2 ┆  f = \{ x, y } -> x + y
+                  ┆       ^^^^^^^^
+
+                The argument is a pattern that matches record values of type:
+
+                    { x : Int, y : Int }
+
+                But the annotation on `f` says the 1st argument should be:
+
+                    { x : Int, y ? Int }
+
+                Hint: To extract the `.y` field it must be non-optional, but the type
+                says this field is optional. Learn more about optional fields at TODO.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn optional_record_invalid_when() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { x : Int, y ? Int } -> Int
+                f = \r ->
+                        when r is
+                            { x, y } -> x + y
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                The 1st pattern in this `when` is causing a mismatch:
+
+                4 ┆              { x, y } -> x + y
+                  ┆              ^^^^^^^^
+
+                The first pattern is trying to match record values of type:
+
+                    { x : Int, y : Int }
+
+                But the expression between `when` and `is` has the type:
+
+                    { x : Int, y ? Int }
+
+                Hint: To extract the `.y` field it must be non-optional, but the type
+                says this field is optional. Learn more about optional fields at TODO.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn optional_record_invalid_access() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : { x : Int, y ? Int } -> Int
+                f = \r -> r.y
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                This expression is used in an unexpected way:
+
+                2 ┆  f = \r -> r.y
+                  ┆            ^^^
+
+                This `r` value is a:
+
+                    { x : Int, y ? Int }
+
+                But you are trying to use it as:
+
+                    { x : Int, y : Int }
+
+                Hint: To extract the `.y` field it must be non-optional, but the type
+                says this field is optional. Learn more about optional fields at TODO.
+                "#
+            ),
+        )
+    }
+
+    // TODO field accessors give a parse error at the moment
+    //    #[test]
+    //    fn optional_record_invalid_accessor() {
+    //        report_problem_as(
+    //            indoc!(
+    //                r#"
+    //                f : { x : Int, y ? Int } -> Int
+    //                f = \r -> .y r
+    //
+    //                f
+    //                "#
+    //            ),
+    //            indoc!(
+    //                r#"
+    //                -- TYPE MISMATCH ---------------------------------------------------------------
+    //
+    //                "#
+    //            ),
+    //        )
+    //    }
+
+    #[test]
     fn guard_mismatch_with_annotation() {
-        // TODO improve this message
-        // The problem is the guard, and the message should point to that
         report_problem_as(
             indoc!(
                 r#"
@@ -3563,9 +3725,6 @@ mod test_reporting {
 
     #[test]
     fn optional_field_mismatch_with_annotation() {
-        // TODO improve this message
-        // The problem is the pattern match default
-        // the message should point to that.
         report_problem_as(
             indoc!(
                 r#"
