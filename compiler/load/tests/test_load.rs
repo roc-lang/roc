@@ -62,7 +62,7 @@ mod test_load {
         subs: &mut Subs,
         home: ModuleId,
         def: &Def,
-        expected_types: &HashMap<&str, &str>,
+        expected_types: &mut HashMap<&str, &str>,
     ) {
         for (symbol, expr_var) in &def.pattern_vars {
             let content = subs.get(*expr_var).content;
@@ -72,34 +72,30 @@ mod test_load {
             let actual_str = content_to_string(content, subs, home, &interns);
             let fully_qualified = symbol.fully_qualified(&interns, home).to_string();
             let expected_type = expected_types
-                .get(fully_qualified.as_str())
+                .remove(fully_qualified.as_str())
                 .unwrap_or_else(|| {
                     panic!("Defs included an unexpected symbol: {:?}", fully_qualified)
                 });
 
-            assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
+            assert_eq!((&symbol, expected_type), (&symbol, actual_str.as_str()));
         }
     }
 
-    fn expect_types(mut loaded_module: LoadedModule, expected_types: HashMap<&str, &str>) {
+    fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&str, &str>) {
         let home = loaded_module.module_id;
         let mut subs = loaded_module.solved.into_inner();
 
         assert_eq!(loaded_module.can_problems, Vec::new());
         assert_eq!(loaded_module.type_problems, Vec::new());
 
-        let mut num_decls = 0;
-
         for decl in loaded_module.declarations_by_id.remove(&home).unwrap() {
-            num_decls += 1;
-
             match decl {
                 Declare(def) => expect_def(
                     &loaded_module.interns,
                     &mut subs,
                     home,
                     &def,
-                    &expected_types,
+                    &mut expected_types,
                 ),
                 DeclareRec(defs) => {
                     for def in defs {
@@ -108,7 +104,7 @@ mod test_load {
                             &mut subs,
                             home,
                             &def,
-                            &expected_types,
+                            &mut expected_types,
                         );
                     }
                 }
@@ -119,7 +115,11 @@ mod test_load {
             };
         }
 
-        assert_eq!(expected_types.len(), num_decls);
+        assert_eq!(
+            expected_types,
+            HashMap::default(),
+            "Some expected types were not found in the defs"
+        );
     }
 
     // TESTS

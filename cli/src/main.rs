@@ -102,7 +102,7 @@ pub fn build(matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {
     } else {
         OptLevel::Normal
     };
-    let path = Path::new(filename);
+    let path = Path::new(filename).canonicalize().unwrap();
     let src_dir = path.parent().unwrap().canonicalize().unwrap();
 
     // Create the runtime
