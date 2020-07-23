@@ -616,6 +616,7 @@ fn occurs(
                             once(&ext_var).chain(vars_by_field.values().map(|field| match field {
                                 RecordField::Optional(var) => var,
                                 RecordField::Required(var) => var,
+                                RecordField::Demanded(var) => var,
                             }));
                         short_circuit(subs, root_var, &new_seen, it)
                     }
@@ -742,6 +743,9 @@ fn explicit_substitute(
                                     }
                                     Required(var) => {
                                         Required(explicit_substitute(subs, from, to, *var, seen))
+                                    }
+                                    Demanded(var) => {
+                                        Demanded(explicit_substitute(subs, from, to, *var, seen))
                                     }
                                 };
                             }
@@ -1017,6 +1021,7 @@ fn flat_type_to_err_type(
                 let err_type = match field_var {
                     Optional(var) => Optional(var_to_err_type(subs, state, var)),
                     Required(var) => Required(var_to_err_type(subs, state, var)),
+                    Demanded(var) => Demanded(var_to_err_type(subs, state, var)),
                 };
 
                 err_fields.insert(field, err_type);

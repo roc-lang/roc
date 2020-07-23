@@ -129,6 +129,7 @@ impl SolvedType {
                     let solved_type = match field {
                         Optional(typ) => RecordField::Optional(Self::from_type(solved_subs, typ)),
                         Required(typ) => RecordField::Required(Self::from_type(solved_subs, typ)),
+                        Demanded(typ) => RecordField::Demanded(Self::from_type(solved_subs, typ)),
                     };
 
                     solved_fields.push((label.clone(), solved_type));
@@ -246,6 +247,7 @@ impl SolvedType {
                     let solved_type = match field {
                         Optional(var) => Optional(Self::from_var(subs, var)),
                         Required(var) => Required(Self::from_var(subs, var)),
+                        Demanded(var) => Demanded(Self::from_var(subs, var)),
                     };
 
                     new_fields.push((label, solved_type));
