@@ -1,3 +1,4 @@
+use crate::builtins::builtin_defs;
 use crate::def::{canonicalize_defs, sort_can_defs, Declaration};
 use crate::env::Env;
 use crate::expr::Output;
@@ -114,7 +115,7 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let (defs, _scope, output, symbols_introduced) = canonicalize_defs(
+    let (mut defs, _scope, output, symbols_introduced) = canonicalize_defs(
         &mut env,
         Output::default(),
         var_store,
@@ -150,6 +151,14 @@ pub fn canonicalize_module_defs<'a>(
     // Gather up all the symbols that were referenced from other modules.
     for symbol in env.referenced_symbols.iter() {
         references.insert(*symbol);
+    }
+
+    // Add defs for any referenced builtins.
+    for (symbol, def) in builtin_defs(var_store) {
+        if output.references.lookups.contains(&symbol) || output.references.calls.contains(&symbol)
+        {
+            defs.can_defs_by_symbol.insert(symbol, def);
+        }
     }
 
     match sort_can_defs(&mut env, defs, Output::default()) {

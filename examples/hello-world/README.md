@@ -1,6 +1,6 @@
 # Hello, World!
 
-To run:
+To run, `cd` into this directory and run:
 
 ```bash
 $ cargo run run Hello.roc
@@ -42,4 +42,3 @@ Using this glue code, the Roc compiler can generate C header files describing th
 boundary. This not only gets us host compatibility with C compilers, but also 
 Rust FFI for free, because [`rust-bindgen`](https://github.com/rust-lang/rust-bindgen) 
 generates correct Rust FFI bindings from C headers.
-
