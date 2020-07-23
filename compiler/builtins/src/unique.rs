@@ -638,6 +638,37 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
+    // append : Attr * (List (Attr * a)), Attr * (List (Attr * a)) -> Attr * (List (Attr * a))
+    add_type(Symbol::LIST_APPEND, {
+        let_tvars! { a, star1, star2, star3 };
+
+        unique_function(
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        flex(star1),
+                        SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)]),
+                    ],
+                ),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        flex(star2),
+                        SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)]),
+                    ],
+                ),
+            ],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    boolean(star3),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)]),
+                ],
+            ),
+        )
+    });
+
     // push : Attr * (List a)
     //      , a
     //     -> Attr * (List a)

@@ -126,6 +126,107 @@ mod gen_list {
     }
 
     #[test]
+    fn list_append() {
+        assert_evals_to!("List.append [] []", &[], &'static [i64]);
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    firstList : List Int
+                    firstList =
+                        []
+
+                    secondList : List Int
+                    secondList =
+                        []
+
+                    List.append firstList secondList
+                "#
+            ),
+            &[],
+            &'static [i64]
+        );
+
+        assert_evals_to!("List.append [ 12, 13 ] []", &[12, 13], &'static [i64]);
+        assert_evals_to!(
+            "List.append [ 34, 43 ] [ 64, 55, 66 ]",
+            &[34, 43, 64, 55, 66],
+            &'static [i64]
+        );
+
+        assert_evals_to!("List.append [] [ 23, 24 ]", &[23, 24], &'static [i64]);
+
+        assert_evals_to!(
+            "List.append [ 1, 2 ] [ 3, 4 ]",
+            &[1, 2, 3, 4],
+            &'static [i64]
+        );
+    }
+
+    fn assert_append_worked(num_elems1: i64, num_elems2: i64) {
+        let vec1: Vec<i64> = (0..num_elems1)
+            .map(|i| 12345 % (i + num_elems1 + num_elems2 + 1))
+            .collect();
+        let vec2: Vec<i64> = (0..num_elems2)
+            .map(|i| 54321 % (i + num_elems1 + num_elems2 + 1))
+            .collect();
+        let slice_str1 = format!("{:?}", vec1);
+        let slice_str2 = format!("{:?}", vec2);
+        let mut expected = vec1;
+
+        expected.extend(vec2);
+
+        let expected_slice: &[i64] = expected.as_ref();
+
+        assert_evals_to!(
+            &format!("List.append {} {}", slice_str1, slice_str2),
+            expected_slice,
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_append_empty_list() {
+        assert_append_worked(0, 0);
+        assert_append_worked(1, 0);
+        assert_append_worked(2, 0);
+        assert_append_worked(3, 0);
+        assert_append_worked(4, 0);
+        assert_append_worked(7, 0);
+        assert_append_worked(8, 0);
+        assert_append_worked(9, 0);
+        assert_append_worked(25, 0);
+        assert_append_worked(150, 0);
+        assert_append_worked(0, 1);
+        assert_append_worked(0, 2);
+        assert_append_worked(0, 3);
+        assert_append_worked(0, 4);
+        assert_append_worked(0, 7);
+        assert_append_worked(0, 8);
+        assert_append_worked(0, 9);
+        assert_append_worked(0, 25);
+        assert_append_worked(0, 150);
+    }
+
+    #[test]
+    fn list_append_nonempty_lists() {
+        assert_append_worked(1, 1);
+        assert_append_worked(1, 2);
+        assert_append_worked(1, 3);
+        assert_append_worked(2, 3);
+        assert_append_worked(2, 1);
+        assert_append_worked(2, 2);
+        assert_append_worked(3, 1);
+        assert_append_worked(3, 2);
+        assert_append_worked(2, 3);
+        assert_append_worked(3, 3);
+        assert_append_worked(4, 4);
+        assert_append_worked(150, 150);
+        assert_append_worked(129, 350);
+        assert_append_worked(350, 129);
+    }
+
+    #[test]
     fn empty_list_len() {
         assert_evals_to!("List.len []", 0, usize);
     }
