@@ -59,7 +59,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_SINGLE => list_single,
         Symbol::LIST_REPEAT => list_repeat,
         Symbol::LIST_REVERSE => list_reverse,
-        Symbol::LIST_APPEND => list_append,
+        Symbol::LIST_CONCAT => list_concat,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_SUB => num_sub,
         Symbol::NUM_MUL => num_mul,
@@ -617,12 +617,12 @@ fn list_reverse(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.append : List elem, List elem -> List elem
-fn list_append(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// List.concat : List elem, List elem -> List elem
+fn list_concat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
 
     let body = RunLowLevel {
-        op: LowLevel::ListAppend,
+        op: LowLevel::ListConcat,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
             (list_var, Var(Symbol::ARG_2)),

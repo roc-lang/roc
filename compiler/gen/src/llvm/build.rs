@@ -1819,7 +1819,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
-        ListAppend => list_append(env, layout_ids, scope, parent, args),
+        ListConcat => list_concat(env, layout_ids, scope, parent, args),
         ListPush => {
             // List.push List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
@@ -2066,14 +2066,14 @@ fn build_int_binop<'a, 'ctx, 'env>(
     }
 }
 
-fn list_append<'a, 'ctx, 'env>(
+fn list_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     args: &[(Expr<'a>, Layout<'a>)],
 ) -> BasicValueEnum<'ctx> {
-    // List.append : List elem, List elem -> List elem
+    // List.concat : List elem, List elem -> List elem
     debug_assert_eq!(args.len(), 2);
 
     // This implementation is quite long, let me explain what is complicating it. Here are our
@@ -2162,7 +2162,7 @@ fn list_append<'a, 'ctx, 'env>(
                 }
                 _ => {
                     unreachable!(
-                        "Invalid List layout for second input list of List.append: {:?}",
+                        "Invalid List layout for second input list of List.concat: {:?}",
                         second_list_layout
                     );
                 }
@@ -2239,7 +2239,7 @@ fn list_append<'a, 'ctx, 'env>(
                             // FIRST LOOP
                             {
                                 let first_loop_bb =
-                                    ctx.append_basic_block(parent, "first_list_append_loop");
+                                    ctx.append_basic_block(parent, "first_list_concat_loop");
 
                                 builder.build_unconditional_branch(first_loop_bb);
                                 builder.position_at_end(first_loop_bb);
@@ -2310,7 +2310,7 @@ fn list_append<'a, 'ctx, 'env>(
                             // SECOND LOOP
                             {
                                 let second_loop_bb =
-                                    ctx.append_basic_block(parent, "second_list_append_loop");
+                                    ctx.append_basic_block(parent, "second_list_concat_loop");
 
                                 builder.build_unconditional_branch(second_loop_bb);
                                 builder.position_at_end(second_loop_bb);
@@ -2436,7 +2436,7 @@ fn list_append<'a, 'ctx, 'env>(
                     }
                     _ => {
                         unreachable!(
-                            "Invalid List layout for second input list of List.append: {:?}",
+                            "Invalid List layout for second input list of List.concat: {:?}",
                             second_list_layout
                         );
                     }
@@ -2481,7 +2481,7 @@ fn list_append<'a, 'ctx, 'env>(
                     }
                     _ => {
                         unreachable!(
-                            "Invalid List layout for second input list of List.append: {:?}",
+                            "Invalid List layout for second input list of List.concat: {:?}",
                             second_list_layout
                         );
                     }
@@ -2499,7 +2499,7 @@ fn list_append<'a, 'ctx, 'env>(
         }
         _ => {
             unreachable!(
-                "Invalid List layout for first list in List.append : {:?}",
+                "Invalid List layout for first list in List.concat : {:?}",
                 first_list_layout
             );
         }

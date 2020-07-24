@@ -638,8 +638,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // append : Attr * (List (Attr * a)), Attr * (List (Attr * a)) -> Attr * (List (Attr * a))
-    add_type(Symbol::LIST_APPEND, {
+    // concat : Attr * (List (Attr * a)), Attr * (List (Attr * a)) -> Attr * (List (Attr * a))
+    add_type(Symbol::LIST_CONCAT, {
         let_tvars! { a, star1, star2, star3 };
 
         unique_function(

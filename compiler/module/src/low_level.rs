@@ -10,7 +10,7 @@ pub enum LowLevel {
     ListSingle,
     ListRepeat,
     ListReverse,
-    ListAppend,
+    ListConcat,
     ListPush,
     NumAdd,
     NumSub,
