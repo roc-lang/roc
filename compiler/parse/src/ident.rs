@@ -81,6 +81,7 @@ where
     let mut is_capitalized;
     let is_accessor_fn;
     let mut is_private_tag = false;
+    let mut chars_parsed;
 
     // Identifiers and accessor functions must start with either a letter or a dot.
     // If this starts with neither, it must be something else!
@@ -96,6 +97,8 @@ where
                         is_private_tag = true;
                         is_capitalized = true;
                         is_accessor_fn = false;
+
+                        chars_parsed = 2;
                     }
                     Some(ch) => {
                         return Err(unexpected(ch, 0, state, Attempting::Identifier));
@@ -109,9 +112,13 @@ where
 
                 is_capitalized = ch.is_uppercase();
                 is_accessor_fn = false;
+
+                chars_parsed = 1;
             } else if ch == '.' {
                 is_capitalized = false;
                 is_accessor_fn = true;
+
+                chars_parsed = 1;
             } else {
                 return Err(unexpected(ch, 0, state, Attempting::Identifier));
             }
@@ -121,7 +128,6 @@ where
         }
     };
 
-    let mut chars_parsed = part_buf.len();
     let mut next_char = None;
 
     while let Some(ch) = chars.next() {
