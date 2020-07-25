@@ -68,6 +68,37 @@ mod gen_list {
     }
 
     #[test]
+    fn list_prepend() {
+        assert_evals_to!("List.prepend [] 1", &[1], &'static [i64]);
+        assert_evals_to!("List.prepend [2] 1", &[1, 2], &'static [i64]);
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    init : List Int
+                    init =
+                        []
+
+                    List.prepend (List.prepend init 4) 6
+                "#
+            ),
+            &[6, 4],
+            &'static [i64]
+        );
+
+        assert_evals_to!(
+            "List.prepend [ True, False ] True",
+            &[true, true, false],
+            &'static [bool]
+        );
+        assert_evals_to!(
+            "List.prepend [ 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 100, 100, 100, 100 ] 9",
+            &[9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 100, 100, 100, 100],
+            &'static [i64]
+        );
+    }
+
+    #[test]
     fn list_single() {
         assert_evals_to!("List.single 1", &[1], &'static [i64]);
         assert_evals_to!("List.single 5.6", &[5.6], &'static [f64]);

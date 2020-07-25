@@ -699,6 +699,36 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
+    // prepend : Attr * (List a)
+    //      , a
+    //     -> Attr * (List a)
+    //
+    // NOTE: we demand the new item to have the same uniqueness as the other list items.
+    // It could be allowed to add unique items to shared lists, but that requires special code gen
+    add_type(Symbol::LIST_PREPEND, {
+        let_tvars! { a, star1, star2 };
+
+        unique_function(
+            vec![
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        flex(star1),
+                        SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)]),
+                    ],
+                ),
+                flex(a),
+            ],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    boolean(star2),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)]),
+                ],
+            ),
+        )
+    });
+
     // List.map does not need to check the container rule on the input list.
     // There is no way in which this signature can cause unique values to be duplicated
     //
