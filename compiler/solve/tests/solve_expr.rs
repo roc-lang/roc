@@ -2362,7 +2362,7 @@ mod solve_expr {
                             []
 
                         Ok next ->
-                            List.push (reconstructPath cameFrom next) goal
+                            List.append (reconstructPath cameFrom next) goal
 
                 reconstructPath
                 "#
@@ -2534,7 +2534,7 @@ mod solve_expr {
                     x = []
 
                     when List.get input 0 is
-                        Ok val -> List.push x val
+                        Ok val -> List.append x val
                         Err _ -> f input
                 f
                 "#

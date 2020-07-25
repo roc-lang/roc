@@ -53,7 +53,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
         Symbol::LIST_SET => list_set,
-        Symbol::LIST_PUSH => list_push,
+        Symbol::LIST_APPEND => list_append,
         Symbol::LIST_FIRST => list_first,
         Symbol::LIST_IS_EMPTY => list_is_empty,
         Symbol::LIST_SINGLE => list_single,
@@ -856,13 +856,13 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.push : List elem, elem -> List elem
-fn list_push(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// List.append : List elem, elem -> List elem
+fn list_append(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let elem_var = var_store.fresh();
 
     let body = RunLowLevel {
-        op: LowLevel::ListPush,
+        op: LowLevel::ListAppend,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
             (elem_var, Var(Symbol::ARG_2)),

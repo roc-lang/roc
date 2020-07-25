@@ -669,13 +669,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // push : Attr * (List a)
+    // append : Attr * (List a)
     //      , a
     //     -> Attr * (List a)
     //
     // NOTE: we demand the new item to have the same uniqueness as the other list items.
     // It could be allowed to add unique items to shared lists, but that requires special code gen
-    add_type(Symbol::LIST_PUSH, {
+    add_type(Symbol::LIST_APPEND, {
         let_tvars! { a, star1, star2 };
 
         unique_function(

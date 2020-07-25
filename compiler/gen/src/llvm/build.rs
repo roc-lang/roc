@@ -1820,7 +1820,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             }
         }
         ListConcat => list_concat(env, layout_ids, scope, parent, args),
-        ListPush => {
+        ListAppend => {
             // List.push List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 

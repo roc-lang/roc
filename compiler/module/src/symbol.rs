@@ -648,7 +648,7 @@ define_builtins! {
         2 LIST_IS_EMPTY: "isEmpty"
         3 LIST_GET: "get"
         4 LIST_SET: "set"
-        5 LIST_PUSH: "push"
+        5 LIST_APPEND: "append"
         6 LIST_MAP: "map"
         7 LIST_LEN: "len"
         8 LIST_FOLDL: "foldl"
