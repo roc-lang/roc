@@ -53,7 +53,6 @@ fn simplify<'a>(pattern: &crate::expr::Pattern<'a>) -> Pattern {
         StrLiteral(v) => Literal(Literal::Str(v.clone())),
 
         // To make sure these are exhaustive, we have to "fake" a union here
-        // TODO: use the hash or some other integer to discriminate between constructors
         BitLiteral { value, union, .. } => Ctor(union.clone(), TagId(*value as u8), vec![]),
         EnumLiteral { tag_id, union, .. } => Ctor(union.clone(), TagId(*tag_id), vec![]),
 
@@ -217,7 +216,7 @@ fn is_exhaustive(matrix: &PatternMatrix, n: usize) -> PatternMatrix {
 
                 let last: _ = alt_list
                     .iter()
-                    .filter_map(|r| is_missing(alts.clone(), ctors.clone(), r));
+                    .filter_map(|r| is_missing(alts.clone(), &ctors, r));
 
                 let mut result = Vec::new();
 
@@ -257,7 +256,7 @@ fn is_exhaustive(matrix: &PatternMatrix, n: usize) -> PatternMatrix {
     }
 }
 
-fn is_missing<T>(union: Union, ctors: MutMap<TagId, T>, ctor: &Ctor) -> Option<Pattern> {
+fn is_missing<T>(union: Union, ctors: &MutMap<TagId, T>, ctor: &Ctor) -> Option<Pattern> {
     let Ctor { arity, tag_id, .. } = ctor;
 
     if ctors.contains_key(tag_id) {
@@ -368,16 +367,16 @@ fn is_useful(matrix: &PatternMatrix, vector: &Row) -> bool {
         match first_pattern {
             // keep checking rows that start with this Ctor or Anything
             Ctor(_, id, args) => {
-                let new_matrix: Vec<_> = matrix
-                    .iter()
-                    .filter_map(|r| specialize_row_by_ctor(id, args.len(), r))
-                    .collect();
+                let mut old_matrix = matrix.clone();
+                let mut matrix = vec![];
+
+                specialize_row_by_ctor2(id, args.len(), &mut old_matrix, &mut matrix);
 
                 let mut new_row = Vec::new();
                 new_row.extend(patterns);
                 new_row.extend(args);
 
-                is_useful(&new_matrix, &new_row)
+                is_useful(&matrix, &new_row)
             }
 
             Anything => {
@@ -387,28 +386,31 @@ fn is_useful(matrix: &PatternMatrix, vector: &Row) -> bool {
                         // This Anything is useful because some Ctors are missing.
                         // But what if a previous row has an Anything?
                         // If so, this one is not useful.
-                        let new_matrix: Vec<_> = matrix
-                            .iter()
-                            .filter_map(|r| specialize_row_by_anything(r))
-                            .collect();
+                        let mut old_matrix = matrix.clone();
+                        let mut matrix = vec![];
 
-                        is_useful(&new_matrix, &patterns)
+                        for mut row in old_matrix.drain(..) {
+                            if let Some(Anything) = row.pop() {
+                                matrix.push(row);
+                            }
+                        }
+
+                        is_useful(&matrix, &patterns)
                     }
                     Complete::Yes(alts) => {
                         // All Ctors are covered, so this Anything is not needed for any
                         // of those. But what if some of those Ctors have subpatterns
                         // that make them less general? If so, this actually is useful!
                         let is_useful_alt = |Ctor { arity, tag_id, .. }| {
-                            let new_matrix = matrix
-                                .iter()
-                                .filter_map(|r| specialize_row_by_ctor(tag_id, arity, r))
-                                .collect();
+                            let mut old_matrix = matrix.clone();
+                            let mut matrix = vec![];
+                            specialize_row_by_ctor2(tag_id, arity, &mut old_matrix, &mut matrix);
                             let mut new_row: Vec<Pattern> =
                                 std::iter::repeat(Anything).take(arity).collect::<Vec<_>>();
 
                             new_row.extend(patterns.clone());
 
-                            is_useful(&new_matrix, &new_row)
+                            is_useful(&matrix, &new_row)
                         };
 
                         alts.iter().cloned().any(is_useful_alt)
@@ -418,13 +420,69 @@ fn is_useful(matrix: &PatternMatrix, vector: &Row) -> bool {
 
             Literal(literal) => {
                 // keep checking rows that start with this Literal or Anything
-                let new_matrix = matrix
-                    .iter()
-                    .filter_map(|r| specialize_row_by_literal(&literal, r))
-                    .collect();
-                is_useful(&new_matrix, &patterns)
+                let mut old_matrix = matrix.clone();
+                let mut matrix = vec![];
+
+                for mut row in old_matrix.drain(..) {
+                    let head = row.pop();
+                    let patterns = row;
+
+                    match head {
+                        Some(Literal(lit)) => {
+                            if lit == literal {
+                                matrix.push(patterns);
+                            } else {
+                                // do nothing
+                            }
+                        }
+                        Some(Anything) => matrix.push(patterns),
+
+                        Some(Ctor(_, _, _)) => panic!(
+                            r#"Compiler bug! After type checking, constructors and literals should never align in pattern match exhaustiveness checks."#
+                        ),
+
+                        None => {
+                            panic!("Compiler error! Empty matrices should not get specialized.")
+                        }
+                    }
+                }
+                is_useful(&matrix, &patterns)
             }
         }
+    }
+}
+
+/// INVARIANT: (length row == N) ==> (length result == arity + N - 1)
+fn specialize_row_by_ctor2(
+    tag_id: TagId,
+    arity: usize,
+    old_matrix: &mut PatternMatrix,
+    matrix: &mut PatternMatrix,
+) {
+    for mut row in old_matrix.drain(..) {
+        let head = row.pop();
+        let patterns = row;
+
+        match head {
+        Some(Ctor(_, id, args)) =>
+            if id == tag_id {
+                // TODO order!
+                let mut new_patterns = Vec::new();
+                new_patterns.extend(args);
+                new_patterns.extend(patterns);
+                matrix.push(new_patterns);
+            } else {
+                // do nothing 
+            }
+        Some(Anything) => {
+            // TODO order!
+            let new_patterns =
+                    std::iter::repeat(Anything).take(arity).chain(patterns).collect();
+            matrix.push(new_patterns);
+            }
+        Some(Literal(_)) => panic!( "Compiler bug! After type checking, constructors and literal should never align in pattern match exhaustiveness checks."),
+        None => panic!("Compiler error! Empty matrices should not get specialized."),
+    }
     }
 }
 
