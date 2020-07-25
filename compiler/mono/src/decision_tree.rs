@@ -148,7 +148,7 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
         Some(goal) => DecisionTree::Match(goal),
         None => {
             // TODO remove clone
-            let path = pick_path(branches.clone());
+            let path = pick_path(&branches).clone();
 
             let (edges, fallback) = gather_edges(branches, &path);
 
@@ -731,22 +731,27 @@ fn needs_tests<'a>(pattern: &Pattern<'a>) -> bool {
 
 /// PICK A PATH
 
-fn pick_path(branches: Vec<Branch>) -> Path {
-    // TODO remove this clone
-    let all_paths = branches
-        .clone()
-        .into_iter()
-        .map(|v| v.patterns)
-        .flatten()
-        .filter_map(is_choice_path);
+fn pick_path<'a>(branches: &'a [Branch]) -> &'a Path {
+    let mut all_paths = Vec::with_capacity(branches.len());
 
-    let mut by_small_defaults = bests_by_small_defaults(&branches, all_paths);
+    // is choice path
+    for branch in branches {
+        for (path, guard, pattern) in &branch.patterns {
+            if !guard.is_none() || needs_tests(&pattern) {
+                all_paths.push(path);
+            } else {
+                // do nothing
+            }
+        }
+    }
+
+    let mut by_small_defaults = bests_by_small_defaults(branches, all_paths.into_iter());
 
     if by_small_defaults.len() == 1 {
         by_small_defaults.remove(0)
     } else {
         debug_assert!(!by_small_defaults.is_empty());
-        let mut result = bests_by_small_branching_factor(&branches, by_small_defaults.into_iter());
+        let mut result = bests_by_small_branching_factor(branches, by_small_defaults.into_iter());
 
         match result.pop() {
             None => unreachable!("bests_by will always return at least one value in the vec"),
@@ -755,33 +760,23 @@ fn pick_path(branches: Vec<Branch>) -> Path {
     }
 }
 
-fn is_choice_path<'a>(path_and_pattern: (Path, Guard<'a>, Pattern<'a>)) -> Option<Path> {
-    let (path, guard, pattern) = path_and_pattern;
-
-    if !guard.is_none() || needs_tests(&pattern) {
-        Some(path)
-    } else {
-        None
-    }
-}
-
-fn bests_by_small_branching_factor<I>(branches: &Vec<Branch>, mut all_paths: I) -> Vec<Path>
+fn bests_by_small_branching_factor<'a, I>(branches: &[Branch], mut all_paths: I) -> Vec<&'a Path>
 where
-    I: Iterator<Item = Path>,
+    I: Iterator<Item = &'a Path>,
 {
     match all_paths.next() {
         None => panic!("Cannot choose the best of zero paths. This should never happen."),
         Some(first_path) => {
-            let mut min_weight = small_branching_factor(branches, &first_path);
+            let mut min_weight = small_branching_factor(branches, first_path);
             let mut min_paths = vec![first_path];
 
             for path in all_paths {
-                let weight = small_branching_factor(branches, &path);
+                let weight = small_branching_factor(branches, path);
 
                 use std::cmp::Ordering;
                 match weight.cmp(&min_weight) {
                     Ordering::Equal => {
-                        min_paths.push(path.clone());
+                        min_paths.push(path);
                     }
                     Ordering::Less => {
                         min_weight = weight;
@@ -797,14 +792,14 @@ where
     }
 }
 
-fn bests_by_small_defaults<I>(branches: &Vec<Branch>, mut all_paths: I) -> Vec<Path>
+fn bests_by_small_defaults<'a, I>(branches: &[Branch], mut all_paths: I) -> Vec<&'a Path>
 where
-    I: Iterator<Item = Path>,
+    I: Iterator<Item = &'a Path>,
 {
     match all_paths.next() {
         None => panic!("Cannot choose the best of zero paths. This should never happen."),
         Some(first_path) => {
-            let mut min_weight = small_defaults(branches, &first_path);
+            let mut min_weight = small_defaults(branches, first_path);
             let mut min_paths = vec![first_path];
 
             for path in all_paths {
@@ -813,7 +808,7 @@ where
                 use std::cmp::Ordering;
                 match weight.cmp(&min_weight) {
                     Ordering::Equal => {
-                        min_paths.push(path.clone());
+                        min_paths.push(path);
                     }
                     Ordering::Less => {
                         min_weight = weight;
@@ -831,7 +826,7 @@ where
 
 /// PATH PICKING HEURISTICS
 
-fn small_defaults(branches: &Vec<Branch>, path: &Path) -> usize {
+fn small_defaults(branches: &[Branch], path: &Path) -> usize {
     branches
         .iter()
         .filter(|b| is_irrelevant_to(path, b))
@@ -839,7 +834,7 @@ fn small_defaults(branches: &Vec<Branch>, path: &Path) -> usize {
         .sum()
 }
 
-fn small_branching_factor(branches: &Vec<Branch>, path: &Path) -> usize {
+fn small_branching_factor(branches: &[Branch], path: &Path) -> usize {
     // TODO remove clone
     let (edges, fallback) = gather_edges(branches.to_vec(), path);
 
