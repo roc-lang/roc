@@ -147,9 +147,8 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
     match check_for_match(&branches) {
         Some(goal) => DecisionTree::Match(goal),
         None => {
-            // TODO remove clone
+            // must clone here to release the borrow on `branches`
             let path = pick_path(&branches).clone();
-
             let (edges, fallback) = gather_edges(branches, &path);
 
             let mut decision_edges: Vec<_> = edges
@@ -211,43 +210,47 @@ fn flatten<'a>(
     path_pattern: (Path, Guard<'a>, Pattern<'a>),
     path_patterns: &mut Vec<(Path, Guard<'a>, Pattern<'a>)>,
 ) {
-    match &path_pattern.2 {
+    match path_pattern.2 {
         Pattern::AppliedTag {
             union,
             arguments,
             tag_id,
-            ..
-        } => {
-            // TODO do we need to check that guard.is_none() here?
-            if union.alternatives.len() == 1 {
-                let path = path_pattern.0;
-                // Theory: unbox doesn't have any value for us, because one-element tag unions
-                // don't store the tag anyway.
-                if arguments.len() == 1 {
-                    path_patterns.push((
-                        Path::Unbox(Box::new(path)),
-                        path_pattern.1.clone(),
-                        path_pattern.2.clone(),
-                    ));
-                } else {
-                    for (index, (arg_pattern, _)) in arguments.iter().enumerate() {
-                        flatten(
-                            (
-                                Path::Index {
-                                    index: index as u64,
-                                    tag_id: *tag_id,
-                                    path: Box::new(path.clone()),
-                                },
-                                // same guard here?
-                                path_pattern.1.clone(),
-                                arg_pattern.clone(),
-                            ),
-                            path_patterns,
-                        );
-                    }
-                }
+            tag_name,
+            layout,
+        } if union.alternatives.len() == 1 => {
+            // TODO ^ do we need to check that guard.is_none() here?
+
+            let path = path_pattern.0;
+            // Theory: unbox doesn't have any value for us, because one-element tag unions
+            // don't store the tag anyway.
+            if arguments.len() == 1 {
+                path_patterns.push((
+                    Path::Unbox(Box::new(path)),
+                    path_pattern.1.clone(),
+                    Pattern::AppliedTag {
+                        union,
+                        arguments,
+                        tag_id,
+                        tag_name,
+                        layout,
+                    },
+                ));
             } else {
-                path_patterns.push(path_pattern);
+                for (index, (arg_pattern, _)) in arguments.iter().enumerate() {
+                    flatten(
+                        (
+                            Path::Index {
+                                index: index as u64,
+                                tag_id,
+                                path: Box::new(path.clone()),
+                            },
+                            // same guard here?
+                            path_pattern.1.clone(),
+                            arg_pattern.clone(),
+                        ),
+                        path_patterns,
+                    );
+                }
             }
         }
 
@@ -282,8 +285,7 @@ fn gather_edges<'a>(
     branches: Vec<Branch<'a>>,
     path: &Path,
 ) -> (Vec<(Test<'a>, Vec<Branch<'a>>)>, Vec<Branch<'a>>) {
-    // TODO remove clone
-    let relevant_tests = tests_at_path(path, branches.clone());
+    let relevant_tests = tests_at_path(path, &branches);
 
     let check = is_complete(&relevant_tests);
 
@@ -307,12 +309,12 @@ fn gather_edges<'a>(
 
 /// FIND RELEVANT TESTS
 
-fn tests_at_path<'a>(selected_path: &Path, branches: Vec<Branch<'a>>) -> Vec<Test<'a>> {
+fn tests_at_path<'a>(selected_path: &Path, branches: &[Branch<'a>]) -> Vec<Test<'a>> {
     // NOTE the ordering of the result is important!
 
     let mut all_tests = Vec::new();
 
-    for branch in branches.into_iter() {
+    for branch in branches {
         test_at_path(selected_path, branch, &mut all_tests);
     }
 
@@ -341,7 +343,7 @@ fn tests_at_path<'a>(selected_path: &Path, branches: Vec<Branch<'a>>) -> Vec<Tes
     unique
 }
 
-fn test_at_path<'a>(selected_path: &Path, branch: Branch<'a>, all_tests: &mut Vec<Test<'a>>) {
+fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut Vec<Test<'a>>) {
     use Pattern::*;
     use Test::*;
 
@@ -457,7 +459,7 @@ fn edges_for<'a>(
 ) -> (Test<'a>, Vec<Branch<'a>>) {
     let mut new_branches = Vec::new();
 
-    for branch in branches.into_iter() {
+    for branch in branches.iter() {
         to_relevant_branch(&test, path, branch, &mut new_branches);
     }
 
@@ -467,13 +469,13 @@ fn edges_for<'a>(
 fn to_relevant_branch<'a>(
     test: &Test<'a>,
     path: &Path,
-    branch: Branch<'a>,
+    branch: &Branch<'a>,
     new_branches: &mut Vec<Branch<'a>>,
 ) {
     // TODO remove clone
     match extract(path, branch.patterns.clone()) {
         Extract::NotFound => {
-            new_branches.push(branch);
+            new_branches.push(branch.clone());
         }
         Extract::Found {
             start,
@@ -509,7 +511,7 @@ fn to_relevant_branch_help<'a>(
     path: &Path,
     mut start: Vec<(Path, Guard<'a>, Pattern<'a>)>,
     end: Vec<(Path, Guard<'a>, Pattern<'a>)>,
-    branch: Branch<'a>,
+    branch: &Branch<'a>,
     guard: Guard<'a>,
     pattern: Pattern<'a>,
 ) -> Option<Branch<'a>> {
@@ -517,7 +519,7 @@ fn to_relevant_branch_help<'a>(
     use Test::*;
 
     match pattern {
-        Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => Some(branch),
+        Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => Some(branch.clone()),
 
         RecordDestructure(destructs, _) => match test {
             IsCtor {
@@ -678,19 +680,14 @@ fn extract<'a>(
 ) -> Extract<'a> {
     let mut start = Vec::new();
 
-    // TODO remove this clone
-    let mut copy = path_patterns.clone();
-
     // TODO potential ordering problem
-    for (index, current) in path_patterns.into_iter().enumerate() {
+    let mut it = path_patterns.into_iter();
+    while let Some(current) = it.next() {
         if &current.0 == selected_path {
             return Extract::Found {
                 start,
                 found_pattern: (current.1, current.2),
-                end: {
-                    copy.drain(0..=index);
-                    copy
-                },
+                end: it.collect::<Vec<_>>(),
             };
         } else {
             start.push(current);
