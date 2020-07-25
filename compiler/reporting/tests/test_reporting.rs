@@ -3667,26 +3667,40 @@ mod test_reporting {
         )
     }
 
-    // TODO field accessors give a parse error at the moment
-    //    #[test]
-    //    fn optional_record_invalid_accessor() {
-    //        report_problem_as(
-    //            indoc!(
-    //                r#"
-    //                f : { x : Int, y ? Int } -> Int
-    //                f = \r -> .y r
-    //
-    //                f
-    //                "#
-    //            ),
-    //            indoc!(
-    //                r#"
-    //                -- TYPE MISMATCH ---------------------------------------------------------------
-    //
-    //                "#
-    //            ),
-    //        )
-    //    }
+    #[test]
+    fn optional_record_invalid_accessor() {
+        report_problem_as(
+            indoc!(
+                r#"
+                    f : { x : Int, y ? Int } -> Int
+                    f = \r -> .y r
+
+                    f
+                    "#
+            ),
+            indoc!(
+                r#"
+                -- TYPE MISMATCH ---------------------------------------------------------------
+
+                The 1st argument to this function is not what I expect:
+
+                2 ┆  f = \r -> .y r
+                  ┆               ^
+
+                This `r` value is a:
+
+                    { x : Int, y ? Int }
+
+                But this function needs the 1st argument to be:
+
+                    { x : Int, y : Int }
+
+                Hint: To extract the `.y` field it must be non-optional, but the type
+                says this field is optional. Learn more about optional fields at TODO.
+                "#
+            ),
+        )
+    }
 
     #[test]
     fn guard_mismatch_with_annotation() {
