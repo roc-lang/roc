@@ -1568,15 +1568,7 @@ fn list_prepend<'a, 'ctx, 'env>(
     let int_type = ptr_int(ctx, ptr_bytes);
     let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
 
-    let elem_ptr = unsafe {
-        builder.build_in_bounds_gep(
-            clone_ptr,
-            &[ctx.i64_type().const_int(0 as u64, false)],
-            "load_index",
-        )
-    };
-
-    builder.build_store(elem_ptr, elem);
+    builder.build_store(clone, elem);
 
     let index_1_ptr = unsafe {
         builder.build_in_bounds_gep(
