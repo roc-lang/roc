@@ -2170,6 +2170,7 @@ dependencies = [
  "indoc",
  "inlinable_string",
  "maplit",
+ "memmap",
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",

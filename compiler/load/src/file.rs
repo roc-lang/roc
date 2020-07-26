@@ -1,4 +1,5 @@
 use bumpalo::Bump;
+use memmap::MmapOptions;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
@@ -19,9 +20,10 @@ use roc_solve::solve;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
 use std::collections::{HashMap, HashSet};
-use std::fs::read_to_string;
+use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::str::from_utf8_unchecked;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio::task::spawn_blocking;
@@ -526,57 +528,81 @@ fn load_module(
     load_filename(filename, msg_tx, module_ids)
 }
 
+fn parse_src(
+    filename: PathBuf,
+    msg_tx: MsgSender,
+    module_ids: SharedModules<'_, '_>,
+    src: &str
+) -> Result<ModuleId, LoadingProblem> {
+    let state = State::new(src, Attempting::Module);
+    let arena = Bump::new();
+
+    // TODO figure out if there's a way to address this clippy error
+    // without introducing a borrow error. ("let and return" is literally
+    // what the borrow checker suggested using here to fix the problem, so...)
+    #[allow(clippy::let_and_return)]
+    let answer = match roc_parse::module::header().parse(&arena, state) {
+        Ok((ast::Module::Interface { header }, state)) => {
+            let module_id = send_header(
+                header.name,
+                header.exposes.into_bump_slice(),
+                header.imports.into_bump_slice(),
+                state,
+                module_ids,
+                msg_tx,
+            );
+
+            Ok(module_id)
+        }
+        Ok((ast::Module::App { header }, state)) => match module_ids {
+            MaybeShared::Shared(_, _) => {
+                // If this is Shared, it means we're trying to import
+                // an app module which is not the root. Not alllowed!
+                Err(LoadingProblem::TriedToImportAppModule)
+            }
+            unique_modules @ MaybeShared::Unique(_, _) => {
+                let module_id = send_header(
+                    header.name,
+                    header.provides.into_bump_slice(),
+                    header.imports.into_bump_slice(),
+                    state,
+                    unique_modules,
+                    msg_tx,
+                );
+
+                Ok(module_id)
+            }
+        },
+        Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
+    };
+
+    answer
+}
+
 /// Load a module by its filename
+///
+/// This has two unsafe calls:
+///
+/// * memory map the filename instead of doing a buffered read
+/// * assume the contents of the file are valid utf8
 fn load_filename(
     filename: PathBuf,
     msg_tx: MsgSender,
     module_ids: SharedModules<'_, '_>,
 ) -> Result<ModuleId, LoadingProblem> {
-    match read_to_string(&filename) {
-        Ok(src) => {
-            let arena = Bump::new();
-            let state = State::new(&src, Attempting::Module);
+    match File::open(&filename) {
+        Ok(file) => {
+            match unsafe { MmapOptions::new().map(&file) } {
+                Ok(mmap) => {
+                    let src = unsafe { from_utf8_unchecked(mmap.as_ref()) };
 
-            // TODO figure out if there's a way to address this clippy error
-            // without introducing a borrow error. ("let and return" is literally
-            // what the borrow checker suggested using here to fix the problem, so...)
-            #[allow(clippy::let_and_return)]
-            let answer = match roc_parse::module::header().parse(&arena, state) {
-                Ok((ast::Module::Interface { header }, state)) => {
-                    let module_id = send_header(
-                        header.name,
-                        header.exposes.into_bump_slice(),
-                        header.imports.into_bump_slice(),
-                        state,
-                        module_ids,
-                        msg_tx,
-                    );
-
-                    Ok(module_id)
+                    parse_src(filename, msg_tx, module_ids, src)
                 }
-                Ok((ast::Module::App { header }, state)) => match module_ids {
-                    MaybeShared::Shared(_, _) => {
-                        // If this is Shared, it means we're trying to import
-                        // an app module which is not the root. Not alllowed!
-                        Err(LoadingProblem::TriedToImportAppModule)
-                    }
-                    unique_modules @ MaybeShared::Unique(_, _) => {
-                        let module_id = send_header(
-                            header.name,
-                            header.provides.into_bump_slice(),
-                            header.imports.into_bump_slice(),
-                            state,
-                            unique_modules,
-                            msg_tx,
-                        );
-
-                        Ok(module_id)
-                    }
-                },
-                Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
-            };
-
-            answer
+                Err(err) => Err(LoadingProblem::FileProblem {
+                    filename,
+                    error: err.kind(),
+                }),
+            }
         }
         Err(err) => Err(LoadingProblem::FileProblem {
             filename,
