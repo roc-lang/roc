@@ -352,6 +352,10 @@ pub enum Expr<'a> {
     },
     EmptyArray,
 
+    /// RC instructions
+    IncBefore(Symbol, &'a Expr<'a>),
+    DecAfter(Symbol, &'a Expr<'a>),
+
     RuntimeError(&'a str),
 }
 
@@ -600,12 +604,20 @@ fn from_can<'a>(
                     layout_cache,
                 )
             } else {
-                Expr::Load(symbol)
+                Expr::IncBefore(symbol, env.arena.alloc(Expr::Load(symbol)))
             }
         }
         LetRec(defs, ret_expr, _, _) => from_can_defs(env, defs, *ret_expr, layout_cache, procs),
         LetNonRec(def, ret_expr, _, _) => {
-            from_can_defs(env, vec![*def], *ret_expr, layout_cache, procs)
+            let symbols = roc_can::pattern::symbols_from_pattern(&def.loc_pattern.value);
+            let mut result = from_can_defs(env, vec![*def], *ret_expr, layout_cache, procs);
+
+            // TODO is order important here?
+            for symbol in symbols {
+                result = Expr::DecAfter(symbol, env.arena.alloc(result));
+            }
+
+            result
         }
 
         Closure(ann, name, _, loc_args, boxed_body) => {
@@ -1208,6 +1220,13 @@ fn from_can_when<'a>(
         let arena = env.arena;
         let mut stored = Vec::with_capacity_in(1, arena);
 
+        let bound_symbols = first
+            .patterns
+            .iter()
+            .map(|pat| roc_can::pattern::symbols_from_pattern(&pat.value))
+            .flatten()
+            .collect::<std::vec::Vec<_>>();
+
         let loc_when_pattern = &first.patterns[0];
 
         let mono_pattern = from_can_pattern(env, procs, layout_cache, &loc_when_pattern.value);
@@ -1247,10 +1266,15 @@ fn from_can_when<'a>(
 
         // NOTE this will still store shadowed names.
         // that's fine: the branch throws a runtime error anyway
-        let ret = match store_pattern(env, &mono_pattern, cond_symbol, cond_layout, &mut stored) {
+        let mut ret = match store_pattern(env, &mono_pattern, cond_symbol, cond_layout, &mut stored)
+        {
             Ok(_) => from_can(env, first.value.value, procs, layout_cache),
             Err(message) => Expr::RuntimeError(env.arena.alloc(message)),
         };
+
+        for symbol in bound_symbols {
+            ret = Expr::DecAfter(symbol, env.arena.alloc(ret));
+        }
 
         Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
     } else {
@@ -1612,7 +1636,13 @@ fn specialize<'a>(
 
     debug_assert!(matches!(unified, roc_unify::unify::Unified::Success(_)));
 
-    let specialized_body = from_can(env, body, procs, layout_cache);
+    let mut specialized_body = from_can(env, body, procs, layout_cache);
+
+    // TODO does order matter here?
+    for &symbol in pattern_symbols.iter() {
+        specialized_body = Expr::DecAfter(symbol, env.arena.alloc(specialized_body));
+    }
+
     // reset subs, so we don't get type errors when specializing for a different signature
     env.subs.rollback_to(snapshot);
 

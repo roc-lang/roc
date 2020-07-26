@@ -717,6 +717,9 @@ pub fn build_expr<'a, 'ctx, 'env>(
             todo!("LLVM build runtime error of {:?}", expr);
         }
         RunLowLevel(op, args) => run_low_level(env, layout_ids, scope, parent, *op, args),
+
+        IncBefore(_, expr) => build_expr(env, layout_ids, scope, parent, expr),
+        DecAfter(_, expr) => build_expr(env, layout_ids, scope, parent, expr),
     }
 }
 
