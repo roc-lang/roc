@@ -1194,6 +1194,7 @@ fn decide_to_branching<'a>(
                 Expr::Switch {
                     cond: env.arena.alloc(cond),
                     cond_layout,
+                    cond_symbol,
                     branches: branches.into_bump_slice(),
                     default_branch,
                     ret_layout,

@@ -11,6 +11,7 @@ mod helpers;
 mod test_mono {
     use crate::helpers::{can_expr, infer_expr, test_home, CanExprOut};
     use bumpalo::Bump;
+    use roc_module::ident::TagName;
     use roc_module::symbol::{Interns, Symbol};
     use roc_mono::expr::Expr::{self, *};
     use roc_mono::expr::Procs;
@@ -166,30 +167,33 @@ mod test_mono {
                 let home = test_home();
                 let gen_symbol_0 = Interns::from_index(home, 0);
 
-                Struct(&[
-                    (
-                        CallByName {
-                            name: gen_symbol_0,
-                            layout: Layout::FunctionPointer(
-                                &[Layout::Builtin(Builtin::Int64)],
-                                &Layout::Builtin(Builtin::Int64),
-                            ),
-                            args: &[(Int(4), Layout::Builtin(Int64))],
-                        },
-                        Layout::Builtin(Int64),
-                    ),
-                    (
-                        CallByName {
-                            name: gen_symbol_0,
-                            layout: Layout::FunctionPointer(
-                                &[Layout::Builtin(Builtin::Float64)],
-                                &Layout::Builtin(Builtin::Float64),
-                            ),
-                            args: &[(Float(3.14), Layout::Builtin(Float64))],
-                        },
-                        Layout::Builtin(Float64),
-                    ),
-                ])
+                DecAfter(
+                    gen_symbol_0,
+                    &Struct(&[
+                        (
+                            CallByName {
+                                name: gen_symbol_0,
+                                layout: Layout::FunctionPointer(
+                                    &[Layout::Builtin(Builtin::Int64)],
+                                    &Layout::Builtin(Builtin::Int64),
+                                ),
+                                args: &[(Int(4), Layout::Builtin(Int64))],
+                            },
+                            Layout::Builtin(Int64),
+                        ),
+                        (
+                            CallByName {
+                                name: gen_symbol_0,
+                                layout: Layout::FunctionPointer(
+                                    &[Layout::Builtin(Builtin::Float64)],
+                                    &Layout::Builtin(Builtin::Float64),
+                                ),
+                                args: &[(Float(3.14), Layout::Builtin(Float64))],
+                            },
+                            Layout::Builtin(Float64),
+                        ),
+                    ]),
+                )
             },
         )
     }
@@ -299,27 +303,30 @@ mod test_mono {
                 let gen_symbol_0 = Interns::from_index(home, 1);
                 let symbol_x = Interns::from_index(home, 0);
 
-                Store(
-                    &[(
-                        symbol_x,
-                        Builtin(Str),
-                        Store(
-                            &[(
-                                gen_symbol_0,
-                                Layout::Builtin(layout::Builtin::Int1),
-                                Expr::Bool(true),
-                            )],
-                            &Cond {
-                                cond_symbol: gen_symbol_0,
-                                branch_symbol: gen_symbol_0,
-                                cond_layout: Builtin(Int1),
-                                pass: (&[] as &[_], &Expr::Str("bar")),
-                                fail: (&[] as &[_], &Expr::Str("foo")),
-                                ret_layout: Builtin(Str),
-                            },
-                        ),
-                    )],
-                    &Load(symbol_x),
+                DecAfter(
+                    symbol_x,
+                    &Store(
+                        &[(
+                            symbol_x,
+                            Builtin(Str),
+                            Store(
+                                &[(
+                                    gen_symbol_0,
+                                    Layout::Builtin(layout::Builtin::Int1),
+                                    Expr::Bool(true),
+                                )],
+                                &Cond {
+                                    cond_symbol: gen_symbol_0,
+                                    branch_symbol: gen_symbol_0,
+                                    cond_layout: Builtin(Int1),
+                                    pass: (&[] as &[_], &Expr::Str("bar")),
+                                    fail: (&[] as &[_], &Expr::Str("foo")),
+                                    ret_layout: Builtin(Str),
+                                },
+                            ),
+                        )],
+                        &Load(symbol_x),
+                    ),
                 )
             },
         )
@@ -359,27 +366,30 @@ mod test_mono {
                 let gen_symbol_0 = Interns::from_index(home, 0);
                 let struct_layout = Layout::Struct(&[I64_LAYOUT, F64_LAYOUT]);
 
-                CallByName {
-                    name: gen_symbol_0,
-                    layout: Layout::FunctionPointer(
-                        &[struct_layout.clone()],
-                        &struct_layout.clone(),
-                    ),
-                    args: &[(
-                        Struct(&[
-                            (
-                                CallByName {
-                                    name: gen_symbol_0,
-                                    layout: Layout::FunctionPointer(&[I64_LAYOUT], &I64_LAYOUT),
-                                    args: &[(Int(4), I64_LAYOUT)],
-                                },
-                                I64_LAYOUT,
-                            ),
-                            (Float(0.1), F64_LAYOUT),
-                        ]),
-                        struct_layout,
-                    )],
-                }
+                DecAfter(
+                    gen_symbol_0,
+                    &CallByName {
+                        name: gen_symbol_0,
+                        layout: Layout::FunctionPointer(
+                            &[struct_layout.clone()],
+                            &struct_layout.clone(),
+                        ),
+                        args: &[(
+                            Struct(&[
+                                (
+                                    CallByName {
+                                        name: gen_symbol_0,
+                                        layout: Layout::FunctionPointer(&[I64_LAYOUT], &I64_LAYOUT),
+                                        args: &[(Int(4), I64_LAYOUT)],
+                                    },
+                                    I64_LAYOUT,
+                                ),
+                                (Float(0.1), F64_LAYOUT),
+                            ]),
+                            struct_layout,
+                        )],
+                    },
+                )
             },
         )
     }
@@ -493,7 +503,9 @@ mod test_mono {
 
                 let load = Load(var_x);
 
-                Store(arena.alloc(stores), arena.alloc(load))
+                let store = Store(arena.alloc(stores), arena.alloc(load));
+
+                DecAfter(var_x, arena.alloc(store))
             },
         );
     }
@@ -517,7 +529,9 @@ mod test_mono {
 
                 let load = Load(var_x);
 
-                Store(arena.alloc(stores), arena.alloc(load))
+                let store = Store(arena.alloc(stores), arena.alloc(load));
+
+                DecAfter(var_x, arena.alloc(store))
             },
         );
     }
@@ -543,7 +557,9 @@ mod test_mono {
 
                 let load = Load(var_x);
 
-                Store(arena.alloc(stores), arena.alloc(load))
+                let store = Store(arena.alloc(stores), arena.alloc(load));
+
+                DecAfter(var_x, arena.alloc(store))
             },
         );
     }
@@ -589,33 +605,143 @@ mod test_mono {
         });
     }
 
-    //    #[test]
-    //    fn when_on_result() {
-    //        compiles_to(
-    //            r#"
-    //            when 1 is
-    //                1 -> 12
-    //                _ -> 34
-    //            "#,
-    //            {
-    //                use self::Builtin::*;
-    //                use Layout::Builtin;
-    //                let home = test_home();
+    //        #[test]
+    //        fn when_on_result() {
+    //            compiles_to(
+    //                r#"
+    //                when 1 is
+    //                    1 -> 12
+    //                    _ -> 34
+    //                "#,
+    //                {
+    //                    use self::Builtin::*;
+    //                    use Layout::Builtin;
+    //                    let home = test_home();
     //
-    //                let gen_symbol_3 = Interns::from_index(home, 3);
-    //                let gen_symbol_4 = Interns::from_index(home, 4);
+    //                    let gen_symbol_3 = Interns::from_index(home, 3);
+    //                    let gen_symbol_4 = Interns::from_index(home, 4);
     //
-    //                CallByName(
-    //                    gen_symbol_3,
-    //                    &[(
-    //                        Struct(&[(
-    //                            CallByName(gen_symbol_4, &[(Int(4), Builtin(Int64))]),
-    //                            Builtin(Int64),
-    //                        )]),
-    //                        Layout::Struct(&[("x".into(), Builtin(Int64))]),
-    //                    )],
-    //                )
-    //            },
-    //        )
-    //    }
+    //                    CallByName(
+    //                        gen_symbol_3,
+    //                        &[(
+    //                            Struct(&[(
+    //                                CallByName(gen_symbol_4, &[(Int(4), Builtin(Int64))]),
+    //                                Builtin(Int64),
+    //                            )]),
+    //                            Layout::Struct(&[("x".into(), Builtin(Int64))]),
+    //                        )],
+    //                    )
+    //                },
+    //            )
+    //        }
+
+    #[test]
+    fn insert_reset_reuse() {
+        compiles_to(
+            r#"
+            when Foo 1 is
+                Foo _ -> Foo 1
+                Bar -> Foo 2
+                Baz -> Foo 2
+                a -> a
+            "#,
+            {
+                use self::Builtin::*;
+                use Layout::{Builtin, Union};
+
+                let home = test_home();
+                let gen_symbol_1 = Interns::from_index(home, 1);
+
+                let union_layout = Union(&[
+                    &[Builtin(Int64)],
+                    &[Builtin(Int64)],
+                    &[Builtin(Int64), Builtin(Int64)],
+                ]);
+
+                Store(
+                    &[(
+                        gen_symbol_1,
+                        union_layout.clone(),
+                        Tag {
+                            tag_layout: union_layout.clone(),
+                            tag_name: TagName::Global("Foo".into()),
+                            tag_id: 2,
+                            union_size: 3,
+                            arguments: &[(Int(2), Builtin(Int64)), (Int(1), Builtin(Int64))],
+                        },
+                    )],
+                    &Store(
+                        &[],
+                        &Switch {
+                            cond: &Load(gen_symbol_1),
+                            cond_symbol: gen_symbol_1,
+                            branches: &[
+                                (
+                                    2,
+                                    &[],
+                                    Reset(
+                                        gen_symbol_1,
+                                        &Reuse(
+                                            gen_symbol_1,
+                                            &Tag {
+                                                tag_layout: union_layout.clone(),
+                                                tag_name: TagName::Global("Foo".into()),
+                                                tag_id: 2,
+                                                union_size: 3,
+                                                arguments: &[
+                                                    (Int(2), Builtin(Int64)),
+                                                    (Int(1), Builtin(Int64)),
+                                                ],
+                                            },
+                                        ),
+                                    ),
+                                ),
+                                (
+                                    0,
+                                    &[],
+                                    Reset(
+                                        gen_symbol_1,
+                                        &Reuse(
+                                            gen_symbol_1,
+                                            &Tag {
+                                                tag_layout: union_layout.clone(),
+                                                tag_name: TagName::Global("Foo".into()),
+                                                tag_id: 2,
+                                                union_size: 3,
+                                                arguments: &[
+                                                    (Int(2), Builtin(Int64)),
+                                                    (Int(2), Builtin(Int64)),
+                                                ],
+                                            },
+                                        ),
+                                    ),
+                                ),
+                            ],
+                            default_branch: (
+                                &[],
+                                &Reset(
+                                    gen_symbol_1,
+                                    &Reuse(
+                                        gen_symbol_1,
+                                        &Tag {
+                                            tag_layout: union_layout.clone(),
+                                            tag_name: TagName::Global("Foo".into()),
+                                            tag_id: 2,
+                                            union_size: 3,
+                                            arguments: &[
+                                                (Int(2), Builtin(Int64)),
+                                                (Int(2), Builtin(Int64)),
+                                            ],
+                                        },
+                                    ),
+                                ),
+                            ),
+                            ret_layout: union_layout.clone(),
+                            cond_layout: union_layout,
+                        },
+                    ),
+                )
+            },
+        )
+    }
 }

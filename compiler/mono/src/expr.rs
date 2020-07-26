@@ -288,6 +288,10 @@ pub enum Expr<'a> {
     Load(Symbol),
     Store(&'a [(Symbol, Layout<'a>, Expr<'a>)], &'a Expr<'a>),
 
+    /// RC instructions
+    LoadWithoutIncrement(Symbol),
+    DecAfter(Symbol, &'a Expr<'a>),
+
     // Functions
     FunctionPointer(Symbol, Layout<'a>),
     RuntimeErrorFunction(&'a str),
@@ -323,6 +327,7 @@ pub enum Expr<'a> {
         /// This *must* be an integer, because Switch potentially compiles to a jump table.
         cond: &'a Expr<'a>,
         cond_layout: Layout<'a>,
+        cond_symbol: Symbol,
         /// The u64 in the tuple will be compared directly to the condition Expr.
         /// If they are equal, this branch will be taken.
         branches: &'a [(u64, Stores<'a>, Expr<'a>)],
@@ -352,11 +357,98 @@ pub enum Expr<'a> {
     },
     EmptyArray,
 
-    /// RC instructions
-    IncBefore(Symbol, &'a Expr<'a>),
-    DecAfter(Symbol, &'a Expr<'a>),
+    /// Reset/Reuse
+
+    /// Re-use Symbol in Expr
+    Reuse(Symbol, &'a Expr<'a>),
+    Reset(Symbol, &'a Expr<'a>),
 
     RuntimeError(&'a str),
+}
+
+fn function_r<'a>(env: &mut Env<'a, '_>, body: &'a Expr<'a>) -> &'a Expr<'a> {
+    use Expr::*;
+
+    match body {
+        Switch {
+            cond_symbol,
+            branches,
+            cond,
+            cond_layout,
+            default_branch,
+            ret_layout,
+        } => {
+            let stack_size = cond_layout.stack_size(env.pointer_size);
+            let mut new_branches = Vec::with_capacity_in(branches.len(), env.arena);
+
+            for (tag, stores, branch) in branches.iter() {
+                let new_branch = function_d(env, *cond_symbol, stack_size as _, branch);
+
+                new_branches.push((*tag, *stores, new_branch));
+            }
+
+            let new_default_branch = (
+                default_branch.0,
+                &*env.arena.alloc(function_d(
+                    env,
+                    *cond_symbol,
+                    stack_size as _,
+                    default_branch.1,
+                )),
+            );
+
+            env.arena.alloc(Switch {
+                cond_symbol: *cond_symbol,
+                branches: new_branches.into_bump_slice(),
+                default_branch: new_default_branch,
+                ret_layout: ret_layout.clone(),
+                cond: *cond,
+                cond_layout: cond_layout.clone(),
+            })
+        }
+        Store(stores, body) => {
+            let new_body = function_r(env, body);
+
+            env.arena.alloc(Store(stores, new_body))
+        }
+
+        _ => body,
+    }
+}
+
+fn function_d<'a>(
+    env: &mut Env<'a, '_>,
+    z: Symbol,
+    stack_size: usize,
+    body: &'a Expr<'a>,
+) -> Expr<'a> {
+    if let Some(reused) = function_s(env, z, stack_size, body) {
+        Expr::Reset(z, env.arena.alloc(reused))
+    } else {
+        body.clone()
+    }
+    /*
+    match body {
+        Expr::Tag { .. } => Some(env.arena.alloc(Expr::Reuse(w, body))),
+        _ => None,
+    }
+    */
+}
+
+fn function_s<'a>(
+    env: &mut Env<'a, '_>,
+    w: Symbol,
+    stack_size: usize,
+    body: &'a Expr<'a>,
+) -> Option<&'a Expr<'a>> {
+    match body {
+        Expr::Tag { tag_layout, .. }
+            if tag_layout.stack_size(env.pointer_size) as usize <= stack_size =>
+        {
+            Some(env.arena.alloc(Expr::Reuse(w, body)))
+        }
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -373,7 +465,8 @@ impl<'a> Expr<'a> {
     ) -> Self {
         let mut layout_cache = LayoutCache::default();
 
-        from_can(env, can_expr, procs, &mut layout_cache)
+        let result = from_can(env, can_expr, procs, &mut layout_cache);
+        function_r(env, env.arena.alloc(result)).clone()
     }
 }
 
@@ -570,6 +663,15 @@ fn pattern_to_when<'a>(
     }
 }
 
+fn decrement_refcount<'a>(env: &mut Env<'a, '_>, symbol: Symbol, expr: Expr<'a>) -> Expr<'a> {
+    // TODO are there any builtins that should be refcounted?
+    if symbol.is_builtin() {
+        expr
+    } else {
+        Expr::DecAfter(symbol, env.arena.alloc(expr))
+    }
+}
+
 #[allow(clippy::cognitive_complexity)]
 fn from_can<'a>(
     env: &mut Env<'a, '_>,
@@ -604,7 +706,8 @@ fn from_can<'a>(
                     layout_cache,
                 )
             } else {
-                Expr::IncBefore(symbol, env.arena.alloc(Expr::Load(symbol)))
+                // NOTE Load will always increment the refcount
+                Expr::Load(symbol)
             }
         }
         LetRec(defs, ret_expr, _, _) => from_can_defs(env, defs, *ret_expr, layout_cache, procs),
@@ -614,7 +717,7 @@ fn from_can<'a>(
 
             // TODO is order important here?
             for symbol in symbols {
-                result = Expr::DecAfter(symbol, env.arena.alloc(result));
+                result = decrement_refcount(env, symbol, result);
             }
 
             result
@@ -699,17 +802,35 @@ fn from_can<'a>(
             region,
             loc_cond,
             branches,
-        } => from_can_when(
-            env,
-            cond_var,
-            expr_var,
-            region,
-            *loc_cond,
-            branches,
-            layout_cache,
-            procs,
-        ),
+        } => {
+            let cond_symbol = if let roc_can::expr::Expr::Var(symbol) = loc_cond.value {
+                symbol
+            } else {
+                env.unique_symbol()
+            };
 
+            let mono_when = from_can_when(
+                env,
+                cond_var,
+                expr_var,
+                region,
+                cond_symbol,
+                branches,
+                layout_cache,
+                procs,
+            );
+
+            let mono_cond = from_can(env, loc_cond.value, procs, layout_cache);
+
+            let cond_layout = layout_cache
+                .from_var(env.arena, cond_var, env.subs, env.pointer_size)
+                .expect("invalid cond_layout");
+
+            Expr::Store(
+                env.arena.alloc([(cond_symbol, cond_layout, mono_cond)]),
+                env.arena.alloc(mono_when),
+            )
+        }
         If {
             cond_var,
             branch_var,
@@ -1203,7 +1324,7 @@ fn from_can_when<'a>(
     cond_var: Variable,
     expr_var: Variable,
     region: Region,
-    loc_cond: Located<roc_can::expr::Expr>,
+    cond_symbol: Symbol,
     mut branches: std::vec::Vec<roc_can::expr::WhenBranch>,
     layout_cache: &mut LayoutCache<'a>,
     procs: &mut Procs<'a>,
@@ -1260,9 +1381,6 @@ fn from_can_when<'a>(
         let cond_layout = layout_cache
             .from_var(env.arena, cond_var, env.subs, env.pointer_size)
             .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
-        let cond_symbol = env.unique_symbol();
-        let cond = from_can(env, loc_cond.value, procs, layout_cache);
-        stored.push((cond_symbol, cond_layout.clone(), cond));
 
         // NOTE this will still store shadowed names.
         // that's fine: the branch throws a runtime error anyway
@@ -1273,7 +1391,7 @@ fn from_can_when<'a>(
         };
 
         for symbol in bound_symbols {
-            ret = Expr::DecAfter(symbol, env.arena.alloc(ret));
+            ret = decrement_refcount(env, symbol, ret);
         }
 
         Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
@@ -1281,9 +1399,6 @@ fn from_can_when<'a>(
         let cond_layout = layout_cache
             .from_var(env.arena, cond_var, env.subs, env.pointer_size)
             .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
-
-        let cond = from_can(env, loc_cond.value, procs, layout_cache);
-        let cond_symbol = env.unique_symbol();
 
         let mut loc_branches = std::vec::Vec::new();
         let mut opt_branches = std::vec::Vec::new();
@@ -1406,17 +1521,13 @@ fn from_can_when<'a>(
             .from_var(env.arena, expr_var, env.subs, env.pointer_size)
             .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
 
-        let branching = crate::decision_tree::optimize_when(
+        crate::decision_tree::optimize_when(
             env,
             cond_symbol,
             cond_layout.clone(),
             ret_layout,
             opt_branches,
-        );
-
-        let stores = env.arena.alloc([(cond_symbol, cond_layout, cond)]);
-
-        Expr::Store(stores, env.arena.alloc(branching))
+        )
     }
 }
 
@@ -1640,7 +1751,7 @@ fn specialize<'a>(
 
     // TODO does order matter here?
     for &symbol in pattern_symbols.iter() {
-        specialized_body = Expr::DecAfter(symbol, env.arena.alloc(specialized_body));
+        specialized_body = decrement_refcount(env, symbol, specialized_body);
     }
 
     // reset subs, so we don't get type errors when specializing for a different signature

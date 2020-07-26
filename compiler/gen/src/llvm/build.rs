@@ -237,6 +237,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             default_branch: (default_stores, default_expr),
             ret_layout,
             cond_layout,
+            cond_symbol: _,
         } => {
             let ret_type =
                 basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
@@ -346,6 +347,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .left()
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
         }
+        LoadWithoutIncrement(_symbol) => todo!("implement load without increment"),
         Load(symbol) => load_symbol(env, scope, symbol),
         Str(str_literal) => {
             if str_literal.is_empty() {
@@ -718,8 +720,10 @@ pub fn build_expr<'a, 'ctx, 'env>(
         }
         RunLowLevel(op, args) => run_low_level(env, layout_ids, scope, parent, *op, args),
 
-        IncBefore(_, expr) => build_expr(env, layout_ids, scope, parent, expr),
         DecAfter(_, expr) => build_expr(env, layout_ids, scope, parent, expr),
+
+        Reuse(_, expr) => build_expr(env, layout_ids, scope, parent, expr),
+        Reset(_, expr) => build_expr(env, layout_ids, scope, parent, expr),
     }
 }
 
