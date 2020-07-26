@@ -1,8 +1,7 @@
 use crate::ast::Attempting;
-use crate::parser::{unexpected, unexpected_eof, ParseResult, Parser, State};
+use crate::parser::{parse_utf8, unexpected, unexpected_eof, ParseResult, Parser, State};
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use std::char;
 
 pub enum StringLiteral<'a> {
     Line(&'a str),
@@ -11,14 +10,15 @@ pub enum StringLiteral<'a> {
 
 pub fn parse<'a>() -> impl Parser<'a, StringLiteral<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
-        let mut chars = state.input.chars();
+        let mut bytes = state.bytes.iter();
 
         // String literals must start with a quote.
         // If this doesn't, it must not be a string literal!
-        match chars.next() {
-            Some('"') => (),
-            Some(other_char) => {
-                return Err(unexpected(other_char, 0, state, Attempting::StringLiteral));
+        match bytes.next() {
+            Some(&byte) => {
+                if byte != '"' as u8 {
+                    return Err(unexpected(0, state, Attempting::StringLiteral));
+                }
             }
             None => {
                 return Err(unexpected_eof(0, Attempting::StringLiteral, state));
@@ -35,44 +35,49 @@ pub fn parse<'a>() -> impl Parser<'a, StringLiteral<'a>> {
         // Since we're keeping the entire raw string, all we need to track is
         // how many characters we've parsed. So far, that's 1 (the opening `"`).
         let mut parsed_chars = 1;
-        let mut prev_ch = '"';
+        let mut prev_byte = '"' as u8;
 
-        while let Some(ch) = chars.next() {
+        while let Some(&byte) = bytes.next() {
             parsed_chars += 1;
 
             // Potentially end the string (unless this is an escaped `"`!)
-            if ch == '"' && prev_ch != '\\' {
-                let string = if parsed_chars == 2 {
-                    if let Some('"') = chars.next() {
-                        // If the first three chars were all `"`, then this
-                        // literal begins with `"""` and is a block string.
-                        return parse_block_string(arena, state, &mut chars);
-                    } else {
-                        ""
+            if byte == '"' as u8 && prev_byte != '\\' as u8 {
+                let (string, state) = if parsed_chars == 2 {
+                    match bytes.next() {
+                        Some(byte) if *byte == '"' as u8 => {
+                            // If the first three chars were all `"`, then this
+                            // literal begins with `"""` and is a block string.
+                            return parse_block_string(arena, state, &mut bytes);
+                        }
+                        _ => ("", state.advance_without_indenting(2)?),
                     }
                 } else {
                     // Start at 1 so we omit the opening `"`.
                     // Subtract 1 from parsed_chars so we omit the closing `"`.
-                    &state.input[1..(parsed_chars - 1)]
+                    let string_bytes = &state.bytes[1..(parsed_chars - 1)];
+
+                    match parse_utf8(string_bytes) {
+                        Ok(string) => (string, state.advance_without_indenting(parsed_chars)?),
+                        Err(reason) => {
+                            return state.fail(reason);
+                        }
+                    }
                 };
 
-                let next_state = state.advance_without_indenting(parsed_chars)?;
-
-                return Ok((StringLiteral::Line(string), next_state));
-            } else if ch == '\n' {
+                return Ok((StringLiteral::Line(string), state));
+            } else if byte == '\n' as u8 {
                 // This is a single-line string, which cannot have newlines!
                 // Treat this as an unclosed string literal, and consume
                 // all remaining chars. This will mask all other errors, but
                 // it should make it easiest to debug; the file will be a giant
                 // error starting from where the open quote appeared.
                 return Err(unexpected(
-                    '\n',
-                    state.input.len() - 1,
+                    state.bytes.len() - 1,
                     state,
                     Attempting::StringLiteral,
                 ));
             } else {
-                prev_ch = ch;
+                prev_byte = byte;
             }
         }
 
@@ -88,48 +93,64 @@ pub fn parse<'a>() -> impl Parser<'a, StringLiteral<'a>> {
 fn parse_block_string<'a, I>(
     arena: &'a Bump,
     state: State<'a>,
-    chars: &mut I,
+    bytes: &mut I,
 ) -> ParseResult<'a, StringLiteral<'a>>
 where
-    I: Iterator<Item = char>,
+    I: Iterator<Item = &'a u8>,
 {
     // So far we have consumed the `"""` and that's it.
     let mut parsed_chars = 3;
-    let mut prev_ch = '"';
+    let mut prev_byte = '"' as u8;
     let mut quotes_seen = 0;
 
     // start at 3 to omit the opening `"`.
     let mut line_start = 3;
 
-    let mut lines = Vec::new_in(arena);
+    let mut lines: Vec<'a, &'a str> = Vec::new_in(arena);
 
-    for ch in chars {
+    for byte in bytes {
         parsed_chars += 1;
 
         // Potentially end the string (unless this is an escaped `"`!)
-        if ch == '"' && prev_ch != '\\' {
+        if *byte == '"' as u8 && prev_byte != '\\' as u8 {
             if quotes_seen == 2 {
                 // three consecutive qoutes, end string
 
                 // Subtract 3 from parsed_chars so we omit the closing `"`.
-                let string = &state.input[line_start..(parsed_chars - 3)];
-                lines.push(string);
+                let line_bytes = &state.bytes[line_start..(parsed_chars - 3)];
 
-                let next_state = state.advance_without_indenting(parsed_chars)?;
+                return match parse_utf8(line_bytes) {
+                    Ok(line) => {
+                        let state = state.advance_without_indenting(parsed_chars)?;
 
-                return Ok((StringLiteral::Block(arena.alloc(lines)), next_state));
+                        lines.push(line);
+
+                        Ok((StringLiteral::Block(arena.alloc(lines)), state))
+                    }
+                    Err(reason) => state.fail(reason),
+                };
             }
             quotes_seen += 1;
-        } else if ch == '\n' {
+        } else if *byte == '\n' as u8 {
             // note this includes the newline
-            let string = &state.input[line_start..parsed_chars];
-            lines.push(string);
-            quotes_seen = 0;
-            line_start = parsed_chars;
+            let line_bytes = &state.bytes[line_start..parsed_chars];
+
+            match parse_utf8(line_bytes) {
+                Ok(line) => {
+                    lines.push(line);
+
+                    quotes_seen = 0;
+                    line_start = parsed_chars;
+                }
+                Err(reason) => {
+                    return state.fail(reason);
+                }
+            }
         } else {
             quotes_seen = 0;
         }
-        prev_ch = ch;
+
+        prev_byte = *byte;
     }
 
     // We ran out of characters before finding 3 closing quotes
@@ -137,6 +158,6 @@ where
         parsed_chars,
         // TODO custom BlockStringLiteral?
         Attempting::StringLiteral,
-        state.clone(),
+        state,
     ))
 }

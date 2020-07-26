@@ -1,6 +1,8 @@
 use crate::ast::CommentOrNewline::{self, *};
 use crate::ast::Spaceable;
-use crate::parser::{self, and, unexpected, unexpected_eof, Parser, State};
+use crate::parser::{
+    self, and, peek_utf8_char, unexpected, unexpected_eof, Fail, FailReason, Parser, State,
+};
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -216,7 +218,6 @@ fn spaces<'a>(
 ) -> impl Parser<'a, &'a [CommentOrNewline<'a>]> {
     move |arena: &'a Bump, state: State<'a>| {
         let original_state = state.clone();
-        let chars = state.input.chars().peekable();
         let mut space_list = Vec::new_in(arena);
         let mut chars_parsed = 0;
         let mut comment_line_buf = String::new_in(arena);
@@ -224,139 +225,182 @@ fn spaces<'a>(
         let mut state = state;
         let mut any_newlines = false;
 
-        for ch in chars {
-            chars_parsed += 1;
+        while !state.bytes.is_empty() {
+            match peek_utf8_char(&state) {
+                Ok(ch) => {
+                    chars_parsed += 1;
 
-            match line_state {
-                LineState::Normal => {
-                    match ch {
-                        ' ' => {
-                            // Don't check indentation here; it might not be enough
-                            // indentation yet, but maybe it will be after more spaces happen!
-                            state = state.advance_spaces(1)?;
-                        }
-                        '\r' => {
-                            // Ignore carriage returns.
-                            state = state.advance_spaces(1)?;
-                        }
-                        '\n' => {
-                            // No need to check indentation because we're about to reset it anyway.
-                            state = state.newline()?;
+                    match line_state {
+                        LineState::Normal => {
+                            match ch {
+                                ' ' => {
+                                    // Don't check indentation here; it might not be enough
+                                    // indentation yet, but maybe it will be after more spaces happen!
+                                    state = state.advance_spaces(1)?;
+                                }
+                                '\r' => {
+                                    // Ignore carriage returns.
+                                    state = state.advance_spaces(1)?;
+                                }
+                                '\n' => {
+                                    // No need to check indentation because we're about to reset it anyway.
+                                    state = state.newline()?;
 
-                            // Newlines only get added to the list when they're outside comments.
-                            space_list.push(Newline);
+                                    // Newlines only get added to the list when they're outside comments.
+                                    space_list.push(Newline);
 
-                            any_newlines = true;
-                        }
-                        '#' => {
-                            // Check indentation to make sure we were indented enough
-                            // before this comment began.
-                            state = state
-                                .check_indent(min_indent)
-                                .map_err(|(fail, _)| (fail, original_state.clone()))?
-                                .advance_without_indenting(1)?;
-
-                            // We're now parsing a line comment!
-                            line_state = LineState::Comment;
-                        }
-                        nonblank => {
-                            return if require_at_least_one && chars_parsed <= 1 {
-                                // We've parsed 1 char and it was not a space,
-                                // but we require parsing at least one space!
-                                Err(unexpected(nonblank, 0, state.clone(), state.attempting))
-                            } else {
-                                // First make sure we were indented enough!
-                                //
-                                // (We only do this if we've encountered any newlines.
-                                // Otherwise, we assume indentation is already correct.
-                                // It's actively important for correctness that we skip
-                                // this check if there are no newlines, because otherwise
-                                // we would have false positives for single-line defs.)
-                                if any_newlines {
+                                    any_newlines = true;
+                                }
+                                '#' => {
+                                    // Check indentation to make sure we were indented enough
+                                    // before this comment began.
                                     state = state
                                         .check_indent(min_indent)
-                                        .map_err(|(fail, _)| (fail, original_state))?;
+                                        .map_err(|(fail, _)| (fail, original_state.clone()))?
+                                        .advance_without_indenting(1)?;
+
+                                    // We're now parsing a line comment!
+                                    line_state = LineState::Comment;
                                 }
-
-                                Ok((space_list.into_bump_slice(), state))
-                            };
-                        }
-                    }
-                }
-                LineState::Comment => {
-                    match ch {
-                        ' ' => {
-                            // If we're in a line comment, this won't affect indentation anyway.
-                            state = state.advance_without_indenting(1)?;
-
-                            if comment_line_buf.len() == 1 {
-                                match comment_line_buf.chars().next() {
-                                    Some('#') => {
-                                        // This is a comment begining with `## ` - that is,
-                                        // a doc comment.
+                                _ => {
+                                    return if require_at_least_one && chars_parsed <= 1 {
+                                        // We've parsed 1 char and it was not a space,
+                                        // but we require parsing at least one space!
+                                        Err(unexpected(0, state.clone(), state.attempting))
+                                    } else {
+                                        // First make sure we were indented enough!
                                         //
-                                        // (The space is important; otherwise, this is not
-                                        // a doc comment, but rather something like a
-                                        // big separator block, e.g. ############)
-                                        line_state = LineState::DocComment;
+                                        // (We only do this if we've encountered any newlines.
+                                        // Otherwise, we assume indentation is already correct.
+                                        // It's actively important for correctness that we skip
+                                        // this check if there are no newlines, because otherwise
+                                        // we would have false positives for single-line defs.)
+                                        if any_newlines {
+                                            state = state
+                                                .check_indent(min_indent)
+                                                .map_err(|(fail, _)| (fail, original_state))?;
+                                        }
 
-                                        // This is now the beginning of the doc comment.
-                                        comment_line_buf.clear();
-                                    }
-                                    _ => {
+                                        Ok((space_list.into_bump_slice(), state))
+                                    };
+                                }
+                            }
+                        }
+                        LineState::Comment => {
+                            match ch {
+                                ' ' => {
+                                    // If we're in a line comment, this won't affect indentation anyway.
+                                    state = state.advance_without_indenting(1)?;
+
+                                    if comment_line_buf.len() == 1 {
+                                        match comment_line_buf.chars().next() {
+                                            Some('#') => {
+                                                // This is a comment begining with `## ` - that is,
+                                                // a doc comment.
+                                                //
+                                                // (The space is important; otherwise, this is not
+                                                // a doc comment, but rather something like a
+                                                // big separator block, e.g. ############)
+                                                line_state = LineState::DocComment;
+
+                                                // This is now the beginning of the doc comment.
+                                                comment_line_buf.clear();
+                                            }
+                                            _ => {
+                                                comment_line_buf.push(ch);
+                                            }
+                                        }
+                                    } else {
                                         comment_line_buf.push(ch);
                                     }
                                 }
-                            } else {
-                                comment_line_buf.push(ch);
+                                '\n' => {
+                                    state = state.newline()?;
+
+                                    // This was a newline, so end this line comment.
+                                    space_list.push(LineComment(comment_line_buf.into_bump_str()));
+                                    comment_line_buf = String::new_in(arena);
+
+                                    line_state = LineState::Normal;
+                                }
+                                nonblank => {
+                                    // Chars can have btye lengths of more than 1!
+                                    state = state.advance_without_indenting(nonblank.len_utf8())?;
+
+                                    comment_line_buf.push(nonblank);
+                                }
                             }
                         }
-                        '\n' => {
-                            state = state.newline()?;
+                        LineState::DocComment => {
+                            match ch {
+                                ' ' => {
+                                    // If we're in a doc comment, this won't affect indentation anyway.
+                                    state = state.advance_without_indenting(1)?;
 
-                            // This was a newline, so end this line comment.
-                            space_list.push(LineComment(comment_line_buf.into_bump_str()));
-                            comment_line_buf = String::new_in(arena);
+                                    comment_line_buf.push(ch);
+                                }
+                                '\n' => {
+                                    state = state.newline()?;
 
-                            line_state = LineState::Normal;
-                        }
-                        nonblank => {
-                            // Chars can have btye lengths of more than 1!
-                            state = state.advance_without_indenting(nonblank.len_utf8())?;
+                                    // This was a newline, so end this doc comment.
+                                    space_list.push(DocComment(comment_line_buf.into_bump_str()));
+                                    comment_line_buf = String::new_in(arena);
 
-                            comment_line_buf.push(nonblank);
-                        }
-                    }
-                }
-                LineState::DocComment => {
-                    match ch {
-                        ' ' => {
-                            // If we're in a doc comment, this won't affect indentation anyway.
-                            state = state.advance_without_indenting(1)?;
+                                    line_state = LineState::Normal;
+                                }
+                                nonblank => {
+                                    // Chars can have btye lengths of more than 1!
+                                    state = state.advance_without_indenting(nonblank.len_utf8())?;
 
-                            comment_line_buf.push(ch);
-                        }
-                        '\n' => {
-                            state = state.newline()?;
-
-                            // This was a newline, so end this doc comment.
-                            space_list.push(DocComment(comment_line_buf.into_bump_str()));
-                            comment_line_buf = String::new_in(arena);
-
-                            line_state = LineState::Normal;
-                        }
-                        nonblank => {
-                            // Chars can have btye lengths of more than 1!
-                            state = state.advance_without_indenting(nonblank.len_utf8())?;
-
-                            comment_line_buf.push(nonblank);
+                                    comment_line_buf.push(nonblank);
+                                }
+                            }
                         }
                     }
                 }
-            }
+                Err(Fail {
+                    reason: FailReason::BadUtf8,
+                    attempting,
+                }) => {
+                    // If we hit an invalid UTF-8 character, bail out immediately.
+                    return Err((
+                        Fail {
+                            reason: dbg!(FailReason::BadUtf8),
+                            attempting,
+                        },
+                        state,
+                    ));
+                }
+                Err(_) => {
+                    if require_at_least_one && chars_parsed == 0 {
+                        return Err(unexpected_eof(0, state.attempting, state));
+                    } else {
+                        let space_slice = space_list.into_bump_slice();
+
+                        // First make sure we were indented enough!
+                        //
+                        // (We only do this if we've encountered any newlines.
+                        // Otherwise, we assume indentation is already correct.
+                        // It's actively important for correctness that we skip
+                        // this check if there are no newlines, because otherwise
+                        // we would have false positives for single-line defs.)
+                        if any_newlines {
+                            return Ok((
+                                space_slice,
+                                state
+                                    .check_indent(min_indent)
+                                    .map_err(|(fail, _)| (fail, original_state))?,
+                            ));
+                        }
+
+                        return Ok((space_slice, state));
+                    }
+                }
+            };
         }
 
-        if require_at_least_one && chars_parsed == 0 {
+        // If we didn't parse anything, return unexpected EOF
+        if require_at_least_one && original_state.bytes.len() == state.bytes.len() {
             Err(unexpected_eof(0, state.attempting, state))
         } else {
             // First make sure we were indented enough!

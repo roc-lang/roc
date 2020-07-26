@@ -584,7 +584,7 @@ fn parse_src(
 /// This has two unsafe calls:
 ///
 /// * memory map the filename instead of doing a buffered read
-/// * assume the contents of the file are valid utf8
+/// * assume the contents of the file are valid UTF-8
 fn load_filename(
     filename: PathBuf,
     msg_tx: MsgSender,

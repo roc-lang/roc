@@ -1,6 +1,6 @@
 use crate::ast::Attempting;
 use crate::keyword;
-use crate::parser::{unexpected, unexpected_eof, Fail, FailReason, ParseResult, Parser, State};
+use crate::parser::{unexpected, utf8_char, Fail, FailReason, ParseResult, Parser, State};
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -67,70 +67,54 @@ impl<'a> Ident<'a> {
 /// Sometimes we may want to check for those later in the process, and give
 /// more contextually-aware error messages than "unexpected `if`" or the like.
 #[inline(always)]
-pub fn parse_ident<'a, I>(
+pub fn parse_ident<'a>(
     arena: &'a Bump,
-    chars: &mut I,
     state: State<'a>,
-) -> ParseResult<'a, (Ident<'a>, Option<char>)>
-where
-    I: Iterator<Item = char>,
-{
+) -> ParseResult<'a, (Ident<'a>, Option<char>)> {
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
     let mut capitalized_parts: Vec<&'a str> = Vec::new_in(arena);
     let mut noncapitalized_parts: Vec<&'a str> = Vec::new_in(arena);
     let mut is_capitalized;
     let is_accessor_fn;
     let mut is_private_tag = false;
-    let mut chars_parsed;
 
     // Identifiers and accessor functions must start with either a letter or a dot.
     // If this starts with neither, it must be something else!
-    match chars.next() {
-        Some(ch) => {
-            if ch == '@' {
-                // '@' must always be followed by a capital letter!
-                match chars.next() {
-                    Some(ch) if ch.is_uppercase() => {
-                        part_buf.push('@');
-                        part_buf.push(ch);
+    let (first_ch, mut state) = utf8_char().parse(arena, state)?;
 
-                        is_private_tag = true;
-                        is_capitalized = true;
-                        is_accessor_fn = false;
+    if first_ch.is_alphabetic() {
+        part_buf.push(first_ch);
 
-                        chars_parsed = 2;
-                    }
-                    Some(ch) => {
-                        return Err(unexpected(ch, 0, state, Attempting::Identifier));
-                    }
-                    None => {
-                        return Err(unexpected_eof(0, Attempting::Identifier, state));
-                    }
-                }
-            } else if ch.is_alphabetic() {
-                part_buf.push(ch);
+        is_capitalized = first_ch.is_uppercase();
+        is_accessor_fn = false;
+    } else if first_ch == '.' {
+        is_capitalized = false;
+        is_accessor_fn = true;
+    } else if first_ch == '@' {
+        // '@' must always be followed by a capital letter!
+        let (next_ch, new_state) = utf8_char().parse(arena, state)?;
 
-                is_capitalized = ch.is_uppercase();
-                is_accessor_fn = false;
+        state = new_state;
 
-                chars_parsed = 1;
-            } else if ch == '.' {
-                is_capitalized = false;
-                is_accessor_fn = true;
+        if next_ch.is_uppercase() {
+            part_buf.push('@');
+            part_buf.push(next_ch);
 
-                chars_parsed = 1;
-            } else {
-                return Err(unexpected(ch, 0, state, Attempting::Identifier));
-            }
+            is_private_tag = true;
+            is_capitalized = true;
+            is_accessor_fn = false;
+        } else {
+            return Err(unexpected(0, state, Attempting::Identifier));
         }
-        None => {
-            return Err(unexpected_eof(0, Attempting::Identifier, state));
-        }
-    };
+    } else {
+        return Err(unexpected(0, state, Attempting::Identifier));
+    }
 
-    let mut next_char = None;
+    while !state.bytes.is_empty() {
+        let (ch, new_state) = utf8_char().parse(arena, state)?;
 
-    while let Some(ch) = chars.next() {
+        state = new_state;
+
         // After the first character, only these are allowed:
         //
         // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
@@ -150,7 +134,6 @@ where
                     Some(ch),
                     arena,
                     state,
-                    chars,
                     capitalized_parts,
                     noncapitalized_parts,
                 );
@@ -167,7 +150,6 @@ where
                     Some(ch),
                     arena,
                     state,
-                    chars,
                     capitalized_parts,
                     noncapitalized_parts,
                 );
@@ -184,12 +166,8 @@ where
         } else {
             // This must be the end of the identifier. We're done!
 
-            next_char = Some(ch);
-
             break;
         }
-
-        chars_parsed += 1;
     }
 
     if part_buf.is_empty() {
@@ -200,10 +178,9 @@ where
         // If we made it this far and don't have a next_char, then necessarily
         // we have consumed a '.' char previously.
         return malformed(
-            next_char.or_else(|| Some('.')),
+            Some('.'),
             arena,
             state,
-            chars,
             capitalized_parts,
             noncapitalized_parts,
         );
@@ -224,14 +201,7 @@ where
 
             Ident::AccessorFunction(value)
         } else {
-            return malformed(
-                None,
-                arena,
-                state,
-                chars,
-                capitalized_parts,
-                noncapitalized_parts,
-            );
+            return malformed(None, arena, state, capitalized_parts, noncapitalized_parts);
         }
     } else if noncapitalized_parts.is_empty() {
         // We have capitalized parts only, so this must be a tag.
@@ -245,33 +215,19 @@ where
                     }
                 } else {
                     // This is a qualified tag, which is not allowed!
-                    return malformed(
-                        None,
-                        arena,
-                        state,
-                        chars,
-                        capitalized_parts,
-                        noncapitalized_parts,
-                    );
+                    return malformed(None, arena, state, capitalized_parts, noncapitalized_parts);
                 }
             }
             None => {
                 // We had neither capitalized nor noncapitalized parts,
                 // yet we made it this far. The only explanation is that this was
                 // a stray '.' drifting through the cosmos.
-                return Err(unexpected('.', 1, state, Attempting::Identifier));
+                return Err(unexpected(1, state, Attempting::Identifier));
             }
         }
     } else if is_private_tag {
         // This is qualified field access with an '@' in front, which does not make sense!
-        return malformed(
-            None,
-            arena,
-            state,
-            chars,
-            capitalized_parts,
-            noncapitalized_parts,
-        );
+        return malformed(None, arena, state, capitalized_parts, noncapitalized_parts);
     } else {
         // We have multiple noncapitalized parts, so this must be field access.
         Ident::Access {
@@ -280,22 +236,16 @@ where
         }
     };
 
-    let state = state.advance_without_indenting(chars_parsed)?;
-
-    Ok(((answer, next_char), state))
+    Ok(((answer, None), state))
 }
 
-fn malformed<'a, I>(
+fn malformed<'a>(
     opt_bad_char: Option<char>,
     arena: &'a Bump,
-    state: State<'a>,
-    chars: &mut I,
+    mut state: State<'a>,
     capitalized_parts: Vec<&'a str>,
     noncapitalized_parts: Vec<&'a str>,
-) -> ParseResult<'a, (Ident<'a>, Option<char>)>
-where
-    I: Iterator<Item = char>,
-{
+) -> ParseResult<'a, (Ident<'a>, Option<char>)> {
     // Reconstruct the original string that we've been parsing.
     let mut full_string = String::new_in(arena);
 
@@ -311,7 +261,11 @@ where
     // Consume the remaining chars in the identifier.
     let mut next_char = None;
 
-    for ch in chars {
+    while !state.bytes.is_empty() {
+        let (ch, new_state) = utf8_char().parse(arena, state)?;
+
+        state = new_state;
+
         // We can't use ch.is_alphanumeric() here because that passes for
         // things that are "numeric" but not ASCII digits, like `¾`
         if ch == '.' || ch.is_alphabetic() || ch.is_ascii_digit() {
@@ -334,7 +288,7 @@ where
 pub fn ident<'a>() -> impl Parser<'a, Ident<'a>> {
     move |arena: &'a Bump, state: State<'a>| {
         // Discard next_char; we don't need it.
-        let ((string, _), state) = parse_ident(arena, &mut state.input.chars(), state)?;
+        let ((string, _), state) = parse_ident(arena, state)?;
 
         Ok((string, state))
     }
@@ -345,32 +299,22 @@ where
     F: Fn(char) -> bool,
 {
     move |arena, state: State<'a>| {
-        let mut chars = state.input.chars();
-
         // pred will determine if this is a tag or ident (based on capitalization)
-        let first_letter = match chars.next() {
-            Some(first_char) => {
-                if pred(first_char) {
-                    first_char
-                } else {
-                    return Err(unexpected(
-                        first_char,
-                        0,
-                        state,
-                        Attempting::RecordFieldLabel,
-                    ));
-                }
-            }
-            None => {
-                return Err(unexpected_eof(0, Attempting::RecordFieldLabel, state));
-            }
-        };
+        let (first_letter, mut state) = utf8_char().parse(arena, state)?;
+
+        if !pred(first_letter) {
+            return Err(unexpected(0, state, Attempting::RecordFieldLabel));
+        }
 
         let mut buf = String::with_capacity_in(1, arena);
 
         buf.push(first_letter);
 
-        for ch in chars {
+        while !state.bytes.is_empty() {
+            let (ch, new_state) = utf8_char().parse(arena, state)?;
+
+            state = new_state;
+
             // After the first character, only these are allowed:
             //
             // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers

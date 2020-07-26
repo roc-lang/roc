@@ -2238,6 +2238,7 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_region",
+ "utf8parse",
 ]
 
 [[package]]
@@ -2759,6 +2760,12 @@ name = "unindent"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af41d708427f8fd0e915dcebb2cae0f0e6acb2a939b2d399c265c39a38a18942"
+
+[[package]]
+name = "utf8parse"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "936e4b492acfd135421d8dca4b1aa80a7bfc26e702ef3af710e0752684df5372"
 
 [[package]]
 name = "vec_map"
