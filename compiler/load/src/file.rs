@@ -1,5 +1,4 @@
 use bumpalo::Bump;
-use memmap::MmapOptions;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
@@ -20,10 +19,10 @@ use roc_solve::solve;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
+use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio::task::spawn_blocking;
@@ -65,7 +64,7 @@ struct ModuleHeader {
     imported_modules: MutSet<ModuleId>,
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    src: Box<str>,
+    src: Box<[u8]>,
 }
 
 #[derive(Debug)]
@@ -532,9 +531,9 @@ fn parse_src(
     filename: PathBuf,
     msg_tx: MsgSender,
     module_ids: SharedModules<'_, '_>,
-    src: &str
+    src_bytes: &[u8]
 ) -> Result<ModuleId, LoadingProblem> {
-    let state = State::new(src, Attempting::Module);
+    let state = State::new(src_bytes, Attempting::Module);
     let arena = Bump::new();
 
     // TODO figure out if there's a way to address this clippy error
@@ -590,19 +589,9 @@ fn load_filename(
     msg_tx: MsgSender,
     module_ids: SharedModules<'_, '_>,
 ) -> Result<ModuleId, LoadingProblem> {
-    match File::open(&filename) {
-        Ok(file) => {
-            match unsafe { MmapOptions::new().map(&file) } {
-                Ok(mmap) => {
-                    let src = unsafe { from_utf8_unchecked(mmap.as_ref()) };
-
-                    parse_src(filename, msg_tx, module_ids, src)
-                }
-                Err(err) => Err(LoadingProblem::FileProblem {
-                    filename,
-                    error: err.kind(),
-                }),
-            }
+    match fs::read(&filename) {
+        Ok(bytes) => {
+            parse_src(filename, msg_tx, module_ids, bytes.as_ref())
         }
         Err(err) => Err(LoadingProblem::FileProblem {
             filename,
@@ -772,7 +761,7 @@ fn send_header<'a>(
 
     // Box up the input &str for transfer over the wire.
     // We'll need this in order to continue parsing later.
-    let src: Box<str> = state.input.to_string().into();
+    let src: Box<[u8]> = state.bytes.into();
 
     // Send the deps to the coordinator thread for processing,
     // then continue on to parsing and canonicalizing defs.
@@ -987,7 +976,7 @@ fn parse_and_constrain(
 
     let (parsed_defs, _) = module_defs()
         .parse(&arena, state)
-        .expect("TODO gracefully handle parse error on module defs");
+        .expect("TODO gracefully handle parse error on module defs. IMPORTANT: Bail out entirely if there are any BadUtf8 problems! That means the whole source file is not valid UTF-8 and any other errors we report may get mis-reported. We rely on this for safety in an `unsafe` block later on in this function.");
 
     let (module, declarations, ident_ids, constraint, problems) = match canonicalize_module_defs(
         &arena,
@@ -1027,8 +1016,12 @@ fn parse_and_constrain(
         }
     };
 
-    let src = header.src;
     let imported_modules = header.imported_modules;
+
+    // SAFETY: By this point we've already incrementally verified that there
+    // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors, 
+    // we'd have bailed out before now.
+    let src: Box<str> = unsafe { from_utf8_unchecked(header.src.as_ref()).to_string().into() };
 
     tokio::spawn(async move {
         let mut tx = msg_tx;

@@ -32,7 +32,9 @@ use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
 use std::hash::Hash;
 use std::io::{self, Write};
+use std::mem;
 use std::path::PathBuf;
+use std::str::from_utf8_unchecked;
 use target_lexicon::Triple;
 
 pub fn main() -> io::Result<()> {
@@ -145,7 +147,11 @@ fn report_parse_error(fail: Fail) {
 }
 
 fn print_output(src: &str) -> Result<String, Fail> {
-    gen(src, Triple::host(), OptLevel::Normal).map(|(answer, answer_type)| {
+    // SAFETY: it's always safe to transmute a &str to a &[u8] since a &str
+    // is literally a &[u8] where we're asserting the bytes are valid UTF-8.
+    let bytes = unsafe { mem::transmute::<&str, &[u8]>(src) };
+
+    gen(bytes, Triple::host(), OptLevel::Normal).map(|(answer, answer_type)| {
         format!("\n{} \u{001b}[35m:\u{001b}[0m {}", answer, answer_type)
     })
 }
@@ -154,7 +160,7 @@ pub fn repl_home() -> ModuleId {
     ModuleIds::default().get_or_insert(&"REPL".into())
 }
 
-pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, String), Fail> {
+pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, String), Fail> {
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
 
     // Look up the types and expressions of the `provided` values
@@ -169,13 +175,16 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
         interns,
         problems: can_problems,
         ..
-    } = can_expr(src)?;
+    } = can_expr(src)?; // IMPORTANT: we must bail out here if there were UTF-8 errors!
+
     let subs = Subs::new(var_store.into());
     let mut type_problems = Vec::new();
     let (content, mut subs) = infer_expr(subs, &mut type_problems, &constraint, var);
 
+    // SAFETY: we've already verified that this is valid UTF-8 during parsing.
+    let src_lines: Vec<&str> = unsafe { from_utf8_unchecked(src).split('\n').collect() };
+
     // Report problems
-    let src_lines: Vec<&str> = src.split('\n').collect();
     let palette = DEFAULT_PALETTE;
 
     // Report parsing and canonicalization problems
@@ -386,8 +395,11 @@ pub fn infer_expr(
     (content, solved.into_inner())
 }
 
-pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast::Expr<'a>>, Fail> {
-    let state = State::new(&input, Attempting::Module);
+pub fn parse_loc_with<'a>(
+    arena: &'a Bump,
+    bytes: &'a [u8],
+) -> Result<Located<ast::Expr<'a>>, Fail> {
+    let state = State::new(&bytes, Attempting::Module);
     let parser = space0_before(loc(roc_parse::expr::expr(0)), 0);
     let answer = parser.parse(&arena, state);
 
@@ -396,14 +408,14 @@ pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast
         .map_err(|(fail, _)| fail)
 }
 
-pub fn can_expr(expr_str: &str) -> Result<CanExprOut, Fail> {
-    can_expr_with(&Bump::new(), repl_home(), expr_str)
+pub fn can_expr(expr_bytes: &[u8]) -> Result<CanExprOut, Fail> {
+    can_expr_with(&Bump::new(), repl_home(), expr_bytes)
 }
 
 // TODO make this return a named struct instead of a big tuple
 #[allow(clippy::type_complexity)]
 pub fn uniq_expr(
-    expr_str: &str,
+    expr_bytes: &[u8],
 ) -> Result<
     (
         Located<roc_can::expr::Expr>,
@@ -419,14 +431,14 @@ pub fn uniq_expr(
 > {
     let declared_idents: &ImMap<Ident, (Symbol, Region)> = &ImMap::default();
 
-    uniq_expr_with(&Bump::new(), expr_str, declared_idents)
+    uniq_expr_with(&Bump::new(), expr_bytes, declared_idents)
 }
 
 // TODO make this return a named struct instead of a big tuple
 #[allow(clippy::type_complexity)]
 pub fn uniq_expr_with(
     arena: &Bump,
-    expr_str: &str,
+    expr_bytes: &[u8],
     declared_idents: &ImMap<Ident, (Symbol, Region)>,
 ) -> Result<
     (
@@ -450,7 +462,7 @@ pub fn uniq_expr_with(
         var,
         interns,
         ..
-    } = can_expr_with(arena, home, expr_str)?;
+    } = can_expr_with(arena, home, expr_bytes)?;
 
     // double check
     let mut var_store = VarStore::new(old_var_store.fresh());
@@ -505,8 +517,8 @@ pub struct CanExprOut {
     pub constraint: Constraint,
 }
 
-pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> Result<CanExprOut, Fail> {
-    let loc_expr = parse_loc_with(&arena, expr_str)?;
+pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_bytes: &[u8]) -> Result<CanExprOut, Fail> {
+    let loc_expr = parse_loc_with(&arena, expr_bytes)?;
     let mut var_store = VarStore::default();
     let var = var_store.fresh();
     let expected = Expected::NoExpectation(Type::Variable(var));

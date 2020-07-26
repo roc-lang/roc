@@ -528,6 +528,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb1f6b1ce1c140482ea30ddd3335fc0024ac7ee112895426e0a629a6c20adfe3"
 
 [[package]]
+name = "encode_unicode"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a357d28ed41a50f9c765dbfe56cbc04a64e53e5fc58ba79fbc34c10ef3df831f"
+
+[[package]]
 name = "env_logger"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2170,7 +2176,6 @@ dependencies = [
  "indoc",
  "inlinable_string",
  "maplit",
- "memmap",
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",
@@ -2230,6 +2235,7 @@ name = "roc_parse"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "encode_unicode",
  "indoc",
  "inlinable_string",
  "pretty_assertions",
@@ -2238,7 +2244,6 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_region",
- "utf8parse",
 ]
 
 [[package]]
@@ -2760,12 +2765,6 @@ name = "unindent"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af41d708427f8fd0e915dcebb2cae0f0e6acb2a939b2d399c265c39a38a18942"
-
-[[package]]
-name = "utf8parse"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "936e4b492acfd135421d8dca4b1aa80a7bfc26e702ef3af710e0752684df5372"
 
 [[package]]
 name = "vec_map"
