@@ -1526,13 +1526,11 @@ fn list_push<'a, 'ctx, 'env>(
 
     builder.build_store(elem_ptr, elem);
 
-    let answer = builder.build_bitcast(
+    builder.build_bitcast(
         struct_val.into_struct_value(),
         collection(ctx, ptr_bytes),
         "cast_collection",
-    );
-
-    answer
+    )
 }
 
 /// List.prepend List elem, elem -> List elem
@@ -1618,12 +1616,11 @@ fn list_prepend<'a, 'ctx, 'env>(
         .build_insert_value(struct_val, new_list_len, Builtin::WRAPPER_LEN, "insert_len")
         .unwrap();
 
-    let answer = builder.build_bitcast(
+    builder.build_bitcast(
         struct_val.into_struct_value(),
         collection(ctx, ptr_bytes),
         "cast_collection",
-    );
-    answer
+    )
 }
 
 fn list_set<'a, 'ctx, 'env>(
