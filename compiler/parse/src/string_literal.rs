@@ -16,7 +16,7 @@ pub fn parse<'a>() -> impl Parser<'a, StringLiteral<'a>> {
         // If this doesn't, it must not be a string literal!
         match bytes.next() {
             Some(&byte) => {
-                if byte != '"' as u8 {
+                if byte != b'"' {
                     return Err(unexpected(0, state, Attempting::StringLiteral));
                 }
             }
@@ -35,16 +35,16 @@ pub fn parse<'a>() -> impl Parser<'a, StringLiteral<'a>> {
         // Since we're keeping the entire raw string, all we need to track is
         // how many characters we've parsed. So far, that's 1 (the opening `"`).
         let mut parsed_chars = 1;
-        let mut prev_byte = '"' as u8;
+        let mut prev_byte = b'"';
 
         while let Some(&byte) = bytes.next() {
             parsed_chars += 1;
 
             // Potentially end the string (unless this is an escaped `"`!)
-            if byte == '"' as u8 && prev_byte != '\\' as u8 {
+            if byte == b'"' && prev_byte != b'\\' {
                 let (string, state) = if parsed_chars == 2 {
                     match bytes.next() {
-                        Some(byte) if *byte == '"' as u8 => {
+                        Some(byte) if *byte == b'"' => {
                             // If the first three chars were all `"`, then this
                             // literal begins with `"""` and is a block string.
                             return parse_block_string(arena, state, &mut bytes);
@@ -65,7 +65,7 @@ pub fn parse<'a>() -> impl Parser<'a, StringLiteral<'a>> {
                 };
 
                 return Ok((StringLiteral::Line(string), state));
-            } else if byte == '\n' as u8 {
+            } else if byte == b'\n' {
                 // This is a single-line string, which cannot have newlines!
                 // Treat this as an unclosed string literal, and consume
                 // all remaining chars. This will mask all other errors, but
@@ -100,7 +100,7 @@ where
 {
     // So far we have consumed the `"""` and that's it.
     let mut parsed_chars = 3;
-    let mut prev_byte = '"' as u8;
+    let mut prev_byte = b'"';
     let mut quotes_seen = 0;
 
     // start at 3 to omit the opening `"`.
@@ -112,7 +112,7 @@ where
         parsed_chars += 1;
 
         // Potentially end the string (unless this is an escaped `"`!)
-        if *byte == '"' as u8 && prev_byte != '\\' as u8 {
+        if *byte == b'"' && prev_byte != b'\\' {
             if quotes_seen == 2 {
                 // three consecutive qoutes, end string
 
@@ -131,7 +131,7 @@ where
                 };
             }
             quotes_seen += 1;
-        } else if *byte == '\n' as u8 {
+        } else if *byte == b'\n' {
             // note this includes the newline
             let line_bytes = &state.bytes[line_start..parsed_chars];
 

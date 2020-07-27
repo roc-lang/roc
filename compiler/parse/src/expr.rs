@@ -1539,11 +1539,11 @@ pub fn ident_without_apply<'a>() -> impl Parser<'a, Expr<'a>> {
 pub fn equals_with_indent<'a>() -> impl Parser<'a, u16> {
     move |_arena, state: State<'a>| {
         match state.bytes.first() {
-            Some(&byte) if byte == '=' as u8 => {
+            Some(&byte) if byte == b'=' => {
                 match state.bytes.get(1) {
                     // The '=' must not be followed by another `=` or `>`
                     // (See equals_for_def() for explanation)
-                    Some(&next_byte) if next_byte != '=' as u8 && next_byte != '>' as u8 => {
+                    Some(&next_byte) if next_byte != b'=' && next_byte != b'>' => {
                         Ok((state.indent_col, state.advance_without_indenting(1)?))
                     }
                     Some(_) => Err(unexpected(0, state, Attempting::Def)),
@@ -1562,9 +1562,7 @@ pub fn equals_with_indent<'a>() -> impl Parser<'a, u16> {
 
 pub fn colon_with_indent<'a>() -> impl Parser<'a, u16> {
     move |_arena, state: State<'a>| match state.bytes.first() {
-        Some(&byte) if byte == ':' as u8 => {
-            Ok((state.indent_col, state.advance_without_indenting(1)?))
-        }
+        Some(&byte) if byte == b':' => Ok((state.indent_col, state.advance_without_indenting(1)?)),
         Some(_) => Err(unexpected(0, state, Attempting::Def)),
         None => Err(unexpected_eof(0, Attempting::Def, state)),
     }

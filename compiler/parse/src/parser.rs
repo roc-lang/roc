@@ -5,7 +5,7 @@ use encode_unicode::CharExt;
 use roc_region::all::{Located, Region};
 use std::fmt;
 use std::str::from_utf8;
-use std::{char, mem, u16};
+use std::{char, u16};
 
 /// A position in a source file.
 #[derive(Clone, PartialEq, Eq)]
@@ -451,10 +451,8 @@ pub fn utf8_char2<'a>() -> impl Parser<'a, char> {
     move |_arena, state: State<'a>| {
         if !state.bytes.is_empty() {
             match char::from_utf8_slice_start(state.bytes) {
-                Ok((ch, bytes_parsed)) => {
-                    return Ok((ch, state.advance_without_indenting(bytes_parsed)?))
-                }
-                Err(_) => return state.fail(FailReason::BadUtf8),
+                Ok((ch, bytes_parsed)) => Ok((ch, state.advance_without_indenting(bytes_parsed)?)),
+                Err(_) => state.fail(FailReason::BadUtf8),
             }
         } else {
             Err(unexpected_eof(0, state.attempting, state))
@@ -511,11 +509,8 @@ pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
 
         // TODO do this comparison in one SIMD instruction (on supported systems)
         match state.bytes.get(0..len) {
-            // SAFETY: Roc language keywords are statically known to contain only
-            // ASCII characters, which means their &str will be 100% u8 values in
-            // memory, and thus can be safely interpreted as &[u8]
             Some(next_str) => {
-                if next_str == unsafe { mem::transmute::<&'static str, &'a [u8]>(keyword) } {
+                if next_str == keyword.as_bytes() {
                     Ok(((), state.advance_without_indenting(len)?))
                 } else {
                     Err(unexpected(len, state, Attempting::Keyword))
@@ -1167,7 +1162,7 @@ where
     attempt!(attempting, parser)
 }
 
-pub fn parse_utf8<'a>(bytes: &'a [u8]) -> Result<&'a str, FailReason> {
+pub fn parse_utf8(bytes: &[u8]) -> Result<&str, FailReason> {
     match from_utf8(bytes) {
         Ok(string) => Ok(string),
         Err(_) => Err(FailReason::BadUtf8),

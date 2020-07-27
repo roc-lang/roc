@@ -10,7 +10,7 @@ pub fn number_literal<'a>() -> impl Parser<'a, Expr<'a>> {
         match bytes.next() {
             Some(&first_byte) => {
                 // Number literals must start with either an '-' or a digit.
-                if first_byte == '-' as u8 || (first_byte as char).is_ascii_digit() {
+                if first_byte == b'-' || (first_byte as char).is_ascii_digit() {
                     parse_number_literal(first_byte as char, bytes, state)
                 } else {
                     Err(unexpected(1, state, Attempting::NumberLiteral))
@@ -50,7 +50,7 @@ where
 
         let is_potentially_non_base10 = || {
             (bytes_parsed == 1 && first_ch == '0')
-                || (bytes_parsed == 2 && first_ch == '-' && prev_byte == '0' as u8)
+                || (bytes_parsed == 2 && first_ch == '-' && prev_byte == b'0')
         };
 
         match next_byte as char {
@@ -146,12 +146,12 @@ enum LiteralType {
     Binary,
 }
 
-fn from_base<'a>(
+fn from_base(
     base: Base,
     first_ch: char,
     bytes_parsed: usize,
-    state: State<'a>,
-) -> ParseResult<'a, Expr<'a>> {
+    state: State<'_>,
+) -> ParseResult<'_, Expr<'_>> {
     let is_negative = first_ch == '-';
     let bytes = if is_negative {
         &state.bytes[3..bytes_parsed]

@@ -69,7 +69,7 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
                     return Err(unexpected(0, state, Attempting::Module));
                 };
 
-                let mut buf = String::with_capacity_in(1, arena);
+                let mut buf = String::with_capacity_in(4, arena);
 
                 buf.push(first_letter);
 
@@ -84,9 +84,9 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
                             // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
                             // * A '.' separating module parts
                             if ch.is_alphabetic() || ch.is_ascii_digit() {
-                                buf.push(ch);
-
                                 state = state.advance_without_indenting(bytes_parsed)?;
+
+                                buf.push(ch);
                             } else if ch == '.' {
                                 match peek_utf8_char_at(&state, 1) {
                                     Ok((next, next_bytes_parsed)) => {
