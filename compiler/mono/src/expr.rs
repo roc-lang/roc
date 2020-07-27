@@ -312,11 +312,12 @@ pub enum Expr<'a> {
         // symbol storing the original expression that we branch on, e.g. `Ok 42`
         // required for RC logic
         cond_symbol: Symbol,
+        cond_layout: Layout<'a>,
 
         // symbol storing the value that we branch on, e.g. `1` representing the `Ok` tag
-        branch_symbol: Symbol,
+        branching_symbol: Symbol,
+        branching_layout: Layout<'a>,
 
-        cond_layout: Layout<'a>,
         // What to do if the condition either passes or fails
         pass: (Stores<'a>, &'a Expr<'a>),
         fail: (Stores<'a>, &'a Expr<'a>),
@@ -408,8 +409,9 @@ fn function_r<'a>(env: &mut Env<'a, '_>, body: &'a Expr<'a>) -> Expr<'a> {
         }
         Cond {
             cond_symbol,
-            branch_symbol,
             cond_layout,
+            branching_symbol,
+            branching_layout,
             pass,
             fail,
             ret_layout,
@@ -432,8 +434,9 @@ fn function_r<'a>(env: &mut Env<'a, '_>, body: &'a Expr<'a>) -> Expr<'a> {
 
             Cond {
                 cond_symbol: *cond_symbol,
-                branch_symbol: *branch_symbol,
                 cond_layout: cond_layout.clone(),
+                branching_symbol: *branching_symbol,
+                branching_layout: branching_layout.clone(),
                 ret_layout: ret_layout.clone(),
                 pass: new_pass,
                 fail: new_fail,
@@ -577,8 +580,9 @@ fn function_s<'a>(
 
         Cond {
             cond_symbol,
-            branch_symbol,
             cond_layout,
+            branching_symbol,
+            branching_layout,
             pass,
             fail,
             ret_layout,
@@ -608,8 +612,9 @@ fn function_s<'a>(
 
             let result = env.arena.alloc(Cond {
                 cond_symbol: *cond_symbol,
-                branch_symbol: *branch_symbol,
                 cond_layout: cond_layout.clone(),
+                branching_symbol: *branching_symbol,
+                branching_layout: branching_layout.clone(),
                 ret_layout: ret_layout.clone(),
                 pass: new_pass,
                 fail: new_fail,
@@ -676,13 +681,13 @@ fn symbols_in_expr<'a>(initial: &Expr<'a>) -> MutSet<Symbol> {
 
             Cond {
                 cond_symbol,
-                branch_symbol,
+                branching_symbol,
                 pass,
                 fail,
                 ..
             } => {
                 result.insert(*cond_symbol);
-                result.insert(*branch_symbol);
+                result.insert(*branching_symbol);
 
                 for (symbol, _, expr) in pass.0.iter() {
                     result.insert(*symbol);
@@ -1189,19 +1194,20 @@ fn from_can<'a>(
                 let cond = from_can(env, loc_cond.value, procs, layout_cache);
                 let then = from_can(env, loc_then.value, procs, layout_cache);
 
-                let branch_symbol = env.unique_symbol();
+                let branching_symbol = env.unique_symbol();
 
                 let cond_expr = Expr::Cond {
-                    cond_symbol: branch_symbol,
-                    branch_symbol,
+                    cond_symbol: branching_symbol,
+                    branching_symbol,
                     cond_layout: cond_layout.clone(),
+                    branching_layout: cond_layout.clone(),
                     pass: (&[], env.arena.alloc(then)),
                     fail: (&[], env.arena.alloc(expr)),
                     ret_layout: ret_layout.clone(),
                 };
 
                 expr = Expr::Store(
-                    bumpalo::vec![in arena; (branch_symbol, Layout::Builtin(Builtin::Int1), cond)]
+                    bumpalo::vec![in arena; (branching_symbol, Layout::Builtin(Builtin::Int1), cond)]
                         .into_bump_slice(),
                     env.arena.alloc(cond_expr),
                 );

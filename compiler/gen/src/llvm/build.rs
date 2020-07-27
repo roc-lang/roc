@@ -174,7 +174,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Cond {
-            branch_symbol,
+            branching_symbol,
             pass: (pass_stores, pass_expr),
             fail: (fail_stores, fail_expr),
             ret_layout,
@@ -186,7 +186,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let ret_type =
                 basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
 
-            let cond_expr = load_symbol(env, scope, branch_symbol);
+            let cond_expr = load_symbol(env, scope, branching_symbol);
 
             match cond_expr {
                 IntValue(value) => {

@@ -1125,10 +1125,10 @@ fn decide_to_branching<'a>(
 
             let condition = boolean_all(env.arena, tests);
 
-            let branch_symbol = env.unique_symbol();
-            let stores = [(branch_symbol, Layout::Builtin(Builtin::Int1), condition)];
+            let branching_symbol = env.unique_symbol();
+            let stores = [(branching_symbol, Layout::Builtin(Builtin::Int1), condition)];
 
-            let cond_layout = Layout::Builtin(Builtin::Int1);
+            let branching_layout = Layout::Builtin(Builtin::Int1);
 
             (
                 env.arena.alloc(stores),
@@ -1136,8 +1136,9 @@ fn decide_to_branching<'a>(
                     &[],
                     env.arena.alloc(Expr::Cond {
                         cond_symbol,
-                        branch_symbol,
                         cond_layout,
+                        branching_symbol,
+                        branching_layout,
                         pass,
                         fail,
                         ret_layout,

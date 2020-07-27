@@ -219,8 +219,9 @@ mod test_mono {
                     )],
                     &Cond {
                         cond_symbol: gen_symbol_0,
-                        branch_symbol: gen_symbol_0,
+                        branching_symbol: gen_symbol_0,
                         cond_layout: Builtin(Int1),
+                        branching_layout: Builtin(Int1),
                         pass: (&[] as &[_], &Expr::Str("bar")),
                         fail: (&[] as &[_], &Expr::Str("foo")),
                         ret_layout: Builtin(Str),
@@ -257,8 +258,9 @@ mod test_mono {
                     )],
                     &Cond {
                         cond_symbol: gen_symbol_0,
-                        branch_symbol: gen_symbol_0,
+                        branching_symbol: gen_symbol_0,
                         cond_layout: Builtin(Int1),
+                        branching_layout: Builtin(Int1),
                         pass: (&[] as &[_], &Expr::Str("bar")),
                         fail: (
                             &[] as &[_],
@@ -270,7 +272,8 @@ mod test_mono {
                                 )],
                                 &Cond {
                                     cond_symbol: gen_symbol_1,
-                                    branch_symbol: gen_symbol_1,
+                                    branching_symbol: gen_symbol_1,
+                                    branching_layout: Builtin(Int1),
                                     cond_layout: Builtin(Int1),
                                     pass: (&[] as &[_], &Expr::Str("foo")),
                                     fail: (&[] as &[_], &Expr::Str("baz")),
@@ -317,8 +320,9 @@ mod test_mono {
                                 )],
                                 &Cond {
                                     cond_symbol: gen_symbol_0,
-                                    branch_symbol: gen_symbol_0,
+                                    branching_symbol: gen_symbol_0,
                                     cond_layout: Builtin(Int1),
+                                    branching_layout: Builtin(Int1),
                                     pass: (&[] as &[_], &Expr::Str("bar")),
                                     fail: (&[] as &[_], &Expr::Str("foo")),
                                     ret_layout: Builtin(Str),
