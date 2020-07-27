@@ -648,7 +648,7 @@ define_builtins! {
         2 LIST_IS_EMPTY: "isEmpty"
         3 LIST_GET: "get"
         4 LIST_SET: "set"
-        5 LIST_PUSH: "push"
+        5 LIST_APPEND: "append"
         6 LIST_MAP: "map"
         7 LIST_LEN: "len"
         8 LIST_FOLDL: "foldl"
@@ -658,8 +658,7 @@ define_builtins! {
         12 LIST_SINGLE: "single"
         13 LIST_REPEAT: "repeat"
         14 LIST_REVERSE: "reverse"
-        15 LIST_APPEND: "append"
-        16 LIST_PREPEND: "prepend"
+        15 LIST_PREPEND: "prepend"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

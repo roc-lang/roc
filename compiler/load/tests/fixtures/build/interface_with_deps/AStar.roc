@@ -54,7 +54,7 @@ reconstructPath = \cameFrom, goal ->
             []
 
         Ok next ->
-            List.push (reconstructPath cameFrom next) goal
+            List.append (reconstructPath cameFrom next) goal
 
 updateCost : position, position, Model position -> Model position
 updateCost = \current, neighbour, model ->
