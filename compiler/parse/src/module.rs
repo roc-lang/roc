@@ -7,7 +7,8 @@ use crate::expr::def;
 use crate::header::ModuleName;
 use crate::ident::unqualified_ident;
 use crate::parser::{
-    self, ascii_char, ascii_string, loc, optional, unexpected, utf8_char, Parser, State,
+    self, ascii_char, ascii_string, loc, optional, peek_utf8_char, peek_utf8_char_at, unexpected,
+    Parser, State,
 };
 use bumpalo::collections::{String, Vec};
 use roc_region::all::Located;
@@ -61,57 +62,68 @@ pub fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>> {
 
 #[inline(always)]
 pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
-    move |arena, state: State<'a>| {
-        let (first_letter, mut state) = utf8_char().parse(arena, state)?;
+    move |arena, mut state: State<'a>| {
+        match peek_utf8_char(&state) {
+            Ok((first_letter, bytes_parsed)) => {
+                if !first_letter.is_uppercase() {
+                    return Err(unexpected(0, state, Attempting::Module));
+                };
 
-        if !first_letter.is_uppercase() {
-            return Err(unexpected(0, state, Attempting::Module));
-        };
+                let mut buf = String::with_capacity_in(1, arena);
 
-        let mut buf = String::with_capacity_in(1, arena);
+                buf.push(first_letter);
 
-        buf.push(first_letter);
+                state = state.advance_without_indenting(bytes_parsed)?;
 
-        while !state.bytes.is_empty() {
-            let (ch, new_state) = utf8_char().parse(arena, state)?;
+                while !state.bytes.is_empty() {
+                    match peek_utf8_char(&state) {
+                        Ok((ch, bytes_parsed)) => {
+                            // After the first character, only these are allowed:
+                            //
+                            // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
+                            // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
+                            // * A '.' separating module parts
+                            if ch.is_alphabetic() || ch.is_ascii_digit() {
+                                buf.push(ch);
 
-            state = new_state;
+                                state = state.advance_without_indenting(bytes_parsed)?;
+                            } else if ch == '.' {
+                                match peek_utf8_char_at(&state, 1) {
+                                    Ok((next, next_bytes_parsed)) => {
+                                        if next.is_uppercase() {
+                                            // If we hit another uppercase letter, keep going!
+                                            buf.push('.');
+                                            buf.push(next);
 
-            // After the first character, only these are allowed:
-            //
-            // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
-            // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-            // * A '.' separating module parts
-            if ch.is_alphabetic() || ch.is_ascii_digit() {
-                buf.push(ch);
-            } else if ch == '.' {
-                let (next, new_state) = utf8_char().parse(arena, state)?;
-
-                state = new_state;
-
-                if next.is_uppercase() {
-                    // If we hit another uppercase letter, keep going!
-                    buf.push('.');
-                    buf.push(next);
-                } else {
-                    let chars_parsed = buf.len();
-
-                    // We have finished parsing the module name.
-                    //
-                    // There may be an identifier after this '.',
-                    // e.g. "baz" in `Foo.Bar.baz`
-                    return Ok((
-                        ModuleName::new(buf.into_bump_str()),
-                        state.advance_without_indenting(chars_parsed)?,
-                    ));
+                                            state = state.advance_without_indenting(
+                                                bytes_parsed + next_bytes_parsed,
+                                            )?;
+                                        } else {
+                                            // We have finished parsing the module name.
+                                            //
+                                            // There may be an identifier after this '.',
+                                            // e.g. "baz" in `Foo.Bar.baz`
+                                            return Ok((
+                                                ModuleName::new(buf.into_bump_str()),
+                                                state,
+                                            ));
+                                        }
+                                    }
+                                    Err(reason) => return state.fail(reason),
+                                }
+                            } else {
+                                // This is the end of the module name. We're done!
+                                break;
+                            }
+                        }
+                        Err(reason) => return state.fail(reason),
+                    }
                 }
-            } else {
-                // This is the end of the module name. We're done!
-                break;
-            }
-        }
 
-        Ok((ModuleName::new(buf.into_bump_str()), state))
+                Ok((ModuleName::new(buf.into_bump_str()), state))
+            }
+            Err(reason) => state.fail(reason),
+        }
     }
 }
 

@@ -4,8 +4,8 @@ use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
-    allocated, ascii_char, ascii_string, not, optional, unexpected, utf8_char, Either, ParseResult,
-    Parser, State,
+    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, unexpected, Either,
+    ParseResult, Parser, State,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -263,61 +263,69 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
 
 fn parse_concrete_type<'a>(
     arena: &'a Bump,
-    state: State<'a>,
+    mut state: State<'a>,
 ) -> ParseResult<'a, TypeAnnotation<'a>> {
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
     let mut parts: Vec<&'a str> = Vec::new_in(arena);
 
     // Qualified types must start with a capitalized letter.
-    let (first_letter, mut state) = utf8_char().parse(arena, state)?;
+    match peek_utf8_char(&state) {
+        Ok((first_letter, bytes_parsed)) => {
+            if first_letter.is_alphabetic() && first_letter.is_uppercase() {
+                part_buf.push(first_letter);
+            } else {
+                return Err(unexpected(0, state, Attempting::ConcreteType));
+            }
 
-    if first_letter.is_alphabetic() && first_letter.is_uppercase() {
-        part_buf.push(first_letter);
-    } else {
-        return Err(unexpected(0, state, Attempting::ConcreteType));
+            state = state.advance_without_indenting(bytes_parsed)?;
+        }
+        Err(reason) => return state.fail(reason),
     }
 
     let mut next_char = None;
 
     while !state.bytes.is_empty() {
-        let (ch, new_state) = utf8_char().parse(arena, state)?;
+        match peek_utf8_char(&state) {
+            Ok((ch, bytes_parsed)) => {
+                // After the first character, only these are allowed:
+                //
+                // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
+                // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
+                // * A dot ('.')
+                if ch.is_alphabetic() {
+                    if part_buf.is_empty() && !ch.is_uppercase() {
+                        // Each part must begin with a capital letter.
+                        return malformed(Some(ch), arena, state, parts);
+                    }
 
-        state = new_state;
+                    part_buf.push(ch);
+                } else if ch.is_ascii_digit() {
+                    // Parts may not start with numbers!
+                    if part_buf.is_empty() {
+                        return malformed(Some(ch), arena, state, parts);
+                    }
 
-        // After the first character, only these are allowed:
-        //
-        // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
-        // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-        // * A dot ('.')
-        if ch.is_alphabetic() {
-            if part_buf.is_empty() && !ch.is_uppercase() {
-                // Each part must begin with a capital letter.
-                return malformed(Some(ch), arena, state, parts);
+                    part_buf.push(ch);
+                } else if ch == '.' {
+                    // Having two consecutive dots is an error.
+                    if part_buf.is_empty() {
+                        return malformed(Some(ch), arena, state, parts);
+                    }
+
+                    parts.push(part_buf.into_bump_str());
+
+                    // Now that we've recorded the contents of the current buffer, reset it.
+                    part_buf = String::new_in(arena);
+                } else {
+                    // This must be the end of the type. We're done!
+                    next_char = Some(ch);
+
+                    break;
+                }
+
+                state = state.advance_without_indenting(bytes_parsed)?;
             }
-
-            part_buf.push(ch);
-        } else if ch.is_ascii_digit() {
-            // Parts may not start with numbers!
-            if part_buf.is_empty() {
-                return malformed(Some(ch), arena, state, parts);
-            }
-
-            part_buf.push(ch);
-        } else if ch == '.' {
-            // Having two consecutive dots is an error.
-            if part_buf.is_empty() {
-                return malformed(Some(ch), arena, state, parts);
-            }
-
-            parts.push(part_buf.into_bump_str());
-
-            // Now that we've recorded the contents of the current buffer, reset it.
-            part_buf = String::new_in(arena);
-        } else {
-            // This must be the end of the type. We're done!
-            next_char = Some(ch);
-
-            break;
+            Err(reason) => return state.fail(reason),
         }
     }
 
@@ -349,31 +357,41 @@ fn parse_concrete_type<'a>(
 
 fn parse_type_variable<'a>(
     arena: &'a Bump,
-    state: State<'a>,
+    mut state: State<'a>,
 ) -> ParseResult<'a, TypeAnnotation<'a>> {
     let mut buf = String::new_in(arena);
-    let (first_letter, mut state) = utf8_char().parse(arena, state)?;
 
-    // Type variables must start with a lowercase letter.
-    if first_letter.is_alphabetic() && first_letter.is_lowercase() {
-        buf.push(first_letter);
-    } else {
-        return Err(unexpected(0, state, Attempting::TypeVariable));
+    match peek_utf8_char(&state) {
+        Ok((first_letter, bytes_parsed)) => {
+            // Type variables must start with a lowercase letter.
+            if first_letter.is_alphabetic() && first_letter.is_lowercase() {
+                buf.push(first_letter);
+            } else {
+                return Err(unexpected(0, state, Attempting::TypeVariable));
+            }
+
+            state = state.advance_without_indenting(bytes_parsed)?;
+        }
+        Err(reason) => return state.fail(reason),
     }
 
     while !state.bytes.is_empty() {
-        let (ch, new_state) = utf8_char().parse(arena, state)?;
+        match peek_utf8_char(&state) {
+            Ok((ch, bytes_parsed)) => {
+                // After the first character, only these are allowed:
+                //
+                // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
+                // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
+                if ch.is_alphabetic() || ch.is_ascii_digit() {
+                    buf.push(ch);
+                } else {
+                    // This must be the end of the type. We're done!
+                    break;
+                }
 
-        state = new_state;
-        // After the first character, only these are allowed:
-        //
-        // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
-        // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-        if ch.is_alphabetic() || ch.is_ascii_digit() {
-            buf.push(ch);
-        } else {
-            // This must be the end of the type. We're done!
-            break;
+                state = state.advance_without_indenting(bytes_parsed)?;
+            }
+            Err(reason) => return state.fail(reason),
         }
     }
 
@@ -399,22 +417,24 @@ fn malformed<'a>(
 
     // Consume the remaining chars in the identifier.
     while !state.bytes.is_empty() {
-        let (ch, new_state) = utf8_char().parse(arena, state)?;
+        match peek_utf8_char(&state) {
+            Ok((ch, bytes_parsed)) => {
+                // We can't use ch.is_alphanumeric() here because that passes for
+                // things that are "numeric" but not ASCII digits, like `¾`
+                if ch == '.' || ch.is_alphabetic() || ch.is_ascii_digit() {
+                    full_string.push(ch);
+                } else {
+                    break;
+                }
 
-        state = new_state;
-        // We can't use ch.is_alphanumeric() here because that passes for
-        // things that are "numeric" but not ASCII digits, like `¾`
-        if ch == '.' || ch.is_alphabetic() || ch.is_ascii_digit() {
-            full_string.push(ch);
-        } else {
-            break;
+                state = state.advance_without_indenting(bytes_parsed)?;
+            }
+            Err(reason) => return state.fail(reason),
         }
     }
 
-    let chars_parsed = full_string.len();
-
     Ok((
         TypeAnnotation::Malformed(full_string.into_bump_str()),
-        state.advance_without_indenting(chars_parsed)?,
+        state,
     ))
 }

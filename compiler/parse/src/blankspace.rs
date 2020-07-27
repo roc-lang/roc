@@ -1,7 +1,7 @@
 use crate::ast::CommentOrNewline::{self, *};
 use crate::ast::Spaceable;
 use crate::parser::{
-    self, and, peek_utf8_char, unexpected, unexpected_eof, Fail, FailReason, Parser, State,
+    self, and, peek_utf8_char, unexpected, unexpected_eof, FailReason, Parser, State,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -219,7 +219,7 @@ fn spaces<'a>(
     move |arena: &'a Bump, state: State<'a>| {
         let original_state = state.clone();
         let mut space_list = Vec::new_in(arena);
-        let mut chars_parsed = 0;
+        let mut bytes_parsed = 0;
         let mut comment_line_buf = String::new_in(arena);
         let mut line_state = LineState::Normal;
         let mut state = state;
@@ -227,8 +227,8 @@ fn spaces<'a>(
 
         while !state.bytes.is_empty() {
             match peek_utf8_char(&state) {
-                Ok(ch) => {
-                    chars_parsed += 1;
+                Ok((ch, utf8_len)) => {
+                    bytes_parsed += utf8_len;
 
                     match line_state {
                         LineState::Normal => {
@@ -263,7 +263,7 @@ fn spaces<'a>(
                                     line_state = LineState::Comment;
                                 }
                                 _ => {
-                                    return if require_at_least_one && chars_parsed <= 1 {
+                                    return if require_at_least_one && bytes_parsed <= 1 {
                                         // We've parsed 1 char and it was not a space,
                                         // but we require parsing at least one space!
                                         Err(unexpected(0, state.clone(), state.attempting))
@@ -349,8 +349,7 @@ fn spaces<'a>(
                                     line_state = LineState::Normal;
                                 }
                                 nonblank => {
-                                    // Chars can have btye lengths of more than 1!
-                                    state = state.advance_without_indenting(nonblank.len_utf8())?;
+                                    state = state.advance_without_indenting(utf8_len)?;
 
                                     comment_line_buf.push(nonblank);
                                 }
@@ -358,21 +357,12 @@ fn spaces<'a>(
                         }
                     }
                 }
-                Err(Fail {
-                    reason: FailReason::BadUtf8,
-                    attempting,
-                }) => {
+                Err(FailReason::BadUtf8) => {
                     // If we hit an invalid UTF-8 character, bail out immediately.
-                    return Err((
-                        Fail {
-                            reason: dbg!(FailReason::BadUtf8),
-                            attempting,
-                        },
-                        state,
-                    ));
+                    return state.fail(FailReason::BadUtf8);
                 }
                 Err(_) => {
-                    if require_at_least_one && chars_parsed == 0 {
+                    if require_at_least_one && bytes_parsed == 0 {
                         return Err(unexpected_eof(0, state.attempting, state));
                     } else {
                         let space_slice = space_list.into_bump_slice();

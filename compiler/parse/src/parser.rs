@@ -3,11 +3,12 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use encode_unicode::CharExt;
 use roc_region::all::{Located, Region};
+use std::fmt;
 use std::str::from_utf8;
 use std::{char, mem, u16};
 
 /// A position in a source file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct State<'a> {
     /// The raw input bytes from the file.
     pub bytes: &'a [u8],
@@ -101,7 +102,7 @@ impl<'a> State<'a> {
     /// This assumes we are *not* advancing with spaces, or at least that
     /// any spaces on the line were preceded by non-spaces - which would mean
     /// they weren't eligible to indent anyway.
-    pub fn advance_without_indenting(&self, quantity: usize) -> Result<Self, (Fail, Self)> {
+    pub fn advance_without_indenting(self, quantity: usize) -> Result<Self, (Fail, Self)> {
         match (self.column as usize).checked_add(quantity) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 Ok(State {
@@ -181,6 +182,24 @@ impl<'a> State<'a> {
             },
             self,
         ))
+    }
+}
+
+impl<'a> fmt::Debug for State<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "State {{")?;
+
+        match from_utf8(self.bytes) {
+            Ok(string) => write!(f, "\n\tbytes: [utf8] {:?}", string)?,
+            Err(_) => write!(f, "\n\tbytes: [invalid utf8] {:?}", self.bytes)?,
+        }
+
+        write!(f, "\n\t(line, col): ({}, {}),", self.line, self.column)?;
+        write!(f, "\n\tindent_col: {}", self.indent_col)?;
+        write!(f, "\n\tis_indenting: {:?}", self.is_indenting)?;
+        write!(f, "\n\tattempting: {:?}", self.attempting)?;
+        write!(f, "\n\toriginal_len: {}", self.original_len)?;
+        write!(f, "\n}}")
     }
 }
 
@@ -428,14 +447,14 @@ pub fn ascii_char<'a>(expected: char) -> impl Parser<'a, ()> {
 
 /// A single UTF-8-encoded char. This will both parse *and* validate that the
 /// char is valid UTF-8.
-pub fn utf8_char<'a>() -> impl Parser<'a, char> {
+pub fn utf8_char2<'a>() -> impl Parser<'a, char> {
     move |_arena, state: State<'a>| {
         if !state.bytes.is_empty() {
             match char::from_utf8_slice_start(state.bytes) {
                 Ok((ch, bytes_parsed)) => {
                     return Ok((ch, state.advance_without_indenting(bytes_parsed)?))
                 }
-                Err(_) => return state.fail(dbg!(FailReason::BadUtf8)),
+                Err(_) => return state.fail(FailReason::BadUtf8),
             }
         } else {
             Err(unexpected_eof(0, state.attempting, state))
@@ -445,17 +464,40 @@ pub fn utf8_char<'a>() -> impl Parser<'a, char> {
 
 /// A single UTF-8-encoded char. This will both parse *and* validate that the
 /// char is valid UTF-8, but it will *not* advance the state.
-pub fn peek_utf8_char<'a>(state: &State<'a>) -> Result<char, Fail> {
-    match char::from_utf8_slice_start(state.bytes) {
-        Ok((ch, _)) => Ok(ch),
-        Err(_) => Err(Fail {
-            reason: dbg!(FailReason::BadUtf8),
-            attempting: state.attempting,
-        }),
+pub fn peek_utf8_char<'a>(state: &State<'a>) -> Result<(char, usize), FailReason> {
+    if !state.bytes.is_empty() {
+        match char::from_utf8_slice_start(state.bytes) {
+            Ok((ch, len_utf8)) => Ok((ch, len_utf8)),
+            Err(_) => Err(FailReason::BadUtf8),
+        }
+    } else {
+        Err(FailReason::Eof(
+            Region::zero(), /* TODO get a better region */
+        ))
     }
 }
 
-/// A hardcoded string consisting only of ASCII characters.
+/// A single UTF-8-encoded char, with an offset. This will both parse *and*
+/// validate that the char is valid UTF-8, but it will *not* advance the state.
+pub fn peek_utf8_char_at<'a>(
+    state: &State<'a>,
+    offset: usize,
+) -> Result<(char, usize), FailReason> {
+    if state.bytes.len() > offset {
+        let bytes = &state.bytes[offset..];
+
+        match char::from_utf8_slice_start(bytes) {
+            Ok((ch, len_utf8)) => Ok((ch, len_utf8)),
+            Err(_) => Err(FailReason::BadUtf8),
+        }
+    } else {
+        Err(FailReason::Eof(
+            Region::zero(), /* TODO get a better region */
+        ))
+    }
+}
+
+/// A hardcoded string with no newlines, consisting only of ASCII characters
 pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
     // Verify that this really is exclusively ASCII characters.
     // The `unsafe` block in this function relies upon this assumption!
@@ -472,10 +514,12 @@ pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
             // SAFETY: Roc language keywords are statically known to contain only
             // ASCII characters, which means their &str will be 100% u8 values in
             // memory, and thus can be safely interpreted as &[u8]
-            Some(next_str)
-                if next_str == unsafe { mem::transmute::<&'static str, &'a [u8]>(keyword) } =>
-            {
-                Ok(((), state.advance_without_indenting(len)?))
+            Some(next_str) => {
+                if next_str == unsafe { mem::transmute::<&'static str, &'a [u8]>(keyword) } {
+                    Ok(((), state.advance_without_indenting(len)?))
+                } else {
+                    Err(unexpected(len, state, Attempting::Keyword))
+                }
             }
             _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
         }
@@ -1126,6 +1170,6 @@ where
 pub fn parse_utf8<'a>(bytes: &'a [u8]) -> Result<&'a str, FailReason> {
     match from_utf8(bytes) {
         Ok(string) => Ok(string),
-        Err(_) => Err(dbg!(FailReason::BadUtf8)),
+        Err(_) => Err(FailReason::BadUtf8),
     }
 }

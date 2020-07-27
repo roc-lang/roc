@@ -1,6 +1,6 @@
 use crate::ast::Attempting;
 use crate::keyword;
-use crate::parser::{unexpected, utf8_char, Fail, FailReason, ParseResult, Parser, State};
+use crate::parser::{peek_utf8_char, unexpected, Fail, FailReason, ParseResult, Parser, State};
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -69,7 +69,7 @@ impl<'a> Ident<'a> {
 #[inline(always)]
 pub fn parse_ident<'a>(
     arena: &'a Bump,
-    state: State<'a>,
+    mut state: State<'a>,
 ) -> ParseResult<'a, (Ident<'a>, Option<char>)> {
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
     let mut capitalized_parts: Vec<&'a str> = Vec::new_in(arena);
@@ -80,93 +80,112 @@ pub fn parse_ident<'a>(
 
     // Identifiers and accessor functions must start with either a letter or a dot.
     // If this starts with neither, it must be something else!
-    let (first_ch, mut state) = utf8_char().parse(arena, state)?;
+    match peek_utf8_char(&state) {
+        Ok((first_ch, bytes_parsed)) => {
+            if first_ch.is_alphabetic() {
+                part_buf.push(first_ch);
 
-    if first_ch.is_alphabetic() {
-        part_buf.push(first_ch);
+                is_capitalized = first_ch.is_uppercase();
+                is_accessor_fn = false;
 
-        is_capitalized = first_ch.is_uppercase();
-        is_accessor_fn = false;
-    } else if first_ch == '.' {
-        is_capitalized = false;
-        is_accessor_fn = true;
-    } else if first_ch == '@' {
-        // '@' must always be followed by a capital letter!
-        let (next_ch, new_state) = utf8_char().parse(arena, state)?;
+                state = state.advance_without_indenting(bytes_parsed)?;
+            } else if first_ch == '.' {
+                is_capitalized = false;
+                is_accessor_fn = true;
 
-        state = new_state;
+                state = state.advance_without_indenting(bytes_parsed)?;
+            } else if first_ch == '@' {
+                state = state.advance_without_indenting(bytes_parsed)?;
 
-        if next_ch.is_uppercase() {
-            part_buf.push('@');
-            part_buf.push(next_ch);
+                // '@' must always be followed by a capital letter!
+                match peek_utf8_char(&state) {
+                    Ok((next_ch, next_bytes_parsed)) => {
+                        if next_ch.is_uppercase() {
+                            state = state.advance_without_indenting(next_bytes_parsed)?;
 
-            is_private_tag = true;
-            is_capitalized = true;
-            is_accessor_fn = false;
-        } else {
-            return Err(unexpected(0, state, Attempting::Identifier));
+                            part_buf.push('@');
+                            part_buf.push(next_ch);
+
+                            is_private_tag = true;
+                            is_capitalized = true;
+                            is_accessor_fn = false;
+                        } else {
+                            return Err(unexpected(
+                                bytes_parsed + next_bytes_parsed,
+                                state,
+                                Attempting::Identifier,
+                            ));
+                        }
+                    }
+                    Err(reason) => return state.fail(reason),
+                }
+            } else {
+                return Err(unexpected(0, state, Attempting::Identifier));
+            }
         }
-    } else {
-        return Err(unexpected(0, state, Attempting::Identifier));
+        Err(reason) => return state.fail(reason),
     }
 
     while !state.bytes.is_empty() {
-        let (ch, new_state) = utf8_char().parse(arena, state)?;
+        match peek_utf8_char(&state) {
+            Ok((ch, bytes_parsed)) => {
+                // After the first character, only these are allowed:
+                //
+                // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
+                // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
+                // * A dot ('.')
+                if ch.is_alphabetic() {
+                    if part_buf.is_empty() {
+                        // Capitalization is determined by the first character in the part.
+                        is_capitalized = ch.is_uppercase();
+                    }
 
-        state = new_state;
+                    part_buf.push(ch);
+                } else if ch.is_ascii_digit() {
+                    // Parts may not start with numbers!
+                    if part_buf.is_empty() {
+                        return malformed(
+                            Some(ch),
+                            arena,
+                            state,
+                            capitalized_parts,
+                            noncapitalized_parts,
+                        );
+                    }
 
-        // After the first character, only these are allowed:
-        //
-        // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
-        // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-        // * A dot ('.')
-        if ch.is_alphabetic() {
-            if part_buf.is_empty() {
-                // Capitalization is determined by the first character in the part.
-                is_capitalized = ch.is_uppercase();
+                    part_buf.push(ch);
+                } else if ch == '.' {
+                    // There are two posssible errors here:
+                    //
+                    // 1. Having two consecutive dots is an error.
+                    // 2. Having capitalized parts after noncapitalized (e.g. `foo.Bar`) is an error.
+                    if part_buf.is_empty() || (is_capitalized && !noncapitalized_parts.is_empty()) {
+                        return malformed(
+                            Some(ch),
+                            arena,
+                            state,
+                            capitalized_parts,
+                            noncapitalized_parts,
+                        );
+                    }
+
+                    if is_capitalized {
+                        capitalized_parts.push(part_buf.into_bump_str());
+                    } else {
+                        noncapitalized_parts.push(part_buf.into_bump_str());
+                    }
+
+                    // Now that we've recorded the contents of the current buffer, reset it.
+                    part_buf = String::new_in(arena);
+                } else {
+                    // This must be the end of the identifier. We're done!
+
+                    break;
+                }
+
+                state = state.advance_without_indenting(bytes_parsed)?;
             }
-
-            part_buf.push(ch);
-        } else if ch.is_ascii_digit() {
-            // Parts may not start with numbers!
-            if part_buf.is_empty() {
-                return malformed(
-                    Some(ch),
-                    arena,
-                    state,
-                    capitalized_parts,
-                    noncapitalized_parts,
-                );
-            }
-
-            part_buf.push(ch);
-        } else if ch == '.' {
-            // There are two posssible errors here:
-            //
-            // 1. Having two consecutive dots is an error.
-            // 2. Having capitalized parts after noncapitalized (e.g. `foo.Bar`) is an error.
-            if part_buf.is_empty() || (is_capitalized && !noncapitalized_parts.is_empty()) {
-                return malformed(
-                    Some(ch),
-                    arena,
-                    state,
-                    capitalized_parts,
-                    noncapitalized_parts,
-                );
-            }
-
-            if is_capitalized {
-                capitalized_parts.push(part_buf.into_bump_str());
-            } else {
-                noncapitalized_parts.push(part_buf.into_bump_str());
-            }
-
-            // Now that we've recorded the contents of the current buffer, reset it.
-            part_buf = String::new_in(arena);
-        } else {
-            // This must be the end of the identifier. We're done!
-
-            break;
+            Err(reason) => return state.fail(reason),
         }
     }
 
@@ -262,26 +281,27 @@ fn malformed<'a>(
     let mut next_char = None;
 
     while !state.bytes.is_empty() {
-        let (ch, new_state) = utf8_char().parse(arena, state)?;
+        match peek_utf8_char(&state) {
+            Ok((ch, bytes_parsed)) => {
+                // We can't use ch.is_alphanumeric() here because that passes for
+                // things that are "numeric" but not ASCII digits, like `¾`
+                if ch == '.' || ch.is_alphabetic() || ch.is_ascii_digit() {
+                    full_string.push(ch);
+                } else {
+                    next_char = Some(ch);
 
-        state = new_state;
+                    break;
+                }
 
-        // We can't use ch.is_alphanumeric() here because that passes for
-        // things that are "numeric" but not ASCII digits, like `¾`
-        if ch == '.' || ch.is_alphabetic() || ch.is_ascii_digit() {
-            full_string.push(ch);
-        } else {
-            next_char = Some(ch);
-
-            break;
+                state = state.advance_without_indenting(bytes_parsed)?;
+            }
+            Err(reason) => return state.fail(reason),
         }
     }
 
-    let chars_parsed = full_string.len();
-
     Ok((
         (Ident::Malformed(full_string.into_bump_str()), next_char),
-        state.advance_without_indenting(chars_parsed)?,
+        state,
     ))
 }
 
@@ -298,42 +318,47 @@ pub fn global_tag_or_ident<'a, F>(pred: F) -> impl Parser<'a, &'a str>
 where
     F: Fn(char) -> bool,
 {
-    move |arena, state: State<'a>| {
+    move |arena, mut state: State<'a>| {
         // pred will determine if this is a tag or ident (based on capitalization)
-        let (first_letter, mut state) = utf8_char().parse(arena, state)?;
+        let (first_letter, bytes_parsed) = match peek_utf8_char(&state) {
+            Ok((first_letter, bytes_parsed)) => {
+                if !pred(first_letter) {
+                    return Err(unexpected(0, state, Attempting::RecordFieldLabel));
+                }
 
-        if !pred(first_letter) {
-            return Err(unexpected(0, state, Attempting::RecordFieldLabel));
-        }
+                (first_letter, bytes_parsed)
+            }
+            Err(reason) => return state.fail(reason),
+        };
 
         let mut buf = String::with_capacity_in(1, arena);
 
         buf.push(first_letter);
 
+        state = state.advance_without_indenting(bytes_parsed)?;
+
         while !state.bytes.is_empty() {
-            let (ch, new_state) = utf8_char().parse(arena, state)?;
+            match peek_utf8_char(&state) {
+                Ok((ch, bytes_parsed)) => {
+                    // After the first character, only these are allowed:
+                    //
+                    // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
+                    // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
+                    // * A ':' indicating the end of the field
+                    if ch.is_alphabetic() || ch.is_ascii_digit() {
+                        buf.push(ch);
 
-            state = new_state;
-
-            // After the first character, only these are allowed:
-            //
-            // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
-            // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-            // * A ':' indicating the end of the field
-            if ch.is_alphabetic() || ch.is_ascii_digit() {
-                buf.push(ch);
-            } else {
-                // This is the end of the field. We're done!
-                break;
-            }
+                        state = state.advance_without_indenting(bytes_parsed)?;
+                    } else {
+                        // This is the end of the field. We're done!
+                        break;
+                    }
+                }
+                Err(reason) => return state.fail(reason),
+            };
         }
 
-        let chars_parsed = buf.len();
-
-        Ok((
-            buf.into_bump_str(),
-            state.advance_without_indenting(chars_parsed)?,
-        ))
+        Ok((buf.into_bump_str(), state))
     }
 }
 
