@@ -11,6 +11,7 @@ use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
+use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartialProc<'a> {
@@ -799,7 +800,6 @@ pub enum MonoProblem {
     PatternProblem(crate::pattern::Error),
 }
 
-#[allow(clippy::too_many_arguments)]
 impl<'a> Expr<'a> {
     pub fn new(
         env: &mut Env<'a, '_>,
@@ -810,6 +810,156 @@ impl<'a> Expr<'a> {
 
         let result = from_can(env, can_expr, procs, &mut layout_cache);
         function_r(env, env.arena.alloc(result))
+    }
+
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, parens: bool) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        use Expr::*;
+
+        match self {
+            Int(lit) => alloc.text(format!("{}i64", lit)),
+            Float(lit) => alloc.text(format!("{}f64", lit)),
+            Bool(lit) => alloc.text(format!("{}", lit)),
+            Byte(lit) => alloc.text(format!("{}u8", lit)),
+            Str(lit) => alloc.text(format!("{:?}", lit)),
+            Load(symbol) if parens => alloc.text(format!("(Load {})", symbol)),
+            Load(symbol) => alloc.text(format!("Load {}", symbol)),
+
+            DecAfter(symbol, expr) => expr
+                .to_doc(alloc, false)
+                .append(alloc.hardline())
+                .append(alloc.text(format!("Dec {}", symbol))),
+
+            Reset(symbol, expr) => alloc
+                .text(format!("Reset {}", symbol))
+                .append(alloc.hardline())
+                .append(expr.to_doc(alloc, false)),
+
+            Reuse(symbol, expr) => alloc
+                .text(format!("Reuse {}", symbol))
+                .append(alloc.hardline())
+                .append(expr.to_doc(alloc, false)),
+
+            Store(stores, expr) => {
+                let doc_stores = stores
+                    .iter()
+                    .map(|(symbol, _, expr)| {
+                        alloc
+                            .text(format!("Store {}: ", symbol))
+                            .append(expr.to_doc(alloc, false))
+                    })
+                    .collect::<std::vec::Vec<_>>();
+
+                alloc
+                    .intersperse(doc_stores, alloc.hardline())
+                    .append(alloc.hardline())
+                    .append(expr.to_doc(alloc, false))
+            }
+
+            Cond {
+                branching_symbol,
+                pass,
+                fail,
+                ..
+            } => alloc
+                .text(format!("if {} then", branching_symbol))
+                .append(alloc.hardline())
+                .append(pass.1.to_doc(alloc, false).indent(4))
+                .append(alloc.hardline())
+                .append(alloc.text("else"))
+                .append(alloc.hardline())
+                .append(fail.1.to_doc(alloc, false).indent(4)),
+
+            Switch {
+                cond_symbol,
+                branches,
+                default_branch,
+                ..
+            } => {
+                let default_doc = alloc
+                    .text("default:")
+                    .append(alloc.hardline())
+                    .append(default_branch.1.to_doc(alloc, false).indent(4))
+                    .indent(4);
+
+                let branches_docs = branches
+                    .iter()
+                    .map(|(tag, _, expr)| {
+                        alloc
+                            .text(format!("case {}:", tag))
+                            .append(alloc.hardline())
+                            .append(expr.to_doc(alloc, false).indent(4))
+                            .indent(4)
+                    })
+                    .chain(std::iter::once(default_doc));
+                //
+                alloc
+                    .text(format!("switch {}:", cond_symbol))
+                    .append(alloc.hardline())
+                    .append(
+                        alloc.intersperse(branches_docs, alloc.hardline().append(alloc.hardline())),
+                    )
+                    .append(alloc.hardline())
+            }
+
+            Struct(fields) => alloc.text(format!("Struct {:?}", fields)),
+
+            Tag {
+                tag_name,
+                arguments,
+                ..
+            } => {
+                let doc_tag = match tag_name {
+                    TagName::Global(s) => alloc.text(s.as_str()),
+                    TagName::Private(s) => alloc.text(format!("{}", s)),
+                };
+                let doc_args = arguments.iter().map(|(expr, _)| expr.to_doc(alloc, true));
+
+                let it = std::iter::once(doc_tag).chain(doc_args);
+
+                alloc.intersperse(it, alloc.space())
+            }
+            AccessAtIndex { index, expr, .. } if parens => alloc
+                .text(format!("(Access @{} ", index))
+                .append(expr.to_doc(alloc, false))
+                .append(alloc.text(")")),
+
+            AccessAtIndex { index, expr, .. } => alloc
+                .text(format!("Access @{} ", index))
+                .append(expr.to_doc(alloc, false)),
+
+            RunLowLevel(instr, arguments) => {
+                let doc_tag = alloc.text(format!("Lowlevel.{:?}", instr));
+                let doc_args = arguments.iter().map(|(expr, _)| expr.to_doc(alloc, true));
+
+                let it = std::iter::once(doc_tag).chain(doc_args);
+
+                if parens {
+                    alloc
+                        .text("(")
+                        .append(alloc.intersperse(it, alloc.space()))
+                        .append(alloc.text(")"))
+                } else {
+                    alloc.intersperse(it, alloc.space())
+                }
+            }
+            CallByName { name, .. } => alloc.text("*magic*"),
+            _ => todo!("not yet implemented: {:?}", self),
+        }
+    }
+    pub fn to_pretty(&self, width: usize) -> String {
+        let allocator = BoxAllocator;
+        let mut w = std::vec::Vec::new();
+        self.to_doc::<_, ()>(&allocator, false)
+            .1
+            .render(width, &mut w)
+            .unwrap();
+        w.push(b'\n');
+        String::from_utf8(w).unwrap()
     }
 }
 

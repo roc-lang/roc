@@ -2222,6 +2222,7 @@ dependencies = [
  "roc_solve",
  "roc_types",
  "roc_unify",
+ "ven_pretty",
 ]
 
 [[package]]

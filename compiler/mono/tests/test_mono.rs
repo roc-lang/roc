@@ -1,6 +1,9 @@
 #[macro_use]
 extern crate pretty_assertions;
 
+#[macro_use]
+extern crate indoc;
+
 extern crate bumpalo;
 extern crate roc_mono;
 
@@ -78,6 +81,57 @@ mod test_mono {
         interns.all_ident_ids.insert(home, ident_ids);
 
         assert_eq!(get_expected(interns), mono_expr);
+    }
+
+    fn compiles_to_string(src: &str, expected: &str) {
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr,
+            var_store,
+            var,
+            constraint,
+            home,
+            mut interns,
+            ..
+        } = can_expr(src);
+
+        let subs = Subs::new(var_store.into());
+        let mut unify_problems = Vec::new();
+        let (_content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+
+        // Compile and add all the Procs before adding main
+        let mut procs = Procs::default();
+        let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
+
+        // assume 64-bit pointers
+        let pointer_size = std::mem::size_of::<u64>() as u32;
+
+        // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
+        let mut mono_problems = Vec::new();
+        let mut mono_env = roc_mono::expr::Env {
+            arena: &arena,
+            subs: &mut subs,
+            problems: &mut mono_problems,
+            home,
+            ident_ids: &mut ident_ids,
+            pointer_size,
+            jump_counter: arena.alloc(0),
+        };
+        let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
+        let procs =
+            roc_mono::expr::specialize_all(&mut mono_env, procs, &mut LayoutCache::default());
+
+        assert_eq!(
+            procs.runtime_errors,
+            roc_collections::all::MutMap::default()
+        );
+
+        // Put this module's ident_ids back in the interns
+        interns.all_ident_ids.insert(home, ident_ids);
+
+        let result = mono_expr.to_pretty(200);
+
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -746,6 +800,150 @@ mod test_mono {
                     ),
                 )
             },
+        )
+    }
+
+    #[test]
+    fn simple_to_string() {
+        compiles_to_string(
+            r#"
+            x = 3
+
+            x
+            "#,
+            indoc!(
+                r#"
+                Store Test.0: 3i64
+                Load Test.0
+                Dec Test.0
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn if_to_string() {
+        compiles_to_string(
+            r#"
+            if True then 1 else 2
+            "#,
+            indoc!(
+                r#"
+                Store Test.0: true
+                if Test.0 then
+                    1i64
+                else
+                    2i64
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn maybe_map_to_string() {
+        compiles_to_string(
+            r#"
+            maybe : [ Nothing, Just Int ]
+            maybe = Just 3
+
+            when maybe is
+                Just x -> Just (x + 1)
+                Nothing -> Nothing
+            "#,
+            indoc!(
+                r#"
+                Store Test.0: Just 0i64 3i64
+                Store Test.0: Load Test.0
+                Store Test.2: Lowlevel.And (Lowlevel.Eq 0i64 (Access @0 Load Test.0)) true
+
+                if Test.2 then
+                    Reset Test.0
+                    Reuse Test.0
+                    Just 0i64 *magic*
+                else
+                    Reset Test.0
+                    Reuse Test.0
+                    Nothing 1i64
+                Dec Test.0
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn very_maybe_map_to_string() {
+        compiles_to_string(
+            r#"
+            Maybe a : [ Nothing, Just a ]
+
+            veryMaybe : Maybe (Maybe Int)
+            veryMaybe = Just (Just 3)
+
+            when veryMaybe is
+                Just (Just _) -> Just (Just 1)
+                Just Nothing -> Just Nothing
+                Nothing -> Nothing
+            "#,
+            indoc!(
+                r#"
+                Store Test.1: Just 0i64 Just 0i64 3i64
+                Store Test.1: Load Test.1
+                Store Test.5: Lowlevel.And (Lowlevel.Eq 0i64 (Access @0 Load Test.1)) true
+
+                if Test.5 then
+                    
+                    if Test.4 then
+                        Just 0i64 Just 0i64 1i64
+                    else
+                        Just 0i64 Nothing 1i64
+                else
+                    Reset Test.1
+                    Reuse Test.1
+                    Nothing 1i64
+                Dec Test.1
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn these_map_to_string() {
+        compiles_to_string(
+            r#"
+            These a b : [ This a, That b, These a b ]
+
+            these : These Int Int
+            these = These 1 2
+
+            when these is
+                This a -> This a
+                That b -> That b
+                These a b -> These b a
+            "#,
+            indoc!(
+                r#"
+                Store Test.1: These 1i64 1i64 2i64
+                Store Test.1: Load Test.1
+
+                switch Test.1:
+                    case 2:
+                        Reset Test.1
+                        Reuse Test.1
+                        This 2i64 (Load Test.2)
+
+                    case 0:
+                        Reset Test.1
+                        Reuse Test.1
+                        That 0i64 (Load Test.3)
+
+                    default:
+                        Reset Test.1
+                        Reuse Test.1
+                        These 1i64 (Load Test.5) (Load Test.4)
+
+                Dec Test.1
+                "#
+            ),
         )
     }
 }
