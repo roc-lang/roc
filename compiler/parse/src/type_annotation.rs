@@ -4,8 +4,8 @@ use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
-    allocated, char, not, optional, string, unexpected, unexpected_eof, Either, ParseResult,
-    Parser, State,
+    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, unexpected, Either,
+    ParseResult, Parser, State,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -22,10 +22,10 @@ macro_rules! tag_union {
         map!(
             and!(
                 collection!(
-                    char('['),
+                    ascii_char('['),
                     loc!(tag_type($min_indent)),
-                    char(','),
-                    char(']'),
+                    ascii_char(','),
+                    ascii_char(']'),
                     $min_indent
                 ),
                 optional(
@@ -61,7 +61,7 @@ pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>>
                 and!(
                     space1(min_indent),
                     skip_first!(
-                        string(keyword::AS),
+                        ascii_string(keyword::AS),
                         space1_before(term(min_indent), min_indent)
                     )
                 )
@@ -89,7 +89,7 @@ pub fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>>
 
 /// The `*` type variable, e.g. in (List *) Wildcard,
 fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
-    map!(loc!(char('*')), |loc_val: Located<()>| {
+    map!(loc!(ascii_char('*')), |loc_val: Located<()>| {
         loc_val.map(|_| TypeAnnotation::Wildcard)
     })
 }
@@ -97,7 +97,7 @@ fn loc_wildcard<'a>() -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
 pub fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     skip_first!(
         // Once we hit an "as", stop parsing args
-        not(string(keyword::AS)),
+        not(ascii_string(keyword::AS)),
         one_of!(
             loc_wildcard(),
             loc_parenthetical_type(min_indent),
@@ -112,12 +112,12 @@ pub fn loc_applied_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnot
 #[inline(always)]
 fn loc_parenthetical_type<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>> {
     between!(
-        char('('),
+        ascii_char('('),
         space0_around(
             move |arena, state| expression(min_indent).parse(arena, state),
             min_indent,
         ),
-        char(')')
+        ascii_char(')')
     )
 }
 
@@ -208,7 +208,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
     move |arena, state: State<'a>| {
         let (first, state) = space0_before(term(min_indent), min_indent).parse(arena, state)?;
         let (rest, state) = zero_or_more!(skip_first!(
-            char(','),
+            ascii_char(','),
             space0_around(term(min_indent), min_indent)
         ))
         .parse(arena, state)?;
@@ -216,7 +216,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
         // TODO this space0 is dropped, so newlines just before the function arrow when there
         // is only one argument are not seen by the formatter. Can we do better?
         let (is_function, state) =
-            optional(skip_first!(space0(min_indent), string("->"))).parse(arena, state)?;
+            optional(skip_first!(space0(min_indent), ascii_string("->"))).parse(arena, state)?;
 
         if is_function.is_some() {
             let (return_type, state) =
@@ -263,67 +263,70 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
 
 fn parse_concrete_type<'a>(
     arena: &'a Bump,
-    state: State<'a>,
+    mut state: State<'a>,
 ) -> ParseResult<'a, TypeAnnotation<'a>> {
-    let mut chars = state.input.chars();
     let mut part_buf = String::new_in(arena); // The current "part" (parts are dot-separated.)
     let mut parts: Vec<&'a str> = Vec::new_in(arena);
 
     // Qualified types must start with a capitalized letter.
-    match chars.next() {
-        Some(ch) => {
-            if ch.is_alphabetic() && ch.is_uppercase() {
-                part_buf.push(ch);
+    match peek_utf8_char(&state) {
+        Ok((first_letter, bytes_parsed)) => {
+            if first_letter.is_alphabetic() && first_letter.is_uppercase() {
+                part_buf.push(first_letter);
             } else {
-                return Err(unexpected(ch, 0, state, Attempting::ConcreteType));
+                return Err(unexpected(0, state, Attempting::ConcreteType));
             }
-        }
-        None => {
-            return Err(unexpected_eof(0, Attempting::ConcreteType, state));
-        }
-    };
 
-    let mut chars_parsed = 1;
+            state = state.advance_without_indenting(bytes_parsed)?;
+        }
+        Err(reason) => return state.fail(reason),
+    }
+
     let mut next_char = None;
 
-    while let Some(ch) = chars.next() {
-        // After the first character, only these are allowed:
-        //
-        // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
-        // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-        // * A dot ('.')
-        if ch.is_alphabetic() {
-            if part_buf.is_empty() && !ch.is_uppercase() {
-                // Each part must begin with a capital letter.
-                return malformed(Some(ch), arena, state, &mut chars, parts);
+    while !state.bytes.is_empty() {
+        match peek_utf8_char(&state) {
+            Ok((ch, bytes_parsed)) => {
+                // After the first character, only these are allowed:
+                //
+                // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
+                // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
+                // * A dot ('.')
+                if ch.is_alphabetic() {
+                    if part_buf.is_empty() && !ch.is_uppercase() {
+                        // Each part must begin with a capital letter.
+                        return malformed(Some(ch), arena, state, parts);
+                    }
+
+                    part_buf.push(ch);
+                } else if ch.is_ascii_digit() {
+                    // Parts may not start with numbers!
+                    if part_buf.is_empty() {
+                        return malformed(Some(ch), arena, state, parts);
+                    }
+
+                    part_buf.push(ch);
+                } else if ch == '.' {
+                    // Having two consecutive dots is an error.
+                    if part_buf.is_empty() {
+                        return malformed(Some(ch), arena, state, parts);
+                    }
+
+                    parts.push(part_buf.into_bump_str());
+
+                    // Now that we've recorded the contents of the current buffer, reset it.
+                    part_buf = String::new_in(arena);
+                } else {
+                    // This must be the end of the type. We're done!
+                    next_char = Some(ch);
+
+                    break;
+                }
+
+                state = state.advance_without_indenting(bytes_parsed)?;
             }
-
-            part_buf.push(ch);
-        } else if ch.is_ascii_digit() {
-            // Parts may not start with numbers!
-            if part_buf.is_empty() {
-                return malformed(Some(ch), arena, state, &mut chars, parts);
-            }
-
-            part_buf.push(ch);
-        } else if ch == '.' {
-            // Having two consecutive dots is an error.
-            if part_buf.is_empty() {
-                return malformed(Some(ch), arena, state, &mut chars, parts);
-            }
-
-            parts.push(part_buf.into_bump_str());
-
-            // Now that we've recorded the contents of the current buffer, reset it.
-            part_buf = String::new_in(arena);
-        } else {
-            // This must be the end of the type. We're done!
-            next_char = Some(ch);
-
-            break;
+            Err(reason) => return state.fail(reason),
         }
-
-        chars_parsed += 1;
     }
 
     if part_buf.is_empty() {
@@ -333,23 +336,16 @@ fn parse_concrete_type<'a>(
         //
         // If we made it this far and don't have a next_char, then necessarily
         // we have consumed a '.' char previously.
-        return malformed(
-            next_char.or_else(|| Some('.')),
-            arena,
-            state,
-            &mut chars,
-            parts,
-        );
+        return malformed(next_char.or_else(|| Some('.')), arena, state, parts);
     }
 
     if part_buf.is_empty() {
         // We had neither capitalized nor noncapitalized parts,
         // yet we made it this far. The only explanation is that this was
         // a stray '.' drifting through the cosmos.
-        return Err(unexpected('.', 1, state, Attempting::Identifier));
+        return Err(unexpected(1, state, Attempting::Identifier));
     }
 
-    let state = state.advance_without_indenting(chars_parsed)?;
     let answer = TypeAnnotation::Apply(
         join_module_parts(arena, parts.into_bump_slice()),
         part_buf.into_bump_str(),
@@ -361,58 +357,55 @@ fn parse_concrete_type<'a>(
 
 fn parse_type_variable<'a>(
     arena: &'a Bump,
-    state: State<'a>,
+    mut state: State<'a>,
 ) -> ParseResult<'a, TypeAnnotation<'a>> {
-    let mut chars = state.input.chars();
     let mut buf = String::new_in(arena);
 
-    // Type variables must start with a lowercase letter.
-    match chars.next() {
-        Some(ch) => {
-            if ch.is_alphabetic() && ch.is_lowercase() {
-                buf.push(ch);
+    match peek_utf8_char(&state) {
+        Ok((first_letter, bytes_parsed)) => {
+            // Type variables must start with a lowercase letter.
+            if first_letter.is_alphabetic() && first_letter.is_lowercase() {
+                buf.push(first_letter);
             } else {
-                return Err(unexpected(ch, 0, state, Attempting::TypeVariable));
+                return Err(unexpected(0, state, Attempting::TypeVariable));
             }
-        }
-        None => {
-            return Err(unexpected_eof(0, Attempting::TypeVariable, state));
-        }
-    };
 
-    let mut chars_parsed = 1;
-
-    for ch in chars {
-        // After the first character, only these are allowed:
-        //
-        // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
-        // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-        if ch.is_alphabetic() || ch.is_ascii_digit() {
-            buf.push(ch);
-        } else {
-            // This must be the end of the type. We're done!
-            break;
+            state = state.advance_without_indenting(bytes_parsed)?;
         }
-
-        chars_parsed += 1;
+        Err(reason) => return state.fail(reason),
     }
 
-    let state = state.advance_without_indenting(chars_parsed)?;
+    while !state.bytes.is_empty() {
+        match peek_utf8_char(&state) {
+            Ok((ch, bytes_parsed)) => {
+                // After the first character, only these are allowed:
+                //
+                // * Unicode alphabetic chars - you might name a variable `鹏` if that's clear to your readers
+                // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
+                if ch.is_alphabetic() || ch.is_ascii_digit() {
+                    buf.push(ch);
+                } else {
+                    // This must be the end of the type. We're done!
+                    break;
+                }
+
+                state = state.advance_without_indenting(bytes_parsed)?;
+            }
+            Err(reason) => return state.fail(reason),
+        }
+    }
+
     let answer = TypeAnnotation::BoundVariable(buf.into_bump_str());
 
     Ok((answer, state))
 }
 
-fn malformed<'a, I>(
+fn malformed<'a>(
     opt_bad_char: Option<char>,
     arena: &'a Bump,
-    state: State<'a>,
-    chars: &mut I,
+    mut state: State<'a>,
     parts: Vec<&'a str>,
-) -> ParseResult<'a, TypeAnnotation<'a>>
-where
-    I: Iterator<Item = char>,
-{
+) -> ParseResult<'a, TypeAnnotation<'a>> {
     // Reconstruct the original string that we've been parsing.
     let mut full_string = String::new_in(arena);
 
@@ -423,20 +416,25 @@ where
     }
 
     // Consume the remaining chars in the identifier.
-    for ch in chars {
-        // We can't use ch.is_alphanumeric() here because that passes for
-        // things that are "numeric" but not ASCII digits, like `¾`
-        if ch == '.' || ch.is_alphabetic() || ch.is_ascii_digit() {
-            full_string.push(ch);
-        } else {
-            break;
+    while !state.bytes.is_empty() {
+        match peek_utf8_char(&state) {
+            Ok((ch, bytes_parsed)) => {
+                // We can't use ch.is_alphanumeric() here because that passes for
+                // things that are "numeric" but not ASCII digits, like `¾`
+                if ch == '.' || ch.is_alphabetic() || ch.is_ascii_digit() {
+                    full_string.push(ch);
+                } else {
+                    break;
+                }
+
+                state = state.advance_without_indenting(bytes_parsed)?;
+            }
+            Err(reason) => return state.fail(reason),
         }
     }
 
-    let chars_parsed = full_string.len();
-
     Ok((
         TypeAnnotation::Malformed(full_string.into_bump_str()),
-        state.advance_without_indenting(chars_parsed)?,
+        state,
     ))
 }

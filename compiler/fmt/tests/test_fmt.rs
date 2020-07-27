@@ -20,7 +20,7 @@ mod test_fmt {
     use roc_parse::parser::{Fail, Parser, State};
 
     fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, Fail> {
-        let state = State::new(&input, Attempting::Module);
+        let state = State::new(input.as_bytes(), Attempting::Module);
         let parser = space0_before(loc!(roc_parse::expr::expr(0)), 0);
         let answer = parser.parse(&arena, state);
 
@@ -55,7 +55,7 @@ mod test_fmt {
         let src = src.trim_end();
         let expected = expected.trim_end();
 
-        match module::header().parse(&arena, State::new(&src, Attempting::Module)) {
+        match module::header().parse(&arena, State::new(src.as_bytes(), Attempting::Module)) {
             Ok((actual, state)) => {
                 let mut buf = String::new_in(&arena);
 

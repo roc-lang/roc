@@ -19,9 +19,10 @@ use roc_solve::solve;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
 use std::collections::{HashMap, HashSet};
-use std::fs::read_to_string;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::str::from_utf8_unchecked;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio::task::spawn_blocking;
@@ -63,7 +64,7 @@ struct ModuleHeader {
     imported_modules: MutSet<ModuleId>,
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    src: Box<str>,
+    src: Box<[u8]>,
 }
 
 #[derive(Debug)]
@@ -526,58 +527,70 @@ fn load_module(
     load_filename(filename, msg_tx, module_ids)
 }
 
+fn parse_src(
+    filename: PathBuf,
+    msg_tx: MsgSender,
+    module_ids: SharedModules<'_, '_>,
+    src_bytes: &[u8],
+) -> Result<ModuleId, LoadingProblem> {
+    let state = State::new(src_bytes, Attempting::Module);
+    let arena = Bump::new();
+
+    // TODO figure out if there's a way to address this clippy error
+    // without introducing a borrow error. ("let and return" is literally
+    // what the borrow checker suggested using here to fix the problem, so...)
+    #[allow(clippy::let_and_return)]
+    let answer = match roc_parse::module::header().parse(&arena, state) {
+        Ok((ast::Module::Interface { header }, state)) => {
+            let module_id = send_header(
+                header.name,
+                header.exposes.into_bump_slice(),
+                header.imports.into_bump_slice(),
+                state,
+                module_ids,
+                msg_tx,
+            );
+
+            Ok(module_id)
+        }
+        Ok((ast::Module::App { header }, state)) => match module_ids {
+            MaybeShared::Shared(_, _) => {
+                // If this is Shared, it means we're trying to import
+                // an app module which is not the root. Not alllowed!
+                Err(LoadingProblem::TriedToImportAppModule)
+            }
+            unique_modules @ MaybeShared::Unique(_, _) => {
+                let module_id = send_header(
+                    header.name,
+                    header.provides.into_bump_slice(),
+                    header.imports.into_bump_slice(),
+                    state,
+                    unique_modules,
+                    msg_tx,
+                );
+
+                Ok(module_id)
+            }
+        },
+        Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
+    };
+
+    answer
+}
+
 /// Load a module by its filename
+///
+/// This has two unsafe calls:
+///
+/// * memory map the filename instead of doing a buffered read
+/// * assume the contents of the file are valid UTF-8
 fn load_filename(
     filename: PathBuf,
     msg_tx: MsgSender,
     module_ids: SharedModules<'_, '_>,
 ) -> Result<ModuleId, LoadingProblem> {
-    match read_to_string(&filename) {
-        Ok(src) => {
-            let arena = Bump::new();
-            let state = State::new(&src, Attempting::Module);
-
-            // TODO figure out if there's a way to address this clippy error
-            // without introducing a borrow error. ("let and return" is literally
-            // what the borrow checker suggested using here to fix the problem, so...)
-            #[allow(clippy::let_and_return)]
-            let answer = match roc_parse::module::header().parse(&arena, state) {
-                Ok((ast::Module::Interface { header }, state)) => {
-                    let module_id = send_header(
-                        header.name,
-                        header.exposes.into_bump_slice(),
-                        header.imports.into_bump_slice(),
-                        state,
-                        module_ids,
-                        msg_tx,
-                    );
-
-                    Ok(module_id)
-                }
-                Ok((ast::Module::App { header }, state)) => match module_ids {
-                    MaybeShared::Shared(_, _) => {
-                        // If this is Shared, it means we're trying to import
-                        // an app module which is not the root. Not alllowed!
-                        Err(LoadingProblem::TriedToImportAppModule)
-                    }
-                    unique_modules @ MaybeShared::Unique(_, _) => {
-                        let module_id = send_header(
-                            header.name,
-                            header.provides.into_bump_slice(),
-                            header.imports.into_bump_slice(),
-                            state,
-                            unique_modules,
-                            msg_tx,
-                        );
-
-                        Ok(module_id)
-                    }
-                },
-                Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
-            };
-
-            answer
-        }
+    match fs::read(&filename) {
+        Ok(bytes) => parse_src(filename, msg_tx, module_ids, bytes.as_ref()),
         Err(err) => Err(LoadingProblem::FileProblem {
             filename,
             error: err.kind(),
@@ -746,7 +759,7 @@ fn send_header<'a>(
 
     // Box up the input &str for transfer over the wire.
     // We'll need this in order to continue parsing later.
-    let src: Box<str> = state.input.to_string().into();
+    let src: Box<[u8]> = state.bytes.into();
 
     // Send the deps to the coordinator thread for processing,
     // then continue on to parsing and canonicalizing defs.
@@ -961,7 +974,7 @@ fn parse_and_constrain(
 
     let (parsed_defs, _) = module_defs()
         .parse(&arena, state)
-        .expect("TODO gracefully handle parse error on module defs");
+        .expect("TODO gracefully handle parse error on module defs. IMPORTANT: Bail out entirely if there are any BadUtf8 problems! That means the whole source file is not valid UTF-8 and any other errors we report may get mis-reported. We rely on this for safety in an `unsafe` block later on in this function.");
 
     let (module, declarations, ident_ids, constraint, problems) = match canonicalize_module_defs(
         &arena,
@@ -1001,8 +1014,12 @@ fn parse_and_constrain(
         }
     };
 
-    let src = header.src;
     let imported_modules = header.imported_modules;
+
+    // SAFETY: By this point we've already incrementally verified that there
+    // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors,
+    // we'd have bailed out before now.
+    let src: Box<str> = unsafe { from_utf8_unchecked(header.src.as_ref()).to_string().into() };
 
     tokio::spawn(async move {
         let mut tx = msg_tx;

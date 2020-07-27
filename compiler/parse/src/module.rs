@@ -6,7 +6,10 @@ use crate::blankspace::{space0_around, space1};
 use crate::expr::def;
 use crate::header::ModuleName;
 use crate::ident::unqualified_ident;
-use crate::parser::{self, char, loc, optional, string, unexpected, unexpected_eof, Parser, State};
+use crate::parser::{
+    self, ascii_char, ascii_string, loc, optional, peek_utf8_char, peek_utf8_char_at, unexpected,
+    Parser, State,
+};
 use bumpalo::collections::{String, Vec};
 use roc_region::all::Located;
 
@@ -30,7 +33,10 @@ pub fn app_module<'a>() -> impl Parser<'a, Module<'a>> {
 pub fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>> {
     parser::map(
         and!(
-            skip_first!(string("interface"), and!(space1(1), loc!(module_name()))),
+            skip_first!(
+                ascii_string("interface"),
+                and!(space1(1), loc!(module_name()))
+            ),
             and!(exposes(), imports())
         ),
         |(
@@ -56,72 +62,68 @@ pub fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>> {
 
 #[inline(always)]
 pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
-    move |arena, state: State<'a>| {
-        let mut chars = state.input.chars();
+    move |arena, mut state: State<'a>| {
+        match peek_utf8_char(&state) {
+            Ok((first_letter, bytes_parsed)) => {
+                if !first_letter.is_uppercase() {
+                    return Err(unexpected(0, state, Attempting::Module));
+                };
 
-        let first_letter = match chars.next() {
-            Some(first_char) => {
-                // Module names must all be uppercase
-                if first_char.is_uppercase() {
-                    first_char
-                } else {
-                    return Err(unexpected(
-                        first_char,
-                        0,
-                        state,
-                        Attempting::RecordFieldLabel,
-                    ));
-                }
-            }
-            None => {
-                return Err(unexpected_eof(0, Attempting::Identifier, state));
-            }
-        };
+                let mut buf = String::with_capacity_in(4, arena);
 
-        let mut buf = String::with_capacity_in(1, arena);
+                buf.push(first_letter);
 
-        buf.push(first_letter);
+                state = state.advance_without_indenting(bytes_parsed)?;
 
-        while let Some(ch) = chars.next() {
-            // After the first character, only these are allowed:
-            //
-            // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
-            // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
-            // * A '.' separating module parts
-            if ch.is_alphabetic() || ch.is_ascii_digit() {
-                buf.push(ch);
-            } else if ch == '.' {
-                match chars.next() {
-                    Some(next) => {
-                        if next.is_uppercase() {
-                            // If we hit another uppercase letter, keep going!
-                            buf.push('.');
-                            buf.push(next);
-                        } else {
-                            // We have finished parsing the module name.
+                while !state.bytes.is_empty() {
+                    match peek_utf8_char(&state) {
+                        Ok((ch, bytes_parsed)) => {
+                            // After the first character, only these are allowed:
                             //
-                            // There may be an identifier after this '.',
-                            // e.g. "baz" in `Foo.Bar.baz`
-                            break;
+                            // * Unicode alphabetic chars - you might include `鹏` if that's clear to your readers
+                            // * ASCII digits - e.g. `1` but not `¾`, both of which pass .is_numeric()
+                            // * A '.' separating module parts
+                            if ch.is_alphabetic() || ch.is_ascii_digit() {
+                                state = state.advance_without_indenting(bytes_parsed)?;
+
+                                buf.push(ch);
+                            } else if ch == '.' {
+                                match peek_utf8_char_at(&state, 1) {
+                                    Ok((next, next_bytes_parsed)) => {
+                                        if next.is_uppercase() {
+                                            // If we hit another uppercase letter, keep going!
+                                            buf.push('.');
+                                            buf.push(next);
+
+                                            state = state.advance_without_indenting(
+                                                bytes_parsed + next_bytes_parsed,
+                                            )?;
+                                        } else {
+                                            // We have finished parsing the module name.
+                                            //
+                                            // There may be an identifier after this '.',
+                                            // e.g. "baz" in `Foo.Bar.baz`
+                                            return Ok((
+                                                ModuleName::new(buf.into_bump_str()),
+                                                state,
+                                            ));
+                                        }
+                                    }
+                                    Err(reason) => return state.fail(reason),
+                                }
+                            } else {
+                                // This is the end of the module name. We're done!
+                                break;
+                            }
                         }
-                    }
-                    None => {
-                        // A module name can't end with a '.'
-                        return Err(unexpected_eof(0, Attempting::Identifier, state));
+                        Err(reason) => return state.fail(reason),
                     }
                 }
-            } else {
-                // This is the end of the module name. We're done!
-                break;
+
+                Ok((ModuleName::new(buf.into_bump_str()), state))
             }
+            Err(reason) => state.fail(reason),
         }
-
-        let chars_parsed = buf.len();
-
-        Ok((
-            ModuleName::new(buf.into_bump_str()),
-            state.advance_without_indenting(chars_parsed)?,
-        ))
     }
 }
 
@@ -129,7 +131,7 @@ pub fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>> {
 fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>> {
     parser::map(
         and!(
-            skip_first!(string("app"), and!(space1(1), loc!(module_name()))),
+            skip_first!(ascii_string("app"), and!(space1(1), loc!(module_name()))),
             and!(provides(), imports())
         ),
         |(
@@ -167,8 +169,14 @@ fn provides<'a>() -> impl Parser<
     ),
 > {
     and!(
-        and!(skip_second!(space1(1), string("provides")), space1(1)),
-        collection!(char('['), loc!(exposes_entry()), char(','), char(']'), 1)
+        and!(skip_second!(space1(1), ascii_string("provides")), space1(1)),
+        collection!(
+            ascii_char('['),
+            loc!(exposes_entry()),
+            ascii_char(','),
+            ascii_char(']'),
+            1
+        )
     )
 }
 
@@ -181,8 +189,14 @@ fn exposes<'a>() -> impl Parser<
     ),
 > {
     and!(
-        and!(skip_second!(space1(1), string("exposes")), space1(1)),
-        collection!(char('['), loc!(exposes_entry()), char(','), char(']'), 1)
+        and!(skip_second!(space1(1), ascii_string("exposes")), space1(1)),
+        collection!(
+            ascii_char('['),
+            loc!(exposes_entry()),
+            ascii_char(','),
+            ascii_char(']'),
+            1
+        )
     )
 }
 
@@ -195,8 +209,14 @@ fn imports<'a>() -> impl Parser<
     ),
 > {
     and!(
-        and!(skip_second!(space1(1), string("imports")), space1(1)),
-        collection!(char('['), loc!(imports_entry()), char(','), char(']'), 1)
+        and!(skip_second!(space1(1), ascii_string("imports")), space1(1)),
+        collection!(
+            ascii_char('['),
+            loc!(imports_entry()),
+            ascii_char(','),
+            ascii_char(']'),
+            1
+        )
     )
 }
 
@@ -213,8 +233,14 @@ fn imports_entry<'a>() -> impl Parser<'a, ImportsEntry<'a>> {
             module_name(),
             // e.g. `.{ Task, after}`
             optional(skip_first!(
-                char('.'),
-                collection!(char('{'), loc!(exposes_entry()), char(','), char('}'), 1)
+                ascii_char('.'),
+                collection!(
+                    ascii_char('{'),
+                    loc!(exposes_entry()),
+                    ascii_char(','),
+                    ascii_char('}'),
+                    1
+                )
             ))
         ),
         |arena,
