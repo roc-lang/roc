@@ -38,10 +38,10 @@ mod gen_list {
     }
 
     #[test]
-    fn list_push() {
-        assert_evals_to!("List.push [1] 2", &[1, 2], &'static [i64]);
-        assert_evals_to!("List.push [1, 1] 2", &[1, 1, 2], &'static [i64]);
-        assert_evals_to!("List.push [] 3", &[3], &'static [i64]);
+    fn list_append() {
+        assert_evals_to!("List.append [1] 2", &[1, 2], &'static [i64]);
+        assert_evals_to!("List.append [1, 1] 2", &[1, 1, 2], &'static [i64]);
+        assert_evals_to!("List.append [] 3", &[3], &'static [i64]);
         assert_evals_to!(
             indoc!(
                 r#"
@@ -49,19 +49,19 @@ mod gen_list {
                     initThrees =
                         []
 
-                    List.push (List.push initThrees 3) 3
+                    List.append (List.append initThrees 3) 3
                 "#
             ),
             &[3, 3],
             &'static [i64]
         );
         assert_evals_to!(
-            "List.push [ True, False ] True",
+            "List.append [ True, False ] True",
             &[true, false, true],
             &'static [bool]
         );
         assert_evals_to!(
-            "List.push [ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22 ] 23",
+            "List.append [ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22 ] 23",
             &[11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
             &'static [i64]
         );
@@ -126,8 +126,8 @@ mod gen_list {
     }
 
     #[test]
-    fn list_append() {
-        assert_evals_to!("List.append [] []", &[], &'static [i64]);
+    fn list_concat() {
+        assert_evals_to!("List.concat [] []", &[], &'static [i64]);
 
         assert_evals_to!(
             indoc!(
@@ -140,30 +140,30 @@ mod gen_list {
                     secondList =
                         []
 
-                    List.append firstList secondList
+                    List.concat firstList secondList
                 "#
             ),
             &[],
             &'static [i64]
         );
 
-        assert_evals_to!("List.append [ 12, 13 ] []", &[12, 13], &'static [i64]);
+        assert_evals_to!("List.concat [ 12, 13 ] []", &[12, 13], &'static [i64]);
         assert_evals_to!(
-            "List.append [ 34, 43 ] [ 64, 55, 66 ]",
+            "List.concat [ 34, 43 ] [ 64, 55, 66 ]",
             &[34, 43, 64, 55, 66],
             &'static [i64]
         );
 
-        assert_evals_to!("List.append [] [ 23, 24 ]", &[23, 24], &'static [i64]);
+        assert_evals_to!("List.concat [] [ 23, 24 ]", &[23, 24], &'static [i64]);
 
         assert_evals_to!(
-            "List.append [ 1, 2 ] [ 3, 4 ]",
+            "List.concat [ 1, 2 ] [ 3, 4 ]",
             &[1, 2, 3, 4],
             &'static [i64]
         );
     }
 
-    fn assert_append_worked(num_elems1: i64, num_elems2: i64) {
+    fn assert_concat_worked(num_elems1: i64, num_elems2: i64) {
         let vec1: Vec<i64> = (0..num_elems1)
             .map(|i| 12345 % (i + num_elems1 + num_elems2 + 1))
             .collect();
@@ -179,51 +179,51 @@ mod gen_list {
         let expected_slice: &[i64] = expected.as_ref();
 
         assert_evals_to!(
-            &format!("List.append {} {}", slice_str1, slice_str2),
+            &format!("List.concat {} {}", slice_str1, slice_str2),
             expected_slice,
             &'static [i64]
         );
     }
 
     #[test]
-    fn list_append_empty_list() {
-        assert_append_worked(0, 0);
-        assert_append_worked(1, 0);
-        assert_append_worked(2, 0);
-        assert_append_worked(3, 0);
-        assert_append_worked(4, 0);
-        assert_append_worked(7, 0);
-        assert_append_worked(8, 0);
-        assert_append_worked(9, 0);
-        assert_append_worked(25, 0);
-        assert_append_worked(150, 0);
-        assert_append_worked(0, 1);
-        assert_append_worked(0, 2);
-        assert_append_worked(0, 3);
-        assert_append_worked(0, 4);
-        assert_append_worked(0, 7);
-        assert_append_worked(0, 8);
-        assert_append_worked(0, 9);
-        assert_append_worked(0, 25);
-        assert_append_worked(0, 150);
+    fn list_concat_empty_list() {
+        assert_concat_worked(0, 0);
+        assert_concat_worked(1, 0);
+        assert_concat_worked(2, 0);
+        assert_concat_worked(3, 0);
+        assert_concat_worked(4, 0);
+        assert_concat_worked(7, 0);
+        assert_concat_worked(8, 0);
+        assert_concat_worked(9, 0);
+        assert_concat_worked(25, 0);
+        assert_concat_worked(150, 0);
+        assert_concat_worked(0, 1);
+        assert_concat_worked(0, 2);
+        assert_concat_worked(0, 3);
+        assert_concat_worked(0, 4);
+        assert_concat_worked(0, 7);
+        assert_concat_worked(0, 8);
+        assert_concat_worked(0, 9);
+        assert_concat_worked(0, 25);
+        assert_concat_worked(0, 150);
     }
 
     #[test]
-    fn list_append_nonempty_lists() {
-        assert_append_worked(1, 1);
-        assert_append_worked(1, 2);
-        assert_append_worked(1, 3);
-        assert_append_worked(2, 3);
-        assert_append_worked(2, 1);
-        assert_append_worked(2, 2);
-        assert_append_worked(3, 1);
-        assert_append_worked(3, 2);
-        assert_append_worked(2, 3);
-        assert_append_worked(3, 3);
-        assert_append_worked(4, 4);
-        assert_append_worked(150, 150);
-        assert_append_worked(129, 350);
-        assert_append_worked(350, 129);
+    fn list_concat_nonempty_lists() {
+        assert_concat_worked(1, 1);
+        assert_concat_worked(1, 2);
+        assert_concat_worked(1, 3);
+        assert_concat_worked(2, 3);
+        assert_concat_worked(2, 1);
+        assert_concat_worked(2, 2);
+        assert_concat_worked(3, 1);
+        assert_concat_worked(3, 2);
+        assert_concat_worked(2, 3);
+        assert_concat_worked(3, 3);
+        assert_concat_worked(4, 4);
+        assert_concat_worked(150, 150);
+        assert_concat_worked(129, 350);
+        assert_concat_worked(350, 129);
     }
 
     #[test]
