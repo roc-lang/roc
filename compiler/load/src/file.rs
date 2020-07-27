@@ -21,8 +21,8 @@ use roc_types::subs::{Subs, VarStore, Variable};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
-use std::str::from_utf8_unchecked;
 use std::path::{Path, PathBuf};
+use std::str::from_utf8_unchecked;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio::task::spawn_blocking;
@@ -531,7 +531,7 @@ fn parse_src(
     filename: PathBuf,
     msg_tx: MsgSender,
     module_ids: SharedModules<'_, '_>,
-    src_bytes: &[u8]
+    src_bytes: &[u8],
 ) -> Result<ModuleId, LoadingProblem> {
     let state = State::new(src_bytes, Attempting::Module);
     let arena = Bump::new();
@@ -590,9 +590,7 @@ fn load_filename(
     module_ids: SharedModules<'_, '_>,
 ) -> Result<ModuleId, LoadingProblem> {
     match fs::read(&filename) {
-        Ok(bytes) => {
-            parse_src(filename, msg_tx, module_ids, bytes.as_ref())
-        }
+        Ok(bytes) => parse_src(filename, msg_tx, module_ids, bytes.as_ref()),
         Err(err) => Err(LoadingProblem::FileProblem {
             filename,
             error: err.kind(),
@@ -1019,7 +1017,7 @@ fn parse_and_constrain(
     let imported_modules = header.imported_modules;
 
     // SAFETY: By this point we've already incrementally verified that there
-    // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors, 
+    // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors,
     // we'd have bailed out before now.
     let src: Box<str> = unsafe { from_utf8_unchecked(header.src.as_ref()).to_string().into() };
 
