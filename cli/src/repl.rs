@@ -32,7 +32,6 @@ use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
 use std::hash::Hash;
 use std::io::{self, Write};
-use std::mem;
 use std::path::PathBuf;
 use std::str::from_utf8_unchecked;
 use target_lexicon::Triple;
@@ -147,11 +146,7 @@ fn report_parse_error(fail: Fail) {
 }
 
 fn print_output(src: &str) -> Result<String, Fail> {
-    // SAFETY: it's always safe to transmute a &str to a &[u8] since a &str
-    // is literally a &[u8] where we're asserting the bytes are valid UTF-8.
-    let bytes = unsafe { mem::transmute::<&str, &[u8]>(src) };
-
-    gen(bytes, Triple::host(), OptLevel::Normal).map(|(answer, answer_type)| {
+    gen(src.as_bytes(), Triple::host(), OptLevel::Normal).map(|(answer, answer_type)| {
         format!("\n{} \u{001b}[35m:\u{001b}[0m {}", answer, answer_type)
     })
 }
