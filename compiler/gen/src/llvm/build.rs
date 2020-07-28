@@ -1462,7 +1462,7 @@ fn list_push<'a, 'ctx, 'env>(
     let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
     let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-    let elems_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
+    let list_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
 
     // The output list length, which is the old list length + 1
     let new_list_len = env.builder.build_int_add(
@@ -1471,7 +1471,6 @@ fn list_push<'a, 'ctx, 'env>(
         "new_list_length",
     );
 
-    let ctx = env.context;
     let ptr_bytes = env.ptr_bytes;
 
     // Calculate the number of bytes we'll need to allocate.
@@ -1486,7 +1485,6 @@ fn list_push<'a, 'ctx, 'env>(
         .build_int_mul(elem_bytes, list_len, "mul_old_len_by_elem_bytes");
 
     // Allocate space for the new array that we'll copy into.
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
     let clone_ptr = builder
         .build_array_malloc(elem_type, new_list_len, "list_ptr")
         .unwrap();
@@ -1500,7 +1498,7 @@ fn list_push<'a, 'ctx, 'env>(
         // one we just malloc'd.
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder.build_memcpy(clone_ptr, ptr_bytes, elems_ptr, ptr_bytes, list_size);
+        builder.build_memcpy(clone_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size);
     } else {
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
@@ -1524,17 +1522,105 @@ fn list_push<'a, 'ctx, 'env>(
         .build_insert_value(struct_val, new_list_len, Builtin::WRAPPER_LEN, "insert_len")
         .unwrap();
 
-    let answer = builder.build_bitcast(
-        struct_val.into_struct_value(),
-        collection(ctx, ptr_bytes),
-        "cast_collection",
-    );
-
     let elem_ptr = unsafe { builder.build_in_bounds_gep(clone_ptr, &[list_len], "load_index") };
 
     builder.build_store(elem_ptr, elem);
 
-    answer
+    builder.build_bitcast(
+        struct_val.into_struct_value(),
+        collection(ctx, ptr_bytes),
+        "cast_collection",
+    )
+}
+
+/// List.prepend List elem, elem -> List elem
+fn list_prepend<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    original_wrapper: StructValue<'ctx>,
+    elem: BasicValueEnum<'ctx>,
+    elem_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    // Load the usize length from the wrapper.
+    let list_len = load_list_len(builder, original_wrapper);
+    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+    let list_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
+
+    // The output list length, which is the old list length + 1
+    let new_list_len = env.builder.build_int_add(
+        ctx.i64_type().const_int(1 as u64, false),
+        list_len,
+        "new_list_length",
+    );
+
+    let ptr_bytes = env.ptr_bytes;
+
+    // Allocate space for the new array that we'll copy into.
+    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let clone_ptr = builder
+        .build_array_malloc(elem_type, new_list_len, "list_ptr")
+        .unwrap();
+    let int_type = ptr_int(ctx, ptr_bytes);
+    let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
+
+    builder.build_store(clone_ptr, elem);
+
+    let index_1_ptr = unsafe {
+        builder.build_in_bounds_gep(
+            clone_ptr,
+            &[ctx.i64_type().const_int(1 as u64, false)],
+            "load_index",
+        )
+    };
+
+    // Calculate the number of bytes we'll need to allocate.
+    let elem_bytes = env
+        .ptr_int()
+        .const_int(elem_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    // This is the size of the list coming in, before we have added an element
+    // to the beginning.
+    let list_size = env
+        .builder
+        .build_int_mul(elem_bytes, list_len, "mul_old_len_by_elem_bytes");
+
+    if elem_layout.safe_to_memcpy() {
+        // Copy the bytes from the original array into the new
+        // one we just malloc'd.
+        //
+        // TODO how do we decide when to do the small memcpy vs the normal one?
+        builder.build_memcpy(index_1_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size);
+    } else {
+        panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
+    }
+
+    // Create a fresh wrapper struct for the newly populated array
+    let struct_type = collection(ctx, env.ptr_bytes);
+    let mut struct_val;
+
+    // Store the pointer
+    struct_val = builder
+        .build_insert_value(
+            struct_type.get_undef(),
+            ptr_as_int,
+            Builtin::WRAPPER_PTR,
+            "insert_ptr",
+        )
+        .unwrap();
+
+    // Store the length
+    struct_val = builder
+        .build_insert_value(struct_val, new_list_len, Builtin::WRAPPER_LEN, "insert_len")
+        .unwrap();
+
+    builder.build_bitcast(
+        struct_val.into_struct_value(),
+        collection(ctx, ptr_bytes),
+        "cast_collection",
+    )
 }
 
 fn list_set<'a, 'ctx, 'env>(
@@ -1830,6 +1916,17 @@ fn run_low_level<'a, 'ctx, 'env>(
             let elem_layout = &args[1].1;
 
             list_push(env, original_wrapper, elem, elem_layout)
+        }
+        ListPrepend => {
+            // List.prepend List elem, elem -> List elem
+            debug_assert_eq!(args.len(), 2);
+
+            let original_wrapper =
+                build_expr(env, layout_ids, scope, parent, &args[0].0).into_struct_value();
+            let elem = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let elem_layout = &args[1].1;
+
+            list_prepend(env, original_wrapper, elem, elem_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumToFloat => {
             debug_assert_eq!(args.len(), 1);
