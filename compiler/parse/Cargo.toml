@@ -11,6 +11,7 @@ roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1"
+encode_unicode = "0.3"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
