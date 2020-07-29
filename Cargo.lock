@@ -387,6 +387,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69323bff1fb41c635347b8ead484a5ca6c3f11914d784170b158d8449ab07f8e"
+dependencies = [
+ "cfg-if",
+ "crossbeam-channel",
+ "crossbeam-deque",
+ "crossbeam-epoch",
+ "crossbeam-queue",
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2173,6 +2187,7 @@ name = "roc_load"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "crossbeam",
  "indoc",
  "inlinable_string",
  "maplit",
@@ -2190,7 +2205,6 @@ dependencies = [
  "roc_solve",
  "roc_types",
  "roc_unify",
- "tokio",
 ]
 
 [[package]]
