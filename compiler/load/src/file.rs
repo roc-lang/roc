@@ -12,6 +12,8 @@ use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use roc_parse::module::module_defs;
+use crossbeam::deque::{Injector, Steal, Stealer, Worker};
+use std::iter;
 use roc_parse::parser::{Fail, Parser, State};
 use roc_region::all::{Located, Region};
 use roc_solve::module::SolvedModule;
@@ -25,7 +27,6 @@ use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
-use crossbeam::channel::{Sender, Receiver, unbounded};
 use tokio::task::spawn_blocking;
 
 /// Filename extension for normal Roc modules
@@ -542,6 +543,35 @@ fn load_module(
     filename.set_extension(ROC_FILE_EXTENSION);
 
     load_filename(filename, msg_tx, module_ids)
+}
+
+/// Find a task according to the following algorithm:
+///
+/// 1. Look in a local Worker queue. If it has a task, pop it off the queue and return it.
+/// 2. If that queue was empty, ask the global queue for a task.
+/// 3. If the global queue is also empty, iterate through each Stealer (each Worker queue has a
+///    corresponding Stealer, which can steal from it. Stealers can be shared across threads.)
+///
+/// Based on https://docs.rs/crossbeam/0.7.3/crossbeam/deque/index.html#examples
+fn find_task<T>(
+    local: &Worker<T>,
+    global: &Injector<T>,
+    stealers: &[Stealer<T>],
+) -> Option<T> {
+    // Pop a task from the local queue, if not empty.
+    local.pop().or_else(|| {
+        // Otherwise, we need to look for a task elsewhere.
+        iter::repeat_with(|| {
+            // Try stealing a task from the global queue.
+            global.steal()
+                // Or try stealing a task from one of the other threads.
+                .or_else(|| stealers.iter().map(|s| s.steal()).collect())
+        })
+        // Loop while no task was stolen and any steal operation needs to be retried.
+        .find(|s| !s.is_retry())
+        // Extract the stolen task, if there is one.
+        .and_then(|s| s.success())
+    })
 }
 
 fn parse_src(
