@@ -161,24 +161,13 @@ pub async fn load<'a>(
     stdlib: &StdLib,
     src_dir: PathBuf,
     filename: PathBuf,
-    mut exposed_types: SubsByModule,
+    exposed_types: SubsByModule,
 ) -> Result<LoadedModule, LoadingProblem> {
     use self::MaybeShared::*;
 
-    let mut type_problems = Vec::new();
-    let mut can_problems = Vec::new();
-    let env = Env {
-        src_dir: src_dir.clone(),
-    };
-
-    let (msg_tx, mut msg_rx): (MsgSender, MsgReceiver) = mpsc::channel(1024);
+    let (msg_tx, msg_rx): (MsgSender, MsgReceiver) = mpsc::channel(1024);
     let mut module_ids = ModuleIds::default();
     let mut root_exposed_ident_ids: IdentIdsByModule = IdentIds::exposed_builtins(0);
-
-    // This is the "final" list of IdentIds, after canonicalization and constraint gen
-    // have completed for a given module.
-    let mut constrained_ident_ids = IdentIds::exposed_builtins(0);
-    let mut headers_parsed = MutSet::default();
 
     // Load the root module synchronously; we can't proceed until we have its id.
     let root_id = load_filename(
@@ -187,7 +176,34 @@ pub async fn load<'a>(
         Unique(&mut module_ids, &mut root_exposed_ident_ids),
     )?;
 
+    load_deps(root_id, msg_tx, msg_rx, stdlib, src_dir, module_ids, root_exposed_ident_ids, exposed_types).await
+}
+
+async fn load_deps<'a>(
+    root_id: ModuleId,
+    msg_tx: MsgSender,
+    mut msg_rx: MsgReceiver,
+    stdlib: &StdLib,
+    src_dir: PathBuf,
+    module_ids: ModuleIds,
+    root_exposed_ident_ids: IdentIdsByModule,
+    mut exposed_types: SubsByModule,
+) -> Result<LoadedModule, LoadingProblem> {
+    use self::MaybeShared::*;
+
+    let mut type_problems = Vec::new();
+    let mut can_problems = Vec::new();
+    let mut headers_parsed = MutSet::default();
+
     headers_parsed.insert(root_id);
+
+    let env = Env {
+        src_dir: src_dir.clone(),
+    };
+
+    // This is the "final" list of IdentIds, after canonicalization and constraint gen
+    // have completed for a given module.
+    let mut constrained_ident_ids = IdentIds::exposed_builtins(0);
 
     // From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
     let arc_modules = Arc::new(Mutex::new(module_ids));
