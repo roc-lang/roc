@@ -614,4 +614,19 @@ mod gen_list {
             );
         })
     }
+
+    #[test]
+    fn gen_list_increment_decrement() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x = [ 1,2,3 ]
+
+                List.len x
+                "#
+            ),
+            3,
+            i64
+        );
+    }
 }

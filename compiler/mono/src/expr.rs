@@ -1130,7 +1130,7 @@ fn from_can<'a>(
 
             match list_layout_from_elem(arena, subs, elem_var, env.pointer_size) {
                 Ok(Layout::Builtin(Builtin::EmptyList)) => Expr::EmptyArray,
-                Ok(Layout::Builtin(Builtin::List(elem_layout))) => {
+                Ok(Layout::Builtin(Builtin::List(_, elem_layout))) => {
                     let mut elems = Vec::with_capacity_in(loc_elems.len(), arena);
 
                     for loc_elem in loc_elems {

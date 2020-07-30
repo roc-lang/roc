@@ -27,6 +27,20 @@ pub enum Layout<'a> {
     Pointer(&'a Layout<'a>),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
+pub enum Ownership {
+    /// The default. Object is reference counted
+    Owned,
+
+    /// Do not update reference counter, surrounding context
+    /// keeps this value alive
+    Borrowed,
+
+    /// Object is unique, can be mutated in-place and
+    /// is not reference counted
+    Unique,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Builtin<'a> {
     Int128,
@@ -42,7 +56,7 @@ pub enum Builtin<'a> {
     Str,
     Map(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
-    List(&'a Layout<'a>),
+    List(Ownership, &'a Layout<'a>),
     EmptyStr,
     EmptyList,
     EmptyMap,
@@ -219,7 +233,7 @@ impl<'a> Builtin<'a> {
             Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
             Map(_, _) | EmptyMap => Builtin::MAP_WORDS * pointer_size,
             Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
-            List(_) | EmptyList => Builtin::LIST_WORDS * pointer_size,
+            List(_, _) | EmptyList => Builtin::LIST_WORDS * pointer_size,
         }
     }
 
@@ -229,7 +243,7 @@ impl<'a> Builtin<'a> {
         match self {
             Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Float128 | Float64 | Float32
             | Float16 | EmptyStr | EmptyMap | EmptyList | EmptySet => true,
-            Str | Map(_, _) | Set(_) | List(_) => false,
+            Str | Map(_, _) | Set(_) | List(_, _) => false,
         }
     }
 }
@@ -696,7 +710,10 @@ pub fn list_layout_from_elem<'a>(
             let elem_layout = Layout::new(arena, content, subs, pointer_size)?;
 
             // This is a normal list.
-            Ok(Layout::Builtin(Builtin::List(arena.alloc(elem_layout))))
+            Ok(Layout::Builtin(Builtin::List(
+                Ownership::Owned,
+                arena.alloc(elem_layout),
+            )))
         }
     }
 }

@@ -720,11 +720,162 @@ pub fn build_expr<'a, 'ctx, 'env>(
         }
         RunLowLevel(op, args) => run_low_level(env, layout_ids, scope, parent, *op, args),
 
-        DecAfter(_, expr) => build_expr(env, layout_ids, scope, parent, expr),
+        DecAfter(symbol, expr) => {
+            match scope.get(symbol) {
+                None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+                Some((layout, ptr)) => {
+                    match layout {
+                        Layout::Builtin(Builtin::List(_, elem_layout)) if false => {
+                            // first run the body
+                            let body = build_expr(env, layout_ids, scope, parent, expr);
+
+                            let wrapper_struct = env
+                                .builder
+                                .build_load(*ptr, symbol.ident_string(&env.interns))
+                                .into_struct_value();
+
+                            decrement_refcount_list(env, parent, wrapper_struct, body)
+                        }
+                        _ => {
+                            // not refcounted, do nothing special
+                            build_expr(env, layout_ids, scope, parent, expr)
+                        }
+                    }
+                }
+            }
+        }
 
         Reuse(_, expr) => build_expr(env, layout_ids, scope, parent, expr),
         Reset(_, expr) => build_expr(env, layout_ids, scope, parent, expr),
     }
+}
+
+fn refcount_is_one_comparison<'ctx>(
+    builder: &Builder<'ctx>,
+    context: &'ctx Context,
+    refcount: IntValue<'ctx>,
+) -> IntValue<'ctx> {
+    let refcount_one: IntValue<'ctx> = context
+        .i64_type()
+        .const_int((std::usize::MAX - 1) as _, false);
+    // Note: Check for refcount < refcount_1 as the "true" condition,
+    // to avoid misprediction. (In practice this should usually pass,
+    // and CPUs generally default to predicting that a forward jump
+    // shouldn't be taken; that is, they predict "else" won't be taken.)
+    builder.build_int_compare(
+        IntPredicate::ULT,
+        refcount,
+        refcount_one,
+        "refcount_one_check",
+    )
+}
+
+fn list_get_refcount_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    list_wrapper: StructValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    // basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let elem_type = ctx.i64_type().into();
+    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+    // Load the pointer to the array data
+    let array_data_ptr = load_list_ptr(builder, list_wrapper, ptr_type);
+
+    // get the refcount
+    let zero_index = ctx.i64_type().const_zero();
+    unsafe {
+        // SAFETY
+        // index 0 is always defined for lists.
+        builder.build_in_bounds_gep(array_data_ptr, &[zero_index], "refcount_index")
+    }
+}
+
+fn increment_refcount_list<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    original_wrapper: StructValue<'ctx>,
+    body: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let refcount_ptr = list_get_refcount_ptr(env, original_wrapper);
+
+    let refcount = env
+        .builder
+        .build_load(refcount_ptr, "get_refcount")
+        .into_int_value();
+
+    // our refcount 0 is actually usize::MAX, so incrementing the refcount means decrementing this value.
+    let decremented = env.builder.build_int_sub(
+        refcount,
+        ctx.i64_type().const_int(1 as u64, false),
+        "new_refcount",
+    );
+
+    // Mutate the new array in-place to change the element.
+    builder.build_store(refcount_ptr, decremented);
+
+    body
+}
+
+fn decrement_refcount_list<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    original_wrapper: StructValue<'ctx>,
+    body: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let refcount_ptr = list_get_refcount_ptr(env, original_wrapper);
+
+    let refcount = env
+        .builder
+        .build_load(refcount_ptr, "get_refcount")
+        .into_int_value();
+
+    let comparison = refcount_is_one_comparison(builder, env.context, refcount);
+
+    // the refcount is higher than 1, write the decremented value
+    let build_then = || {
+        // our refcount 0 is actually usize::MAX, so decrementing the refcount means incrementing this value.
+        let decremented = env.builder.build_int_add(
+            ctx.i64_type().const_int(1 as u64, false),
+            refcount,
+            "new_refcount",
+        );
+
+        // Mutate the new array in-place to change the element.
+        builder.build_store(refcount_ptr, decremented);
+
+        body
+    };
+
+    // refcount is one, and will be decremented. This list can be freed
+    let build_else = || {
+        let array_data_ptr = load_list_ptr(
+            builder,
+            original_wrapper,
+            ctx.i64_type().ptr_type(AddressSpace::Generic),
+        );
+        let free = builder.build_free(array_data_ptr);
+
+        builder.insert_instruction(&free, None);
+
+        body
+    };
+    let ret_type = body.get_type();
+
+    build_basic_phi2(
+        env,
+        parent,
+        comparison,
+        build_then,
+        build_else,
+        ret_type.into(),
+    )
 }
 
 fn load_symbol<'a, 'ctx, 'env>(
@@ -733,9 +884,23 @@ fn load_symbol<'a, 'ctx, 'env>(
     symbol: &Symbol,
 ) -> BasicValueEnum<'ctx> {
     match scope.get(symbol) {
-        Some((_, ptr)) => env
-            .builder
-            .build_load(*ptr, symbol.ident_string(&env.interns)),
+        Some((layout, ptr)) => match layout {
+            Layout::Builtin(Builtin::List(_, _)) if false => {
+                let load = env
+                    .builder
+                    .build_load(*ptr, symbol.ident_string(&env.interns));
+
+                let wrapper_struct = env
+                    .builder
+                    .build_load(*ptr, symbol.ident_string(&env.interns))
+                    .into_struct_value();
+
+                increment_refcount_list(env, wrapper_struct, load)
+            }
+            _ => env
+                .builder
+                .build_load(*ptr, symbol.ident_string(&env.interns)),
+        },
         None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
     }
 }
@@ -1670,7 +1835,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (list, list_layout) = &args[0];
 
             match list_layout {
-                Layout::Builtin(Builtin::List(elem_layout)) => {
+                Layout::Builtin(Builtin::List(_, elem_layout)) => {
                     let wrapper_struct =
                         build_expr(env, layout_ids, scope, parent, list).into_struct_value();
 
@@ -1979,7 +2144,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 build_expr(env, layout_ids, scope, parent, &args[1].0).into_int_value();
 
             match list_layout {
-                Layout::Builtin(Builtin::List(elem_layout)) => {
+                Layout::Builtin(Builtin::List(_, elem_layout)) => {
                     let ctx = env.context;
                     let elem_type =
                         basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
@@ -2129,7 +2294,7 @@ fn list_append<'a, 'ctx, 'env>(
         Layout::Builtin(Builtin::EmptyList) => {
             match second_list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(elem_layout)) => {
+                Layout::Builtin(Builtin::List(_, elem_layout)) => {
                     // THIS IS A COPY AND PASTE
                     // All the code under the Layout::Builtin(Builtin::List()) match branch
                     // is the same as what is under `if_first_list_is_empty`. Re-using
@@ -2175,7 +2340,7 @@ fn list_append<'a, 'ctx, 'env>(
                 }
             }
         }
-        Layout::Builtin(Builtin::List(elem_layout)) => {
+        Layout::Builtin(Builtin::List(_, elem_layout)) => {
             let first_list_wrapper =
                 build_expr(env, layout_ids, scope, parent, first_list).into_struct_value();
 
@@ -2214,7 +2379,7 @@ fn list_append<'a, 'ctx, 'env>(
 
                         BasicValueEnum::StructValue(new_wrapper)
                     }
-                    Layout::Builtin(Builtin::List(_)) => {
+                    Layout::Builtin(Builtin::List(_, _)) => {
                         // second_list_len > 0
                         // We do this check to avoid allocating memory. If the second input
                         // list is empty, then we can just return the first list cloned
@@ -2453,7 +2618,7 @@ fn list_append<'a, 'ctx, 'env>(
             let if_first_list_is_empty = || {
                 match second_list_layout {
                     Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                    Layout::Builtin(Builtin::List(elem_layout)) => {
+                    Layout::Builtin(Builtin::List(_, elem_layout)) => {
                         // second_list_len > 0
                         // We do this check to avoid allocating memory. If the second input
                         // list is empty, then we can just return the first list cloned

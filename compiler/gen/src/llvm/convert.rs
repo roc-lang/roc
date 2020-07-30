@@ -137,7 +137,7 @@ pub fn basic_type_from_layout<'ctx>(
                 .as_basic_type_enum(),
             Map(_, _) | EmptyMap => panic!("TODO layout_to_basic_type for Builtin::Map"),
             Set(_) | EmptySet => panic!("TODO layout_to_basic_type for Builtin::Set"),
-            List(_) => collection(context, ptr_bytes).into(),
+            List(_, _) => collection(context, ptr_bytes).into(),
             EmptyList => BasicTypeEnum::StructType(collection(context, ptr_bytes)),
         },
     }
