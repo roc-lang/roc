@@ -13,6 +13,7 @@
 
 pub mod expr;
 pub mod layout;
+pub mod reset_reuse;
 
 // Temporary, while we can build up test cases and optimize the exhaustiveness checking.
 // For now, following this warning's advice will lead to nasty type inference errors.

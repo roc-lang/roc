@@ -17,7 +17,7 @@ mod test_mono {
     use roc_module::ident::TagName;
     use roc_module::symbol::{Interns, Symbol};
     use roc_mono::expr::Expr::{self, *};
-    use roc_mono::expr::Procs;
+    use roc_mono::expr::{InProgressProc, Procs};
     use roc_mono::layout;
     use roc_mono::layout::{Builtin, Layout, LayoutCache};
     use roc_types::subs::Subs;
@@ -129,7 +129,21 @@ mod test_mono {
         // Put this module's ident_ids back in the interns
         interns.all_ident_ids.insert(home, ident_ids);
 
-        let result = mono_expr.to_pretty(200);
+        let mut procs_string = procs
+            .specialized
+            .iter()
+            .map(|(_, value)| {
+                if let InProgressProc::Done(proc) = value {
+                    proc.to_pretty(200)
+                } else {
+                    String::new()
+                }
+            })
+            .collect::<Vec<_>>();
+
+        procs_string.push(mono_expr.to_pretty(200));
+
+        let result = procs_string.join("\n");
 
         assert_eq!(result, expected);
     }
@@ -221,33 +235,30 @@ mod test_mono {
                 let home = test_home();
                 let gen_symbol_0 = Interns::from_index(home, 0);
 
-                DecAfter(
-                    gen_symbol_0,
-                    &Struct(&[
-                        (
-                            CallByName {
-                                name: gen_symbol_0,
-                                layout: Layout::FunctionPointer(
-                                    &[Layout::Builtin(Builtin::Int64)],
-                                    &Layout::Builtin(Builtin::Int64),
-                                ),
-                                args: &[(Int(4), Layout::Builtin(Int64))],
-                            },
-                            Layout::Builtin(Int64),
-                        ),
-                        (
-                            CallByName {
-                                name: gen_symbol_0,
-                                layout: Layout::FunctionPointer(
-                                    &[Layout::Builtin(Builtin::Float64)],
-                                    &Layout::Builtin(Builtin::Float64),
-                                ),
-                                args: &[(Float(3.14), Layout::Builtin(Float64))],
-                            },
-                            Layout::Builtin(Float64),
-                        ),
-                    ]),
-                )
+                Struct(&[
+                    (
+                        CallByName {
+                            name: gen_symbol_0,
+                            layout: Layout::FunctionPointer(
+                                &[Layout::Builtin(Builtin::Int64)],
+                                &Layout::Builtin(Builtin::Int64),
+                            ),
+                            args: &[(Int(4), Layout::Builtin(Int64))],
+                        },
+                        Layout::Builtin(Int64),
+                    ),
+                    (
+                        CallByName {
+                            name: gen_symbol_0,
+                            layout: Layout::FunctionPointer(
+                                &[Layout::Builtin(Builtin::Float64)],
+                                &Layout::Builtin(Builtin::Float64),
+                            ),
+                            args: &[(Float(3.14), Layout::Builtin(Float64))],
+                        },
+                        Layout::Builtin(Float64),
+                    ),
+                ])
             },
         )
     }
@@ -360,31 +371,28 @@ mod test_mono {
                 let gen_symbol_0 = Interns::from_index(home, 1);
                 let symbol_x = Interns::from_index(home, 0);
 
-                DecAfter(
-                    symbol_x,
-                    &Store(
-                        &[(
-                            symbol_x,
-                            Builtin(Str),
-                            Store(
-                                &[(
-                                    gen_symbol_0,
-                                    Layout::Builtin(layout::Builtin::Int1),
-                                    Expr::Bool(true),
-                                )],
-                                &Cond {
-                                    cond_symbol: gen_symbol_0,
-                                    branching_symbol: gen_symbol_0,
-                                    cond_layout: Builtin(Int1),
-                                    branching_layout: Builtin(Int1),
-                                    pass: (&[] as &[_], &Expr::Str("bar")),
-                                    fail: (&[] as &[_], &Expr::Str("foo")),
-                                    ret_layout: Builtin(Str),
-                                },
-                            ),
-                        )],
-                        &Load(symbol_x),
-                    ),
+                Store(
+                    &[(
+                        symbol_x,
+                        Builtin(Str),
+                        Store(
+                            &[(
+                                gen_symbol_0,
+                                Layout::Builtin(layout::Builtin::Int1),
+                                Expr::Bool(true),
+                            )],
+                            &Cond {
+                                cond_symbol: gen_symbol_0,
+                                branching_symbol: gen_symbol_0,
+                                cond_layout: Builtin(Int1),
+                                branching_layout: Builtin(Int1),
+                                pass: (&[] as &[_], &Expr::Str("bar")),
+                                fail: (&[] as &[_], &Expr::Str("foo")),
+                                ret_layout: Builtin(Str),
+                            },
+                        ),
+                    )],
+                    &DecAfter(symbol_x, &Load(symbol_x)),
                 )
             },
         )
@@ -424,30 +432,27 @@ mod test_mono {
                 let gen_symbol_0 = Interns::from_index(home, 0);
                 let struct_layout = Layout::Struct(&[I64_LAYOUT, F64_LAYOUT]);
 
-                DecAfter(
-                    gen_symbol_0,
-                    &CallByName {
-                        name: gen_symbol_0,
-                        layout: Layout::FunctionPointer(
-                            &[struct_layout.clone()],
-                            &struct_layout.clone(),
-                        ),
-                        args: &[(
-                            Struct(&[
-                                (
-                                    CallByName {
-                                        name: gen_symbol_0,
-                                        layout: Layout::FunctionPointer(&[I64_LAYOUT], &I64_LAYOUT),
-                                        args: &[(Int(4), I64_LAYOUT)],
-                                    },
-                                    I64_LAYOUT,
-                                ),
-                                (Float(0.1), F64_LAYOUT),
-                            ]),
-                            struct_layout,
-                        )],
-                    },
-                )
+                CallByName {
+                    name: gen_symbol_0,
+                    layout: Layout::FunctionPointer(
+                        &[struct_layout.clone()],
+                        &struct_layout.clone(),
+                    ),
+                    args: &[(
+                        Struct(&[
+                            (
+                                CallByName {
+                                    name: gen_symbol_0,
+                                    layout: Layout::FunctionPointer(&[I64_LAYOUT], &I64_LAYOUT),
+                                    args: &[(Int(4), I64_LAYOUT)],
+                                },
+                                I64_LAYOUT,
+                            ),
+                            (Float(0.1), F64_LAYOUT),
+                        ]),
+                        struct_layout,
+                    )],
+                }
             },
         )
     }
@@ -561,9 +566,9 @@ mod test_mono {
 
                 let load = Load(var_x);
 
-                let store = Store(arena.alloc(stores), arena.alloc(load));
+                let dec = DecAfter(var_x, arena.alloc(load));
 
-                DecAfter(var_x, arena.alloc(store))
+                Store(arena.alloc(stores), arena.alloc(dec))
             },
         );
     }
@@ -587,9 +592,9 @@ mod test_mono {
 
                 let load = Load(var_x);
 
-                let store = Store(arena.alloc(stores), arena.alloc(load));
+                let dec = DecAfter(var_x, arena.alloc(load));
 
-                DecAfter(var_x, arena.alloc(store))
+                Store(arena.alloc(stores), arena.alloc(dec))
             },
         );
     }
@@ -615,9 +620,8 @@ mod test_mono {
 
                 let load = Load(var_x);
 
-                let store = Store(arena.alloc(stores), arena.alloc(load));
-
-                DecAfter(var_x, arena.alloc(store))
+                let dec = DecAfter(var_x, arena.alloc(load));
+                Store(arena.alloc(stores), arena.alloc(dec))
             },
         );
     }
@@ -843,8 +847,10 @@ mod test_mono {
     fn maybe_map_to_string() {
         compiles_to_string(
             r#"
-            maybe : [ Nothing, Just Int ]
-            maybe = Just 3
+            Maybe a : [ Nothing, Just a ]
+
+            maybe : Maybe Int
+            maybe = Just 0x3
 
             when maybe is
                 Just x -> Just (x + 1)
@@ -852,19 +858,22 @@ mod test_mono {
             "#,
             indoc!(
                 r#"
-                Store Test.0: Just 0i64 3i64
-                Store Test.0: Load Test.0
-                Store Test.2: Lowlevel.And (Lowlevel.Eq 0i64 (Access @0 Load Test.0)) true
+                procedure Num.14 (#Attr.2, #Attr.3):
+                    Lowlevel.NumAdd (Load #Attr.2) (Load #Attr.3)
 
-                if Test.2 then
-                    Reset Test.0
-                    Reuse Test.0
+                Store Test.1: Just 0i64 3i64
+                Store Test.1: Load Test.1
+                Store Test.3: Lowlevel.And (Lowlevel.Eq 0i64 (Access @0 Load Test.1)) true
+                
+                if Test.3 then
+                    Reset Test.1
+                    Reuse Test.1
                     Just 0i64 *magic*
                 else
-                    Reset Test.0
-                    Reuse Test.0
+                    Reset Test.1
+                    Reuse Test.1
                     Nothing 1i64
-                Dec Test.0
+                Dec Test.1
                 "#
             ),
         )
@@ -942,6 +951,27 @@ mod test_mono {
                         These 1i64 (Load Test.5) (Load Test.4)
 
                 Dec Test.1
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_length() {
+        compiles_to_string(
+            r#"
+            x = [ 1,2,3 ]
+
+            List.len x
+            "#,
+            indoc!(
+                r#"
+                procedure List.7 (#Attr.2):
+                    Lowlevel.ListLen (Load #Attr.2)
+
+                Store Test.0: [ 1i64, 2i64, 3i64 ]
+                *magic*
+                Dec Test.0
                 "#
             ),
         )
