@@ -451,6 +451,7 @@ impl<'a> Expr<'a> {
                 .append(alloc.hardline())
                 .append(expr.to_doc(alloc, false)),
 
+            Store(stores, expr) if stores.is_empty() => expr.to_doc(alloc, false),
             Store(stores, expr) => {
                 let doc_stores = stores
                     .iter()

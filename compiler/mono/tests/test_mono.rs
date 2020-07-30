@@ -868,11 +868,10 @@ mod test_mono {
                 Store Test.1: Just 0i64 3i64
                 Store Test.1: Load Test.1
                 Store Test.3: Lowlevel.And (Lowlevel.Eq 0i64 (Access @0 Load Test.1)) true
-
                 if Test.3 then
                     Reset Test.1
                     Reuse Test.1
-                    Just 0i64 *magic*
+                    Just 0i64 (Call Num.14 (Load Test.2) 1i64)
                 else
                     Reset Test.1
                     Reuse Test.1
@@ -902,9 +901,7 @@ mod test_mono {
                 Store Test.1: Just 0i64 Just 0i64 3i64
                 Store Test.1: Load Test.1
                 Store Test.5: Lowlevel.And (Lowlevel.Eq 0i64 (Access @0 Load Test.1)) true
-
                 if Test.5 then
-
                     if Test.4 then
                         Just 0i64 Just 0i64 1i64
                     else
@@ -937,7 +934,6 @@ mod test_mono {
                 r#"
                 Store Test.1: These 1i64 1i64 2i64
                 Store Test.1: Load Test.1
-
                 switch Test.1:
                     case 2:
                         Reset Test.1
@@ -974,7 +970,7 @@ mod test_mono {
                     Lowlevel.ListLen (Load #Attr.2)
 
                 Store Test.0: [ 1i64, 2i64, 3i64 ]
-                *magic*
+                Call List.7 (Load Test.0)
                 Dec Test.0
                 "#
             ),
