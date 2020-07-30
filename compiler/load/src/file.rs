@@ -36,7 +36,7 @@ const ROC_FILE_EXTENSION: &str = "roc";
 const MODULE_SEPARATOR: char = '.';
 
 #[derive(Debug)]
-pub struct LoadedModule {
+pub struct LoadedModule<'a> {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub solved: Solved<Subs>,
@@ -44,7 +44,7 @@ pub struct LoadedModule {
     pub type_problems: Vec<solve::TypeError>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
-    pub src: Box<str>,
+    pub src: &'a str,
 }
 
 #[derive(Debug)]
@@ -85,6 +85,7 @@ enum Msg<'a> {
     },
     Finished {
         solved: Solved<Subs>,
+        problems: Vec<solve::TypeError>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         src: &'a str,
     },
@@ -161,15 +162,15 @@ type MsgReceiver<'a> = Receiver<Msg<'a>>;
 ///     specializations, so if none of their specializations changed, we don't even need
 ///     to rebuild the module and can link in the cached one directly.)
 #[allow(clippy::cognitive_complexity)]
-pub fn load(
+pub fn load<'a>(
+    arena: &'a Bump,
     stdlib: &StdLib,
     src_dir: PathBuf,
     filename: PathBuf,
     exposed_types: SubsByModule,
-) -> Result<LoadedModule, LoadingProblem> {
+) -> Result<LoadedModule<'a>, LoadingProblem> {
     use self::MaybeShared::*;
 
-    let arena = Bump::new();
     let (msg_tx, msg_rx) = bounded(1024);
     let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
     let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
@@ -278,7 +279,7 @@ fn load_deps<'a>(
     arc_modules: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     exposed_types: SubsByModule,
-) -> Result<LoadedModule, LoadingProblem> {
+) -> Result<LoadedModule<'a>, LoadingProblem> {
     // Reserve one CPU for the main thread, and let all the others be eligible
     // to spawn workers.
     let num_workers = num_cpus::get() - 1;
@@ -409,6 +410,7 @@ fn load_deps<'a>(
             match msg {
                 Msg::Finished {
                     solved,
+                    problems,
                     exposed_vars_by_symbol,
                     src,
                 } => {
@@ -416,6 +418,8 @@ fn load_deps<'a>(
                     debug_assert!(msg_rx.is_empty());
 
                     dbg!("TODO send Shutdown messages to all the worker threads.");
+
+                    state.type_problems.extend(problems);
 
                     let module_ids = Arc::try_unwrap(state.arc_modules)
                         .unwrap_or_else(|_| {
@@ -762,19 +766,22 @@ fn update<'a>(
             solved_module,
             solved_subs,
         } => {
-            state.type_problems.extend(solved_module.problems);
-
             if module_id == state.root_id {
                 let solved = Arc::try_unwrap(solved_subs).unwrap_or_else(|_| {
                     panic!("There were still outstanding Arc references to Solved<Subs>")
                 });
 
-                msg_tx.send(Msg::Finished {
-                    solved,
-                    exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
-                    src,
-                });
+                msg_tx
+                    .send(Msg::Finished {
+                        solved,
+                        problems: solved_module.problems,
+                        exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
+                        src,
+                    })
+                    .map_err(|_| LoadingProblem::MsgChannelDied)?;
             } else {
+                state.type_problems.extend(solved_module.problems);
+
                 // This was a dependency. Write it down and keep processing messages.
                 debug_assert!(!state.exposed_types.contains_key(&module_id));
                 state.exposed_types.insert(
@@ -1147,84 +1154,84 @@ fn add_exposed_to_scope(
     }
 }
 
-//// TODO trim down these arguments - possibly by moving Constraint into Module
-//#[allow(clippy::too_many_arguments)]
-//fn spawn_solve_module(
-//    module: Module,
-//    src: Box<str>,
-//    constraint: Constraint,
-//    mut var_store: VarStore,
-//    imported_modules: MutSet<ModuleId>,
-//    msg_tx: MsgSender,
-//    exposed_types: &mut SubsByModule,
-//    stdlib: &StdLib,
-//) {
-//    let home = module.module_id;
+// TODO trim down these arguments - possibly by moving Constraint into Module
+#[allow(clippy::too_many_arguments)]
+fn spawn_solve_module(
+    module: Module,
+    src: Box<str>,
+    constraint: Constraint,
+    mut var_store: VarStore,
+    imported_modules: MutSet<ModuleId>,
+    msg_tx: MsgSender,
+    exposed_types: &mut SubsByModule,
+    stdlib: &StdLib,
+) {
+    let home = module.module_id;
 
-//    // Get the constraints for this module's imports. We do this on the main thread
-//    // to avoid having to lock the map of exposed types, or to clone it
-//    // (which would be more expensive for the main thread).
-//    let ConstrainableImports {
-//        imported_symbols,
-//        imported_aliases,
-//        unused_imports,
-//    } = pre_constrain_imports(
-//        home,
-//        &module.references,
-//        imported_modules,
-//        exposed_types,
-//        stdlib,
-//    );
+    // Get the constraints for this module's imports. We do this on the main thread
+    // to avoid having to lock the map of exposed types, or to clone it
+    // (which would be more expensive for the main thread).
+    let ConstrainableImports {
+        imported_symbols,
+        imported_aliases,
+        unused_imports,
+    } = pre_constrain_imports(
+        home,
+        &module.references,
+        imported_modules,
+        exposed_types,
+        stdlib,
+    );
 
-//    for unused_import in unused_imports {
-//        todo!(
-//            "TODO gracefully handle unused import {:?} from module {:?}",
-//            unused_import,
-//            home
-//        );
-//    }
+    for unused_import in unused_imports {
+        todo!(
+            "TODO gracefully handle unused import {:?} from module {:?}",
+            unused_import,
+            home
+        );
+    }
 
-//    // We can't pass the reference to stdlib to the thread, but we can pass mode.
-//    let mode = stdlib.mode;
+    // We can't pass the reference to stdlib to the thread, but we can pass mode.
+    let mode = stdlib.mode;
 
-//    // Start solving this module in the background.
-//    thread_scope.spawn(move |_| {
-//        // Rebuild the aliases in this thread, so we don't have to clone all of
-//        // stdlib.aliases on the main thread.
-//        let aliases = match mode {
-//            Mode::Standard => roc_builtins::std::aliases(),
-//            Mode::Uniqueness => roc_builtins::unique::aliases(),
-//        };
+    // Start solving this module in the background.
+    // thread_scope.spawn(move |_| {
+    //     // Rebuild the aliases in this thread, so we don't have to clone all of
+    //     // stdlib.aliases on the main thread.
+    //     let aliases = match mode {
+    //         Mode::Standard => roc_builtins::std::aliases(),
+    //         Mode::Uniqueness => roc_builtins::unique::aliases(),
+    //     };
 
-//        // Finish constraining the module by wrapping the existing Constraint
-//        // in the ones we just computed. We can do this off the main thread.
-//        let constraint = constrain_imports(
-//            imported_symbols,
-//            imported_aliases,
-//            constraint,
-//            &mut var_store,
-//        );
-//        let mut constraint = load_builtin_aliases(aliases, constraint, &mut var_store);
+    //     // Finish constraining the module by wrapping the existing Constraint
+    //     // in the ones we just computed. We can do this off the main thread.
+    //     let constraint = constrain_imports(
+    //         imported_symbols,
+    //         imported_aliases,
+    //         constraint,
+    //         &mut var_store,
+    //     );
+    //     let mut constraint = load_builtin_aliases(aliases, constraint, &mut var_store);
 
-//        // Turn Apply into Alias
-//        constraint.instantiate_aliases(&mut var_store);
+    //     // Turn Apply into Alias
+    //     constraint.instantiate_aliases(&mut var_store);
 
-//        let (solved_subs, solved_module) =
-//            roc_solve::module::solve_module(module, constraint, var_store);
+    //     let (solved_subs, solved_module) =
+    //         roc_solve::module::solve_module(module, constraint, var_store);
 
-//        thread_scope.spawn(move |_| {
-//            // Send the subs to the main thread for processing,
-//            msg_tx
-//                .send(Msg::Solved {
-//                    src,
-//                    module_id: home,
-//                    solved_subs: Arc::new(solved_subs),
-//                    solved_module,
-//                })
-//                .unwrap_or_else(|_| panic!("Failed to send Solved message"));
-//        });
-//    });
-//}
+    //     thread_scope.spawn(move |_| {
+    //         // Send the subs to the main thread for processing,
+    //         msg_tx
+    //             .send(Msg::Solved {
+    //                 src,
+    //                 module_id: home,
+    //                 solved_subs: Arc::new(solved_subs),
+    //                 solved_module,
+    //             })
+    //             .unwrap_or_else(|_| panic!("Failed to send Solved message"));
+    //     });
+    // });
+}
 
 #[allow(clippy::too_many_arguments)]
 fn build_parse_and_constrain_task<'a, 'b>(
