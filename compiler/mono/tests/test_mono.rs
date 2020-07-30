@@ -19,6 +19,7 @@ mod test_mono {
     use roc_mono::expr::Expr::{self, *};
     use roc_mono::expr::{InProgressProc, Procs};
     use roc_mono::layout;
+    use roc_mono::layout::Ownership::Owned;
     use roc_mono::layout::{Builtin, Layout, LayoutCache};
     use roc_types::subs::Subs;
 
@@ -632,7 +633,10 @@ mod test_mono {
             CallByName {
                 name: Symbol::LIST_GET,
                 layout: Layout::FunctionPointer(
-                    &[Layout::Builtin(Builtin::List(&I64_LAYOUT)), I64_LAYOUT],
+                    &[
+                        Layout::Builtin(Builtin::List(Owned, &I64_LAYOUT)),
+                        I64_LAYOUT,
+                    ],
                     &Layout::Union(&[&[I64_LAYOUT], &[I64_LAYOUT, I64_LAYOUT]]),
                 ),
                 args: &vec![
@@ -641,11 +645,11 @@ mod test_mono {
                             name: Symbol::LIST_SET,
                             layout: Layout::FunctionPointer(
                                 &[
-                                    Layout::Builtin(Builtin::List(&I64_LAYOUT)),
+                                    Layout::Builtin(Builtin::List(Owned, &I64_LAYOUT)),
                                     I64_LAYOUT,
                                     I64_LAYOUT,
                                 ],
-                                &Layout::Builtin(Builtin::List(&I64_LAYOUT)),
+                                &Layout::Builtin(Builtin::List(Owned, &I64_LAYOUT)),
                             ),
                             args: &vec![
                                 (
@@ -653,13 +657,13 @@ mod test_mono {
                                         elem_layout: I64_LAYOUT,
                                         elems: &vec![Int(12), Int(9), Int(7), Int(3)],
                                     },
-                                    Layout::Builtin(Builtin::List(&I64_LAYOUT)),
+                                    Layout::Builtin(Builtin::List(Owned, &I64_LAYOUT)),
                                 ),
                                 (Int(1), I64_LAYOUT),
                                 (Int(42), I64_LAYOUT),
                             ],
                         },
-                        Layout::Builtin(Builtin::List(&I64_LAYOUT)),
+                        Layout::Builtin(Builtin::List(Owned, &I64_LAYOUT)),
                     ),
                     (Int(1), I64_LAYOUT),
                 ],
@@ -864,7 +868,7 @@ mod test_mono {
                 Store Test.1: Just 0i64 3i64
                 Store Test.1: Load Test.1
                 Store Test.3: Lowlevel.And (Lowlevel.Eq 0i64 (Access @0 Load Test.1)) true
-                
+
                 if Test.3 then
                     Reset Test.1
                     Reuse Test.1
@@ -900,7 +904,7 @@ mod test_mono {
                 Store Test.5: Lowlevel.And (Lowlevel.Eq 0i64 (Access @0 Load Test.1)) true
 
                 if Test.5 then
-                    
+
                     if Test.4 then
                         Just 0i64 Just 0i64 1i64
                     else
@@ -971,6 +975,32 @@ mod test_mono {
 
                 Store Test.0: [ 1i64, 2i64, 3i64 ]
                 *magic*
+                Dec Test.0
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn pass_list_to_function() {
+        compiles_to_string(
+            r#"
+            x : List Int
+            x = [1,2,3]
+
+            id : a -> a
+            id = \y -> y
+
+            id x
+            "#,
+            indoc!(
+                r#"
+                procedure Test.1 (Test.3):
+                    Load Test.3
+                    Dec Test.3
+
+                Store Test.0: [ 1i64, 2i64, 3i64 ]
+                Call Test.1 (Load Test.0)
                 Dec Test.0
                 "#
             ),

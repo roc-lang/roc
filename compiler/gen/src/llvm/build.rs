@@ -19,7 +19,7 @@ use roc_collections::all::ImMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::expr::{Expr, Proc};
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::{Builtin, Layout, Ownership};
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -388,72 +388,9 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 BasicValueEnum::PointerValue(ptr)
             }
         }
-        EmptyArray => {
-            let struct_type = collection(env.context, env.ptr_bytes);
-
-            // The pointer should be null (aka zero) and the length should be zero,
-            // so the whole struct should be a const_zero
-            BasicValueEnum::StructValue(struct_type.const_zero())
-        }
+        EmptyArray => empty_polymorphic_list(env),
         Array { elem_layout, elems } => {
-            let ctx = env.context;
-            let builder = env.builder;
-
-            if elems.is_empty() {
-                empty_list(env)
-            } else {
-                let len_u64 = elems.len() as u64;
-                let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-
-                let ptr = {
-                    let bytes_len = elem_bytes * len_u64;
-                    let len_type = env.ptr_int();
-                    let len = len_type.const_int(bytes_len, false);
-
-                    allocate_list(env, elem_layout, len)
-
-                    // TODO check if malloc returned null; if so, runtime error for OOM!
-                };
-
-                // Copy the elements from the list literal into the array
-                for (index, elem) in elems.iter().enumerate() {
-                    let index_val = ctx.i64_type().const_int(index as u64, false);
-                    let elem_ptr =
-                        unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
-                    let val = build_expr(env, layout_ids, &scope, parent, &elem);
-
-                    builder.build_store(elem_ptr, val);
-                }
-
-                let ptr_bytes = env.ptr_bytes;
-                let int_type = ptr_int(ctx, ptr_bytes);
-                let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
-                let struct_type = collection(ctx, ptr_bytes);
-                let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
-                let mut struct_val;
-
-                // Store the pointer
-                struct_val = builder
-                    .build_insert_value(
-                        struct_type.get_undef(),
-                        ptr_as_int,
-                        Builtin::WRAPPER_PTR,
-                        "insert_ptr",
-                    )
-                    .unwrap();
-
-                // Store the length
-                struct_val = builder
-                    .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
-                    .unwrap();
-
-                // Bitcast to an array of raw bytes
-                builder.build_bitcast(
-                    struct_val.into_struct_value(),
-                    collection(ctx, ptr_bytes),
-                    "cast_collection",
-                )
-            }
+            list_literal(env, layout_ids, scope, parent, elem_layout, elems)
         }
 
         Struct(sorted_fields) => {
@@ -722,7 +659,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
                 Some((layout, ptr)) => {
                     match layout {
-                        Layout::Builtin(Builtin::List(_, elem_layout)) if false => {
+                        Layout::Builtin(Builtin::List(Ownership::Owned, _elem_layout)) => {
                             // first run the body
                             let body = build_expr(env, layout_ids, scope, parent, expr);
 
@@ -774,19 +711,28 @@ fn list_get_refcount_ptr<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    // basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-    let elem_type = ctx.i64_type().into();
-    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-    // Load the pointer to the array data
-    let array_data_ptr = load_list_ptr(builder, list_wrapper, ptr_type);
+    // pointer to usize
+    let ptr_bytes = env.ptr_bytes;
+    let int_type = ptr_int(ctx, ptr_bytes);
 
-    // get the refcount
-    let zero_index = ctx.i64_type().const_zero();
-    unsafe {
-        // SAFETY
-        // index 0 is always defined for lists.
-        builder.build_in_bounds_gep(array_data_ptr, &[zero_index], "refcount_index")
-    }
+    // fetch the pointer to the array data, as an integer
+    let ptr_as_int = builder
+        .build_extract_value(list_wrapper, Builtin::WRAPPER_PTR, "read_list_ptr")
+        .unwrap()
+        .into_int_value();
+
+    // subtract ptr_size, to access the refcount
+    let refcount_ptr = builder.build_int_sub(
+        ptr_as_int,
+        ctx.i64_type().const_int(env.ptr_bytes as u64, false),
+        "refcount_ptr",
+    );
+
+    builder.build_int_to_ptr(
+        refcount_ptr,
+        int_type.ptr_type(AddressSpace::Generic),
+        "make ptr",
+    )
 }
 
 fn increment_refcount_list<'a, 'ctx, 'env>(
@@ -808,7 +754,7 @@ fn increment_refcount_list<'a, 'ctx, 'env>(
     let decremented = env.builder.build_int_sub(
         refcount,
         ctx.i64_type().const_int(1 as u64, false),
-        "new_refcount",
+        "incremented_refcount",
     );
 
     // Mutate the new array in-place to change the element.
@@ -841,7 +787,7 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
         let decremented = env.builder.build_int_add(
             ctx.i64_type().const_int(1 as u64, false),
             refcount,
-            "new_refcount",
+            "decremented_refcount",
         );
 
         // Mutate the new array in-place to change the element.
@@ -852,12 +798,7 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
 
     // refcount is one, and will be decremented. This list can be freed
     let build_else = || {
-        let array_data_ptr = load_list_ptr(
-            builder,
-            original_wrapper,
-            ctx.i64_type().ptr_type(AddressSpace::Generic),
-        );
-        let free = builder.build_free(array_data_ptr);
+        let free = builder.build_free(refcount_ptr);
 
         builder.insert_instruction(&free, None);
 
@@ -875,7 +816,7 @@ fn load_symbol<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     match scope.get(symbol) {
         Some((layout, ptr)) => match layout {
-            Layout::Builtin(Builtin::List(_, _)) if false => {
+            Layout::Builtin(Builtin::List(Ownership::Owned, _)) => {
                 let load = env
                     .builder
                     .build_load(*ptr, symbol.ident_string(&env.interns));
@@ -1237,11 +1178,14 @@ pub fn allocate_list<'a, 'ctx, 'env>(
         let bytes_len = len_type.const_int(elem_bytes, false);
 
         let len = builder.build_int_mul(bytes_len, length, "data_length");
-        // TODO 8 assume 64-bit pointer/refcount
-        let len = builder.build_int_add(len, len_type.const_int(8, false), "add_refcount_space");
+        let len = builder.build_int_add(
+            len,
+            len_type.const_int(env.ptr_bytes as u64, false),
+            "add_refcount_space",
+        );
 
         env.builder
-            .build_array_malloc(elem_type, len, "create_list_ptr")
+            .build_array_malloc(ctx.i8_type(), len, "create_list_ptr")
             .unwrap()
 
         // TODO check if malloc returned null; if so, runtime error for OOM!
@@ -1448,7 +1392,7 @@ fn list_repeat<'a, 'ctx, 'env>(
         )
     };
 
-    let build_else = || empty_list(env);
+    let build_else = || empty_polymorphic_list(env);
 
     let struct_type = collection(ctx, env.ptr_bytes);
 
@@ -1640,7 +1584,7 @@ enum InPlace {
     Clone,
 }
 
-fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+fn empty_polymorphic_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
     let ctx = env.context;
 
     let struct_type = collection(ctx, env.ptr_bytes);
@@ -1648,6 +1592,69 @@ fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx>
     // The pointer should be null (aka zero) and the length should be zero,
     // so the whole struct should be a const_zero
     BasicValueEnum::StructValue(struct_type.const_zero())
+}
+
+fn list_literal<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    elem_layout: &Layout<'a>,
+    elems: &&[roc_mono::expr::Expr<'a>],
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+    let builder = env.builder;
+
+    let len_u64 = elems.len() as u64;
+    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+
+    let ptr = {
+        let bytes_len = elem_bytes * len_u64;
+        let len_type = env.ptr_int();
+        let len = len_type.const_int(bytes_len, false);
+
+        allocate_list(env, elem_layout, len)
+
+        // TODO check if malloc returned null; if so, runtime error for OOM!
+    };
+
+    // Copy the elements from the list literal into the array
+    for (index, elem) in elems.iter().enumerate() {
+        let index_val = ctx.i64_type().const_int(index as u64, false);
+        let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+        let val = build_expr(env, layout_ids, &scope, parent, &elem);
+
+        builder.build_store(elem_ptr, val);
+    }
+
+    let ptr_bytes = env.ptr_bytes;
+    let int_type = ptr_int(ctx, ptr_bytes);
+    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+    let struct_type = collection(ctx, ptr_bytes);
+    let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
+    let mut struct_val;
+
+    // Store the pointer
+    struct_val = builder
+        .build_insert_value(
+            struct_type.get_undef(),
+            ptr_as_int,
+            Builtin::WRAPPER_PTR,
+            "insert_ptr",
+        )
+        .unwrap();
+
+    // Store the length
+    struct_val = builder
+        .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
+        .unwrap();
+
+    // Bitcast to an array of raw bytes
+    builder.build_bitcast(
+        struct_val.into_struct_value(),
+        collection(ctx, ptr_bytes),
+        "cast_collection",
+    )
 }
 
 fn bounds_check_comparison<'ctx>(
@@ -2009,7 +2016,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                         )
                     };
 
-                    let build_else = || empty_list(env);
+                    let build_else = || empty_polymorphic_list(env);
 
                     let struct_type = collection(ctx, env.ptr_bytes);
 
@@ -2022,7 +2029,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                         BasicTypeEnum::StructType(struct_type),
                     )
                 }
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::EmptyList) => empty_polymorphic_list(env),
                 _ => {
                     unreachable!("Invalid List layout for List.reverse {:?}", list_layout);
                 }
@@ -2330,7 +2337,7 @@ fn list_append<'a, 'ctx, 'env>(
     match first_list_layout {
         Layout::Builtin(Builtin::EmptyList) => {
             match second_list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::EmptyList) => empty_polymorphic_list(env),
                 Layout::Builtin(Builtin::List(_, elem_layout)) => {
                     // THIS IS A COPY AND PASTE
                     // All the code under the Layout::Builtin(Builtin::List()) match branch
@@ -2358,7 +2365,7 @@ fn list_append<'a, 'ctx, 'env>(
                         BasicValueEnum::StructValue(new_wrapper)
                     };
 
-                    let build_second_list_else = || empty_list(env);
+                    let build_second_list_else = || empty_polymorphic_list(env);
 
                     build_basic_phi2(
                         env,
@@ -2646,7 +2653,7 @@ fn list_append<'a, 'ctx, 'env>(
 
             let if_first_list_is_empty = || {
                 match second_list_layout {
-                    Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                    Layout::Builtin(Builtin::EmptyList) => empty_polymorphic_list(env),
                     Layout::Builtin(Builtin::List(_, elem_layout)) => {
                         // second_list_len > 0
                         // We do this check to avoid allocating memory. If the second input
@@ -2669,7 +2676,7 @@ fn list_append<'a, 'ctx, 'env>(
                             BasicValueEnum::StructValue(new_wrapper)
                         };
 
-                        let build_second_list_else = || empty_list(env);
+                        let build_second_list_else = || empty_polymorphic_list(env);
 
                         build_basic_phi2(
                             env,

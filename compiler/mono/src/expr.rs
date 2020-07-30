@@ -563,7 +563,21 @@ impl<'a> Expr<'a> {
                     alloc.intersperse(it, alloc.space())
                 }
             }
-            CallByName { name, .. } => alloc.text("*magic*"),
+            CallByName { name, args, .. } => {
+                let doc_name = alloc.text(format!("Call {}", name));
+                let doc_args = args.iter().map(|(expr, _)| expr.to_doc(alloc, true));
+
+                let it = std::iter::once(doc_name).chain(doc_args);
+
+                if parens {
+                    alloc
+                        .text("(")
+                        .append(alloc.intersperse(it, alloc.space()))
+                        .append(alloc.text(")"))
+                } else {
+                    alloc.intersperse(it, alloc.space())
+                }
+            }
             _ => todo!("not yet implemented: {:?}", self),
         }
     }

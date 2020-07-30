@@ -616,17 +616,54 @@ mod gen_list {
     }
 
     #[test]
-    fn gen_list_increment_decrement() {
+    fn empty_list_increment_decrement() {
         assert_evals_to!(
             indoc!(
                 r#"
-                x = [ 1,2,3 ]
+                x : List Int
+                x = []
 
-                List.len x
+                List.len x + List.len x
                 "#
             ),
-            3,
+            0,
             i64
+        );
+    }
+
+    #[test]
+    fn list_literal_increment_decrement() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : List Int
+                x = [1,2,3]
+
+                List.len x + List.len x
+                "#
+            ),
+            6,
+            i64
+        );
+    }
+
+    #[test]
+    fn list_pass_to_function() {
+        // yes
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : List Int
+                x = [1,2,3]
+
+                id : List Int -> List Int
+                id = \y -> y 
+
+                id x
+                "#
+            ),
+            &[1, 2, 3],
+            &'static [i64]
         );
     }
 }
