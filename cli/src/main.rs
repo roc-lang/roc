@@ -152,7 +152,7 @@ pub fn build(matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {
     Ok(())
 }
 
-async fn build_file(
+fn build_file(
     src_dir: PathBuf,
     filename: PathBuf,
     opt_level: OptLevel,

@@ -20,6 +20,7 @@ roc_solve = { path = "../solve" }
 bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1"
 crossbeam = "0.7"
+num_cpus = "1"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
