@@ -413,7 +413,7 @@ fn load_deps<'a>(
                     exposed_vars_by_symbol,
                     src,
                 } => {
-                    // We're done!
+                    // We're done! There should be no more messages pending.
                     debug_assert!(msg_rx.is_empty());
 
                     // Shut down all the worker threads.
@@ -423,30 +423,7 @@ fn load_deps<'a>(
                             .map_err(|_| LoadingProblem::MsgChannelDied)?;
                     }
 
-                    state.type_problems.extend(problems);
-
-                    let module_ids = Arc::try_unwrap(state.arc_modules)
-                        .unwrap_or_else(|_| {
-                            panic!("There were still outstanding Arc references to module_ids")
-                        })
-                        .into_inner()
-                        .expect("Unwrapping mutex for module_ids");
-
-                    let interns = Interns {
-                        module_ids,
-                        all_ident_ids: state.constrained_ident_ids,
-                    };
-
-                    return Ok(LoadedModule {
-                        module_id: state.root_id,
-                        interns,
-                        solved,
-                        can_problems: state.can_problems,
-                        type_problems: state.type_problems,
-                        declarations_by_id: state.declarations_by_id,
-                        exposed_vars_by_symbol,
-                        src: src.into(),
-                    });
+                    return Ok(finish(state, solved, problems, exposed_vars_by_symbol, src));
                 }
                 msg => {
                     // This is where most of the main thread's work gets done.
@@ -823,6 +800,37 @@ fn update<'a>(
         Msg::Finished { .. } => {
             unreachable!();
         }
+    }
+}
+
+fn finish<'a>(
+    mut state: State<'a>,
+    solved: Solved<Subs>,
+    problems: Vec<solve::TypeError>,
+    exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    src: &'a str,
+) -> LoadedModule<'a> {
+    state.type_problems.extend(problems);
+
+    let module_ids = Arc::try_unwrap(state.arc_modules)
+        .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
+        .into_inner()
+        .expect("Unwrapping mutex for module_ids");
+
+    let interns = Interns {
+        module_ids,
+        all_ident_ids: state.constrained_ident_ids,
+    };
+
+    LoadedModule {
+        module_id: state.root_id,
+        interns,
+        solved,
+        can_problems: state.can_problems,
+        type_problems: state.type_problems,
+        declarations_by_id: state.declarations_by_id,
+        exposed_vars_by_symbol,
+        src: src.into(),
     }
 }
 
