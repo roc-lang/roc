@@ -92,6 +92,76 @@ enum Msg<'a> {
 }
 
 #[derive(Debug)]
+struct State<'a> {
+    pub root_id: ModuleId,
+    pub src_dir: PathBuf,
+    pub exposed_types: SubsByModule,
+
+    pub can_problems: Vec<roc_problem::can::Problem>,
+    pub headers_parsed: MutSet<ModuleId>,
+    pub type_problems: Vec<solve::TypeError>,
+
+    /// This is the "final" list of IdentIds, after canonicalization and constraint gen
+    /// have completed for a given module.
+    pub constrained_ident_ids: MutMap<ModuleId, IdentIds>,
+
+    /// From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
+    pub arc_modules: Arc<Mutex<ModuleIds>>,
+
+    pub ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+
+    /// All the dependent modules we've already begun loading -
+    /// meaning we should never kick off another load_module on them!
+    pub loading_started: MutSet<ModuleId>,
+
+    pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
+
+    pub exposed_symbols_by_module: MutMap<ModuleId, MutSet<Symbol>>,
+
+    /// Modules which are waiting for certain headers to be parsed
+    pub waiting_for_headers: MutMap<ModuleId, MutSet<ModuleId>>,
+
+    // When the key ModuleId gets solved, iterate through each of the given modules
+    // a,d remove that ModuleId from the appropriate waiting_for_headers entry.
+    // If the relevant module's waiting_for_headers entry is now empty, canonicalize the module.
+    pub header_listeners: MutMap<ModuleId, Vec<ModuleId>>,
+
+    pub unparsed_modules: MutMap<ModuleId, ModuleHeader<'a>>,
+
+    // Modules which are waiting for certain deps to be solved
+    pub waiting_for_solve: MutMap<ModuleId, MutSet<ModuleId>>,
+
+    // When the key ModuleId gets solved, iterate through each of the given modules
+    // and remove that ModuleId from the appropriate waiting_for_solve entry.
+    // If the relevant module's waiting_for_solve entry is now empty, solve the module.
+    pub solve_listeners: MutMap<ModuleId, Vec<ModuleId>>,
+
+    #[allow(clippy::type_complexity)]
+    pub unsolved_modules:
+        MutMap<ModuleId, (Module, Box<str>, MutSet<ModuleId>, Constraint, VarStore)>,
+}
+
+#[derive(Debug)]
+enum BuildTask<'a, 'b> {
+    LoadModule {
+        module_name: ModuleName,
+        module_ids: SharedModules<'a, 'b>,
+    },
+    ParseAndConstrain {
+        header: ModuleHeader<'a>,
+        mode: Mode,
+        module_ids: ModuleIds,
+        dep_idents: IdentIdsByModule,
+        exposed_symbols: MutSet<Symbol>,
+    },
+}
+
+enum WorkerMsg {
+    Shutdown,
+    TaskAdded,
+}
+
+#[derive(Debug)]
 pub enum LoadingProblem {
     FileProblem {
         filename: PathBuf,
@@ -214,76 +284,6 @@ fn enqueue_task<'a, 'b>(
     }
 
     Ok(())
-}
-
-#[derive(Debug)]
-struct State<'a> {
-    pub root_id: ModuleId,
-    pub src_dir: PathBuf,
-    pub exposed_types: SubsByModule,
-
-    pub can_problems: Vec<roc_problem::can::Problem>,
-    pub headers_parsed: MutSet<ModuleId>,
-    pub type_problems: Vec<solve::TypeError>,
-
-    /// This is the "final" list of IdentIds, after canonicalization and constraint gen
-    /// have completed for a given module.
-    pub constrained_ident_ids: MutMap<ModuleId, IdentIds>,
-
-    /// From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
-    pub arc_modules: Arc<Mutex<ModuleIds>>,
-
-    pub ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
-
-    /// All the dependent modules we've already begun loading -
-    /// meaning we should never kick off another load_module on them!
-    pub loading_started: MutSet<ModuleId>,
-
-    pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
-
-    pub exposed_symbols_by_module: MutMap<ModuleId, MutSet<Symbol>>,
-
-    /// Modules which are waiting for certain headers to be parsed
-    pub waiting_for_headers: MutMap<ModuleId, MutSet<ModuleId>>,
-
-    // When the key ModuleId gets solved, iterate through each of the given modules
-    // a,d remove that ModuleId from the appropriate waiting_for_headers entry.
-    // If the relevant module's waiting_for_headers entry is now empty, canonicalize the module.
-    pub header_listeners: MutMap<ModuleId, Vec<ModuleId>>,
-
-    pub unparsed_modules: MutMap<ModuleId, ModuleHeader<'a>>,
-
-    // Modules which are waiting for certain deps to be solved
-    pub waiting_for_solve: MutMap<ModuleId, MutSet<ModuleId>>,
-
-    // When the key ModuleId gets solved, iterate through each of the given modules
-    // and remove that ModuleId from the appropriate waiting_for_solve entry.
-    // If the relevant module's waiting_for_solve entry is now empty, solve the module.
-    pub solve_listeners: MutMap<ModuleId, Vec<ModuleId>>,
-
-    #[allow(clippy::type_complexity)]
-    pub unsolved_modules:
-        MutMap<ModuleId, (Module, Box<str>, MutSet<ModuleId>, Constraint, VarStore)>,
-}
-
-#[derive(Debug)]
-enum BuildTask<'a, 'b> {
-    LoadModule {
-        module_name: ModuleName,
-        module_ids: SharedModules<'a, 'b>,
-    },
-    ParseAndConstrain {
-        header: ModuleHeader<'a>,
-        mode: Mode,
-        module_ids: ModuleIds,
-        dep_idents: IdentIdsByModule,
-        exposed_symbols: MutSet<Symbol>,
-    },
-}
-
-enum WorkerMsg {
-    Shutdown,
-    TaskAdded,
 }
 
 fn load_deps<'a>(
