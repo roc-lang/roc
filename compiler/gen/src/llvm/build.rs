@@ -397,7 +397,6 @@ pub fn build_expr<'a, 'ctx, 'env>(
         }
         Array { elem_layout, elems } => {
             let ctx = env.context;
-            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
             let builder = env.builder;
 
             if elems.is_empty() {
@@ -411,9 +410,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                     let len_type = env.ptr_int();
                     let len = len_type.const_int(bytes_len, false);
 
-                    env.builder
-                        .build_array_malloc(elem_type, len, "create_list_ptr")
-                        .unwrap()
+                    allocate_list(env, elem_layout, len)
 
                     // TODO check if malloc returned null; if so, runtime error for OOM!
                 };
@@ -868,14 +865,7 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
     };
     let ret_type = body.get_type();
 
-    build_basic_phi2(
-        env,
-        parent,
-        comparison,
-        build_then,
-        build_else,
-        ret_type.into(),
-    )
+    build_basic_phi2(env, parent, comparison, build_then, build_else, ret_type)
 }
 
 fn load_symbol<'a, 'ctx, 'env>(
@@ -1229,6 +1219,76 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
     }
 }
 
+pub fn allocate_list<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    elem_layout: &Layout<'a>,
+    length: IntValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+
+    let ptr = {
+        let len_type = env.ptr_int();
+
+        // bytes per element
+        let bytes_len = len_type.const_int(elem_bytes, false);
+
+        let len = builder.build_int_mul(bytes_len, length, "data_length");
+        // TODO 8 assume 64-bit pointer/refcount
+        let len = builder.build_int_add(len, len_type.const_int(8, false), "add_refcount_space");
+
+        env.builder
+            .build_array_malloc(elem_type, len, "create_list_ptr")
+            .unwrap()
+
+        // TODO check if malloc returned null; if so, runtime error for OOM!
+    };
+
+    // Put the element into the list
+    let refcount_ptr = unsafe {
+        builder.build_in_bounds_gep(
+            ptr,
+            &[ctx.i64_type().const_int(
+                // 0 as in 0 index of our new list
+                0 as u64, false,
+            )],
+            "index",
+        )
+    };
+
+    // cast the refcount_ptr to be an u64_ptr
+    let refcount_ptr = builder
+        .build_bitcast(
+            refcount_ptr,
+            get_ptr_type(
+                &BasicTypeEnum::IntType(ctx.i64_type()),
+                AddressSpace::Generic,
+            ),
+            "refcount_ptr",
+        )
+        .into_pointer_value();
+
+    // put our "refcount 0" in the first slot
+    let ref_count_zero = ctx.i64_type().const_int(std::usize::MAX as u64, false);
+    builder.build_store(refcount_ptr, ref_count_zero);
+
+    // We must return a pointer to the first element:
+    let ptr_bytes = env.ptr_bytes;
+    let int_type = ptr_int(ctx, ptr_bytes);
+    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+    let incremented = builder.build_int_add(
+        ptr_as_int,
+        ctx.i64_type().const_int(8, false),
+        "increment_list_ptr",
+    );
+
+    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+    builder.build_int_to_ptr(incremented, ptr_type, "list_cast_ptr")
+}
+
 /// List.single : a -> List a
 fn list_single<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -1238,20 +1298,9 @@ fn list_single<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-
-    let ptr = {
-        let bytes_len = elem_bytes;
-        let len_type = env.ptr_int();
-        let len = len_type.const_int(bytes_len, false);
-
-        env.builder
-            .build_array_malloc(elem_type, len, "create_list_ptr")
-            .unwrap()
-
-        // TODO check if malloc returned null; if so, runtime error for OOM!
-    };
+    // allocate a list of size 1 on the heap
+    let size = ctx.i64_type().const_int(1, false);
+    let ptr = allocate_list(env, elem_layout, size);
 
     // Put the element into the list
     let elem_ptr = unsafe {
@@ -1308,7 +1357,6 @@ fn list_repeat<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
     let ctx = env.context;
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
 
     // list_len > 0
     // We have to do a loop below, continuously adding the `elem`
@@ -1326,10 +1374,7 @@ fn list_repeat<'a, 'ctx, 'env>(
 
     let build_then = || {
         // Allocate space for the new array that we'll copy into.
-        let list_ptr = builder
-            .build_array_malloc(elem_type, list_len, "create_list_ptr")
-            .unwrap();
-
+        let list_ptr = allocate_list(env, elem_layout, list_len);
         // TODO check if malloc returned null; if so, runtime error for OOM!
 
         let index_name = "#index";
@@ -1542,10 +1587,8 @@ fn clone_nonempty_list<'a, 'ctx, 'env>(
         .build_int_mul(elem_bytes, list_len, "mul_len_by_elem_bytes");
 
     // Allocate space for the new array that we'll copy into.
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-    let clone_ptr = builder
-        .build_array_malloc(elem_type, list_len, "list_ptr")
-        .unwrap();
+    let clone_ptr = allocate_list(env, elem_layout, list_len);
+
     let int_type = ptr_int(ctx, ptr_bytes);
     let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
 
@@ -1658,10 +1701,7 @@ fn list_push<'a, 'ctx, 'env>(
         .build_int_mul(elem_bytes, list_len, "mul_old_len_by_elem_bytes");
 
     // Allocate space for the new array that we'll copy into.
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-    let clone_ptr = builder
-        .build_array_malloc(elem_type, new_list_len, "list_ptr")
-        .unwrap();
+    let clone_ptr = allocate_list(env, elem_layout, new_list_len);
     let int_type = ptr_int(ctx, ptr_bytes);
     let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
 
@@ -1861,10 +1901,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
                         let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-                        let reversed_list_ptr = env
-                            .builder
-                            .build_array_malloc(elem_type, list_len, "create_reversed_list_ptr")
-                            .unwrap();
+                        let reversed_list_ptr = allocate_list(env, elem_layout, list_len);
 
                         // TODO check if malloc returned null; if so, runtime error for OOM!
 
@@ -2355,8 +2392,6 @@ fn list_append<'a, 'ctx, 'env>(
                 let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
                 let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-                let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-
                 let if_second_list_is_empty = || {
                     let (new_wrapper, _) = clone_nonempty_list(
                         env,
@@ -2393,14 +2428,8 @@ fn list_append<'a, 'ctx, 'env>(
                                 "add_list_lengths",
                             );
 
-                            let combined_list_ptr = env
-                                .builder
-                                .build_array_malloc(
-                                    elem_type,
-                                    combined_list_len,
-                                    "create_combined_list_ptr",
-                                )
-                                .unwrap();
+                            let combined_list_ptr =
+                                allocate_list(env, elem_layout, combined_list_len);
 
                             let index_name = "#index";
                             let index_alloca = builder.build_alloca(ctx.i64_type(), index_name);
