@@ -340,7 +340,6 @@ fn load_deps<'a>(
             unsolved_modules: MutMap::default(),
         };
 
-        let mut worker_handles = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
         let mut worker_listeners = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
 
         for _ in 0..num_workers {
@@ -355,7 +354,7 @@ fn load_deps<'a>(
             let main_task_queue = &main_task_queue;
 
             // Record this thread's handle so the main thread can join it later.
-            worker_handles.push(thread_scope.spawn(move |_| {
+            thread_scope.spawn(move |_| {
                 // Keep listening until we receive a Shutdown msg
                 for msg in worker_msg_rx.iter() {
                     match msg {
@@ -392,7 +391,7 @@ fn load_deps<'a>(
                 // Needed to prevent a borrow checker error about this closure
                 // outliving its enclosing function.
                 drop(worker_msg_rx);
-            }));
+            });
         }
 
         // We've now distributed one worker queue to each thread.
@@ -463,16 +462,6 @@ fn load_deps<'a>(
                     )?;
                 }
             }
-        }
-
-        // Join all the threads we created earlier, so we don't exit until
-        // they all do. They'll exit when we send them Shutdown messages,
-        // which `update` will do once all processing has been completed.
-        for handle in worker_handles {
-            // TODO can we not do this?
-            handle
-                .join()
-                .map_err(|_| LoadingProblem::ErrJoiningWorkerThreads)?;
         }
 
         // The msg_rx receiver closed unexpectedly before we finished solving everything
