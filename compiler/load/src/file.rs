@@ -417,7 +417,12 @@ fn load_deps<'a>(
                     // We're done!
                     debug_assert!(msg_rx.is_empty());
 
-                    dbg!("TODO send Shutdown messages to all the worker threads.");
+                    // Shut down all the worker threads.
+                    for listener in worker_listeners {
+                        listener
+                            .send(WorkerMsg::Shutdown)
+                            .map_err(|_| LoadingProblem::MsgChannelDied)?;
+                    }
 
                     state.type_problems.extend(problems);
 
