@@ -15,7 +15,7 @@ use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use roc_parse::module::module_defs;
-use roc_parse::parser::{Fail, Parser, State};
+use roc_parse::parser::{self, Fail, Parser};
 use roc_region::all::{Located, Region};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
@@ -78,10 +78,15 @@ enum Msg<'a> {
         var_store: VarStore,
     },
     Solved {
-        src: Box<str>,
+        src: &'a str,
         module_id: ModuleId,
         solved_module: SolvedModule,
         solved_subs: Arc<Solved<Subs>>,
+    },
+    Finished {
+        solved: Solved<Subs>,
+        exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+        src: &'a str,
     },
 }
 
@@ -194,7 +199,7 @@ pub fn load(
 }
 
 #[derive(Debug)]
-struct Env<'a> {
+struct State<'a> {
     pub root_id: ModuleId,
     pub src_dir: PathBuf,
     pub exposed_types: SubsByModule,
@@ -258,10 +263,9 @@ enum BuildTask<'a, 'b> {
     },
 }
 
-enum WorkerMsg<'a, 'b> {
+enum WorkerMsg {
     Shutdown,
     TaskAdded,
-    GotStealers(&'a [Stealer<BuildTask<'a, 'b>>]),
 }
 
 fn load_deps<'a>(
@@ -275,9 +279,30 @@ fn load_deps<'a>(
     ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     exposed_types: SubsByModule,
 ) -> Result<LoadedModule, LoadingProblem> {
+    // Reserve one CPU for the main thread, and let all the others be eligible
+    // to spawn workers.
     let num_workers = num_cpus::get() - 1;
+
+    // We'll add tasks to this, and then worker threads will take tasks from it.
     let main_task_queue = Injector::new();
+
+    // We need to allocate worker *queues* on the main thread and then move them
+    // into the worker threads, because those workers' stealers need to be
+    // shared between all threads, and this coordination work is much easier
+    // on the main thread.
+    let mut worker_queues = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
     let mut stealers = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
+
+    for _ in 0..num_workers {
+        let worker = Worker::new_lifo();
+
+        stealers.push(worker.stealer());
+        worker_queues.push(worker);
+    }
+
+    // Get a reference to the completed stealers, so we can send that
+    // reference to each worker. (Slices are Sync, but bumpalo Vecs are not.)
+    let stealers = stealers.into_bump_slice();
 
     thread::scope(|thread_scope| {
         let mut headers_parsed = MutSet::default();
@@ -293,7 +318,7 @@ fn load_deps<'a>(
         // we still shouldn't load it.
         loading_started.insert(root_id);
 
-        let mut env = Env {
+        let mut state = State {
             root_id,
             src_dir,
             exposed_types,
@@ -314,36 +339,37 @@ fn load_deps<'a>(
             unsolved_modules: MutMap::default(),
         };
 
-        let (stealer_msg_tx, stealer_msg_rx) = bounded(num_workers);
         let mut worker_handles = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
         let mut worker_listeners = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
 
         for _ in 0..num_workers {
-            let stealer_msg_tx = stealer_msg_tx.clone();
+            let worker = worker_queues.pop().unwrap();
             let (worker_msg_tx, worker_msg_rx) = bounded(1024);
 
             worker_listeners.push(worker_msg_tx);
 
-            let handle = thread_scope.spawn(|_| {
-                let worker = Worker::new_lifo();
-                let mut stealers: &'a [Stealer<BuildTask<'a, '_>>] = &[];
+            // We only want to move a *reference* to the main task queue
+            // into the thread, not the entire queue itself (since other threads
+            // need to reference it too).
+            let main_task_queue = &main_task_queue;
 
-                // Register our stealer and close that channel.
-                stealer_msg_tx.send(worker.stealer());
-                drop(stealer_msg_tx);
-
+            // Record this thread's handle so the main thread can join it later.
+            worker_handles.push(thread_scope.spawn(move |_| {
                 // Keep listening until we receive a Shutdown msg
                 for msg in worker_msg_rx.iter() {
                     match msg {
                         WorkerMsg::Shutdown => {
+                            // We've finished all our work. It's time to
+                            // shut down the thread, so when the main thread
+                            // blocks on joining with all the worker threads,
+                            // it can finally exit too!
                             return;
                         }
-                        WorkerMsg::GotStealers(new_stealers) => {
-                            stealers = new_stealers;
-                            println!("worker got {} stealers", stealers.len());
-                        }
                         WorkerMsg::TaskAdded => {
-                            match find_task(&worker, &main_task_queue, stealers) {
+                            // Find a task - either from this thread's queue,
+                            // or from the main queue, or from another worker's
+                            // queue - and run it.
+                            match find_task(&worker, main_task_queue, stealers) {
                                 Some(task) => {
                                     let t2: BuildTask<'a, '_> = task;
                                     println!("run this task: {:?}", t2);
@@ -351,7 +377,11 @@ fn load_deps<'a>(
                                     todo!("run this task: {:?}", t2);
                                 }
                                 None => {
-                                    // No tasks to work on!
+                                    // No tasks to work on! This might be because
+                                    // another thread is working on a task which
+                                    // will later result in more tasks being
+                                    // added, so keep waiting until we receive
+                                    // a Shutdown message.
                                 }
                             }
                         }
@@ -361,49 +391,76 @@ fn load_deps<'a>(
                 // Needed to prevent a borrow checker error about this closure
                 // outliving its enclosing function.
                 drop(worker_msg_rx);
-            });
-
-            worker_handles.push(handle);
+            }));
         }
 
-        // We never send stealer messages from the main thread, so drop this now.
-        drop(stealer_msg_tx);
+        // We've now distributed one worker queue to each thread.
+        // There should be no queues left to distribute!
+        debug_assert!(worker_queues.is_empty());
+        drop(worker_queues);
 
-        // Gather all the stealers and send the full list to each worker.
-        for stealer in stealer_msg_rx.iter() {
-            stealers.push(stealer);
-
-            // TODO why is this necessary? Seems the last Sender should be
-            // disonnected at this point, so shouldn't the iterator finish?
-            if stealers.len() >= num_workers {
-                break;
-            }
-        }
-
-        // Get a reference to the completed stealers, so we can send that
-        // reference to each worker rather than cloning it each time.
-        let stealers = stealers.into_bump_slice();
+        // Grab a reference to these Senders outside the loop, so we can share
+        // it across each iteration of the loop.
         let worker_listeners = worker_listeners.into_bump_slice();
-
-        for tx in worker_listeners {
-            tx.send(WorkerMsg::GotStealers(stealers))
-                .map_err(|_| LoadingProblem::MsgChannelDied)?;
-        }
 
         // The root module will have already queued up messages to process,
         // and processing those messages will in turn queue up more messages.
         for msg in msg_rx.iter() {
-            env = update(
-                env,
-                stdlib,
-                msg,
-                &msg_tx,
-                &main_task_queue,
-                worker_listeners,
-            )?;
+            match msg {
+                Msg::Finished {
+                    solved,
+                    exposed_vars_by_symbol,
+                    src,
+                } => {
+                    // We're done!
+                    debug_assert!(msg_rx.is_empty());
+
+                    dbg!("TODO send Shutdown messages to all the worker threads.");
+
+                    let module_ids = Arc::try_unwrap(state.arc_modules)
+                        .unwrap_or_else(|_| {
+                            panic!("There were still outstanding Arc references to module_ids")
+                        })
+                        .into_inner()
+                        .expect("Unwrapping mutex for module_ids");
+
+                    let interns = Interns {
+                        module_ids,
+                        all_ident_ids: state.constrained_ident_ids,
+                    };
+
+                    return Ok(LoadedModule {
+                        module_id: state.root_id,
+                        interns,
+                        solved,
+                        can_problems: state.can_problems,
+                        type_problems: state.type_problems,
+                        declarations_by_id: state.declarations_by_id,
+                        exposed_vars_by_symbol,
+                        src: src.into(),
+                    });
+                }
+                msg => {
+                    // This is where most of the main thread's work gets done.
+                    // Everything up to this point has been setting up the threading
+                    // system which lets this logic work efficiently.
+                    state = update(
+                        state,
+                        msg,
+                        stdlib,
+                        &msg_tx,
+                        &main_task_queue,
+                        worker_listeners,
+                    )?;
+                }
+            }
         }
 
+        // Join all the threads we created earlier, so we don't exit until
+        // they all do. They'll exit when we send them Shutdown messages,
+        // which `update` will do once all processing has been completed.
         for handle in worker_handles {
+            // TODO can we not do this?
             handle
                 .join()
                 .map_err(|_| LoadingProblem::ErrJoiningWorkerThreads)?;
@@ -416,13 +473,13 @@ fn load_deps<'a>(
 }
 
 fn update<'a>(
-    mut env: Env<'a>,
-    stdlib: &StdLib,
+    mut state: State<'a>,
     msg: Msg<'a>,
+    stdlib: &StdLib,
     msg_tx: &MsgSender<'a>,
     main_task_queue: &Injector<BuildTask<'a, '_>>,
     worker_listeners: &'a [Sender<WorkerMsg>],
-) -> Result<Env<'a>, LoadingProblem> {
+) -> Result<State<'a>, LoadingProblem> {
     use self::MaybeShared::*;
     use self::Msg::*;
 
@@ -433,10 +490,10 @@ fn update<'a>(
             let mut headers_needed =
                 HashSet::with_capacity_and_hasher(deps_by_name.len(), default_hasher());
 
-            env.headers_parsed.insert(home);
+            state.headers_parsed.insert(home);
 
             for dep_id in deps_by_name.values() {
-                if !env.headers_parsed.contains(&dep_id) {
+                if !state.headers_parsed.contains(&dep_id) {
                     headers_needed.insert(*dep_id);
                 }
             }
@@ -450,15 +507,17 @@ fn update<'a>(
                 exposed_symbols.insert(*symbol);
             }
 
-            debug_assert!(!env.exposed_symbols_by_module.contains_key(&home));
-            env.exposed_symbols_by_module.insert(home, exposed_symbols);
+            debug_assert!(!state.exposed_symbols_by_module.contains_key(&home));
+            state
+                .exposed_symbols_by_module
+                .insert(home, exposed_symbols);
 
             // Notify all the listeners that headers are now available for this module.
-            if let Some(listeners) = env.header_listeners.remove(&home) {
+            if let Some(listeners) = state.header_listeners.remove(&home) {
                 for listener_id in listeners {
                     // This listener is longer waiting for this module,
                     // because this module's headers are now available!
-                    let waiting_for = env
+                    let waiting_for = state
                         .waiting_for_headers
                         .get_mut(&listener_id)
                         .expect("Unable to find module ID in waiting_for_headers");
@@ -467,12 +526,12 @@ fn update<'a>(
 
                     // If it's no longer waiting for anything else, solve it.
                     if waiting_for.is_empty() {
-                        let header = env
+                        let header = state
                             .unparsed_modules
                             .remove(&listener_id)
                             .expect("Could not find listener ID in unparsed_modules");
 
-                        let exposed_symbols = env
+                        let exposed_symbols = state
                             .exposed_symbols_by_module
                             .remove(&listener_id)
                             .expect("Could not find listener ID in exposed_symbols_by_module");
@@ -480,11 +539,11 @@ fn update<'a>(
                         main_task_queue.push(build_parse_and_constrain_task(
                             header,
                             stdlib.mode,
-                            Arc::clone(&env.arc_modules),
-                            Arc::clone(&env.ident_ids_by_module),
-                            &env.exposed_types,
+                            Arc::clone(&state.arc_modules),
+                            Arc::clone(&state.ident_ids_by_module),
+                            &state.exposed_types,
                             exposed_symbols.clone(),
-                            &mut env.waiting_for_solve,
+                            &mut state.waiting_for_solve,
                         ));
 
                         for tx in worker_listeners {
@@ -501,10 +560,10 @@ fn update<'a>(
 
             // If any of our deps weren't loaded before, start loading them.
             for (dep_name, dep_id) in deps_by_name.iter() {
-                if !env.loading_started.contains(&dep_id) {
+                if !state.loading_started.contains(&dep_id) {
                     // Record that we've started loading the module *before*
                     // we actually start loading it.
-                    env.loading_started.insert(*dep_id);
+                    state.loading_started.insert(*dep_id);
 
                     let msg_tx = msg_tx.clone();
                     let dep_name = dep_name.clone();
@@ -512,8 +571,8 @@ fn update<'a>(
                     // Provide mutexes of ModuleIds and IdentIds by module,
                     // so other modules can populate them as they load.
                     let shared = Shared(
-                        Arc::clone(&env.arc_modules),
-                        Arc::clone(&env.ident_ids_by_module),
+                        Arc::clone(&state.arc_modules),
+                        Arc::clone(&state.ident_ids_by_module),
                     );
 
                     // Start loading this module in the background.
@@ -525,7 +584,7 @@ fn update<'a>(
             }
 
             if headers_needed.is_empty() {
-                let exposed_symbols = env
+                let exposed_symbols = state
                     .exposed_symbols_by_module
                     .remove(&home)
                     .expect("Could not find listener ID in exposed_symbols_by_module");
@@ -533,21 +592,21 @@ fn update<'a>(
                 main_task_queue.push(build_parse_and_constrain_task(
                     header,
                     stdlib.mode,
-                    Arc::clone(&env.arc_modules),
-                    Arc::clone(&env.ident_ids_by_module),
-                    &env.exposed_types,
+                    Arc::clone(&state.arc_modules),
+                    Arc::clone(&state.ident_ids_by_module),
+                    &state.exposed_types,
                     exposed_symbols,
-                    &mut env.waiting_for_solve,
+                    &mut state.waiting_for_solve,
                 ));
             } else {
                 // We will have to wait for our deps' headers to be parsed,
                 // so we can access their IdentId, which we need for canonicalization.
-                debug_assert!(!env.unparsed_modules.contains_key(&home));
-                env.unparsed_modules.insert(home, header);
+                debug_assert!(!state.unparsed_modules.contains_key(&home));
+                state.unparsed_modules.insert(home, header);
 
                 // Register a listener with each of these.
                 for dep_id in headers_needed.iter() {
-                    let listeners = env
+                    let listeners = state
                         .header_listeners
                         .entry(*dep_id)
                         .or_insert_with(|| Vec::with_capacity(1));
@@ -555,11 +614,11 @@ fn update<'a>(
                     (*listeners).push(home);
                 }
 
-                debug_assert!(!env.waiting_for_headers.contains_key(&home));
-                env.waiting_for_headers.insert(home, headers_needed);
+                debug_assert!(!state.waiting_for_headers.contains_key(&home));
+                state.waiting_for_headers.insert(home, headers_needed);
             }
 
-            Ok(env)
+            Ok(state)
         }
         Constrained {
             module,
@@ -571,10 +630,10 @@ fn update<'a>(
             problems,
             mut var_store,
         } => {
-            env.can_problems.extend(problems);
+            state.can_problems.extend(problems);
 
             let module_id = module.module_id;
-            let Env {
+            let State {
                 waiting_for_solve,
                 exposed_types,
                 constrained_ident_ids,
@@ -582,7 +641,7 @@ fn update<'a>(
                 unsolved_modules,
                 solve_listeners,
                 ..
-            } = &mut env;
+            } = &mut state;
             let waiting_for = waiting_for_solve.get_mut(&module_id).unwrap_or_else(|| {
                 panic!(
                     "Could not find module ID {:?} in waiting_for_solve",
@@ -695,95 +754,74 @@ fn update<'a>(
                 }
             }
 
-            Ok(env)
+            Ok(state)
         }
-        other => {
-            todo!("TODO restore msg handling code for {:?}", other);
-        } // Solved {
-          //     src,
-          //     module_id,
-          //     solved_module,
-          //     solved_subs,
-          // } => {
-          //     env.type_problems.extend(solved_module.problems);
+        Solved {
+            src,
+            module_id,
+            solved_module,
+            solved_subs,
+        } => {
+            state.type_problems.extend(solved_module.problems);
 
-          //     if module_id == env.root_id {
-          //         let solved = Arc::try_unwrap(solved_subs).unwrap_or_else(|_| {
-          //             panic!("There were still outstanding Arc references to Solved<Subs>")
-          //         });
+            if module_id == state.root_id {
+                let solved = Arc::try_unwrap(solved_subs).unwrap_or_else(|_| {
+                    panic!("There were still outstanding Arc references to Solved<Subs>")
+                });
 
-          //         let module_ids = Arc::try_unwrap(env.arc_modules)
-          //             .unwrap_or_else(|_| {
-          //                 panic!("There were still outstanding Arc references to module_ids")
-          //             })
-          //             .into_inner()
-          //             .expect("Unwrapping mutex for module_ids");
+                msg_tx.send(Msg::Finished {
+                    solved,
+                    exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
+                    src,
+                });
+            } else {
+                // This was a dependency. Write it down and keep processing messages.
+                debug_assert!(!state.exposed_types.contains_key(&module_id));
+                state.exposed_types.insert(
+                    module_id,
+                    ExposedModuleTypes::Valid(solved_module.solved_types, solved_module.aliases),
+                );
 
-          //         let interns = Interns {
-          //             module_ids,
-          //             all_ident_ids: env.constrained_ident_ids,
-          //         };
+                // Notify all the listeners that this solved.
+                if let Some(listeners) = state.solve_listeners.remove(&module_id) {
+                    for listener_id in listeners {
+                        // This listener is longer waiting for this module,
+                        // because this module has now been solved!
+                        let waiting_for = state
+                            .waiting_for_solve
+                            .get_mut(&listener_id)
+                            .expect("Unable to find module ID in waiting_for_solve");
 
-          //         // We're done!
-          //         debug_assert!(msg_rx.is_empty());
+                        waiting_for.remove(&module_id);
 
-          //         return Ok(LoadedModule {
-          //             module_id: env.root_id,
-          //             interns,
-          //             solved,
-          //             can_problems: env.can_problems,
-          //             type_problems: env.type_problems,
-          //             declarations_by_id: env.declarations_by_id,
-          //             exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
-          //             src,
-          //         });
-          //     } else {
-          //         // This was a dependency. Write it down and keep processing messages.
-          //         debug_assert!(!env.exposed_types.contains_key(&module_id));
-          //         env.exposed_types.insert(
-          //             module_id,
-          //             ExposedModuleTypes::Valid(
-          //                 solved_module.solved_types,
-          //                 solved_module.aliases,
-          //             ),
-          //         );
+                        // If it's no longer waiting for anything else, solve it.
+                        if waiting_for.is_empty() {
+                            let (module, src, imported_modules, constraint, var_store) = state
+                                .unsolved_modules
+                                .remove(&listener_id)
+                                .expect("Could not find listener ID in unsolved_modules");
 
-          //         // Notify all the listeners that this solved.
-          //         if let Some(listeners) = env.solve_listeners.remove(&module_id) {
-          //             for listener_id in listeners {
-          //                 // This listener is longer waiting for this module,
-          //                 // because this module has now been solved!
-          //                 let waiting_for = env
-          //                     .waiting_for_solve
-          //                     .get_mut(&listener_id)
-          //                     .expect("Unable to find module ID in waiting_for_solve");
+                            todo!("spawn_solve_module");
+                            // spawn_solve_module(
+                            //     module,
+                            //     src,
+                            //     constraint,
+                            //     var_store,
+                            //     imported_modules,
+                            //     msg_tx.clone(),
+                            //     &mut state.exposed_types,
+                            //     stdlib,
+                            // );
+                        }
+                    }
+                }
+            }
 
-          //                 waiting_for.remove(&module_id);
-
-          //                 // If it's no longer waiting for anything else, solve it.
-          //                 if waiting_for.is_empty() {
-          //                     let (module, src, imported_modules, constraint, var_store) =
-          //                         env.unsolved_modules.remove(&listener_id).expect(
-          //                             "Could not find listener ID in unsolved_modules",
-          //                         );
-
-          //                     spawn_solve_module(
-          //                         module,
-          //                         src,
-          //                         constraint,
-          //                         var_store,
-          //                         imported_modules,
-          //                         msg_tx.clone(),
-          //                         &mut env.exposed_types,
-          //                         stdlib,
-          //                     );
-          //                 }
-          //             }
-          //         }
-          //     }
-
-          //     Ok(env)
-          // }
+            Ok(state)
+        }
+        Msg::Finished { .. } => {
+            unreachable!();
+        }
     }
 }
 
@@ -843,26 +881,26 @@ fn parse_src<'a>(
     module_ids: SharedModules<'_, '_>,
     src_bytes: &'a [u8],
 ) -> Result<ModuleId, LoadingProblem> {
-    let state = State::new(src_bytes, Attempting::Module);
+    let parse_state = parser::State::new(src_bytes, Attempting::Module);
 
     // TODO figure out if there's a way to address this clippy error
     // without introducing a borrow error. ("let and return" is literally
     // what the borrow checker suggested using here to fix the problem, so...)
     #[allow(clippy::let_and_return)]
-    let answer = match roc_parse::module::header().parse(&arena, state) {
-        Ok((ast::Module::Interface { header }, state)) => {
+    let answer = match roc_parse::module::header().parse(&arena, parse_state) {
+        Ok((ast::Module::Interface { header }, parse_state)) => {
             let module_id = send_header(
                 header.name,
                 header.exposes.into_bump_slice(),
                 header.imports.into_bump_slice(),
-                state,
+                parse_state,
                 module_ids,
                 msg_tx,
             );
 
             Ok(module_id)
         }
-        Ok((ast::Module::App { header }, state)) => match module_ids {
+        Ok((ast::Module::App { header }, parse_state)) => match module_ids {
             MaybeShared::Shared(_, _) => {
                 // If this is Shared, it means we're trying to import
                 // an app module which is not the root. Not alllowed!
@@ -873,7 +911,7 @@ fn parse_src<'a>(
                     header.name,
                     header.provides.into_bump_slice(),
                     header.imports.into_bump_slice(),
-                    state,
+                    parse_state,
                     unique_modules,
                     msg_tx,
                 );
@@ -912,7 +950,7 @@ fn send_header<'a>(
     name: Located<roc_parse::header::ModuleName<'a>>,
     exposes: &'a [Located<ExposesEntry<'a>>],
     imports: &'a [Located<ImportsEntry<'a>>],
-    state: State<'a>,
+    parse_state: parser::State<'a>,
     shared_modules: SharedModules<'_, '_>,
     msg_tx: MsgSender<'a>,
 ) -> ModuleId {
@@ -1083,7 +1121,7 @@ fn send_header<'a>(
             imported_modules,
             deps_by_name,
             exposes: exposed,
-            src: state.bytes,
+            src: parse_state.bytes,
             exposed_imports: scope,
         }))
         .unwrap_or_else(|_| panic!("Failed to send Header message for module ID: {:?}", home));
@@ -1267,10 +1305,10 @@ fn build_parse_and_constrain_task<'a, 'b>(
 //    let module_id = header.module_id;
 //    let mut var_store = VarStore::default();
 //    let arena = Bump::new();
-//    let state = State::new(&header.src, Attempting::Module);
+//    let parse_state = parser::State::new(&header.src, Attempting::Module);
 
 //    let (parsed_defs, _) = module_defs()
-//        .parse(&arena, state)
+//        .parse(&arena, parse_state)
 //        .expect("TODO gracefully handle parse error on module defs. IMPORTANT: Bail out entirely if there are any BadUtf8 problems! That means the whole source file is not valid UTF-8 and any other errors we report may get mis-reported. We rely on this for safety in an `unsafe` block later on in this function.");
 
 //    let (module, declarations, ident_ids, constraint, problems) = match canonicalize_module_defs(
