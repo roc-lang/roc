@@ -37,7 +37,7 @@ pub struct Proc<'a> {
 }
 
 impl<'a> Proc<'a> {
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, parens: bool) -> DocBuilder<'b, D, A>
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _parens: bool) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
@@ -835,10 +835,7 @@ fn from_can<'a>(
         }
         LetRec(defs, ret_expr, _, _) => from_can_defs(env, defs, *ret_expr, layout_cache, procs),
         LetNonRec(def, ret_expr, _, _) => {
-            let symbols = roc_can::pattern::symbols_from_pattern(&def.loc_pattern.value);
-            let mut result = from_can_defs(env, vec![*def], *ret_expr, layout_cache, procs);
-
-            result
+            from_can_defs(env, vec![*def], *ret_expr, layout_cache, procs)
         }
 
         Closure(ann, name, _, loc_args, boxed_body) => {

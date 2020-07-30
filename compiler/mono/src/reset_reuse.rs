@@ -1,15 +1,10 @@
 use crate::expr::Env;
 use crate::expr::Expr;
 
-use crate::layout::{Builtin, Layout};
 use bumpalo::collections::Vec;
-use bumpalo::Bump;
-use roc_collections::all::{MutMap, MutSet};
-use roc_module::ident::{Ident, Lowercase, TagName};
-use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_region::all::{Located, Region};
+use roc_collections::all::MutSet;
+use roc_module::symbol::Symbol;
 
-use Expr::*;
 /*
 R : FnBodypure → FnBodyRC
 R(let x = e; F ) = let x = e; R(F )
