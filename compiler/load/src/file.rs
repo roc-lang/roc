@@ -8,7 +8,7 @@ use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_constrain::module::{
-    constrain_imports, load_builtin_aliases, pre_constrain_imports, ConstrainableImports,
+    constrain_imports, load_builtin_aliases, pre_constrain_imports, ConstrainableImports, Import,
 };
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName};
@@ -21,6 +21,7 @@ use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
+use roc_types::types::{Alias, Type};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
@@ -71,7 +72,7 @@ enum Msg<'a> {
         module: Module,
         declarations: Vec<Declaration>,
         imported_modules: MutSet<ModuleId>,
-        src: Box<str>,
+        src: &'a str,
         constraint: Constraint,
         ident_ids: IdentIds,
         problems: Vec<roc_problem::can::Problem>,
@@ -94,7 +95,6 @@ enum Msg<'a> {
 #[derive(Debug)]
 struct State<'a> {
     pub root_id: ModuleId,
-    pub src_dir: PathBuf,
     pub exposed_types: SubsByModule,
 
     pub can_problems: Vec<roc_problem::can::Problem>,
@@ -138,7 +138,7 @@ struct State<'a> {
 
     #[allow(clippy::type_complexity)]
     pub unsolved_modules:
-        MutMap<ModuleId, (Module, Box<str>, MutSet<ModuleId>, Constraint, VarStore)>,
+        MutMap<ModuleId, (Module, &'a str, MutSet<ModuleId>, Constraint, VarStore)>,
 }
 
 #[derive(Debug)]
@@ -153,6 +153,15 @@ enum BuildTask<'a, 'b> {
         module_ids: ModuleIds,
         dep_idents: IdentIdsByModule,
         exposed_symbols: MutSet<Symbol>,
+    },
+
+    Solve {
+        module: Module,
+        imported_symbols: Vec<Import>,
+        imported_aliases: MutMap<Symbol, Alias>,
+        constraint: Constraint,
+        var_store: VarStore,
+        src: &'a str,
     },
 }
 
@@ -235,7 +244,7 @@ type MsgReceiver<'a> = Receiver<Msg<'a>>;
 pub fn load<'a>(
     arena: &'a Bump,
     stdlib: &StdLib,
-    src_dir: PathBuf,
+    src_dir: &Path,
     filename: PathBuf,
     exposed_types: SubsByModule,
 ) -> Result<LoadedModule<'a>, LoadingProblem> {
@@ -292,7 +301,7 @@ fn load_deps<'a>(
     msg_tx: MsgSender<'a>,
     msg_rx: MsgReceiver<'a>,
     stdlib: &StdLib,
-    src_dir: PathBuf,
+    src_dir: &Path,
     arc_modules: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     exposed_types: SubsByModule,
@@ -338,7 +347,6 @@ fn load_deps<'a>(
 
         let mut state = State {
             root_id,
-            src_dir,
             exposed_types,
             headers_parsed,
             loading_started,
@@ -360,6 +368,7 @@ fn load_deps<'a>(
         let mut worker_listeners = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
 
         for _ in 0..num_workers {
+            let arena = Bump::new();
             let worker = worker_queues.pop().unwrap();
             let (worker_msg_tx, worker_msg_rx) = bounded(1024);
 
@@ -372,6 +381,8 @@ fn load_deps<'a>(
 
             // Record this thread's handle so the main thread can join it later.
             thread_scope.spawn(move |_| {
+                let msg_tx = msg_tx.clone();
+
                 // Keep listening until we receive a Shutdown msg
                 for msg in worker_msg_rx.iter() {
                     match msg {
@@ -388,10 +399,7 @@ fn load_deps<'a>(
                             // queue - and run it.
                             match find_task(&worker, injector, stealers) {
                                 Some(task) => {
-                                    let t2: BuildTask<'a, '_> = task;
-                                    println!("run this task: {:?}", t2);
-
-                                    todo!("run this task: {:?}", t2);
+                                    run_task(task, &arena, src_dir, msg_tx.clone(), stdlib);
                                 }
                                 None => {
                                     // No tasks to work on! This might be because
@@ -419,6 +427,7 @@ fn load_deps<'a>(
         // Grab a reference to these Senders outside the loop, so we can share
         // it across each iteration of the loop.
         let worker_listeners = worker_listeners.into_bump_slice();
+        let msg_tx = msg_tx.clone();
 
         // The root module will have already queued up messages to process,
         // and processing those messages will in turn queue up more messages.
@@ -446,7 +455,14 @@ fn load_deps<'a>(
                     // This is where most of the main thread's work gets done.
                     // Everything up to this point has been setting up the threading
                     // system which lets this logic work efficiently.
-                    state = update(state, msg, stdlib, &msg_tx, &injector, worker_listeners)?;
+                    state = update(
+                        state,
+                        msg,
+                        stdlib,
+                        msg_tx.clone(),
+                        &injector,
+                        worker_listeners,
+                    )?;
                 }
             }
         }
@@ -461,7 +477,7 @@ fn update<'a>(
     mut state: State<'a>,
     msg: Msg<'a>,
     stdlib: &StdLib,
-    msg_tx: &MsgSender<'a>,
+    msg_tx: MsgSender<'a>,
     injector: &Injector<BuildTask<'a, '_>>,
     worker_listeners: &'a [Sender<WorkerMsg>],
 ) -> Result<State<'a>, LoadingProblem> {
@@ -524,7 +540,7 @@ fn update<'a>(
                         enqueue_task(
                             injector,
                             worker_listeners,
-                            build_parse_and_constrain_task(
+                            BuildTask::parse_and_constrain(
                                 header,
                                 stdlib.mode,
                                 Arc::clone(&state.arc_modules),
@@ -534,15 +550,6 @@ fn update<'a>(
                                 &mut state.waiting_for_solve,
                             ),
                         )?;
-
-                        for tx in worker_listeners {
-                            match tx.send(WorkerMsg::TaskAdded) {
-                                Ok(()) => {}
-                                Err(_) => {
-                                    return Err(LoadingProblem::MsgChannelDied);
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -553,9 +560,6 @@ fn update<'a>(
                     // Record that we've started loading the module *before*
                     // we actually start loading it.
                     state.loading_started.insert(*dep_id);
-
-                    let msg_tx = msg_tx.clone();
-                    let dep_name = dep_name.clone();
 
                     // Provide mutexes of ModuleIds and IdentIds by module,
                     // so other modules can populate them as they load.
@@ -569,7 +573,7 @@ fn update<'a>(
                         injector,
                         worker_listeners,
                         BuildTask::LoadModule {
-                            module_name: dep_name,
+                            module_name: dep_name.clone(),
                             module_ids: shared,
                         },
                     )?;
@@ -585,7 +589,7 @@ fn update<'a>(
                 enqueue_task(
                     injector,
                     worker_listeners,
-                    build_parse_and_constrain_task(
+                    BuildTask::parse_and_constrain(
                         header,
                         stdlib.mode,
                         Arc::clone(&state.arc_modules),
@@ -625,7 +629,7 @@ fn update<'a>(
             imported_modules,
             constraint,
             problems,
-            mut var_store,
+            var_store,
         } => {
             state.can_problems.extend(problems);
 
@@ -660,79 +664,20 @@ fn update<'a>(
             if waiting_for.is_empty() {
                 // All of our dependencies have already been solved. Great!
                 // That means we can proceed directly to solving.
-                // spawn_solve_module(
-                //     module,
-                //     src,
-                //     constraint,
-                //     var_store,
-                //     imported_modules,
-                //     msg_tx.clone(),
-                //     exposed_types,
-                //     stdlib,
-                // );
-
-                // Get the constraints for this module's imports. We do this on the main thread
-                // to avoid having to lock the map of exposed types, or to clone it
-                // (which would be more expensive for the main thread).
-                let ConstrainableImports {
-                    imported_symbols,
-                    imported_aliases,
-                    unused_imports,
-                } = pre_constrain_imports(
-                    module.module_id,
-                    &module.references,
-                    imported_modules,
-                    exposed_types,
-                    stdlib,
-                );
-
-                for unused_import in unused_imports {
-                    todo!(
-                        "TODO gracefully handle unused import {:?} from module {:?}",
-                        unused_import,
-                        module.module_id
-                    );
-                }
-
-                // Start solving this module in the background.
-                todo!("add a task for solving this module.");
-            // thread_scope.spawn(|_| {
-            //     // Rebuild the aliases in this thread, so we don't have to clone all of
-            //     // stdlib.aliases on the main thread.
-            //     let aliases = match stdlib.mode {
-            //         Mode::Standard => roc_builtins::std::aliases(),
-            //         Mode::Uniqueness => roc_builtins::unique::aliases(),
-            //     };
-
-            //     // Finish constraining the module by wrapping the existing Constraint
-            //     // in the ones we just computed. We can do this off the main thread.
-            //     let constraint = constrain_imports(
-            //         imported_symbols,
-            //         imported_aliases,
-            //         constraint,
-            //         &mut var_store,
-            //     );
-            //     let mut constraint = load_builtin_aliases(aliases, constraint, &mut var_store);
-
-            //     // Turn Apply into Alias
-            //     constraint.instantiate_aliases(&mut var_store);
-
-            //     let home = module.module_id;
-            //     let (solved_subs, solved_module) =
-            //         roc_solve::module::solve_module(module, constraint, var_store);
-
-            //     // thread_scope.spawn(move |_| { // TODO FIXME
-            //     // Send the subs to the main thread for processing,
-            //     msg_tx
-            //         .send(Msg::Solved {
-            //             src,
-            //             module_id: home,
-            //             solved_subs: Arc::new(solved_subs),
-            //             solved_module,
-            //         })
-            //         .unwrap_or_else(|_| panic!("Failed to send Solved message"));
-            //     // }); TODO FIXME
-            // });
+                enqueue_task(
+                    injector,
+                    worker_listeners,
+                    BuildTask::solve_module(
+                        module,
+                        src,
+                        constraint,
+                        var_store,
+                        imported_modules,
+                        msg_tx.clone(),
+                        &mut state.exposed_types,
+                        stdlib,
+                    ),
+                )?;
             } else {
                 // We will have to wait for our dependencies to be solved.
                 debug_assert!(!unsolved_modules.contains_key(&module_id));
@@ -801,17 +746,20 @@ fn update<'a>(
                                 .remove(&listener_id)
                                 .expect("Could not find listener ID in unsolved_modules");
 
-                            todo!("spawn_solve_module");
-                            // spawn_solve_module(
-                            //     module,
-                            //     src,
-                            //     constraint,
-                            //     var_store,
-                            //     imported_modules,
-                            //     msg_tx.clone(),
-                            //     &mut state.exposed_types,
-                            //     stdlib,
-                            // );
+                            enqueue_task(
+                                injector,
+                                worker_listeners,
+                                BuildTask::solve_module(
+                                    module,
+                                    src,
+                                    constraint,
+                                    var_store,
+                                    imported_modules,
+                                    msg_tx.clone(),
+                                    &mut state.exposed_types,
+                                    stdlib,
+                                ),
+                            )?;
                         }
                     }
                 }
@@ -1178,149 +1126,160 @@ fn add_exposed_to_scope(
     }
 }
 
-// TODO trim down these arguments - possibly by moving Constraint into Module
-#[allow(clippy::too_many_arguments)]
-fn spawn_solve_module(
-    module: Module,
-    src: Box<str>,
-    constraint: Constraint,
-    mut var_store: VarStore,
-    imported_modules: MutSet<ModuleId>,
-    msg_tx: MsgSender,
-    exposed_types: &mut SubsByModule,
-    stdlib: &StdLib,
-) {
-    let home = module.module_id;
+impl<'a, 'b> BuildTask<'a, 'b> {
+    // TODO trim down these arguments - possibly by moving Constraint into Module
+    #[allow(clippy::too_many_arguments)]
+    pub fn solve_module(
+        module: Module,
+        src: &'a str,
+        constraint: Constraint,
+        mut var_store: VarStore,
+        imported_modules: MutSet<ModuleId>,
+        msg_tx: MsgSender,
+        exposed_types: &mut SubsByModule,
+        stdlib: &StdLib,
+    ) -> Self {
+        let home = module.module_id;
 
-    // Get the constraints for this module's imports. We do this on the main thread
-    // to avoid having to lock the map of exposed types, or to clone it
-    // (which would be more expensive for the main thread).
-    let ConstrainableImports {
-        imported_symbols,
-        imported_aliases,
-        unused_imports,
-    } = pre_constrain_imports(
-        home,
-        &module.references,
-        imported_modules,
-        exposed_types,
-        stdlib,
-    );
-
-    for unused_import in unused_imports {
-        todo!(
-            "TODO gracefully handle unused import {:?} from module {:?}",
-            unused_import,
-            home
+        // Get the constraints for this module's imports. We do this on the main thread
+        // to avoid having to lock the map of exposed types, or to clone it
+        // (which would be more expensive for the main thread).
+        let ConstrainableImports {
+            imported_symbols,
+            imported_aliases,
+            unused_imports,
+        } = pre_constrain_imports(
+            home,
+            &module.references,
+            imported_modules,
+            exposed_types,
+            stdlib,
         );
+
+        for unused_import in unused_imports {
+            todo!(
+                "TODO gracefully handle unused import {:?} from module {:?}",
+                unused_import,
+                home
+            );
+        }
+
+        // Next, solve this module in the background.
+        Self::Solve {
+            module,
+            imported_symbols,
+            imported_aliases,
+            constraint,
+            var_store,
+            src,
+        }
     }
 
-    // We can't pass the reference to stdlib to the thread, but we can pass mode.
-    let mode = stdlib.mode;
+    #[allow(clippy::too_many_arguments)]
+    pub fn parse_and_constrain(
+        header: ModuleHeader<'a>,
+        mode: Mode,
+        module_ids: Arc<Mutex<ModuleIds>>,
+        ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+        exposed_types: &SubsByModule,
+        exposed_symbols: MutSet<Symbol>,
+        waiting_for_solve: &mut MutMap<ModuleId, MutSet<ModuleId>>,
+    ) -> Self {
+        let module_id = header.module_id;
+        let deps_by_name = &header.deps_by_name;
+        let num_deps = deps_by_name.len();
+        let mut dep_idents: IdentIdsByModule = IdentIds::exposed_builtins(num_deps);
 
-    // Start solving this module in the background.
-    // thread_scope.spawn(move |_| {
-    //     // Rebuild the aliases in this thread, so we don't have to clone all of
-    //     // stdlib.aliases on the main thread.
-    //     let aliases = match mode {
-    //         Mode::Standard => roc_builtins::std::aliases(),
-    //         Mode::Uniqueness => roc_builtins::unique::aliases(),
-    //     };
-
-    //     // Finish constraining the module by wrapping the existing Constraint
-    //     // in the ones we just computed. We can do this off the main thread.
-    //     let constraint = constrain_imports(
-    //         imported_symbols,
-    //         imported_aliases,
-    //         constraint,
-    //         &mut var_store,
-    //     );
-    //     let mut constraint = load_builtin_aliases(aliases, constraint, &mut var_store);
-
-    //     // Turn Apply into Alias
-    //     constraint.instantiate_aliases(&mut var_store);
-
-    //     let (solved_subs, solved_module) =
-    //         roc_solve::module::solve_module(module, constraint, var_store);
-
-    //     thread_scope.spawn(move |_| {
-    //         // Send the subs to the main thread for processing,
-    //         msg_tx
-    //             .send(Msg::Solved {
-    //                 src,
-    //                 module_id: home,
-    //                 solved_subs: Arc::new(solved_subs),
-    //                 solved_module,
-    //             })
-    //             .unwrap_or_else(|_| panic!("Failed to send Solved message"));
-    //     });
-    // });
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_parse_and_constrain_task<'a, 'b>(
-    header: ModuleHeader<'a>,
-    mode: Mode,
-    module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
-    exposed_types: &SubsByModule,
-    exposed_symbols: MutSet<Symbol>,
-    waiting_for_solve: &mut MutMap<ModuleId, MutSet<ModuleId>>,
-) -> BuildTask<'a, 'b> {
-    let module_id = header.module_id;
-    let deps_by_name = &header.deps_by_name;
-    let num_deps = deps_by_name.len();
-    let mut dep_idents: IdentIdsByModule = IdentIds::exposed_builtins(num_deps);
-
-    {
-        let ident_ids_by_module = (*ident_ids_by_module).lock().expect(
+        {
+            let ident_ids_by_module = (*ident_ids_by_module).lock().expect(
             "Failed to acquire lock for interning ident IDs, presumably because a thread panicked.",
         );
 
-        // Populate dep_idents with each of their IdentIds,
-        // which we'll need during canonicalization to translate
-        // identifier strings into IdentIds, which we need to build Symbols.
-        // We only include the modules we care about (the ones we import).
-        //
-        // At the end of this loop, dep_idents contains all the information to
-        // resolve a symbol from another module: if it's in here, that means
-        // we have both imported the module and the ident was exported by that mdoule.
-        for dep_id in header.deps_by_name.values() {
-            // We already verified that these are all present,
-            // so unwrapping should always succeed here.
-            let idents = ident_ids_by_module.get(&dep_id).unwrap();
+            // Populate dep_idents with each of their IdentIds,
+            // which we'll need during canonicalization to translate
+            // identifier strings into IdentIds, which we need to build Symbols.
+            // We only include the modules we care about (the ones we import).
+            //
+            // At the end of this loop, dep_idents contains all the information to
+            // resolve a symbol from another module: if it's in here, that means
+            // we have both imported the module and the ident was exported by that mdoule.
+            for dep_id in header.deps_by_name.values() {
+                // We already verified that these are all present,
+                // so unwrapping should always succeed here.
+                let idents = ident_ids_by_module.get(&dep_id).unwrap();
 
-            dep_idents.insert(*dep_id, idents.clone());
+                dep_idents.insert(*dep_id, idents.clone());
+            }
+        }
+
+        // Once this step has completed, the next thing we'll need
+        // is solving. Register the modules we'll need to have been
+        // solved before we can solve.
+        let mut solve_needed = HashSet::with_capacity_and_hasher(num_deps, default_hasher());
+
+        for dep_id in deps_by_name.values() {
+            if !exposed_types.contains_key(dep_id) {
+                solve_needed.insert(*dep_id);
+            }
+        }
+
+        waiting_for_solve.insert(module_id, solve_needed);
+
+        let module_ids = {
+            (*module_ids).lock().expect("Failed to acquire lock for obtaining module IDs, presumably because a thread panicked.").clone()
+        };
+
+        // Now that we have waiting_for_solve populated, continue parsing,
+        // canonicalizing, and constraining the module.
+        Self::ParseAndConstrain {
+            header,
+            mode,
+            module_ids,
+            dep_idents,
+            exposed_symbols,
         }
     }
+}
 
-    // Once this step has completed, the next thing we'll need
-    // is solving. Register the modules we'll need to have been
-    // solved before we can solve.
-    let mut solve_needed = HashSet::with_capacity_and_hasher(num_deps, default_hasher());
-
-    for dep_id in deps_by_name.values() {
-        if !exposed_types.contains_key(dep_id) {
-            solve_needed.insert(*dep_id);
-        }
-    }
-
-    waiting_for_solve.insert(module_id, solve_needed);
-
-    let module_ids = {
-        (*module_ids).lock().expect(
-            "Failed to acquire lock for obtaining module IDs, presumably because a thread panicked.",
-        ).clone()
+fn run_solve<'a>(
+    module: Module,
+    stdlib: &StdLib,
+    imported_symbols: Vec<Import>,
+    imported_aliases: MutMap<Symbol, Alias>,
+    constraint: Constraint,
+    mut var_store: VarStore,
+    src: &'a str,
+) -> Msg<'a> {
+    // Rebuild the aliases in this thread, so we don't have to clone all of
+    // stdlib.aliases on the main thread.
+    let aliases = match stdlib.mode {
+        Mode::Standard => roc_builtins::std::aliases(),
+        Mode::Uniqueness => roc_builtins::unique::aliases(),
     };
 
-    // Now that we have waiting_for_solve populated, continue parsing,
-    // canonicalizing, and constraining the module.
-    BuildTask::ParseAndConstrain {
-        header,
-        mode,
-        module_ids,
-        dep_idents,
-        exposed_symbols,
+    // Finish constraining the module by wrapping the existing Constraint
+    // in the ones we just computed. We can do this off the main thread.
+    let constraint = constrain_imports(
+        imported_symbols,
+        imported_aliases,
+        constraint,
+        &mut var_store,
+    );
+    let mut constraint = load_builtin_aliases(aliases, constraint, &mut var_store);
+
+    // Turn Apply into Alias
+    constraint.instantiate_aliases(&mut var_store);
+
+    let module_id = module.module_id;
+    let (solved_subs, solved_module) =
+        roc_solve::module::solve_module(module, constraint, var_store);
+
+    // Send the subs to the main thread for processing,
+    Msg::Solved {
+        src,
+        module_id,
+        solved_subs: Arc::new(solved_subs),
+        solved_module,
     }
 }
 
@@ -1431,5 +1390,57 @@ fn ident_from_exposed(entry: &ExposesEntry<'_>) -> Ident {
     match entry {
         Ident(ident) => (*ident).into(),
         SpaceBefore(sub_entry, _) | SpaceAfter(sub_entry, _) => ident_from_exposed(sub_entry),
+    }
+}
+
+fn run_task<'a, 'b>(
+    task: BuildTask<'a, 'b>,
+    arena: &'a Bump,
+    src_dir: &Path,
+    msg_tx: MsgSender<'a>,
+    stdlib: &StdLib,
+) -> Result<(), LoadingProblem> {
+    use BuildTask::*;
+
+    match task {
+        LoadModule {
+            module_name,
+            module_ids,
+        } => {
+            let module_id = load_module(arena, src_dir, module_name, msg_tx, module_ids)?;
+
+            Ok(())
+        }
+        ParseAndConstrain {
+            header,
+            mode,
+            module_ids,
+            dep_idents,
+            exposed_symbols,
+        } => {
+            //TODO
+            Ok(())
+        }
+
+        Solve {
+            module,
+            imported_symbols,
+            imported_aliases,
+            constraint,
+            var_store,
+            src,
+        } => {
+            let msg = run_solve(
+                module,
+                stdlib,
+                imported_symbols,
+                imported_aliases,
+                constraint,
+                var_store,
+                src,
+            );
+
+            Ok(())
+        }
     }
 }
