@@ -441,8 +441,8 @@ fn symbols_in_expr<'a>(initial: &Expr<'a>) -> MutSet<Symbol> {
             }
 
             Tag { arguments, .. } => {
-                for (expr, _) in arguments.iter() {
-                    stack.push(expr);
+                for (symbol, _) in arguments.iter() {
+                    result.insert(*symbol);
                 }
             }
 

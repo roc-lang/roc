@@ -375,7 +375,7 @@ pub enum Expr<'a> {
         tag_name: TagName,
         tag_id: u8,
         union_size: u8,
-        arguments: &'a [(Expr<'a>, Layout<'a>)],
+        arguments: &'a [(Symbol, Layout<'a>)],
     },
     Struct(&'a [(Expr<'a>, Layout<'a>)]),
     AccessAtIndex {
@@ -525,7 +525,9 @@ impl<'a> Expr<'a> {
                     TagName::Global(s) => alloc.text(s.as_str()),
                     TagName::Private(s) => alloc.text(format!("{}", s)),
                 };
-                let doc_args = arguments.iter().map(|(expr, _)| expr.to_doc(alloc, true));
+                let doc_args = arguments
+                    .iter()
+                    .map(|(symbol, _)| alloc.text(format!("{}", symbol)));
 
                 let it = std::iter::once(doc_tag).chain(doc_args);
 
@@ -1067,14 +1069,30 @@ fn from_can<'a>(
                         .expect("tag must be in its own type");
 
                     let mut arguments = Vec::with_capacity_in(args.len(), arena);
+                    let mut stores = Vec::with_capacity_in(args.len(), arena);
 
-                    let it = std::iter::once(Expr::Int(tag_id as i64)).chain(
-                        args.into_iter()
-                            .map(|(_, arg)| from_can(env, arg.value, procs, layout_cache)),
-                    );
+                    let expr_it = std::iter::once((Expr::Int(tag_id as i64), env.unique_symbol()))
+                        .chain({
+                            let transform = |(_, arg): (_, Located<roc_can::expr::Expr>)| {
+                                let expr = from_can(env, arg.value, procs, layout_cache);
+                                let symbol = env.unique_symbol();
 
-                    for (arg_layout, arg_expr) in argument_layouts.iter().zip(it) {
-                        arguments.push((arg_expr, arg_layout.clone()));
+                                (expr, symbol)
+                            };
+
+                            args.into_iter().map(transform)
+                        });
+
+                    let layout_it = argument_layouts.iter();
+
+                    for (arg_layout, (arg_expr, symbol)) in layout_it.zip(expr_it) {
+                        // arguments.push((arg_expr, arg_layout.clone()));
+                        if let Expr::Load(existing) = arg_expr {
+                            arguments.push((existing, arg_layout.clone()));
+                        } else {
+                            arguments.push((symbol, arg_layout.clone()));
+                            stores.push((symbol, arg_layout.clone(), arg_expr));
+                        }
                     }
 
                     let mut layouts: Vec<&'a [Layout<'a>]> =
@@ -1086,13 +1104,15 @@ fn from_can<'a>(
 
                     let layout = Layout::Union(layouts.into_bump_slice());
 
-                    Expr::Tag {
+                    let tag = Expr::Tag {
                         tag_layout: layout,
                         tag_name,
                         tag_id: tag_id as u8,
                         union_size,
                         arguments: arguments.into_bump_slice(),
-                    }
+                    };
+
+                    Expr::Store(stores.into_bump_slice(), env.arena.alloc(tag))
                 }
             }
         }

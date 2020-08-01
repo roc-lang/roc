@@ -453,11 +453,12 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            for (field_expr, field_layout) in it {
+            for (field_symbol, field_layout) in it {
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
                 if field_layout.stack_size(ptr_bytes) != 0 {
-                    let val = build_expr(env, layout_ids, &scope, parent, field_expr);
+                    let val = load_symbol(env, scope, field_symbol);
+
                     let field_type = basic_type_from_layout(
                         env.arena,
                         env.context,
@@ -507,13 +508,13 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            for (field_expr, field_layout) in arguments.iter() {
+            for (field_symbol, field_layout) in arguments.iter() {
                 let field_size = field_layout.stack_size(ptr_size);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
                 if field_size != 0 {
-                    let val = build_expr(env, layout_ids, &scope, parent, field_expr);
+                    let val = load_symbol(env, scope, field_symbol);
                     let field_type =
                         basic_type_from_layout(env.arena, env.context, &field_layout, ptr_size);
 
@@ -684,7 +685,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
                 Some((layout, ptr)) => {
                     match layout {
-                        Layout::Builtin(Builtin::List(Ownership::Owned, _elem_layout)) => {
+                        Layout::Builtin(Builtin::List(Ownership::Owned, _elem_layout)) if false => {
                             // first run the body
                             let body = build_expr(env, layout_ids, scope, parent, expr);
 
