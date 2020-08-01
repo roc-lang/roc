@@ -1,0 +1,11 @@
+[package]
+name = "arena-pool"
+version = "0.1.0"
+authors = ["Richard Feldman <oss@rtfeldman.com>"]
+repository = "https://github.com/rtfeldman/roc"
+edition = "2018"
+description = "A CLI for Roc"
+license = "Apache-2.0"
+
+[dependencies]
+smallvec = "1.4"
