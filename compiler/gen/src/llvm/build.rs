@@ -348,7 +348,6 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .left()
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
         }
-        LoadWithoutIncrement(_symbol) => todo!("implement load without increment"),
         Load(symbol) => load_symbol(env, scope, symbol),
         Str(str_literal) => {
             if str_literal.is_empty() {
@@ -655,6 +654,31 @@ pub fn build_expr<'a, 'ctx, 'env>(
         }
         RunLowLevel(op, args) => run_low_level(env, layout_ids, scope, parent, *op, args),
 
+        Inc(symbol, expr) => {
+            match scope.get(symbol) {
+                None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+                Some((layout, ptr)) => {
+                    match layout {
+                        Layout::Builtin(Builtin::List(Ownership::Owned, _elem_layout)) => {
+                            let load = env
+                                .builder
+                                .build_load(*ptr, symbol.ident_string(&env.interns));
+
+                            let wrapper_struct = env
+                                .builder
+                                .build_load(*ptr, symbol.ident_string(&env.interns))
+                                .into_struct_value();
+
+                            increment_refcount_list(env, wrapper_struct, load)
+                        }
+                        _ => {
+                            // not refcounted, do nothing special
+                            build_expr(env, layout_ids, scope, parent, expr)
+                        }
+                    }
+                }
+            }
+        }
         DecAfter(symbol, expr) => {
             match scope.get(symbol) {
                 None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
@@ -817,23 +841,9 @@ fn load_symbol<'a, 'ctx, 'env>(
     symbol: &Symbol,
 ) -> BasicValueEnum<'ctx> {
     match scope.get(symbol) {
-        Some((layout, ptr)) => match layout {
-            Layout::Builtin(Builtin::List(Ownership::Owned, _)) => {
-                let load = env
-                    .builder
-                    .build_load(*ptr, symbol.ident_string(&env.interns));
-
-                let wrapper_struct = env
-                    .builder
-                    .build_load(*ptr, symbol.ident_string(&env.interns))
-                    .into_struct_value();
-
-                increment_refcount_list(env, wrapper_struct, load)
-            }
-            _ => env
-                .builder
-                .build_load(*ptr, symbol.ident_string(&env.interns)),
-        },
+        Some((_, ptr)) => env
+            .builder
+            .build_load(*ptr, symbol.ident_string(&env.interns)),
         None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
     }
 }

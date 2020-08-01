@@ -1027,4 +1027,52 @@ mod test_mono {
             ),
         )
     }
+
+    #[test]
+    fn is_nil() {
+        compiles_to_string(
+            r#"
+            isNil = \xs ->
+                when xs is
+                    Nil -> True
+                    Cons _ _ -> False
+
+            isNil Nil
+            "#,
+            indoc!(
+                r#"
+                procedure Test.0 (Test.2):
+                    Store Test.2: Load Test.2
+                    Store Test.3: Lowlevel.And (Lowlevel.Eq true (Load Test.2)) true
+                    if Test.3 then
+                        true
+                    else
+                        false
+                    Dec Test.2
+
+                Call Test.0 true
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn y_is_dead() {
+        compiles_to_string(
+            r#"
+            f = \y -> Pair y y
+
+            f [1]
+            "#,
+            indoc!(
+                r#"
+                procedure Test.0 (Test.2):
+                    Struct [(Load(`Test.y`), Builtin(List(Owned, Builtin(Int64)))), (Load(`Test.y`), Builtin(List(Owned, Builtin(Int64))))]
+                    Dec Test.2
+
+                Call Test.0 [ 1i64 ]
+                "#
+            ),
+        )
+    }
 }

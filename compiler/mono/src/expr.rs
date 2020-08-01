@@ -322,7 +322,7 @@ pub enum Expr<'a> {
     Store(&'a [(Symbol, Layout<'a>, Expr<'a>)], &'a Expr<'a>),
 
     /// RC instructions
-    LoadWithoutIncrement(Symbol),
+    Inc(Symbol, &'a Expr<'a>),
     DecAfter(Symbol, &'a Expr<'a>),
 
     // Functions

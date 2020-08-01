@@ -156,7 +156,7 @@ pub fn function_r<'a>(env: &mut Env<'a, '_>, body: &'a Expr<'a>) -> Expr<'a> {
         | Byte(_)
         | Load(_)
         | EmptyArray
-        | LoadWithoutIncrement(_)
+        | Inc(_, _)
         | FunctionPointer(_, _)
         | RuntimeError(_)
         | RuntimeErrorFunction(_) => body.clone(),
@@ -334,7 +334,7 @@ fn function_s<'a>(
         | Byte(_)
         | Load(_)
         | EmptyArray
-        | LoadWithoutIncrement(_)
+        | Inc(_, _)
         | FunctionPointer(_, _)
         | RuntimeError(_)
         | RuntimeErrorFunction(_) => Err(body),
@@ -352,7 +352,7 @@ fn symbols_in_expr<'a>(initial: &Expr<'a>) -> MutSet<Symbol> {
 
     while let Some(expr) = stack.pop() {
         match expr {
-            FunctionPointer(symbol, _) | LoadWithoutIncrement(symbol) | Load(symbol) => {
+            FunctionPointer(symbol, _) | Load(symbol) => {
                 result.insert(*symbol);
             }
 
@@ -417,7 +417,7 @@ fn symbols_in_expr<'a>(initial: &Expr<'a>) -> MutSet<Symbol> {
                 stack.push(body)
             }
 
-            DecAfter(symbol, body) => {
+            DecAfter(symbol, body) | Inc(symbol, body) => {
                 result.insert(*symbol);
                 stack.push(body);
             }
