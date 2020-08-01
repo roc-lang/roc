@@ -241,6 +241,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
         interns,
         module: arena.alloc(module),
         ptr_bytes,
+        leak: false,
     };
     let mut procs = Procs::default();
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();

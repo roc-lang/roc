@@ -157,6 +157,7 @@ pub fn gen(
         interns: loaded.interns,
         module: arena.alloc(module),
         ptr_bytes,
+        leak: false,
     };
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
     let mut layout_ids = LayoutIds::default();

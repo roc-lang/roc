@@ -1,6 +1,6 @@
 #[macro_export]
 macro_rules! assert_llvm_evals_to {
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
         let target = target_lexicon::Triple::host();
         let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
         let arena = Bump::new();
@@ -56,7 +56,9 @@ macro_rules! assert_llvm_evals_to {
             context: &context,
             interns,
             module: arena.alloc(module),
-            ptr_bytes
+            ptr_bytes,
+            leak: $leak
+
         };
         let mut procs = Procs::default();
         let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
@@ -179,6 +181,10 @@ macro_rules! assert_llvm_evals_to {
             assert_eq!($transform(main.call()), $expected);
         }
     };
+
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+        assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
+    };
 }
 
 // TODO this is almost all code duplication with assert_llvm_evals_to
@@ -186,7 +192,7 @@ macro_rules! assert_llvm_evals_to {
 // Should extract the common logic into test helpers.
 #[macro_export]
 macro_rules! assert_opt_evals_to {
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
         let arena = Bump::new();
         let target = target_lexicon::Triple::host();
         let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
@@ -242,7 +248,8 @@ macro_rules! assert_opt_evals_to {
             context: &context,
             interns,
             module: arena.alloc(module),
-            ptr_bytes
+            ptr_bytes,
+            leak: $leak
         };
         let mut procs = Procs::default();
         let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
@@ -365,6 +372,10 @@ macro_rules! assert_opt_evals_to {
             assert_eq!($transform(main.call()), $expected);
         }
     };
+
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+        assert_llvm_evals_to!($src, $expected, $ty, $transform, false)
+    };
 }
 
 #[macro_export]
@@ -388,6 +399,15 @@ macro_rules! assert_evals_to {
         }
         {
             assert_opt_evals_to!($src, $expected, $ty, $transform);
+        }
+    };
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
+        // Same as above, except with an additional transformation argument.
+        {
+            assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak);
+        }
+        {
+            assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
         }
     };
 }

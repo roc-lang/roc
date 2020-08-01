@@ -1002,4 +1002,29 @@ mod test_mono {
             ),
         )
     }
+
+    #[test]
+    fn double_list_len() {
+        compiles_to_string(
+            r#"
+            x : List Int
+            x = [1,2,3]
+
+            List.len x + List.len x
+            "#,
+            indoc!(
+                r#"
+                procedure Num.14 (#Attr.2, #Attr.3):
+                    Lowlevel.NumAdd (Load #Attr.2) (Load #Attr.3)
+
+                procedure List.7 (#Attr.2):
+                    Lowlevel.ListLen (Load #Attr.2)
+                
+                Store Test.0: [ 1i64, 2i64, 3i64 ]
+                Call Num.14 (Call List.7 (Load Test.0)) (Call List.7 (Load Test.0))
+                Dec Test.0
+                "#
+            ),
+        )
+    }
 }

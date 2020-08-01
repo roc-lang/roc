@@ -44,6 +44,7 @@ pub struct Env<'a, 'ctx, 'env> {
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
     pub ptr_bytes: u32,
+    pub leak: bool,
 }
 
 impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
@@ -798,8 +799,10 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
 
     // refcount is one, and will be decremented. This list can be freed
     let build_else = || {
-        let free = builder.build_free(refcount_ptr);
-        builder.insert_instruction(&free, None);
+        if !env.leak {
+            let free = builder.build_free(refcount_ptr);
+            builder.insert_instruction(&free, None);
+        }
 
         body
     };

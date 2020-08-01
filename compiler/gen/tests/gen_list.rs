@@ -544,6 +544,120 @@ mod gen_list {
     }
 
     #[test]
+    fn gen_swap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    swap : Int, Int, List a -> List a
+                    swap = \i, j, list ->
+                        when Pair (List.get list i) (List.get list j) is
+                            Pair (Ok atI) (Ok atJ) ->
+                                list
+                                    |> List.set i atJ
+                                    |> List.set j atI
+
+                            _ ->
+                                []
+                    swap 0 1 [ 1, 2 ]
+                "#
+            ),
+            &[2, 1],
+            &'static [i64]
+        );
+    }
+
+    //    #[test]
+    //    fn gen_partition() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                    swap : Int, Int, List a -> List a
+    //                    swap = \i, j, list ->
+    //                        when Pair (List.get list i) (List.get list j) is
+    //                            Pair (Ok atI) (Ok atJ) ->
+    //                                list
+    //                                    |> List.set i atJ
+    //                                    |> List.set j atI
+    //
+    //                            _ ->
+    //                                []
+    //                    partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
+    //                    partition = \low, high, initialList ->
+    //                        when List.get initialList high is
+    //                            Ok pivot ->
+    //                                when partitionHelp (low - 1) low initialList high pivot is
+    //                                    Pair newI newList ->
+    //                                        Pair (newI + 1) (swap (newI + 1) high newList)
+    //
+    //                            Err _ ->
+    //                                Pair (low - 1) initialList
+    //
+    //
+    //                    partitionHelp : Int, Int, List (Num a), Int, Int -> [ Pair Int (List (Num a)) ]
+    //                    partitionHelp = \i, j, list, high, pivot ->
+    //                        if j < high then
+    //                            when List.get list j is
+    //                                Ok value ->
+    //                                    if value <= pivot then
+    //                                        partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+    //                                    else
+    //                                        partitionHelp i (j + 1) list high pivot
+    //
+    //                                Err _ ->
+    //                                    Pair i list
+    //                        else
+    //                            Pair i list
+    //
+    //                    # when partition 0 0 [ 1,2,3,4,5 ] is
+    //                    # Pair list _ -> list
+    //                    [ 1,3 ]
+    //                "#
+    //            ),
+    //            &[2, 1],
+    //            &'static [i64]
+    //        );
+    //    }
+
+    //    #[test]
+    //    fn gen_partition() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                    swap : Int, Int, List a -> List a
+    //                    swap = \i, j, list ->
+    //                        when Pair (List.get list i) (List.get list j) is
+    //                            Pair (Ok atI) (Ok atJ) ->
+    //                                list
+    //                                    |> List.set i atJ
+    //                                    |> List.set j atI
+    //
+    //                            _ ->
+    //                                []
+    //                    partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
+    //                    partition = \low, high, initialList ->
+    //                        when List.get initialList high is
+    //                            Ok pivot ->
+    //                                when partitionHelp (low - 1) low initialList high pivot is
+    //                                    Pair newI newList ->
+    //                                        Pair (newI + 1) (swap (newI + 1) high newList)
+    //
+    //                            Err _ ->
+    //                                Pair (low - 1) initialList
+    //
+    //
+    //                    partitionHelp : Int, Int, List (Num a), Int, Int -> [ Pair Int (List (Num a)) ]
+    //
+    //                    # when partition 0 0 [ 1,2,3,4,5 ] is
+    //                    # Pair list _ -> list
+    //                    [ 1,3 ]
+    //                "#
+    //            ),
+    //            &[2, 1],
+    //            &'static [i64]
+    //        );
+    //    }
+
+    #[test]
     fn gen_quicksort() {
         with_larger_debug_stack(|| {
             assert_evals_to!(
@@ -610,7 +724,159 @@ mod gen_list {
                 "#
                 ),
                 &[4, 7, 19, 21],
-                &'static [i64]
+                &'static [i64],
+                |x| x,
+                true
+            );
+        })
+    }
+
+    #[test]
+    fn foobar2() {
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
+                    quicksort : List (Num a) -> List (Num a)
+                    quicksort = \list ->
+                        quicksortHelp list 0 (List.len list - 1)
+
+
+                    quicksortHelp : List (Num a), Int, Int -> List (Num a)
+                    quicksortHelp = \list, low, high ->
+                        if low < high then
+                            when partition low high list is
+                                Pair partitionIndex partitioned ->
+                                    partitioned
+                                        |> quicksortHelp low (partitionIndex - 1)
+                                        |> quicksortHelp (partitionIndex + 1) high
+                        else
+                            list
+
+
+                    swap : Int, Int, List a -> List a
+                    swap = \i, j, list ->
+                        when Pair (List.get list i) (List.get list j) is
+                            Pair (Ok atI) (Ok atJ) ->
+                                list
+                                    |> List.set i atJ
+                                    |> List.set j atI
+
+                            _ ->
+                                []
+
+                    partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
+                    partition = \low, high, initialList ->
+                        when List.get initialList high is
+                            Ok pivot ->
+                                when partitionHelp (low - 1) low initialList high pivot is
+                                    Pair newI newList ->
+                                        Pair (newI + 1) (swap (newI + 1) high newList)
+
+                            Err _ ->
+                                Pair (low - 1) initialList
+
+
+                    partitionHelp : Int, Int, List (Num a), Int, Int -> [ Pair Int (List (Num a)) ]
+                    partitionHelp = \i, j, list, high, pivot ->
+                        # if j < high then
+                        if False then
+                            when List.get list j is
+                                Ok value ->
+                                    if value <= pivot then
+                                        partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+                                    else
+                                        partitionHelp i (j + 1) list high pivot
+
+                                Err _ ->
+                                    Pair i list
+                        else
+                            Pair i list
+
+
+
+                    quicksort [ 7, 4, 21, 19 ]
+                "#
+                ),
+                &[19, 7, 4, 21],
+                &'static [i64],
+                |x| x,
+                true
+            );
+        })
+    }
+
+    #[test]
+    fn foobar() {
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
+                    quicksort : List (Num a) -> List (Num a)
+                    quicksort = \list ->
+                        quicksortHelp list 0 (List.len list - 1)
+
+
+                    quicksortHelp : List (Num a), Int, Int -> List (Num a)
+                    quicksortHelp = \list, low, high ->
+                        if low < high then
+                            when partition low high list is
+                                Pair partitionIndex partitioned ->
+                                    partitioned
+                                        |> quicksortHelp low (partitionIndex - 1)
+                                        |> quicksortHelp (partitionIndex + 1) high
+                        else
+                            list
+
+
+                    swap : Int, Int, List a -> List a
+                    swap = \i, j, list ->
+                        when Pair (List.get list i) (List.get list j) is
+                            Pair (Ok atI) (Ok atJ) ->
+                                list
+                                    |> List.set i atJ
+                                    |> List.set j atI
+
+                            _ ->
+                                []
+
+                    partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
+                    partition = \low, high, initialList ->
+                        when List.get initialList high is
+                            Ok pivot ->
+                                when partitionHelp (low - 1) low initialList high pivot is
+                                    Pair newI newList ->
+                                        Pair (newI + 1) (swap (newI + 1) high newList)
+
+                            Err _ ->
+                                Pair (low - 1) initialList
+
+
+                    partitionHelp : Int, Int, List (Num a), Int, Int -> [ Pair Int (List (Num a)) ]
+                    partitionHelp = \i, j, list, high, pivot ->
+                        if j < high then
+                            when List.get list j is
+                                Ok value ->
+                                    if value <= pivot then
+                                        partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+                                    else
+                                        partitionHelp i (j + 1) list high pivot
+
+                                Err _ ->
+                                    Pair i list
+                        else
+                            Pair i list
+
+
+
+                    when List.first (quicksort [0x1]) is
+                        _ -> 4
+                "#
+                ),
+                4,
+                i64,
+                |x| x,
+                false
             );
         })
     }
@@ -659,6 +925,55 @@ mod gen_list {
                 id = \y -> y 
 
                 id x
+                "#
+            ),
+            &[1, 2, 3],
+            &'static [i64]
+        );
+    }
+
+    //    fn bad() {
+    //        assert_evals_to!(
+    //            indoc!(
+    //                r#"
+    //                id : List Int -> [ Id (List Int) ]
+    //                id = \y -> Pair y 4
+    //
+    //                when id [ 1,2,3 ] is
+    //                    Id v -> v
+    //                "#
+    //            ),
+    //            &[1, 2, 3],
+    //            &'static [i64]
+    //        );
+    //    }
+    //
+    #[test]
+    fn list_wrap_in_tag() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                id : List Int -> [ Pair (List Int) Int, Nil ]
+                id = \y -> Pair y 4
+
+                when id [1,2,3] is
+                    Pair _ _ -> v
+                "#
+            ),
+            &[1, 2, 3],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_wrap_in_tag() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x = [1,2,3]
+
+                when id [1,2,3] is
+                    Pair _ _ -> v
                 "#
             ),
             &[1, 2, 3],
