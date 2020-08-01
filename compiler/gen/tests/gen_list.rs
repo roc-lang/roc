@@ -649,7 +649,6 @@ mod gen_list {
 
     #[test]
     fn list_pass_to_function() {
-        // yes
         assert_evals_to!(
             indoc!(
                 r#"

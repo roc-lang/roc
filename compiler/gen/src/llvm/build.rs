@@ -799,7 +799,6 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
     // refcount is one, and will be decremented. This list can be freed
     let build_else = || {
         let free = builder.build_free(refcount_ptr);
-
         builder.insert_instruction(&free, None);
 
         body
@@ -1171,18 +1170,15 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
     let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
 
+    let len_type = env.ptr_int();
+    // bytes per element
+    let bytes_len = len_type.const_int(elem_bytes, false);
+    let offset = (env.ptr_bytes as u64).max(elem_bytes);
+
     let ptr = {
-        let len_type = env.ptr_int();
-
-        // bytes per element
-        let bytes_len = len_type.const_int(elem_bytes, false);
-
         let len = builder.build_int_mul(bytes_len, length, "data_length");
-        let len = builder.build_int_add(
-            len,
-            len_type.const_int(env.ptr_bytes as u64, false),
-            "add_refcount_space",
-        );
+        let len =
+            builder.build_int_add(len, len_type.const_int(offset, false), "add_refcount_space");
 
         env.builder
             .build_array_malloc(ctx.i8_type(), len, "create_list_ptr")
@@ -1191,46 +1187,37 @@ pub fn allocate_list<'a, 'ctx, 'env>(
         // TODO check if malloc returned null; if so, runtime error for OOM!
     };
 
-    // Put the element into the list
-    let refcount_ptr = unsafe {
-        builder.build_in_bounds_gep(
-            ptr,
-            &[ctx.i64_type().const_int(
-                // 0 as in 0 index of our new list
-                0 as u64, false,
-            )],
-            "index",
-        )
-    };
-
-    // cast the refcount_ptr to be an u64_ptr
-    let refcount_ptr = builder
-        .build_bitcast(
-            refcount_ptr,
-            get_ptr_type(
-                &BasicTypeEnum::IntType(ctx.i64_type()),
-                AddressSpace::Generic,
-            ),
-            "refcount_ptr",
-        )
-        .into_pointer_value();
-
-    // put our "refcount 0" in the first slot
-    let ref_count_zero = ctx.i64_type().const_int(std::usize::MAX as u64, false);
-    builder.build_store(refcount_ptr, ref_count_zero);
-
     // We must return a pointer to the first element:
     let ptr_bytes = env.ptr_bytes;
     let int_type = ptr_int(ctx, ptr_bytes);
     let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
     let incremented = builder.build_int_add(
         ptr_as_int,
-        ctx.i64_type().const_int(8, false),
+        ctx.i64_type().const_int(offset, false),
         "increment_list_ptr",
     );
 
     let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-    builder.build_int_to_ptr(incremented, ptr_type, "list_cast_ptr")
+    let list_element_ptr = builder.build_int_to_ptr(incremented, ptr_type, "list_cast_ptr");
+
+    // subtract ptr_size, to access the refcount
+    let refcount_ptr = builder.build_int_sub(
+        incremented,
+        ctx.i64_type().const_int(env.ptr_bytes as u64, false),
+        "refcount_ptr",
+    );
+
+    let refcount_ptr = builder.build_int_to_ptr(
+        refcount_ptr,
+        int_type.ptr_type(AddressSpace::Generic),
+        "make ptr",
+    );
+
+    // put our "refcount 0" in the first slot
+    let ref_count_zero = ctx.i64_type().const_int(std::usize::MAX as u64, false);
+    builder.build_store(refcount_ptr, ref_count_zero);
+
+    list_element_ptr
 }
 
 /// List.single : a -> List a
