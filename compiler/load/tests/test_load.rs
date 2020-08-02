@@ -14,6 +14,7 @@ mod helpers;
 #[cfg(test)]
 mod test_load {
     use crate::helpers::fixtures_dir;
+    use bumpalo::Bump;
     use inlinable_string::InlinableString;
     use roc_can::def::Declaration::*;
     use roc_can::def::Def;
@@ -28,15 +29,17 @@ mod test_load {
     // HELPERS
 
     fn load_fixture<'a>(
+        arena: &'a Bump,
         dir_name: &str,
         module_name: &str,
         subs_by_module: SubsByModule,
-    ) -> LoadedModule {
+    ) -> LoadedModule<'a> {
         let src_dir = fixtures_dir().join(dir_name);
         let filename = src_dir.join(format!("{}.roc", module_name));
         let loaded = load(
+            &arena,
             &roc_builtins::std::standard_stdlib(),
-            src_dir.as_path(),
+            src_dir,
             filename,
             subs_by_module,
         );
@@ -128,9 +131,11 @@ mod test_load {
         let subs_by_module = MutMap::default();
         let src_dir = fixtures_dir().join("interface_with_deps");
         let filename = src_dir.join("Primary.roc");
+        let arena = Bump::new();
         let loaded = load(
+            &arena,
             &roc_builtins::std::standard_stdlib(),
-            src_dir.as_path(),
+            src_dir,
             filename,
             subs_by_module,
         );
@@ -160,8 +165,9 @@ mod test_load {
 
     #[test]
     fn load_unit() {
+        let arena = Bump::new();
         let subs_by_module = MutMap::default();
-        let loaded_module = load_fixture("no_deps", "Unit", subs_by_module);
+        let loaded_module = load_fixture(&arena, "no_deps", "Unit", subs_by_module);
 
         expect_types(
             loaded_module,
@@ -173,8 +179,10 @@ mod test_load {
 
     #[test]
     fn import_alias() {
+        let arena = Bump::new();
         let subs_by_module = MutMap::default();
-        let loaded_module = load_fixture("interface_with_deps", "ImportAlias", subs_by_module);
+        let loaded_module =
+            load_fixture(&arena, "interface_with_deps", "ImportAlias", subs_by_module);
 
         expect_types(
             loaded_module,
@@ -186,8 +194,14 @@ mod test_load {
 
     #[test]
     fn load_and_typecheck() {
+        let arena = Bump::new();
         let subs_by_module = MutMap::default();
-        let loaded_module = load_fixture("interface_with_deps", "WithBuiltins", subs_by_module);
+        let loaded_module = load_fixture(
+            &arena,
+            "interface_with_deps",
+            "WithBuiltins",
+            subs_by_module,
+        );
 
         expect_types(
             loaded_module,
@@ -206,8 +220,10 @@ mod test_load {
 
     #[test]
     fn iface_quicksort() {
+        let arena = Bump::new();
         let subs_by_module = MutMap::default();
-        let loaded_module = load_fixture("interface_with_deps", "Quicksort", subs_by_module);
+        let loaded_module =
+            load_fixture(&arena, "interface_with_deps", "Quicksort", subs_by_module);
 
         expect_types(
             loaded_module,
@@ -221,8 +237,9 @@ mod test_load {
 
     #[test]
     fn app_quicksort() {
+        let arena = Bump::new();
         let subs_by_module = MutMap::default();
-        let loaded_module = load_fixture("app_with_deps", "Quicksort", subs_by_module);
+        let loaded_module = load_fixture(&arena, "app_with_deps", "Quicksort", subs_by_module);
 
         expect_types(
             loaded_module,
@@ -236,8 +253,9 @@ mod test_load {
 
     #[test]
     fn load_astar() {
+        let arena = Bump::new();
         let subs_by_module = MutMap::default();
-        let loaded_module = load_fixture("interface_with_deps", "AStar", subs_by_module);
+        let loaded_module = load_fixture(&arena, "interface_with_deps", "AStar", subs_by_module);
 
         expect_types(
             loaded_module,
@@ -254,8 +272,9 @@ mod test_load {
 
     #[test]
     fn load_principal_types() {
+        let arena = Bump::new();
         let subs_by_module = MutMap::default();
-        let loaded_module = load_fixture("no_deps", "Principal", subs_by_module);
+        let loaded_module = load_fixture(&arena, "no_deps", "Principal", subs_by_module);
 
         expect_types(
             loaded_module,
@@ -268,8 +287,9 @@ mod test_load {
 
     #[test]
     fn iface_dep_types() {
+        let arena = Bump::new();
         let subs_by_module = MutMap::default();
-        let loaded_module = load_fixture("interface_with_deps", "Primary", subs_by_module);
+        let loaded_module = load_fixture(&arena, "interface_with_deps", "Primary", subs_by_module);
 
         expect_types(
             loaded_module,
@@ -290,8 +310,9 @@ mod test_load {
 
     #[test]
     fn app_dep_types() {
+        let arena = Bump::new();
         let subs_by_module = MutMap::default();
-        let loaded_module = load_fixture("app_with_deps", "Primary", subs_by_module);
+        let loaded_module = load_fixture(&arena, "app_with_deps", "Primary", subs_by_module);
 
         expect_types(
             loaded_module,
@@ -312,8 +333,9 @@ mod test_load {
 
     #[test]
     fn imported_dep_regression() {
+        let arena = Bump::new();
         let subs_by_module = MutMap::default();
-        let loaded_module = load_fixture("interface_with_deps", "OneDep", subs_by_module);
+        let loaded_module = load_fixture(&arena, "interface_with_deps", "OneDep", subs_by_module);
 
         expect_types(
             loaded_module,

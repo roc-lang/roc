@@ -37,7 +37,7 @@ const ROC_FILE_EXTENSION: &str = "roc";
 const MODULE_SEPARATOR: char = '.';
 
 #[derive(Debug)]
-pub struct LoadedModule {
+pub struct LoadedModule<'a> {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub solved: Solved<Subs>,
@@ -45,7 +45,7 @@ pub struct LoadedModule {
     pub type_problems: Vec<solve::TypeError>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
-    pub src: Box<str>,
+    pub src: &'a str,
 }
 
 #[derive(Debug)]
@@ -242,29 +242,70 @@ type MsgReceiver<'a> = Receiver<Msg<'a>>;
 ///     to rebuild the module and can link in the cached one directly.)
 #[allow(clippy::cognitive_complexity)]
 pub fn load<'a>(
+    arena: &'a Bump,
     stdlib: &StdLib,
     src_dir: &Path,
     filename: PathBuf,
     exposed_types: SubsByModule,
-) -> Result<LoadedModule, LoadingProblem> {
+) -> Result<LoadedModule<'a>, LoadingProblem> {
     use self::MaybeShared::*;
 
+    let (msg_tx, msg_rx) = bounded(1024);
     let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
     let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
     let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
-    let arena = Bump::new();
-    let (msg_tx, msg_rx) = bounded(1024);
 
     // Load the root module synchronously; we can't proceed until we have its id.
     let root_id = load_filename(
-        arena,
+        &arena,
         filename,
-        &msg_tx,
+        msg_tx.clone(),
         Shared(Arc::clone(&arc_modules), Arc::clone(&ident_ids_by_module)),
         // TODO FIXME go back to using Unique here, not Shared
         // Unique(&mut module_ids, &mut root_exposed_ident_ids),
     )?;
 
+    load_deps(
+        &arena,
+        root_id,
+        msg_tx,
+        msg_rx,
+        stdlib,
+        src_dir,
+        arc_modules,
+        ident_ids_by_module,
+        exposed_types,
+    )
+}
+
+/// Add a task to the queue, and notify all the listeners.
+fn enqueue_task<'a, 'b>(
+    injector: &Injector<BuildTask<'a, 'b>>,
+    listeners: &[Sender<WorkerMsg>],
+    task: BuildTask<'a, 'b>,
+) -> Result<(), LoadingProblem> {
+    injector.push(task);
+
+    for listener in listeners {
+        listener
+            .send(WorkerMsg::TaskAdded)
+            .map_err(|_| LoadingProblem::MsgChannelDied)?;
+    }
+
+    Ok(())
+}
+
+fn load_deps<'a>(
+    arena: &'a Bump,
+    root_id: ModuleId,
+    msg_tx: MsgSender<'a>,
+    msg_rx: MsgReceiver<'a>,
+    stdlib: &StdLib,
+    src_dir: &Path,
+    arc_modules: Arc<Mutex<ModuleIds>>,
+    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    exposed_types: SubsByModule,
+) -> Result<LoadedModule<'a>, LoadingProblem> {
     // Reserve one CPU for the main thread, and let all the others be eligible
     // to spawn workers.
     let num_workers = num_cpus::get() - 1;
@@ -276,17 +317,14 @@ pub fn load<'a>(
     // into the worker threads, because those workers' stealers need to be
     // shared between all threads, and this coordination work is much easier
     // on the main thread.
-    let mut worker_queues = bumpalo::collections::Vec::with_capacity_in(num_workers, &arena);
-    let mut stealers = bumpalo::collections::Vec::with_capacity_in(num_workers, &arena);
-
-    let mut arenas = bumpalo::collections::Vec::with_capacity_in(num_workers, &arena);
+    let mut worker_queues = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
+    let mut stealers = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
 
     for _ in 0..num_workers {
         let worker = Worker::new_lifo();
 
         stealers.push(worker.stealer());
         worker_queues.push(worker);
-        arenas.push(Bump::new());
     }
 
     // Get a reference to the completed stealers, so we can send that
@@ -327,11 +365,10 @@ pub fn load<'a>(
             unsolved_modules: MutMap::default(),
         };
 
-        let mut worker_listeners = bumpalo::collections::Vec::with_capacity_in(num_workers, &arena);
+        let mut worker_listeners = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
 
         for _ in 0..num_workers {
-            let msg_tx = msg_tx.clone();
-            let mut arena = Bump::new();
+            let arena = Bump::new();
             let worker = worker_queues.pop().unwrap();
             let (worker_msg_tx, worker_msg_rx) = bounded(1024);
 
@@ -344,6 +381,8 @@ pub fn load<'a>(
 
             // Record this thread's handle so the main thread can join it later.
             thread_scope.spawn(move |_| {
+                let msg_tx = msg_tx.clone();
+
                 // Keep listening until we receive a Shutdown msg
                 for msg in worker_msg_rx.iter() {
                     match msg {
@@ -352,7 +391,7 @@ pub fn load<'a>(
                             // shut down the thread, so when the main thread
                             // blocks on joining with all the worker threads,
                             // it can finally exit too!
-                            return Ok(arena);
+                            return;
                         }
                         WorkerMsg::TaskAdded => {
                             // Find a task - either from this thread's queue,
@@ -360,10 +399,7 @@ pub fn load<'a>(
                             // queue - and run it.
                             match find_task(&worker, injector, stealers) {
                                 Some(task) => {
-                                    arena = match run_task(task, arena, src_dir, &msg_tx, stdlib) {
-                                        Ok(arena) => arena,
-                                        Err(problem) => return Err(problem),
-                                    };
+                                    run_task(task, &arena, src_dir, msg_tx.clone(), stdlib);
                                 }
                                 None => {
                                     // No tasks to work on! This might be because
@@ -377,7 +413,9 @@ pub fn load<'a>(
                     }
                 }
 
-                Ok(arena)
+                // Needed to prevent a borrow checker error about this closure
+                // outliving its enclosing function.
+                drop(worker_msg_rx);
             });
         }
 
@@ -389,6 +427,7 @@ pub fn load<'a>(
         // Grab a reference to these Senders outside the loop, so we can share
         // it across each iteration of the loop.
         let worker_listeners = worker_listeners.into_bump_slice();
+        let msg_tx = msg_tx.clone();
 
         // The root module will have already queued up messages to process,
         // and processing those messages will in turn queue up more messages.
@@ -416,7 +455,14 @@ pub fn load<'a>(
                     // This is where most of the main thread's work gets done.
                     // Everything up to this point has been setting up the threading
                     // system which lets this logic work efficiently.
-                    state = update(state, msg, stdlib, &msg_tx, &injector, worker_listeners)?;
+                    state = update(
+                        state,
+                        msg,
+                        stdlib,
+                        msg_tx.clone(),
+                        &injector,
+                        worker_listeners,
+                    )?;
                 }
             }
         }
@@ -431,7 +477,7 @@ fn update<'a>(
     mut state: State<'a>,
     msg: Msg<'a>,
     stdlib: &StdLib,
-    msg_tx: &MsgSender<'a>,
+    msg_tx: MsgSender<'a>,
     injector: &Injector<BuildTask<'a, '_>>,
     worker_listeners: &'a [Sender<WorkerMsg>],
 ) -> Result<State<'a>, LoadingProblem> {
@@ -627,7 +673,7 @@ fn update<'a>(
                         constraint,
                         var_store,
                         imported_modules,
-                        msg_tx,
+                        msg_tx.clone(),
                         &mut state.exposed_types,
                         stdlib,
                     ),
@@ -709,7 +755,7 @@ fn update<'a>(
                                     constraint,
                                     var_store,
                                     imported_modules,
-                                    msg_tx,
+                                    msg_tx.clone(),
                                     &mut state.exposed_types,
                                     stdlib,
                                 ),
@@ -733,7 +779,7 @@ fn finish<'a>(
     problems: Vec<solve::TypeError>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     src: &'a str,
-) -> LoadedModule {
+) -> LoadedModule<'a> {
     state.type_problems.extend(problems);
 
     let module_ids = Arc::try_unwrap(state.arc_modules)
@@ -760,10 +806,10 @@ fn finish<'a>(
 
 /// Load a module by its module name, rather than by its filename
 fn load_module<'a>(
-    arena: Bump,
+    arena: &'a Bump,
     src_dir: &Path,
     module_name: ModuleName,
-    msg_tx: &MsgSender<'a>,
+    msg_tx: MsgSender<'a>,
     module_ids: SharedModules<'a, '_>,
 ) -> Result<ModuleId, LoadingProblem> {
     let mut filename = PathBuf::new();
@@ -808,9 +854,9 @@ fn find_task<T>(local: &Worker<T>, global: &Injector<T>, stealers: &[Stealer<T>]
 }
 
 fn parse_src<'a>(
-    arena: Bump,
+    arena: &'a Bump,
     filename: PathBuf,
-    msg_tx: &MsgSender<'a>,
+    msg_tx: MsgSender<'a>,
     module_ids: SharedModules<'_, '_>,
     src_bytes: &'a [u8],
 ) -> Result<ModuleId, LoadingProblem> {
@@ -860,9 +906,9 @@ fn parse_src<'a>(
 
 /// Load a module by its filename
 fn load_filename<'a>(
-    arena: Bump,
+    arena: &'a Bump,
     filename: PathBuf,
-    msg_tx: &MsgSender<'a>,
+    msg_tx: MsgSender<'a>,
     module_ids: SharedModules<'a, '_>,
 ) -> Result<ModuleId, LoadingProblem> {
     match fs::read(&filename) {
@@ -880,7 +926,7 @@ fn send_header<'a>(
     imports: &'a [Located<ImportsEntry<'a>>],
     parse_state: parser::State<'a>,
     shared_modules: SharedModules<'_, '_>,
-    msg_tx: &MsgSender<'a>,
+    msg_tx: MsgSender<'a>,
 ) -> ModuleId {
     use MaybeShared::*;
 
@@ -1082,9 +1128,9 @@ impl<'a, 'b> BuildTask<'a, 'b> {
         module: Module,
         src: &'a str,
         constraint: Constraint,
-        var_store: VarStore,
+        mut var_store: VarStore,
         imported_modules: MutSet<ModuleId>,
-        msg_tx: &MsgSender,
+        msg_tx: MsgSender,
         exposed_types: &mut SubsByModule,
         stdlib: &StdLib,
     ) -> Self {
@@ -1344,11 +1390,11 @@ fn ident_from_exposed(entry: &ExposesEntry<'_>) -> Ident {
 
 fn run_task<'a, 'b>(
     task: BuildTask<'a, 'b>,
-    arena: Bump,
+    arena: &'a Bump,
     src_dir: &Path,
-    msg_tx: &MsgSender<'a>,
+    msg_tx: MsgSender<'a>,
     stdlib: &StdLib,
-) -> Result<Bump, LoadingProblem> {
+) -> Result<(), LoadingProblem> {
     use BuildTask::*;
 
     match task {
@@ -1358,7 +1404,7 @@ fn run_task<'a, 'b>(
         } => {
             let module_id = load_module(arena, src_dir, module_name, msg_tx, module_ids)?;
 
-            Ok(arena)
+            Ok(())
         }
         ParseAndConstrain {
             header,
@@ -1368,7 +1414,7 @@ fn run_task<'a, 'b>(
             exposed_symbols,
         } => {
             //TODO
-            Ok(arena)
+            Ok(())
         }
 
         Solve {
@@ -1389,24 +1435,7 @@ fn run_task<'a, 'b>(
                 src,
             );
 
-            Ok(arena)
+            Ok(())
         }
     }
-}
-
-/// Add a task to the queue, and notify all the listeners.
-fn enqueue_task<'a, 'b>(
-    injector: &Injector<BuildTask<'a, 'b>>,
-    listeners: &[Sender<WorkerMsg>],
-    task: BuildTask<'a, 'b>,
-) -> Result<(), LoadingProblem> {
-    injector.push(task);
-
-    for listener in listeners {
-        listener
-            .send(WorkerMsg::TaskAdded)
-            .map_err(|_| LoadingProblem::MsgChannelDied)?;
-    }
-
-    Ok(())
 }
