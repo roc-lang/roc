@@ -1684,7 +1684,7 @@ fn list_join<'a, 'ctx, 'env>(
                     builder.build_store(index_alloca, next_index);
 
                     // The pointer to the list in the outer list (the list of lists)
-                    let inner_list_ptr = {
+                    let (inner_list_len, inner_list_ptr) = {
                         let wrapper_ptr = unsafe {
                             builder.build_in_bounds_gep(outer_list_ptr, &[curr_index], "load_index")
                         };
@@ -1693,7 +1693,10 @@ fn list_join<'a, 'ctx, 'env>(
                             .into_struct_value();
                         let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-                        load_list_ptr(builder, wrapper, elem_ptr_type)
+                        (
+                            load_list_len(builder, wrapper),
+                            load_list_ptr(builder, wrapper, elem_ptr_type),
+                        )
                     };
 
                     // Inner Loop
@@ -1744,7 +1747,7 @@ fn list_join<'a, 'ctx, 'env>(
                         let outer_loop_end_cond = builder.build_int_compare(
                             IntPredicate::ULT,
                             next_index,
-                            outer_list_len,
+                            inner_list_len,
                             "loopcond",
                         );
 
