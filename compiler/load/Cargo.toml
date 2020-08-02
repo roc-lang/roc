@@ -17,7 +17,6 @@ roc_problem = { path = "../problem" }
 roc_unify = { path = "../unify" }
 roc_parse = { path = "../parse" }
 roc_solve = { path = "../solve" }
-arena_pool = { path = "../arena_pool" }
 bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1"
 crossbeam = "0.7"

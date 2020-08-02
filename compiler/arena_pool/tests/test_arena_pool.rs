@@ -5,7 +5,7 @@ extern crate arena_pool;
 
 #[cfg(test)]
 mod test_arena_pool {
-    use arena_pool::{Arena, ArenaIter, ArenaPool, ArenaRef};
+    use arena_pool::pool::{Arena, ArenaIter, ArenaPool, ArenaRef};
 
     #[test]
     fn empty_pool() {
