@@ -1,6 +1,7 @@
 use std::marker::PhantomPinned;
 use std::ptr::{copy_nonoverlapping, NonNull};
 
+#[derive(Debug)]
 pub struct ArenaRef<T> {
     ptr: NonNull<T>,
     _pin: PhantomPinned,
@@ -28,8 +29,66 @@ impl<T> ArenaRef<T> {
     }
 }
 
+/// ArenaRef<T> implements Clone if T is Copy
+impl<T: Copy> Clone for ArenaRef<T> {
+    fn clone(&self) -> Self {
+        ArenaRef {
+            ptr: self.ptr,
+            _pin: PhantomPinned,
+        }
+    }
+}
+
+/// ArenaRef<T> implements Copy if T is Copy. (ArenaVec cannot, however.)
+impl<T: Copy> Copy for ArenaRef<T> {}
+
+pub trait CloneIn<T> {
+    fn clone_in(&self, arena: &mut Arena<T>) -> Self;
+}
+
+/// Anything that has Clone gets CloneIn for free, because we don't even need
+/// an Arena to clone it.
+impl<T: Clone> CloneIn<T> for T {
+    fn clone_in(&self, _: &mut Arena<T>) -> Self {
+        self.clone()
+    }
+}
+
+/// Any ArenaRef that wraps a CloneIn value also has CloneIn
+impl<T: CloneIn<T>> CloneIn<T> for ArenaRef<T> {
+    fn clone_in(&self, arena: &mut Arena<T>) -> Self {
+        let val = self.get(arena);
+        let clone = val.clone_in(arena);
+
+        arena.alloc(clone)
+    }
+}
+
+/// Any ArenaVec that wraps a CloneIn value also has CloneIn
+impl<T: CloneIn<T>> CloneIn<T> for ArenaVec<T> {
+    fn clone_in(&self, arena: &mut Arena<T>) -> Self {
+        todo!("Implement clone_in for ArenaVec");
+        // let val = self.get(arena);
+        // let clone = val.clone_in(arena);
+
+        // arena.alloc(clone)
+    }
+}
+
+/// Any ArenaVec2d that wraps a CloneIn value also has CloneIn
+impl<T: CloneIn<T>> CloneIn<T> for ArenaVec2d<T> {
+    fn clone_in(&self, arena: &mut Arena<T>) -> Self {
+        todo!("Implement clone_in for ArenaVec");
+        // let val = self.get(arena);
+        // let clone = val.clone_in(arena);
+
+        // arena.alloc(clone)
+    }
+}
+
 /// Like a Vec, except the capacity you give it initially is its maximum
 /// capacity forever. If you ever exceed it, it'll panic!
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArenaVec<T> {
     buffer_ptr: NonNull<T>,
     len: usize,
@@ -38,7 +97,7 @@ pub struct ArenaVec<T> {
 }
 
 impl<T> ArenaVec<T> {
-    pub fn new_in<'a>(arena: &mut Arena<T>) -> Self {
+    pub fn new_in(arena: &mut Arena<T>) -> Self {
         // We can't start with a NonNull::dangling pointer because when we go
         // to push elements into this, they'll try to verify the dangling
         // pointer resides in the arena it was given, which will likely panic.
@@ -48,7 +107,7 @@ impl<T> ArenaVec<T> {
         Self::with_capacity_in(0, arena)
     }
 
-    pub fn with_capacity_in<'a>(capacity: usize, arena: &mut Arena<T>) -> Self {
+    pub fn with_capacity_in(capacity: usize, arena: &mut Arena<T>) -> Self {
         let ptr = arena.alloc_vec(capacity);
 
         Self {
@@ -59,7 +118,7 @@ impl<T> ArenaVec<T> {
         }
     }
 
-    pub fn push<'a>(&'a mut self, val: T, arena: &mut Arena<T>) {
+    pub fn push(&mut self, val: T, arena: &mut Arena<T>) {
         // Verify that this is the arena where we originally got our buffer,
         // and is therefore safe to read and to write to. (If we have sufficient
         // capacity, we'll write to it, and otherwise we'll read from it when
@@ -124,6 +183,20 @@ impl<T> ArenaVec<T> {
             None
         }
     }
+}
+
+/// Essentially an ArenaVec<ArenaVec<T>>.
+///
+/// It's impossible for ArenaVec to nest directly, because the Arena only knows
+/// how to allocate elements of size T, not elements of size ArenaVec<T> (or
+/// for that matter ArenaVec<T> or ArenaVec<ArenaVec<T>>, or
+/// ArenaVec<ArenaVec<ArenaVec<T>>>, etc.)
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct ArenaVec2d<T> {
+    buffer_ptr: NonNull<T>,
+    len: usize,
+    capacity: usize,
+    _pin: PhantomPinned,
 }
 
 #[derive(PartialEq, Eq)]
