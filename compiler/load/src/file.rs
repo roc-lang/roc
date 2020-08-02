@@ -37,7 +37,7 @@ const ROC_FILE_EXTENSION: &str = "roc";
 const MODULE_SEPARATOR: char = '.';
 
 #[derive(Debug)]
-pub struct LoadedModule<'a> {
+pub struct LoadedModule {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub solved: Solved<Subs>,
@@ -45,7 +45,7 @@ pub struct LoadedModule<'a> {
     pub type_problems: Vec<solve::TypeError>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
-    pub src: &'a str,
+    pub src: Box<str>,
 }
 
 #[derive(Debug)]
@@ -240,43 +240,43 @@ type MsgReceiver<'a> = Receiver<Msg<'a>>;
 ///     and then linking them together, and possibly caching them by the hash of their
 ///     specializations, so if none of their specializations changed, we don't even need
 ///     to rebuild the module and can link in the cached one directly.)
-#[allow(clippy::cognitive_complexity)]
-pub fn load<'a>(
-    arena: &'a Bump,
-    stdlib: &StdLib,
-    src_dir: &Path,
-    filename: PathBuf,
-    exposed_types: SubsByModule,
-) -> Result<LoadedModule<'a>, LoadingProblem> {
-    use self::MaybeShared::*;
+// #[allow(clippy::cognitive_complexity)]
+// pub fn load<'a>(
+//     arena: &'a Bump,
+//     stdlib: &StdLib,
+//     src_dir: &Path,
+//     filename: PathBuf,
+//     exposed_types: SubsByModule,
+// ) -> Result<LoadedModule, LoadingProblem> {
+//     use self::MaybeShared::*;
 
-    let (msg_tx, msg_rx) = bounded(1024);
-    let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
-    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-    let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
+//     let (msg_tx, msg_rx) = bounded(1024);
+//     let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
+//     let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+//     let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
 
-    // Load the root module synchronously; we can't proceed until we have its id.
-    let root_id = load_filename(
-        &arena,
-        filename,
-        msg_tx.clone(),
-        Shared(Arc::clone(&arc_modules), Arc::clone(&ident_ids_by_module)),
-        // TODO FIXME go back to using Unique here, not Shared
-        // Unique(&mut module_ids, &mut root_exposed_ident_ids),
-    )?;
+//     // Load the root module synchronously; we can't proceed until we have its id.
+//     let root_id = load_filename(
+//         &arena,
+//         filename,
+//         msg_tx.clone(),
+//         Shared(Arc::clone(&arc_modules), Arc::clone(&ident_ids_by_module)),
+//         // TODO FIXME go back to using Unique here, not Shared
+//         // Unique(&mut module_ids, &mut root_exposed_ident_ids),
+//     )?;
 
-    load_deps(
-        &arena,
-        root_id,
-        msg_tx,
-        msg_rx,
-        stdlib,
-        src_dir,
-        arc_modules,
-        ident_ids_by_module,
-        exposed_types,
-    )
-}
+//     load_deps(
+//         &arena,
+//         root_id,
+//         msg_tx,
+//         msg_rx,
+//         stdlib,
+//         src_dir,
+//         arc_modules,
+//         ident_ids_by_module,
+//         exposed_types,
+//     )
+// }
 
 /// Add a task to the queue, and notify all the listeners.
 fn enqueue_task<'a, 'b>(
@@ -295,43 +295,45 @@ fn enqueue_task<'a, 'b>(
     Ok(())
 }
 
-fn load_deps<'a>(
-    arena: &'a Bump,
+fn load_deps(
     root_id: ModuleId,
-    msg_tx: MsgSender<'a>,
-    msg_rx: MsgReceiver<'a>,
     stdlib: &StdLib,
     src_dir: &Path,
     arc_modules: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     exposed_types: SubsByModule,
-) -> Result<LoadedModule<'a>, LoadingProblem> {
+) -> Result<LoadedModule, LoadingProblem> {
     // Reserve one CPU for the main thread, and let all the others be eligible
     // to spawn workers.
     let num_workers = num_cpus::get() - 1;
+
+    let arena = Bump::new();
 
     // We'll add tasks to this, and then worker threads will take tasks from it.
     let injector = Injector::new();
 
     // We need to allocate worker *queues* on the main thread and then move them
     // into the worker threads, because those workers' stealers need to be
-    // shared between all threads, and this coordination work is much easier
+    // shared bet,een all threads, and this coordination work is much easier
     // on the main thread.
-    let mut worker_queues = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
-    let mut stealers = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
-
-    for _ in 0..num_workers {
-        let worker = Worker::new_lifo();
-
-        stealers.push(worker.stealer());
-        worker_queues.push(worker);
-    }
-
-    // Get a reference to the completed stealers, so we can send that
-    // reference to each worker. (Slices are Sync, but bumpalo Vecs are not.)
-    let stealers = stealers.into_bump_slice();
+    let mut worker_queues = bumpalo::collections::Vec::with_capacity_in(num_workers, &arena);
+    let mut stealers = bumpalo::collections::Vec::with_capacity_in(num_workers, &arena);
 
     thread::scope(|thread_scope| {
+        // let arenas = bumpalo::collections::Vec::with_capacity_in(num_workers, &arena);
+        let (msg_tx, msg_rx) = bounded(1024);
+
+        for _ in 0..num_workers {
+            let worker = Worker::new_lifo();
+
+            stealers.push(worker.stealer());
+            worker_queues.push(worker);
+        }
+
+        // Get a reference to the completed stealers, so we can send that
+        // reference to each worker. (Slices are Sync, but bumpalo Vecs are not.)
+        let stealers = stealers.into_bump_slice();
+
         let mut headers_parsed = MutSet::default();
 
         // We've already parsed the root's header. (But only its header, so far.)
@@ -365,10 +367,11 @@ fn load_deps<'a>(
             unsolved_modules: MutMap::default(),
         };
 
-        let mut worker_listeners = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
+        let mut worker_listeners = bumpalo::collections::Vec::with_capacity_in(num_workers, &arena);
 
         for _ in 0..num_workers {
             let arena = Bump::new();
+            let msg_tx = msg_tx.clone();
             let worker = worker_queues.pop().unwrap();
             let (worker_msg_tx, worker_msg_rx) = bounded(1024);
 
@@ -381,8 +384,6 @@ fn load_deps<'a>(
 
             // Record this thread's handle so the main thread can join it later.
             thread_scope.spawn(move |_| {
-                let msg_tx = msg_tx.clone();
-
                 // Keep listening until we receive a Shutdown msg
                 for msg in worker_msg_rx.iter() {
                     match msg {
@@ -391,7 +392,7 @@ fn load_deps<'a>(
                             // shut down the thread, so when the main thread
                             // blocks on joining with all the worker threads,
                             // it can finally exit too!
-                            return;
+                            return arena;
                         }
                         WorkerMsg::TaskAdded => {
                             // Find a task - either from this thread's queue,
@@ -416,6 +417,8 @@ fn load_deps<'a>(
                 // Needed to prevent a borrow checker error about this closure
                 // outliving its enclosing function.
                 drop(worker_msg_rx);
+
+                arena
             });
         }
 
@@ -779,7 +782,7 @@ fn finish<'a>(
     problems: Vec<solve::TypeError>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     src: &'a str,
-) -> LoadedModule<'a> {
+) -> LoadedModule {
     state.type_problems.extend(problems);
 
     let module_ids = Arc::try_unwrap(state.arc_modules)
