@@ -1537,7 +1537,7 @@ fn list_append<'a, 'ctx, 'env>(
 fn list_join<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
-    outer_wrapper_struct: StructValue<'ctx>,
+    outer_list_wrapper: StructValue<'ctx>,
     outer_list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     match outer_list_layout {
@@ -1555,22 +1555,14 @@ fn list_join<'a, 'ctx, 'env>(
             let inner_list_type =
                 basic_type_from_layout(env.arena, ctx, &inner_list_layout, env.ptr_bytes);
 
-            let outer_list_type =
-                basic_type_from_layout(env.arena, ctx, &outer_list_layout, env.ptr_bytes);
-
-            let outer_list_len = load_list_len(builder, outer_wrapper_struct);
-
+            let outer_list_len = load_list_len(builder, outer_list_wrapper);
             let outer_list_ptr = {
-                let ptr_type = get_ptr_type(&outer_list_type, AddressSpace::Generic);
+                let elem_ptr_type = get_ptr_type(&inner_list_type, AddressSpace::Generic);
 
-                load_list_ptr(builder, outer_wrapper_struct, ptr_type)
+                load_list_ptr(builder, outer_list_wrapper, elem_ptr_type)
             };
 
-            let dest_elem_ptr_name = "#destelem";
-            let dest_elem_ptr_alloca = builder.build_alloca(
-                get_ptr_type(&elem_type, AddressSpace::Generic),
-                dest_elem_ptr_name,
-            );
+            let dest_elem_ptr_alloca = builder.build_alloca(elem_ptr_type, "dest_elem");
 
             // outer_list_len > 0
             // We do this check to avoid allocating memory. If the input
@@ -1612,11 +1604,19 @@ fn list_join<'a, 'ctx, 'env>(
                     builder.build_store(index_alloca, next_index);
 
                     // The pointer to the list in the outer list (the list of lists)
-                    let inner_list_ptr = unsafe {
-                        builder.build_in_bounds_gep(outer_list_ptr, &[curr_index], "load_index")
+                    let inner_list_ptr = {
+                        let wrapper_ptr = unsafe {
+                            builder.build_in_bounds_gep(outer_list_ptr, &[curr_index], "load_index")
+                        };
+                        let wrapper = builder
+                            .build_load(wrapper_ptr, "inner_list_wrapper")
+                            .into_struct_value();
+                        let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                        load_list_ptr(builder, wrapper, elem_ptr_type)
                     };
 
-                    let inner_list = builder.build_load(inner_list_ptr, "get_elem");
+                    let inner_list = builder.build_load(inner_list_ptr, "inner_list");
                     let inner_list_len = load_list_len(builder, inner_list.into_struct_value());
 
                     let next_list_sum = builder.build_int_add(
@@ -1682,12 +1682,17 @@ fn list_join<'a, 'ctx, 'env>(
                     builder.build_store(index_alloca, next_index);
 
                     // The pointer to the list in the outer list (the list of lists)
-                    let inner_list_ptr = unsafe {
-                        builder.build_in_bounds_gep(outer_list_ptr, &[curr_index], "load_index")
-                    };
+                    let inner_list_ptr = {
+                        let wrapper_ptr = unsafe {
+                            builder.build_in_bounds_gep(outer_list_ptr, &[curr_index], "load_index")
+                        };
+                        let wrapper = builder
+                            .build_load(wrapper_ptr, "inner_list_wrapper")
+                            .into_struct_value();
+                        let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-                    let inner_list = builder.build_load(inner_list_ptr, "get_elem");
-                    let inner_list_len = load_list_len(builder, inner_list.into_struct_value());
+                        load_list_ptr(builder, wrapper, elem_ptr_type)
+                    };
 
                     // Inner Loop
                     {
