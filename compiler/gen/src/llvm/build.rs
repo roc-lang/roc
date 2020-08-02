@@ -1540,7 +1540,16 @@ fn list_join<'a, 'ctx, 'env>(
     outer_list_wrapper: StructValue<'ctx>,
     outer_list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
+    // List.join is implemented as follows:
+    // 1. loop over every list to sum the list lengths
+    // 2. using the sum of all the list lengths, allocate an output list of
+    //    that size.
+    // 3. loop over every list, for every list, loop over every element
+    //    putting it into the output list
+
     match outer_list_layout {
+        // If the input list is empty, or if it is a list of empty lists
+        // then simply return an empty list
         Layout::Builtin(Builtin::EmptyList)
         | Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::EmptyList))) => empty_list(env),
         Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::List(elem_layout)))) => {
@@ -1578,6 +1587,7 @@ fn list_join<'a, 'ctx, 'env>(
                 let list_len_sum_name = "#listslengthsum";
                 let list_len_sum_alloca = builder.build_alloca(ctx.i64_type(), list_len_sum_name);
 
+                // List Sum Loop
                 {
                     let index_name = "#index";
                     let index_alloca = builder.build_alloca(ctx.i64_type(), index_name);
@@ -1620,7 +1630,7 @@ fn list_join<'a, 'ctx, 'env>(
 
                     builder.build_store(list_len_sum_alloca, next_list_sum);
 
-                    // #index < second_list_len
+                    // #index < outer_list_len
                     let outer_loop_end_cond = builder.build_int_compare(
                         IntPredicate::ULT,
                         next_index,
@@ -1647,6 +1657,7 @@ fn list_join<'a, 'ctx, 'env>(
 
                 builder.build_store(dest_elem_ptr_alloca, final_list_ptr);
 
+                // Element inserting loop
                 {
                     let index_name = "#index";
                     let index_alloca = builder.build_alloca(ctx.i64_type(), index_name);
@@ -1711,7 +1722,6 @@ fn list_join<'a, 'ctx, 'env>(
 
                         builder.build_store(inner_index_alloca, next_index);
 
-                        // The pointer to the list in the outer list (the list of lists)
                         let src_elem_ptr = unsafe {
                             builder.build_in_bounds_gep(inner_list_ptr, &[curr_index], "load_index")
                         };
@@ -1749,7 +1759,7 @@ fn list_join<'a, 'ctx, 'env>(
                         builder.position_at_end(after_outer_loop_bb);
                     }
 
-                    // #index < second_list_len
+                    // #index < outer_list_len
                     let outer_loop_end_cond = builder.build_int_compare(
                         IntPredicate::ULT,
                         next_index,
