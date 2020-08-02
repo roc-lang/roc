@@ -99,6 +99,12 @@ mod gen_list {
     }
 
     #[test]
+    fn list_join() {
+        assert_evals_to!("List.join []", &[], &'static [i64]);
+        assert_evals_to!("List.join [ [ 1 ] ]", &[1], &'static [i64]);
+    }
+
+    #[test]
     fn list_single() {
         assert_evals_to!("List.single 1", &[1], &'static [i64]);
         assert_evals_to!("List.single 5.6", &[5.6], &'static [f64]);

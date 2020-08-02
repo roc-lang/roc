@@ -1533,6 +1533,11 @@ fn list_push<'a, 'ctx, 'env>(
     )
 }
 
+/// List.join : List (List elem) -> List elem
+fn list_join<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+    empty_list(env)
+}
+
 /// List.prepend List elem, elem -> List elem
 fn list_prepend<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -1927,6 +1932,12 @@ fn run_low_level<'a, 'ctx, 'env>(
             let elem_layout = &args[1].1;
 
             list_prepend(env, original_wrapper, elem, elem_layout)
+        }
+        ListJoin => {
+            // List.join : List (List elem) -> List elem
+            debug_assert_eq!(args.len(), 1);
+
+            list_join(env)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumToFloat => {
             debug_assert_eq!(args.len(), 1);
