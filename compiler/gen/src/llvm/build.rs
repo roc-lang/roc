@@ -1603,20 +1603,11 @@ fn list_join<'a, 'ctx, 'env>(
 
                     builder.build_store(index_alloca, next_index);
 
-                    // The pointer to the list in the outer list (the list of lists)
-                    let inner_list_ptr = {
-                        let wrapper_ptr = unsafe {
-                            builder.build_in_bounds_gep(outer_list_ptr, &[curr_index], "load_index")
-                        };
-                        let wrapper = builder
-                            .build_load(wrapper_ptr, "inner_list_wrapper")
-                            .into_struct_value();
-                        let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-                        load_list_ptr(builder, wrapper, elem_ptr_type)
+                    let inner_list_wrapper_ptr = unsafe {
+                        builder.build_in_bounds_gep(outer_list_ptr, &[curr_index], "load_index")
                     };
 
-                    let inner_list = builder.build_load(inner_list_ptr, "inner_list");
+                    let inner_list = builder.build_load(inner_list_wrapper_ptr, "inner_list");
                     let inner_list_len = load_list_len(builder, inner_list.into_struct_value());
 
                     let next_list_sum = builder.build_int_add(

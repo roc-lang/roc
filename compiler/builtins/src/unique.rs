@@ -729,6 +729,29 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
+    // join : Attr * (List (Attr * (List a)))
+    //     -> Attr * (List a)
+    add_type(Symbol::LIST_JOIN, {
+        let_tvars! { a, star1, star2, star3 };
+
+        unique_function(
+            vec![SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    flex(star1),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![list_type(star2, a)]),
+                ],
+            )],
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    boolean(star3),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)]),
+                ],
+            ),
+        )
+    });
+
     // List.map does not need to check the container rule on the input list.
     // There is no way in which this signature can cause unique values to be duplicated
     //
