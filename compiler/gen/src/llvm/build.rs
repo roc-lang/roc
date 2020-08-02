@@ -1448,7 +1448,7 @@ fn bounds_check_comparison<'ctx>(
 }
 
 /// List.push List elem, elem -> List elem
-fn list_push<'a, 'ctx, 'env>(
+fn list_append<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     original_wrapper: StructValue<'ctx>,
     elem: BasicValueEnum<'ctx>,
@@ -1912,7 +1912,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         ListConcat => list_concat(env, layout_ids, scope, parent, args),
         ListAppend => {
-            // List.push List elem, elem -> List elem
+            // List.append : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
             let original_wrapper =
@@ -1920,10 +1920,10 @@ fn run_low_level<'a, 'ctx, 'env>(
             let elem = build_expr(env, layout_ids, scope, parent, &args[1].0);
             let elem_layout = &args[1].1;
 
-            list_push(env, original_wrapper, elem, elem_layout)
+            list_append(env, original_wrapper, elem, elem_layout)
         }
         ListPrepend => {
-            // List.prepend List elem, elem -> List elem
+            // List.prepend : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
             let original_wrapper =
