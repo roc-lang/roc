@@ -1,2 +1,1 @@
-pub mod arena_pool;
-mod pool_id;
+pub mod pool;

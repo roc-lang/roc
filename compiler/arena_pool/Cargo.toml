@@ -7,5 +7,5 @@ edition = "2018"
 description = "A CLI for Roc"
 license = "Apache-2.0"
 
-[dependencies]
-smallvec = "1.4"
+[dev-dependencies]
+pretty_assertions = "0.5.1"
