@@ -1706,8 +1706,13 @@ fn list_join<'a, 'ctx, 'env>(
                             .into_pointer_value();
 
                         let inner_index_name = "#inner_index";
+
                         let inner_index_alloca =
                             builder.build_alloca(ctx.i64_type(), inner_index_name);
+
+                        let inner_list_index = ctx.i64_type().const_int(0, false);
+
+                        builder.build_store(inner_index_alloca, inner_list_index);
 
                         let inner_loop_bb = ctx.append_basic_block(parent, "loop");
                         builder.build_unconditional_branch(inner_loop_bb);
