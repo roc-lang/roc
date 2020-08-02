@@ -859,11 +859,6 @@ fn parse_src<'a>(
 }
 
 /// Load a module by its filename
-///
-/// This has two unsafe calls:
-///
-/// * memory map the filename instead of doing a buffered read
-/// * assume the contents of the file are valid UTF-8
 fn load_filename<'a>(
     arena: Bump,
     filename: PathBuf,

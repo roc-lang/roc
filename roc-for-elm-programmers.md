@@ -718,6 +718,16 @@ However, it cannot involve record field access. So this would *not* compile:
 { Foo.defaults.config & timeZone: utc }
 ```
 
+## Optional Record Fields
+
+In Elm, all record fields are required. [Kinda not really with Open Records though, yeah?]
+
+
+
+
+
+
+
 ## Standard Data Structures
 
 Elm has `List`, `Array`, `Set`, and `Dict` in the standard library.

@@ -20,6 +20,7 @@ members = [
     "compiler/load",
     "compiler/gen",
     "compiler/build",
+    "compiler/arena_pool",
     "vendor/ena",
     "vendor/pathfinding",
     "vendor/pretty",
