@@ -378,7 +378,7 @@ macro_rules! assert_evals_to {
             assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
         }
         {
-            assert_opt_evals_to!($src, $expected, $ty, (|val| val));
+            // assert_opt_evals_to!($src, $expected, $ty, (|val| val));
         }
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
@@ -387,7 +387,7 @@ macro_rules! assert_evals_to {
             assert_llvm_evals_to!($src, $expected, $ty, $transform);
         }
         {
-            assert_opt_evals_to!($src, $expected, $ty, $transform);
+            // assert_opt_evals_to!($src, $expected, $ty, $transform);
         }
     };
 }

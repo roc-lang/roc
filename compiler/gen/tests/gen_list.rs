@@ -101,7 +101,7 @@ mod gen_list {
     #[test]
     fn list_join() {
         assert_evals_to!("List.join []", &[], &'static [i64]);
-        assert_evals_to!("List.join [ [ 1 ] ]", &[1], &'static [i64]);
+        assert_evals_to!("List.join [ [ 1.1 ] ]", &[1.1], &'static [f64]);
     }
 
     #[test]

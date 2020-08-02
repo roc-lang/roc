@@ -1534,8 +1534,296 @@ fn list_append<'a, 'ctx, 'env>(
 }
 
 /// List.join : List (List elem) -> List elem
-fn list_join<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
-    empty_list(env)
+fn list_join<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    outer_wrapper_struct: StructValue<'ctx>,
+    outer_list_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    match outer_list_layout {
+        Layout::Builtin(Builtin::EmptyList)
+        | Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::EmptyList))) => empty_list(env),
+        Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::List(elem_layout)))) => {
+            let inner_list_layout = Layout::Builtin(Builtin::List(elem_layout));
+
+            let builder = env.builder;
+            let ctx = env.context;
+
+            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+            let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+            let inner_list_type =
+                basic_type_from_layout(env.arena, ctx, &inner_list_layout, env.ptr_bytes);
+
+            let outer_list_type =
+                basic_type_from_layout(env.arena, ctx, &outer_list_layout, env.ptr_bytes);
+
+            let outer_list_len = load_list_len(builder, outer_wrapper_struct);
+
+            let outer_list_ptr = {
+                let ptr_type = get_ptr_type(&outer_list_type, AddressSpace::Generic);
+
+                load_list_ptr(builder, outer_wrapper_struct, ptr_type)
+            };
+
+            let dest_elem_ptr_name = "#destelem";
+            let dest_elem_ptr_alloca = builder.build_alloca(
+                get_ptr_type(&elem_type, AddressSpace::Generic),
+                dest_elem_ptr_name,
+            );
+
+            // outer_list_len > 0
+            // We do this check to avoid allocating memory. If the input
+            // list is empty, then we can just return an empty list.
+            let comparison = builder.build_int_compare(
+                IntPredicate::UGT,
+                outer_list_len,
+                ctx.i64_type().const_int(0, false),
+                "greaterthanzero",
+            );
+
+            let build_then = || {
+                let list_len_sum_name = "#listslengthsum";
+                let list_len_sum_alloca = builder.build_alloca(ctx.i64_type(), list_len_sum_name);
+
+                {
+                    let index_name = "#index";
+                    let index_alloca = builder.build_alloca(ctx.i64_type(), index_name);
+
+                    // index in the outer list, pointing to a inner list
+                    let outer_list_index = ctx.i64_type().const_int(0, false);
+
+                    builder.build_store(index_alloca, outer_list_index);
+
+                    let outer_loop_bb = ctx.append_basic_block(parent, "loop");
+                    builder.build_unconditional_branch(outer_loop_bb);
+                    builder.position_at_end(outer_loop_bb);
+
+                    // #index = #index + 1
+                    let curr_index = builder
+                        .build_load(index_alloca, index_name)
+                        .into_int_value();
+                    let next_index = builder.build_int_add(
+                        curr_index,
+                        ctx.i64_type().const_int(1, false),
+                        "nextindex",
+                    );
+
+                    builder.build_store(index_alloca, next_index);
+
+                    // The pointer to the list in the outer list (the list of lists)
+                    let inner_list_ptr = unsafe {
+                        builder.build_in_bounds_gep(outer_list_ptr, &[curr_index], "load_index")
+                    };
+
+                    let inner_list = builder.build_load(inner_list_ptr, "get_elem");
+                    let inner_list_len = load_list_len(builder, inner_list.into_struct_value());
+
+                    let next_list_sum = builder.build_int_add(
+                        builder
+                            .build_load(list_len_sum_alloca, list_len_sum_name)
+                            .into_int_value(),
+                        inner_list_len,
+                        "nextlistsum",
+                    );
+
+                    builder.build_store(list_len_sum_alloca, next_list_sum);
+
+                    // #index < second_list_len
+                    let outer_loop_end_cond = builder.build_int_compare(
+                        IntPredicate::ULT,
+                        next_index,
+                        outer_list_len,
+                        "loopcond",
+                    );
+
+                    let after_outer_loop_bb = ctx.append_basic_block(parent, "after_outer_loop");
+
+                    builder.build_conditional_branch(
+                        outer_loop_end_cond,
+                        outer_loop_bb,
+                        after_outer_loop_bb,
+                    );
+                    builder.position_at_end(after_outer_loop_bb);
+                }
+                let final_list_sum = builder
+                    .build_load(list_len_sum_alloca, list_len_sum_name)
+                    .into_int_value();
+
+                let final_list_ptr = builder
+                    .build_array_malloc(elem_type, final_list_sum, "final_list_sum")
+                    .unwrap();
+
+                builder.build_store(dest_elem_ptr_alloca, final_list_ptr);
+
+                {
+                    let index_name = "#index";
+                    let index_alloca = builder.build_alloca(ctx.i64_type(), index_name);
+
+                    // index in the outer list, pointing to a inner list
+                    let outer_list_index = ctx.i64_type().const_int(0, false);
+
+                    builder.build_store(index_alloca, outer_list_index);
+
+                    let outer_loop_bb = ctx.append_basic_block(parent, "loop");
+                    builder.build_unconditional_branch(outer_loop_bb);
+                    builder.position_at_end(outer_loop_bb);
+
+                    // #index = #index + 1
+                    let curr_index = builder
+                        .build_load(index_alloca, index_name)
+                        .into_int_value();
+                    let next_index = builder.build_int_add(
+                        curr_index,
+                        ctx.i64_type().const_int(1, false),
+                        "nextindex",
+                    );
+
+                    builder.build_store(index_alloca, next_index);
+
+                    // The pointer to the list in the outer list (the list of lists)
+                    let inner_list_ptr = unsafe {
+                        builder.build_in_bounds_gep(outer_list_ptr, &[curr_index], "load_index")
+                    };
+
+                    let inner_list = builder.build_load(inner_list_ptr, "get_elem");
+                    let inner_list_len = load_list_len(builder, inner_list.into_struct_value());
+
+                    // Inner Loop
+                    {
+                        let dest_elem_ptr = builder
+                            .build_load(dest_elem_ptr_alloca, "load_dest_elem")
+                            .into_pointer_value();
+
+                        let inner_index_name = "#inner_index";
+                        let inner_index_alloca =
+                            builder.build_alloca(ctx.i64_type(), inner_index_name);
+
+                        let inner_loop_bb = ctx.append_basic_block(parent, "loop");
+                        builder.build_unconditional_branch(inner_loop_bb);
+                        builder.position_at_end(inner_loop_bb);
+
+                        // #index = #index + 1
+                        let curr_index = builder
+                            .build_load(inner_index_alloca, inner_index_name)
+                            .into_int_value();
+                        let next_index = builder.build_int_add(
+                            curr_index,
+                            ctx.i64_type().const_int(1, false),
+                            "nextindex",
+                        );
+
+                        builder.build_store(inner_index_alloca, next_index);
+
+                        // The pointer to the list in the outer list (the list of lists)
+                        let src_elem_ptr = unsafe {
+                            builder.build_in_bounds_gep(inner_list_ptr, &[curr_index], "load_index")
+                        };
+
+                        let src_elem = builder.build_load(src_elem_ptr, "get_elem");
+                        // TODO clone src_elem
+
+                        builder.build_store(dest_elem_ptr, src_elem);
+
+                        let next_dest_elem_ptr = unsafe {
+                            builder.build_in_bounds_gep(
+                                dest_elem_ptr,
+                                &[env.ptr_int().const_int(1, false)],
+                                "increment_dest_elem",
+                            )
+                        };
+
+                        builder.build_store(dest_elem_ptr_alloca, next_dest_elem_ptr);
+
+                        let outer_loop_end_cond = builder.build_int_compare(
+                            IntPredicate::ULT,
+                            next_index,
+                            outer_list_len,
+                            "loopcond",
+                        );
+
+                        let after_outer_loop_bb =
+                            ctx.append_basic_block(parent, "after_outer_loop");
+
+                        builder.build_conditional_branch(
+                            outer_loop_end_cond,
+                            inner_loop_bb,
+                            after_outer_loop_bb,
+                        );
+                        builder.position_at_end(after_outer_loop_bb);
+                    }
+
+                    // #index < second_list_len
+                    let outer_loop_end_cond = builder.build_int_compare(
+                        IntPredicate::ULT,
+                        next_index,
+                        outer_list_len,
+                        "loopcond",
+                    );
+
+                    let after_outer_loop_bb = ctx.append_basic_block(parent, "after_outer_loop");
+
+                    builder.build_conditional_branch(
+                        outer_loop_end_cond,
+                        outer_loop_bb,
+                        after_outer_loop_bb,
+                    );
+                    builder.position_at_end(after_outer_loop_bb);
+
+                    let ptr_bytes = env.ptr_bytes;
+                    let int_type = ptr_int(ctx, ptr_bytes);
+                    let ptr_as_int =
+                        builder.build_ptr_to_int(final_list_ptr, int_type, "list_cast_ptr");
+                    let struct_type = collection(ctx, ptr_bytes);
+
+                    let mut struct_val;
+
+                    // Store the pointer
+                    struct_val = builder
+                        .build_insert_value(
+                            struct_type.get_undef(),
+                            ptr_as_int,
+                            Builtin::WRAPPER_PTR,
+                            "insert_ptr",
+                        )
+                        .unwrap();
+
+                    // Store the length
+                    struct_val = builder
+                        .build_insert_value(
+                            struct_val,
+                            final_list_sum,
+                            Builtin::WRAPPER_LEN,
+                            "insert_len",
+                        )
+                        .unwrap();
+
+                    builder.build_bitcast(
+                        struct_val.into_struct_value(),
+                        collection(ctx, ptr_bytes),
+                        "cast_collection",
+                    )
+                }
+            };
+
+            let build_else = || empty_list(env);
+
+            let struct_type = collection(ctx, env.ptr_bytes);
+
+            build_basic_phi2(
+                env,
+                parent,
+                comparison,
+                build_then,
+                build_else,
+                BasicTypeEnum::StructType(struct_type),
+            )
+        }
+
+        _ => {
+            unreachable!("Invalid List layout for List.join {:?}", outer_list_layout);
+        }
+    }
 }
 
 /// List.prepend List elem, elem -> List elem
@@ -1937,7 +2225,12 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.join : List (List elem) -> List elem
             debug_assert_eq!(args.len(), 1);
 
-            list_join(env)
+            let (list, outer_list_layout) = &args[0];
+
+            let outer_wrapper_struct =
+                build_expr(env, layout_ids, scope, parent, list).into_struct_value();
+
+            list_join(env, parent, outer_wrapper_struct, outer_list_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumToFloat => {
             debug_assert_eq!(args.len(), 1);
