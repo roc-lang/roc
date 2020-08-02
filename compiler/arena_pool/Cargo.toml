@@ -1,5 +1,5 @@
 [package]
-name = "arena-pool"
+name = "arena_pool"
 version = "0.1.0"
 authors = ["Richard Feldman <oss@rtfeldman.com>"]
 repository = "https://github.com/rtfeldman/roc"

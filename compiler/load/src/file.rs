@@ -1,20 +1,21 @@
+use arena_pool::pool::{ArenaPool, ArenaRef, ArenaVec};
 use bumpalo::Bump;
-use crossbeam::channel::{bounded, Receiver, RecvError, SendError, Sender};
+use crossbeam::channel::{bounded, Receiver, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
-use crossbeam::thread::{self, Scope};
+use crossbeam::thread;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
-use roc_can::module::{canonicalize_module_defs, Module};
+use roc_can::module::Module; /*canonicalize_module_defs*/
 use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_constrain::module::{
-    constrain_imports, load_builtin_aliases, pre_constrain_imports, ConstrainableImports,
+    /*constrain_imports, load_builtin_aliases, */ pre_constrain_imports, ConstrainableImports,
 };
-use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
+use roc_constrain::module::{/*constrain_module*/ ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
-use roc_parse::module::module_defs;
+// use roc_parse::module::module_defs;
 use roc_parse::parser::{self, Fail, Parser};
 use roc_region::all::{Located, Region};
 use roc_solve::module::SolvedModule;
@@ -26,7 +27,7 @@ use std::fs;
 use std::io;
 use std::iter;
 use std::path::{Path, PathBuf};
-use std::str::from_utf8_unchecked;
+// use std::str::from_utf8_unchecked;
 use std::sync::{Arc, Mutex};
 
 /// Filename extension for normal Roc modules
@@ -36,7 +37,7 @@ const ROC_FILE_EXTENSION: &str = "roc";
 const MODULE_SEPARATOR: char = '.';
 
 #[derive(Debug)]
-pub struct LoadedModule<'a> {
+pub struct LoadedModule {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub solved: Solved<Subs>,
@@ -44,7 +45,7 @@ pub struct LoadedModule<'a> {
     pub type_problems: Vec<solve::TypeError>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
-    pub src: &'a str,
+    pub src: Box<str>,
 }
 
 #[derive(Debug)]
@@ -182,6 +183,24 @@ enum MaybeShared<'a, 'b, A, B> {
     Unique(&'a mut A, &'b mut B),
 }
 
+/// ArenaPools for Layout and mono::expr::Expr
+struct Pools {
+    layout: ArenaPool<Layout>,
+    mono_expr: ArenaPool<()>,
+}
+
+/// Fake version of mono::layout::Layout - to be replaced with the real one!
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Layout {
+    Struct(ArenaVec<Layout>),
+    Union(ArenaVec<ArenaVec<Layout>>),
+    FunctionPointer {
+        args: ArenaVec<Layout>,
+        ret: ArenaRef<Layout>,
+    },
+    Pointer(ArenaRef<Layout>),
+}
+
 type SharedModules<'a, 'b> = MaybeShared<'a, 'b, ModuleIds, IdentIdsByModule>;
 type IdentIdsByModule = MutMap<ModuleId, IdentIds>;
 
@@ -233,12 +252,12 @@ type MsgReceiver<'a> = Receiver<Msg<'a>>;
 ///     to rebuild the module and can link in the cached one directly.)
 #[allow(clippy::cognitive_complexity)]
 pub fn load<'a>(
-    arena: &'a Bump,
+    pools: Pools,
     stdlib: &StdLib,
     src_dir: PathBuf,
     filename: PathBuf,
     exposed_types: SubsByModule,
-) -> Result<LoadedModule<'a>, LoadingProblem> {
+) -> Result<LoadedModule, LoadingProblem> {
     use self::MaybeShared::*;
 
     let (msg_tx, msg_rx) = bounded(1024);
@@ -248,7 +267,7 @@ pub fn load<'a>(
 
     // Load the root module synchronously; we can't proceed until we have its id.
     let root_id = load_filename(
-        &arena,
+        pools,
         filename,
         msg_tx.clone(),
         Shared(Arc::clone(&arc_modules), Arc::clone(&ident_ids_by_module)),
@@ -257,7 +276,7 @@ pub fn load<'a>(
     )?;
 
     load_deps(
-        &arena,
+        pools,
         root_id,
         msg_tx,
         msg_rx,
@@ -287,7 +306,7 @@ fn enqueue_task<'a, 'b>(
 }
 
 fn load_deps<'a>(
-    arena: &'a Bump,
+    pools: Pools,
     root_id: ModuleId,
     msg_tx: MsgSender<'a>,
     msg_rx: MsgReceiver<'a>,
@@ -296,7 +315,7 @@ fn load_deps<'a>(
     arc_modules: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     exposed_types: SubsByModule,
-) -> Result<LoadedModule<'a>, LoadingProblem> {
+) -> Result<LoadedModule, LoadingProblem> {
     // Reserve one CPU for the main thread, and let all the others be eligible
     // to spawn workers.
     let num_workers = num_cpus::get() - 1;
@@ -308,8 +327,9 @@ fn load_deps<'a>(
     // into the worker threads, because those workers' stealers need to be
     // shared between all threads, and this coordination work is much easier
     // on the main thread.
-    let mut worker_queues = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
-    let mut stealers = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
+    let bump = Bump::new();
+    let mut worker_queues = bumpalo::collections::Vec::with_capacity_in(num_workers, &bump);
+    let mut stealers = bumpalo::collections::Vec::with_capacity_in(num_workers, &bump);
 
     for _ in 0..num_workers {
         let worker = Worker::new_lifo();
@@ -831,7 +851,7 @@ fn finish<'a>(
     problems: Vec<solve::TypeError>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     src: &'a str,
-) -> LoadedModule<'a> {
+) -> LoadedModule {
     state.type_problems.extend(problems);
 
     let module_ids = Arc::try_unwrap(state.arc_modules)
@@ -858,7 +878,7 @@ fn finish<'a>(
 
 /// Load a module by its module name, rather than by its filename
 fn load_module<'a>(
-    arena: &'a Bump,
+    pools: Pools,
     src_dir: &Path,
     module_name: ModuleName,
     msg_tx: MsgSender<'a>,
@@ -876,7 +896,7 @@ fn load_module<'a>(
     // End with .roc
     filename.set_extension(ROC_FILE_EXTENSION);
 
-    load_filename(arena, filename, msg_tx, module_ids)
+    load_filename(pools, filename, msg_tx, module_ids)
 }
 
 /// Find a task according to the following algorithm:
@@ -906,19 +926,20 @@ fn find_task<T>(local: &Worker<T>, global: &Injector<T>, stealers: &[Stealer<T>]
 }
 
 fn parse_src<'a>(
-    arena: &'a Bump,
+    pools: Pools,
     filename: PathBuf,
     msg_tx: MsgSender<'a>,
     module_ids: SharedModules<'_, '_>,
     src_bytes: &'a [u8],
 ) -> Result<ModuleId, LoadingProblem> {
     let parse_state = parser::State::new(src_bytes, Attempting::Module);
+    let bump_arena = Bump::new();
 
     // TODO figure out if there's a way to address this clippy error
     // without introducing a borrow error. ("let and return" is literally
     // what the borrow checker suggested using here to fix the problem, so...)
     #[allow(clippy::let_and_return)]
-    let answer = match roc_parse::module::header().parse(&arena, parse_state) {
+    let answer = match roc_parse::module::header().parse(bump_arena, parse_state) {
         Ok((ast::Module::Interface { header }, parse_state)) => {
             let module_id = send_header(
                 header.name,
@@ -958,13 +979,13 @@ fn parse_src<'a>(
 
 /// Load a module by its filename
 fn load_filename<'a>(
-    arena: &'a Bump,
+    pools: Pools,
     filename: PathBuf,
     msg_tx: MsgSender<'a>,
     module_ids: SharedModules<'a, '_>,
 ) -> Result<ModuleId, LoadingProblem> {
     match fs::read(&filename) {
-        Ok(bytes) => parse_src(arena, filename, msg_tx, module_ids, arena.alloc(bytes)),
+        Ok(bytes) => parse_src(pools, filename, msg_tx, module_ids, bytes),
         Err(err) => Err(LoadingProblem::FileProblem {
             filename,
             error: err.kind(),
@@ -1334,11 +1355,11 @@ fn build_parse_and_constrain_task<'a, 'b>(
 //    let parse_state = parser::State::new(&header.src, Attempting::Module);
 
 //    let (parsed_defs, _) = module_defs()
-//        .parse(&arena, parse_state)
+//        .parse(pools, parse_state)
 //        .expect("TODO gracefully handle parse error on module defs. IMPORTANT: Bail out entirely if there are any BadUtf8 problems! That means the whole source file is not valid UTF-8 and any other errors we report may get mis-reported. We rely on this for safety in an `unsafe` block later on in this function.");
 
 //    let (module, declarations, ident_ids, constraint, problems) = match canonicalize_module_defs(
-//        &arena,
+//        pools,
 //        parsed_defs,
 //        module_id,
 //        &module_ids,
