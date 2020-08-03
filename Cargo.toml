@@ -24,8 +24,8 @@ members = [
     "vendor/ena",
     "vendor/pathfinding",
     "vendor/pretty",
-    "editor"
-    # "cli"
+    "editor",
+    "cli"
 ]
 
 # Optimizations based on https://deterministic.space/high-performance-rust.html
