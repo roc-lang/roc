@@ -757,7 +757,7 @@ mod test_mono {
                 procedure Num.14 (#Attr.2, #Attr.3):
                     Lowlevel.NumAdd (Load #Attr.2) (Load #Attr.3)
 
-                Store Test.1: 
+                Store Test.1:
                     Store Test.3: 0i64
                     Store Test.4: 3i64
                     Just Test.3 Test.4
@@ -795,7 +795,7 @@ mod test_mono {
             "#,
             indoc!(
                 r#"
-                Store Test.1: 
+                Store Test.1:
                     Store Test.6: 1i64
                     Store Test.7: 1i64
                     Store Test.8: 2i64
@@ -888,7 +888,7 @@ mod test_mono {
 
                 procedure List.7 (#Attr.2):
                     Lowlevel.ListLen (Load #Attr.2)
-                
+
                 Store Test.0: [ 1i64, 2i64, 3i64 ]
                 Call Num.14 (Call List.7 (Load Test.0)) (Call List.7 (Load Test.0))
                 Dec Test.0
@@ -1115,20 +1115,93 @@ mod test_mono {
             "#,
             indoc!(
                 r#"
-                let Test.0 = 0u8;
-                switch Test.0:
-                    case 1:
-                        let Test.1 = 1i64;
+                let Test.10 = 0i64;
+                let Test.11 = 3i64;
+                let Test.1 = Just Test.10 Test.11;
+                let Test.7 = true;
+                let Test.5 = Index 0 Test.1;
+                let Test.4 = 0i64;
+                let Test.8 = lowlevel Eq Test.4 Test.5;
+                let Test.6 = lowlevel And Test.8 Test.7;
+                if Test.6 then
+                    let Test.0 = Index 1 Test.1;
+                    ret Test.0;
+                else
+                    let Test.3 = 0i64;
+                    ret Test.3;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ir_when_these() {
+        // NOTE apparently loading the tag_id is not required?
+        compiles_to_ir(
+            r#"
+            when These 1 2 is
+                This x -> x
+                That y -> y
+                These x _ -> x
+            "#,
+            indoc!(
+                r#"
+                let Test.7 = 1i64;
+                let Test.8 = 1i64;
+                let Test.9 = 2i64;
+                let Test.3 = These Test.7 Test.8 Test.9;
+                switch Test.3:
+                    case 2:
+                        let Test.0 = Index 1 Test.3;
+                        ret Test.0;
+
+                    case 0:
+                        let Test.1 = Index 1 Test.3;
                         ret Test.1;
 
-                    case 2:
-                        let Test.2 = 2i64;
+                    default:
+                        let Test.2 = Index 1 Test.3;
                         ret Test.2;
 
-                    default:
-                        let Test.3 = 3i64;
-                        ret Test.3;
+                "#
+            ),
+        )
+    }
 
+    #[test]
+    fn ir_when_record() {
+        // NOTE apparently loading the tag_id is not required?
+        compiles_to_ir(
+            r#"
+            when { x: 1, y: 3.14 } is
+                { x } -> x
+            "#,
+            indoc!(
+                r#"
+                let Test.4 = 1i64;
+                let Test.5 = 3.14f64;
+                let Test.1 = Struct {Test.4, Test.5};
+                let Test.0 = Index 0 Test.1;
+                ret Test.0;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ir_plus() {
+        // NOTE apparently loading the tag_id is not required?
+        compiles_to_ir(
+            r#"
+            1 + 2
+            "#,
+            indoc!(
+                r#"
+                let Test.4 = 1i64;
+                let Test.5 = 3.14f64;
+                let Test.1 = Struct {Test.4, Test.5};
+                let Test.0 = Index 0 Test.1;
+                ret Test.0;
                 "#
             ),
         )

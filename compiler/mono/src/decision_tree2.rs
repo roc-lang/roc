@@ -989,57 +989,13 @@ fn path_to_expr_help2<'a>(
     (symbol, stores, layout)
 }
 
-fn path_to_expr_help<'a>(
-    env: &mut Env<'a, '_>,
-    symbol: Symbol,
-    path: &Path,
-    layout: Layout<'a>,
-) -> (Expr<'a>, Layout<'a>) {
-    match path {
-        Path::Unbox(unboxed) => path_to_expr_help(env, symbol, unboxed, layout),
-        // Path::Empty => (Expr::Load(symbol), layout),
-        Path::Empty => todo!(),
-
-        Path::Index {
-            index,
-            tag_id,
-            path: nested,
-        } => {
-            let (outer_expr, outer_layout) = path_to_expr_help(env, symbol, nested, layout);
-
-            let (is_unwrapped, field_layouts) = match outer_layout {
-                Layout::Union(layouts) => (layouts.is_empty(), layouts[*tag_id as usize].to_vec()),
-                Layout::Struct(layouts) => (true, layouts.to_vec()),
-                other => (true, vec![other]),
-            };
-
-            debug_assert!(*index < field_layouts.len() as u64);
-
-            let inner_layout = field_layouts[*index as usize].clone();
-
-            // TODO not assigned
-            let structure_symbol = env.unique_symbol();
-
-            let inner_expr = Expr::AccessAtIndex {
-                index: *index,
-                field_layouts: env.arena.alloc(field_layouts),
-                //structure: env.arena.alloc(outer_expr),
-                structure: structure_symbol,
-                is_unwrapped,
-            };
-
-            (inner_expr, inner_layout)
-        }
-    }
-}
-
 fn test_to_equality<'a>(
     env: &mut Env<'a, '_>,
     cond_symbol: Symbol,
     cond_layout: &Layout<'a>,
     path: &Path,
     test: Test<'a>,
-    tests: &mut Vec<(Stores<'a>, Symbol, Symbol, Layout<'a>)>,
+    tests: &mut Vec<(StoresVec<'a>, Symbol, Symbol, Layout<'a>)>,
 ) {
     match test {
         Test::IsCtor {
@@ -1074,10 +1030,10 @@ fn test_to_equality<'a>(
             let lhs_symbol = env.unique_symbol();
             let rhs_symbol = env.unique_symbol();
 
-            let stores = env.arena.alloc([
-                (lhs_symbol, Layout::Builtin(Builtin::Int64), lhs),
-                (rhs_symbol, Layout::Builtin(Builtin::Int64), rhs),
-            ]);
+            let mut stores = bumpalo::collections::Vec::with_capacity_in(2, env.arena);
+
+            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
+            stores.push((rhs_symbol, Layout::Builtin(Builtin::Int64), rhs));
 
             tests.push((
                 stores,
@@ -1092,7 +1048,7 @@ fn test_to_equality<'a>(
             let (mut stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
             tests.push((
-                stores.into_bump_slice(),
+                stores,
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Int64),
@@ -1107,7 +1063,7 @@ fn test_to_equality<'a>(
             let (mut stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Float64), lhs));
             tests.push((
-                stores.into_bump_slice(),
+                stores,
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Float64),
@@ -1122,7 +1078,7 @@ fn test_to_equality<'a>(
             let (mut stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int8), lhs));
             tests.push((
-                stores.into_bump_slice(),
+                stores,
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Int8),
@@ -1135,7 +1091,7 @@ fn test_to_equality<'a>(
             let (mut stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
 
             tests.push((
-                stores.into_bump_slice(),
+                stores,
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Int1),
@@ -1150,7 +1106,7 @@ fn test_to_equality<'a>(
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Str), lhs));
 
             tests.push((
-                stores.into_bump_slice(),
+                stores,
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Str),
@@ -1172,7 +1128,7 @@ fn test_to_equality<'a>(
 
             tests.push((lhs, rhs, Layout::Builtin(Builtin::Int1)));
             */
-            todo!()
+            todo!("pattern with guard, what to do?")
         }
     }
 }
@@ -1211,7 +1167,7 @@ fn decide_to_branching<'a>(
                 test_to_equality(env, cond_symbol, &cond_layout, &path, test, &mut tests);
             }
 
-            let (pass_stores, pass_expr) = decide_to_branching(
+            let (pass_stores, mut pass_expr) = decide_to_branching(
                 env,
                 cond_symbol,
                 cond_layout.clone(),
@@ -1220,7 +1176,12 @@ fn decide_to_branching<'a>(
                 jumps,
             );
 
-            let (fail_stores, fail_expr) = decide_to_branching(
+            // TODO remove clone
+            for (symbol, layout, expr) in pass_stores.iter().cloned() {
+                pass_expr = Stmt::Let(symbol, expr, layout, env.arena.alloc(pass_expr));
+            }
+
+            let (fail_stores, mut fail_expr) = decide_to_branching(
                 env,
                 cond_symbol,
                 cond_layout.clone(),
@@ -1228,6 +1189,11 @@ fn decide_to_branching<'a>(
                 *failure,
                 jumps,
             );
+
+            // TODO remove clone
+            for (symbol, layout, expr) in fail_stores.iter().cloned() {
+                fail_expr = Stmt::Let(symbol, expr, layout, env.arena.alloc(fail_expr));
+            }
 
             let fail = &*env.arena.alloc(fail_expr);
             let pass = &*env.arena.alloc(pass_expr);
@@ -1240,7 +1206,7 @@ fn decide_to_branching<'a>(
             let condition = Expr::Literal(Literal::Int(42));
 
             let branching_symbol = env.unique_symbol();
-            let stores = [(branching_symbol, Layout::Builtin(Builtin::Int1), condition)];
+            let mut stores = vec![(branching_symbol, Layout::Builtin(Builtin::Int1), condition)];
 
             let branching_layout = Layout::Builtin(Builtin::Int1);
 
@@ -1254,16 +1220,57 @@ fn decide_to_branching<'a>(
                 ret_layout,
             };
 
+            let true_symbol = env.unique_symbol();
+
             // let condition = boolean_all(env.arena, tests);
             debug_assert!(!tests.is_empty());
-            for (stores, lhs, rhs, layout) in tests.iter().rev() {
-                cond = cond;
+            let mut current_symbol = branching_symbol;
+            let mut condition_symbol = true_symbol;
+            for (new_stores, lhs, rhs, layout) in tests.into_iter().rev() {
+                let test_symbol = env.unique_symbol();
+                let test = Expr::RunLowLevel(
+                    LowLevel::Eq,
+                    bumpalo::vec![in env.arena; lhs, rhs].into_bump_slice(),
+                );
 
-                symbol = env.unique_symbol();
+                let and_expr = Expr::RunLowLevel(
+                    LowLevel::And,
+                    env.arena.alloc([test_symbol, condition_symbol]),
+                );
+
+                // write to the branching symbol
+                cond = Stmt::Let(
+                    current_symbol,
+                    and_expr,
+                    Layout::Builtin(Builtin::Int1),
+                    env.arena.alloc(cond),
+                );
+
+                // write to the test symbol
+                cond = Stmt::Let(
+                    test_symbol,
+                    test,
+                    Layout::Builtin(Builtin::Int1),
+                    env.arena.alloc(cond),
+                );
+
+                for (symbol, layout, expr) in new_stores.into_iter() {
+                    cond = Stmt::Let(symbol, expr, layout, env.arena.alloc(cond));
+                }
+
+                condition_symbol = current_symbol;
+                current_symbol = env.unique_symbol();
             }
 
+            cond = Stmt::Let(
+                true_symbol,
+                Expr::Literal(Literal::Bool(true)),
+                Layout::Builtin(Builtin::Int1),
+                env.arena.alloc(cond),
+            );
+
             // (env.arena.alloc(stores), cond)
-            todo!()
+            (&[], cond)
         }
         FanOut {
             path,
@@ -1272,10 +1279,11 @@ fn decide_to_branching<'a>(
         } => {
             // the cond_layout can change in the process. E.g. if the cond is a Tag, we actually
             // switch on the tag discriminant (currently an i64 value)
-            let (cond, stores_vec, cond_layout) =
+            // NOTE the tag discriminant is not actually loaded, `cond` can point to a tag
+            let (cond, cond_stores_vec, cond_layout) =
                 path_to_expr_help2(env, cond_symbol, &path, cond_layout);
 
-            let (default_stores, default_expr) = decide_to_branching(
+            let (default_stores, mut default_branch) = decide_to_branching(
                 env,
                 cond_symbol,
                 cond_layout.clone(),
@@ -1283,12 +1291,16 @@ fn decide_to_branching<'a>(
                 *fallback,
                 jumps,
             );
-            let default_branch = (default_stores, &*env.arena.alloc(default_expr));
+
+            // TODO remove clone
+            for (symbol, layout, expr) in default_stores.iter().cloned() {
+                default_branch = Stmt::Let(symbol, expr, layout, env.arena.alloc(default_branch));
+            }
 
             let mut branches = bumpalo::collections::Vec::with_capacity_in(tests.len(), env.arena);
 
             for (test, decider) in tests {
-                let (stores, branch) = decide_to_branching(
+                let (stores, mut branch) = decide_to_branching(
                     env,
                     cond_symbol,
                     cond_layout.clone(),
@@ -1296,6 +1308,11 @@ fn decide_to_branching<'a>(
                     decider,
                     jumps,
                 );
+
+                // TODO remove clone
+                for (symbol, layout, expr) in stores.iter().cloned() {
+                    branch = Stmt::Let(symbol, expr, layout, env.arena.alloc(branch));
+                }
 
                 let tag = match test {
                     Test::IsInt(v) => v as u64,
@@ -1306,20 +1323,23 @@ fn decide_to_branching<'a>(
                     other => todo!("other {:?}", other),
                 };
 
-                branches.push((tag, stores, branch));
+                branches.push((tag, branch));
+            }
+
+            let mut switch = Stmt::Switch {
+                cond_layout,
+                cond_symbol: cond,
+                branches: branches.into_bump_slice(),
+                default_branch: env.arena.alloc(default_branch),
+                ret_layout,
+            };
+
+            for (symbol, layout, expr) in cond_stores_vec.into_iter() {
+                switch = Stmt::Let(symbol, expr, layout, env.arena.alloc(switch));
             }
 
             // make a jump table based on the tests
-            (
-                &[],
-                Stmt::Switch {
-                    cond_layout,
-                    cond_symbol,
-                    branches: branches.into_bump_slice(),
-                    default_branch,
-                    ret_layout,
-                },
-            )
+            (&[], switch)
         }
     }
 }

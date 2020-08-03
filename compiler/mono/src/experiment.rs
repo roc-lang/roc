@@ -299,9 +299,9 @@ pub enum Stmt<'a> {
         cond_layout: Layout<'a>,
         /// The u64 in the tuple will be compared directly to the condition Expr.
         /// If they are equal, this branch will be taken.
-        branches: &'a [(u64, Stores<'a>, Stmt<'a>)],
+        branches: &'a [(u64, Stmt<'a>)],
         /// If no other branches pass, this default branch will be taken.
-        default_branch: (Stores<'a>, &'a Stmt<'a>),
+        default_branch: &'a Stmt<'a>,
         /// Each branch must return a value of this type.
         ret_layout: Layout<'a>,
     },
@@ -352,6 +352,11 @@ pub enum Literal<'a> {
     /// compile to bytes, e.g. [ Blue, Black, Red, Green, White ]
     Byte(u8),
 }
+#[derive(Clone, Debug, PartialEq, Copy)]
+pub enum CallType {
+    ByName(Symbol),
+    ByPointer(Symbol),
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr<'a> {
@@ -359,8 +364,8 @@ pub enum Expr<'a> {
 
     // Functions
     FunctionPointer(Symbol, Layout<'a>),
-    CallByName {
-        name: Symbol,
+    FunctionCall {
+        call_type: CallType,
         layout: Layout<'a>,
         args: &'a [Symbol],
     },
@@ -432,13 +437,26 @@ impl<'a> Expr<'a> {
 
             FunctionPointer(symbol, _) => symbol_to_doc(alloc, *symbol),
 
-            CallByName { name, args, .. } => {
-                let it = std::iter::once(name)
-                    .chain(args.iter())
-                    .map(|s| symbol_to_doc(alloc, *s));
+            FunctionCall {
+                call_type, args, ..
+            } => match call_type {
+                CallType::ByName(name) => {
+                    let it = std::iter::once(name)
+                        .chain(args.iter())
+                        .map(|s| symbol_to_doc(alloc, *s));
 
-                alloc.text("call ").append(alloc.intersperse(it, " "))
-            }
+                    alloc.text("CallByName ").append(alloc.intersperse(it, " "))
+                }
+                CallType::ByPointer(name) => {
+                    let it = std::iter::once(name)
+                        .chain(args.iter())
+                        .map(|s| symbol_to_doc(alloc, *s));
+
+                    alloc
+                        .text("CallByPointer ")
+                        .append(alloc.intersperse(it, " "))
+                }
+            },
             RunLowLevel(lowlevel, args) => {
                 let it = args.iter().map(|s| symbol_to_doc(alloc, *s));
 
@@ -524,12 +542,12 @@ impl<'a> Stmt<'a> {
                 let default_doc = alloc
                     .text("default:")
                     .append(alloc.hardline())
-                    .append(default_branch.1.to_doc(alloc, false).indent(4))
+                    .append(default_branch.to_doc(alloc, false).indent(4))
                     .indent(4);
 
                 let branches_docs = branches
                     .iter()
-                    .map(|(tag, _, expr)| {
+                    .map(|(tag, expr)| {
                         alloc
                             .text(format!("case {}:", tag))
                             .append(alloc.hardline())
@@ -718,7 +736,7 @@ pub fn with_hole<'a>(
                     Stmt::Let(
                         assigned,
                         Expr::Literal(Literal::Bool(tag_name == ttrue)),
-                        Layout::Builtin(Builtin::Float64),
+                        Layout::Builtin(Builtin::Int1),
                         hole,
                     )
                 }),
@@ -732,86 +750,246 @@ pub fn with_hole<'a>(
                         Stmt::Let(
                             assigned,
                             Expr::Literal(Literal::Byte(tag_id as u8)),
-                            Layout::Builtin(Builtin::Float64),
+                            Layout::Builtin(Builtin::Int8),
                             hole,
                         )
                     })
                 }
 
-                /*
-                    Unwrapped(field_layouts) => {
-                        let field_exprs = args
-                            .into_iter()
-                            .map(|(_, arg)| from_can(env, arg.value, procs, layout_cache));
+                Unwrapped(field_layouts) => {
+                    let mut field_symbols = Vec::with_capacity_in(field_layouts.len(), env.arena);
 
-                        let mut field_tuples = Vec::with_capacity_in(field_layouts.len(), arena);
+                    let field_exprs = args
+                        .into_iter()
+                        .map(|(_, arg)| {
+                            let symbol = env.unique_symbol();
+                            field_symbols.push(symbol);
+                            with_hole(env, arg.value, procs, layout_cache, symbol)
+                        })
+                        .collect::<std::vec::Vec<_>>();
 
-                        for tuple in field_exprs.zip(field_layouts.into_iter()) {
-                            field_tuples.push(tuple)
+                    let layout = Layout::Struct(field_layouts.into_bump_slice());
+
+                    Box::new(move |hole| {
+                        let mut stmt = Stmt::Let(
+                            assigned,
+                            Expr::Struct(field_symbols.into_bump_slice()),
+                            layout,
+                            hole,
+                        );
+
+                        for expr in field_exprs.into_iter().rev() {
+                            stmt = expr(arena.alloc(stmt));
                         }
 
-                        Expr::Struct(field_tuples.into_bump_slice())
+                        stmt
+                    })
+                }
+                Wrapped(sorted_tag_layouts) => {
+                    let union_size = sorted_tag_layouts.len() as u8;
+                    let (tag_id, (_, argument_layouts)) = sorted_tag_layouts
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (key, _))| key == &tag_name)
+                        .expect("tag must be in its own type");
+
+                    let mut arguments: Vec<Symbol> = Vec::with_capacity_in(args.len(), arena);
+                    let tag_id_symbol = env.unique_symbol();
+                    arguments.push(tag_id_symbol);
+
+                    let expr_it = args
+                        .into_iter()
+                        .map(|(_, arg): (_, Located<roc_can::expr::Expr>)| {
+                            let symbol = env.unique_symbol();
+                            arguments.push(symbol);
+                            with_hole(env, arg.value, procs, layout_cache, symbol)
+                        })
+                        .collect::<std::vec::Vec<_>>();
+
+                    let layout_it = argument_layouts.iter();
+
+                    let mut layouts: Vec<&'a [Layout<'a>]> =
+                        Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
+
+                    for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
+                        layouts.push(arg_layouts);
                     }
-                    Wrapped(sorted_tag_layouts) => {
-                        let union_size = sorted_tag_layouts.len() as u8;
-                        let (tag_id, (_, argument_layouts)) = sorted_tag_layouts
-                            .iter()
-                            .enumerate()
-                            .find(|(_, (key, _))| key == &tag_name)
-                            .expect("tag must be in its own type");
 
-                        let mut arguments = Vec::with_capacity_in(args.len(), arena);
-                        let mut stores = Vec::with_capacity_in(args.len(), arena);
+                    let layout = Layout::Union(layouts.into_bump_slice());
+                    let tag = Expr::Tag {
+                        tag_layout: layout.clone(),
+                        tag_name,
+                        tag_id: tag_id as u8,
+                        union_size,
+                        arguments: arguments.into_bump_slice(),
+                    };
 
-                        let expr_it = std::iter::once((Expr::Int(tag_id as i64), env.unique_symbol()))
-                            .chain({
-                                let transform = |(_, arg): (_, Located<roc_can::expr::Expr>)| {
-                                    let expr = from_can(env, arg.value, procs, layout_cache);
-                                    let symbol = env.unique_symbol();
+                    Box::new(move |hole| {
+                        let mut stmt = Stmt::Let(assigned, tag, layout, hole);
 
-                                    (expr, symbol)
-                                };
-
-                                args.into_iter().map(transform)
-                            });
-
-                        let layout_it = argument_layouts.iter();
-
-                        for (arg_layout, (arg_expr, symbol)) in layout_it.zip(expr_it) {
-                            // arguments.push((arg_expr, arg_layout.clone()));
-                            if let Expr::Load(existing) = arg_expr {
-                                arguments.push((existing, arg_layout.clone()));
-                            } else {
-                                arguments.push((symbol, arg_layout.clone()));
-                                stores.push((symbol, arg_layout.clone(), arg_expr));
-                            }
+                        for expr in expr_it.into_iter().rev() {
+                            stmt = expr(arena.alloc(stmt));
                         }
 
-                        let mut layouts: Vec<&'a [Layout<'a>]> =
-                            Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
+                        // define the tag id
+                        stmt = Stmt::Let(
+                            tag_id_symbol,
+                            Expr::Literal(Literal::Int(tag_id as i64)),
+                            Layout::Builtin(Builtin::Int64),
+                            arena.alloc(stmt),
+                        );
 
-                        for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
-                            layouts.push(arg_layouts);
-                        }
-
-                        let layout = Layout::Union(layouts.into_bump_slice());
-
-                        let tag = Expr::Tag {
-                            tag_layout: layout,
-                            tag_name,
-                            tag_id: tag_id as u8,
-                            union_size,
-                            arguments: arguments.into_bump_slice(),
-                        };
-
-                        Expr::Store(stores.into_bump_slice(), env.arena.alloc(tag))
-                    }
-                */
-                _ => todo!(),
+                        stmt
+                    })
+                }
             }
         }
 
-        _ => todo!("{:?}", &can_expr),
+        Record {
+            record_var,
+            mut fields,
+            ..
+        } => {
+            let arena = env.arena;
+
+            let sorted_fields = crate::layout::sort_record_fields(
+                env.arena,
+                record_var,
+                env.subs,
+                env.pointer_size,
+            );
+
+            /*
+            let mut field_tuples = Vec::with_capacity_in(sorted_fields.len(), arena);
+
+            for (label, layout) in sorted_fields {
+                let field = fields.remove(&label).unwrap();
+                let expr = from_can(env, field.loc_expr.value, procs, layout_cache);
+
+                field_tuples.push((expr, layout));
+            }
+
+            let record = Expr::Struct(field_tuples.into_bump_slice());
+            */
+
+            let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
+            let mut field_layouts = Vec::with_capacity_in(fields.len(), env.arena);
+
+            let field_exprs = sorted_fields
+                .into_iter()
+                .map(|(label, layout)| {
+                    let symbol = env.unique_symbol();
+                    field_symbols.push(symbol);
+                    field_layouts.push(layout);
+
+                    let field = fields.remove(&label).unwrap();
+
+                    with_hole(env, field.loc_expr.value, procs, layout_cache, symbol)
+                })
+                .collect::<std::vec::Vec<_>>();
+
+            let layout = Layout::Struct(field_layouts.into_bump_slice());
+
+            Box::new(move |hole| {
+                let mut stmt = Stmt::Let(
+                    assigned,
+                    Expr::Struct(field_symbols.into_bump_slice()),
+                    layout,
+                    hole,
+                );
+
+                for expr in field_exprs.into_iter().rev() {
+                    stmt = expr(arena.alloc(stmt));
+                }
+
+                stmt
+            })
+        }
+
+        EmptyRecord => {
+            Box::new(move |hole| Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole))
+        }
+
+        When { .. } | If { .. } => todo!("when or if in expression requires join points"),
+
+        List { .. } => todo!("list"),
+        LetRec(_, _, _, _) | LetNonRec(_, _, _, _) => todo!("lets"),
+
+        Access { .. } | Accessor { .. } | Update { .. } => todo!("record access/accessor/update"),
+
+        Closure(_, _, _, _, _) => todo!("call"),
+        Call(boxed, loc_args, _) => {
+            let (fn_var, loc_expr, ret_var) = *boxed;
+
+            // match from_can(env, loc_expr.value, procs, layout_cache) {
+            match loc_expr.value {
+                roc_can::expr::Expr::Var(proc_name) => Box::new(move |hole| {
+                    call_by_name(
+                        env,
+                        procs,
+                        fn_var,
+                        ret_var,
+                        proc_name,
+                        loc_args,
+                        layout_cache,
+                        assigned,
+                        hole,
+                    )
+                }),
+                _ => {
+                    let function_symbol = env.unique_symbol();
+                    let ptr = with_hole(env, loc_expr.value, procs, layout_cache, function_symbol);
+                    // Call by pointer - the closure was anonymous, e.g.
+                    //
+                    // ((\a -> a) 5)
+                    //
+                    // It might even be the anonymous result of a conditional:
+                    //
+                    // ((if x > 0 then \a -> a else \_ -> 0) 5)
+                    //
+                    // It could be named too:
+                    //
+                    // ((if x > 0 then foo else bar) 5)
+                    let mut args = Vec::with_capacity_in(loc_args.len(), env.arena);
+                    let mut arg_symbols = Vec::with_capacity_in(loc_args.len(), env.arena);
+
+                    for (_, loc_arg) in loc_args {
+                        let symbol = env.unique_symbol();
+                        arg_symbols.push(symbol);
+                        args.push(with_hole(env, loc_arg.value, procs, layout_cache, symbol));
+                    }
+
+                    let layout = layout_cache
+                        .from_var(env.arena, fn_var, env.subs, env.pointer_size)
+                        .unwrap_or_else(|err| {
+                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
+                        });
+
+                    Box::new(move |mut hole| {
+                        // Expr::CallByPointer(&*env.arena.alloc(ptr), args.into_bump_slice(), layout)
+                        let mut result = Stmt::Let(
+                            assigned,
+                            Expr::FunctionCall {
+                                call_type: CallType::ByPointer(function_symbol),
+                                layout: layout.clone(),
+                                args: arg_symbols.into_bump_slice(),
+                            },
+                            layout,
+                            arena.alloc(hole),
+                        );
+                        result = ptr(arena.alloc(result));
+
+                        for arg in args {
+                            result = arg(arena.alloc(result));
+                        }
+
+                        result
+                    })
+                }
+            }
+        }
+        RunLowLevel { .. } => todo!("run lowlevel"),
+        RuntimeError(_) => todo!("runtime error"),
     }
 }
 
@@ -969,12 +1147,11 @@ fn from_can_when<'a>(
             Err(message) => Stmt::RuntimeError(env.arena.alloc(message)),
         };
 
-        //        for symbol in bound_symbols {
-        //            ret = decrement_refcount(env, symbol, ret);
-        //        }
+        for (symbol, layout, expr) in stored.iter().rev().cloned() {
+            ret = Stmt::Let(symbol, expr, layout, env.arena.alloc(ret));
+        }
 
-        // Expr::Store(stored.into_bump_slice(), arena.alloc(ret))
-        todo!()
+        ret
     } else {
         let cond_layout = layout_cache
             .from_var(env.arena, cond_var, env.subs, env.pointer_size)
@@ -1254,4 +1431,145 @@ fn store_record_destruct<'a>(
     }
 
     Ok(())
+}
+
+fn call_by_name<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    fn_var: Variable,
+    ret_var: Variable,
+    proc_name: Symbol,
+    loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+    layout_cache: &mut LayoutCache<'a>,
+    assigned: Symbol,
+    hole: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    // Register a pending_specialization for this function
+    match layout_cache.from_var(env.arena, fn_var, env.subs, env.pointer_size) {
+        Ok(layout) => {
+            // Build the CallByName node
+            let arena = env.arena;
+            let mut args = Vec::with_capacity_in(loc_args.len(), arena);
+            let mut pattern_vars = Vec::with_capacity_in(loc_args.len(), arena);
+
+            for (var, loc_arg) in loc_args {
+                match layout_cache.from_var(&env.arena, var, &env.subs, env.pointer_size) {
+                    Ok(layout) => {
+                        pattern_vars.push(var);
+                        args.push((from_can(env, loc_arg.value, procs, layout_cache), layout));
+                    }
+                    Err(_) => {
+                        // One of this function's arguments code gens to a runtime error,
+                        // so attempting to call it will immediately crash.
+                        return Stmt::RuntimeError("TODO runtime error for invalid layout");
+                    }
+                }
+            }
+
+            // If we've already specialized this one, no further work is needed.
+            if procs.specialized.contains_key(&(proc_name, layout.clone())) {
+                let call = Expr::FunctionCall {
+                    call_type: CallType::ByName(proc_name),
+                    layout,
+                    args: &[],
+                };
+
+                Stmt::Let(assigned, call, layout, hole)
+            } else {
+                let pending = PendingSpecialization {
+                    pattern_vars,
+                    ret_var,
+                    fn_var,
+                };
+
+                // When requested (that is, when procs.pending_specializations is `Some`),
+                // store a pending specialization rather than specializing immediately.
+                //
+                // We do this so that we can do specialization in two passes: first,
+                // build the mono_expr with all the specialized calls in place (but
+                // no specializations performed yet), and then second, *after*
+                // de-duplicating requested specializations (since multiple modules
+                // which could be getting monomorphized in parallel might request
+                // the same specialization independently), we work through the
+                // queue of pending specializations to complete each specialization
+                // exactly once.
+                match &mut procs.pending_specializations {
+                    Some(pending_specializations) => {
+                        // register the pending specialization, so this gets code genned later
+                        add_pending(pending_specializations, proc_name, layout.clone(), pending);
+
+                        let call = Expr::FunctionCall {
+                            call_type: CallType::ByName(proc_name),
+                            layout,
+                            args: &[],
+                        };
+
+                        Stmt::Let(assigned, call, layout, hole)
+                    }
+                    None => {
+                        let opt_partial_proc = procs.partial_procs.get(&proc_name);
+
+                        match opt_partial_proc {
+                            Some(partial_proc) => {
+                                // TODO should pending_procs hold a Rc<Proc> to avoid this .clone()?
+                                let partial_proc = partial_proc.clone();
+
+                                // Mark this proc as in-progress, so if we're dealing with
+                                // mutually recursive functions, we don't loop forever.
+                                // (We had a bug around this before this system existed!)
+                                procs
+                                    .specialized
+                                    .insert((proc_name, layout.clone()), InProgress);
+
+                                match specialize(
+                                    env,
+                                    procs,
+                                    proc_name,
+                                    layout_cache,
+                                    pending,
+                                    partial_proc,
+                                ) {
+                                    Ok(proc) => {
+                                        procs
+                                            .specialized
+                                            .insert((proc_name, layout.clone()), Done(proc));
+
+                                        let call = Expr::FunctionCall {
+                                            call_type: CallType::ByName(proc_name),
+                                            layout,
+                                            args: &[],
+                                        };
+
+                                        Stmt::Let(assigned, call, layout, hole)
+                                    }
+                                    Err(error) => {
+                                        let error_msg = env.arena.alloc(format!(
+                                            "TODO generate a RuntimeError message for {:?}",
+                                            error
+                                        ));
+
+                                        procs.runtime_errors.insert(proc_name, error_msg);
+
+                                        Stmt::RuntimeError(error_msg)
+                                    }
+                                }
+                            }
+
+                            None => {
+                                // This must have been a runtime error.
+                                let error = procs.runtime_errors.get(&proc_name).unwrap();
+
+                                Stmt::RuntimeError(error)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            // This function code gens to a runtime error,
+            // so attempting to call it will immediately crash.
+            Stmt::RuntimeError("")
+        }
+    }
 }
