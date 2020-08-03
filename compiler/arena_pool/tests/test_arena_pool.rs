@@ -1,11 +1,11 @@
-#[macro_use]
-extern crate pretty_assertions;
+// #[macro_use]
+// extern crate pretty_assertions;
 
 extern crate arena_pool;
 
 #[cfg(test)]
 mod test_arena_pool {
-    use arena_pool::pool::{Arena, ArenaIter, ArenaPool, ArenaRef};
+    use arena_pool::pool::{ArenaIter, ArenaPool};
 
     #[test]
     fn empty_pool() {

@@ -35,9 +35,9 @@ mod test_load {
         let src_dir = fixtures_dir().join(dir_name);
         let filename = src_dir.join(format!("{}.roc", module_name));
         let loaded = load(
-            src_dir,
+            filename,
             &roc_builtins::std::standard_stdlib(),
-            filename.as_path(),
+            src_dir.as_path(),
             subs_by_module,
         );
         let loaded_module = loaded.expect("Test module failed to load");
@@ -129,9 +129,9 @@ mod test_load {
         let src_dir = fixtures_dir().join("interface_with_deps");
         let filename = src_dir.join("Primary.roc");
         let loaded = load(
-            src_dir,
+            filename,
             &roc_builtins::std::standard_stdlib(),
-            filename.as_path(),
+            src_dir.as_path(),
             subs_by_module,
         );
 
