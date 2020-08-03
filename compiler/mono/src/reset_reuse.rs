@@ -5,50 +5,6 @@ use bumpalo::collections::Vec;
 use roc_collections::all::MutSet;
 use roc_module::symbol::Symbol;
 
-/*
-R : FnBodypure → FnBodyRC
-R(let x = e; F ) = let x = e; R(F )
-R(ret x) = ret x
-R(case x of F ) = case x of D(x,ni
-, R(Fi))
-where ni = #fields of x in i-th branch
-D : Var × N × FnBodyRC → FnBodyRC
-D(z,n, case x of F ) = case x of D(z,n, F )
-D(z,n, ret x) = ret x
-D(z,n, let x = e; F ) = let x = e; D(z,n, F )
-if z ∈ e or z ∈ F
-D(z,n, F ) = let w = reset z; S(w,n, F )
-otherwise, if S(w,n, F ) , F for a fresh w
-D(z,n, F ) = F otherwise
-S : Var × N × FnBodyRC → FnBodyRC
-S(w,n, let x = ctori y; F ) = let x = reuse w in ctori y; F
-if | y |= n
-S(w,n, let x = e; F ) = let x = e; S(w,n, F ) otherwise
-S(w,n, ret x) = ret x
-S(w,n, case x of F ) = case x of S(w,n, F )
-
-
-Maybe a : [ Nothing, Just a ]
-
-map : Maybe a -> (a -> b) -> Maybe b
-map = \maybe f ->
-    when maybe is
-        Nothing -> Nothing
-        Just x -> Just (f x)
-
-
-map : Maybe a -> (a -> b) -> Maybe b
-map = \maybe f ->
-    when maybe is
-        Nothing ->
-            let w = reset maybe
-            let r = reuse w in AppliedTag("Nothing", vec![])
-        Just x ->
-            let v = f x
-            let w = reset maybe
-            let r = reuse w in AppliedTag("Just", vec![v])
-*/
-
 pub fn function_r<'a>(env: &mut Env<'a, '_>, body: &'a Expr<'a>) -> Expr<'a> {
     use Expr::*;
 
@@ -345,6 +301,143 @@ fn function_s<'a>(
     }
 }
 
+fn free_variables<'a>(initial: &Expr<'a>) -> MutSet<Symbol> {
+    use Expr::*;
+    let mut seen = MutSet::default();
+    let mut bound = MutSet::default();
+    let mut stack = vec![initial];
+
+    // in other words, variables that are referenced, but not stored
+
+    while let Some(expr) = stack.pop() {
+        match expr {
+            FunctionPointer(symbol, _) | Load(symbol) => {
+                seen.insert(*symbol);
+            }
+            Reset(symbol, expr) | Reuse(symbol, expr) => {
+                seen.insert(*symbol);
+                stack.push(expr)
+            }
+
+            Cond {
+                cond_symbol,
+                branching_symbol,
+                pass,
+                fail,
+                ..
+            } => {
+                seen.insert(*cond_symbol);
+                seen.insert(*branching_symbol);
+
+                for (symbol, _, expr) in pass.0.iter() {
+                    seen.insert(*symbol);
+                    stack.push(expr)
+                }
+
+                for (symbol, _, expr) in fail.0.iter() {
+                    seen.insert(*symbol);
+                    stack.push(expr)
+                }
+            }
+
+            Switch {
+                cond,
+                cond_symbol,
+                branches,
+                default_branch,
+                ..
+            } => {
+                stack.push(cond);
+                seen.insert(*cond_symbol);
+
+                for (_, stores, expr) in branches.iter() {
+                    stack.push(expr);
+
+                    for (symbol, _, expr) in stores.iter() {
+                        bound.insert(*symbol);
+                        stack.push(expr)
+                    }
+                }
+
+                stack.push(default_branch.1);
+                for (symbol, _, expr) in default_branch.0.iter() {
+                    seen.insert(*symbol);
+                    stack.push(expr)
+                }
+            }
+
+            Store(stores, body) => {
+                for (symbol, _, expr) in stores.iter() {
+                    bound.insert(*symbol);
+                    stack.push(&expr)
+                }
+
+                stack.push(body)
+            }
+
+            DecAfter(symbol, body) | Inc(symbol, body) => {
+                seen.insert(*symbol);
+                stack.push(body);
+            }
+
+            CallByName { name, args, .. } => {
+                seen.insert(*name);
+                for (expr, _) in args.iter() {
+                    stack.push(expr);
+                }
+            }
+
+            CallByPointer(function, args, _) => {
+                stack.push(function);
+                stack.extend(args.iter());
+            }
+
+            RunLowLevel(_, args) => {
+                for (expr, _) in args.iter() {
+                    stack.push(expr);
+                }
+            }
+
+            Tag { arguments, .. } => {
+                for (symbol, _) in arguments.iter() {
+                    seen.insert(*symbol);
+                }
+            }
+
+            Struct(arguments) => {
+                for (expr, _) in arguments.iter() {
+                    stack.push(expr);
+                }
+            }
+
+            Array { elems, .. } => {
+                for expr in elems.iter() {
+                    stack.push(expr);
+                }
+            }
+
+            AccessAtIndex { expr, .. } => {
+                stack.push(expr);
+            }
+
+            Int(_)
+            | Float(_)
+            | Str(_)
+            | Bool(_)
+            | Byte(_)
+            | EmptyArray
+            | RuntimeError(_)
+            | RuntimeErrorFunction(_) => {}
+        }
+    }
+
+    for symbol in bound.iter() {
+        seen.remove(symbol);
+    }
+
+    seen
+}
+
 fn symbols_in_expr<'a>(initial: &Expr<'a>) -> MutSet<Symbol> {
     use Expr::*;
     let mut result = MutSet::default();
@@ -474,4 +567,82 @@ fn symbols_in_expr<'a>(initial: &Expr<'a>) -> MutSet<Symbol> {
     }
 
     result
+}
+
+pub fn function_c<'a>(env: &mut Env<'a, '_>, body: Expr<'a>) -> Expr<'a> {
+    let fv = free_variables(&body);
+
+    function_c_help(env, body, fv)
+}
+
+pub fn function_c_help<'a>(env: &mut Env<'a, '_>, body: Expr<'a>, fv: MutSet<Symbol>) -> Expr<'a> {
+    use Expr::*;
+
+    match body {
+        Tag { arguments, .. } => {
+            let symbols = arguments
+                .iter()
+                .map(|(x, _)| x)
+                .copied()
+                .collect::<std::vec::Vec<_>>();
+
+            function_c_app(env, &symbols, &fv, body)
+        }
+        _ => body,
+    }
+}
+
+fn function_c_app<'a>(
+    env: &mut Env<'a, '_>,
+    arguments: &[Symbol],
+    orig_fv: &MutSet<Symbol>,
+    mut application: Expr<'a>,
+) -> Expr<'a> {
+    // in the future, this will need to be a check
+    let is_owned = true;
+
+    for (i, y) in arguments.iter().rev().enumerate() {
+        if is_owned {
+            let mut fv = orig_fv.clone();
+            fv.extend(arguments[i..].iter().copied());
+
+            application = insert_increment(env, *y, fv, application)
+        } else {
+            unimplemented!("owned references are not implemented yet")
+        }
+    }
+
+    application
+}
+
+fn insert_increment<'a>(
+    env: &mut Env<'a, '_>,
+    symbol: Symbol,
+    live_variables: MutSet<Symbol>,
+    body: Expr<'a>,
+) -> Expr<'a> {
+    // in the future, this will need to be a check
+    let is_owned = true;
+
+    if is_owned && !live_variables.contains(&symbol) {
+        body
+    } else {
+        Expr::Inc(symbol, env.arena.alloc(body))
+    }
+}
+
+fn insert_decrement<'a>(env: &mut Env<'a, '_>, symbols: &[Symbol], mut body: Expr<'a>) -> Expr<'a> {
+    // in the future, this will need to be a check
+    let is_owned = true;
+    let fv = free_variables(&body);
+
+    for symbol in symbols.iter() {
+        let is_dead = !fv.contains(&symbol);
+
+        if is_owned && is_dead {
+            body = Expr::DecAfter(*symbol, env.arena.alloc(body));
+        }
+    }
+
+    body
 }
