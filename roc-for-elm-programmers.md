@@ -720,13 +720,61 @@ However, it cannot involve record field access. So this would *not* compile:
 
 ## Optional Record Fields
 
-In Elm, all record fields are required. [Kinda not really with Open Records though, yeah?]
+There's a pattern in Elm where you pass a function a record of configuration
+values, some of which you don't really care about and want to leave as defaults.
+To incorporate the default config options, you call the function like so:
 
+```elm
+table { defaultConfig | height = 800, width = 600 }
+```
 
+This way, as the caller I'm specifying only the `height` and `width` fields,
+and leaving the others to whatever is inside `defaultConfig`. Perhaps it also
+has the fields `x` and `y`.
 
+In Roc, you can do this like so:
 
+```elm
+table { height = 800, width = 600 }
+```
 
+...and the `table` function will fill in its default values for `x` and `y`.
+There is no need to use a `defaultConfig` record.
 
+Here's how `table` would be defined in Roc:
+
+```
+table = \{ height, width, x ? 0.0, y ? 0.0 } ->
+```
+
+This is using *optional field destructuring* to destructure a record while
+also providing default values for any fields that might be missing.
+Here's the type of `table`:
+
+```
+table : { height : Float, width : Float, x ? Float, y ? Float } -> Table
+table = \{ height, width, x ? 0.0, y ? 0.0 } ->
+```
+
+This says that `table` takes a record with two *required* fields (`height` and
+`width` and two *optional* fields (`x` and `y`). It also says that all of those
+fields have the type `Float` This means you can choose to omit `x`, `y`, or both,
+when calling the function...but if you provide them, they must be numbers.
+
+This is also the type that would have been inferred for `table` if no annotation
+had been written. Roc's compiler can tell from the destructuring syntax
+`x ? 0.0` that `x` is an optional field, and that it has the type `Float`. These
+default values can reference other expressions in the record destructure; if you
+wanted, you could write `{ height, width, x ? 0.0, y ? x + 1 }`.
+
+Destructuring is the only way to implement a record with optional fields.
+(For example, if you write the expression `config.x` and `x` is an optional field,
+you'll get a compile error.)
+
+This means it's never possible to end up with an "optional value" that exists
+outside a record field. Optionality is a concept that exists only in record fields,
+and it's intended for the use case of config records like this. The ergonomics
+of destructuring mean this wouldn't be a good fit for data modeling.
 
 ## Standard Data Structures
 
