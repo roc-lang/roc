@@ -1,7 +1,7 @@
 use bumpalo::Bump;
-use crossbeam::channel::{bounded, Receiver, RecvError, SendError, Sender};
+use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
-use crossbeam::thread::{self, Scope};
+use crossbeam::thread;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
@@ -21,7 +21,7 @@ use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
-use roc_types::types::{Alias, Type};
+use roc_types::types::Alias;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
@@ -195,7 +195,6 @@ type SharedModules<'a, 'b> = MaybeShared<'a, 'b, ModuleIds, IdentIdsByModule>;
 type IdentIdsByModule = MutMap<ModuleId, IdentIds>;
 
 type MsgSender<'a> = Sender<Msg<'a>>;
-type MsgReceiver<'a> = Receiver<Msg<'a>>;
 
 /// Add a task to the queue, and notify all the listeners.
 fn enqueue_task<'a, 'b>(
@@ -258,12 +257,10 @@ fn enqueue_task<'a, 'b>(
 ///     specializations, so if none of their specializations changed, we don't even need
 ///     to rebuild the module and can link in the cached one directly.)
 // #[allow(clippy::cognitive_complexity)]
-fn load(
+pub fn load(
     filename: PathBuf,
     stdlib: &StdLib,
     src_dir: &Path,
-    arc_modules: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     exposed_types: SubsByModule,
 ) -> Result<LoadedModule, LoadingProblem> {
     use self::MaybeShared::*;
@@ -286,14 +283,17 @@ fn load(
     let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
 
     // Load the root module synchronously; we can't proceed until we have its id.
-    let root_id = load_filename(
+    let (root_id, root_msg) = load_filename(
         &arena,
         filename,
-        msg_tx.clone(),
         Shared(Arc::clone(&arc_modules), Arc::clone(&ident_ids_by_module)),
         // TODO FIXME go back to using Unique here, not Shared
         // Unique(&mut module_ids, &mut root_exposed_ident_ids),
     )?;
+
+    msg_tx
+        .send(root_msg)
+        .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
     // We'll add tasks to this, and then worker threads will take tasks from it.
     let injector = Injector::new();
@@ -382,7 +382,8 @@ fn load(
                             // queue - and run it.
                             match find_task(&worker, injector, stealers) {
                                 Some(task) => {
-                                    run_task(task, worker_arena, src_dir, msg_tx.clone(), stdlib);
+                                    run_task(task, worker_arena, src_dir, msg_tx.clone(), stdlib)
+                                        .expect("Msg channel closed unexpectedly.");
                                 }
                                 None => {
                                     // No tasks to work on! This might be because
@@ -656,7 +657,6 @@ fn update<'a>(
                         constraint,
                         var_store,
                         imported_modules,
-                        msg_tx.clone(),
                         &mut state.exposed_types,
                         stdlib,
                     ),
@@ -738,7 +738,6 @@ fn update<'a>(
                                     constraint,
                                     var_store,
                                     imported_modules,
-                                    msg_tx.clone(),
                                     &mut state.exposed_types,
                                     stdlib,
                                 ),
@@ -792,9 +791,8 @@ fn load_module<'a>(
     arena: &'a Bump,
     src_dir: &Path,
     module_name: ModuleName,
-    msg_tx: MsgSender<'a>,
     module_ids: SharedModules<'a, '_>,
-) -> Result<ModuleId, LoadingProblem> {
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let mut filename = PathBuf::new();
 
     filename.push(src_dir);
@@ -807,7 +805,7 @@ fn load_module<'a>(
     // End with .roc
     filename.set_extension(ROC_FILE_EXTENSION);
 
-    load_filename(arena, filename, msg_tx, module_ids)
+    load_filename(arena, filename, module_ids)
 }
 
 /// Find a task according to the following algorithm:
@@ -839,63 +837,45 @@ fn find_task<T>(local: &Worker<T>, global: &Injector<T>, stealers: &[Stealer<T>]
 fn parse_src<'a>(
     arena: &'a Bump,
     filename: PathBuf,
-    msg_tx: MsgSender<'a>,
     module_ids: SharedModules<'_, '_>,
     src_bytes: &'a [u8],
-) -> Result<ModuleId, LoadingProblem> {
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let parse_state = parser::State::new(src_bytes, Attempting::Module);
 
-    // TODO figure out if there's a way to address this clippy error
-    // without introducing a borrow error. ("let and return" is literally
-    // what the borrow checker suggested using here to fix the problem, so...)
-    #[allow(clippy::let_and_return)]
-    let answer = match roc_parse::module::header().parse(&arena, parse_state) {
-        Ok((ast::Module::Interface { header }, parse_state)) => {
-            let module_id = send_header(
-                header.name,
-                header.exposes.into_bump_slice(),
-                header.imports.into_bump_slice(),
-                parse_state,
-                module_ids,
-                msg_tx,
-            );
-
-            Ok(module_id)
-        }
+    match roc_parse::module::header().parse(&arena, parse_state) {
+        Ok((ast::Module::Interface { header }, parse_state)) => Ok(send_header(
+            header.name,
+            header.exposes.into_bump_slice(),
+            header.imports.into_bump_slice(),
+            parse_state,
+            module_ids,
+        )),
         Ok((ast::Module::App { header }, parse_state)) => match module_ids {
             MaybeShared::Shared(_, _) => {
                 // If this is Shared, it means we're trying to import
                 // an app module which is not the root. Not alllowed!
                 Err(LoadingProblem::TriedToImportAppModule)
             }
-            unique_modules @ MaybeShared::Unique(_, _) => {
-                let module_id = send_header(
-                    header.name,
-                    header.provides.into_bump_slice(),
-                    header.imports.into_bump_slice(),
-                    parse_state,
-                    unique_modules,
-                    msg_tx,
-                );
-
-                Ok(module_id)
-            }
+            unique_modules @ MaybeShared::Unique(_, _) => Ok(send_header(
+                header.name,
+                header.provides.into_bump_slice(),
+                header.imports.into_bump_slice(),
+                parse_state,
+                unique_modules,
+            )),
         },
         Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
-    };
-
-    answer
+    }
 }
 
 /// Load a module by its filename
 fn load_filename<'a>(
     arena: &'a Bump,
     filename: PathBuf,
-    msg_tx: MsgSender<'a>,
     module_ids: SharedModules<'a, '_>,
-) -> Result<ModuleId, LoadingProblem> {
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     match fs::read(&filename) {
-        Ok(bytes) => parse_src(arena, filename, msg_tx, module_ids, arena.alloc(bytes)),
+        Ok(bytes) => parse_src(arena, filename, module_ids, arena.alloc(bytes)),
         Err(err) => Err(LoadingProblem::FileProblem {
             filename,
             error: err.kind(),
@@ -909,8 +889,7 @@ fn send_header<'a>(
     imports: &'a [Located<ImportsEntry<'a>>],
     parse_state: parser::State<'a>,
     shared_modules: SharedModules<'_, '_>,
-    msg_tx: MsgSender<'a>,
-) -> ModuleId {
+) -> (ModuleId, Msg<'a>) {
     use MaybeShared::*;
 
     let declared_name: ModuleName = name.value.as_str().into();
@@ -1070,8 +1049,9 @@ fn send_header<'a>(
     // to decrement its "pending" count.
 
     // Send the header the main thread for processing,
-    msg_tx
-        .send(Msg::Header(ModuleHeader {
+    (
+        home,
+        Msg::Header(ModuleHeader {
             module_id: home,
             exposed_ident_ids: ident_ids,
             module_name: declared_name,
@@ -1080,10 +1060,8 @@ fn send_header<'a>(
             exposes: exposed,
             src: parse_state.bytes,
             exposed_imports: scope,
-        }))
-        .unwrap_or_else(|_| panic!("Failed to send Header message for module ID: {:?}", home));
-
-    home
+        }),
+    )
 }
 
 fn add_exposed_to_scope(
@@ -1111,9 +1089,8 @@ impl<'a, 'b> BuildTask<'a, 'b> {
         module: Module,
         src: &'a str,
         constraint: Constraint,
-        mut var_store: VarStore,
+        var_store: VarStore,
         imported_modules: MutSet<ModuleId>,
-        msg_tx: MsgSender,
         exposed_types: &mut SubsByModule,
         stdlib: &StdLib,
     ) -> Self {
@@ -1261,85 +1238,80 @@ fn run_solve<'a>(
     }
 }
 
-///// Parse the module, canonicalize it, and generate constraints for it.
-//fn parse_and_constrain(
-//    header: ModuleHeader,
-//    mode: Mode,
-//    module_ids: ModuleIds,
-//    dep_idents: IdentIdsByModule,
-//    exposed_symbols: MutSet<Symbol>,
-//    msg_tx: MsgSender,
-//) {
-//    let module_id = header.module_id;
-//    let mut var_store = VarStore::default();
-//    let arena = Bump::new();
-//    let parse_state = parser::State::new(&header.src, Attempting::Module);
+/// Parse the module, canonicalize it, and generate constraints for it.
+fn parse_and_constrain<'a>(
+    header: ModuleHeader<'a>,
+    mode: Mode,
+    module_ids: ModuleIds,
+    dep_idents: IdentIdsByModule,
+    exposed_symbols: MutSet<Symbol>,
+) -> Result<Msg<'a>, LoadingProblem> {
+    let module_id = header.module_id;
+    let mut var_store = VarStore::default();
+    let arena = Bump::new();
+    let parse_state = parser::State::new(&header.src, Attempting::Module);
 
-//    let (parsed_defs, _) = module_defs()
-//        .parse(&arena, parse_state)
-//        .expect("TODO gracefully handle parse error on module defs. IMPORTANT: Bail out entirely if there are any BadUtf8 problems! That means the whole source file is not valid UTF-8 and any other errors we report may get mis-reported. We rely on this for safety in an `unsafe` block later on in this function.");
+    let (parsed_defs, _) = module_defs()
+        .parse(&arena, parse_state)
+        .expect("TODO gracefully handle parse error on module defs. IMPORTANT: Bail out entirely if there are any BadUtf8 problems! That means the whole source file is not valid UTF-8 and any other errors we report may get mis-reported. We rely on this for safety in an `unsafe` block later on in this function.");
 
-//    let (module, declarations, ident_ids, constraint, problems) = match canonicalize_module_defs(
-//        &arena,
-//        parsed_defs,
-//        module_id,
-//        &module_ids,
-//        header.exposed_ident_ids,
-//        dep_idents,
-//        header.exposed_imports,
-//        exposed_symbols,
-//        &mut var_store,
-//    ) {
-//        Ok(module_output) => {
-//            let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
-//            let module = Module {
-//                module_id,
-//                exposed_imports: module_output.exposed_imports,
-//                exposed_vars_by_symbol: module_output.exposed_vars_by_symbol,
-//                references: module_output.references,
-//                aliases: module_output.aliases,
-//                rigid_variables: module_output.rigid_variables,
-//            };
+    let (module, declarations, ident_ids, constraint, problems) = match canonicalize_module_defs(
+        &arena,
+        parsed_defs,
+        module_id,
+        &module_ids,
+        header.exposed_ident_ids,
+        dep_idents,
+        header.exposed_imports,
+        exposed_symbols,
+        &mut var_store,
+    ) {
+        Ok(module_output) => {
+            let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
+            let module = Module {
+                module_id,
+                exposed_imports: module_output.exposed_imports,
+                exposed_vars_by_symbol: module_output.exposed_vars_by_symbol,
+                references: module_output.references,
+                aliases: module_output.aliases,
+                rigid_variables: module_output.rigid_variables,
+            };
 
-//            (
-//                module,
-//                module_output.declarations,
-//                module_output.ident_ids,
-//                constraint,
-//                module_output.problems,
-//            )
-//        }
-//        Err(runtime_error) => {
-//            panic!(
-//                "TODO gracefully handle module canonicalization error {:?}",
-//                runtime_error
-//            );
-//        }
-//    };
+            (
+                module,
+                module_output.declarations,
+                module_output.ident_ids,
+                constraint,
+                module_output.problems,
+            )
+        }
+        Err(runtime_error) => {
+            panic!(
+                "TODO gracefully handle module canonicalization error {:?}",
+                runtime_error
+            );
+        }
+    };
 
-//    let imported_modules = header.imported_modules;
+    let imported_modules = header.imported_modules;
 
-//    // SAFETY: By this point we've already incrementally verified that there
-//    // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors,
-//    // we'd have bailed out before now.
-//    let src: Box<str> = unsafe { from_utf8_unchecked(header.src.as_ref()).to_string().into() };
+    // SAFETY: By this point we've already incrementally verified that there
+    // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors,
+    // we'd have bailed out before now.
+    let src = unsafe { from_utf8_unchecked(header.src.as_ref()) };
 
-//    thread_scope.spawn(move |_| {
-//        // Send the constraint to the main thread for processing.
-//        msg_tx
-//            .send(Msg::Constrained {
-//                module,
-//                src,
-//                declarations,
-//                imported_modules,
-//                ident_ids,
-//                constraint,
-//                problems,
-//                var_store,
-//            })
-//            .unwrap_or_else(|_| panic!("Failed to send Constrained message"));
-//    });
-//}
+    // Send the constraint to the main thread for processing.
+    Ok(Msg::Constrained {
+        module,
+        src,
+        declarations,
+        imported_modules,
+        ident_ids,
+        constraint,
+        problems,
+        var_store,
+    })
+}
 
 fn exposed_from_import(entry: &ImportsEntry<'_>) -> (ModuleName, Vec<Ident>) {
     use roc_parse::ast::ImportsEntry::*;
@@ -1380,26 +1352,18 @@ fn run_task<'a, 'b>(
 ) -> Result<(), LoadingProblem> {
     use BuildTask::*;
 
-    match task {
+    let msg = match task {
         LoadModule {
             module_name,
             module_ids,
-        } => {
-            let module_id = load_module(arena, src_dir, module_name, msg_tx, module_ids)?;
-
-            Ok(())
-        }
+        } => load_module(arena, src_dir, module_name, module_ids).map(|(_, msg)| msg),
         ParseAndConstrain {
             header,
             mode,
             module_ids,
             dep_idents,
             exposed_symbols,
-        } => {
-            //TODO
-            Ok(())
-        }
-
+        } => parse_and_constrain(header, mode, module_ids, dep_idents, exposed_symbols),
         Solve {
             module,
             imported_symbols,
@@ -1407,18 +1371,20 @@ fn run_task<'a, 'b>(
             constraint,
             var_store,
             src,
-        } => {
-            let msg = run_solve(
-                module,
-                stdlib,
-                imported_symbols,
-                imported_aliases,
-                constraint,
-                var_store,
-                src,
-            );
+        } => Ok(run_solve(
+            module,
+            stdlib,
+            imported_symbols,
+            imported_aliases,
+            constraint,
+            var_store,
+            src,
+        )),
+    }?;
 
-            Ok(())
-        }
-    }
+    msg_tx
+        .send(msg)
+        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+
+    Ok(())
 }
