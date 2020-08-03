@@ -872,7 +872,10 @@ fn from_can<'a>(
         Call(boxed, loc_args, _) => {
             let (fn_var, loc_expr, ret_var) = *boxed;
 
-            match from_can(env, loc_expr.value, procs, layout_cache) {
+            let result = from_can(env, loc_expr.value, procs, layout_cache);
+            dbg!(&result, &procs);
+
+            match result {
                 Expr::Load(proc_name) => {
                     // Some functions can potentially mutate in-place.
                     // If we have one of those, switch to the in-place version if appropriate.
@@ -1374,6 +1377,7 @@ fn from_can_defs<'a>(
 
                         let (loc_body, ret_var) = *boxed_body;
 
+                        dbg!("inserting", *symbol);
                         procs.insert_named(
                             env,
                             layout_cache,

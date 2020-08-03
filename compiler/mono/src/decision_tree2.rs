@@ -1,7 +1,6 @@
-use crate::experiment::{Expr, Literal, Stmt};
-use crate::expr::{DestructType, Env, Pattern};
+use crate::experiment::{DestructType, Env, Expr, Literal, Pattern, Stmt};
 use crate::layout::{Builtin, Layout};
-use crate::pattern::{Ctor, RenderAs, TagId, Union};
+use crate::pattern2::{Ctor, RenderAs, TagId, Union};
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
@@ -58,7 +57,7 @@ pub enum Test<'a> {
     IsCtor {
         tag_id: u8,
         tag_name: TagName,
-        union: crate::pattern::Union,
+        union: crate::pattern2::Union,
         arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
     IsInt(i64),

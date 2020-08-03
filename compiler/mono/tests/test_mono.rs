@@ -118,9 +118,11 @@ mod test_mono {
             pointer_size,
             jump_counter: arena.alloc(0),
         };
+        dbg!(&procs);
         let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
         let procs =
             roc_mono::expr::specialize_all(&mut mono_env, procs, &mut LayoutCache::default());
+        dbg!(&procs);
 
         assert_eq!(
             procs.runtime_errors,
@@ -987,11 +989,9 @@ mod test_mono {
             &mut layout_cache,
         );
 
-        /*
-
-        let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
+        // let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
         let procs =
-            roc_mono::expr::specialize_all(&mut mono_env, procs, &mut LayoutCache::default());
+            roc_mono::experiment::specialize_all(&mut mono_env, procs, &mut LayoutCache::default());
 
         assert_eq!(
             procs.runtime_errors,
@@ -1005,7 +1005,7 @@ mod test_mono {
             .specialized
             .iter()
             .map(|(_, value)| {
-                if let InProgressProc::Done(proc) = value {
+                if let roc_mono::experiment::InProgressProc::Done(proc) = value {
                     proc.to_pretty(200)
                 } else {
                     String::new()
@@ -1013,9 +1013,6 @@ mod test_mono {
             })
             .collect::<Vec<_>>();
 
-        dbg!(&mono_expr);
-        */
-        let mut procs_string = vec![];
         procs_string.push(ir_expr.to_pretty(200));
 
         let result = procs_string.join("\n");
@@ -1190,17 +1187,17 @@ mod test_mono {
 
     #[test]
     fn ir_plus() {
-        // NOTE apparently loading the tag_id is not required?
         compiles_to_ir(
             r#"
             1 + 2
             "#,
             indoc!(
                 r#"
-                let Test.4 = 1i64;
-                let Test.5 = 3.14f64;
-                let Test.1 = Struct {Test.4, Test.5};
-                let Test.0 = Index 0 Test.1;
+                procedure Num.14 (#Attr.2, #Attr.3):
+                    let Test.3 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.3;
+
+                let Test.0 = CallByName Num.14;
                 ret Test.0;
                 "#
             ),
