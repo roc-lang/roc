@@ -142,10 +142,11 @@ struct State<'a> {
 }
 
 #[derive(Debug)]
-enum BuildTask<'a, 'b> {
+enum BuildTask<'a> {
     LoadModule {
         module_name: ModuleName,
-        module_ids: SharedModules<'a, 'b>,
+        module_ids: Arc<Mutex<ModuleIds>>,
+        ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     },
     ParseAndConstrain {
         header: ModuleHeader<'a>,
@@ -185,22 +186,14 @@ pub enum LoadingProblem {
     TriedToImportAppModule,
 }
 
-#[derive(Debug)]
-enum MaybeShared<'a, 'b, A, B> {
-    Shared(Arc<Mutex<A>>, Arc<Mutex<B>>),
-    Unique(&'a mut A, &'b mut B),
-}
-
-type SharedModules<'a, 'b> = MaybeShared<'a, 'b, ModuleIds, IdentIdsByModule>;
 type IdentIdsByModule = MutMap<ModuleId, IdentIds>;
-
 type MsgSender<'a> = Sender<Msg<'a>>;
 
 /// Add a task to the queue, and notify all the listeners.
 fn enqueue_task<'a, 'b>(
-    injector: &Injector<BuildTask<'a, 'b>>,
+    injector: &Injector<BuildTask<'a>>,
     listeners: &[Sender<WorkerMsg>],
-    task: BuildTask<'a, 'b>,
+    task: BuildTask<'a>,
 ) -> Result<(), LoadingProblem> {
     injector.push(task);
 
@@ -263,8 +256,6 @@ pub fn load(
     src_dir: &Path,
     exposed_types: SubsByModule,
 ) -> Result<LoadedModule, LoadingProblem> {
-    use self::MaybeShared::*;
-
     let arena = Bump::new();
 
     // Reserve one CPU for the main thread, and let all the others be eligible
@@ -286,7 +277,8 @@ pub fn load(
     let (root_id, root_msg) = load_filename(
         &arena,
         filename,
-        Shared(Arc::clone(&arc_modules), Arc::clone(&ident_ids_by_module)),
+        Arc::clone(&arc_modules),
+        Arc::clone(&ident_ids_by_module),
         // TODO FIXME go back to using Unique here, not Shared
         // Unique(&mut module_ids, &mut root_exposed_ident_ids),
     )?;
@@ -462,10 +454,9 @@ fn update<'a>(
     msg: Msg<'a>,
     stdlib: &StdLib,
     msg_tx: MsgSender<'a>,
-    injector: &Injector<BuildTask<'a, '_>>,
+    injector: &Injector<BuildTask<'a>>,
     worker_listeners: &'a [Sender<WorkerMsg>],
 ) -> Result<State<'a>, LoadingProblem> {
-    use self::MaybeShared::*;
     use self::Msg::*;
 
     match msg {
@@ -545,20 +536,16 @@ fn update<'a>(
                     // we actually start loading it.
                     state.loading_started.insert(*dep_id);
 
-                    // Provide mutexes of ModuleIds and IdentIds by module,
-                    // so other modules can populate them as they load.
-                    let shared = Shared(
-                        Arc::clone(&state.arc_modules),
-                        Arc::clone(&state.ident_ids_by_module),
-                    );
-
                     // Start loading this module in the background.
                     enqueue_task(
                         injector,
                         worker_listeners,
                         BuildTask::LoadModule {
                             module_name: dep_name.clone(),
-                            module_ids: shared,
+                            // Provide mutexes of ModuleIds and IdentIds by module,
+                            // so other modules can populate them as they load.
+                            module_ids: Arc::clone(&state.arc_modules),
+                            ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
                         },
                     )?;
                 }
@@ -791,7 +778,8 @@ fn load_module<'a>(
     arena: &'a Bump,
     src_dir: &Path,
     module_name: ModuleName,
-    module_ids: SharedModules<'a, '_>,
+    module_ids: Arc<Mutex<ModuleIds>>,
+    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let mut filename = PathBuf::new();
 
@@ -805,7 +793,7 @@ fn load_module<'a>(
     // End with .roc
     filename.set_extension(ROC_FILE_EXTENSION);
 
-    load_filename(arena, filename, module_ids)
+    load_filename(arena, filename, module_ids, ident_ids_by_module)
 }
 
 /// Find a task according to the following algorithm:
@@ -837,7 +825,8 @@ fn find_task<T>(local: &Worker<T>, global: &Injector<T>, stealers: &[Stealer<T>]
 fn parse_src<'a>(
     arena: &'a Bump,
     filename: PathBuf,
-    module_ids: SharedModules<'_, '_>,
+    module_ids: Arc<Mutex<ModuleIds>>,
+    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     src_bytes: &'a [u8],
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let parse_state = parser::State::new(src_bytes, Attempting::Module);
@@ -849,21 +838,16 @@ fn parse_src<'a>(
             header.imports.into_bump_slice(),
             parse_state,
             module_ids,
+            ident_ids_by_module,
         )),
-        Ok((ast::Module::App { header }, parse_state)) => match module_ids {
-            MaybeShared::Shared(_, _) => {
-                // If this is Shared, it means we're trying to import
-                // an app module which is not the root. Not alllowed!
-                Err(LoadingProblem::TriedToImportAppModule)
-            }
-            unique_modules @ MaybeShared::Unique(_, _) => Ok(send_header(
-                header.name,
-                header.provides.into_bump_slice(),
-                header.imports.into_bump_slice(),
-                parse_state,
-                unique_modules,
-            )),
-        },
+        Ok((ast::Module::App { header }, parse_state)) => Ok(send_header(
+            header.name,
+            header.provides.into_bump_slice(),
+            header.imports.into_bump_slice(),
+            parse_state,
+            module_ids,
+            ident_ids_by_module,
+        )),
         Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
     }
 }
@@ -872,10 +856,17 @@ fn parse_src<'a>(
 fn load_filename<'a>(
     arena: &'a Bump,
     filename: PathBuf,
-    module_ids: SharedModules<'a, '_>,
+    module_ids: Arc<Mutex<ModuleIds>>,
+    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     match fs::read(&filename) {
-        Ok(bytes) => parse_src(arena, filename, module_ids, arena.alloc(bytes)),
+        Ok(bytes) => parse_src(
+            arena,
+            filename,
+            module_ids,
+            ident_ids_by_module,
+            arena.alloc(bytes),
+        ),
         Err(err) => Err(LoadingProblem::FileProblem {
             filename,
             error: err.kind(),
@@ -888,10 +879,9 @@ fn send_header<'a>(
     exposes: &'a [Located<ExposesEntry<'a>>],
     imports: &'a [Located<ImportsEntry<'a>>],
     parse_state: parser::State<'a>,
-    shared_modules: SharedModules<'_, '_>,
+    module_ids: Arc<Mutex<ModuleIds>>,
+    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
 ) -> (ModuleId, Msg<'a>) {
-    use MaybeShared::*;
-
     let declared_name: ModuleName = name.value.as_str().into();
 
     // TODO check to see if declared_name is consistent with filename.
@@ -920,125 +910,73 @@ fn send_header<'a>(
         HashMap::with_capacity_and_hasher(scope_size, default_hasher());
     let home: ModuleId;
 
-    let ident_ids = match shared_modules {
-        Shared(arc_module_ids, arc_ident_ids) => {
-            // Lock just long enough to perform the minimal operations necessary.
-            let mut module_ids = (*arc_module_ids).lock().expect("Failed to acquire lock for interning module IDs, presumably because a thread panicked.");
-            let mut ident_ids_by_module = (*arc_ident_ids).lock().expect("Failed to acquire lock for interning ident IDs, presumably because a thread panicked.");
+    let ident_ids = {
+        // Lock just long enough to perform the minimal operations necessary.
+        let mut module_ids = (*module_ids).lock().expect("Failed to acquire lock for interning module IDs, presumably because a thread panicked.");
+        let mut ident_ids_by_module = (*ident_ids_by_module).lock().expect(
+            "Failed to acquire lock for interning ident IDs, presumably because a thread panicked.",
+        );
 
-            home = module_ids.get_or_insert(&declared_name.as_inline_str());
+        home = module_ids.get_or_insert(&declared_name.as_inline_str());
 
-            // Ensure this module has an entry in the exposed_ident_ids map.
-            ident_ids_by_module
-                .entry(home)
-                .or_insert_with(IdentIds::default);
+        // Ensure this module has an entry in the exposed_ident_ids map.
+        ident_ids_by_module
+            .entry(home)
+            .or_insert_with(IdentIds::default);
 
-            // This can't possibly fail, because we just ensured it
-            // has an entry with this key.
-            let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
-            let mut imports_to_expose = Vec::with_capacity(imports.len());
+        // This can't possibly fail, because we just ensured it
+        // has an entry with this key.
+        let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
+        let mut imports_to_expose = Vec::with_capacity(imports.len());
 
-            // For each of our imports, add an entry to deps_by_name
-            //
-            // e.g. for `imports [ Foo.{ bar } ]`, add `Foo` to deps_by_name
-            for (module_name, exposed, region) in imported.into_iter() {
-                let cloned_module_name = module_name.clone();
-                let module_id = module_ids.get_or_insert(&module_name.into());
+        // For each of our imports, add an entry to deps_by_name
+        //
+        // e.g. for `imports [ Foo.{ bar } ]`, add `Foo` to deps_by_name
+        for (module_name, exposed, region) in imported.into_iter() {
+            let cloned_module_name = module_name.clone();
+            let module_id = module_ids.get_or_insert(&module_name.into());
 
-                deps_by_name.insert(cloned_module_name, module_id);
+            deps_by_name.insert(cloned_module_name, module_id);
 
-                imported_modules.insert(module_id);
+            imported_modules.insert(module_id);
 
-                imports_to_expose.push((module_id, exposed, region));
-            }
-
-            // For each of our imports, add any exposed values to scope.
-            //
-            // e.g. for `imports [ Foo.{ bar } ]`, add `bar` to scope.
-            for (module_id, exposed, region) in imports_to_expose.into_iter() {
-                if !exposed.is_empty() {
-                    add_exposed_to_scope(module_id, &mut scope, exposed, ident_ids, region);
-                }
-            }
-
-            // Generate IdentIds entries for all values this module exposes.
-            // This way, when we encounter them in Defs later, they already
-            // have an IdentIds entry.
-            //
-            // We must *not* add them to scope yet, or else the Defs will
-            // incorrectly think they're shadowing them!
-            for loc_exposed in exposes.iter() {
-                // Use get_or_insert here because the ident_ids may already
-                // created an IdentId for this, when it was imported exposed
-                // in a dependent module.
-                //
-                // For example, if module A has [ B.{ foo } ], then
-                // when we get here for B, `foo` will already have
-                // an IdentId. We must reuse that!
-                let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str().into());
-                let symbol = Symbol::new(home, ident_id);
-
-                exposed.push(symbol);
-            }
-
-            if cfg!(debug_assertions) {
-                home.register_debug_idents(&ident_ids);
-            }
-
-            ident_ids.clone()
+            imports_to_expose.push((module_id, exposed, region));
         }
-        Unique(module_ids, ident_ids_by_module) => {
-            // If this is the original file the user loaded,
-            // then we already have a mutable reference,
-            // and won't need to pay locking costs.
-            home = module_ids.get_or_insert(declared_name.as_inline_str());
 
-            // For each of our imports, add it to deps_by_name,
-            // and also add any exposed values to scope.
-            //
-            // e.g. for `imports [ Foo.{ bar } ]`, add `Foo` to deps_by_name and `bar` to scope.
-            for (module_name, exposed, region) in imported.into_iter() {
-                let module_id = module_ids.get_or_insert(&module_name.clone().into());
-
-                deps_by_name.insert(module_name, module_id);
-
-                imported_modules.insert(module_id);
-
-                if !exposed.is_empty() {
-                    let mut ident_ids = IdentIds::default();
-
-                    add_exposed_to_scope(module_id, &mut scope, exposed, &mut ident_ids, region);
-
-                    ident_ids_by_module.insert(module_id, ident_ids);
-                }
+        // For each of our imports, add any exposed values to scope.
+        //
+        // e.g. for `imports [ Foo.{ bar } ]`, add `bar` to scope.
+        for (module_id, exposed, region) in imports_to_expose.into_iter() {
+            if !exposed.is_empty() {
+                add_exposed_to_scope(module_id, &mut scope, exposed, ident_ids, region);
             }
-
-            let mut ident_ids = IdentIds::default();
-
-            // Generate IdentIds entries for all values this module exposes.
-            // This way, when we encounter them in Defs later, they already
-            // have an IdentIds entry.
-            //
-            // We must *not* add them to scope yet, or else the Defs will
-            // incorrectly think they're shadowing them!
-            for loc_exposed in exposes.iter() {
-                let ident_id = ident_ids.add(loc_exposed.value.as_str().into());
-                let symbol = Symbol::new(home, ident_id);
-
-                exposed.push(symbol);
-            }
-
-            if cfg!(debug_assertions) {
-                home.register_debug_idents(&ident_ids);
-            }
-
-            // Record this entry into ident_ids_by_module. It should not
-            // have been recorded previously, since this was Unique.
-            debug_assert!(!ident_ids_by_module.contains_key(&home));
-            ident_ids_by_module.insert(home, ident_ids.clone());
-
-            ident_ids
         }
+
+        // Generate IdentIds entries for all values this module exposes.
+        // This way, when we encounter them in Defs later, they already
+        // have an IdentIds entry.
+        //
+        // We must *not* add them to scope yet, or else the Defs will
+        // incorrectly think they're shadowing them!
+        for loc_exposed in exposes.iter() {
+            // Use get_or_insert here because the ident_ids may already
+            // created an IdentId for this, when it was imported exposed
+            // in a dependent module.
+            //
+            // For example, if module A has [ B.{ foo } ], then
+            // when we get here for B, `foo` will already have
+            // an IdentId. We must reuse that!
+            let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str().into());
+            let symbol = Symbol::new(home, ident_id);
+
+            exposed.push(symbol);
+        }
+
+        if cfg!(debug_assertions) {
+            home.register_debug_idents(&ident_ids);
+        }
+
+        ident_ids.clone()
     };
 
     // Send the deps to the coordinator thread for processing,
@@ -1082,7 +1020,7 @@ fn add_exposed_to_scope(
     }
 }
 
-impl<'a, 'b> BuildTask<'a, 'b> {
+impl<'a> BuildTask<'a> {
     // TODO trim down these arguments - possibly by moving Constraint into Module
     #[allow(clippy::too_many_arguments)]
     pub fn solve_module(
@@ -1343,8 +1281,8 @@ fn ident_from_exposed(entry: &ExposesEntry<'_>) -> Ident {
     }
 }
 
-fn run_task<'a, 'b>(
-    task: BuildTask<'a, 'b>,
+fn run_task<'a>(
+    task: BuildTask<'a>,
     arena: &'a Bump,
     src_dir: &Path,
     msg_tx: MsgSender<'a>,
@@ -1356,7 +1294,9 @@ fn run_task<'a, 'b>(
         LoadModule {
             module_name,
             module_ids,
-        } => load_module(arena, src_dir, module_name, module_ids).map(|(_, msg)| msg),
+            ident_ids_by_module,
+        } => load_module(arena, src_dir, module_name, module_ids, ident_ids_by_module)
+            .map(|(_, msg)| msg),
         ParseAndConstrain {
             header,
             mode,
