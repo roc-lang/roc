@@ -11,7 +11,7 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Command;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
 
 pub mod repl;
@@ -137,6 +137,14 @@ pub fn build(matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {
     Ok(())
 }
 
+fn report_timing(buf: &mut String, label: &str, duration: Duration) {
+    buf.push_str(&format!(
+        "        {:.3} ms   {}\n",
+        duration.as_secs_f64() * 1000.0,
+        label,
+    ));
+}
+
 fn build_file(
     src_dir: PathBuf,
     filename: PathBuf,
@@ -156,6 +164,31 @@ fn build_file(
     let loaded =
         roc_load::file::load(filename.clone(), &stdlib, src_dir.as_path(), subs_by_module)?;
     let dest_filename = filename.with_extension("o");
+
+    let buf = &mut String::with_capacity(1024);
+
+    for (module_id, module_timing) in loaded.timings.iter() {
+        let module_name = loaded.interns.module_name(*module_id);
+
+        buf.push_str("    ");
+        buf.push_str(module_name);
+        buf.push_str("\n");
+
+        report_timing(buf, "Read .roc file from disk", module_timing.read_roc_file);
+        report_timing(buf, "Parse header", module_timing.parse_header);
+        report_timing(buf, "Parse body", module_timing.parse_body);
+        report_timing(buf, "Canonicalize", module_timing.canonicalize);
+        report_timing(buf, "Constrain", module_timing.constrain);
+        report_timing(buf, "Solve", module_timing.solve);
+        report_timing(buf, "Other", module_timing.other());
+        buf.push('\n');
+        report_timing(buf, "Total", module_timing.total_start_to_finish);
+    }
+
+    println!(
+        "\n\nCompilation finished! Here's how long each module took to compile:\n\n{}",
+        buf
+    );
 
     gen(
         &arena,
