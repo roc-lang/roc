@@ -2,17 +2,27 @@ interface Set
     exposes [ Set, map, isEmpty ]
     imports []
 
+
+## An empty set.
+empty : Set *
+
 ## Check
 
-# isEmpty : List * -> Bool
+isEmpty : Set * -> Bool
 
-## Convert each element in the list to something new, by calling a conversion
-## function on each of them. Then return a new list of the converted values.
+len : Set * -> Len
+
+add : Set 'elem, 'elem -> Set 'elem
+
+rem : Set 'elem, 'elem -> Set 'elem
+
+## Convert each element in the set to something new, by calling a conversion
+## function on each of them. Then return a new set of the converted values.
 ##
-## >>> Set.map {[ -1, 1, 3 ]} Num.negate
+## >>> Set.map {: -1, 1, 3 :} Num.negate
 ##
-## >>> Set.map {[ "", "a", "bc" ]} Str.isEmpty
+## >>> Set.map {: "", "a", "bc" :} Str.isEmpty
 ##
 ## `map` functions like this are common in Roc, and they all work similarly.
 ## See for example #Result.map, #List.map, and #Map.map.
-map : List before, (before -> after) -> List after
+map : Set 'elem, ('before -> 'after) -> Set 'after
