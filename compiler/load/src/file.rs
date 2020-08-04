@@ -1220,7 +1220,7 @@ fn parse_and_constrain<'a>(
     // SAFETY: By this point we've already incrementally verified that there
     // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors,
     // we'd have bailed out before now.
-    let src = unsafe { from_utf8_unchecked(header.src.as_ref()) };
+    let src = unsafe { from_utf8_unchecked(header.src) };
 
     // Send the constraint to the main thread for processing.
     Ok(Msg::Constrained {

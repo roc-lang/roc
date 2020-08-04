@@ -38,7 +38,7 @@ pub struct ArenaVec<T> {
 }
 
 impl<T> ArenaVec<T> {
-    pub fn new_in<'a>(arena: &mut Arena<T>) -> Self {
+    pub fn new_in(arena: &mut Arena<T>) -> Self {
         // We can't start with a NonNull::dangling pointer because when we go
         // to push elements into this, they'll try to verify the dangling
         // pointer resides in the arena it was given, which will likely panic.
@@ -48,7 +48,7 @@ impl<T> ArenaVec<T> {
         Self::with_capacity_in(0, arena)
     }
 
-    pub fn with_capacity_in<'a>(capacity: usize, arena: &mut Arena<T>) -> Self {
+    pub fn with_capacity_in(capacity: usize, arena: &mut Arena<T>) -> Self {
         let ptr = arena.alloc_vec(capacity);
 
         Self {
@@ -88,7 +88,7 @@ impl<T> ArenaVec<T> {
         }
 
         // Store the element in the appropriate memory address.
-        let elem_ptr = unsafe { &mut *self.buffer_ptr.as_ptr().offset(self.len as isize) };
+        let elem_ptr = unsafe { &mut *self.buffer_ptr.as_ptr().add(self.len) };
 
         *elem_ptr = val;
 
@@ -104,7 +104,7 @@ impl<T> ArenaVec<T> {
             // deallocated once the pool where it was created gets deallocated
             // (along with all of the Arenas it detached), and we just verified that
             // this ArenaRef's ID matches a pool which has not yet been deallocated.
-            Some(unsafe { &*self.buffer_ptr.as_ptr().offset(index as isize) })
+            Some(unsafe { &*self.buffer_ptr.as_ptr().add(index) })
         } else {
             None
         }
@@ -119,7 +119,7 @@ impl<T> ArenaVec<T> {
             // deallocated once the pool where it was created gets deallocated
             // (along with all of the Arenas it detached), and we just verified that
             // this ArenaRef's ID matches a pool which has not yet been deallocated.
-            Some(unsafe { &mut *self.buffer_ptr.as_ptr().offset(index as isize) })
+            Some(unsafe { &mut *self.buffer_ptr.as_ptr().add(index) })
         } else {
             None
         }
@@ -239,7 +239,7 @@ impl<T> Iterator for ArenaIter<T> {
         if self.quantity_remaining != 0 {
             let first_chunk_ptr = self.ptr;
 
-            self.ptr = unsafe { self.ptr.offset(self.first_chunk_capacity as isize) };
+            self.ptr = unsafe { self.ptr.add(self.first_chunk_capacity) };
             self.quantity_remaining -= 1;
 
             Some(Arena {
@@ -269,7 +269,7 @@ impl<T> Arena<T> {
             self.first_chunk_len += 1;
 
             // Return a pointer to the next available slot.
-            unsafe { self.first_chunk_ptr.offset(self.first_chunk_len as isize) }
+            unsafe { self.first_chunk_ptr.add(self.first_chunk_len) }
         } else {
             // We ran out of space in the first chunk, so we turn to extra chunks.
             // First, ensure that we have an extra chunk with enough space in it.
@@ -309,7 +309,7 @@ impl<T> Arena<T> {
             self.first_chunk_len += num_elems;
 
             // Return a pointer to the next available element.
-            unsafe { self.first_chunk_ptr.offset(self.first_chunk_len as isize) }
+            unsafe { self.first_chunk_ptr.add(self.first_chunk_len) }
         } else {
             let new_chunk_cap = self.first_chunk_cap.max(num_elems);
 
@@ -367,7 +367,7 @@ impl<T> AsArena<T> for Arena<T> {
 fn verify_ownership<T>(
     first_chunk_ptr: *const T,
     first_chunk_cap: usize,
-    extra_chunks: &Vec<Vec<T>>,
+    extra_chunks: &[Vec<T>],
     ptr: *const T,
 ) {
     let addr = ptr as usize;
