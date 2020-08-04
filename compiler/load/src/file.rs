@@ -191,19 +191,20 @@ impl ModuleTiming {
 
         end_time
             .duration_since(*start_time)
-            .unwrap()
-            .checked_sub(*solve)
-            .unwrap()
-            .checked_sub(*constrain)
-            .unwrap()
-            .checked_sub(*canonicalize)
-            .unwrap()
-            .checked_sub(*parse_body)
-            .unwrap()
-            .checked_sub(*parse_header)
-            .unwrap()
-            .checked_sub(*read_roc_file)
-            .unwrap()
+            .ok()
+            .and_then(|t| {
+                t.checked_sub(*solve).and_then(|t| {
+                    t.checked_sub(*constrain).and_then(|t| {
+                        t.checked_sub(*canonicalize).and_then(|t| {
+                            t.checked_sub(*parse_body).and_then(|t| {
+                                t.checked_sub(*parse_header)
+                                    .and_then(|t| t.checked_sub(*read_roc_file))
+                            })
+                        })
+                    })
+                })
+            })
+            .unwrap_or_else(Duration::default)
     }
 }
 
