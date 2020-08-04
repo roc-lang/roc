@@ -29,6 +29,7 @@ use std::iter;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
 /// Filename extension for normal Roc modules
 const ROC_FILE_EXTENSION: &str = "roc";
@@ -46,6 +47,7 @@ pub struct LoadedModule {
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub src: Box<str>,
+    pub timings: MutMap<ModuleId, ModuleTiming>,
 }
 
 #[derive(Debug)]
@@ -63,6 +65,8 @@ struct ModuleHeader<'a> {
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     src: &'a [u8],
+    module_timing: ModuleTiming,
+    start_time: SystemTime,
 }
 
 #[derive(Debug)]
@@ -77,12 +81,15 @@ enum Msg<'a> {
         ident_ids: IdentIds,
         problems: Vec<roc_problem::can::Problem>,
         var_store: VarStore,
+        module_timing: ModuleTiming,
+        start_time: SystemTime,
     },
     Solved {
         src: &'a str,
         module_id: ModuleId,
         solved_module: SolvedModule,
         solved_subs: Arc<Solved<Subs>>,
+        module_timing: ModuleTiming,
     },
     Finished {
         solved: Solved<Subs>,
@@ -136,9 +143,63 @@ struct State<'a> {
     // If the relevant module's waiting_for_solve entry is now empty, solve the module.
     pub solve_listeners: MutMap<ModuleId, Vec<ModuleId>>,
 
-    #[allow(clippy::type_complexity)]
-    pub unsolved_modules:
-        MutMap<ModuleId, (Module, &'a str, MutSet<ModuleId>, Constraint, VarStore)>,
+    pub unsolved_modules: MutMap<ModuleId, UnsolvedModule<'a>>,
+
+    pub timings: MutMap<ModuleId, ModuleTiming>,
+}
+
+#[derive(Debug)]
+struct UnsolvedModule<'a> {
+    module: Module,
+    src: &'a str,
+    imported_modules: MutSet<ModuleId>,
+    constraint: Constraint,
+    var_store: VarStore,
+    module_timing: ModuleTiming,
+    start_time: SystemTime,
+}
+
+#[derive(Debug, Default)]
+pub struct ModuleTiming {
+    pub read_roc_file: Duration,
+    pub parse_header: Duration,
+    pub parse_body: Duration,
+    pub canonicalize: Duration,
+    pub constrain: Duration,
+    pub solve: Duration,
+    // TODO pub monomorphize: Duration,
+    /// This will always be more than the sum of the other fields, due to things
+    /// like state lookups in between phases, waiting on other threads, etc.
+    pub total_start_to_finish: Duration,
+}
+
+impl ModuleTiming {
+    /// Subtract all the other fields from total_start_to_finish
+    pub fn other(&self) -> Duration {
+        let Self {
+            read_roc_file,
+            parse_header,
+            parse_body,
+            canonicalize,
+            constrain,
+            solve,
+            total_start_to_finish,
+        } = self;
+
+        total_start_to_finish
+            .checked_sub(*solve)
+            .unwrap()
+            .checked_sub(*constrain)
+            .unwrap()
+            .checked_sub(*canonicalize)
+            .unwrap()
+            .checked_sub(*parse_body)
+            .unwrap()
+            .checked_sub(*parse_header)
+            .unwrap()
+            .checked_sub(*read_roc_file)
+            .unwrap()
+    }
 }
 
 #[derive(Debug)]
@@ -160,6 +221,8 @@ enum BuildTask<'a> {
         module: Module,
         imported_symbols: Vec<Import>,
         imported_aliases: MutMap<Symbol, Alias>,
+        module_timing: ModuleTiming,
+        start_time: SystemTime,
         constraint: Constraint,
         var_store: VarStore,
         src: &'a str,
@@ -274,14 +337,17 @@ pub fn load(
     let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
 
     // Load the root module synchronously; we can't proceed until we have its id.
-    let (root_id, root_msg) = load_filename(
-        &arena,
-        filename,
-        Arc::clone(&arc_modules),
-        Arc::clone(&ident_ids_by_module),
-        // TODO FIXME go back to using Unique here, not Shared
-        // Unique(&mut module_ids, &mut root_exposed_ident_ids),
-    )?;
+    let (root_id, root_msg) = {
+        let root_start_time = SystemTime::now();
+
+        load_filename(
+            &arena,
+            filename,
+            Arc::clone(&arc_modules),
+            Arc::clone(&ident_ids_by_module),
+            root_start_time,
+        )?
+    };
 
     msg_tx
         .send(root_msg)
@@ -340,6 +406,7 @@ pub fn load(
             waiting_for_solve: MutMap::default(),
             solve_listeners: MutMap::default(),
             unsolved_modules: MutMap::default(),
+            timings: MutMap::default(),
         };
 
         let mut worker_listeners = bumpalo::collections::Vec::with_capacity_in(num_workers, &arena);
@@ -598,6 +665,8 @@ fn update<'a>(
             constraint,
             problems,
             var_store,
+            module_timing,
+            start_time,
         } => {
             state.can_problems.extend(problems);
 
@@ -637,6 +706,8 @@ fn update<'a>(
                     worker_listeners,
                     BuildTask::solve_module(
                         module,
+                        module_timing,
+                        start_time,
                         src,
                         constraint,
                         var_store,
@@ -650,7 +721,15 @@ fn update<'a>(
                 debug_assert!(!unsolved_modules.contains_key(&module_id));
                 unsolved_modules.insert(
                     module_id,
-                    (module, src, imported_modules, constraint, var_store),
+                    UnsolvedModule {
+                        module,
+                        src,
+                        imported_modules,
+                        constraint,
+                        var_store,
+                        module_timing,
+                        start_time,
+                    },
                 );
 
                 // Register a listener with each of these.
@@ -670,7 +749,12 @@ fn update<'a>(
             module_id,
             solved_module,
             solved_subs,
+            module_timing,
         } => {
+            // We've finished recording all the timings for this module,
+            // add them to state.timings
+            state.timings.insert(module_id, module_timing);
+
             if module_id == state.root_id {
                 let solved = Arc::try_unwrap(solved_subs).unwrap_or_else(|_| {
                     panic!("There were still outstanding Arc references to Solved<Subs>")
@@ -708,7 +792,15 @@ fn update<'a>(
 
                         // If it's no longer waiting for anything else, solve it.
                         if waiting_for.is_empty() {
-                            let (module, src, imported_modules, constraint, var_store) = state
+                            let UnsolvedModule {
+                                module,
+                                src,
+                                imported_modules,
+                                constraint,
+                                var_store,
+                                module_timing,
+                                start_time,
+                            } = state
                                 .unsolved_modules
                                 .remove(&listener_id)
                                 .expect("Could not find listener ID in unsolved_modules");
@@ -718,6 +810,8 @@ fn update<'a>(
                                 worker_listeners,
                                 BuildTask::solve_module(
                                     module,
+                                    module_timing,
+                                    start_time,
                                     src,
                                     constraint,
                                     var_store,
@@ -767,6 +861,7 @@ fn finish<'a>(
         declarations_by_id: state.declarations_by_id,
         exposed_vars_by_symbol,
         src: src.into(),
+        timings: state.timings,
     }
 }
 
@@ -778,6 +873,7 @@ fn load_module<'a>(
     module_ids: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
+    let module_start_time = SystemTime::now();
     let mut filename = PathBuf::new();
 
     filename.push(src_dir);
@@ -790,7 +886,13 @@ fn load_module<'a>(
     // End with .roc
     filename.set_extension(ROC_FILE_EXTENSION);
 
-    load_filename(arena, filename, module_ids, ident_ids_by_module)
+    load_filename(
+        arena,
+        filename,
+        module_ids,
+        ident_ids_by_module,
+        module_start_time,
+    )
 }
 
 /// Find a task according to the following algorithm:
@@ -819,16 +921,27 @@ fn find_task<T>(local: &Worker<T>, global: &Injector<T>, stealers: &[Stealer<T>]
     })
 }
 
-fn parse_src<'a>(
+fn parse_header<'a>(
     arena: &'a Bump,
+    read_file_duration: Duration,
     filename: PathBuf,
     module_ids: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     src_bytes: &'a [u8],
+    module_start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
+    let parse_start = SystemTime::now();
     let parse_state = parser::State::new(src_bytes, Attempting::Module);
+    let parsed = roc_parse::module::header().parse(&arena, parse_state);
+    let parse_header_duration = parse_start.elapsed().unwrap();
 
-    match roc_parse::module::header().parse(&arena, parse_state) {
+    // Insert the first entries for this module's timings
+    let mut module_timing = ModuleTiming::default();
+
+    module_timing.read_roc_file = read_file_duration;
+    module_timing.parse_header = parse_header_duration;
+
+    match parsed {
         Ok((ast::Module::Interface { header }, parse_state)) => Ok(send_header(
             header.name,
             header.exposes.into_bump_slice(),
@@ -836,6 +949,8 @@ fn parse_src<'a>(
             parse_state,
             module_ids,
             ident_ids_by_module,
+            module_timing,
+            module_start_time,
         )),
         Ok((ast::Module::App { header }, parse_state)) => Ok(send_header(
             header.name,
@@ -844,6 +959,8 @@ fn parse_src<'a>(
             parse_state,
             module_ids,
             ident_ids_by_module,
+            module_timing,
+            module_start_time,
         )),
         Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
     }
@@ -855,14 +972,21 @@ fn load_filename<'a>(
     filename: PathBuf,
     module_ids: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    module_start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
-    match fs::read(&filename) {
-        Ok(bytes) => parse_src(
+    let file_io_start = SystemTime::now();
+    let file = fs::read(&filename);
+    let file_io_duration = file_io_start.elapsed().unwrap();
+
+    match file {
+        Ok(bytes) => parse_header(
             arena,
+            file_io_duration,
             filename,
             module_ids,
             ident_ids_by_module,
             arena.alloc(bytes),
+            module_start_time,
         ),
         Err(err) => Err(LoadingProblem::FileProblem {
             filename,
@@ -871,6 +995,7 @@ fn load_filename<'a>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn send_header<'a>(
     name: Located<roc_parse::header::ModuleName<'a>>,
     exposes: &'a [Located<ExposesEntry<'a>>],
@@ -878,6 +1003,8 @@ fn send_header<'a>(
     parse_state: parser::State<'a>,
     module_ids: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    module_timing: ModuleTiming,
+    start_time: SystemTime,
 ) -> (ModuleId, Msg<'a>) {
     let declared_name: ModuleName = name.value.as_str().into();
 
@@ -1000,6 +1127,8 @@ fn send_header<'a>(
             exposes: exposed,
             src: parse_state.bytes,
             exposed_imports: scope,
+            module_timing,
+            start_time,
         }),
     )
 }
@@ -1009,6 +1138,8 @@ impl<'a> BuildTask<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn solve_module(
         module: Module,
+        module_timing: ModuleTiming,
+        start_time: SystemTime,
         src: &'a str,
         constraint: Constraint,
         var_store: VarStore,
@@ -1046,9 +1177,11 @@ impl<'a> BuildTask<'a> {
             module,
             imported_symbols,
             imported_aliases,
+            start_time,
             constraint,
             var_store,
             src,
+            module_timing,
         }
     }
 
@@ -1118,8 +1251,11 @@ impl<'a> BuildTask<'a> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_solve<'a>(
     module: Module,
+    mut module_timing: ModuleTiming,
+    start_time: SystemTime,
     stdlib: &StdLib,
     imported_symbols: Vec<Import>,
     imported_aliases: MutMap<Symbol, Alias>,
@@ -1134,6 +1270,9 @@ fn run_solve<'a>(
         Mode::Uniqueness => roc_builtins::unique::aliases(),
     };
 
+    // We have more constraining work to do now, so we'll add it to our timings.
+    let constrain_start = SystemTime::now();
+
     // Finish constraining the module by wrapping the existing Constraint
     // in the ones we just computed. We can do this off the main thread.
     let constraint = constrain_imports(
@@ -1147,9 +1286,19 @@ fn run_solve<'a>(
     // Turn Apply into Alias
     constraint.instantiate_aliases(&mut var_store);
 
+    let constrain_end = SystemTime::now();
+
     let module_id = module.module_id;
     let (solved_subs, solved_module) =
         roc_solve::module::solve_module(module, constraint, var_store);
+
+    // Record the final timings
+    let solve_end = SystemTime::now();
+    let constrain_elapsed = constrain_end.duration_since(constrain_start).unwrap();
+
+    module_timing.constrain += constrain_elapsed;
+    module_timing.solve = solve_end.duration_since(constrain_end).unwrap();
+    module_timing.total_start_to_finish = solve_end.duration_since(start_time).unwrap();
 
     // Send the subs to the main thread for processing,
     Msg::Solved {
@@ -1157,6 +1306,7 @@ fn run_solve<'a>(
         module_id,
         solved_subs: Arc::new(solved_subs),
         solved_module,
+        module_timing,
     }
 }
 
@@ -1168,16 +1318,20 @@ fn parse_and_constrain<'a>(
     dep_idents: IdentIdsByModule,
     exposed_symbols: MutSet<Symbol>,
 ) -> Result<Msg<'a>, LoadingProblem> {
-    let module_id = header.module_id;
-    let mut var_store = VarStore::default();
+    let mut module_timing = header.module_timing;
+    let parse_start = SystemTime::now();
     let arena = Bump::new();
     let parse_state = parser::State::new(&header.src, Attempting::Module);
-
     let (parsed_defs, _) = module_defs()
         .parse(&arena, parse_state)
         .expect("TODO gracefully handle parse error on module defs. IMPORTANT: Bail out entirely if there are any BadUtf8 problems! That means the whole source file is not valid UTF-8 and any other errors we report may get mis-reported. We rely on this for safety in an `unsafe` block later on in this function.");
 
-    let (module, declarations, ident_ids, constraint, problems) = match canonicalize_module_defs(
+    // Record the parse end time once, to avoid checking the time a second time
+    // immediately afterward (for the beginning of canonicalization).
+    let parse_end = SystemTime::now();
+    let module_id = header.module_id;
+    let mut var_store = VarStore::default();
+    let canonicalized = canonicalize_module_defs(
         &arena,
         parsed_defs,
         module_id,
@@ -1187,9 +1341,18 @@ fn parse_and_constrain<'a>(
         header.exposed_imports,
         exposed_symbols,
         &mut var_store,
-    ) {
+    );
+    let canonicalize_end = SystemTime::now();
+    let (module, declarations, ident_ids, constraint, problems) = match canonicalized {
         Ok(module_output) => {
             let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
+
+            // Now that we're done with parsing, canonicalization, and constraint gen,
+            // add the timings for those to module_timing
+            module_timing.constrain = canonicalize_end.elapsed().unwrap();
+            module_timing.parse_body = parse_end.duration_since(parse_start).unwrap();
+            module_timing.canonicalize = canonicalize_end.duration_since(parse_start).unwrap();
+
             let module = Module {
                 module_id,
                 exposed_imports: module_output.exposed_imports,
@@ -1232,6 +1395,8 @@ fn parse_and_constrain<'a>(
         constraint,
         problems,
         var_store,
+        module_timing,
+        start_time: header.start_time,
     })
 }
 
@@ -1290,6 +1455,8 @@ fn run_task<'a>(
         } => parse_and_constrain(header, mode, module_ids, dep_idents, exposed_symbols),
         Solve {
             module,
+            module_timing,
+            start_time,
             imported_symbols,
             imported_aliases,
             constraint,
@@ -1297,6 +1464,8 @@ fn run_task<'a>(
             src,
         } => Ok(run_solve(
             module,
+            module_timing,
+            start_time,
             stdlib,
             imported_symbols,
             imported_aliases,
