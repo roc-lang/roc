@@ -66,7 +66,6 @@ struct ModuleHeader<'a> {
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     src: &'a [u8],
     module_timing: ModuleTiming,
-    start_time: SystemTime,
 }
 
 #[derive(Debug)]
@@ -82,7 +81,6 @@ enum Msg<'a> {
         problems: Vec<roc_problem::can::Problem>,
         var_store: VarStore,
         module_timing: ModuleTiming,
-        start_time: SystemTime,
     },
     Solved {
         src: &'a str,
@@ -156,10 +154,9 @@ struct UnsolvedModule<'a> {
     constraint: Constraint,
     var_store: VarStore,
     module_timing: ModuleTiming,
-    start_time: SystemTime,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ModuleTiming {
     pub read_roc_file: Duration,
     pub parse_header: Duration,
@@ -168,12 +165,17 @@ pub struct ModuleTiming {
     pub constrain: Duration,
     pub solve: Duration,
     // TODO pub monomorphize: Duration,
-    /// This will always be more than the sum of the other fields, due to things
-    /// like state lookups in between phases, waiting on other threads, etc.
-    pub total_start_to_finish: Duration,
+    /// Total duration will always be more than the sum of the other fields, due
+    /// to things like state lookups in between phases, waiting on other threads, etc.
+    start_time: SystemTime,
+    end_time: SystemTime,
 }
 
 impl ModuleTiming {
+    pub fn total(&self) -> Duration {
+        self.end_time.duration_since(self.start_time).unwrap()
+    }
+
     /// Subtract all the other fields from total_start_to_finish
     pub fn other(&self) -> Duration {
         let Self {
@@ -183,22 +185,26 @@ impl ModuleTiming {
             canonicalize,
             constrain,
             solve,
-            total_start_to_finish,
+            start_time,
+            end_time,
         } = self;
 
-        total_start_to_finish
-            .checked_sub(*solve)
-            .unwrap()
-            .checked_sub(*constrain)
-            .unwrap()
-            .checked_sub(*canonicalize)
-            .unwrap()
-            .checked_sub(*parse_body)
-            .unwrap()
-            .checked_sub(*parse_header)
-            .unwrap()
-            .checked_sub(*read_roc_file)
-            .unwrap()
+        end_time
+            .duration_since(*start_time)
+            .ok()
+            .and_then(|t| {
+                t.checked_sub(*solve).and_then(|t| {
+                    t.checked_sub(*constrain).and_then(|t| {
+                        t.checked_sub(*canonicalize).and_then(|t| {
+                            t.checked_sub(*parse_body).and_then(|t| {
+                                t.checked_sub(*parse_header)
+                                    .and_then(|t| t.checked_sub(*read_roc_file))
+                            })
+                        })
+                    })
+                })
+            })
+            .unwrap_or_else(Duration::default)
     }
 }
 
@@ -222,7 +228,6 @@ enum BuildTask<'a> {
         imported_symbols: Vec<Import>,
         imported_aliases: MutMap<Symbol, Alias>,
         module_timing: ModuleTiming,
-        start_time: SystemTime,
         constraint: Constraint,
         var_store: VarStore,
         src: &'a str,
@@ -666,7 +671,6 @@ fn update<'a>(
             problems,
             var_store,
             module_timing,
-            start_time,
         } => {
             state.can_problems.extend(problems);
 
@@ -707,7 +711,6 @@ fn update<'a>(
                     BuildTask::solve_module(
                         module,
                         module_timing,
-                        start_time,
                         src,
                         constraint,
                         var_store,
@@ -728,7 +731,6 @@ fn update<'a>(
                         constraint,
                         var_store,
                         module_timing,
-                        start_time,
                     },
                 );
 
@@ -749,8 +751,10 @@ fn update<'a>(
             module_id,
             solved_module,
             solved_subs,
-            module_timing,
+            mut module_timing,
         } => {
+            module_timing.end_time = SystemTime::now();
+
             // We've finished recording all the timings for this module,
             // add them to state.timings
             state.timings.insert(module_id, module_timing);
@@ -799,7 +803,6 @@ fn update<'a>(
                                 constraint,
                                 var_store,
                                 module_timing,
-                                start_time,
                             } = state
                                 .unsolved_modules
                                 .remove(&listener_id)
@@ -811,7 +814,6 @@ fn update<'a>(
                                 BuildTask::solve_module(
                                     module,
                                     module_timing,
-                                    start_time,
                                     src,
                                     constraint,
                                     var_store,
@@ -928,7 +930,7 @@ fn parse_header<'a>(
     module_ids: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     src_bytes: &'a [u8],
-    module_start_time: SystemTime,
+    start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let parse_start = SystemTime::now();
     let parse_state = parser::State::new(src_bytes, Attempting::Module);
@@ -936,7 +938,16 @@ fn parse_header<'a>(
     let parse_header_duration = parse_start.elapsed().unwrap();
 
     // Insert the first entries for this module's timings
-    let mut module_timing = ModuleTiming::default();
+    let mut module_timing = ModuleTiming {
+        read_roc_file: Duration::default(),
+        parse_header: Duration::default(),
+        parse_body: Duration::default(),
+        canonicalize: Duration::default(),
+        constrain: Duration::default(),
+        solve: Duration::default(),
+        start_time,
+        end_time: start_time, // just for now; we'll overwrite this at the end
+    };
 
     module_timing.read_roc_file = read_file_duration;
     module_timing.parse_header = parse_header_duration;
@@ -950,7 +961,6 @@ fn parse_header<'a>(
             module_ids,
             ident_ids_by_module,
             module_timing,
-            module_start_time,
         )),
         Ok((ast::Module::App { header }, parse_state)) => Ok(send_header(
             header.name,
@@ -960,7 +970,6 @@ fn parse_header<'a>(
             module_ids,
             ident_ids_by_module,
             module_timing,
-            module_start_time,
         )),
         Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
     }
@@ -1004,7 +1013,6 @@ fn send_header<'a>(
     module_ids: Arc<Mutex<ModuleIds>>,
     ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     module_timing: ModuleTiming,
-    start_time: SystemTime,
 ) -> (ModuleId, Msg<'a>) {
     let declared_name: ModuleName = name.value.as_str().into();
 
@@ -1128,7 +1136,6 @@ fn send_header<'a>(
             src: parse_state.bytes,
             exposed_imports: scope,
             module_timing,
-            start_time,
         }),
     )
 }
@@ -1139,7 +1146,6 @@ impl<'a> BuildTask<'a> {
     pub fn solve_module(
         module: Module,
         module_timing: ModuleTiming,
-        start_time: SystemTime,
         src: &'a str,
         constraint: Constraint,
         var_store: VarStore,
@@ -1177,7 +1183,6 @@ impl<'a> BuildTask<'a> {
             module,
             imported_symbols,
             imported_aliases,
-            start_time,
             constraint,
             var_store,
             src,
@@ -1255,7 +1260,6 @@ impl<'a> BuildTask<'a> {
 fn run_solve<'a>(
     module: Module,
     mut module_timing: ModuleTiming,
-    start_time: SystemTime,
     stdlib: &StdLib,
     imported_symbols: Vec<Import>,
     imported_aliases: MutMap<Symbol, Alias>,
@@ -1298,7 +1302,6 @@ fn run_solve<'a>(
 
     module_timing.constrain += constrain_elapsed;
     module_timing.solve = solve_end.duration_since(constrain_end).unwrap();
-    module_timing.total_start_to_finish = solve_end.duration_since(start_time).unwrap();
 
     // Send the subs to the main thread for processing,
     Msg::Solved {
@@ -1396,7 +1399,6 @@ fn parse_and_constrain<'a>(
         problems,
         var_store,
         module_timing,
-        start_time: header.start_time,
     })
 }
 
@@ -1456,7 +1458,6 @@ fn run_task<'a>(
         Solve {
             module,
             module_timing,
-            start_time,
             imported_symbols,
             imported_aliases,
             constraint,
@@ -1465,7 +1466,6 @@ fn run_task<'a>(
         } => Ok(run_solve(
             module,
             module_timing,
-            start_time,
             stdlib,
             imported_symbols,
             imported_aliases,
