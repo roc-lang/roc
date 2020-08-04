@@ -190,7 +190,7 @@ type IdentIdsByModule = MutMap<ModuleId, IdentIds>;
 type MsgSender<'a> = Sender<Msg<'a>>;
 
 /// Add a task to the queue, and notify all the listeners.
-fn enqueue_task<'a, 'b>(
+fn enqueue_task<'a>(
     injector: &Injector<BuildTask<'a>>,
     listeners: &[Sender<WorkerMsg>],
     task: BuildTask<'a>,
@@ -372,18 +372,15 @@ pub fn load(
                             // Find a task - either from this thread's queue,
                             // or from the main queue, or from another worker's
                             // queue - and run it.
-                            match find_task(&worker, injector, stealers) {
-                                Some(task) => {
-                                    run_task(task, worker_arena, src_dir, msg_tx.clone(), stdlib)
-                                        .expect("Msg channel closed unexpectedly.");
-                                }
-                                None => {
-                                    // No tasks to work on! This might be because
-                                    // another thread is working on a task which
-                                    // will later result in more tasks being
-                                    // added, so keep waiting until we receive
-                                    // a Shutdown message.
-                                }
+                            //
+                            // There might be no tasks to work on! That could
+                            // happen if another thread is working on a task
+                            // which will later result in more tasks being
+                            // added. In that case, do nothing, and keep waiting
+                            // until we receive a Shutdown message.
+                            if let Some(task) = find_task(&worker, injector, stealers) {
+                                run_task(task, worker_arena, src_dir, msg_tx.clone(), stdlib)
+                                    .expect("Msg channel closed unexpectedly.");
                             }
                         }
                     }
@@ -924,15 +921,12 @@ fn send_header<'a>(
             .entry(home)
             .or_insert_with(IdentIds::default);
 
-        // This can't possibly fail, because we just ensured it
-        // has an entry with this key.
-        let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
-        let mut imports_to_expose = Vec::with_capacity(imports.len());
-
         // For each of our imports, add an entry to deps_by_name
         //
         // e.g. for `imports [ Foo.{ bar } ]`, add `Foo` to deps_by_name
-        for (module_name, exposed, region) in imported.into_iter() {
+        //
+        // Also build a list of imported_values_to_expose (like `bar` above.)
+        for (module_name, exposed_idents, region) in imported.into_iter() {
             let cloned_module_name = module_name.clone();
             let module_id = module_ids.get_or_insert(&module_name.into());
 
@@ -940,17 +934,25 @@ fn send_header<'a>(
 
             imported_modules.insert(module_id);
 
-            imports_to_expose.push((module_id, exposed, region));
-        }
+            // Add the new exposed idents to the dep module's IdentIds, so
+            // once that module later gets loaded, its lookups will resolve
+            // to the same symbols as the ones we're using here.
+            let ident_ids = ident_ids_by_module
+                .entry(module_id)
+                .or_insert_with(IdentIds::default);
 
-        // For each of our imports, add any exposed values to scope.
-        //
-        // e.g. for `imports [ Foo.{ bar } ]`, add `bar` to scope.
-        for (module_id, exposed, region) in imports_to_expose.into_iter() {
-            if !exposed.is_empty() {
-                add_exposed_to_scope(module_id, &mut scope, exposed, ident_ids, region);
+            for ident in exposed_idents {
+                let ident_id = ident_ids.get_or_insert(ident.as_inline_str());
+                let symbol = Symbol::new(module_id, ident_id);
+
+                // Since this value is exposed, add it to our module's default scope.
+                debug_assert!(!scope.contains_key(&ident.clone()));
+
+                scope.insert(ident, (symbol, region));
             }
         }
+
+        let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
 
         // Generate IdentIds entries for all values this module exposes.
         // This way, when we encounter them in Defs later, they already
@@ -1000,24 +1002,6 @@ fn send_header<'a>(
             exposed_imports: scope,
         }),
     )
-}
-
-fn add_exposed_to_scope(
-    module_id: ModuleId,
-    scope: &mut MutMap<Ident, (Symbol, Region)>,
-    exposed: Vec<Ident>,
-    ident_ids: &mut IdentIds,
-    region: Region,
-) {
-    for ident in exposed {
-        // Since this value is exposed, add it to our module's default scope.
-        debug_assert!(!scope.contains_key(&ident.clone()));
-
-        let ident_id = ident_ids.add(ident.clone().into());
-        let symbol = Symbol::new(module_id, ident_id);
-
-        scope.insert(ident, (symbol, region));
-    }
 }
 
 impl<'a> BuildTask<'a> {
