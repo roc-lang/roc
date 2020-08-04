@@ -182,7 +182,7 @@ fn build_file(
         report_timing(buf, "Solve", module_timing.solve);
         report_timing(buf, "Other", module_timing.other());
         buf.push('\n');
-        report_timing(buf, "Total", module_timing.total_start_to_finish);
+        report_timing(buf, "Total", module_timing.total());
     }
 
     println!(
