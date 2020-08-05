@@ -1751,22 +1751,22 @@ fn list_join<'a, 'ctx, 'env>(
 
                         builder.build_store(dest_elem_ptr_alloca, next_dest_elem_ptr);
 
-                        let outer_loop_end_cond = builder.build_int_compare(
+                        let inner_loop_end_cond = builder.build_int_compare(
                             IntPredicate::ULT,
                             next_index,
                             inner_list_len,
                             "loopcond",
                         );
 
-                        let after_outer_loop_bb =
-                            ctx.append_basic_block(parent, "after_outer_loop");
+                        let after_inner_loop_bb =
+                            ctx.append_basic_block(parent, "after_inner_loop");
 
                         builder.build_conditional_branch(
-                            outer_loop_end_cond,
+                            inner_loop_end_cond,
                             inner_loop_bb,
-                            after_outer_loop_bb,
+                            after_inner_loop_bb,
                         );
-                        builder.position_at_end(after_outer_loop_bb);
+                        builder.position_at_end(after_inner_loop_bb);
                     }
 
                     // #index < outer_list_len
