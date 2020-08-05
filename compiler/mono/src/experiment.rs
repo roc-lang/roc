@@ -304,7 +304,7 @@ impl<'a, 'i> Env<'a, 'i> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Copy)]
+#[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
 pub struct JoinPointId(Symbol);
 
 pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
@@ -348,8 +348,10 @@ pub enum Stmt<'a> {
     Join {
         id: JoinPointId,
         arguments: &'a [Symbol],
-        result: &'a Stmt<'a>,
+        /// does not contain jumps to this id
         continuation: &'a Stmt<'a>,
+        /// contains the jumps to this id
+        remainder: &'a Stmt<'a>,
     },
     Jump(JoinPointId, &'a [Symbol]),
     RuntimeError(&'a str),
@@ -441,6 +443,15 @@ where
     alloc.text(format!("{}", symbol))
 }
 
+fn join_point_to_doc<'b, D, A>(alloc: &'b D, symbol: JoinPointId) -> DocBuilder<'b, D, A>
+where
+    D: DocAllocator<'b, A>,
+    D::Doc: Clone,
+    A: Clone,
+{
+    alloc.text(format!("{}", symbol.0))
+}
+
 impl<'a> Expr<'a> {
     pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, parens: bool) -> DocBuilder<'b, D, A>
     where
@@ -528,6 +539,15 @@ impl<'a> Expr<'a> {
 }
 
 impl<'a> Stmt<'a> {
+    pub fn new(
+        env: &mut Env<'a, '_>,
+        can_expr: roc_can::expr::Expr,
+        procs: &mut Procs<'a>,
+    ) -> Self {
+        let mut layout_cache = LayoutCache::default();
+
+        from_can(env, can_expr, procs, &mut layout_cache)
+    }
     pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, parens: bool) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
@@ -597,6 +617,34 @@ impl<'a> Stmt<'a> {
                 .append(alloc.hardline())
                 .append(fail.to_doc(alloc, false).indent(4)),
             RuntimeError(s) => alloc.text(format!("Error {}", s)),
+
+            Join {
+                id,
+                arguments,
+                continuation,
+                remainder,
+            } => alloc.intersperse(
+                vec![
+                    remainder.to_doc(alloc, false),
+                    alloc
+                        .text("joinpoint ")
+                        .append(join_point_to_doc(alloc, *id))
+                        .append(":"),
+                    continuation.to_doc(alloc, false).indent(4),
+                ],
+                alloc.hardline(),
+            ),
+            Jump(id, arguments) => {
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+
+                alloc
+                    .text("jump ")
+                    .append(join_point_to_doc(alloc, *id))
+                    .append(" ".repeat(arguments.len().min(1)))
+                    .append(alloc.intersperse(it, alloc.space()))
+                    .append(";")
+            }
+
             _ => todo!(),
         }
         /*
@@ -888,11 +936,14 @@ fn specialize<'a>(
         .from_var(&env.arena, ret_var, env.subs, env.pointer_size)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
+    // TODO WRONG
+    let closes_over_layout = Layout::Struct(&[]);
+
     let proc = Proc {
         name: proc_name,
         args: proc_args.into_bump_slice(),
         body: specialized_body,
-        closes_over: Layout::Struct(&[]),
+        closes_over: closes_over_layout,
         ret_layout,
     };
 
@@ -968,7 +1019,7 @@ pub fn with_hole<'a>(
             }
         }
         Var(symbol) => Stmt::Ret(symbol),
-
+        // Var(symbol) => panic!("reached Var {}", symbol),
         Tag {
             variant_var,
             name: tag_name,
@@ -987,12 +1038,7 @@ pub fn with_hole<'a>(
 
             match variant {
                 Never => unreachable!("The `[]` type has no constructors"),
-                Unit => Stmt::Let(
-                    assigned,
-                    Expr::Struct(&[]),
-                    Layout::Builtin(Builtin::Float64),
-                    hole,
-                ),
+                Unit => Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole),
                 BoolUnion { ttrue, .. } => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Bool(tag_name == ttrue)),
@@ -1016,12 +1062,22 @@ pub fn with_hole<'a>(
                 Unwrapped(field_layouts) => {
                     let mut field_symbols = Vec::with_capacity_in(field_layouts.len(), env.arena);
 
-                    for _ in 0..field_layouts.len() {
-                        field_symbols.push(env.unique_symbol());
+                    for (_, arg) in args.iter() {
+                        if let roc_can::expr::Expr::Var(symbol) = arg.value {
+                            field_symbols.push(symbol);
+                        } else {
+                            field_symbols.push(env.unique_symbol());
+                        }
                     }
 
-                    let layout = Layout::Struct(field_layouts.into_bump_slice());
+                    // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
+                    let layout = layout_cache
+                        .from_var(env.arena, variant_var, env.subs, env.pointer_size)
+                        .unwrap_or_else(|err| {
+                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
+                        });
 
+                    // even though this was originally a Tag, we treat it as a Struct from now on
                     let mut stmt = Stmt::Let(
                         assigned,
                         Expr::Struct(field_symbols.clone().into_bump_slice()),
@@ -1031,6 +1087,10 @@ pub fn with_hole<'a>(
 
                     for ((_, arg), symbol) in args.into_iter().rev().zip(field_symbols.iter().rev())
                     {
+                        // if this argument is already a symbol, we don't need to re-define it
+                        if let roc_can::expr::Expr::Var(_) = arg.value {
+                            continue;
+                        }
                         stmt = with_hole(
                             env,
                             arg.value,
@@ -1055,8 +1115,12 @@ pub fn with_hole<'a>(
                     let tag_id_symbol = env.unique_symbol();
                     field_symbols.push(tag_id_symbol);
 
-                    for _ in 0..args.len() {
-                        field_symbols.push(env.unique_symbol());
+                    for (_, arg) in args.iter() {
+                        if let roc_can::expr::Expr::Var(symbol) = arg.value {
+                            field_symbols.push(symbol);
+                        } else {
+                            field_symbols.push(env.unique_symbol());
+                        }
                     }
 
                     let layout_it = argument_layouts.iter();
@@ -1082,6 +1146,11 @@ pub fn with_hole<'a>(
 
                     for ((_, arg), symbol) in args.into_iter().rev().zip(field_symbols.iter().rev())
                     {
+                        // if this argument is already a symbol, we don't need to re-define it
+                        if let roc_can::expr::Expr::Var(_) = arg.value {
+                            continue;
+                        }
+
                         stmt = with_hole(
                             env,
                             arg.value,
@@ -1130,7 +1199,10 @@ pub fn with_hole<'a>(
                 can_fields.push(field);
             }
 
-            let layout = Layout::Struct(field_layouts.into_bump_slice());
+            // creating a record from the var will unpack it if it's just a single field.
+            let layout = layout_cache
+                .from_var(env.arena, record_var, env.subs, env.pointer_size)
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let field_symbols = field_symbols.into_bump_slice();
             let mut stmt = Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole);
@@ -1151,16 +1223,133 @@ pub fn with_hole<'a>(
 
         EmptyRecord => Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole),
 
+        If {
+            cond_var,
+            branch_var,
+            branches,
+            final_else,
+        } => {
+            let arena = env.arena;
+
+            let ret_layout = layout_cache
+                .from_var(env.arena, branch_var, env.subs, env.pointer_size)
+                .expect("invalid ret_layout");
+            let cond_layout = layout_cache
+                .from_var(env.arena, cond_var, env.subs, env.pointer_size)
+                .expect("invalid cond_layout");
+
+            let id = JoinPointId(env.unique_symbol());
+            let jump = env.arena.alloc(Stmt::Jump(id, &[]));
+
+            let mut stmt = with_hole(env, final_else.value, procs, layout_cache, assigned, jump);
+
+            for (loc_cond, loc_then) in branches.into_iter().rev() {
+                let branching_symbol = env.unique_symbol();
+                let then = with_hole(env, loc_then.value, procs, layout_cache, assigned, jump);
+
+                stmt = Stmt::Cond {
+                    cond_symbol: branching_symbol,
+                    branching_symbol,
+                    cond_layout: cond_layout.clone(),
+                    branching_layout: cond_layout.clone(),
+                    pass: env.arena.alloc(then),
+                    fail: env.arena.alloc(stmt),
+                    ret_layout: ret_layout.clone(),
+                };
+
+                // add condition
+                stmt = with_hole(
+                    env,
+                    loc_cond.value,
+                    procs,
+                    layout_cache,
+                    branching_symbol,
+                    env.arena.alloc(stmt),
+                );
+            }
+
+            let join = Stmt::Join {
+                id,
+                arguments: &[],
+                remainder: env.arena.alloc(stmt),
+                continuation: hole,
+            };
+
+            // expr
+            join
+        }
+
         When { .. } | If { .. } => todo!("when or if in expression requires join points"),
 
         List { .. } => todo!("list"),
         LetRec(_, _, _, _) | LetNonRec(_, _, _, _) => todo!("lets"),
 
-        Access { .. } | Accessor { .. } | Update { .. } => todo!("record access/accessor/update"),
+        Access {
+            record_var,
+            field_var,
+            field,
+            loc_expr,
+            ..
+        } => {
+            let arena = env.arena;
+
+            let sorted_fields = crate::layout::sort_record_fields(
+                env.arena,
+                record_var,
+                env.subs,
+                env.pointer_size,
+            );
+
+            let mut index = None;
+            let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
+
+            for (current, (label, field_layout)) in sorted_fields.into_iter().enumerate() {
+                field_layouts.push(field_layout);
+
+                if label == field {
+                    index = Some(current);
+                }
+            }
+
+            let record_symbol = if let roc_can::expr::Expr::Var(symbol) = loc_expr.value {
+                symbol
+            } else {
+                env.unique_symbol()
+            };
+
+            let expr = Expr::AccessAtIndex {
+                index: index.expect("field not in its own type") as u64,
+                field_layouts: field_layouts.into_bump_slice(),
+                structure: record_symbol,
+                is_unwrapped: true,
+            };
+
+            let layout = layout_cache
+                .from_var(env.arena, field_var, env.subs, env.pointer_size)
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+            let mut stmt = Stmt::Let(assigned, expr, layout, hole);
+
+            if let roc_can::expr::Expr::Var(symbol) = loc_expr.value {
+                // do nothing
+            } else {
+                stmt = with_hole(
+                    env,
+                    loc_expr.value,
+                    procs,
+                    layout_cache,
+                    record_symbol,
+                    env.arena.alloc(stmt),
+                );
+            };
+
+            stmt
+        }
+
+        Accessor { .. } | Update { .. } => todo!("record access/accessor/update"),
 
         Closure(_, _, _, _, _) => todo!("call"),
         Call(boxed, loc_args, _) => {
-            dbg!(&boxed, &loc_args);
             let (fn_var, loc_expr, ret_var) = *boxed;
 
             /*
@@ -1188,7 +1377,6 @@ pub fn with_hole<'a>(
                 */
 
             // match from_can(env, loc_expr.value, procs, layout_cache) {
-            dbg!(&procs.module_thunks);
             match loc_expr.value {
                 roc_can::expr::Expr::Var(proc_name) if procs.module_thunks.contains(&proc_name) => {
                     todo!()
@@ -1269,7 +1457,7 @@ pub fn with_hole<'a>(
             }
         }
 
-        RunLowLevel { op, args, .. } => {
+        RunLowLevel { op, args, ret_var } => {
             let op = optimize_low_level(env.subs, op, &args);
 
             let mut arg_symbols = Vec::with_capacity_in(args.len(), env.arena);
@@ -1283,23 +1471,18 @@ pub fn with_hole<'a>(
             }
             let arg_symbols = arg_symbols.into_bump_slice();
 
-            // WRONG!@
-            let layout = Layout::Builtin(Builtin::Int64);
+            // layout of the return type
+            let layout = layout_cache
+                .from_var(env.arena, ret_var, env.subs, env.pointer_size)
+                .unwrap_or_else(|err| todo!("TODO turn fn_var into a RuntimeError {:?}", err));
+
             let mut result = Stmt::Let(assigned, Expr::RunLowLevel(op, arg_symbols), layout, hole);
 
-            dbg!(&args, &arg_symbols);
-            for ((arg_var, arg_expr), symbol) in
+            for ((_arg_var, arg_expr), symbol) in
                 args.into_iter().rev().zip(arg_symbols.iter().rev())
             {
-                dbg!(&result);
-                /*
-                let arg = from_can(env, arg_expr, procs, layout_cache);
-                let layout = layout_cache
-                    .from_var(env.arena, arg_var, env.subs, env.pointer_size)
-                    .unwrap_or_else(|err| todo!("TODO turn fn_var into a RuntimeError {:?}", err));
-                */
-
-                if let roc_can::expr::Expr::Var(symbol) = arg_expr {
+                // if this argument is already a symbol, we don't need to re-define it
+                if let roc_can::expr::Expr::Var(_) = arg_expr {
                     continue;
                 }
 
@@ -1313,7 +1496,6 @@ pub fn with_hole<'a>(
                 );
             }
 
-            dbg!(&result);
             result
         }
         RuntimeError(_) => todo!("runtime error"),
@@ -1341,7 +1523,6 @@ pub fn from_can<'a>(
 
                             let (loc_body, ret_var) = *boxed_body;
 
-                            dbg!("inserting", *symbol);
                             procs.insert_named(
                                 env,
                                 layout_cache,
@@ -1368,7 +1549,19 @@ pub fn from_can<'a>(
                 );
             }
 
-            todo!("convert complex pattern to when");
+            let (symbol, can_expr) =
+                pattern_to_when(env, def.expr_var, def.loc_pattern, def.expr_var, *cont);
+
+            let stmt = from_can(env, can_expr.value, procs, layout_cache);
+
+            with_hole(
+                env,
+                def.loc_expr.value,
+                procs,
+                layout_cache,
+                symbol,
+                env.arena.alloc(stmt),
+            )
         }
 
         If {
@@ -1439,8 +1632,12 @@ pub fn from_can<'a>(
                 procs,
             );
 
-            let hole = env.arena.alloc(mono_when);
-            with_hole(env, loc_cond.value, procs, layout_cache, cond_symbol, hole)
+            if let roc_can::expr::Expr::Var(_) = loc_cond.value {
+                mono_when
+            } else {
+                let hole = env.arena.alloc(mono_when);
+                with_hole(env, loc_cond.value, procs, layout_cache, cond_symbol, hole)
+            }
         }
         _ => {
             let symbol = env.unique_symbol();
@@ -1568,11 +1765,27 @@ fn from_can_when<'a>(
                         //
                         // otherwise, we modify the branch's expression to include the stores
                         if let Some(loc_guard) = when_branch.guard.clone() {
-                            let expr = from_can(env, loc_guard.value, procs, layout_cache);
+                            let guard_symbol = env.unique_symbol();
+                            let id = JoinPointId(env.unique_symbol());
+
+                            let hole = env.arena.alloc(Stmt::Jump(id, &[]));
+                            let mut stmt = with_hole(
+                                env,
+                                loc_guard.value,
+                                procs,
+                                layout_cache,
+                                guard_symbol,
+                                hole,
+                            );
+
+                            for (symbol, expr, layout) in stores.into_iter().rev() {
+                                stmt = Stmt::Let(symbol, layout, expr, env.arena.alloc(stmt));
+                            }
                             (
                                 crate::decision_tree2::Guard::Guard {
-                                    stores: stores.into_bump_slice(),
-                                    expr,
+                                    stmt,
+                                    id,
+                                    symbol: guard_symbol,
                                 },
                                 &[] as &[_],
                                 mono_expr.clone(),
@@ -1588,6 +1801,7 @@ fn from_can_when<'a>(
                     Err(message) => {
                         // when the pattern is invalid, a guard must give a runtime error too
                         if when_branch.guard.is_some() {
+                            /*
                             (
                                 crate::decision_tree2::Guard::Guard {
                                     stores: &[],
@@ -1597,6 +1811,8 @@ fn from_can_when<'a>(
                                 // we can never hit this
                                 Stmt::RuntimeError(&"invalid pattern with guard: unreachable"),
                             )
+                                */
+                            todo!()
                         } else {
                             (
                                 crate::decision_tree2::Guard::NoGuard,
@@ -1675,7 +1891,7 @@ fn store_pattern<'a>(
         Identifier(symbol) => {
             // let load = Expr::Load(outer_symbol);
             // stored.push((*symbol, layout, load))
-            todo!()
+            // todo!()
         }
         Underscore => {
             // Since _ is never read, it's safe to reassign it.
@@ -1821,14 +2037,23 @@ fn call_by_name<'a>(
         Ok(layout) => {
             // Build the CallByName node
             let arena = env.arena;
-            let mut args = Vec::with_capacity_in(loc_args.len(), arena);
             let mut pattern_vars = Vec::with_capacity_in(loc_args.len(), arena);
 
-            for (var, loc_arg) in loc_args {
+            let mut field_symbols = Vec::with_capacity_in(loc_args.len(), env.arena);
+
+            for (_, arg_expr) in loc_args.iter() {
+                if let roc_can::expr::Expr::Var(symbol) = arg_expr.value {
+                    field_symbols.push(symbol);
+                } else {
+                    field_symbols.push(env.unique_symbol());
+                }
+            }
+            let field_symbols = field_symbols.into_bump_slice();
+
+            for (var, loc_arg) in loc_args.clone() {
                 match layout_cache.from_var(&env.arena, var, &env.subs, env.pointer_size) {
                     Ok(layout) => {
                         pattern_vars.push(var);
-                        args.push((from_can(env, loc_arg.value, procs, layout_cache), layout));
                     }
                     Err(_) => {
                         // One of this function's arguments code gens to a runtime error,
@@ -1838,15 +2063,41 @@ fn call_by_name<'a>(
                 }
             }
 
+            // wrong, clearly. But in general I think the layout here should be just the return type.
+            let layout = if let Layout::FunctionPointer(_, rlayout) = layout {
+                rlayout
+            } else {
+                todo!()
+            };
+
             // If we've already specialized this one, no further work is needed.
             if procs.specialized.contains_key(&(proc_name, layout.clone())) {
                 let call = Expr::FunctionCall {
                     call_type: CallType::ByName(proc_name),
                     layout: layout.clone(),
-                    args: &[],
+                    args: field_symbols,
                 };
 
-                Stmt::Let(assigned, call, layout.clone(), hole)
+                let mut result = Stmt::Let(assigned, call, layout.clone(), hole);
+
+                for ((_, loc_arg), symbol) in
+                    loc_args.into_iter().rev().zip(field_symbols.iter().rev())
+                {
+                    // if this argument is already a symbol, we don't need to re-define it
+                    if let roc_can::expr::Expr::Var(_) = loc_arg.value {
+                        continue;
+                    }
+                    result = with_hole(
+                        env,
+                        loc_arg.value,
+                        procs,
+                        layout_cache,
+                        *symbol,
+                        env.arena.alloc(result),
+                    );
+                }
+
+                result
             } else {
                 let pending = PendingSpecialization {
                     pattern_vars,
@@ -1873,10 +2124,29 @@ fn call_by_name<'a>(
                         let call = Expr::FunctionCall {
                             call_type: CallType::ByName(proc_name),
                             layout: layout.clone(),
-                            args: &[],
+                            args: field_symbols,
                         };
 
-                        Stmt::Let(assigned, call, layout, hole)
+                        let mut result = Stmt::Let(assigned, call, layout.clone(), hole);
+
+                        for ((_, loc_arg), symbol) in
+                            loc_args.into_iter().rev().zip(field_symbols.iter().rev())
+                        {
+                            // if this argument is already a symbol, we don't need to re-define it
+                            if let roc_can::expr::Expr::Var(_) = loc_arg.value {
+                                continue;
+                            }
+                            result = with_hole(
+                                env,
+                                loc_arg.value,
+                                procs,
+                                layout_cache,
+                                *symbol,
+                                env.arena.alloc(result),
+                            );
+                        }
+
+                        result
                     }
                     None => {
                         let opt_partial_proc = procs.partial_procs.get(&proc_name);
@@ -1909,10 +2179,32 @@ fn call_by_name<'a>(
                                         let call = Expr::FunctionCall {
                                             call_type: CallType::ByName(proc_name),
                                             layout: layout.clone(),
-                                            args: &[],
+                                            args: field_symbols,
                                         };
 
-                                        Stmt::Let(assigned, call, layout, hole)
+                                        let mut result =
+                                            Stmt::Let(assigned, call, layout.clone(), hole);
+
+                                        for ((_, loc_arg), symbol) in loc_args
+                                            .into_iter()
+                                            .rev()
+                                            .zip(field_symbols.iter().rev())
+                                        {
+                                            // if this argument is already a symbol, we don't need to re-define it
+                                            if let roc_can::expr::Expr::Var(_) = loc_arg.value {
+                                                continue;
+                                            }
+                                            result = with_hole(
+                                                env,
+                                                loc_arg.value,
+                                                procs,
+                                                layout_cache,
+                                                *symbol,
+                                                env.arena.alloc(result),
+                                            );
+                                        }
+
+                                        result
                                     }
                                     Err(error) => {
                                         let error_msg = env.arena.alloc(format!(

@@ -1,4 +1,4 @@
-use crate::experiment::{DestructType, Env, Expr, Literal, Pattern, Stmt};
+use crate::experiment::{DestructType, Env, Expr, JoinPointId, Literal, Pattern, Stmt};
 use crate::layout::{Builtin, Layout};
 use crate::pattern2::{Ctor, RenderAs, TagId, Union};
 use bumpalo::Bump;
@@ -31,8 +31,12 @@ pub fn compile<'a>(raw_branches: Vec<(Guard<'a>, Pattern<'a>, u64)>) -> Decision
 pub enum Guard<'a> {
     NoGuard,
     Guard {
-        stores: &'a [(Symbol, Layout<'a>, Expr<'a>)],
-        expr: Stmt<'a>,
+        /// Symbol that stores a boolean
+        /// when true this branch is picked, otherwise skipped
+        symbol: Symbol,
+        /// after assigning to symbol, the stmt jumps to this label
+        id: JoinPointId,
+        stmt: Stmt<'a>,
     },
 }
 
@@ -72,8 +76,12 @@ pub enum Test<'a> {
     // A pattern that always succeeds (like `_`) can still have a guard
     Guarded {
         opt_test: Option<Box<Test<'a>>>,
-        stores: &'a [(Symbol, Layout<'a>, Expr<'a>)],
-        expr: Stmt<'a>,
+        /// Symbol that stores a boolean
+        /// when true this branch is picked, otherwise skipped
+        symbol: Symbol,
+        /// after assigning to symbol, the stmt jumps to this label
+        id: JoinPointId,
+        stmt: Stmt<'a>,
     },
 }
 use std::hash::{Hash, Hasher};
@@ -353,11 +361,12 @@ fn test_at_path<'a>(selected_path: &Path, branch: Branch<'a>, all_tests: &mut Ve
         None => {}
         Some((_, guard, pattern)) => {
             let guarded = |test| {
-                if let Guard::Guard { stores, expr } = guard {
+                if let Guard::Guard { symbol, id, stmt } = guard {
                     Guarded {
                         opt_test: Some(Box::new(test)),
-                        stores,
-                        expr: expr.clone(),
+                        stmt: stmt.clone(),
+                        symbol: *symbol,
+                        id: *id,
                     }
                 } else {
                     test
@@ -367,11 +376,12 @@ fn test_at_path<'a>(selected_path: &Path, branch: Branch<'a>, all_tests: &mut Ve
             match pattern {
                 // TODO use guard!
                 Identifier(_) | Underscore | Shadowed(_, _) | UnsupportedPattern(_) => {
-                    if let Guard::Guard { stores, expr } = guard {
+                    if let Guard::Guard { symbol, id, stmt } = guard {
                         all_tests.push(Guarded {
                             opt_test: None,
-                            stores,
-                            expr: expr.clone(),
+                            stmt: stmt.clone(),
+                            symbol: *symbol,
+                            id: *id,
                         });
                     }
                 }
@@ -994,8 +1004,7 @@ fn test_to_equality<'a>(
     cond_layout: &Layout<'a>,
     path: &Path,
     test: Test<'a>,
-    tests: &mut Vec<(StoresVec<'a>, Symbol, Symbol, Layout<'a>)>,
-) {
+) -> (StoresVec<'a>, Symbol, Symbol, Layout<'a>) {
     match test {
         Test::IsCtor {
             tag_id,
@@ -1034,24 +1043,25 @@ fn test_to_equality<'a>(
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
             stores.push((rhs_symbol, Layout::Builtin(Builtin::Int64), rhs));
 
-            tests.push((
+            (
                 stores,
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Int64),
-            ));
+            )
         }
         Test::IsInt(test_int) => {
             let lhs = Expr::Literal(Literal::Int(test_int));
             let lhs_symbol = env.unique_symbol();
             let (mut stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
-            tests.push((
+
+            (
                 stores,
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Int64),
-            ))
+            )
         }
 
         Test::IsFloat(test_int) => {
@@ -1061,12 +1071,13 @@ fn test_to_equality<'a>(
             let lhs_symbol = env.unique_symbol();
             let (mut stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Float64), lhs));
-            tests.push((
+
+            (
                 stores,
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Float64),
-            ))
+            )
         }
 
         Test::IsByte {
@@ -1076,12 +1087,13 @@ fn test_to_equality<'a>(
             let lhs_symbol = env.unique_symbol();
             let (mut stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int8), lhs));
-            tests.push((
+
+            (
                 stores,
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Int8),
-            ));
+            )
         }
 
         Test::IsBit(test_bit) => {
@@ -1089,12 +1101,12 @@ fn test_to_equality<'a>(
             let lhs_symbol = env.unique_symbol();
             let (mut stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
 
-            tests.push((
+            (
                 stores,
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Int1),
-            ));
+            )
         }
 
         Test::IsStr(test_str) => {
@@ -1104,31 +1116,15 @@ fn test_to_equality<'a>(
 
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Str), lhs));
 
-            tests.push((
+            (
                 stores,
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Str),
-            ));
+            )
         }
 
-        Test::Guarded {
-            opt_test,
-            stores,
-            expr,
-        } => {
-            if let Some(nested) = opt_test {
-                test_to_equality(env, cond_symbol, cond_layout, path, *nested, tests);
-            }
-
-            /*
-            let lhs = Expr::Bool(true);
-            let rhs = Expr::Store(stores, env.arena.alloc(expr));
-
-            tests.push((lhs, rhs, Layout::Builtin(Builtin::Int1)));
-            */
-            todo!("pattern with guard, what to do?")
-        }
+        Test::Guarded { .. } => unreachable!("should be handled elsewhere"),
     }
 }
 
@@ -1160,12 +1156,6 @@ fn decide_to_branching<'a>(
         } => {
             // generate a switch based on the test chain
 
-            let mut tests = Vec::with_capacity(test_chain.len());
-
-            for (path, test) in test_chain {
-                test_to_equality(env, cond_symbol, &cond_layout, &path, test, &mut tests);
-            }
-
             let (pass_stores, mut pass_expr) = decide_to_branching(
                 env,
                 cond_symbol,
@@ -1175,8 +1165,11 @@ fn decide_to_branching<'a>(
                 jumps,
             );
 
+            dbg!(&pass_expr);
+
             // TODO remove clone
-            for (symbol, layout, expr) in pass_stores.iter().cloned() {
+            for (symbol, layout, expr) in pass_stores.iter().cloned().rev() {
+                println!("{} {:?}", symbol, expr);
                 pass_expr = Stmt::Let(symbol, expr, layout, env.arena.alloc(pass_expr));
             }
 
@@ -1190,7 +1183,7 @@ fn decide_to_branching<'a>(
             );
 
             // TODO remove clone
-            for (symbol, layout, expr) in fail_stores.iter().cloned() {
+            for (symbol, layout, expr) in fail_stores.iter().cloned().rev() {
                 fail_expr = Stmt::Let(symbol, expr, layout, env.arena.alloc(fail_expr));
             }
 
@@ -1211,7 +1204,7 @@ fn decide_to_branching<'a>(
 
             let mut cond = Stmt::Cond {
                 cond_symbol,
-                cond_layout,
+                cond_layout: cond_layout.clone(),
                 branching_symbol,
                 branching_layout,
                 pass,
@@ -1221,21 +1214,64 @@ fn decide_to_branching<'a>(
 
             let true_symbol = env.unique_symbol();
 
-            // let condition = boolean_all(env.arena, tests);
+            let mut tests = Vec::with_capacity(test_chain.len());
+
+            let mut guard = None;
+
+            // Assumption: there is at most 1 guard, and it is the outer layer.
+            for (path, test) in test_chain {
+                match test {
+                    Test::Guarded {
+                        opt_test,
+                        id,
+                        symbol,
+                        stmt,
+                    } => {
+                        if let Some(nested) = opt_test {
+                            tests.push(test_to_equality(
+                                env,
+                                cond_symbol,
+                                &cond_layout,
+                                &path,
+                                *nested,
+                            ));
+                        }
+
+                        // let (stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
+
+                        guard = Some((symbol, id, stmt));
+                    }
+
+                    _ => tests.push(test_to_equality(
+                        env,
+                        cond_symbol,
+                        &cond_layout,
+                        &path,
+                        test,
+                    )),
+                }
+            }
+
             debug_assert!(!tests.is_empty());
             let mut current_symbol = branching_symbol;
             let mut condition_symbol = true_symbol;
-            for (new_stores, lhs, rhs, layout) in tests.into_iter().rev() {
+
+            let accum_symbols = std::iter::once(true_symbol)
+                .chain((0..tests.len() - 1).map(|_| env.unique_symbol()))
+                .rev()
+                .collect::<Vec<_>>();
+
+            for ((new_stores, lhs, rhs, layout), accum) in
+                tests.into_iter().rev().zip(accum_symbols)
+            {
                 let test_symbol = env.unique_symbol();
                 let test = Expr::RunLowLevel(
                     LowLevel::Eq,
                     bumpalo::vec![in env.arena; lhs, rhs].into_bump_slice(),
                 );
 
-                let and_expr = Expr::RunLowLevel(
-                    LowLevel::And,
-                    env.arena.alloc([test_symbol, condition_symbol]),
-                );
+                let and_expr =
+                    Expr::RunLowLevel(LowLevel::And, env.arena.alloc([test_symbol, accum]));
 
                 // write to the branching symbol
                 cond = Stmt::Let(
@@ -1258,8 +1294,39 @@ fn decide_to_branching<'a>(
                 }
 
                 condition_symbol = current_symbol;
+                current_symbol = accum;
+            }
+
+            /*
+
+            // the guard is the final thing that we check, so needs to be layered on first!
+            if let Some((symbol, id, stmt)) = guard {
+                let test_symbol = symbol;
+                let and_expr = Expr::RunLowLevel(
+                    LowLevel::And,
+                    env.arena.alloc([test_symbol, condition_symbol]),
+                );
+
+                // write to the branching symbol
+                cond = Stmt::Let(
+                    current_symbol,
+                    and_expr,
+                    Layout::Builtin(Builtin::Int1),
+                    env.arena.alloc(cond),
+                );
+
+                // calculate the guard value
+                cond = Stmt::Join {
+                    id,
+                    arguments: &[],
+                    remainder: env.arena.alloc(stmt),
+                    continuation: env.arena.alloc(cond),
+                };
+
+                condition_symbol = current_symbol;
                 current_symbol = env.unique_symbol();
             }
+            */
 
             cond = Stmt::Let(
                 true_symbol,
@@ -1324,6 +1391,7 @@ fn decide_to_branching<'a>(
 
                 branches.push((tag, branch));
             }
+            dbg!(&branches, &default_branch);
 
             let mut switch = Stmt::Switch {
                 cond_layout,

@@ -333,7 +333,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
     let ret = roc_gen::llvm::build::build_expr(
         &env,
         &mut layout_ids,
-        &ImMap::default(),
+        &roc_gen::llvm::build::Scope::default(),
         main_fn,
         &main_body,
     );

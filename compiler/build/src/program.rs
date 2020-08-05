@@ -302,7 +302,7 @@ pub fn gen(
     let ret = roc_gen::llvm::build::build_expr(
         &env,
         &mut layout_ids,
-        &ImMap::default(),
+        &roc_gen::llvm::build::Scope::default(),
         main_fn,
         &main_body,
     );

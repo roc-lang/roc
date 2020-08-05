@@ -1017,6 +1017,11 @@ mod test_mono {
 
         let result = procs_string.join("\n");
 
+        let the_same = result == expected;
+        if !the_same {
+            println!("{}", result);
+        }
+
         assert_eq!(result, expected);
     }
 
@@ -1115,12 +1120,12 @@ mod test_mono {
                 let Test.10 = 0i64;
                 let Test.11 = 3i64;
                 let Test.1 = Just Test.10 Test.11;
-                let Test.7 = true;
-                let Test.5 = Index 0 Test.1;
-                let Test.4 = 0i64;
-                let Test.8 = lowlevel Eq Test.4 Test.5;
-                let Test.6 = lowlevel And Test.8 Test.7;
-                if Test.6 then
+                let Test.5 = true;
+                let Test.7 = Index 0 Test.1;
+                let Test.6 = 0i64;
+                let Test.8 = lowlevel Eq Test.6 Test.7;
+                let Test.4 = lowlevel And Test.8 Test.5;
+                if Test.4 then
                     let Test.0 = Index 1 Test.1;
                     ret Test.0;
                 else
@@ -1197,8 +1202,333 @@ mod test_mono {
                     let Test.3 = lowlevel NumAdd #Attr.2 #Attr.3;
                     ret Test.3;
 
-                let Test.0 = CallByName Num.14;
+                let Test.1 = 1i64;
+                let Test.2 = 2i64;
+                let Test.0 = CallByName Num.14 Test.1 Test.2;
                 ret Test.0;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ir_round() {
+        compiles_to_ir(
+            r#"
+            Num.round 3.6
+            "#,
+            indoc!(
+                r#"
+                procedure Num.36 (#Attr.2):
+                    let Test.2 = lowlevel NumRound #Attr.2;
+                    ret Test.2;
+
+                let Test.1 = 3.6f64;
+                let Test.0 = CallByName Num.36 Test.1;
+                ret Test.0;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ir_when_idiv() {
+        compiles_to_ir(
+            r#"
+            when 1000 // 10 is
+                Ok val -> val
+                Err _ -> -1
+            "#,
+            indoc!(
+                r#"
+            procedure Num.32 (#Attr.2, #Attr.3):
+                let Test.19 = 0i64;
+                let Test.15 = lowlevel NotEq #Attr.3 Test.19;
+                if Test.15 then
+                    let Test.17 = 1i64;
+                    let Test.18 = lowlevel NumDivUnchecked #Attr.2 #Attr.3;
+                    let Test.16 = Ok Test.17 Test.18;
+                    ret Test.16;
+                else
+                    let Test.13 = 0i64;
+                    let Test.14 = Struct {};
+                    let Test.12 = Err Test.13 Test.14;
+                    ret Test.12;
+
+            let Test.10 = 1000i64;
+            let Test.11 = 10i64;
+            let Test.1 = CallByName Num.32 Test.10 Test.11;
+            let Test.5 = true;
+            let Test.7 = Index 0 Test.1;
+            let Test.6 = 1i64;
+            let Test.8 = lowlevel Eq Test.6 Test.7;
+            let Test.4 = lowlevel And Test.8 Test.5;
+            if Test.4 then
+                let Test.0 = Index 1 Test.1;
+                ret Test.0;
+            else
+                let Test.3 = -1i64;
+                ret Test.3;
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ir_two_defs() {
+        compiles_to_ir(
+            r#"
+            x = 3
+            y = 4
+
+            x + y
+            "#,
+            indoc!(
+                r#"
+                procedure Num.14 (#Attr.2, #Attr.3):
+                    let Test.3 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.3;
+
+                let Test.1 = 4i64;
+                let Test.0 = 3i64;
+                let Test.2 = CallByName Num.14 Test.0 Test.1;
+                ret Test.2;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn ir_when_just() {
+        compiles_to_ir(
+            r#"
+            x : [ Nothing, Just Int ]
+            x = Just 41
+
+            when x is
+                Just v -> v + 0x1
+                Nothing -> 0x1
+            "#,
+            indoc!(
+                r#"
+                procedure Num.14 (#Attr.2, #Attr.3):
+                    let Test.4 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.4;
+
+                let Test.12 = 0i64;
+                let Test.13 = 41i64;
+                let Test.0 = Just Test.12 Test.13;
+                let Test.7 = true;
+                let Test.9 = Index 0 Test.0;
+                let Test.8 = 0i64;
+                let Test.10 = lowlevel Eq Test.8 Test.9;
+                let Test.6 = lowlevel And Test.10 Test.7;
+                if Test.6 then
+                    let Test.1 = Index 1 Test.0;
+                    let Test.3 = 1i64;
+                    let Test.2 = CallByName Num.14 Test.1 Test.3;
+                    ret Test.2;
+                else
+                    let Test.5 = 1i64;
+                    ret Test.5;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn one_element_tag() {
+        compiles_to_ir(
+            r#"
+            x : [ Pair Int ]
+            x = Pair 2
+
+            x
+            "#,
+            indoc!(
+                r#"
+                let Test.2 = 2i64;
+                let Test.0 = Pair Test.2;
+                ret Test.0;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn join_points() {
+        compiles_to_ir(
+            r#"
+            x =
+                if True then 1 else 2
+
+            x
+            "#,
+            indoc!(
+                r#"
+                let Test.3 = true;
+                if Test.3 then
+                    let Test.0 = 1i64;
+                    jump Test.2;
+                else
+                    let Test.0 = 2i64;
+                    jump Test.2;
+                joinpoint Test.2:
+                    ret Test.0;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn guard_pattern_true() {
+        compiles_to_ir(
+            r#"
+            when 2 is
+                2 if True -> 42
+                _ -> 0
+            "#,
+            indoc!(
+                r#"
+                let Test.0 = 2i64;
+                let Test.6 = true;
+                let Test.10 = lowlevel Eq Test.6 Test.2;
+                let Test.9 = lowlevel And Test.10 Test.5;
+                let Test.7 = 2i64;
+                let Test.8 = lowlevel Eq Test.7 Test.0;
+                let Test.5 = lowlevel And Test.8 Test.6;
+                let Test.2 = true;
+                jump Test.3;
+                joinpoint Test.3:
+                    if Test.5 then
+                        let Test.1 = 42i64;
+                        ret Test.1;
+                    else
+                        let Test.4 = 0i64;
+                        ret Test.4;
+               "#
+            ),
+        )
+    }
+
+    #[test]
+    fn when_on_record() {
+        compiles_to_ir(
+            r#"
+            when { x: 0x2 } is
+                { x } -> x + 3
+            "#,
+            indoc!(
+                r#"
+                let Test.5 = 2i64;
+                let Test.1 = Struct {Test.5};
+                let Test.0 = Index 0 Test.1;
+                let Test.3 = 3i64;
+                let Test.2 = CallByName Num.14 Test.0 Test.3;
+                ret Test.2;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn let_on_record() {
+        compiles_to_ir(
+            r#"
+            { x } = { x: 0x2, y: 3.14 }
+
+            x
+            "#,
+            indoc!(
+                r#"
+                let Test.4 = 2i64;
+                let Test.5 = 3.14f64;
+                let Test.1 = Struct {Test.4, Test.5};
+                let Test.0 = Index 0 Test.1;
+                ret Test.0;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn when_nested_maybe() {
+        compiles_to_ir(
+            r#"
+            Maybe a : [ Nothing, Just a ]
+
+            x : Maybe (Maybe Int)
+            x = Just (Just 41)
+
+            when x is
+                Just (Just v) -> v + 0x1
+                _ -> 0x1
+            "#,
+            indoc!(
+                r#"
+                procedure Num.14 (#Attr.2, #Attr.3):
+                    let Test.5 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.5;
+ 
+                let Test.16 = 2i64;
+                let Test.17 = 3i64;
+                let Test.2 = Struct {Test.16, Test.17};
+                let Test.7 = true;
+                let Test.8 = 4i64;
+                let Test.9 = Index 0 Test.2;
+                let Test.14 = lowlevel Eq Test.8 Test.9;
+                let Test.13 = lowlevel And Test.14 Test.6;
+                let Test.10 = 3i64;
+                let Test.11 = Index 1 Test.2;
+                let Test.12 = lowlevel Eq Test.10 Test.11;
+                let Test.6 = lowlevel And Test.12 Test.7;
+                if Test.6 then
+                    let Test.3 = 9i64;
+                    ret Test.3;
+                else
+                    let Test.1 = Index 1 Test.2;
+                    let Test.0 = Index 0 Test.2;
+                    let Test.4 = CallByName Num.14 Test.0 Test.1;
+                    ret Test.4;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn when_on_two_values() {
+        compiles_to_ir(
+            r#"
+            when Pair 2 3 is
+                Pair 4 3 -> 9
+                Pair a b -> a + b
+            "#,
+            indoc!(
+                r#"
+                procedure Num.14 (#Attr.2, #Attr.3):
+                    let Test.5 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.5;
+ 
+                let Test.16 = 2i64;
+                let Test.17 = 3i64;
+                let Test.2 = Struct {Test.16, Test.17};
+                let Test.7 = true;
+                let Test.8 = 4i64;
+                let Test.9 = Index 0 Test.2;
+                let Test.14 = lowlevel Eq Test.8 Test.9;
+                let Test.13 = lowlevel And Test.14 Test.6;
+                let Test.10 = 3i64;
+                let Test.11 = Index 1 Test.2;
+                let Test.12 = lowlevel Eq Test.10 Test.11;
+                let Test.6 = lowlevel And Test.12 Test.7;
+                if Test.6 then
+                    let Test.3 = 9i64;
+                    ret Test.3;
+                else
+                    let Test.1 = Index 1 Test.2;
+                    let Test.0 = Index 0 Test.2;
+                    let Test.4 = CallByName Num.14 Test.0 Test.1;
+                    ret Test.4;
                 "#
             ),
         )

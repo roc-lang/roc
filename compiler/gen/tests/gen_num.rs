@@ -30,7 +30,7 @@ mod gen_num {
     #[test]
     fn f64_sqrt() {
         // FIXME this works with normal types, but fails when checking uniqueness types
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     when Num.sqrt 100 is
@@ -44,31 +44,31 @@ mod gen_num {
     }
 
     #[test]
-    fn f64_round() {
-        assert_evals_to!("Num.round 3.6", 4, i64);
+    fn f64_round_old() {
+        assert_evals_to_ir!("Num.round 3.6", 4, i64);
     }
 
     #[test]
     fn f64_abs() {
-        assert_evals_to!("Num.abs -4.7", 4.7, f64);
-        assert_evals_to!("Num.abs 5.8", 5.8, f64);
+        assert_evals_to_ir!("Num.abs -4.7", 4.7, f64);
+        assert_evals_to_ir!("Num.abs 5.8", 5.8, f64);
     }
 
     #[test]
     fn i64_abs() {
-        assert_evals_to!("Num.abs -6", 6, i64);
-        assert_evals_to!("Num.abs 7", 7, i64);
-        assert_evals_to!("Num.abs 0", 0, i64);
-        assert_evals_to!("Num.abs -0", 0, i64);
-        assert_evals_to!("Num.abs -1", 1, i64);
-        assert_evals_to!("Num.abs 1", 1, i64);
-        assert_evals_to!("Num.abs 9_000_000_000_000", 9_000_000_000_000, i64);
-        assert_evals_to!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
+        assert_evals_to_ir!("Num.abs -6", 6, i64);
+        assert_evals_to_ir!("Num.abs 7", 7, i64);
+        assert_evals_to_ir!("Num.abs 0", 0, i64);
+        assert_evals_to_ir!("Num.abs -0", 0, i64);
+        assert_evals_to_ir!("Num.abs -1", 1, i64);
+        assert_evals_to_ir!("Num.abs 1", 1, i64);
+        assert_evals_to_ir!("Num.abs 9_000_000_000_000", 9_000_000_000_000, i64);
+        assert_evals_to_ir!("Num.abs -9_000_000_000_000", 9_000_000_000_000, i64);
     }
 
     #[test]
     fn gen_if_fn() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     limitedNegate = \num ->
@@ -89,7 +89,7 @@ mod gen_num {
 
     #[test]
     fn gen_float_eq() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     1.0 == 1.0
@@ -102,7 +102,7 @@ mod gen_num {
 
     #[test]
     fn gen_add_f64() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     1.1 + 2.4 + 3
@@ -115,7 +115,7 @@ mod gen_num {
 
     #[test]
     fn gen_wrap_add_nums() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     add2 = \num1, num2 -> num1 + num2
@@ -131,7 +131,7 @@ mod gen_num {
     #[test]
     fn gen_div_f64() {
         // FIXME this works with normal types, but fails when checking uniqueness types
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     when 48 / 2 is
@@ -146,7 +146,7 @@ mod gen_num {
 
     #[test]
     fn gen_int_eq() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     4 == 4
@@ -159,7 +159,7 @@ mod gen_num {
 
     #[test]
     fn gen_int_neq() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     4 != 5
@@ -172,7 +172,7 @@ mod gen_num {
 
     #[test]
     fn gen_wrap_int_neq() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     wrappedNotEq : a, a -> Bool
@@ -189,7 +189,7 @@ mod gen_num {
 
     #[test]
     fn gen_add_i64() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     1 + 2 + 3
@@ -202,7 +202,7 @@ mod gen_num {
 
     #[test]
     fn gen_sub_f64() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     1.5 - 2.4 - 3
@@ -215,7 +215,7 @@ mod gen_num {
 
     #[test]
     fn gen_sub_i64() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     1 - 2 - 3
@@ -228,7 +228,7 @@ mod gen_num {
 
     #[test]
     fn gen_mul_i64() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     2 * 4 * 6
@@ -241,7 +241,7 @@ mod gen_num {
 
     #[test]
     fn gen_div_i64() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     when 1000 // 10 is
@@ -256,7 +256,7 @@ mod gen_num {
 
     #[test]
     fn gen_div_by_zero_i64() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     when 1000 // 0 is
@@ -271,7 +271,7 @@ mod gen_num {
 
     #[test]
     fn gen_rem_i64() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     when Num.rem 8 3 is
@@ -286,7 +286,7 @@ mod gen_num {
 
     #[test]
     fn gen_rem_div_by_zero_i64() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     when Num.rem 8 0 is
@@ -301,143 +301,143 @@ mod gen_num {
 
     #[test]
     fn gen_is_zero_i64() {
-        assert_evals_to!("Num.isZero 0", true, bool);
-        assert_evals_to!("Num.isZero 1", false, bool);
+        assert_evals_to_ir!("Num.isZero 0", true, bool);
+        assert_evals_to_ir!("Num.isZero 1", false, bool);
     }
 
     #[test]
     fn gen_is_positive_i64() {
-        assert_evals_to!("Num.isPositive 0", false, bool);
-        assert_evals_to!("Num.isPositive 1", true, bool);
-        assert_evals_to!("Num.isPositive -5", false, bool);
+        assert_evals_to_ir!("Num.isPositive 0", false, bool);
+        assert_evals_to_ir!("Num.isPositive 1", true, bool);
+        assert_evals_to_ir!("Num.isPositive -5", false, bool);
     }
 
     #[test]
     fn gen_is_negative_i64() {
-        assert_evals_to!("Num.isNegative 0", false, bool);
-        assert_evals_to!("Num.isNegative 3", false, bool);
-        assert_evals_to!("Num.isNegative -2", true, bool);
+        assert_evals_to_ir!("Num.isNegative 0", false, bool);
+        assert_evals_to_ir!("Num.isNegative 3", false, bool);
+        assert_evals_to_ir!("Num.isNegative -2", true, bool);
     }
 
     #[test]
     fn gen_is_positive_f64() {
-        assert_evals_to!("Num.isPositive 0.0", false, bool);
-        assert_evals_to!("Num.isPositive 4.7", true, bool);
-        assert_evals_to!("Num.isPositive -8.5", false, bool);
+        assert_evals_to_ir!("Num.isPositive 0.0", false, bool);
+        assert_evals_to_ir!("Num.isPositive 4.7", true, bool);
+        assert_evals_to_ir!("Num.isPositive -8.5", false, bool);
     }
 
     #[test]
     fn gen_is_negative_f64() {
-        assert_evals_to!("Num.isNegative 0.0", false, bool);
-        assert_evals_to!("Num.isNegative 9.9", false, bool);
-        assert_evals_to!("Num.isNegative -4.4", true, bool);
+        assert_evals_to_ir!("Num.isNegative 0.0", false, bool);
+        assert_evals_to_ir!("Num.isNegative 9.9", false, bool);
+        assert_evals_to_ir!("Num.isNegative -4.4", true, bool);
     }
 
     #[test]
     fn gen_is_zero_f64() {
-        assert_evals_to!("Num.isZero 0", true, bool);
-        assert_evals_to!("Num.isZero 0_0", true, bool);
-        assert_evals_to!("Num.isZero 0.0", true, bool);
-        assert_evals_to!("Num.isZero 1", false, bool);
+        assert_evals_to_ir!("Num.isZero 0", true, bool);
+        assert_evals_to_ir!("Num.isZero 0_0", true, bool);
+        assert_evals_to_ir!("Num.isZero 0.0", true, bool);
+        assert_evals_to_ir!("Num.isZero 1", false, bool);
     }
 
     #[test]
     fn gen_is_odd() {
-        assert_evals_to!("Num.isOdd 4", false, bool);
-        assert_evals_to!("Num.isOdd 5", true, bool);
+        assert_evals_to_ir!("Num.isOdd 4", false, bool);
+        assert_evals_to_ir!("Num.isOdd 5", true, bool);
     }
 
     #[test]
     fn gen_is_even() {
-        assert_evals_to!("Num.isEven 6", true, bool);
-        assert_evals_to!("Num.isEven 7", false, bool);
+        assert_evals_to_ir!("Num.isEven 6", true, bool);
+        assert_evals_to_ir!("Num.isEven 7", false, bool);
     }
 
     #[test]
     fn sin() {
-        assert_evals_to!("Num.sin 0", 0.0, f64);
-        assert_evals_to!("Num.sin 1.41421356237", 0.9877659459922529, f64);
+        assert_evals_to_ir!("Num.sin 0", 0.0, f64);
+        assert_evals_to_ir!("Num.sin 1.41421356237", 0.9877659459922529, f64);
     }
 
     #[test]
     fn cos() {
-        assert_evals_to!("Num.cos 0", 1.0, f64);
-        assert_evals_to!("Num.cos 3.14159265359", -1.0, f64);
+        assert_evals_to_ir!("Num.cos 0", 1.0, f64);
+        assert_evals_to_ir!("Num.cos 3.14159265359", -1.0, f64);
     }
 
     #[test]
     fn tan() {
-        assert_evals_to!("Num.tan 0", 0.0, f64);
-        assert_evals_to!("Num.tan 1", 1.557407724654902, f64);
+        assert_evals_to_ir!("Num.tan 0", 0.0, f64);
+        assert_evals_to_ir!("Num.tan 1", 1.557407724654902, f64);
     }
 
     #[test]
     fn lt_i64() {
-        assert_evals_to!("1 < 2", true, bool);
-        assert_evals_to!("1 < 1", false, bool);
-        assert_evals_to!("2 < 1", false, bool);
-        assert_evals_to!("0 < 0", false, bool);
+        assert_evals_to_ir!("1 < 2", true, bool);
+        assert_evals_to_ir!("1 < 1", false, bool);
+        assert_evals_to_ir!("2 < 1", false, bool);
+        assert_evals_to_ir!("0 < 0", false, bool);
     }
 
     #[test]
     fn lte_i64() {
-        assert_evals_to!("1 <= 1", true, bool);
-        assert_evals_to!("2 <= 1", false, bool);
-        assert_evals_to!("1 <= 2", true, bool);
-        assert_evals_to!("0 <= 0", true, bool);
+        assert_evals_to_ir!("1 <= 1", true, bool);
+        assert_evals_to_ir!("2 <= 1", false, bool);
+        assert_evals_to_ir!("1 <= 2", true, bool);
+        assert_evals_to_ir!("0 <= 0", true, bool);
     }
 
     #[test]
     fn gt_i64() {
-        assert_evals_to!("2 > 1", true, bool);
-        assert_evals_to!("2 > 2", false, bool);
-        assert_evals_to!("1 > 1", false, bool);
-        assert_evals_to!("0 > 0", false, bool);
+        assert_evals_to_ir!("2 > 1", true, bool);
+        assert_evals_to_ir!("2 > 2", false, bool);
+        assert_evals_to_ir!("1 > 1", false, bool);
+        assert_evals_to_ir!("0 > 0", false, bool);
     }
 
     #[test]
     fn gte_i64() {
-        assert_evals_to!("1 >= 1", true, bool);
-        assert_evals_to!("1 >= 2", false, bool);
-        assert_evals_to!("2 >= 1", true, bool);
-        assert_evals_to!("0 >= 0", true, bool);
+        assert_evals_to_ir!("1 >= 1", true, bool);
+        assert_evals_to_ir!("1 >= 2", false, bool);
+        assert_evals_to_ir!("2 >= 1", true, bool);
+        assert_evals_to_ir!("0 >= 0", true, bool);
     }
 
     #[test]
     fn lt_f64() {
-        assert_evals_to!("1.1 < 1.2", true, bool);
-        assert_evals_to!("1.1 < 1.1", false, bool);
-        assert_evals_to!("1.2 < 1.1", false, bool);
-        assert_evals_to!("0.0 < 0.0", false, bool);
+        assert_evals_to_ir!("1.1 < 1.2", true, bool);
+        assert_evals_to_ir!("1.1 < 1.1", false, bool);
+        assert_evals_to_ir!("1.2 < 1.1", false, bool);
+        assert_evals_to_ir!("0.0 < 0.0", false, bool);
     }
 
     #[test]
     fn lte_f64() {
-        assert_evals_to!("1.1 <= 1.1", true, bool);
-        assert_evals_to!("1.2 <= 1.1", false, bool);
-        assert_evals_to!("1.1 <= 1.2", true, bool);
-        assert_evals_to!("0.0 <= 0.0", true, bool);
+        assert_evals_to_ir!("1.1 <= 1.1", true, bool);
+        assert_evals_to_ir!("1.2 <= 1.1", false, bool);
+        assert_evals_to_ir!("1.1 <= 1.2", true, bool);
+        assert_evals_to_ir!("0.0 <= 0.0", true, bool);
     }
 
     #[test]
     fn gt_f64() {
-        assert_evals_to!("2.2 > 1.1", true, bool);
-        assert_evals_to!("2.2 > 2.2", false, bool);
-        assert_evals_to!("1.1 > 2.2", false, bool);
-        assert_evals_to!("0.0 > 0.0", false, bool);
+        assert_evals_to_ir!("2.2 > 1.1", true, bool);
+        assert_evals_to_ir!("2.2 > 2.2", false, bool);
+        assert_evals_to_ir!("1.1 > 2.2", false, bool);
+        assert_evals_to_ir!("0.0 > 0.0", false, bool);
     }
 
     #[test]
     fn gte_f64() {
-        assert_evals_to!("1.1 >= 1.1", true, bool);
-        assert_evals_to!("1.1 >= 1.2", false, bool);
-        assert_evals_to!("1.2 >= 1.1", true, bool);
-        assert_evals_to!("0.0 >= 0.0", true, bool);
+        assert_evals_to_ir!("1.1 >= 1.1", true, bool);
+        assert_evals_to_ir!("1.1 >= 1.2", false, bool);
+        assert_evals_to_ir!("1.2 >= 1.1", true, bool);
+        assert_evals_to_ir!("0.0 >= 0.0", true, bool);
     }
 
     #[test]
     fn gen_order_of_arithmetic_ops() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     1 + 3 * 7 - 2
@@ -450,7 +450,7 @@ mod gen_num {
 
     #[test]
     fn gen_order_of_arithmetic_ops_complex_float() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     3 - 48 * 2.0
@@ -463,7 +463,7 @@ mod gen_num {
 
     #[test]
     fn if_guard_bind_variable() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                 when 10 is
@@ -475,7 +475,7 @@ mod gen_num {
             i64
         );
 
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                 when 10 is
@@ -490,7 +490,7 @@ mod gen_num {
 
     #[test]
     fn tail_call_elimination() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     sum = \n, accum ->
@@ -508,12 +508,12 @@ mod gen_num {
 
     #[test]
     fn int_negate() {
-        assert_evals_to!("Num.neg 123", -123, i64);
+        assert_evals_to_ir!("Num.neg 123", -123, i64);
     }
 
     #[test]
     fn gen_wrap_int_neg() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     wrappedNeg = \num -> -num
@@ -528,7 +528,7 @@ mod gen_num {
 
     #[test]
     fn gen_basic_fn() {
-        assert_evals_to!(
+        assert_evals_to_ir!(
             indoc!(
                 r#"
                     always42 : Num.Num Num.Integer -> Num.Num Num.Integer
@@ -544,16 +544,16 @@ mod gen_num {
 
     #[test]
     fn int_to_float() {
-        assert_evals_to!("Num.toFloat 0x9", 9.0, f64);
+        assert_evals_to_ir!("Num.toFloat 0x9", 9.0, f64);
     }
 
     #[test]
     fn num_to_float() {
-        assert_evals_to!("Num.toFloat 9", 9.0, f64);
+        assert_evals_to_ir!("Num.toFloat 9", 9.0, f64);
     }
 
     #[test]
     fn float_to_float() {
-        assert_evals_to!("Num.toFloat 0.5", 0.5, f64);
+        assert_evals_to_ir!("Num.toFloat 0.5", 0.5, f64);
     }
 }
