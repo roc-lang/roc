@@ -1190,15 +1190,10 @@ fn decide_to_branching<'a>(
             let fail = &*env.arena.alloc(fail_expr);
             let pass = &*env.arena.alloc(pass_expr);
 
-            let mut symbol = cond_symbol;
-
-            // TODO not assigned
-            //
             // TODO totally wrong
             let condition = Expr::Literal(Literal::Int(42));
 
             let branching_symbol = env.unique_symbol();
-            let mut stores = vec![(branching_symbol, Layout::Builtin(Builtin::Int1), condition)];
 
             let branching_layout = Layout::Builtin(Builtin::Int1);
 

@@ -206,7 +206,45 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         Float(num) => env.context.f64_type().const_float(*num).into(),
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
-        _ => todo!("unsupported literal {:?}", literal),
+        Str(str_literal) => {
+            if str_literal.is_empty() {
+                panic!("TODO build an empty string in LLVM");
+            } else {
+                let ctx = env.context;
+                let builder = env.builder;
+                let str_len = str_literal.len() + 1/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
+
+                let byte_type = ctx.i8_type();
+                let nul_terminator = byte_type.const_zero();
+                let len_val = ctx.i64_type().const_int(str_len as u64, false);
+                let ptr = env
+                    .builder
+                    .build_array_malloc(ctx.i8_type(), len_val, "str_ptr")
+                    .unwrap();
+
+                // TODO check if malloc returned null; if so, runtime error for OOM!
+
+                // Copy the bytes from the string literal into the array
+                for (index, byte) in str_literal.bytes().enumerate() {
+                    let index_val = ctx.i64_type().const_int(index as u64, false);
+                    let elem_ptr =
+                        unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "byte") };
+
+                    builder.build_store(elem_ptr, byte_type.const_int(byte as u64, false));
+                }
+
+                // Add a NUL terminator at the end.
+                // TODO: Instead of NUL-terminating, return a struct
+                // with the pointer and also the length and capacity.
+                let index_val = ctx.i64_type().const_int(str_len as u64 - 1, false);
+                let elem_ptr =
+                    unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "nul_terminator") };
+
+                builder.build_store(elem_ptr, nul_terminator);
+
+                BasicValueEnum::PointerValue(ptr)
+            }
+        }
     }
 }
 
@@ -257,6 +295,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 arg_tuples.into_bump_slice(),
             )
         }
+
+        FunctionCall {
+            call_type: ByPointer(name),
+            layout,
+            args,
+        } => todo!(),
 
         Struct(sorted_fields) => {
             let ctx = env.context;
@@ -517,7 +561,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 .build_extract_value(struct_value, *index as u32, "")
                 .expect("desired field did not decode")
         }
-        _ => todo!("unsupported literal {:?}", expr),
+        EmptyArray => empty_polymorphic_list(env),
+        Array { elem_layout, elems } => {
+            list_literal2(env, layout_ids, scope, parent, elem_layout, elems)
+        }
+        FunctionPointer(_, _) => todo!(),
+        RuntimeErrorFunction(_) => todo!(),
     }
 }
 
@@ -2422,6 +2471,69 @@ fn list_literal<'a, 'ctx, 'env>(
         let index_val = ctx.i64_type().const_int(index as u64, false);
         let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
         let val = build_expr(env, layout_ids, &scope, parent, &elem);
+
+        builder.build_store(elem_ptr, val);
+    }
+
+    let ptr_bytes = env.ptr_bytes;
+    let int_type = ptr_int(ctx, ptr_bytes);
+    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+    let struct_type = collection(ctx, ptr_bytes);
+    let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
+    let mut struct_val;
+
+    // Store the pointer
+    struct_val = builder
+        .build_insert_value(
+            struct_type.get_undef(),
+            ptr_as_int,
+            Builtin::WRAPPER_PTR,
+            "insert_ptr",
+        )
+        .unwrap();
+
+    // Store the length
+    struct_val = builder
+        .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
+        .unwrap();
+
+    // Bitcast to an array of raw bytes
+    builder.build_bitcast(
+        struct_val.into_struct_value(),
+        collection(ctx, ptr_bytes),
+        "cast_collection",
+    )
+}
+
+fn list_literal2<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    elem_layout: &Layout<'a>,
+    elems: &&[Symbol],
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+    let builder = env.builder;
+
+    let len_u64 = elems.len() as u64;
+    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+
+    let ptr = {
+        let bytes_len = elem_bytes * len_u64;
+        let len_type = env.ptr_int();
+        let len = len_type.const_int(bytes_len, false);
+
+        allocate_list(env, elem_layout, len)
+
+        // TODO check if malloc returned null; if so, runtime error for OOM!
+    };
+
+    // Copy the elements from the list literal into the array
+    for (index, symbol) in elems.iter().enumerate() {
+        let val = load_symbol(env, scope, symbol);
+        let index_val = ctx.i64_type().const_int(index as u64, false);
+        let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
 
         builder.build_store(elem_ptr, val);
     }

@@ -1281,7 +1281,48 @@ pub fn with_hole<'a>(
 
         When { .. } | If { .. } => todo!("when or if in expression requires join points"),
 
-        List { .. } => todo!("list"),
+        List {
+            elem_var,
+            loc_elems,
+        } => {
+            let mut arg_symbols = Vec::with_capacity_in(loc_elems.len(), env.arena);
+            for arg_expr in loc_elems.iter() {
+                if let roc_can::expr::Expr::Var(symbol) = arg_expr.value {
+                    arg_symbols.push(symbol);
+                } else {
+                    arg_symbols.push(env.unique_symbol());
+                }
+            }
+            let arg_symbols = arg_symbols.into_bump_slice();
+
+            let elem_layout = layout_cache
+                .from_var(env.arena, elem_var, env.subs, env.pointer_size)
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+            let expr = Expr::Array {
+                elem_layout: elem_layout.clone(),
+                elems: arg_symbols,
+            };
+            let mut stmt = Stmt::Let(assigned, expr, elem_layout, hole);
+
+            for (arg_expr, symbol) in loc_elems.into_iter().rev().zip(arg_symbols.iter().rev()) {
+                // if this argument is already a symbol, we don't need to re-define it
+                if let roc_can::expr::Expr::Var(_) = arg_expr.value {
+                    continue;
+                }
+
+                stmt = with_hole(
+                    env,
+                    arg_expr.value,
+                    procs,
+                    layout_cache,
+                    *symbol,
+                    env.arena.alloc(stmt),
+                );
+            }
+
+            stmt
+        }
         LetRec(_, _, _, _) | LetNonRec(_, _, _, _) => todo!("lets"),
 
         Access {
