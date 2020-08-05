@@ -391,4 +391,20 @@ mod gen_records {
             bool
         );
     }
+
+    #[test]
+    fn return_record() {
+        assert_evals_to_ir!(
+            indoc!(
+                r#"
+                x = 4
+                y = 3
+
+                { x, y }
+                "#
+            ),
+            (4, 3),
+            (i64, i64)
+        );
+    }
 }

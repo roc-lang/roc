@@ -72,6 +72,26 @@ mod gen_num {
             indoc!(
                 r#"
                     limitedNegate = \num ->
+                        x = 
+                            if num == 1 then
+                                -1
+                            else if num == -1 then
+                                1
+                            else
+                                num
+                        x
+
+                    limitedNegate 1
+                "#
+            ),
+            -1,
+            i64
+        );
+
+        assert_evals_to_ir!(
+            indoc!(
+                r#"
+                    limitedNegate = \num ->
                         if num == 1 then
                             -1
                         else if num == -1 then

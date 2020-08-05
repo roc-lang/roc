@@ -301,7 +301,37 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             call_type: ByPointer(name),
             layout,
             args,
-        } => todo!(),
+        } => {
+            let sub_expr = load_symbol(env, scope, name);
+
+            let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
+
+            for arg in args.iter() {
+                arg_vals.push(load_symbol(env, scope, arg));
+            }
+
+            let call = match sub_expr {
+                BasicValueEnum::PointerValue(ptr) => {
+                    env.builder.build_call(ptr, arg_vals.as_slice(), "tmp")
+                }
+                non_ptr => {
+                    panic!(
+                        "Tried to call by pointer, but encountered a non-pointer: {:?}",
+                        non_ptr
+                    );
+                }
+            };
+
+            // TODO FIXME this should not be hardcoded!
+            // Need to look up what calling convention is the right one for that function.
+            // If this is an external-facing function, it'll use the C calling convention.
+            // If it's an internal-only function, it should (someday) use the fast calling conention.
+            call.set_call_convention(C_CALL_CONV);
+
+            call.try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
+        }
 
         Struct(sorted_fields) => {
             let ctx = env.context;
@@ -566,7 +596,19 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Array { elem_layout, elems } => {
             list_literal2(env, layout_ids, scope, parent, elem_layout, elems)
         }
-        FunctionPointer(_, _) => todo!(),
+        FunctionPointer(symbol, layout) => {
+            let fn_name = layout_ids
+                .get(*symbol, layout)
+                .to_symbol_string(*symbol, &env.interns);
+            let ptr = env
+                .module
+                .get_function(fn_name.as_str())
+                .unwrap_or_else(|| panic!("Could not get pointer to unknown function {:?}", symbol))
+                .as_global_value()
+                .as_pointer_value();
+
+            BasicValueEnum::PointerValue(ptr)
+        }
         RuntimeErrorFunction(_) => todo!(),
     }
 }

@@ -1385,7 +1385,7 @@ mod test_mono {
         compiles_to_ir(
             r#"
             when 2 is
-                2 if True -> 42
+                2 if False -> 42
                 _ -> 0
             "#,
             indoc!(
@@ -1569,6 +1569,62 @@ mod test_mono {
                     White -> 2
                     Blue -> 3
 
+            y
+            "#,
+            indoc!(
+                r#"
+                procedure List.5 (#Attr.2, #Attr.3):
+                    let Test.3 = lowlevel ListPush #Attr.2 #Attr.3;
+                    ret Test.3;
+
+                let Test.4 = 1i64;
+                let Test.1 = Array [Test.4];
+                let Test.2 = 2i64;
+                let Test.0 = CallByName List.5 Test.1 Test.2;
+                ret Test.0;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn if_multi_branch() {
+        compiles_to_ir(
+            r#"
+            if True then
+                1
+            else if False then
+                2
+            else 
+                3
+            "#,
+            indoc!(
+                r#"
+                procedure List.5 (#Attr.2, #Attr.3):
+                    let Test.3 = lowlevel ListPush #Attr.2 #Attr.3;
+                    ret Test.3;
+
+                let Test.4 = 1i64;
+                let Test.1 = Array [Test.4];
+                let Test.2 = 2i64;
+                let Test.0 = CallByName List.5 Test.1 Test.2;
+                ret Test.0;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn when_on_result() {
+        compiles_to_ir(
+            r#"
+            x : Result Int Int
+            x = Ok 2
+
+            y = when x is
+                    Ok 3 -> 1
+                    Ok _ -> 2
+                    Err _ -> 3
             y
             "#,
             indoc!(

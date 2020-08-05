@@ -553,7 +553,7 @@ impl<'a> Stmt<'a> {
     ) -> Self {
         let mut layout_cache = LayoutCache::default();
 
-        dbg!(from_can(env, can_expr, procs, &mut layout_cache))
+        from_can(env, can_expr, procs, &mut layout_cache)
     }
     pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, parens: bool) -> DocBuilder<'b, D, A>
     where
@@ -926,7 +926,9 @@ fn specialize<'a>(
 
     debug_assert!(matches!(unified, roc_unify::unify::Unified::Success(_)));
 
-    let specialized_body = from_can(env, body, procs, layout_cache);
+    let ret_symbol = env.unique_symbol();
+    let hole = env.arena.alloc(Stmt::Ret(ret_symbol));
+    let specialized_body = with_hole(env, body, procs, layout_cache, ret_symbol, hole);
 
     // reset subs, so we don't get type errors when specializing for a different signature
     env.subs.rollback_to(snapshot);
@@ -1031,7 +1033,13 @@ pub fn with_hole<'a>(
                 todo!()
             }
         }
-        Var(symbol) => Stmt::Ret(symbol),
+        Var(symbol) => {
+            // A bit ugly, but it does the job
+            match hole {
+                Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([symbol])),
+                _ => Stmt::Ret(symbol),
+            }
+        }
         // Var(symbol) => panic!("reached Var {}", symbol),
         Tag {
             variant_var,
@@ -1206,10 +1214,16 @@ pub fn with_hole<'a>(
             let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
 
             for (label, layout) in sorted_fields.into_iter() {
-                field_symbols.push(env.unique_symbol());
                 field_layouts.push(layout);
+
                 let field = fields.remove(&label).unwrap();
-                can_fields.push(field);
+                let field_symbol = if let roc_can::expr::Expr::Var(symbol) = field.loc_expr.value {
+                    field_symbols.push(symbol);
+                    can_fields.push(None);
+                } else {
+                    field_symbols.push(env.unique_symbol());
+                    can_fields.push(Some(field));
+                };
             }
 
             // creating a record from the var will unpack it if it's just a single field.
@@ -1220,15 +1234,18 @@ pub fn with_hole<'a>(
             let field_symbols = field_symbols.into_bump_slice();
             let mut stmt = Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole);
 
-            for (field, symbol) in can_fields.into_iter().rev().zip(field_symbols.iter().rev()) {
-                stmt = with_hole(
-                    env,
-                    field.loc_expr.value,
-                    procs,
-                    layout_cache,
-                    *symbol,
-                    env.arena.alloc(stmt),
-                );
+            for (opt_field, symbol) in can_fields.into_iter().rev().zip(field_symbols.iter().rev())
+            {
+                if let Some(field) = opt_field {
+                    stmt = with_hole(
+                        env,
+                        field.loc_expr.value,
+                        procs,
+                        layout_cache,
+                        *symbol,
+                        env.arena.alloc(stmt),
+                    );
+                }
             }
 
             stmt
@@ -1317,7 +1334,7 @@ pub fn with_hole<'a>(
                 branches,
                 layout_cache,
                 procs,
-                Some((id, assigned)),
+                Some(id),
             );
 
             // TODO define condition
@@ -1464,7 +1481,27 @@ pub fn with_hole<'a>(
 
         Accessor { .. } | Update { .. } => todo!("record access/accessor/update"),
 
-        Closure(_, _, _, _, _) => todo!("call"),
+        Closure(ann, name, _, loc_args, boxed_body) => {
+            let (loc_body, ret_var) = *boxed_body;
+
+            match procs.insert_anonymous(env, name, ann, loc_args, loc_body, ret_var, layout_cache)
+            {
+                Ok(layout) => {
+                    // TODO should the let have layout Pointer?
+                    Stmt::Let(
+                        assigned,
+                        Expr::FunctionPointer(name, layout.clone()),
+                        layout,
+                        hole,
+                    )
+                }
+
+                Err(_error) => Stmt::RuntimeError(
+                    "TODO convert anonymous function error to a RuntimeError string",
+                ),
+            }
+        }
+
         Call(boxed, loc_args, _) => {
             let (fn_var, loc_expr, ret_var) = *boxed;
 
@@ -1532,16 +1569,22 @@ pub fn with_hole<'a>(
                             panic!("TODO turn fn_var into a RuntimeError {:?}", err)
                         });
 
+                    let ret_layout = layout_cache
+                        .from_var(env.arena, ret_var, env.subs, env.pointer_size)
+                        .unwrap_or_else(|err| {
+                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
+                        });
+
                     let function_symbol = env.unique_symbol();
                     let arg_symbols = arg_symbols.into_bump_slice();
                     let mut result = Stmt::Let(
                         assigned,
                         Expr::FunctionCall {
                             call_type: CallType::ByPointer(function_symbol),
-                            layout: layout.clone(),
+                            layout,
                             args: arg_symbols,
                         },
-                        layout,
+                        ret_layout,
                         arena.alloc(hole),
                     );
 
@@ -1614,7 +1657,7 @@ pub fn with_hole<'a>(
 
             result
         }
-        RuntimeError(_) => todo!("runtime error"),
+        RuntimeError(e) => todo!("runtime error {:?}", e),
     }
 }
 
@@ -1680,82 +1723,6 @@ pub fn from_can<'a>(
             )
         }
 
-        If {
-            cond_var,
-            branch_var,
-            branches,
-            final_else,
-        } => {
-            let mut expr = from_can(env, final_else.value, procs, layout_cache);
-            let arena = env.arena;
-
-            let ret_layout = layout_cache
-                .from_var(env.arena, branch_var, env.subs, env.pointer_size)
-                .expect("invalid ret_layout");
-            let cond_layout = layout_cache
-                .from_var(env.arena, cond_var, env.subs, env.pointer_size)
-                .expect("invalid cond_layout");
-
-            for (loc_cond, loc_then) in branches.into_iter().rev() {
-                let branching_symbol = env.unique_symbol();
-                let then = from_can(env, loc_then.value, procs, layout_cache);
-
-                let cond_stmt = Stmt::Cond {
-                    cond_symbol: branching_symbol,
-                    branching_symbol,
-                    cond_layout: cond_layout.clone(),
-                    branching_layout: cond_layout.clone(),
-                    pass: env.arena.alloc(then),
-                    fail: env.arena.alloc(expr),
-                    ret_layout: ret_layout.clone(),
-                };
-
-                // add condition
-                let hole = env.arena.alloc(cond_stmt);
-                expr = with_hole(
-                    env,
-                    loc_cond.value,
-                    procs,
-                    layout_cache,
-                    branching_symbol,
-                    hole,
-                );
-            }
-
-            expr
-        }
-        When {
-            cond_var,
-            expr_var,
-            region,
-            loc_cond,
-            branches,
-        } => {
-            let cond_symbol = if let roc_can::expr::Expr::Var(symbol) = loc_cond.value {
-                symbol
-            } else {
-                env.unique_symbol()
-            };
-
-            let mono_when = from_can_when(
-                env,
-                cond_var,
-                expr_var,
-                region,
-                cond_symbol,
-                branches,
-                layout_cache,
-                procs,
-                None,
-            );
-
-            if let roc_can::expr::Expr::Var(_) = loc_cond.value {
-                mono_when
-            } else {
-                let hole = env.arena.alloc(mono_when);
-                with_hole(env, loc_cond.value, procs, layout_cache, cond_symbol, hole)
-            }
-        }
         _ => {
             let symbol = env.unique_symbol();
             let hole = env.arena.alloc(Stmt::Ret(symbol));
@@ -1774,7 +1741,7 @@ fn to_opt_branches<'a>(
     layout_cache: &mut LayoutCache<'a>,
 ) -> std::vec::Vec<(
     Pattern<'a>,
-    crate::decision_tree2::Guard<'a>,
+    Option<Located<roc_can::expr::Expr>>,
     roc_can::expr::Expr,
 )> {
     debug_assert!(!branches.is_empty());
@@ -1801,10 +1768,12 @@ fn to_opt_branches<'a>(
                 exhaustive_guard.clone(),
             ));
 
-            // TODO implement guard again
-            let mono_guard = crate::decision_tree2::Guard::NoGuard;
-
-            opt_branches.push((mono_pattern, mono_guard, when_branch.value.value.clone()));
+            // TODO remove clone?
+            opt_branches.push((
+                mono_pattern,
+                when_branch.guard.clone(),
+                when_branch.value.value.clone(),
+            ));
         }
     }
 
@@ -1840,7 +1809,7 @@ fn to_opt_branches<'a>(
             if is_not_exhaustive {
                 opt_branches.push((
                     Pattern::Underscore,
-                    crate::decision_tree2::Guard::NoGuard,
+                    None,
                     roc_can::expr::Expr::RuntimeError(
                         roc_problem::can::RuntimeError::NonExhaustivePattern,
                     ),
@@ -1861,7 +1830,7 @@ fn from_can_when<'a>(
     branches: std::vec::Vec<roc_can::expr::WhenBranch>,
     layout_cache: &mut LayoutCache<'a>,
     procs: &mut Procs<'a>,
-    join_point: Option<(JoinPointId, Symbol)>,
+    join_point: Option<JoinPointId>,
 ) -> Stmt<'a> {
     if branches.is_empty() {
         // A when-expression with no branches is a runtime error.
@@ -1887,36 +1856,58 @@ fn from_can_when<'a>(
         .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
 
     let arena = env.arena;
-    let it = opt_branches.into_iter().map(|(pattern, guard, can_expr)| {
-        let mut stores = Vec::with_capacity_in(1, env.arena);
-        let res_stores =
-            store_pattern(env, &pattern, cond_symbol, cond_layout.clone(), &mut stores);
-        let mut stmt = match join_point {
-            None => from_can(env, can_expr, procs, layout_cache),
-            Some((id, _symbol)) => {
-                let symbol = env.unique_symbol();
-                let arguments = bumpalo::vec![in env.arena; symbol].into_bump_slice();
-                let jump = env.arena.alloc(Stmt::Jump(id, arguments));
+    let it = opt_branches
+        .into_iter()
+        .map(|(pattern, opt_guard, can_expr)| {
+            let mut stores = Vec::with_capacity_in(1, env.arena);
+            let res_stores =
+                store_pattern(env, &pattern, cond_symbol, cond_layout.clone(), &mut stores);
+            let mut stmt = match join_point {
+                None => from_can(env, can_expr, procs, layout_cache),
+                Some(id) => {
+                    let symbol = env.unique_symbol();
+                    let arguments = bumpalo::vec![in env.arena; symbol].into_bump_slice();
+                    let jump = env.arena.alloc(Stmt::Jump(id, arguments));
 
-                with_hole(env, can_expr, procs, layout_cache, symbol, jump)
-            }
-        };
-
-        match res_stores {
-            Ok(_) => {
-                for (symbol, layout, expr) in stores.into_iter().rev() {
-                    stmt = Stmt::Let(symbol, expr, layout, env.arena.alloc(stmt));
+                    with_hole(env, can_expr, procs, layout_cache, symbol, jump)
                 }
+            };
 
-                (pattern, guard, stmt)
+            use crate::decision_tree2::Guard;
+            match res_stores {
+                Ok(_) => {
+                    for (symbol, layout, expr) in stores.iter().rev() {
+                        stmt =
+                            Stmt::Let(*symbol, expr.clone(), layout.clone(), env.arena.alloc(stmt));
+                    }
+
+                    let guard = if let Some(loc_expr) = opt_guard {
+                        let id = JoinPointId(env.unique_symbol());
+                        let symbol = env.unique_symbol();
+                        let jump = env.arena.alloc(Stmt::Jump(id, env.arena.alloc([symbol])));
+
+                        let mut stmt =
+                            with_hole(env, loc_expr.value, procs, layout_cache, symbol, jump);
+
+                        // guard must have access to bound values
+                        for (symbol, layout, expr) in stores.into_iter().rev() {
+                            stmt = Stmt::Let(symbol, expr, layout, env.arena.alloc(stmt));
+                        }
+
+                        Guard::Guard { id, symbol, stmt }
+                    } else {
+                        Guard::NoGuard
+                    };
+
+                    (pattern, guard, stmt)
+                }
+                Err(msg) => (
+                    Pattern::Underscore,
+                    Guard::NoGuard,
+                    Stmt::RuntimeError(env.arena.alloc(msg)),
+                ),
             }
-            Err(msg) => (
-                Pattern::Underscore,
-                guard,
-                Stmt::RuntimeError(env.arena.alloc(msg)),
-            ),
-        }
-    });
+        });
     let mono_branches = Vec::from_iter_in(it, arena);
 
     crate::decision_tree2::optimize_when(

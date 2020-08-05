@@ -585,6 +585,8 @@ fn to_relevant_branch_help<'a>(
                             start.push((Path::Unbox(Box::new(path.clone())), guard, arg.0));
                             start.extend(end);
                         }
+                    } else if union.alternatives.len() == 1 {
+                        todo!("this should need a special index, right?")
                     } else {
                         let sub_positions =
                             arguments
@@ -946,7 +948,7 @@ fn path_to_expr_help2<'a>(
     env: &mut Env<'a, '_>,
     mut symbol: Symbol,
     mut path: &Path,
-    layout: Layout<'a>,
+    mut layout: Layout<'a>,
 ) -> (Symbol, StoresVec<'a>, Layout<'a>) {
     let mut stores = bumpalo::collections::Vec::new_in(env.arena);
 
@@ -983,8 +985,9 @@ fn path_to_expr_help2<'a>(
                 };
 
                 symbol = env.unique_symbol();
-                stores.push((symbol, inner_layout, inner_expr));
+                stores.push((symbol, inner_layout.clone(), inner_expr));
 
+                layout = inner_layout;
                 path = nested;
             }
         }
@@ -1230,18 +1233,47 @@ fn decide_to_branching<'a>(
                 }
             }
 
-            debug_assert!(!tests.is_empty());
             let mut current_symbol = branching_symbol;
-            let mut condition_symbol = true_symbol;
 
+            // TODO There must be some way to remove this iterator/loop
+            let nr = (tests.len() as i64) - 1 + (guard.is_some() as i64);
             let accum_symbols = std::iter::once(true_symbol)
-                .chain((0..tests.len() - 1).map(|_| env.unique_symbol()))
+                .chain((0..nr).map(|_| env.unique_symbol()))
                 .rev()
                 .collect::<Vec<_>>();
 
-            for ((new_stores, lhs, rhs, layout), accum) in
-                tests.into_iter().rev().zip(accum_symbols)
-            {
+            let mut accum_it = accum_symbols.into_iter();
+
+            // the guard is the final thing that we check, so needs to be layered on first!
+            if let Some((_, id, stmt)) = guard {
+                let accum = accum_it.next().unwrap();
+                let test_symbol = env.unique_symbol();
+
+                let and_expr =
+                    Expr::RunLowLevel(LowLevel::And, env.arena.alloc([test_symbol, accum]));
+
+                // write to the branching symbol
+                cond = Stmt::Let(
+                    current_symbol,
+                    and_expr,
+                    Layout::Builtin(Builtin::Int1),
+                    env.arena.alloc(cond),
+                );
+
+                // calculate the guard value
+                cond = Stmt::Join {
+                    id,
+                    arguments: env
+                        .arena
+                        .alloc([(test_symbol, Layout::Builtin(Builtin::Int1))]),
+                    remainder: env.arena.alloc(stmt),
+                    continuation: env.arena.alloc(cond),
+                };
+
+                current_symbol = accum;
+            }
+
+            for ((new_stores, lhs, rhs, layout), accum) in tests.into_iter().rev().zip(accum_it) {
                 let test_symbol = env.unique_symbol();
                 let test = Expr::RunLowLevel(
                     LowLevel::Eq,
@@ -1271,40 +1303,8 @@ fn decide_to_branching<'a>(
                     cond = Stmt::Let(symbol, expr, layout, env.arena.alloc(cond));
                 }
 
-                condition_symbol = current_symbol;
                 current_symbol = accum;
             }
-
-            /*
-
-            // the guard is the final thing that we check, so needs to be layered on first!
-            if let Some((symbol, id, stmt)) = guard {
-                let test_symbol = symbol;
-                let and_expr = Expr::RunLowLevel(
-                    LowLevel::And,
-                    env.arena.alloc([test_symbol, condition_symbol]),
-                );
-
-                // write to the branching symbol
-                cond = Stmt::Let(
-                    current_symbol,
-                    and_expr,
-                    Layout::Builtin(Builtin::Int1),
-                    env.arena.alloc(cond),
-                );
-
-                // calculate the guard value
-                cond = Stmt::Join {
-                    id,
-                    arguments: &[],
-                    remainder: env.arena.alloc(stmt),
-                    continuation: env.arena.alloc(cond),
-                };
-
-                condition_symbol = current_symbol;
-                current_symbol = env.unique_symbol();
-            }
-            */
 
             cond = Stmt::Let(
                 true_symbol,
