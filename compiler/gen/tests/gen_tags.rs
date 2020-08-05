@@ -663,17 +663,74 @@ mod gen_tags {
     }
 
     #[test]
-    fn join_points() {
+    fn join_point_if() {
         assert_evals_to_ir!(
             indoc!(
                 r#"
                 x =
                     if True then 1 else 2
 
-                5
+                x
                 "#
             ),
-            5,
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    fn join_point_when() {
+        assert_evals_to_ir!(
+            indoc!(
+                r#"
+            x : [ Red, White, Blue ]
+            x = Blue
+
+            y = 
+                when x is
+                    Red -> 1
+                    White -> 2
+                    Blue -> 3.1
+
+            y
+            "#
+            ),
+            3.1,
+            f64
+        );
+    }
+
+    #[test]
+    fn join_point_with_cond_expr() {
+        assert_evals_to_ir!(
+            indoc!(
+                r#"
+            y = 
+                when 1 + 2 is
+                    3 -> 3
+                    1 -> 1
+                    _ -> 0
+
+            y
+            "#
+            ),
+            3,
+            i64
+        );
+
+        assert_evals_to_ir!(
+            indoc!(
+                r#"
+            y = 
+                if 1 + 2 > 0 then
+                    3
+                else
+                    0
+
+            y
+            "#
+            ),
+            3,
             i64
         );
     }

@@ -41,7 +41,7 @@ pub enum OptLevel {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>,
-    join_points: ImMap<JoinPointId, BasicBlock<'ctx>>,
+    join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, &'a [PointerValue<'ctx>])>,
 }
 
 impl<'a, 'ctx> Scope<'a, 'ctx> {
@@ -604,11 +604,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
             result
         }
-        Ret(symbol) => {
-            dbg!(symbol, &scope);
-
-            load_symbol(env, scope, symbol)
-        }
+        Ret(symbol) => load_symbol(env, scope, symbol),
 
         Cond {
             branching_symbol,
@@ -714,11 +710,24 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let builder = env.builder;
             let context = env.context;
 
+            let mut joinpoint_args = Vec::with_capacity_in(arguments.len(), env.arena);
+
+            for (_, layout) in arguments.iter() {
+                let btype = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+                joinpoint_args.push(create_entry_block_alloca(
+                    env,
+                    parent,
+                    btype,
+                    "joinpointarg",
+                ));
+            }
+
             // create new block
             let cont_block = context.append_basic_block(parent, "joinpointcont");
 
             // store this join point
-            scope.join_points.insert(*id, cont_block);
+            let joinpoint_args = joinpoint_args.into_bump_slice();
+            scope.join_points.insert(*id, (cont_block, joinpoint_args));
 
             // construct the blocks that may jump to this join point
             build_exp_stmt(env, layout_ids, scope, parent, remainder);
@@ -726,14 +735,11 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             // remove this join point again
             scope.join_points.remove(&id);
 
-            // Assumptions
-            //
-            // - `remainder` is either a Cond or Switch where
-            // - all branches jump to this join point
-            //
-            // we should improve this in the future!
+            for (ptr, (argument, layout)) in joinpoint_args.iter().zip(arguments.iter()) {
+                scope.insert(*argument, (layout.clone(), *ptr));
+            }
+
             let phi_block = builder.get_insert_block().unwrap();
-            //builder.build_unconditional_branch(cont_block);
 
             // put the cont block at the back
             builder.position_at_end(cont_block);
@@ -745,15 +751,20 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
             result
         }
-        Jump(join_point, _arguments) => {
+        Jump(join_point, arguments) => {
             let builder = env.builder;
             let context = env.context;
-            let cont_block = scope.join_points.get(join_point).unwrap();
-            let jmp = builder.build_unconditional_branch(*cont_block);
-            // builder.insert_instruction(&jmp, None);
+            let (cont_block, argument_pointers) = scope.join_points.get(join_point).unwrap();
+
+            for (pointer, argument) in argument_pointers.iter().zip(arguments.iter()) {
+                let value = load_symbol(env, scope, argument);
+                builder.build_store(*pointer, value);
+            }
+
+            builder.build_unconditional_branch(*cont_block);
 
             // This doesn't currently do anything
-            context.i64_type().const_int(0, false).into()
+            context.i64_type().const_zero().into()
         }
         _ => todo!("unsupported expr {:?}", stmt),
     }
@@ -1724,9 +1735,10 @@ fn build_switch_ir<'a, 'ctx, 'env>(
 
         let branch_val = build_exp_stmt(env, layout_ids, scope, parent, branch_expr);
 
-        builder.build_unconditional_branch(cont_block);
-
-        incoming.push((branch_val, block));
+        if block.get_terminator().is_none() {
+            builder.build_unconditional_branch(cont_block);
+            incoming.push((branch_val, block));
+        }
     }
 
     // The block for the conditional's default branch.
@@ -1734,20 +1746,29 @@ fn build_switch_ir<'a, 'ctx, 'env>(
 
     let default_val = build_exp_stmt(env, layout_ids, scope, parent, default_branch);
 
-    builder.build_unconditional_branch(cont_block);
-
-    incoming.push((default_val, default_block));
-
-    // emit merge block
-    builder.position_at_end(cont_block);
-
-    let phi = builder.build_phi(ret_type, "branch");
-
-    for (branch_val, block) in incoming {
-        phi.add_incoming(&[(&Into::<BasicValueEnum>::into(branch_val), block)]);
+    if default_block.get_terminator().is_none() {
+        builder.build_unconditional_branch(cont_block);
+        incoming.push((default_val, default_block));
     }
 
-    phi.as_basic_value()
+    // emit merge block
+    if incoming.is_empty() {
+        unsafe {
+            cont_block.delete().unwrap();
+        }
+        // produce unused garbage value
+        context.i64_type().const_zero().into()
+    } else {
+        builder.position_at_end(cont_block);
+
+        let phi = builder.build_phi(ret_type, "branch");
+
+        for (branch_val, block) in incoming {
+            phi.add_incoming(&[(&Into::<BasicValueEnum>::into(branch_val), block)]);
+        }
+
+        phi.as_basic_value()
+    }
 }
 
 fn build_basic_phi2<'a, 'ctx, 'env, PassFn, FailFn>(

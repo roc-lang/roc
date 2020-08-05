@@ -349,7 +349,7 @@ pub enum Stmt<'a> {
     Dec(Symbol, &'a Stmt<'a>),
     Join {
         id: JoinPointId,
-        arguments: &'a [Symbol],
+        arguments: &'a [(Symbol, Layout<'a>)],
         /// does not contain jumps to this id
         continuation: &'a Stmt<'a>,
         /// contains the jumps to this id
@@ -548,7 +548,7 @@ impl<'a> Stmt<'a> {
     ) -> Self {
         let mut layout_cache = LayoutCache::default();
 
-        from_can(env, can_expr, procs, &mut layout_cache)
+        dbg!(from_can(env, can_expr, procs, &mut layout_cache))
     }
     pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, parens: bool) -> DocBuilder<'b, D, A>
     where
@@ -625,17 +625,23 @@ impl<'a> Stmt<'a> {
                 arguments,
                 continuation,
                 remainder,
-            } => alloc.intersperse(
-                vec![
-                    remainder.to_doc(alloc, false),
-                    alloc
-                        .text("joinpoint ")
-                        .append(join_point_to_doc(alloc, *id))
-                        .append(":"),
-                    continuation.to_doc(alloc, false).indent(4),
-                ],
-                alloc.hardline(),
-            ),
+            } => {
+                let it = arguments.iter().map(|(s, _)| symbol_to_doc(alloc, *s));
+
+                alloc.intersperse(
+                    vec![
+                        remainder.to_doc(alloc, false),
+                        alloc
+                            .text("joinpoint ")
+                            .append(join_point_to_doc(alloc, *id))
+                            .append(" ".repeat(arguments.len().min(1)))
+                            .append(alloc.intersperse(it, alloc.space()))
+                            .append(":"),
+                        continuation.to_doc(alloc, false).indent(4),
+                    ],
+                    alloc.hardline(),
+                )
+            }
             Jump(id, arguments) => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
@@ -708,7 +714,7 @@ fn patterns_to_when<'a>(
     // are only stores anyway, no branches.
     for (pattern_var, pattern) in patterns.into_iter() {
         let context = crate::pattern2::Context::BadArg;
-        let mono_pattern = from_can_pattern(env, procs, layout_cache, &pattern.value);
+        let mono_pattern = from_can_pattern(env, layout_cache, &pattern.value);
 
         match crate::pattern2::check(
             pattern.region,
@@ -1241,7 +1247,7 @@ pub fn with_hole<'a>(
                 .expect("invalid cond_layout");
 
             let id = JoinPointId(env.unique_symbol());
-            let jump = env.arena.alloc(Stmt::Jump(id, &[]));
+            let jump = env.arena.alloc(Stmt::Jump(id, env.arena.alloc([assigned])));
 
             let mut stmt = with_hole(env, final_else.value, procs, layout_cache, assigned, jump);
 
@@ -1270,18 +1276,66 @@ pub fn with_hole<'a>(
                 );
             }
 
-            let join = Stmt::Join {
+            let layout = layout_cache
+                .from_var(env.arena, branch_var, env.subs, env.pointer_size)
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+            Stmt::Join {
                 id,
-                arguments: &[],
+                arguments: env.arena.alloc([(assigned, layout)]),
                 remainder: env.arena.alloc(stmt),
                 continuation: hole,
-            };
-
-            // expr
-            join
+            }
         }
 
-        When { .. } | If { .. } => todo!("when or if in expression requires join points"),
+        When {
+            cond_var,
+            expr_var,
+            region,
+            loc_cond,
+            branches,
+        } => {
+            let cond_symbol = if let roc_can::expr::Expr::Var(symbol) = loc_cond.value {
+                symbol
+            } else {
+                env.unique_symbol()
+            };
+
+            let id = JoinPointId(env.unique_symbol());
+
+            let mut stmt = from_can_when(
+                env,
+                cond_var,
+                expr_var,
+                region,
+                cond_symbol,
+                branches,
+                layout_cache,
+                procs,
+                Some((id, assigned)),
+            );
+
+            // TODO define condition
+
+            // define the `when` condition
+            if let roc_can::expr::Expr::Var(_) = loc_cond.value {
+                // do nothing
+            } else {
+                let hole = env.arena.alloc(stmt);
+                stmt = with_hole(env, loc_cond.value, procs, layout_cache, cond_symbol, hole);
+            };
+
+            let layout = layout_cache
+                .from_var(env.arena, expr_var, env.subs, env.pointer_size)
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+            Stmt::Join {
+                id,
+                arguments: bumpalo::vec![in env.arena; (assigned, layout)].into_bump_slice(),
+                remainder: env.arena.alloc(stmt),
+                continuation: hole,
+            }
+        }
 
         List { loc_elems, .. } if loc_elems.is_empty() => {
             // because an empty list has an unknown element type, it is handled differently
@@ -1687,6 +1741,7 @@ pub fn from_can<'a>(
                 branches,
                 layout_cache,
                 procs,
+                None,
             );
 
             if let roc_can::expr::Expr::Var(_) = loc_cond.value {
@@ -1704,7 +1759,7 @@ pub fn from_can<'a>(
     }
 }
 
-fn from_can_when<'a>(
+fn to_opt_branches<'a>(
     env: &mut Env<'a, '_>,
     cond_var: Variable,
     expr_var: Variable,
@@ -1712,243 +1767,174 @@ fn from_can_when<'a>(
     cond_symbol: Symbol,
     mut branches: std::vec::Vec<roc_can::expr::WhenBranch>,
     layout_cache: &mut LayoutCache<'a>,
-    procs: &mut Procs<'a>,
-) -> Stmt<'a> {
-    if branches.is_empty() {
-        // A when-expression with no branches is a runtime error.
-        // We can't know what to return!
-        Stmt::RuntimeError("Hit a 0-branch when expression")
-    } else if branches.len() == 1 && branches[0].patterns.len() == 1 && branches[0].guard.is_none()
-    {
-        let first = branches.remove(0);
-        // A when-expression with exactly 1 branch is essentially a LetNonRec.
-        // As such, we can compile it direcly to a Store.
-        let arena = env.arena;
-        let mut stored = Vec::with_capacity_in(1, arena);
+) -> std::vec::Vec<(
+    Pattern<'a>,
+    crate::decision_tree2::Guard<'a>,
+    roc_can::expr::Expr,
+)> {
+    debug_assert!(!branches.is_empty());
 
-        let bound_symbols = first
-            .patterns
-            .iter()
-            .map(|pat| roc_can::pattern::symbols_from_pattern(&pat.value))
-            .flatten()
-            .collect::<std::vec::Vec<_>>();
+    let cond_layout = layout_cache
+        .from_var(env.arena, cond_var, env.subs, env.pointer_size)
+        .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
 
-        let loc_when_pattern = &first.patterns[0];
+    let mut loc_branches = std::vec::Vec::new();
+    let mut opt_branches = std::vec::Vec::new();
 
-        let mono_pattern = from_can_pattern(env, procs, layout_cache, &loc_when_pattern.value);
-
-        // record pattern matches can have 1 branch and typecheck, but may still not be exhaustive
-        let guard = if first.guard.is_some() {
+    for when_branch in branches {
+        let exhaustive_guard = if when_branch.guard.is_some() {
             Guard::HasGuard
         } else {
             Guard::NoGuard
         };
 
-        let context = crate::pattern2::Context::BadCase;
-        match crate::pattern2::check(
-            region,
-            &[(
-                Located::at(loc_when_pattern.region, mono_pattern.clone()),
-                guard,
-            )],
-            context,
-        ) {
-            Ok(_) => {}
-            Err(errors) => {
-                for error in errors {
-                    env.problems.push(MonoProblem::PatternProblem(error))
-                }
+        for loc_pattern in when_branch.patterns {
+            let mono_pattern = from_can_pattern(env, layout_cache, &loc_pattern.value);
 
-                // panic!("generate runtime error, should probably also optimize this");
+            loc_branches.push((
+                Located::at(loc_pattern.region, mono_pattern.clone()),
+                exhaustive_guard.clone(),
+            ));
+
+            // TODO implement guard again
+            let mono_guard = crate::decision_tree2::Guard::NoGuard;
+
+            opt_branches.push((mono_pattern, mono_guard, when_branch.value.value.clone()));
+        }
+    }
+
+    // NOTE exhaustiveness is checked after the construction of all the branches
+    // In contrast to elm (currently), we still do codegen even if a pattern is non-exhaustive.
+    // So we not only report exhaustiveness errors, but also correct them
+    let context = crate::pattern2::Context::BadCase;
+    match crate::pattern2::check(region, &loc_branches, context) {
+        Ok(_) => {}
+        Err(errors) => {
+            use crate::pattern2::Error::*;
+            let mut is_not_exhaustive = false;
+            let mut overlapping_branches = std::vec::Vec::new();
+
+            for error in errors {
+                match &error {
+                    Incomplete(_, _, _) => {
+                        is_not_exhaustive = true;
+                    }
+                    Redundant { index, .. } => {
+                        overlapping_branches.push(index.to_zero_based());
+                    }
+                }
+                env.problems.push(MonoProblem::PatternProblem(error))
+            }
+
+            overlapping_branches.sort();
+
+            for i in overlapping_branches.into_iter().rev() {
+                opt_branches.remove(i);
+            }
+
+            if is_not_exhaustive {
+                opt_branches.push((
+                    Pattern::Underscore,
+                    crate::decision_tree2::Guard::NoGuard,
+                    roc_can::expr::Expr::RuntimeError(
+                        roc_problem::can::RuntimeError::NonExhaustivePattern,
+                    ),
+                ));
             }
         }
+    }
 
-        let cond_layout = layout_cache
-            .from_var(env.arena, cond_var, env.subs, env.pointer_size)
-            .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+    opt_branches
+}
 
-        // NOTE this will still store shadowed names.
-        // that's fine: the branch throws a runtime error anyway
-        let mut ret = match store_pattern(env, &mono_pattern, cond_symbol, cond_layout, &mut stored)
-        {
-            Ok(_) => from_can(env, first.value.value, procs, layout_cache),
-            Err(message) => Stmt::RuntimeError(env.arena.alloc(message)),
+fn from_can_when<'a>(
+    env: &mut Env<'a, '_>,
+    cond_var: Variable,
+    expr_var: Variable,
+    region: Region,
+    cond_symbol: Symbol,
+    branches: std::vec::Vec<roc_can::expr::WhenBranch>,
+    layout_cache: &mut LayoutCache<'a>,
+    procs: &mut Procs<'a>,
+    join_point: Option<(JoinPointId, Symbol)>,
+) -> Stmt<'a> {
+    if branches.is_empty() {
+        // A when-expression with no branches is a runtime error.
+        // We can't know what to return!
+        return Stmt::RuntimeError("Hit a 0-branch when expression");
+    }
+    let opt_branches = to_opt_branches(
+        env,
+        cond_var,
+        expr_var,
+        region,
+        cond_symbol,
+        branches,
+        layout_cache,
+    );
+
+    let cond_layout = layout_cache
+        .from_var(env.arena, cond_var, env.subs, env.pointer_size)
+        .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+
+    let ret_layout = layout_cache
+        .from_var(env.arena, expr_var, env.subs, env.pointer_size)
+        .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
+
+    let arena = env.arena;
+    let it = opt_branches.into_iter().map(|(pattern, guard, can_expr)| {
+        let mut stores = Vec::with_capacity_in(1, env.arena);
+        let res_stores =
+            store_pattern(env, &pattern, cond_symbol, cond_layout.clone(), &mut stores);
+        let mut stmt = match join_point {
+            None => from_can(env, can_expr, procs, layout_cache),
+            Some((id, _symbol)) => {
+                let symbol = env.unique_symbol();
+                let arguments = bumpalo::vec![in env.arena; symbol].into_bump_slice();
+                let jump = env.arena.alloc(Stmt::Jump(id, arguments));
+
+                with_hole(env, can_expr, procs, layout_cache, symbol, jump)
+            }
         };
 
-        for (symbol, layout, expr) in stored.iter().rev().cloned() {
-            ret = Stmt::Let(symbol, expr, layout, env.arena.alloc(ret));
-        }
+        match res_stores {
+            Ok(_) => {
+                for (symbol, layout, expr) in stores.into_iter().rev() {
+                    stmt = Stmt::Let(symbol, expr, layout, env.arena.alloc(stmt));
+                }
 
-        ret
-    } else {
-        let cond_layout = layout_cache
-            .from_var(env.arena, cond_var, env.subs, env.pointer_size)
-            .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
-
-        let mut loc_branches = std::vec::Vec::new();
-        let mut opt_branches = std::vec::Vec::new();
-
-        for when_branch in branches {
-            let mono_expr = from_can(env, when_branch.value.value, procs, layout_cache);
-
-            let exhaustive_guard = if when_branch.guard.is_some() {
-                Guard::HasGuard
-            } else {
-                Guard::NoGuard
-            };
-
-            for loc_pattern in when_branch.patterns {
-                let mono_pattern = from_can_pattern(env, procs, layout_cache, &loc_pattern.value);
-
-                loc_branches.push((
-                    Located::at(loc_pattern.region, mono_pattern.clone()),
-                    exhaustive_guard.clone(),
-                ));
-
-                let mut stores = Vec::with_capacity_in(1, env.arena);
-
-                let (mono_guard, stores, expr) = match store_pattern(
-                    env,
-                    &mono_pattern,
-                    cond_symbol,
-                    cond_layout.clone(),
-                    &mut stores,
-                ) {
-                    Ok(_) => {
-                        // if the branch is guarded, the guard can use variables bound in the
-                        // pattern. They must be available, so we give the stores to the
-                        // decision_tree. A branch with guard can only be entered with the guard
-                        // evaluated, so variables will also be loaded in the branch's body expr.
-                        //
-                        // otherwise, we modify the branch's expression to include the stores
-                        if let Some(loc_guard) = when_branch.guard.clone() {
-                            let guard_symbol = env.unique_symbol();
-                            let id = JoinPointId(env.unique_symbol());
-
-                            let hole = env.arena.alloc(Stmt::Jump(id, &[]));
-                            let mut stmt = with_hole(
-                                env,
-                                loc_guard.value,
-                                procs,
-                                layout_cache,
-                                guard_symbol,
-                                hole,
-                            );
-
-                            for (symbol, expr, layout) in stores.into_iter().rev() {
-                                stmt = Stmt::Let(symbol, layout, expr, env.arena.alloc(stmt));
-                            }
-                            (
-                                crate::decision_tree2::Guard::Guard {
-                                    stmt,
-                                    id,
-                                    symbol: guard_symbol,
-                                },
-                                &[] as &[_],
-                                mono_expr.clone(),
-                            )
-                        } else {
-                            (
-                                crate::decision_tree2::Guard::NoGuard,
-                                stores.into_bump_slice(),
-                                mono_expr.clone(),
-                            )
-                        }
-                    }
-                    Err(message) => {
-                        // when the pattern is invalid, a guard must give a runtime error too
-                        if when_branch.guard.is_some() {
-                            /*
-                            (
-                                crate::decision_tree2::Guard::Guard {
-                                    stores: &[],
-                                    expr: Stmt::RuntimeError(env.arena.alloc(message)),
-                                },
-                                &[] as &[_],
-                                // we can never hit this
-                                Stmt::RuntimeError(&"invalid pattern with guard: unreachable"),
-                            )
-                                */
-                            todo!()
-                        } else {
-                            (
-                                crate::decision_tree2::Guard::NoGuard,
-                                &[] as &[_],
-                                Stmt::RuntimeError(env.arena.alloc(message)),
-                            )
-                        }
-                    }
-                };
-
-                opt_branches.push((mono_pattern, mono_guard, stores, expr));
+                (pattern, guard, stmt)
             }
+            Err(msg) => (
+                Pattern::Underscore,
+                guard,
+                Stmt::RuntimeError(env.arena.alloc(msg)),
+            ),
         }
+    });
+    let mono_branches = Vec::from_iter_in(it, arena);
 
-        let context = crate::pattern2::Context::BadCase;
-        match crate::pattern2::check(region, &loc_branches, context) {
-            Ok(_) => {}
-            Err(errors) => {
-                use crate::pattern2::Error::*;
-                let mut is_not_exhaustive = false;
-                let mut overlapping_branches = std::vec::Vec::new();
-
-                for error in errors {
-                    match &error {
-                        Incomplete(_, _, _) => {
-                            is_not_exhaustive = true;
-                        }
-                        Redundant { index, .. } => {
-                            overlapping_branches.push(index.to_zero_based());
-                        }
-                    }
-                    env.problems.push(MonoProblem::PatternProblem(error))
-                }
-
-                overlapping_branches.sort();
-
-                for i in overlapping_branches.into_iter().rev() {
-                    opt_branches.remove(i);
-                }
-
-                if is_not_exhaustive {
-                    opt_branches.push((
-                        Pattern::Underscore,
-                        crate::decision_tree2::Guard::NoGuard,
-                        &[],
-                        Stmt::RuntimeError("non-exhaustive pattern match"),
-                    ));
-                }
-            }
-        }
-
-        let ret_layout = layout_cache
-            .from_var(env.arena, expr_var, env.subs, env.pointer_size)
-            .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
-
-        crate::decision_tree2::optimize_when(
-            env,
-            cond_symbol,
-            cond_layout.clone(),
-            ret_layout,
-            opt_branches,
-        )
-    }
+    crate::decision_tree2::optimize_when(
+        env,
+        cond_symbol,
+        cond_layout.clone(),
+        ret_layout,
+        mono_branches,
+    )
 }
 
 fn store_pattern<'a>(
     env: &mut Env<'a, '_>,
     can_pat: &Pattern<'a>,
     outer_symbol: Symbol,
-    layout: Layout<'a>,
+    _layout: Layout<'a>,
     stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
 ) -> Result<(), String> {
     use Pattern::*;
 
     match can_pat {
         Identifier(symbol) => {
-            // let load = Expr::Load(outer_symbol);
-            // stored.push((*symbol, layout, load))
-            // todo!()
+            // TODO surely something should happen here?
         }
         Underscore => {
             // Since _ is never read, it's safe to reassign it.
@@ -2343,7 +2329,7 @@ pub struct RecordDestruct<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum DestructType<'a> {
     Required,
-    Optional(Stmt<'a>),
+    Optional(roc_can::expr::Expr),
     Guard(Pattern<'a>),
 }
 
@@ -2356,7 +2342,6 @@ pub struct WhenBranch<'a> {
 
 pub fn from_can_pattern<'a>(
     env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     can_pattern: &roc_can::pattern::Pattern,
 ) -> Pattern<'a> {
@@ -2466,7 +2451,7 @@ pub fn from_can_pattern<'a>(
                     let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
                     for ((_, loc_pat), layout) in arguments.iter().zip(field_layouts.iter()) {
                         mono_args.push((
-                            from_can_pattern(env, procs, layout_cache, &loc_pat.value),
+                            from_can_pattern(env, layout_cache, &loc_pat.value),
                             layout.clone(),
                         ));
                     }
@@ -2508,7 +2493,7 @@ pub fn from_can_pattern<'a>(
                     let it = argument_layouts[1..].iter();
                     for ((_, loc_pat), layout) in arguments.iter().zip(it) {
                         mono_args.push((
-                            from_can_pattern(env, procs, layout_cache, &loc_pat.value),
+                            from_can_pattern(env, layout_cache, &loc_pat.value),
                             layout.clone(),
                         ));
                     }
@@ -2561,7 +2546,6 @@ pub fn from_can_pattern<'a>(
 
                         mono_destructs.push(from_can_record_destruct(
                             env,
-                            procs,
                             layout_cache,
                             &destruct.value,
                             field_layout.clone(),
@@ -2597,7 +2581,6 @@ pub fn from_can_pattern<'a>(
 
 fn from_can_record_destruct<'a>(
     env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     can_rd: &roc_can::pattern::RecordDestruct,
     field_layout: Layout<'a>,
@@ -2609,11 +2592,11 @@ fn from_can_record_destruct<'a>(
         typ: match &can_rd.typ {
             roc_can::pattern::DestructType::Required => DestructType::Required,
             roc_can::pattern::DestructType::Optional(_, loc_expr) => {
-                DestructType::Optional(from_can(env, loc_expr.value.clone(), procs, layout_cache))
+                DestructType::Optional(loc_expr.value.clone())
             }
-            roc_can::pattern::DestructType::Guard(_, loc_pattern) => DestructType::Guard(
-                from_can_pattern(env, procs, layout_cache, &loc_pattern.value),
-            ),
+            roc_can::pattern::DestructType::Guard(_, loc_pattern) => {
+                DestructType::Guard(from_can_pattern(env, layout_cache, &loc_pattern.value))
+            }
         },
     }
 }

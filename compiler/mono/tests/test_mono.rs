@@ -1555,4 +1555,35 @@ mod test_mono {
             ),
         )
     }
+
+    #[test]
+    fn when_joinpoint() {
+        compiles_to_ir(
+            r#"
+            x : [ Red, White, Blue ]
+            x = Blue
+
+            y = 
+                when x is
+                    Red -> 1
+                    White -> 2
+                    Blue -> 3
+
+            y
+            "#,
+            indoc!(
+                r#"
+                procedure List.5 (#Attr.2, #Attr.3):
+                    let Test.3 = lowlevel ListPush #Attr.2 #Attr.3;
+                    ret Test.3;
+
+                let Test.4 = 1i64;
+                let Test.1 = Array [Test.4];
+                let Test.2 = 2i64;
+                let Test.0 = CallByName List.5 Test.1 Test.2;
+                ret Test.0;
+                "#
+            ),
+        )
+    }
 }

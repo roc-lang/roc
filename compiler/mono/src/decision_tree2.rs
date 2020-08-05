@@ -873,7 +873,7 @@ enum Decider<'a, T> {
 
 #[derive(Clone, Debug, PartialEq)]
 enum Choice<'a> {
-    Inline(Stores<'a>, Stmt<'a>),
+    Inline(Stmt<'a>),
     Jump(Label),
 }
 
@@ -885,20 +885,17 @@ pub fn optimize_when<'a>(
     cond_symbol: Symbol,
     cond_layout: Layout<'a>,
     ret_layout: Layout<'a>,
-    opt_branches: Vec<(Pattern<'a>, Guard<'a>, Stores<'a>, Stmt<'a>)>,
+    opt_branches: bumpalo::collections::Vec<'a, (Pattern<'a>, Guard<'a>, Stmt<'a>)>,
 ) -> Stmt<'a> {
     let (patterns, _indexed_branches) = opt_branches
         .into_iter()
         .enumerate()
-        .map(|(index, (pattern, guard, stores, branch))| {
-            (
-                (guard, pattern, index as u64),
-                (index as u64, stores, branch),
-            )
+        .map(|(index, (pattern, guard, branch))| {
+            ((guard, pattern, index as u64), (index as u64, branch))
         })
         .unzip();
 
-    let indexed_branches: Vec<(u64, Stores<'a>, Stmt<'a>)> = _indexed_branches;
+    let indexed_branches: Vec<(u64, Stmt<'a>)> = _indexed_branches;
 
     let decision_tree = compile(patterns);
     let decider = tree_to_decider(decision_tree);
@@ -907,9 +904,8 @@ pub fn optimize_when<'a>(
     let mut choices = MutMap::default();
     let mut jumps = Vec::new();
 
-    for (index, stores, branch) in indexed_branches.into_iter() {
-        let ((branch_index, choice), opt_jump) =
-            create_choices(&target_counts, index, stores, branch);
+    for (index, branch) in indexed_branches.into_iter() {
+        let ((branch_index, choice), opt_jump) = create_choices(&target_counts, index, branch);
 
         if let Some(jump) = opt_jump {
             jumps.push(jump);
@@ -920,7 +916,7 @@ pub fn optimize_when<'a>(
 
     let choice_decider = insert_choices(&choices, decider);
 
-    let (stores, expr) = decide_to_branching(
+    let expr = decide_to_branching(
         env,
         cond_symbol,
         cond_layout,
@@ -932,7 +928,6 @@ pub fn optimize_when<'a>(
     // increase the jump counter by the number of jumps in this branching structure
     *env.jump_counter += jumps.len() as u64;
 
-    // Expr::Store(stores, env.arena.alloc(expr))
     expr
 }
 
@@ -1100,6 +1095,7 @@ fn test_to_equality<'a>(
             let lhs = Expr::Literal(Literal::Bool(test_bit));
             let lhs_symbol = env.unique_symbol();
             let (mut stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
+            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int1), lhs));
 
             (
                 stores,
@@ -1134,21 +1130,21 @@ fn decide_to_branching<'a>(
     cond_layout: Layout<'a>,
     ret_layout: Layout<'a>,
     decider: Decider<'a, Choice<'a>>,
-    jumps: &Vec<(u64, Stores<'a>, Stmt<'a>)>,
-) -> (Stores<'a>, Stmt<'a>) {
+    jumps: &Vec<(u64, Stmt<'a>)>,
+) -> Stmt<'a> {
     use Choice::*;
     use Decider::*;
 
     match decider {
         Leaf(Jump(label)) => {
             // we currently inline the jumps: does fewer jumps but produces a larger artifact
-            let (_, stores, expr) = jumps
+            let (_, expr) = jumps
                 .iter()
-                .find(|(l, _, _)| l == &label)
+                .find(|(l, _)| l == &label)
                 .expect("jump not in list of jumps");
-            (stores, expr.clone())
+            expr.clone()
         }
-        Leaf(Inline(stores, expr)) => (stores, expr),
+        Leaf(Inline(expr)) => expr,
         Chain {
             test_chain,
             success,
@@ -1156,7 +1152,7 @@ fn decide_to_branching<'a>(
         } => {
             // generate a switch based on the test chain
 
-            let (pass_stores, mut pass_expr) = decide_to_branching(
+            let pass_expr = decide_to_branching(
                 env,
                 cond_symbol,
                 cond_layout.clone(),
@@ -1165,15 +1161,7 @@ fn decide_to_branching<'a>(
                 jumps,
             );
 
-            dbg!(&pass_expr);
-
-            // TODO remove clone
-            for (symbol, layout, expr) in pass_stores.iter().cloned().rev() {
-                println!("{} {:?}", symbol, expr);
-                pass_expr = Stmt::Let(symbol, expr, layout, env.arena.alloc(pass_expr));
-            }
-
-            let (fail_stores, mut fail_expr) = decide_to_branching(
+            let fail_expr = decide_to_branching(
                 env,
                 cond_symbol,
                 cond_layout.clone(),
@@ -1181,11 +1169,6 @@ fn decide_to_branching<'a>(
                 *failure,
                 jumps,
             );
-
-            // TODO remove clone
-            for (symbol, layout, expr) in fail_stores.iter().cloned().rev() {
-                fail_expr = Stmt::Let(symbol, expr, layout, env.arena.alloc(fail_expr));
-            }
 
             let fail = &*env.arena.alloc(fail_expr);
             let pass = &*env.arena.alloc(pass_expr);
@@ -1331,7 +1314,7 @@ fn decide_to_branching<'a>(
             );
 
             // (env.arena.alloc(stores), cond)
-            (&[], cond)
+            cond
         }
         FanOut {
             path,
@@ -1344,7 +1327,7 @@ fn decide_to_branching<'a>(
             let (cond, cond_stores_vec, cond_layout) =
                 path_to_expr_help2(env, cond_symbol, &path, cond_layout);
 
-            let (default_stores, mut default_branch) = decide_to_branching(
+            let default_branch = decide_to_branching(
                 env,
                 cond_symbol,
                 cond_layout.clone(),
@@ -1353,15 +1336,10 @@ fn decide_to_branching<'a>(
                 jumps,
             );
 
-            // TODO remove clone
-            for (symbol, layout, expr) in default_stores.iter().cloned() {
-                default_branch = Stmt::Let(symbol, expr, layout, env.arena.alloc(default_branch));
-            }
-
             let mut branches = bumpalo::collections::Vec::with_capacity_in(tests.len(), env.arena);
 
             for (test, decider) in tests {
-                let (stores, mut branch) = decide_to_branching(
+                let branch = decide_to_branching(
                     env,
                     cond_symbol,
                     cond_layout.clone(),
@@ -1369,11 +1347,6 @@ fn decide_to_branching<'a>(
                     decider,
                     jumps,
                 );
-
-                // TODO remove clone
-                for (symbol, layout, expr) in stores.iter().cloned() {
-                    branch = Stmt::Let(symbol, expr, layout, env.arena.alloc(branch));
-                }
 
                 let tag = match test {
                     Test::IsInt(v) => v as u64,
@@ -1386,7 +1359,6 @@ fn decide_to_branching<'a>(
 
                 branches.push((tag, branch));
             }
-            dbg!(&branches, &default_branch);
 
             let mut switch = Stmt::Switch {
                 cond_layout,
@@ -1401,7 +1373,7 @@ fn decide_to_branching<'a>(
             }
 
             // make a jump table based on the tests
-            (&[], switch)
+            switch
         }
     }
 }
@@ -1601,19 +1573,15 @@ fn count_targets_help(decision_tree: &Decider<u64>, targets: &mut MutMap<u64, u6
 fn create_choices<'a>(
     target_counts: &MutMap<u64, u64>,
     target: u64,
-    stores: Stores<'a>,
     branch: Stmt<'a>,
-) -> ((u64, Choice<'a>), Option<(u64, Stores<'a>, Stmt<'a>)>) {
+) -> ((u64, Choice<'a>), Option<(u64, Stmt<'a>)>) {
     match target_counts.get(&target) {
         None => unreachable!(
             "this should never happen: {:?} not in {:?}",
             target, target_counts
         ),
-        Some(1) => ((target, Choice::Inline(stores, branch)), None),
-        Some(_) => (
-            (target, Choice::Jump(target)),
-            Some((target, stores, branch)),
-        ),
+        Some(1) => ((target, Choice::Inline(branch)), None),
+        Some(_) => ((target, Choice::Jump(target)), Some((target, branch))),
     }
 }
 
