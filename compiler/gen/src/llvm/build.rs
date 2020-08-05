@@ -1587,6 +1587,8 @@ fn list_join<'a, 'ctx, 'env>(
                 let list_len_sum_name = "#listslengthsum";
                 let list_len_sum_alloca = builder.build_alloca(ctx.i64_type(), list_len_sum_name);
 
+                builder.build_store(list_len_sum_alloca, ctx.i64_type().const_int(0, false));
+
                 // List Sum Loop
                 {
                     let index_name = "#index";
