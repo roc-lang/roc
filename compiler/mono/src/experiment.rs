@@ -1,5 +1,7 @@
 use self::InProgressProc::*;
-use crate::layout::{list_layout_from_elem, Builtin, Layout, LayoutCache, LayoutProblem};
+use crate::layout::{
+    list_layout_from_elem, Builtin, Layout, LayoutCache, LayoutProblem, Ownership,
+};
 use crate::pattern2::{Ctor, Guard, RenderAs, TagId};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -1281,6 +1283,12 @@ pub fn with_hole<'a>(
 
         When { .. } | If { .. } => todo!("when or if in expression requires join points"),
 
+        List { loc_elems, .. } if loc_elems.is_empty() => {
+            // because an empty list has an unknown element type, it is handled differently
+            let expr = Expr::EmptyArray;
+            Stmt::Let(assigned, expr, Layout::Builtin(Builtin::EmptyList), hole)
+        }
+
         List {
             elem_var,
             loc_elems,
@@ -1303,7 +1311,15 @@ pub fn with_hole<'a>(
                 elem_layout: elem_layout.clone(),
                 elems: arg_symbols,
             };
-            let mut stmt = Stmt::Let(assigned, expr, elem_layout, hole);
+            let mut stmt = Stmt::Let(
+                assigned,
+                expr,
+                Layout::Builtin(Builtin::List(
+                    Ownership::Owned,
+                    env.arena.alloc(elem_layout),
+                )),
+                hole,
+            );
 
             for (arg_expr, symbol) in loc_elems.into_iter().rev().zip(arg_symbols.iter().rev()) {
                 // if this argument is already a symbol, we don't need to re-define it

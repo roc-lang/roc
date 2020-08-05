@@ -33,6 +33,11 @@ mod gen_list {
     }
 
     #[test]
+    fn int_singleton_list_literal() {
+        assert_evals_to_ir!("[1]", &[1], &'static [i64]);
+    }
+
+    #[test]
     fn int_list_literal() {
         assert_evals_to_ir!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64]);
     }
