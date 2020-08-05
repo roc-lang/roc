@@ -384,6 +384,10 @@ pub enum CallType {
 pub enum Expr<'a> {
     Literal(Literal<'a>),
 
+    /// A symbol will alias this symbol
+    /// in the long term we should get rid of this using copy propagation
+    Alias(Symbol),
+
     // Functions
     FunctionPointer(Symbol, Layout<'a>),
     FunctionCall {
@@ -465,6 +469,7 @@ impl<'a> Expr<'a> {
 
         match self {
             Literal(lit) => lit.to_doc(alloc, false),
+            Alias(symbol) => alloc.text("alias ").append(symbol_to_doc(alloc, *symbol)),
 
             FunctionPointer(symbol, _) => symbol_to_doc(alloc, *symbol),
 
@@ -1927,7 +1932,7 @@ fn store_pattern<'a>(
     env: &mut Env<'a, '_>,
     can_pat: &Pattern<'a>,
     outer_symbol: Symbol,
-    _layout: Layout<'a>,
+    layout: Layout<'a>,
     stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
 ) -> Result<(), String> {
     use Pattern::*;
@@ -1935,6 +1940,7 @@ fn store_pattern<'a>(
     match can_pat {
         Identifier(symbol) => {
             // TODO surely something should happen here?
+            stored.push((*symbol, layout, Expr::Alias(outer_symbol)));
         }
         Underscore => {
             // Since _ is never read, it's safe to reassign it.

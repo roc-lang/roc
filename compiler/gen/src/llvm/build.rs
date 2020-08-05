@@ -260,6 +260,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
     match expr {
         Literal(literal) => build_exp_literal(env, layout_ids, scope, parent, literal),
+        Alias(symbol) => load_symbol(env, scope, symbol),
         RunLowLevel(op, symbols) => {
             let mut args = Vec::with_capacity_in(symbols.len(), env.arena);
 
