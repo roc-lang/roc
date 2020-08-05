@@ -1571,8 +1571,6 @@ fn list_join<'a, 'ctx, 'env>(
                 load_list_ptr(builder, outer_list_wrapper, elem_ptr_type)
             };
 
-            let dest_elem_ptr_alloca = builder.build_alloca(elem_ptr_type, "dest_elem");
-
             // outer_list_len > 0
             // We do this check to avoid allocating memory. If the input
             // list is empty, then we can just return an empty list.
@@ -1657,6 +1655,8 @@ fn list_join<'a, 'ctx, 'env>(
                     .build_array_malloc(elem_type, final_list_sum, "final_list_sum")
                     .unwrap();
 
+                let dest_elem_ptr_alloca = builder.build_alloca(elem_ptr_type, "dest_elem");
+
                 builder.build_store(dest_elem_ptr_alloca, final_list_ptr);
 
                 // Element inserting loop
@@ -1704,7 +1704,7 @@ fn list_join<'a, 'ctx, 'env>(
                     // Inner Loop
                     {
                         let dest_elem_ptr = builder
-                            .build_load(dest_elem_ptr_alloca, "load_dest_elem")
+                            .build_load(dest_elem_ptr_alloca, "load_dest_elem_ptr")
                             .into_pointer_value();
 
                         let inner_index_name = "#inner_index";
@@ -1739,12 +1739,16 @@ fn list_join<'a, 'ctx, 'env>(
                         let src_elem = builder.build_load(src_elem_ptr, "get_elem");
                         // TODO clone src_elem
 
-                        builder.build_store(dest_elem_ptr, src_elem);
+                        let curr_dest_elem_ptr = builder
+                            .build_load(dest_elem_ptr_alloca, "load_dest_elem_ptr")
+                            .into_pointer_value();
+
+                        builder.build_store(curr_dest_elem_ptr, src_elem);
 
                         let next_dest_elem_ptr = unsafe {
                             builder.build_in_bounds_gep(
-                                dest_elem_ptr,
-                                &[env.ptr_int().const_int(1, false)],
+                                curr_dest_elem_ptr,
+                                &[env.ptr_int().const_int(1 as u64, false)],
                                 "increment_dest_elem",
                             )
                         };
