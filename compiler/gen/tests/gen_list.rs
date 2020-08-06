@@ -101,7 +101,38 @@ mod gen_list {
     #[test]
     fn list_join() {
         assert_evals_to!("List.join []", &[], &'static [i64]);
-        assert_evals_to!("List.join [ [ 1.1 ] ]", &[1.1], &'static [f64]);
+        assert_evals_to!("List.join [ [1, 2, 3 ] ]", &[1, 2, 3], &'static [i64]);
+        assert_evals_to!(
+            "List.join [ [1, 2, 3 ] , [4 ,5, 6] ]",
+            &[1, 2, 3, 4, 5, 6],
+            &'static [i64]
+        );
+        assert_evals_to!(
+            "List.join [ [ 1.2, 1.1 ], [ 2.1, 2.2 ] ]",
+            &[1.2, 1.1, 2.1, 2.2],
+            &'static [f64]
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    empty : List Float
+                    empty =
+                        []
+        
+                    List.join [ [ 0.2, 11.11 ], empty ]
+                "#
+            ),
+            &[0.2, 11.11],
+            &'static [f64]
+        );
+
+        assert_evals_to!("List.join [ [], [], [] ]", &[], &'static [f64]);
+        assert_evals_to!(
+            "List.join [ [ 1.2, 1.1 ], [] ]",
+            &[1.2, 1.1],
+            &'static [f64]
+        );
     }
 
     #[test]
