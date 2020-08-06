@@ -1971,7 +1971,7 @@ fn from_can_when<'a>(
                 }
             };
 
-            use crate::decision_tree2::Guard;
+            use crate::decision_tree::Guard;
             match res_stores {
                 Ok(_) => {
                     for (symbol, layout, expr) in stores.iter().rev() {
@@ -2008,7 +2008,7 @@ fn from_can_when<'a>(
         });
     let mono_branches = Vec::from_iter_in(it, arena);
 
-    crate::decision_tree2::optimize_when(
+    crate::decision_tree::optimize_when(
         env,
         cond_symbol,
         cond_layout.clone(),

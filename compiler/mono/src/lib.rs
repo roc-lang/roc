@@ -19,6 +19,6 @@ pub mod layout;
 //#[allow(clippy::ptr_arg)]
 //pub mod decision_tree;
 #[allow(clippy::ptr_arg)]
-pub mod decision_tree2;
+pub mod decision_tree;
 #[allow(clippy::ptr_arg)]
 pub mod exhaustive;
