@@ -31,7 +31,7 @@ mod gen_primitives {
 
     #[test]
     fn basic_str() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             "\"shirt and hat\"",
             CString::new("shirt and hat").unwrap().as_c_str(),
             *const c_char,
@@ -41,17 +41,17 @@ mod gen_primitives {
 
     #[test]
     fn basic_int() {
-        assert_evals_to_ir!("123", 123, i64);
+        assert_evals_to!("123", 123, i64);
     }
 
     #[test]
     fn basic_float() {
-        assert_evals_to_ir!("1234.0", 1234.0, f64);
+        assert_evals_to!("1234.0", 1234.0, f64);
     }
 
     #[test]
     fn branch_first_float() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     when 1.23 is
@@ -66,7 +66,7 @@ mod gen_primitives {
 
     #[test]
     fn branch_second_float() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     when 2.34 is
@@ -81,7 +81,7 @@ mod gen_primitives {
 
     #[test]
     fn branch_third_float() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                    when 10.0 is
@@ -97,7 +97,7 @@ mod gen_primitives {
 
     #[test]
     fn branch_first_int() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     when 1 is
@@ -112,7 +112,7 @@ mod gen_primitives {
 
     #[test]
     fn branch_second_int() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     when 2 is
@@ -127,7 +127,7 @@ mod gen_primitives {
 
     #[test]
     fn branch_third_int() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     when 10 is
@@ -143,7 +143,7 @@ mod gen_primitives {
 
     #[test]
     fn branch_store_variable() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     when 0 is
@@ -158,7 +158,7 @@ mod gen_primitives {
 
     #[test]
     fn when_one_element_tag() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 x : [ Pair Int Int ]
@@ -175,7 +175,7 @@ mod gen_primitives {
 
     #[test]
     fn when_two_element_tag_first() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 x : [A Int, B Int]
@@ -193,7 +193,7 @@ mod gen_primitives {
 
     #[test]
     fn when_two_element_tag_second() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 x : [A Int, B Int]
@@ -211,7 +211,7 @@ mod gen_primitives {
 
     #[test]
     fn gen_when_one_branch() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     when 3.14 is
@@ -225,7 +225,7 @@ mod gen_primitives {
 
     #[test]
     fn gen_large_when_int() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     foo = \num ->
@@ -247,7 +247,7 @@ mod gen_primitives {
 
     // #[test]
     // fn gen_large_when_float() {
-    //     assert_evals_to_ir!(
+    //     assert_evals_to!(
     //         indoc!(
     //             r#"
     //                 foo = \num ->
@@ -269,7 +269,7 @@ mod gen_primitives {
 
     #[test]
     fn or_pattern() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 when 2 is
@@ -284,7 +284,7 @@ mod gen_primitives {
 
     #[test]
     fn apply_identity() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     identity = \a -> a
@@ -299,7 +299,7 @@ mod gen_primitives {
 
     #[test]
     fn apply_unnamed_identity() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     (\a -> a) 5
@@ -312,7 +312,7 @@ mod gen_primitives {
 
     #[test]
     fn return_unnamed_fn() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     alwaysFloatIdentity : Int -> (Float -> Float)
@@ -329,7 +329,7 @@ mod gen_primitives {
 
     #[test]
     fn gen_when_fn() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     limitedNegate = \num ->
@@ -348,7 +348,7 @@ mod gen_primitives {
 
     #[test]
     fn gen_basic_def() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     answer = 42
@@ -360,7 +360,7 @@ mod gen_primitives {
             i64
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     pi = 3.14
@@ -375,7 +375,7 @@ mod gen_primitives {
 
     #[test]
     fn gen_multiple_defs() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     answer = 42
@@ -389,7 +389,7 @@ mod gen_primitives {
             i64
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     answer = 42
@@ -406,7 +406,7 @@ mod gen_primitives {
 
     #[test]
     fn gen_chained_defs() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     x = i1
@@ -424,7 +424,7 @@ mod gen_primitives {
     }
     #[test]
     fn gen_nested_defs() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     x = 5

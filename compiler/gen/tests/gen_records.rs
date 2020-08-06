@@ -29,7 +29,7 @@ mod gen_records {
 
     #[test]
     fn basic_record() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     { y: 17, x: 15, z: 19 }.x
@@ -39,7 +39,7 @@ mod gen_records {
             i64
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     { x: 15, y: 17, z: 19 }.y
@@ -49,7 +49,7 @@ mod gen_records {
             i64
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     { x: 15, y: 17, z: 19 }.z
@@ -62,7 +62,7 @@ mod gen_records {
 
     #[test]
     fn f64_record() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                    rec = { y: 17.2, x: 15.1, z: 19.3 }
@@ -74,7 +74,7 @@ mod gen_records {
             f64
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                    rec = { y: 17.2, x: 15.1, z: 19.3 }
@@ -86,7 +86,7 @@ mod gen_records {
             f64
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     rec = { y: 17.2, x: 15.1, z: 19.3 }
@@ -101,7 +101,7 @@ mod gen_records {
 
     #[test]
     fn fn_record() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     getRec = \x -> { y: 17, x, z: 19 }
@@ -113,7 +113,7 @@ mod gen_records {
             i64
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     rec = { x: 15, y: 17, z: 19 }
@@ -125,7 +125,7 @@ mod gen_records {
             i64
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     rec = { x: 15, y: 17, z: 19 }
@@ -137,7 +137,7 @@ mod gen_records {
             i64
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     rec = { x: 15, y: 17, z: 19 }
@@ -152,7 +152,7 @@ mod gen_records {
 
     #[test]
     fn def_record() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     rec = { y: 17, x: 15, z: 19 }
@@ -164,7 +164,7 @@ mod gen_records {
             i64
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     rec = { x: 15, y: 17, z: 19 }
@@ -176,7 +176,7 @@ mod gen_records {
             i64
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     rec = { x: 15, y: 17, z: 19 }
@@ -191,7 +191,7 @@ mod gen_records {
 
     #[test]
     fn when_on_record() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 when { x: 0x2 } is
@@ -205,7 +205,7 @@ mod gen_records {
 
     #[test]
     fn when_on_record_with_guard_pattern() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 when { x: 0x2, y: 3.14 } is
@@ -219,7 +219,7 @@ mod gen_records {
 
     #[test]
     fn let_with_record_pattern() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 { x } = { x: 0x2, y: 3.14 }
@@ -234,7 +234,7 @@ mod gen_records {
 
     #[test]
     fn record_guard_pattern() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 when { x: 0x2, y: 3.14 } is
@@ -249,7 +249,7 @@ mod gen_records {
 
     #[test]
     fn twice_record_access() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 x =  {a: 0x2, b: 0x3 }
@@ -263,7 +263,7 @@ mod gen_records {
     }
     #[test]
     fn empty_record() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 v = {}
@@ -277,7 +277,7 @@ mod gen_records {
     }
     #[test]
     fn i64_record2_literal() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                    { x: 3, y: 5 }
@@ -290,7 +290,7 @@ mod gen_records {
 
     // #[test]
     // fn i64_record3_literal() {
-    //     assert_evals_to_ir!(
+    //     assert_evals_to!(
     //         indoc!(
     //             r#"
     //                { x: 3, y: 5, z: 17 }
@@ -303,7 +303,7 @@ mod gen_records {
 
     #[test]
     fn f64_record2_literal() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                    { x: 3.1, y: 5.1 }
@@ -316,7 +316,7 @@ mod gen_records {
 
     // #[test]
     // fn f64_record3_literal() {
-    //     assert_evals_to_ir!(
+    //     assert_evals_to!(
     //         indoc!(
     //             r#"
     //                { x: 3.1, y: 5.1, z: 17.1 }
@@ -329,7 +329,7 @@ mod gen_records {
 
     // #[test]
     // fn bool_record4_literal() {
-    //     assert_evals_to_ir!(
+    //     assert_evals_to!(
     //         indoc!(
     //             r#"
     //                record : { a : Bool, b : Bool, c : Bool, d : Bool }
@@ -345,7 +345,7 @@ mod gen_records {
 
     #[test]
     fn i64_record1_literal() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                    { a: 3 }
@@ -358,7 +358,7 @@ mod gen_records {
 
     // #[test]
     // fn i64_record9_literal() {
-    //     assert_evals_to_ir!(
+    //     assert_evals_to!(
     //         indoc!(
     //             r#"
     //                { a: 3, b: 5, c: 17, d: 1, e: 9, f: 12, g: 13, h: 14, i: 15 }
@@ -371,7 +371,7 @@ mod gen_records {
 
     // #[test]
     // fn f64_record3_literal() {
-    //     assert_evals_to_ir!(
+    //     assert_evals_to!(
     //         indoc!(
     //             r#"
     //                { x: 3.1, y: 5.1, z: 17.1 }
@@ -384,7 +384,7 @@ mod gen_records {
 
     #[test]
     fn bool_literal() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 x : Bool
@@ -400,7 +400,7 @@ mod gen_records {
 
     #[test]
     fn return_record() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 x = 4

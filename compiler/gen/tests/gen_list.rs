@@ -29,25 +29,25 @@ mod gen_list {
 
     #[test]
     fn empty_list_literal() {
-        assert_evals_to_ir!("[]", &[], &'static [i64]);
+        assert_evals_to!("[]", &[], &'static [i64]);
     }
 
     #[test]
     fn int_singleton_list_literal() {
-        assert_evals_to_ir!("[1]", &[1], &'static [i64]);
+        assert_evals_to!("[1]", &[1], &'static [i64]);
     }
 
     #[test]
     fn int_list_literal() {
-        assert_evals_to_ir!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64]);
+        assert_evals_to!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64]);
     }
 
     #[test]
     fn list_push() {
-        assert_evals_to_ir!("List.push [1] 2", &[1, 2], &'static [i64]);
-        assert_evals_to_ir!("List.push [1, 1] 2", &[1, 1, 2], &'static [i64]);
-        assert_evals_to_ir!("List.push [] 3", &[3], &'static [i64]);
-        assert_evals_to_ir!(
+        assert_evals_to!("List.push [1] 2", &[1, 2], &'static [i64]);
+        assert_evals_to!("List.push [1, 1] 2", &[1, 1, 2], &'static [i64]);
+        assert_evals_to!("List.push [] 3", &[3], &'static [i64]);
+        assert_evals_to!(
             indoc!(
                 r#"
                     initThrees : List Int
@@ -60,12 +60,12 @@ mod gen_list {
             &[3, 3],
             &'static [i64]
         );
-        assert_evals_to_ir!(
+        assert_evals_to!(
             "List.push [ True, False ] True",
             &[true, false, true],
             &'static [bool]
         );
-        assert_evals_to_ir!(
+        assert_evals_to!(
             "List.push [ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22 ] 23",
             &[11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
             &'static [i64]
@@ -74,17 +74,17 @@ mod gen_list {
 
     #[test]
     fn list_single() {
-        assert_evals_to_ir!("List.single 1", &[1], &'static [i64]);
-        assert_evals_to_ir!("List.single 5.6", &[5.6], &'static [f64]);
+        assert_evals_to!("List.single 1", &[1], &'static [i64]);
+        assert_evals_to!("List.single 5.6", &[5.6], &'static [f64]);
     }
 
     #[test]
     fn list_repeat() {
-        assert_evals_to_ir!("List.repeat 5 1", &[1, 1, 1, 1, 1], &'static [i64]);
-        assert_evals_to_ir!("List.repeat 4 2", &[2, 2, 2, 2], &'static [i64]);
+        assert_evals_to!("List.repeat 5 1", &[1, 1, 1, 1, 1], &'static [i64]);
+        assert_evals_to!("List.repeat 4 2", &[2, 2, 2, 2], &'static [i64]);
 
-        assert_evals_to_ir!("List.repeat 2 []", &[&[], &[]], &'static [&'static [i64]]);
-        assert_evals_to_ir!(
+        assert_evals_to!("List.repeat 2 []", &[&[], &[]], &'static [&'static [i64]]);
+        assert_evals_to!(
             indoc!(
                 r#"
                     noStrs : List Str
@@ -98,7 +98,7 @@ mod gen_list {
             &'static [&'static [i64]]
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             "List.repeat 15 4",
             &[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
             &'static [i64]
@@ -107,14 +107,14 @@ mod gen_list {
 
     #[test]
     fn list_reverse() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             "List.reverse [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 ]",
             &[12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
             &'static [i64]
         );
-        assert_evals_to_ir!("List.reverse [1, 2, 3]", &[3, 2, 1], &'static [i64]);
-        assert_evals_to_ir!("List.reverse [4]", &[4], &'static [i64]);
-        assert_evals_to_ir!(
+        assert_evals_to!("List.reverse [1, 2, 3]", &[3, 2, 1], &'static [i64]);
+        assert_evals_to!("List.reverse [4]", &[4], &'static [i64]);
+        assert_evals_to!(
             indoc!(
                 r#"
                     emptyList : List Int
@@ -127,14 +127,14 @@ mod gen_list {
             &[],
             &'static [i64]
         );
-        assert_evals_to_ir!("List.reverse []", &[], &'static [i64]);
+        assert_evals_to!("List.reverse []", &[], &'static [i64]);
     }
 
     #[test]
     fn list_append() {
-        assert_evals_to_ir!("List.append [] []", &[], &'static [i64]);
+        assert_evals_to!("List.append [] []", &[], &'static [i64]);
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     firstList : List Int
@@ -152,16 +152,16 @@ mod gen_list {
             &'static [i64]
         );
 
-        assert_evals_to_ir!("List.append [ 12, 13 ] []", &[12, 13], &'static [i64]);
-        assert_evals_to_ir!(
+        assert_evals_to!("List.append [ 12, 13 ] []", &[12, 13], &'static [i64]);
+        assert_evals_to!(
             "List.append [ 34, 43 ] [ 64, 55, 66 ]",
             &[34, 43, 64, 55, 66],
             &'static [i64]
         );
 
-        assert_evals_to_ir!("List.append [] [ 23, 24 ]", &[23, 24], &'static [i64]);
+        assert_evals_to!("List.append [] [ 23, 24 ]", &[23, 24], &'static [i64]);
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             "List.append [ 1, 2 ] [ 3, 4 ]",
             &[1, 2, 3, 4],
             &'static [i64]
@@ -183,7 +183,7 @@ mod gen_list {
 
         let expected_slice: &[i64] = expected.as_ref();
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             &format!("List.append {} {}", slice_str1, slice_str2),
             expected_slice,
             &'static [i64]
@@ -233,17 +233,17 @@ mod gen_list {
 
     #[test]
     fn empty_list_len() {
-        assert_evals_to_ir!("List.len []", 0, usize);
+        assert_evals_to!("List.len []", 0, usize);
     }
 
     #[test]
     fn basic_int_list_len() {
-        assert_evals_to_ir!("List.len [ 12, 9, 6, 3 ]", 4, usize);
+        assert_evals_to!("List.len [ 12, 9, 6, 3 ]", 4, usize);
     }
 
     #[test]
     fn loaded_int_list_len() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     nums = [ 2, 4, 6 ]
@@ -258,7 +258,7 @@ mod gen_list {
 
     #[test]
     fn fn_int_list_len() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     getLen = \list -> List.len list
@@ -275,17 +275,17 @@ mod gen_list {
 
     #[test]
     fn int_list_is_empty() {
-        assert_evals_to_ir!("List.isEmpty [ 12, 9, 6, 3 ]", false, bool);
+        assert_evals_to!("List.isEmpty [ 12, 9, 6, 3 ]", false, bool);
     }
 
     #[test]
     fn empty_list_is_empty() {
-        assert_evals_to_ir!("List.isEmpty []", true, bool);
+        assert_evals_to!("List.isEmpty []", true, bool);
     }
 
     #[test]
     fn first_int_list() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     when List.first [ 12, 9, 6, 3 ] is
@@ -300,7 +300,7 @@ mod gen_list {
 
     #[test]
     fn first_wildcard_empty_list() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     when List.first [] is
@@ -319,7 +319,7 @@ mod gen_list {
     //
     // #[test]
     // fn first_empty_list() {
-    //     assert_evals_to_ir!(
+    //     assert_evals_to!(
     //         indoc!(
     //             r#"
     //                 when List.first [] is
@@ -334,7 +334,7 @@ mod gen_list {
 
     #[test]
     fn get_empty_list() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                    when List.get [] 0 is
@@ -349,7 +349,7 @@ mod gen_list {
 
     #[test]
     fn get_wildcard_empty_list() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                    when List.get [] 0 is
@@ -364,7 +364,7 @@ mod gen_list {
 
     #[test]
     fn get_int_list_ok() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     when List.get [ 12, 9, 6 ] 1 is
@@ -379,7 +379,7 @@ mod gen_list {
 
     #[test]
     fn get_int_list_oob() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     when List.get [ 12, 9, 6 ] 1000 is
@@ -394,7 +394,7 @@ mod gen_list {
 
     #[test]
     fn get_set_unique_int_list() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     when List.get (List.set [ 12, 9, 7, 3 ] 1 42) 1 is
@@ -409,7 +409,7 @@ mod gen_list {
 
     #[test]
     fn set_unique_int_list() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             "List.set [ 12, 9, 7, 1, 5 ] 2 33",
             &[12, 9, 33, 1, 5],
             &'static [i64]
@@ -418,7 +418,7 @@ mod gen_list {
 
     #[test]
     fn set_unique_list_oob() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             "List.set [ 3, 17, 4.1 ] 1337 9.25",
             &[3.0, 17.0, 4.1],
             &'static [f64]
@@ -427,7 +427,7 @@ mod gen_list {
 
     #[test]
     fn set_shared_int_list() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     shared = [ 2.1, 4.3 ]
@@ -453,7 +453,7 @@ mod gen_list {
 
     #[test]
     fn set_shared_list_oob() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     shared = [ 2, 4 ]
@@ -479,7 +479,7 @@ mod gen_list {
 
     #[test]
     fn get_unique_int_list() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     unique = [ 2, 4 ]
@@ -496,7 +496,7 @@ mod gen_list {
 
     #[test]
     fn gen_wrap_len() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     wrapLen = \list ->
@@ -512,7 +512,7 @@ mod gen_list {
 
     #[test]
     fn gen_wrap_first() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     wrapFirst = \list ->
@@ -528,7 +528,7 @@ mod gen_list {
 
     #[test]
     fn gen_duplicate() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     # Duplicate the first element into the second index
@@ -550,7 +550,7 @@ mod gen_list {
 
     #[test]
     fn gen_swap() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                     swap : Int, Int, List a -> List a
@@ -573,7 +573,7 @@ mod gen_list {
 
     //    #[test]
     //    fn gen_partition() {
-    //        assert_evals_to_ir!(
+    //        assert_evals_to!(
     //            indoc!(
     //                r#"
     //                    swap : Int, Int, List a -> List a
@@ -625,7 +625,7 @@ mod gen_list {
 
     //    #[test]
     //    fn gen_partition() {
-    //        assert_evals_to_ir!(
+    //        assert_evals_to!(
     //            indoc!(
     //                r#"
     //                    swap : Int, Int, List a -> List a
@@ -665,7 +665,7 @@ mod gen_list {
     #[test]
     fn gen_quicksort() {
         with_larger_debug_stack(|| {
-            assert_evals_to_ir!(
+            assert_evals_to!(
                 indoc!(
                     r#"
                     quicksort : List (Num a) -> List (Num a)
@@ -739,7 +739,7 @@ mod gen_list {
     //    #[test]
     //    fn foobar2() {
     //        with_larger_debug_stack(|| {
-    //            assert_evals_to_ir!(
+    //            assert_evals_to!(
     //                indoc!(
     //                    r#"
     //                    quicksort : List (Num a) -> List (Num a)
@@ -814,7 +814,7 @@ mod gen_list {
     //    #[test]
     //    fn foobar() {
     //        with_larger_debug_stack(|| {
-    //            assert_evals_to_ir!(
+    //            assert_evals_to!(
     //                indoc!(
     //                    r#"
     //                    quicksort : List (Num a) -> List (Num a)
@@ -888,7 +888,7 @@ mod gen_list {
 
     #[test]
     fn empty_list_increment_decrement() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 x : List Int
@@ -904,7 +904,7 @@ mod gen_list {
 
     #[test]
     fn list_literal_increment_decrement() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 x : List Int
@@ -920,7 +920,7 @@ mod gen_list {
 
     #[test]
     fn list_pass_to_function() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 x : List Int
@@ -938,7 +938,7 @@ mod gen_list {
     }
 
     //    fn bad() {
-    //        assert_evals_to_ir!(
+    //        assert_evals_to!(
     //            indoc!(
     //                r#"
     //                id : List Int -> [ Id (List Int) ]
@@ -955,7 +955,7 @@ mod gen_list {
     //
     #[test]
     fn list_wrap_in_tag() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 id : List Int -> [ Pair (List Int) Int ]

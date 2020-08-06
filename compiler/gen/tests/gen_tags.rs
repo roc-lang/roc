@@ -29,7 +29,7 @@ mod gen_tags {
 
     #[test]
     fn applied_tag_nothing_ir() {
-        assert_llvm_ir_evals_to!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 Maybe a : [ Just a, Nothing ]
@@ -41,15 +41,13 @@ mod gen_tags {
                 "#
             ),
             1,
-            i64,
-            |x| x,
-            false
+            i64
         );
     }
 
     #[test]
     fn applied_tag_nothing() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 Maybe a : [ Just a, Nothing ]
@@ -67,7 +65,7 @@ mod gen_tags {
 
     #[test]
     fn applied_tag_just() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 Maybe a : [ Just a, Nothing ]
@@ -85,7 +83,7 @@ mod gen_tags {
 
     #[test]
     fn applied_tag_just_ir() {
-        assert_llvm_ir_evals_to!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 Maybe a : [ Just a, Nothing ]
@@ -97,15 +95,13 @@ mod gen_tags {
                 "#
             ),
             1,
-            i64,
-            |x| x,
-            false
+            i64
         );
     }
 
     #[test]
     fn applied_tag_just_unit() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 Fruit : [ Orange, Apple, Banana ]
@@ -127,7 +123,7 @@ mod gen_tags {
 
     // #[test]
     // fn raw_result() {
-    //     assert_evals_to_ir!(
+    //     assert_evals_to!(
     //         indoc!(
     //             r#"
     //             x : Result Int Int
@@ -143,7 +139,7 @@ mod gen_tags {
 
     #[test]
     fn true_is_true() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                    bool : [True, False]
@@ -159,7 +155,7 @@ mod gen_tags {
 
     #[test]
     fn false_is_false() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                    bool : [True, False]
@@ -175,7 +171,7 @@ mod gen_tags {
 
     #[test]
     fn basic_enum() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 Fruit : [ Apple, Orange, Banana ]
@@ -196,7 +192,7 @@ mod gen_tags {
 
     //    #[test]
     //    fn linked_list_empty() {
-    //        assert_evals_to_ir!(
+    //        assert_evals_to!(
     //            indoc!(
     //                r#"
     //                LinkedList a : [ Cons a (LinkedList a), Nil ]
@@ -214,7 +210,7 @@ mod gen_tags {
     //
     //    #[test]
     //    fn linked_list_singleton() {
-    //        assert_evals_to_ir!(
+    //        assert_evals_to!(
     //            indoc!(
     //                r#"
     //                LinkedList a : [ Cons a (LinkedList a), Nil ]
@@ -232,7 +228,7 @@ mod gen_tags {
     //
     //    #[test]
     //    fn linked_list_is_empty() {
-    //        assert_evals_to_ir!(
+    //        assert_evals_to!(
     //            indoc!(
     //                r#"
     //                LinkedList a : [ Cons a (LinkedList a), Nil ]
@@ -253,7 +249,7 @@ mod gen_tags {
 
     #[test]
     fn even_odd() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 even = \n ->
@@ -278,7 +274,7 @@ mod gen_tags {
 
     #[test]
     fn gen_literal_true() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 if True then -1 else 1
@@ -291,7 +287,7 @@ mod gen_tags {
 
     #[test]
     fn gen_if_float() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 if True then -1.0 else 1.0
@@ -303,7 +299,7 @@ mod gen_tags {
     }
     #[test]
     fn when_on_nothing() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 x : [ Nothing, Just Int ]
@@ -321,7 +317,7 @@ mod gen_tags {
 
     #[test]
     fn when_on_just() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 x : [ Nothing, Just Int ]
@@ -339,7 +335,7 @@ mod gen_tags {
 
     #[test]
     fn when_on_result() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 x : Result Int Int
@@ -357,7 +353,7 @@ mod gen_tags {
 
     #[test]
     fn when_on_these() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 These a b : [ This a, That b, These a b ]
@@ -379,7 +375,7 @@ mod gen_tags {
     #[test]
     fn match_on_two_values() {
         // this will produce a Chain internally
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 when Pair 2 3 is
@@ -394,7 +390,7 @@ mod gen_tags {
 
     #[test]
     fn pair_with_guard_pattern() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 when Pair 2 3 is
@@ -411,7 +407,7 @@ mod gen_tags {
     #[test]
     fn result_with_guard_pattern() {
         // This test revealed an issue with hashing Test values
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
             x : Result Int Int
@@ -430,7 +426,7 @@ mod gen_tags {
 
     #[test]
     fn maybe_is_just() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 Maybe a : [ Just a, Nothing ]
@@ -451,7 +447,7 @@ mod gen_tags {
 
     #[test]
     fn nested_pattern_match() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 Maybe a : [ Nothing, Just a ]
@@ -470,7 +466,7 @@ mod gen_tags {
     }
     #[test]
     fn if_guard_pattern_false() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 when 2 is
@@ -485,7 +481,7 @@ mod gen_tags {
 
     #[test]
     fn if_guard_pattern_true() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 when 2 is
@@ -500,7 +496,7 @@ mod gen_tags {
 
     #[test]
     fn if_guard_exhaustiveness() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 when 2 is
@@ -515,7 +511,7 @@ mod gen_tags {
 
     #[test]
     fn when_on_enum() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 Fruit : [ Apple, Orange, Banana ]
@@ -536,7 +532,7 @@ mod gen_tags {
 
     #[test]
     fn pattern_matching_unit() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 Unit : [ Unit ]
@@ -551,7 +547,7 @@ mod gen_tags {
             i64
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 Unit : [ Unit ]
@@ -567,7 +563,7 @@ mod gen_tags {
             i64
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 f : {} -> Int
@@ -580,7 +576,7 @@ mod gen_tags {
             i64
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 when {} is
@@ -594,7 +590,7 @@ mod gen_tags {
 
     #[test]
     fn one_element_tag() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 x : [ Pair Int ]
@@ -610,7 +606,7 @@ mod gen_tags {
 
     #[test]
     fn nested_tag_union() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 Maybe a : [ Nothing, Just a ]
@@ -627,7 +623,7 @@ mod gen_tags {
     }
     #[test]
     fn unit_type() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 Unit : [ Unit ]
@@ -645,7 +641,7 @@ mod gen_tags {
 
     #[test]
     fn nested_record_load() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 Maybe a : [ Nothing, Just a ]
@@ -664,7 +660,7 @@ mod gen_tags {
 
     #[test]
     fn join_point_if() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
                 x =
@@ -680,7 +676,7 @@ mod gen_tags {
 
     #[test]
     fn join_point_when() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
             x : [ Red, White, Blue ]
@@ -702,7 +698,7 @@ mod gen_tags {
 
     #[test]
     fn join_point_with_cond_expr() {
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
             y = 
@@ -718,7 +714,7 @@ mod gen_tags {
             i64
         );
 
-        assert_evals_to_ir!(
+        assert_evals_to!(
             indoc!(
                 r#"
             y = 

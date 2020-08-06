@@ -227,7 +227,7 @@ macro_rules! assert_evals_to {
 }
 
 #[macro_export]
-macro_rules! assert_llvm_ir_evals_to {
+macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
         let target = target_lexicon::Triple::host();
         let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
@@ -413,19 +413,19 @@ macro_rules! assert_llvm_ir_evals_to {
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        assert_llvm_ir_evals_to!($src, $expected, $ty, $transform, false);
+        assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
     };
 }
 
 #[macro_export]
-macro_rules! assert_evals_to_ir {
+macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {
         // Run un-optimized tests, and then optimized tests, in separate scopes.
         // These each rebuild everything from scratch, starting with
         // parsing the source, so that there's no chance their passing
         // or failing depends on leftover state from the previous one.
         {
-            assert_llvm_ir_evals_to!($src, $expected, $ty, (|val| val));
+            assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
         }
         {
             assert_opt_evals_to!($src, $expected, $ty, (|val| val));
@@ -434,7 +434,7 @@ macro_rules! assert_evals_to_ir {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
         {
-            assert_llvm_ir_evals_to!($src, $expected, $ty, $transform);
+            assert_llvm_evals_to!($src, $expected, $ty, $transform);
         }
         {
             assert_opt_evals_to!($src, $expected, $ty, $transform);
@@ -443,7 +443,7 @@ macro_rules! assert_evals_to_ir {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
         // Same as above, except with an additional transformation argument.
         {
-            assert_llvm_ir_evals_to!($src, $expected, $ty, $transform, $leak);
+            assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak);
         }
         {
             assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
