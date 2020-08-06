@@ -1,7 +1,6 @@
 use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
 use crate::ir::{DestructType, Env, Expr, JoinPointId, Literal, Pattern, Stmt};
 use crate::layout::{Builtin, Layout};
-use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
@@ -879,7 +878,6 @@ enum Choice<'a> {
     Jump(Label),
 }
 
-type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
 type StoresVec<'a> = bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>;
 
 pub fn optimize_when<'a>(
@@ -1176,11 +1174,7 @@ fn decide_to_branching<'a>(
             let fail = &*env.arena.alloc(fail_expr);
             let pass = &*env.arena.alloc(pass_expr);
 
-            // TODO totally wrong
-            let condition = Expr::Literal(Literal::Int(42));
-
             let branching_symbol = env.unique_symbol();
-
             let branching_layout = Layout::Builtin(Builtin::Int1);
 
             let mut cond = Stmt::Cond {
@@ -1273,7 +1267,7 @@ fn decide_to_branching<'a>(
                 current_symbol = accum;
             }
 
-            for ((new_stores, lhs, rhs, layout), accum) in tests.into_iter().rev().zip(accum_it) {
+            for ((new_stores, lhs, rhs, _layout), accum) in tests.into_iter().rev().zip(accum_it) {
                 let test_symbol = env.unique_symbol();
                 let test = Expr::RunLowLevel(
                     LowLevel::Eq,

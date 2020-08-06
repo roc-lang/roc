@@ -20,7 +20,7 @@ use roc_collections::all::ImMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::JoinPointId;
-use roc_mono::layout::{Builtin, Layout, Ownership};
+use roc_mono::layout::{Builtin, Layout};
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -193,9 +193,6 @@ pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>, opt_level: OptLevel) {
 
 pub fn build_exp_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    scope: &Scope<'a, 'ctx>,
-    parent: FunctionValue<'ctx>,
     literal: &roc_mono::ir::Literal<'a>,
 ) -> BasicValueEnum<'ctx> {
     use roc_mono::ir::Literal::*;
@@ -258,20 +255,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     use roc_mono::ir::Expr::*;
 
     match expr {
-        Literal(literal) => build_exp_literal(env, layout_ids, scope, parent, literal),
+        Literal(literal) => build_exp_literal(env, literal),
         Alias(symbol) => load_symbol(env, scope, symbol),
-        RunLowLevel(op, symbols) => {
-            let mut args = Vec::with_capacity_in(symbols.len(), env.arena);
-
-            for symbol in symbols.iter() {
-                match scope.get(symbol) {
-                    Some((layout, _)) => args.push(*symbol),
-                    None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
-                }
-            }
-
-            run_low_level(env, layout_ids, scope, parent, *op, args.into_bump_slice())
-        }
+        RunLowLevel(op, symbols) => run_low_level(env, scope, parent, *op, symbols),
 
         FunctionCall {
             call_type: ByName(name),
@@ -284,7 +270,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 arg_tuples.push(load_symbol(env, scope, symbol));
             }
 
-            call_with_args_ir(
+            call_with_args(
                 env,
                 layout_ids,
                 layout,
@@ -296,7 +282,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
         FunctionCall {
             call_type: ByPointer(name),
-            layout,
+            layout: _,
             args,
         } => {
             let sub_expr = load_symbol(env, scope, name);
@@ -392,7 +378,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            for (field_symbol) in it {
+            for field_symbol in it {
                 let (val, field_layout) = load_symbol_and_layout(env, scope, field_symbol);
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
@@ -590,9 +576,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 .expect("desired field did not decode")
         }
         EmptyArray => empty_polymorphic_list(env),
-        Array { elem_layout, elems } => {
-            list_literal(env, layout_ids, scope, parent, elem_layout, elems)
-        }
+        Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
         FunctionPointer(symbol, layout) => {
             let fn_name = layout_ids
                 .get(*symbol, layout)
@@ -830,6 +814,7 @@ fn refcount_is_one_comparison<'ctx>(
     )
 }
 
+#[allow(dead_code)]
 fn list_get_refcount_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     list_wrapper: StructValue<'ctx>,
@@ -861,6 +846,7 @@ fn list_get_refcount_ptr<'a, 'ctx, 'env>(
     )
 }
 
+#[allow(dead_code)]
 fn increment_refcount_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     original_wrapper: StructValue<'ctx>,
@@ -889,6 +875,7 @@ fn increment_refcount_list<'a, 'ctx, 'env>(
     body
 }
 
+#[allow(dead_code)]
 fn decrement_refcount_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
@@ -942,7 +929,7 @@ fn load_symbol<'a, 'ctx, 'env>(
     symbol: &Symbol,
 ) -> BasicValueEnum<'ctx> {
     match scope.get(symbol) {
-        Some((layout, ptr)) => env
+        Some((_, ptr)) => env
             .builder
             .build_load(*ptr, symbol.ident_string(&env.interns)),
         None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
@@ -1534,49 +1521,9 @@ fn list_repeat<'a, 'ctx, 'env>(
     )
 }
 
+// #[allow(clippy::cognitive_complexity)]
 #[inline(always)]
-#[allow(clippy::cognitive_complexity)]
 fn call_with_args<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    layout: &Layout<'a>,
-    symbol: Symbol,
-    _parent: FunctionValue<'ctx>,
-    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
-) -> BasicValueEnum<'ctx> {
-    let fn_name = layout_ids
-        .get(symbol, layout)
-        .to_symbol_string(symbol, &env.interns);
-    let fn_val = env
-        .module
-        .get_function(fn_name.as_str())
-        .unwrap_or_else(|| {
-            if symbol.is_builtin() {
-                panic!("Unrecognized builtin function: {:?}", symbol)
-            } else {
-                panic!("Unrecognized non-builtin function: {:?}", symbol)
-            }
-        });
-    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
-
-    for (arg, _layout) in args.iter() {
-        arg_vals.push(*arg);
-    }
-
-    let call = env
-        .builder
-        .build_call(fn_val, arg_vals.into_bump_slice(), "call");
-
-    call.set_call_convention(fn_val.get_call_conventions());
-
-    call.try_as_basic_value()
-        .left()
-        .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
-}
-
-#[inline(always)]
-#[allow(clippy::cognitive_complexity)]
-fn call_with_args_ir<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
@@ -1597,15 +1544,8 @@ fn call_with_args_ir<'a, 'ctx, 'env>(
                 panic!("Unrecognized non-builtin function: {:?}", symbol)
             }
         });
-    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
 
-    for (arg) in args.iter() {
-        arg_vals.push(*arg);
-    }
-
-    let call = env
-        .builder
-        .build_call(fn_val, arg_vals.into_bump_slice(), "call");
+    let call = env.builder.build_call(fn_val, args, "call");
 
     call.set_call_convention(fn_val.get_call_conventions());
 
@@ -1764,9 +1704,7 @@ fn empty_polymorphic_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicVal
 
 fn list_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
-    parent: FunctionValue<'ctx>,
     elem_layout: &Layout<'a>,
     elems: &&[Symbol],
 ) -> BasicValueEnum<'ctx> {
@@ -2008,7 +1946,6 @@ pub static COLD_CALL_CONV: u32 = 9;
 
 fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     op: LowLevel,
@@ -2202,7 +2139,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
-        ListAppend => list_append(env, layout_ids, scope, parent, args),
+        ListAppend => list_append(env, scope, parent, args),
         ListPush => {
             // List.push List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
@@ -2422,7 +2359,6 @@ fn build_int_binop<'a, 'ctx, 'env>(
 
 fn list_append<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     args: &[Symbol],

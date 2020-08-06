@@ -4,7 +4,6 @@ use inkwell::module::Linkage;
 use inkwell::passes::PassManager;
 use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
-use roc_collections::all::ImMap;
 use roc_gen::layout_id::LayoutIds;
 use roc_gen::llvm::build::{
     build_proc, build_proc_header, get_call_conventions, module_from_builtins, OptLevel,
