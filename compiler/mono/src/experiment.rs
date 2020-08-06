@@ -663,13 +663,6 @@ impl<'a> Stmt<'a> {
         /*
         Inc(Symbol, &'a Stmt<'a>),
         Dec(Symbol, &'a Stmt<'a>),
-        Join {
-            id: JoinPointId,
-            arguments: &'a [Symbol],
-            result: &'a Stmt<'a>,
-            continuation: &'a Stmt<'a>,
-        },
-        Jump(JoinPointId, &'a [Symbol]),
              */
     }
 
@@ -1037,7 +1030,16 @@ pub fn with_hole<'a>(
             // A bit ugly, but it does the job
             match hole {
                 Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([symbol])),
-                _ => Stmt::Ret(symbol),
+                Stmt::Ret(s) => {
+                    //
+                    dbg!(symbol, assigned);
+                    Stmt::Ret(symbol)
+                }
+                _ => {
+                    // if you see this, there is variable aliasing going on
+                    dbg!(hole);
+                    Stmt::Ret(symbol)
+                }
             }
         }
         // Var(symbol) => panic!("reached Var {}", symbol),
@@ -1337,14 +1339,18 @@ pub fn with_hole<'a>(
                 Some(id),
             );
 
-            // TODO define condition
-
             // define the `when` condition
             if let roc_can::expr::Expr::Var(_) = loc_cond.value {
                 // do nothing
             } else {
-                let hole = env.arena.alloc(stmt);
-                stmt = with_hole(env, loc_cond.value, procs, layout_cache, cond_symbol, hole);
+                stmt = with_hole(
+                    env,
+                    loc_cond.value,
+                    procs,
+                    layout_cache,
+                    cond_symbol,
+                    env.arena.alloc(stmt),
+                );
             };
 
             let layout = layout_cache
@@ -1355,7 +1361,7 @@ pub fn with_hole<'a>(
                 id,
                 arguments: bumpalo::vec![in env.arena; (assigned, layout)].into_bump_slice(),
                 remainder: env.arena.alloc(stmt),
-                continuation: hole,
+                continuation: env.arena.alloc(hole),
             }
         }
 
@@ -1670,7 +1676,40 @@ pub fn from_can<'a>(
     use roc_can::expr::Expr::*;
 
     match can_expr {
-        LetNonRec(def, cont, _, _) => {
+        LetRec(defs, cont, _, _) => {
+            // because Roc is strict, only functions can be recursive!
+            for def in defs.into_iter() {
+                if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
+                    // Now that we know for sure it's a closure, get an owned
+                    // version of these variant args so we can use them properly.
+                    match def.loc_expr.value {
+                        Closure(ann, _, _, loc_args, boxed_body) => {
+                            // Extract Procs, but discard the resulting Expr::Load.
+                            // That Load looks up the pointer, which we won't use here!
+
+                            let (loc_body, ret_var) = *boxed_body;
+
+                            procs.insert_named(
+                                env,
+                                layout_cache,
+                                *symbol,
+                                ann,
+                                loc_args,
+                                loc_body,
+                                ret_var,
+                            );
+
+                            continue;
+                        }
+                        _ => unreachable!("recursive value is not a function"),
+                    }
+                }
+                unreachable!("recursive value does not have Identifier pattern")
+            }
+
+            from_can(env, cont.value, procs, layout_cache)
+        }
+        LetNonRec(def, cont, xvar, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
                 if let Closure(_, _, _, _, _) = &def.loc_expr.value {
                     // Now that we know for sure it's a closure, get an owned
@@ -1709,7 +1748,9 @@ pub fn from_can<'a>(
             }
 
             let (symbol, can_expr) =
-                pattern_to_when(env, def.expr_var, def.loc_pattern, def.expr_var, *cont);
+                pattern_to_when(env, def.expr_var, def.loc_pattern, xvar, *cont);
+
+            dbg!(symbol, &can_expr);
 
             let stmt = from_can(env, can_expr.value, procs, layout_cache);
 

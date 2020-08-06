@@ -1642,4 +1642,26 @@ mod test_mono {
             ),
         )
     }
+
+    #[test]
+    fn let_with_record_pattern() {
+        compiles_to_ir(
+            r#"
+            { x } = { x: 0x2, y: 3.14 }
+
+            x
+            "#,
+            indoc!(
+                r#"
+                let Test.6 = 2i64;
+                let Test.7 = 3.14f64;
+                let Test.1 = Struct {Test.6, Test.7};
+                let Test.0 = Index 0 Test.1;
+                jump Test.3 Test.0;
+                joinpoint Test.3 Test.2:
+                    ret Test.2;
+                "#
+            ),
+        )
+    }
 }

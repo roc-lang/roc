@@ -201,7 +201,10 @@ mod gen_records {
             5,
             i64
         );
+    }
 
+    #[test]
+    fn when_on_record_with_guard_pattern() {
         assert_evals_to_ir!(
             indoc!(
                 r#"
@@ -212,7 +215,10 @@ mod gen_records {
             5,
             i64
         );
+    }
 
+    #[test]
+    fn let_with_record_pattern() {
         assert_evals_to_ir!(
             indoc!(
                 r#"
