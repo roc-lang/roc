@@ -1685,33 +1685,23 @@ fn list_join<'a, 'ctx, 'env>(
 
                     builder.build_store(index_alloca, next_index);
 
-                    // The pointer to the list in the outer list (the list of lists)
-                    let (inner_list_len, inner_list_ptr) = {
+                    let inner_list_wrapper = {
                         let wrapper_ptr = unsafe {
                             builder.build_in_bounds_gep(outer_list_ptr, &[curr_index], "load_index")
                         };
-                        let wrapper = builder
-                            .build_load(wrapper_ptr, "inner_list_wrapper")
-                            .into_struct_value();
-                        let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-                        (
-                            load_list_len(builder, wrapper),
-                            load_list_ptr(builder, wrapper, elem_ptr_type),
-                        )
+                        builder
+                            .build_load(wrapper_ptr, "inner_list_wrapper")
+                            .into_struct_value()
                     };
+                    let inner_list_len = load_list_len(builder, inner_list_wrapper);
+                    let inner_list_ptr = load_list_ptr(builder, inner_list_wrapper, elem_ptr_type);
+
+                    let inner_index_name = "#inner_index";
+                    let inner_index_alloca = builder.build_alloca(ctx.i64_type(), inner_index_name);
 
                     // Inner Loop
                     {
-                        let dest_elem_ptr = builder
-                            .build_load(dest_elem_ptr_alloca, "load_dest_elem_ptr")
-                            .into_pointer_value();
-
-                        let inner_index_name = "#inner_index";
-
-                        let inner_index_alloca =
-                            builder.build_alloca(ctx.i64_type(), inner_index_name);
-
                         let inner_list_index = ctx.i64_type().const_int(0, false);
 
                         builder.build_store(inner_index_alloca, inner_list_index);
