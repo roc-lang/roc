@@ -605,7 +605,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
     match stmt {
         Let(symbol, expr, layout, cont) => {
-            println!("{} {:?}", symbol, expr);
             let context = &env.context;
 
             let val = build_exp_expr(env, layout_ids, &scope, parent, &expr);

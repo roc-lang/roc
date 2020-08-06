@@ -20,7 +20,6 @@ mod gen_num {
     use inkwell::passes::PassManager;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
-    use roc_collections::all::ImMap;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
     use roc_gen::llvm::convert::basic_type_from_layout;
     use roc_mono::layout::Layout;

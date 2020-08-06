@@ -5,7 +5,6 @@
 macro_rules! assert_opt_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
         use roc_gen::llvm::build::Scope;
-        use roc_gen::llvm::build::{build_proc_header, build_proc};
 
         let arena = Bump::new();
         let target = target_lexicon::Triple::host();
@@ -192,40 +191,6 @@ macro_rules! assert_opt_evals_to {
     };
 }
 
-// #[macro_export]
-macro_rules! assert_evals_to {
-    ($src:expr, $expected:expr, $ty:ty) => {
-        // Run un-optimized tests, and then optimized tests, in separate scopes.
-        // These each rebuild everything from scratch, starting with
-        // parsing the source, so that there's no chance their passing
-        // or failing depends on leftover state from the previous one.
-        {
-            assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
-        }
-        {
-            assert_opt_evals_to!($src, $expected, $ty, (|val| val));
-        }
-    };
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        // Same as above, except with an additional transformation argument.
-        {
-            assert_llvm_evals_to!($src, $expected, $ty, $transform);
-        }
-        {
-            assert_opt_evals_to!($src, $expected, $ty, $transform);
-        }
-    };
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
-        // Same as above, except with an additional transformation argument.
-        {
-            assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak);
-        }
-        {
-            assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
-        }
-    };
-}
-
 #[macro_export]
 macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
@@ -385,7 +350,7 @@ macro_rules! assert_llvm_evals_to {
         builder.build_return(Some(&ret));
 
         // Uncomment this to see the module's un-optimized LLVM instruction output:
-        env.module.print_to_stderr();
+        // env.module.print_to_stderr();
 
         if main_fn.verify(true) {
             fpm.run_on(&main_fn);
