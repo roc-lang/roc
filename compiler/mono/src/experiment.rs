@@ -1032,12 +1032,10 @@ pub fn with_hole<'a>(
                 Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([symbol])),
                 Stmt::Ret(s) => {
                     //
-                    dbg!(symbol, assigned);
                     Stmt::Ret(symbol)
                 }
                 _ => {
                     // if you see this, there is variable aliasing going on
-                    dbg!(hole);
                     Stmt::Ret(symbol)
                 }
             }
@@ -1749,8 +1747,6 @@ pub fn from_can<'a>(
 
             let (symbol, can_expr) =
                 pattern_to_when(env, def.expr_var, def.loc_pattern, xvar, *cont);
-
-            dbg!(symbol, &can_expr);
 
             let stmt = from_can(env, can_expr.value, procs, layout_cache);
 
