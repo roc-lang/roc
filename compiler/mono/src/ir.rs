@@ -1007,16 +1007,15 @@ pub fn with_hole<'a>(
             // WRONG! this is introduces new control flow, and should call `from_can` again
             if let roc_can::pattern::Pattern::Identifier(symbol) = def.loc_pattern.value {
                 let stmt = with_hole(env, cont.value, procs, layout_cache, assigned, hole);
-                let expr = with_hole(
+
+                with_hole(
                     env,
                     def.loc_expr.value,
                     procs,
                     layout_cache,
                     symbol,
                     env.arena.alloc(stmt),
-                );
-
-                expr
+                )
             } else {
                 todo!()
             }
@@ -1782,17 +1781,20 @@ pub fn from_can<'a>(
                     .from_var(env.arena, def.expr_var, env.subs, env.pointer_size)
                     .expect("invalid layout");
 
-                let mut stores = Vec::new_in(env.arena);
-                let outer_symbol = env.unique_symbol();
-                store_pattern(env, &mono_pattern, outer_symbol, layout, &mut stores).unwrap();
-
                 // convert the continuation
                 let mut stmt = from_can(env, cont.value, procs, layout_cache);
 
-                // unpack the body of the def based on the pattern
-                for (symbol, layout, expr) in stores.iter().rev() {
-                    stmt = Stmt::Let(*symbol, expr.clone(), layout.clone(), env.arena.alloc(stmt));
-                }
+                let outer_symbol = env.unique_symbol();
+                stmt = store_pattern(
+                    env,
+                    procs,
+                    layout_cache,
+                    &mono_pattern,
+                    outer_symbol,
+                    layout,
+                    stmt,
+                )
+                .unwrap();
 
                 // convert the def body, store in outer_symbol
                 with_hole(
@@ -1897,6 +1899,7 @@ fn to_opt_branches<'a>(
     opt_branches
 }
 
+#[allow(clippy::too_many_arguments)]
 fn from_can_when<'a>(
     env: &mut Env<'a, '_>,
     cond_var: Variable,
@@ -1927,10 +1930,7 @@ fn from_can_when<'a>(
     let it = opt_branches
         .into_iter()
         .map(|(pattern, opt_guard, can_expr)| {
-            let mut stores = Vec::with_capacity_in(1, env.arena);
-            let res_stores =
-                store_pattern(env, &pattern, cond_symbol, cond_layout.clone(), &mut stores);
-            let mut stmt = match join_point {
+            let branch_stmt = match join_point {
                 None => from_can(env, can_expr, procs, layout_cache),
                 Some(id) => {
                     let symbol = env.unique_symbol();
@@ -1942,44 +1942,62 @@ fn from_can_when<'a>(
             };
 
             use crate::decision_tree::Guard;
-            match res_stores {
-                Ok(_) => {
-                    for (symbol, layout, expr) in stores.iter().rev() {
-                        stmt =
-                            Stmt::Let(*symbol, expr.clone(), layout.clone(), env.arena.alloc(stmt));
-                    }
+            if let Some(loc_expr) = opt_guard {
+                let id = JoinPointId(env.unique_symbol());
+                let symbol = env.unique_symbol();
+                let jump = env.arena.alloc(Stmt::Jump(id, env.arena.alloc([symbol])));
 
-                    let guard = if let Some(loc_expr) = opt_guard {
-                        let id = JoinPointId(env.unique_symbol());
-                        let symbol = env.unique_symbol();
-                        let jump = env.arena.alloc(Stmt::Jump(id, env.arena.alloc([symbol])));
+                let guard_stmt = with_hole(env, loc_expr.value, procs, layout_cache, symbol, jump);
 
-                        let mut stmt =
-                            with_hole(env, loc_expr.value, procs, layout_cache, symbol, jump);
-
-                        // guard must have access to bound values
-                        for (symbol, layout, expr) in stores.into_iter().rev() {
-                            stmt = Stmt::Let(symbol, expr, layout, env.arena.alloc(stmt));
-                        }
-
-                        Guard::Guard { id, symbol, stmt }
-                    } else {
-                        Guard::NoGuard
-                    };
-
-                    (pattern, guard, stmt)
+                match store_pattern(
+                    env,
+                    procs,
+                    layout_cache,
+                    &pattern,
+                    cond_symbol,
+                    cond_layout.clone(),
+                    guard_stmt,
+                ) {
+                    Ok(new_guard_stmt) => (
+                        pattern,
+                        Guard::Guard {
+                            id,
+                            symbol,
+                            stmt: new_guard_stmt,
+                        },
+                        branch_stmt,
+                    ),
+                    Err(msg) => (
+                        Pattern::Underscore,
+                        Guard::NoGuard,
+                        Stmt::RuntimeError(env.arena.alloc(msg)),
+                    ),
                 }
-                Err(msg) => (
-                    Pattern::Underscore,
-                    Guard::NoGuard,
-                    Stmt::RuntimeError(env.arena.alloc(msg)),
-                ),
+            } else {
+                match store_pattern(
+                    env,
+                    procs,
+                    layout_cache,
+                    &pattern,
+                    cond_symbol,
+                    cond_layout.clone(),
+                    branch_stmt,
+                ) {
+                    Ok(new_branch_stmt) => (pattern, Guard::NoGuard, new_branch_stmt),
+                    Err(msg) => (
+                        Pattern::Underscore,
+                        Guard::NoGuard,
+                        Stmt::RuntimeError(env.arena.alloc(msg)),
+                    ),
+                }
             }
         });
     let mono_branches = Vec::from_iter_in(it, arena);
 
     crate::decision_tree::optimize_when(
         env,
+        procs,
+        layout_cache,
         cond_symbol,
         cond_layout.clone(),
         ret_layout,
@@ -1987,25 +2005,31 @@ fn from_can_when<'a>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn store_pattern<'a>(
     env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
     can_pat: &Pattern<'a>,
     outer_symbol: Symbol,
     layout: Layout<'a>,
-    stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
-) -> Result<(), String> {
+    mut stmt: Stmt<'a>,
+) -> Result<Stmt<'a>, &'a str> {
     use Pattern::*;
 
     match can_pat {
         Identifier(symbol) => {
-            // TODO surely something should happen here?
-            stored.push((*symbol, layout, Expr::Alias(outer_symbol)));
+            let expr = Expr::Alias(outer_symbol);
+            stmt = Stmt::Let(*symbol, expr, layout, env.arena.alloc(stmt));
         }
         Underscore => {
-            // Since _ is never read, it's safe to reassign it.
-            // stored.push((Symbol::UNDERSCORE, layout, Expr::Load(outer_symbol)))
+            // do nothing
         }
-        IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral { .. } => {}
+        IntLiteral(_)
+        | FloatLiteral(_)
+        | EnumLiteral { .. }
+        | BitLiteral { .. }
+        | StrLiteral(_) => {}
         AppliedTag {
             union, arguments, ..
         } => {
@@ -2022,7 +2046,7 @@ fn store_pattern<'a>(
                 arg_layouts.push(layout.clone());
             }
 
-            for (index, (argument, arg_layout)) in arguments.iter().enumerate() {
+            for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
                 let load = Expr::AccessAtIndex {
                     is_unwrapped,
                     index: (!is_unwrapped as usize + index) as u64,
@@ -2032,57 +2056,79 @@ fn store_pattern<'a>(
                 match argument {
                     Identifier(symbol) => {
                         // store immediately in the given symbol
-                        stored.push((*symbol, arg_layout.clone(), load));
+                        stmt = Stmt::Let(*symbol, load, arg_layout.clone(), env.arena.alloc(stmt));
                     }
                     Underscore => {
                         // ignore
                     }
-                    IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral { .. } => {}
+                    IntLiteral(_)
+                    | FloatLiteral(_)
+                    | EnumLiteral { .. }
+                    | BitLiteral { .. }
+                    | StrLiteral(_) => {}
                     _ => {
                         // store the field in a symbol, and continue matching on it
                         let symbol = env.unique_symbol();
-                        stored.push((symbol, arg_layout.clone(), load));
 
-                        store_pattern(env, argument, symbol, arg_layout.clone(), stored)?;
+                        // first recurse, continuing to unpack symbol
+                        stmt = store_pattern(
+                            env,
+                            procs,
+                            layout_cache,
+                            argument,
+                            symbol,
+                            arg_layout.clone(),
+                            stmt,
+                        )?;
+
+                        // then store the symbol
+                        stmt = Stmt::Let(symbol, load, arg_layout.clone(), env.arena.alloc(stmt));
                     }
                 }
             }
         }
         RecordDestructure(destructs, Layout::Struct(sorted_fields)) => {
-            for (index, destruct) in destructs.iter().enumerate() {
-                store_record_destruct(
+            for (index, destruct) in destructs.iter().enumerate().rev() {
+                stmt = store_record_destruct(
                     env,
+                    procs,
+                    layout_cache,
                     destruct,
                     index as u64,
                     outer_symbol,
                     sorted_fields,
-                    stored,
+                    stmt,
                 )?;
             }
         }
 
-        Shadowed(region, ident) => {
-            return Err(format!(
-                "The pattern at {:?} shadows variable {:?}",
-                region, ident
-            ));
+        RecordDestructure(_, _) => {
+            unreachable!("a record destructure must always occur on a struct layout");
         }
-        _ => {
-            panic!("TODO store_pattern for {:?}", can_pat);
+
+        Shadowed(_region, _ident) => {
+            return Err(&"TODO");
+        }
+
+        UnsupportedPattern(_region) => {
+            return Err(&"TODO");
         }
     }
 
-    Ok(())
+    Ok(stmt)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn store_record_destruct<'a>(
     env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
     destruct: &RecordDestruct<'a>,
     index: u64,
     outer_symbol: Symbol,
     sorted_fields: &'a [Layout<'a>],
-    stored: &mut Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
-) -> Result<(), String> {
+    mut stmt: Stmt<'a>,
+) -> Result<Stmt<'a>, &'a str> {
     use Pattern::*;
 
     let load = Expr::AccessAtIndex {
@@ -2094,14 +2140,24 @@ fn store_record_destruct<'a>(
 
     match &destruct.typ {
         DestructType::Required => {
-            stored.push((destruct.symbol, destruct.layout.clone(), load));
+            stmt = Stmt::Let(
+                destruct.symbol,
+                load,
+                destruct.layout.clone(),
+                env.arena.alloc(stmt),
+            );
         }
         DestructType::Optional(_expr) => {
             todo!("TODO monomorphize optional field destructure's default expr");
         }
         DestructType::Guard(guard_pattern) => match &guard_pattern {
             Identifier(symbol) => {
-                stored.push((*symbol, destruct.layout.clone(), load));
+                stmt = Stmt::Let(
+                    *symbol,
+                    load,
+                    destruct.layout.clone(),
+                    env.arena.alloc(stmt),
+                );
             }
             Underscore => {
                 // important that this is special-cased to do nothing: mono record patterns will extract all the
@@ -2116,19 +2172,34 @@ fn store_record_destruct<'a>(
                 //
                 // internally. But `y` is never used, so we must make sure it't not stored/loaded.
             }
-            IntLiteral(_) | FloatLiteral(_) | EnumLiteral { .. } | BitLiteral { .. } => {}
+            IntLiteral(_)
+            | FloatLiteral(_)
+            | EnumLiteral { .. }
+            | BitLiteral { .. }
+            | StrLiteral(_) => {}
+
             _ => {
                 let symbol = env.unique_symbol();
-                stored.push((symbol, destruct.layout.clone(), load));
 
-                store_pattern(env, guard_pattern, symbol, destruct.layout.clone(), stored)?;
+                stmt = store_pattern(
+                    env,
+                    procs,
+                    layout_cache,
+                    guard_pattern,
+                    symbol,
+                    destruct.layout.clone(),
+                    stmt,
+                )?;
+
+                stmt = Stmt::Let(symbol, load, destruct.layout.clone(), env.arena.alloc(stmt));
             }
         },
     }
 
-    Ok(())
+    Ok(stmt)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn call_by_name<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,

@@ -480,7 +480,7 @@ mod gen_num {
     }
 
     #[test]
-    fn if_guard_bind_variable() {
+    fn if_guard_bind_variable_false() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -492,7 +492,10 @@ mod gen_num {
             42,
             i64
         );
+    }
 
+    #[test]
+    fn if_guard_bind_variable_true() {
         assert_evals_to!(
             indoc!(
                 r#"

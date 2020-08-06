@@ -534,8 +534,8 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Num.14 (#Attr.2, #Attr.3):
-                    let Test.8 = lowlevel NumAdd #Attr.2 #Attr.3;
-                    ret Test.8;
+                    let Test.7 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.7;
 
                 let Test.19 = 0i64;
                 let Test.21 = 0i64;
@@ -552,11 +552,11 @@ mod test_mono {
                 let Test.17 = lowlevel Eq Test.14 Test.15;
                 let Test.10 = lowlevel And Test.17 Test.16;
                 if Test.10 then
-                    let Test.5 = Index 1 Test.1;
-                    let Test.2 = Index 1 Test.5;
-                    let Test.7 = 1i64;
-                    let Test.6 = CallByName Num.14 Test.2 Test.7;
-                    jump Test.4 Test.6;
+                    let Test.8 = Index 1 Test.1;
+                    let Test.2 = Index 1 Test.8;
+                    let Test.6 = 1i64;
+                    let Test.5 = CallByName Num.14 Test.2 Test.6;
+                    jump Test.4 Test.5;
                 else
                     let Test.9 = 1i64;
                     jump Test.4 Test.9;
@@ -760,9 +760,46 @@ mod test_mono {
                 r#"
                 let Test.4 = 2i64;
                 let Test.5 = 3.14f64;
-                let Test.2 = Struct {Test.4, Test.5};
-                let Test.0 = Index 0 Test.2;
+                let Test.3 = Struct {Test.4, Test.5};
+                let Test.0 = Index 0 Test.3;
                 ret Test.0;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn if_guard_bind_variable_false() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                when 10 is
+                    x if x == 5 -> 0
+                    _ -> 42
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure Bool.5 (#Attr.2, #Attr.3):
+                    let Test.8 = lowlevel Eq #Attr.2 #Attr.3;
+                    ret Test.8;
+
+                let Test.2 = 10i64;
+                let Test.11 = true;
+                let Test.0 = alias Test.2;
+                let Test.7 = 5i64;
+                let Test.6 = CallByName Bool.5 Test.0 Test.7;
+                jump Test.5 Test.6;
+                joinpoint Test.5 Test.12:
+                    let Test.10 = lowlevel And Test.12 Test.11;
+                    if Test.10 then
+                        let Test.4 = 0i64;
+                        jump Test.3 Test.4;
+                    else
+                        let Test.9 = 42i64;
+                        jump Test.3 Test.9;
+                joinpoint Test.3 Test.1:
+                    ret Test.1;
                 "#
             ),
         )

@@ -395,7 +395,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 }
             }
 
-            dbg!(&field_vals);
             // If the struct has only one field that isn't zero-sized,
             // unwrap it. This is what the layout expects us to do.
             if field_vals.len() == 1 {

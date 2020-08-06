@@ -1,6 +1,6 @@
 use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
-use crate::ir::{DestructType, Env, Expr, JoinPointId, Literal, Pattern, Stmt};
-use crate::layout::{Builtin, Layout};
+use crate::ir::{DestructType, Env, Expr, JoinPointId, Literal, Pattern, Procs, Stmt};
+use crate::layout::{Builtin, Layout, LayoutCache};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
@@ -882,6 +882,8 @@ type StoresVec<'a> = bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>
 
 pub fn optimize_when<'a>(
     env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
     cond_symbol: Symbol,
     cond_layout: Layout<'a>,
     ret_layout: Layout<'a>,
@@ -918,6 +920,8 @@ pub fn optimize_when<'a>(
 
     let expr = decide_to_branching(
         env,
+        procs,
+        layout_cache,
         cond_symbol,
         cond_layout,
         ret_layout,
@@ -1125,8 +1129,14 @@ fn test_to_equality<'a>(
     }
 }
 
+// TODO procs and layout are currently unused, but potentially required
+// for defining optional fields?
+// if not, do remove
+#[allow(clippy::too_many_arguments)]
 fn decide_to_branching<'a>(
     env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
     cond_symbol: Symbol,
     cond_layout: Layout<'a>,
     ret_layout: Layout<'a>,
@@ -1155,6 +1165,8 @@ fn decide_to_branching<'a>(
 
             let pass_expr = decide_to_branching(
                 env,
+                procs,
+                layout_cache,
                 cond_symbol,
                 cond_layout.clone(),
                 ret_layout.clone(),
@@ -1164,6 +1176,8 @@ fn decide_to_branching<'a>(
 
             let fail_expr = decide_to_branching(
                 env,
+                procs,
+                layout_cache,
                 cond_symbol,
                 cond_layout.clone(),
                 ret_layout.clone(),
@@ -1264,6 +1278,8 @@ fn decide_to_branching<'a>(
                     continuation: env.arena.alloc(cond),
                 };
 
+                // load all the variables (the guard might need them);
+
                 current_symbol = accum;
             }
 
@@ -1323,6 +1339,8 @@ fn decide_to_branching<'a>(
 
             let default_branch = decide_to_branching(
                 env,
+                procs,
+                layout_cache,
                 cond_symbol,
                 cond_layout.clone(),
                 ret_layout.clone(),
@@ -1335,6 +1353,8 @@ fn decide_to_branching<'a>(
             for (test, decider) in tests {
                 let branch = decide_to_branching(
                     env,
+                    procs,
+                    layout_cache,
                     cond_symbol,
                     cond_layout.clone(),
                     ret_layout.clone(),
