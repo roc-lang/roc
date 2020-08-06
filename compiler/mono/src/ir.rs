@@ -966,8 +966,6 @@ pub fn with_hole<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    use crate::expr::num_argument_to_int_or_float;
-    use crate::expr::IntOrFloat;
     use roc_can::expr::Expr::*;
 
     let arena = env.arena;
@@ -1027,6 +1025,27 @@ pub fn with_hole<'a>(
             }
         }
         Var(symbol) => {
+            if procs.module_thunks.contains(&symbol) {
+                let partial_proc = procs.partial_procs.get(&symbol).unwrap();
+                let fn_var = partial_proc.annotation;
+                let ret_var = fn_var; // These are the same for a thunk.
+
+                // This is a top-level declaration, which will code gen to a 0-arity thunk.
+                let result = call_by_name(
+                    env,
+                    procs,
+                    fn_var,
+                    ret_var,
+                    symbol,
+                    std::vec::Vec::new(),
+                    layout_cache,
+                    assigned,
+                    env.arena.alloc(Stmt::Ret(assigned)),
+                );
+
+                return result;
+            }
+
             // A bit ugly, but it does the job
             match hole {
                 Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([symbol])),
@@ -1041,6 +1060,8 @@ pub fn with_hole<'a>(
             }
         }
         // Var(symbol) => panic!("reached Var {}", symbol),
+        // assigned,
+        // Stmt::Ret(symbol),
         Tag {
             variant_var,
             name: tag_name,
@@ -1661,7 +1682,7 @@ pub fn with_hole<'a>(
 
             result
         }
-        RuntimeError(e) => todo!("runtime error {:?}", e),
+        RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
     }
 }
 
@@ -1745,19 +1766,59 @@ pub fn from_can<'a>(
                 );
             }
 
-            let (symbol, can_expr) =
-                pattern_to_when(env, def.expr_var, def.loc_pattern, xvar, *cont);
+            // this may be a destructure pattern
+            let mono_pattern = from_can_pattern(env, layout_cache, &def.loc_pattern.value);
 
-            let stmt = from_can(env, can_expr.value, procs, layout_cache);
+            if let Pattern::Identifier(symbol) = mono_pattern {
+                let hole = env
+                    .arena
+                    .alloc(from_can(env, cont.value, procs, layout_cache));
+                with_hole(env, def.loc_expr.value, procs, layout_cache, symbol, hole)
+            } else {
+                let context = crate::exhaustive::Context::BadDestruct;
+                match crate::exhaustive::check(
+                    def.loc_pattern.region,
+                    &[(
+                        Located::at(def.loc_pattern.region, mono_pattern.clone()),
+                        crate::exhaustive::Guard::NoGuard,
+                    )],
+                    context,
+                ) {
+                    Ok(_) => {}
+                    Err(errors) => {
+                        for error in errors {
+                            env.problems.push(MonoProblem::PatternProblem(error))
+                        }
+                    } // TODO make all variables bound in the pattern evaluate to a runtime error
+                      // return Stmt::RuntimeError("TODO non-exhaustive pattern");
+                }
 
-            with_hole(
-                env,
-                def.loc_expr.value,
-                procs,
-                layout_cache,
-                symbol,
-                env.arena.alloc(stmt),
-            )
+                let layout = layout_cache
+                    .from_var(env.arena, def.expr_var, env.subs, env.pointer_size)
+                    .expect("invalid layout");
+
+                let mut stores = Vec::new_in(env.arena);
+                let outer_symbol = env.unique_symbol();
+                store_pattern(env, &mono_pattern, outer_symbol, layout, &mut stores);
+
+                // convert the continuation
+                let mut stmt = from_can(env, cont.value, procs, layout_cache);
+
+                // unpack the body of the def based on the pattern
+                for (symbol, layout, expr) in stores.iter().rev() {
+                    stmt = Stmt::Let(*symbol, expr.clone(), layout.clone(), env.arena.alloc(stmt));
+                }
+
+                // convert the def body, store in outer_symbol
+                with_hole(
+                    env,
+                    def.loc_expr.value,
+                    procs,
+                    layout_cache,
+                    outer_symbol,
+                    env.arena.alloc(stmt),
+                )
+            }
         }
 
         _ => {
@@ -2140,11 +2201,11 @@ fn call_by_name<'a>(
                 }
             }
 
-            // wrong, clearly. But in general I think the layout here should be just the return type.
+            // TODO does this work?
             let layout = if let Layout::FunctionPointer(_, rlayout) = layout {
                 rlayout
             } else {
-                todo!()
+                &layout
             };
 
             // If we've already specialized this one, no further work is needed.
@@ -2392,14 +2453,10 @@ pub fn from_can_pattern<'a>(
             // TODO preserve malformed problem information here?
             Pattern::UnsupportedPattern(*region)
         }
-        NumLiteral(var, num) => {
-            use crate::expr::IntOrFloat;
-
-            match crate::expr::num_argument_to_int_or_float(env.subs, *var) {
-                IntOrFloat::IntType => Pattern::IntLiteral(*num),
-                IntOrFloat::FloatType => Pattern::FloatLiteral(*num as u64),
-            }
-        }
+        NumLiteral(var, num) => match num_argument_to_int_or_float(env.subs, *var) {
+            IntOrFloat::IntType => Pattern::IntLiteral(*num),
+            IntOrFloat::FloatType => Pattern::FloatLiteral(*num as u64),
+        },
 
         AppliedTag {
             whole_var,
@@ -2670,5 +2727,40 @@ fn optimize_low_level(
             }
         }
         _ => op,
+    }
+}
+
+pub enum IntOrFloat {
+    IntType,
+    FloatType,
+}
+
+/// Given the `a` in `Num a`, determines whether it's an int or a float
+pub fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
+    match subs.get_without_compacting(var).content {
+        Content::Alias(Symbol::NUM_INTEGER, args, _) => {
+            debug_assert!(args.is_empty());
+            IntOrFloat::IntType
+        }
+        Content::FlexVar(_) => {
+            // If this was still a (Num *), assume compiling it to an Int
+            IntOrFloat::IntType
+        }
+        Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _) => {
+            debug_assert!(args.is_empty());
+            IntOrFloat::FloatType
+        }
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
+            debug_assert!(attr_args.len() == 2);
+
+            // Recurse on the second argument
+            num_argument_to_int_or_float(subs, attr_args[1])
+        }
+        other => {
+            panic!(
+                "Unrecognized Num type argument for var {:?} with Content: {:?}",
+                var, other
+            );
+        }
     }
 }

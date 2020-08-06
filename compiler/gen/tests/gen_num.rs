@@ -23,7 +23,6 @@ mod gen_num {
     use roc_collections::all::ImMap;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
     use roc_gen::llvm::convert::basic_type_from_layout;
-    use roc_mono::expr::{Expr, Procs};
     use roc_mono::layout::Layout;
     use roc_types::subs::Subs;
 

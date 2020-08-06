@@ -5,7 +5,7 @@
 macro_rules! assert_opt_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
         use roc_gen::llvm::build::Scope;
-        use roc_gen::llvm::build::{build_proc_header_ir, build_proc_ir};
+        use roc_gen::llvm::build::{build_proc_header, build_proc};
 
         let arena = Bump::new();
         let target = target_lexicon::Triple::host();
@@ -65,13 +65,13 @@ macro_rules! assert_opt_evals_to {
             ptr_bytes,
             leak: $leak
         };
-        let mut procs = roc_mono::experiment::Procs::default();
+        let mut procs = roc_mono::ir::Procs::default();
         let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
         let mut layout_ids = roc_gen::layout_id::LayoutIds::default();
 
         // Populate Procs and get the low-level Expr from the canonical Expr
         let mut mono_problems = Vec::new();
-        let mut mono_env = roc_mono::experiment::Env {
+        let mut mono_env = roc_mono::ir::Env {
             arena: &arena,
             subs: &mut subs,
             problems: &mut mono_problems,
@@ -81,7 +81,7 @@ macro_rules! assert_opt_evals_to {
             jump_counter: arena.alloc(0),
         };
 
-        let main_body = roc_mono::experiment::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
+        let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
         let mut headers = {
             let num_headers = match &procs.pending_specializations {
                 Some(map) => map.len(),
@@ -91,7 +91,7 @@ macro_rules! assert_opt_evals_to {
             Vec::with_capacity(num_headers)
         };
         let mut layout_cache = roc_mono::layout::LayoutCache::default();
-        let mut procs = roc_mono::experiment::specialize_all(&mut mono_env, procs, &mut layout_cache);
+        let mut procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
         assert_eq!(procs.runtime_errors, roc_collections::all::MutMap::default());
 
@@ -104,7 +104,7 @@ macro_rules! assert_opt_evals_to {
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
         for ((symbol, layout), proc) in procs.specialized.drain() {
-            use roc_mono::experiment::InProgressProc::*;
+            use roc_mono::ir::InProgressProc::*;
 
             match proc {
                 InProgress => {
@@ -112,7 +112,7 @@ macro_rules! assert_opt_evals_to {
                 }
                 Done(proc) => {
                     let (fn_val, arg_basic_types) =
-                        build_proc_header_ir(&env, &mut layout_ids, symbol, &layout, &proc);
+                        build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
                     headers.push((proc, fn_val, arg_basic_types));
                 }
@@ -121,7 +121,7 @@ macro_rules! assert_opt_evals_to {
 
         // Build each proc using its header info.
         for (proc, fn_val, arg_basic_types) in headers {
-            build_proc_ir(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
+            build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
 
             if fn_val.verify(true) {
                 fpm.run_on(&fn_val);
@@ -288,13 +288,13 @@ macro_rules! assert_llvm_evals_to {
             leak: $leak
 
         };
-        let mut procs = roc_mono::experiment::Procs::default();
+        let mut procs = roc_mono::ir::Procs::default();
         let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
         let mut layout_ids = roc_gen::layout_id::LayoutIds::default();
 
         // Populate Procs and get the low-level Expr from the canonical Expr
         let mut mono_problems = Vec::new();
-        let mut mono_env = roc_mono::experiment::Env {
+        let mut mono_env = roc_mono::ir::Env {
             arena: &arena,
             subs: &mut subs,
             problems: &mut mono_problems,
@@ -304,7 +304,7 @@ macro_rules! assert_llvm_evals_to {
             jump_counter: arena.alloc(0),
         };
 
-        let main_body = roc_mono::experiment::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
+        let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
         let mut headers = {
             let num_headers = match &procs.pending_specializations {
                 Some(map) => map.len(),
@@ -314,7 +314,7 @@ macro_rules! assert_llvm_evals_to {
             Vec::with_capacity(num_headers)
         };
         let mut layout_cache = roc_mono::layout::LayoutCache::default();
-        let mut procs = roc_mono::experiment::specialize_all(&mut mono_env, procs, &mut layout_cache);
+        let mut procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
         assert_eq!(procs.runtime_errors, roc_collections::all::MutMap::default());
 
@@ -323,12 +323,12 @@ macro_rules! assert_llvm_evals_to {
         // a conflicting mutable borrow on ident_ids.
         env.interns.all_ident_ids.insert(home, ident_ids);
 
-        use roc_gen::llvm::build::{build_proc_header_ir, build_proc_ir };
+        use roc_gen::llvm::build::{build_proc_header, build_proc };
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
         for ((symbol, layout), proc) in procs.specialized.drain() {
-            use roc_mono::experiment::InProgressProc::*;
+            use roc_mono::ir::InProgressProc::*;
 
             match proc {
                 InProgress => {
@@ -336,7 +336,7 @@ macro_rules! assert_llvm_evals_to {
                 }
                 Done(proc) => {
                     let (fn_val, arg_basic_types) =
-                        build_proc_header_ir(&env, &mut layout_ids, symbol, &layout, &proc);
+                        build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
                     headers.push((proc, fn_val, arg_basic_types));
                 }
@@ -345,7 +345,7 @@ macro_rules! assert_llvm_evals_to {
 
         // Build each proc using its header info.
         for (proc, fn_val, arg_basic_types) in headers {
-            build_proc_ir(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
+            build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
 
             if fn_val.verify(true) {
                 fpm.run_on(&fn_val);

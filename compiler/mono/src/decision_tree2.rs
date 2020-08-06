@@ -1,5 +1,5 @@
 use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
-use crate::experiment::{DestructType, Env, Expr, JoinPointId, Literal, Pattern, Stmt};
+use crate::ir::{DestructType, Env, Expr, JoinPointId, Literal, Pattern, Stmt};
 use crate::layout::{Builtin, Layout};
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};

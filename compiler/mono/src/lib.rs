@@ -11,18 +11,14 @@
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
 
-pub mod experiment;
-pub mod expr;
+pub mod ir;
 pub mod layout;
-pub mod reset_reuse;
 
 // Temporary, while we can build up test cases and optimize the exhaustiveness checking.
 // For now, following this warning's advice will lead to nasty type inference errors.
-#[allow(clippy::ptr_arg)]
-pub mod decision_tree;
+//#[allow(clippy::ptr_arg)]
+//pub mod decision_tree;
 #[allow(clippy::ptr_arg)]
 pub mod decision_tree2;
 #[allow(clippy::ptr_arg)]
 pub mod exhaustive;
-#[allow(clippy::ptr_arg)]
-pub mod pattern;

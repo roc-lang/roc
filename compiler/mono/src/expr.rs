@@ -630,7 +630,6 @@ pub fn num_argument_to_int_or_float(subs: &Subs, var: Variable) -> IntOrFloat {
         }
     }
 }
-
 /// turn record/tag patterns into a when expression, e.g.
 ///
 /// foo = \{ x } -> body

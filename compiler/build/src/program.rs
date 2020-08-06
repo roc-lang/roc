@@ -12,7 +12,7 @@ use roc_gen::llvm::build::{
 use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_load::file::LoadedModule;
 use roc_module::symbol::Symbol;
-use roc_mono::expr::{Env, Expr, PartialProc, Procs};
+use roc_mono::ir::{Env, PartialProc, Procs, Stmt};
 use roc_mono::layout::{Layout, LayoutCache};
 
 use inkwell::targets::{
@@ -229,7 +229,7 @@ pub fn gen(
     }
 
     // Populate Procs further and get the low-level Expr from the canonical Expr
-    let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
+    let main_body = Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),
@@ -238,7 +238,7 @@ pub fn gen(
 
         Vec::with_capacity(num_headers)
     };
-    let mut procs = roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
+    let mut procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
     assert_eq!(
         procs.runtime_errors,
@@ -254,7 +254,7 @@ pub fn gen(
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
     for ((symbol, layout), proc) in procs.specialized.drain() {
-        use roc_mono::expr::InProgressProc::*;
+        use roc_mono::ir::InProgressProc::*;
 
         match proc {
             InProgress => {
@@ -299,10 +299,10 @@ pub fn gen(
 
     builder.position_at_end(basic_block);
 
-    let ret = roc_gen::llvm::build::build_expr(
+    let ret = roc_gen::llvm::build::build_exp_stmt(
         &env,
         &mut layout_ids,
-        &roc_gen::llvm::build::Scope::default(),
+        &mut roc_gen::llvm::build::Scope::default(),
         main_fn,
         &main_body,
     );

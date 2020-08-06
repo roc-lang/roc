@@ -1,4 +1,4 @@
-use crate::experiment::DestructType;
+use crate::ir::DestructType;
 use roc_collections::all::{Index, MutMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_region::all::{Located, Region};
@@ -44,8 +44,8 @@ pub enum Literal {
     Str(Box<str>),
 }
 
-fn simplify<'a>(pattern: &crate::experiment::Pattern<'a>) -> Pattern {
-    use crate::experiment::Pattern::*;
+fn simplify<'a>(pattern: &crate::ir::Pattern<'a>) -> Pattern {
+    use crate::ir::Pattern::*;
 
     match pattern {
         IntLiteral(v) => Literal(Literal::Int(*v)),
@@ -138,7 +138,7 @@ pub enum Guard {
 
 pub fn check<'a>(
     region: Region,
-    patterns: &[(Located<crate::experiment::Pattern<'a>>, Guard)],
+    patterns: &[(Located<crate::ir::Pattern<'a>>, Guard)],
     context: Context,
 ) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
@@ -154,7 +154,7 @@ pub fn check<'a>(
 pub fn check_patterns<'a>(
     region: Region,
     context: Context,
-    patterns: &[(Located<crate::experiment::Pattern<'a>>, Guard)],
+    patterns: &[(Located<crate::ir::Pattern<'a>>, Guard)],
     errors: &mut Vec<Error>,
 ) {
     match to_nonredundant_rows(region, patterns) {
@@ -287,7 +287,7 @@ fn recover_ctor(
 /// INVARIANT: Produces a list of rows where (forall row. length row == 1)
 fn to_nonredundant_rows<'a>(
     overall_region: Region,
-    patterns: &[(Located<crate::experiment::Pattern<'a>>, Guard)],
+    patterns: &[(Located<crate::ir::Pattern<'a>>, Guard)],
 ) -> Result<Vec<Vec<Pattern>>, Error> {
     let mut checked_rows = Vec::with_capacity(patterns.len());
 

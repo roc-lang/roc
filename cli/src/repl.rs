@@ -19,7 +19,7 @@ use roc_gen::llvm::build::{build_proc, build_proc_header, OptLevel};
 use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
-use roc_mono::expr::Procs;
+use roc_mono::ir::Procs;
 use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
@@ -249,7 +249,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
 
     // Populate Procs and get the low-level Expr from the canonical Expr
     let mut mono_problems = Vec::new();
-    let mut mono_env = roc_mono::expr::Env {
+    let mut mono_env = roc_mono::ir::Env {
         arena: &arena,
         subs: &mut subs,
         problems: &mut mono_problems,
@@ -259,7 +259,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
         jump_counter: arena.alloc(0),
     };
 
-    let main_body = roc_mono::expr::Expr::new(&mut mono_env, loc_expr.value, &mut procs);
+    let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),
@@ -269,7 +269,7 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
         Vec::with_capacity(num_headers)
     };
     let mut layout_cache = LayoutCache::default();
-    let mut procs = roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
+    let mut procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
     assert_eq!(
         procs.runtime_errors,
@@ -284,8 +284,10 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
+
+    let mut gen_scope = roc_gen::llvm::build::Scope::default();
     for ((symbol, layout), proc) in procs.specialized.drain() {
-        use roc_mono::expr::InProgressProc::*;
+        use roc_mono::ir::InProgressProc::*;
 
         match proc {
             InProgress => {
@@ -330,10 +332,12 @@ pub fn gen(src: &str, target: Triple, opt_level: OptLevel) -> Result<(String, St
 
     builder.position_at_end(basic_block);
 
-    let ret = roc_gen::llvm::build::build_expr(
+    dbg!(&main_body);
+
+    let ret = roc_gen::llvm::build::build_exp_stmt(
         &env,
         &mut layout_ids,
-        &roc_gen::llvm::build::Scope::default(),
+        &mut gen_scope,
         main_fn,
         &main_body,
     );
