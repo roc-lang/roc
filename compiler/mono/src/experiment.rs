@@ -1,8 +1,8 @@
 use self::InProgressProc::*;
+use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
     list_layout_from_elem, Builtin, Layout, LayoutCache, LayoutProblem, Ownership,
 };
-use crate::pattern2::{Ctor, Guard, RenderAs, TagId};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
@@ -17,7 +17,7 @@ use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
 #[derive(Clone, Debug)]
 pub enum MonoProblem {
-    PatternProblem(crate::pattern2::Error),
+    PatternProblem(crate::exhaustive::Error),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -711,14 +711,14 @@ fn patterns_to_when<'a>(
     // to pass type checking. So the order in which we add them to the body does not matter: there
     // are only stores anyway, no branches.
     for (pattern_var, pattern) in patterns.into_iter() {
-        let context = crate::pattern2::Context::BadArg;
+        let context = crate::exhaustive::Context::BadArg;
         let mono_pattern = from_can_pattern(env, layout_cache, &pattern.value);
 
-        match crate::pattern2::check(
+        match crate::exhaustive::check(
             pattern.region,
             &[(
                 Located::at(pattern.region, mono_pattern.clone()),
-                crate::pattern2::Guard::NoGuard,
+                crate::exhaustive::Guard::NoGuard,
             )],
             context,
         ) {
@@ -1817,11 +1817,11 @@ fn to_opt_branches<'a>(
     // NOTE exhaustiveness is checked after the construction of all the branches
     // In contrast to elm (currently), we still do codegen even if a pattern is non-exhaustive.
     // So we not only report exhaustiveness errors, but also correct them
-    let context = crate::pattern2::Context::BadCase;
-    match crate::pattern2::check(region, &loc_branches, context) {
+    let context = crate::exhaustive::Context::BadCase;
+    match crate::exhaustive::check(region, &loc_branches, context) {
         Ok(_) => {}
         Err(errors) => {
-            use crate::pattern2::Error::*;
+            use crate::exhaustive::Error::*;
             let mut is_not_exhaustive = false;
             let mut overlapping_branches = std::vec::Vec::new();
 
@@ -2328,12 +2328,12 @@ pub enum Pattern<'a> {
     BitLiteral {
         value: bool,
         tag_name: TagName,
-        union: crate::pattern2::Union,
+        union: crate::exhaustive::Union,
     },
     EnumLiteral {
         tag_id: u8,
         tag_name: TagName,
-        union: crate::pattern2::Union,
+        union: crate::exhaustive::Union,
     },
     StrLiteral(Box<str>),
 
@@ -2343,7 +2343,7 @@ pub enum Pattern<'a> {
         tag_id: u8,
         arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
         layout: Layout<'a>,
-        union: crate::pattern2::Union,
+        union: crate::exhaustive::Union,
     },
 
     // Runtime Exceptions
@@ -2407,8 +2407,8 @@ pub fn from_can_pattern<'a>(
             arguments,
             ..
         } => {
+            use crate::exhaustive::Union;
             use crate::layout::UnionVariant::*;
-            use crate::pattern2::Union;
 
             let variant =
                 crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.pointer_size);
@@ -2461,7 +2461,7 @@ pub fn from_can_pattern<'a>(
                         })
                     }
 
-                    let union = crate::pattern2::Union {
+                    let union = crate::exhaustive::Union {
                         render_as: RenderAs::Tag,
                         alternatives: ctors,
                     };
@@ -2473,7 +2473,7 @@ pub fn from_can_pattern<'a>(
                     }
                 }
                 Unwrapped(field_layouts) => {
-                    let union = crate::pattern2::Union {
+                    let union = crate::exhaustive::Union {
                         render_as: RenderAs::Tag,
                         alternatives: vec![Ctor {
                             tag_id: TagId(0),
@@ -2511,7 +2511,7 @@ pub fn from_can_pattern<'a>(
                         })
                     }
 
-                    let union = crate::pattern2::Union {
+                    let union = crate::exhaustive::Union {
                         render_as: RenderAs::Tag,
                         alternatives: ctors,
                     };

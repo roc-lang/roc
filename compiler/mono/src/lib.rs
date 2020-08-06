@@ -23,6 +23,6 @@ pub mod decision_tree;
 #[allow(clippy::ptr_arg)]
 pub mod decision_tree2;
 #[allow(clippy::ptr_arg)]
-pub mod pattern;
+pub mod exhaustive;
 #[allow(clippy::ptr_arg)]
-pub mod pattern2;
+pub mod pattern;
