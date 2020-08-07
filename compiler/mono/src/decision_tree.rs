@@ -1,5 +1,5 @@
 use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
-use crate::ir::{DestructType, Env, Expr, JoinPointId, Literal, Pattern, Procs, Stmt};
+use crate::ir::{DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt};
 use crate::layout::{Builtin, Layout, LayoutCache};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
@@ -1269,11 +1269,14 @@ fn decide_to_branching<'a>(
                 );
 
                 // calculate the guard value
+                let param = Param {
+                    symbol: test_symbol,
+                    layout: Layout::Builtin(Builtin::Int1),
+                    borrow: false,
+                };
                 cond = Stmt::Join {
                     id,
-                    arguments: env
-                        .arena
-                        .alloc([(test_symbol, Layout::Builtin(Builtin::Int1))]),
+                    parameters: env.arena.alloc([param]),
                     remainder: env.arena.alloc(stmt),
                     continuation: env.arena.alloc(cond),
                 };

@@ -725,17 +725,18 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         }
         Join {
             id,
-            arguments,
+            parameters,
             remainder,
             continuation,
         } => {
             let builder = env.builder;
             let context = env.context;
 
-            let mut joinpoint_args = Vec::with_capacity_in(arguments.len(), env.arena);
+            let mut joinpoint_args = Vec::with_capacity_in(parameters.len(), env.arena);
 
-            for (_, layout) in arguments.iter() {
-                let btype = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+            for param in parameters.iter() {
+                let btype =
+                    basic_type_from_layout(env.arena, env.context, &param.layout, env.ptr_bytes);
                 joinpoint_args.push(create_entry_block_alloca(
                     env,
                     parent,
@@ -757,8 +758,8 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             // remove this join point again
             scope.join_points.remove(&id);
 
-            for (ptr, (argument, layout)) in joinpoint_args.iter().zip(arguments.iter()) {
-                scope.insert(*argument, (layout.clone(), *ptr));
+            for (ptr, param) in joinpoint_args.iter().zip(parameters.iter()) {
+                scope.insert(param.symbol, (param.layout.clone(), *ptr));
             }
 
             let phi_block = builder.get_insert_block().unwrap();

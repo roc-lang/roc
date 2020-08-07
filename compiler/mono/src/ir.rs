@@ -307,6 +307,13 @@ impl<'a, 'i> Env<'a, 'i> {
 #[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
 pub struct JoinPointId(Symbol);
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Param<'a> {
+    pub symbol: Symbol,
+    pub borrow: bool,
+    pub layout: Layout<'a>,
+}
+
 pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt<'a> {
@@ -347,7 +354,7 @@ pub enum Stmt<'a> {
     Dec(Symbol, &'a Stmt<'a>),
     Join {
         id: JoinPointId,
-        arguments: &'a [(Symbol, Layout<'a>)],
+        parameters: &'a [Param<'a>],
         /// does not contain jumps to this id
         continuation: &'a Stmt<'a>,
         /// contains the jumps to this id
@@ -625,11 +632,11 @@ impl<'a> Stmt<'a> {
 
             Join {
                 id,
-                arguments,
+                parameters,
                 continuation,
                 remainder,
             } => {
-                let it = arguments.iter().map(|(s, _)| symbol_to_doc(alloc, *s));
+                let it = parameters.iter().map(|p| symbol_to_doc(alloc, p.symbol));
 
                 alloc.intersperse(
                     vec![
@@ -637,7 +644,7 @@ impl<'a> Stmt<'a> {
                         alloc
                             .text("joinpoint ")
                             .append(join_point_to_doc(alloc, *id))
-                            .append(" ".repeat(arguments.len().min(1)))
+                            .append(" ".repeat(parameters.len().min(1)))
                             .append(alloc.intersperse(it, alloc.space()))
                             .append(":"),
                         continuation.to_doc(alloc).indent(4),
@@ -655,13 +662,19 @@ impl<'a> Stmt<'a> {
                     .append(alloc.intersperse(it, alloc.space()))
                     .append(";")
             }
-
-            _ => todo!(),
+            Inc(symbol, cont) => alloc
+                .text("inc ")
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(";")
+                .append(alloc.hardline())
+                .append(cont.to_doc(alloc)),
+            Dec(symbol, cont) => alloc
+                .text("dec ")
+                .append(symbol_to_doc(alloc, *symbol))
+                .append(";")
+                .append(alloc.hardline())
+                .append(cont.to_doc(alloc)),
         }
-        /*
-        Inc(Symbol, &'a Stmt<'a>),
-        Dec(Symbol, &'a Stmt<'a>),
-             */
     }
 
     pub fn to_pretty(&self, width: usize) -> String {
@@ -1309,9 +1322,15 @@ pub fn with_hole<'a>(
                 .from_var(env.arena, branch_var, env.subs, env.pointer_size)
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
+            let param = Param {
+                symbol: assigned,
+                layout,
+                borrow: false,
+            };
+
             Stmt::Join {
                 id,
-                arguments: env.arena.alloc([(assigned, layout)]),
+                parameters: env.arena.alloc([param]),
                 remainder: env.arena.alloc(stmt),
                 continuation: hole,
             }
@@ -1362,9 +1381,15 @@ pub fn with_hole<'a>(
                 .from_var(env.arena, expr_var, env.subs, env.pointer_size)
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
+            let param = Param {
+                symbol: assigned,
+                layout,
+                borrow: false,
+            };
+
             Stmt::Join {
                 id,
-                arguments: bumpalo::vec![in env.arena; (assigned, layout)].into_bump_slice(),
+                parameters: env.arena.alloc([param]),
                 remainder: env.arena.alloc(stmt),
                 continuation: env.arena.alloc(hole),
             }

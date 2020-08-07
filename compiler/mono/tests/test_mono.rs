@@ -56,6 +56,13 @@ mod test_mono {
         let ir_expr =
             roc_mono::ir::from_can(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
 
+        // apply inc/dec
+        use roc_collections::all::MutMap;
+        use roc_mono::inc_dec::function_c;
+        let mut inc_dec_env = roc_mono::inc_dec::Env::new(mono_env.arena);
+
+        let ir_expr = function_c(&mut inc_dec_env, mono_env.arena.alloc(ir_expr));
+
         // let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
         let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut LayoutCache::default());
 
@@ -762,6 +769,8 @@ mod test_mono {
                 let Test.5 = 3.14f64;
                 let Test.3 = Struct {Test.4, Test.5};
                 let Test.0 = Index 0 Test.3;
+                inc Test.0;
+                dec Test.3;
                 ret Test.0;
                 "#
             ),
@@ -800,6 +809,33 @@ mod test_mono {
                         jump Test.3 Test.9;
                 joinpoint Test.3 Test.1:
                     ret Test.1;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn beans_example_1() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                y = 10
+
+                z = Num.add y y
+
+                z
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure Num.14 (#Attr.2, #Attr.3):
+                    let Test.3 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.3;
+
+                let Test.0 = 10i64;
+                inc Test.0;
+                let Test.1 = CallByName Num.14 Test.0 Test.0;
+                ret Test.1;
                 "#
             ),
         )
