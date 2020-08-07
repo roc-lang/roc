@@ -226,7 +226,7 @@ pub fn gen(
     }
 
     // Populate Procs further and get the low-level Expr from the canonical Expr
-    let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
+    let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),

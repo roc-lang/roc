@@ -260,7 +260,9 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
         ident_ids: &mut ident_ids,
     };
 
-    let main_body = roc_mono::expr::Expr::new(&mut mono_env, loc_expr.value, &mut procs);
+    let mut layout_cache = LayoutCache::default();
+    let main_body =
+        roc_mono::expr::Expr::new(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),
@@ -269,7 +271,6 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
 
         Vec::with_capacity(num_headers)
     };
-    let mut layout_cache = LayoutCache::default();
     let mut procs = roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
     assert_eq!(
