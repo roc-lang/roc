@@ -38,7 +38,7 @@ macro_rules! assert_llvm_evals_to {
         fpm.initialize();
 
         // Compute main_fn_type before moving subs to Env
-        let layout = Layout::new(&arena, content, &subs, ptr_bytes)
+        let layout = Layout::new(&arena, content, &subs)
     .unwrap_or_else(|err| panic!("Code gen error in NON-OPTIMIZED test: could not convert to layout. Err was {:?}", err));
         let execution_engine =
             module
@@ -70,7 +70,6 @@ macro_rules! assert_llvm_evals_to {
             problems: &mut mono_problems,
             home,
             ident_ids: &mut ident_ids,
-            pointer_size: ptr_bytes,
             jump_counter: arena.alloc(0),
         };
 
@@ -223,7 +222,7 @@ macro_rules! assert_opt_evals_to {
         fpm.initialize();
 
         // Compute main_fn_type before moving subs to Env
-        let layout = Layout::new(&arena, content, &subs, ptr_bytes)
+        let layout = Layout::new(&arena, content, &subs)
     .unwrap_or_else(|err| panic!("Code gen error in OPTIMIZED test: could not convert to layout. Err was {:?}", err));
 
         let execution_engine =
@@ -256,7 +255,6 @@ macro_rules! assert_opt_evals_to {
             problems: &mut mono_problems,
             home,
             ident_ids: &mut ident_ids,
-            pointer_size: ptr_bytes,
             jump_counter: arena.alloc(0),
         };
         let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);

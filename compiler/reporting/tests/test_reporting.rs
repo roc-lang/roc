@@ -86,9 +86,6 @@ mod test_reporting {
             let mut procs = Procs::default();
             let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
 
-            // assume 64-bit pointers
-            let pointer_size = std::mem::size_of::<u64>() as u32;
-
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
             let mut mono_env = roc_mono::expr::Env {
                 arena: &arena,
@@ -96,7 +93,6 @@ mod test_reporting {
                 problems: &mut mono_problems,
                 home,
                 ident_ids: &mut ident_ids,
-                pointer_size,
                 jump_counter: arena.alloc(0),
             };
             let _mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
