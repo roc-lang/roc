@@ -133,7 +133,7 @@ pub fn helper_without_uniqueness<'a>(
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
 
-    for ((symbol, layout), proc) in procs.to_specialized_procs(env.arena).drain() {
+    for ((symbol, layout), proc) in procs.get_specialized_procs(env.arena).drain() {
         let (fn_val, arg_basic_types) =
             build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
@@ -325,7 +325,7 @@ pub fn helper_with_uniqueness<'a>(
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    for ((symbol, layout), proc) in procs.to_specialized_procs(env.arena).drain() {
+    for ((symbol, layout), proc) in procs.get_specialized_procs(env.arena).drain() {
         let (fn_val, arg_basic_types) =
             build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
@@ -400,6 +400,10 @@ pub fn helper_with_uniqueness<'a>(
 #[macro_export]
 macro_rules! assert_opt_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
+        use bumpalo::Bump;
+        use inkwell::context::Context;
+        use inkwell::execution_engine::JitFunction;
+
         let arena = Bump::new();
 
         let context = Context::create();
@@ -426,6 +430,10 @@ macro_rules! assert_opt_evals_to {
 #[macro_export]
 macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
+        use bumpalo::Bump;
+        use inkwell::context::Context;
+        use inkwell::execution_engine::JitFunction;
+
         let arena = Bump::new();
 
         let context = Context::create();

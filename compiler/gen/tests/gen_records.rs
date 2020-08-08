@@ -13,18 +13,6 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_records {
-    use crate::helpers::{can_expr, infer_expr, uniq_expr, CanExprOut};
-    use bumpalo::Bump;
-    use inkwell::context::Context;
-    use inkwell::execution_engine::JitFunction;
-    use inkwell::passes::PassManager;
-    use inkwell::types::BasicType;
-    use inkwell::OptimizationLevel;
-    use roc_gen::llvm::build::{build_proc, build_proc_header};
-    use roc_gen::llvm::convert::basic_type_from_layout;
-    use roc_mono::layout::Layout;
-    use roc_types::subs::Subs;
-
     #[test]
     fn basic_record() {
         assert_evals_to!(

@@ -14,9 +14,6 @@ mod helpers;
 #[cfg(test)]
 mod gen_list {
     use crate::helpers::with_larger_debug_stack;
-    use bumpalo::Bump;
-    use inkwell::context::Context;
-    use inkwell::execution_engine::JitFunction;
 
     #[test]
     fn empty_list_literal() {

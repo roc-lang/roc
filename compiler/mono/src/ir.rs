@@ -91,7 +91,7 @@ pub enum InProgressProc<'a> {
 
 impl<'a> Procs<'a> {
     // TODO investigate make this an iterator?
-    pub fn to_specialized_procs(self, arena: &'a Bump) -> MutMap<(Symbol, Layout<'a>), Proc<'a>> {
+    pub fn get_specialized_procs(self, arena: &'a Bump) -> MutMap<(Symbol, Layout<'a>), Proc<'a>> {
         let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
         for (key, in_prog_proc) in self.specialized.into_iter() {

@@ -73,7 +73,7 @@ mod test_mono {
         interns.all_ident_ids.insert(home, ident_ids);
 
         let mut procs_string = procs
-            .to_specialized_procs(mono_env.arena)
+            .get_specialized_procs(mono_env.arena)
             .values()
             .map(|proc| proc.to_pretty(200))
             .collect::<Vec<_>>();
