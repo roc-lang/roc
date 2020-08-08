@@ -1,4 +1,4 @@
-use crate::ir::{Expr, JoinPointId, Stmt};
+use crate::ir::{Expr, JoinPointId, Param, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -89,7 +89,6 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
 }
 
 pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
-    use crate::ir::CallType;
     use Expr::*;
 
     match expr {
@@ -101,15 +100,10 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
             result.insert(*symbol);
         }
 
-        FunctionCall {
-            call_type, args, ..
-        } => {
+        FunctionCall { args, .. } => {
+            // NOTE thouth the function name does occur, it is a static constant in the program
+            // for liveness, it should not be included here.
             result.extend(args.iter().copied());
-
-            match call_type {
-                CallType::ByName(s) => result.insert(*s),
-                CallType::ByPointer(s) => result.insert(*s),
-            };
         }
 
         RunLowLevel(_, arguments)
@@ -122,455 +116,6 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
         }
 
         EmptyArray | RuntimeErrorFunction(_) | Literal(_) => {}
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum Ownership {
-    Owned,
-    Borrowed,
-}
-
-pub struct Env<'a> {
-    pub arena: &'a Bump,
-    pub beta: MutMap<Symbol, &'a [Ownership]>,
-    pub beta_l: MutMap<Symbol, Ownership>,
-    pub join_points: MutMap<JoinPointId, MutSet<Symbol>>,
-}
-
-impl<'a> Env<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
-        Self {
-            arena,
-            beta: MutMap::default(),
-            beta_l: MutMap::default(),
-            join_points: MutMap::default(),
-        }
-    }
-
-    fn ownership(&self, symbol: &Symbol) -> Ownership {
-        // default to owned
-        match self.beta_l.get(symbol) {
-            None => Ownership::Owned,
-            Some(o) => *o,
-        }
-    }
-
-    fn borrow_signature(&self, symbol: &Symbol, arguments: &[Symbol]) -> &'a [(Symbol, Ownership)] {
-        use Ownership::*;
-
-        let signature = match self.beta.get(symbol) {
-            None => &[] as &[_],
-            Some(o) => o,
-        };
-
-        let mut result = Vec::with_capacity_in(arguments.len(), self.arena);
-
-        for (i, arg) in arguments.iter().enumerate() {
-            let ownership = match signature.get(i) {
-                None => Owned,
-                Some(o) => *o,
-            };
-            result.push((*arg, ownership));
-        }
-
-        result.into_bump_slice()
-    }
-}
-
-fn function_o_minus_x<'a>(
-    arena: &'a Bump,
-    x: Symbol,
-    f: &'a Stmt<'a>,
-    ownership: Ownership,
-) -> &'a Stmt<'a> {
-    match ownership {
-        Ownership::Owned if !free_variables(&f).contains(&x) => arena.alloc(Stmt::Dec(x, f)),
-        _ => f,
-    }
-}
-
-fn function_o_minus<'a>(arena: &'a Bump, xs: &[Symbol], mut f: &'a Stmt<'a>) -> &'a Stmt<'a> {
-    for x in xs.iter() {
-        f = function_o_minus_x(arena, *x, f, Ownership::Owned);
-    }
-
-    f
-}
-
-fn function_o_plus_x<'a>(
-    arena: &'a Bump,
-    x: Symbol,
-    v: &MutSet<Symbol>,
-    f: &'a Stmt<'a>,
-    ownership: Ownership,
-) -> &'a Stmt<'a> {
-    match ownership {
-        Ownership::Owned if !v.contains(&x) => f,
-        _ => arena.alloc(Stmt::Inc(x, f)),
-    }
-}
-
-fn function_c_app<'a>(
-    arena: &'a Bump,
-    arguments: &[(Symbol, Ownership)],
-    stmt: &'a Stmt<'a>,
-) -> &'a Stmt<'a> {
-    use Ownership::*;
-    use Stmt::*;
-
-    match (arguments.get(0), stmt) {
-        (Some((y, Owned)), Let(z, _, e, f)) => {
-            let ybar = &arguments[1..];
-
-            let mut v = free_variables(f);
-            v.extend(ybar.iter().map(|(s, _)| s).copied());
-
-            let rest = function_c_app(arena, ybar, stmt);
-            function_o_plus_x(arena, *y, &v, rest, Owned)
-        }
-        (Some((y, Borrowed)), Let(z, l, e, f)) => {
-            let ybar = &arguments[1..];
-
-            let v = ybar.iter().map(|(s, _)| s).copied().collect::<MutSet<_>>();
-
-            let rest = Stmt::Let(
-                *z,
-                l.clone(),
-                e.clone(),
-                function_o_minus_x(arena, *y, f, Owned),
-            );
-
-            function_c_app(arena, ybar, arena.alloc(rest))
-        }
-        _ => stmt,
-    }
-}
-
-pub fn function_c<'a>(env: &mut Env<'a>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
-    use Expr::*;
-    use Ownership::*;
-    use Stmt::*;
-
-    let arena = env.arena;
-
-    dbg!(stmt);
-
-    /*
-        | b@(FnBody.jmp j xs), ctx =>
-          let jLiveVars := getJPLiveVars ctx j;
-          let ps        := getJPParams ctx j;
-          let b         := addIncBefore ctx xs ps b jLiveVars;
-          let bLiveVars := collectLiveVars b ctx.jpLiveVarMap;
-          (b, bLiveVars)
-
-    | FnBody.jdecl j xs v b,     ctx =>
-      let (v, vLiveVars) := visitFnBody v (updateVarInfoWithParams ctx xs);
-      let v   := addDecForDeadParams ctx xs v vLiveVars;
-      let ctx := { ctx with jpLiveVarMap := updateJPLiveVarMap j xs v ctx.jpLiveVarMap };
-      let (b, bLiveVars) := visitFnBody b ctx;
-      (FnBody.jdecl j xs v b, bLiveVars)
-            */
-
-    match stmt {
-        Ret(x) => function_o_plus_x(arena, *x, &MutSet::default(), stmt, Owned),
-
-        Cond {
-            cond_symbol,
-            cond_layout,
-            branching_symbol,
-            branching_layout,
-            pass,
-            fail,
-            ret_layout,
-        } => {
-            let ybar: Vec<Symbol> = Vec::from_iter_in(
-                std::iter::once(free_variables(pass))
-                    .chain(std::iter::once(free_variables(fail)))
-                    .flatten(),
-                arena,
-            );
-
-            let new_pass = function_o_minus(arena, &ybar, function_c(env, pass));
-            let new_fail = function_o_minus(arena, &ybar, function_c(env, fail));
-
-            let cond = Cond {
-                cond_symbol: *cond_symbol,
-                cond_layout: cond_layout.clone(),
-                branching_symbol: *branching_symbol,
-                branching_layout: branching_layout.clone(),
-                pass: new_pass,
-                fail: new_fail,
-                ret_layout: ret_layout.clone(),
-            };
-
-            arena.alloc(cond)
-        }
-        Switch {
-            cond_symbol,
-            branches,
-            default_branch,
-            cond_layout,
-            ret_layout,
-        } => {
-            let ybar: Vec<Symbol> = Vec::from_iter_in(
-                std::iter::once(free_variables(default_branch))
-                    .chain(branches.iter().map(|(_, b)| free_variables(b)))
-                    .flatten(),
-                arena,
-            );
-
-            let new_default_branch =
-                function_o_minus(arena, &ybar, function_c(env, default_branch));
-            let new_branches: &'a [(u64, Stmt<'a>)] = Vec::from_iter_in(
-                branches.iter().map(|(label, branch)| {
-                    (
-                        *label,
-                        function_o_minus(arena, &ybar, function_c(env, branch)).clone(),
-                    )
-                }),
-                arena,
-            )
-            .into_bump_slice();
-
-            arena.alloc(Switch {
-                cond_symbol: *cond_symbol,
-                branches: new_branches,
-                default_branch: new_default_branch,
-                cond_layout: cond_layout.clone(),
-                ret_layout: ret_layout.clone(),
-            })
-        }
-
-        Let(y, e, l, f) => match e {
-            AccessAtIndex { structure, .. } => match env.ownership(structure) {
-                Owned => {
-                    let foo = function_c(env, f);
-                    let cont = function_o_minus_x(arena, *structure, arena.alloc(foo), Owned);
-                    let rest = arena.alloc(Inc(*y, cont));
-
-                    arena.alloc(Let(*y, e.clone(), l.clone(), rest))
-                }
-                Borrowed => {
-                    let old_y = env.beta_l.insert(*y, Borrowed);
-
-                    let rest = function_c(env, f);
-
-                    match old_y {
-                        Some(old) => env.beta_l.insert(*y, old),
-                        None => env.beta_l.remove(y),
-                    };
-
-                    arena.alloc(Let(*y, e.clone(), l.clone(), rest))
-                }
-            },
-            Tag { arguments, .. }
-            | Struct(arguments)
-            | Array {
-                elems: arguments, ..
-            } => {
-                let rest = function_c(env, f);
-                let let_stmt = arena.alloc(Let(*y, e.clone(), l.clone(), rest));
-
-                let y_owned = Vec::from_iter_in(arguments.iter().map(|s| (*s, Owned)), arena);
-
-                function_c_app(arena, &y_owned, let_stmt)
-            }
-            EmptyArray => {
-                let rest = function_c(env, f);
-                let let_stmt = arena.alloc(Let(*y, e.clone(), l.clone(), rest));
-
-                let y_owned = &[] as &[_];
-
-                function_c_app(arena, &y_owned, let_stmt)
-            }
-            FunctionCall {
-                call_type, args, ..
-            } => {
-                use crate::ir::CallType;
-
-                let c = match call_type {
-                    CallType::ByName(s) => s,
-                    CallType::ByPointer(s) => s,
-                };
-
-                let rest = function_c(env, f);
-                let let_stmt = arena.alloc(Let(*y, e.clone(), l.clone(), rest));
-
-                let y_owned = env.borrow_signature(&c, args);
-
-                function_c_app(arena, &y_owned, let_stmt)
-            }
-            RunLowLevel(_, args) => {
-                use crate::ir::CallType;
-
-                let rest = function_c(env, f);
-                let let_stmt = arena.alloc(Let(*y, e.clone(), l.clone(), rest));
-
-                let y_owned = {
-                    let signature = &[] as &[_];
-
-                    let mut result = Vec::with_capacity_in(args.len(), env.arena);
-
-                    for (i, arg) in args.iter().enumerate() {
-                        let ownership = match signature.get(i) {
-                            None => Owned,
-                            Some(o) => *o,
-                        };
-                        result.push((*arg, ownership));
-                    }
-
-                    result.into_bump_slice()
-                };
-
-                function_c_app(arena, &y_owned, let_stmt)
-            }
-            Literal(_) | Alias(_) | FunctionPointer(_, _) | RuntimeErrorFunction(_) => {
-                // leaves in terms of RC
-                let rest = function_c(env, f);
-                arena.alloc(Let(*y, e.clone(), l.clone(), rest))
-            }
-        },
-        Inc(_, _) | Dec(_, _) => stmt,
-        Join { .. } | Jump(_, _) => stmt,
-        RuntimeError(_) => stmt,
-    }
-}
-
-/*
-fn visit_fn_body<'a>(env: &mut Env<'a>, stmt: &'a Stmt<'a>) -> (&'a Stmt<'a>, LiveVarSet) {
-    use Stmt::*;
-
-    todo!()
-}
-*/
-
-mod live_vars {
-    use crate::ir::{Expr, JoinPointId, Stmt};
-    use bumpalo::collections::Vec;
-    use bumpalo::Bump;
-    use roc_collections::all::{MutMap, MutSet};
-    use roc_module::symbol::Symbol;
-
-    type LiveVarSet = MutSet<Symbol>;
-    type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
-
-    pub fn collect_live_vars(b: &Stmt<'_>, _m: &JPLiveVarMap, v: &mut LiveVarSet) {
-        // inefficient, but it works
-        let (mut occuring, _) = crate::inc_dec::occuring_variables(b);
-
-        v.extend(occuring);
-
-        v.retain(|s| is_live(&MutMap::default(), *s, b));
-    }
-
-    fn is_live<'a>(
-        join_points: &MutMap<JoinPointId, (&'a [Symbol], Stmt<'a>)>,
-        needle: Symbol,
-        stmt: &Stmt<'a>,
-    ) -> bool {
-        use Stmt::*;
-
-        let needle = &needle;
-
-        let mut stack = std::vec![stmt];
-        let mut result = MutSet::default();
-
-        while let Some(stmt) = stack.pop() {
-            use Stmt::*;
-
-            match stmt {
-                Let(symbol, expr, _, cont) => {
-                    result.clear();
-                    crate::inc_dec::occuring_variables_expr(expr, &mut result);
-                    if result.contains(needle) {
-                        return true;
-                    }
-                    stack.push(cont);
-                }
-                Ret(symbol) => {
-                    if symbol == needle {
-                        return true;
-                    }
-                }
-
-                Inc(symbol, cont) | Dec(symbol, cont) => {
-                    if symbol == needle {
-                        return true;
-                    }
-                    stack.push(cont);
-                }
-
-                Jump(j, _arguments) => {
-                    match join_points.get(j) {
-                        Some((_, b)) => {
-                            // `j` is not a local join point since we assume we cannot shadow join point declarations.
-                            // Instead of marking the join points that we have already been visited, we permanently remove `j` from the context.
-                            let mut join_points = join_points.clone();
-                            join_points.remove(j);
-
-                            if is_live(&join_points, *needle, b) {
-                                return true;
-                            }
-                        }
-                        None => {
-                            // `j` must be a local join point. So do nothing since we have already visite its body.
-                        }
-                    }
-                }
-
-                Join {
-                    parameters,
-                    continuation,
-                    remainder,
-                    ..
-                } => {
-                    if parameters
-                        .iter()
-                        .map(|p| p.symbol)
-                        .find(|s| s == needle)
-                        .is_some()
-                    {
-                        return true;
-                    }
-
-                    stack.push(continuation);
-                    stack.push(remainder);
-                }
-
-                Switch {
-                    cond_symbol,
-                    branches,
-                    default_branch,
-                    ..
-                } => {
-                    if cond_symbol == needle {
-                        return true;
-                    }
-
-                    stack.extend(branches.iter().map(|(_, s)| s));
-                    stack.push(default_branch);
-                }
-
-                Cond {
-                    cond_symbol,
-                    branching_symbol,
-                    pass,
-                    fail,
-                    ..
-                } => {
-                    if cond_symbol == needle || branching_symbol == needle {
-                        return true;
-                    }
-                    stack.push(pass);
-                    stack.push(fail);
-                }
-
-                RuntimeError(_) => {}
-            }
-        }
-
-        return false;
     }
 }
 
@@ -590,20 +135,21 @@ type VarMap = MutMap<Symbol, VarInfo>;
 type LiveVarSet = MutSet<Symbol>;
 type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
 
-// TODO this should contain more information ( e.g. make it contain layout, and whether it is
-// borrowed)
-type Param = Symbol;
-
 #[derive(Clone, Debug)]
-struct Context<'a> {
+pub struct Context<'a> {
     arena: &'a Bump,
     vars: VarMap,
     jp_live_vars: JPLiveVarMap,      // map: join point => live variables
     local_context: LocalContext<'a>, // we use it to store the join point declarations
+    function_params: MutMap<Symbol, &'a [Param<'a>]>,
 }
 
-fn update_live_vars<'a>(e: &Expr<'a>, v: &LiveVarSet) -> LiveVarSet {
-    todo!()
+fn update_live_vars<'a>(expr: &Expr<'a>, v: &LiveVarSet) -> LiveVarSet {
+    let mut v = v.clone();
+
+    occuring_variables_expr(expr, &mut v);
+
+    v
 }
 
 fn is_first_occurence(xs: &[Symbol], i: usize) -> bool {
@@ -613,7 +159,7 @@ fn is_first_occurence(xs: &[Symbol], i: usize) -> bool {
     }
 }
 
-fn get_num_consumptions<F>(x: Symbol, ys: &[Symbol], mut consume_param_pred: F) -> usize
+fn get_num_consumptions<F>(x: Symbol, ys: &[Symbol], consume_param_pred: F) -> usize
 where
     F: Fn(usize) -> bool,
 {
@@ -627,7 +173,7 @@ where
     n
 }
 
-fn is_borrow_param_help<F>(x: Symbol, ys: &[Symbol], mut consume_param_pred: F) -> bool
+fn is_borrow_param_help<F>(x: Symbol, ys: &[Symbol], consume_param_pred: F) -> bool
 where
     F: Fn(usize) -> bool,
 {
@@ -636,9 +182,13 @@ where
         .any(|(i, y)| x == *y && !consume_param_pred(i))
 }
 
-fn is_borrow_param(x: Symbol, ys: &[Symbol], ps: &[Symbol]) -> bool {
-    // Lean: isBorrowParamAux x ys (fun i => not (ps.get! i).borrow)
-    is_borrow_param_help(x, ys, |_| true)
+fn is_borrow_param(x: Symbol, ys: &[Symbol], ps: &[Param]) -> bool {
+    // default to owned arguments
+    let pred = |i: usize| match ps.get(i) {
+        Some(param) => !param.borrow,
+        None => true,
+    };
+    is_borrow_param_help(x, ys, pred)
 }
 
 // We do not need to consume the projection of a variable that is not consumed
@@ -652,6 +202,15 @@ fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
     }
 }
 
+fn is_layout_refcounted(layout: &Layout<'_>) -> bool {
+    use crate::layout::Builtin;
+
+    match layout {
+        Layout::Builtin(Builtin::List(_, _)) => true,
+        _ => false,
+    }
+}
+
 impl<'a> Context<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         Self {
@@ -659,11 +218,18 @@ impl<'a> Context<'a> {
             vars: MutMap::default(),
             jp_live_vars: MutMap::default(),
             local_context: LocalContext::default(),
+            function_params: MutMap::default(),
         }
     }
 
     fn get_var_info(&self, symbol: Symbol) -> VarInfo {
-        *self.vars.get(&symbol).unwrap()
+        match self.vars.get(&symbol) {
+            Some(info) => *info,
+            None => panic!(
+                "Symbol {:?} {} has no info in {:?}",
+                symbol, symbol, self.vars
+            ),
+        }
     }
 
     fn add_inc(&self, symbol: Symbol, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
@@ -750,15 +316,15 @@ impl<'a> Context<'a> {
             if !info.reference || !is_first_occurence(xs, i) {
                 // do nothing
             } else {
-                let numConsuptions = get_num_consumptions(*x, xs, consume_param_pred.clone()); // number of times the argument is used
+                let num_consumptions = get_num_consumptions(*x, xs, consume_param_pred.clone()); // number of times the argument is used
                 let num_incs = if !info.consume ||                     // `x` is not a variable that must be consumed by the current procedure
              live_vars_after.contains(x) ||          // `x` is live after executing instruction
              is_borrow_param_help( *x ,xs, consume_param_pred.clone())
                 // `x` is used in a position that is passed as a borrow reference
                 {
-                    numConsuptions
+                    num_consumptions
                 } else {
-                    numConsuptions - 1
+                    num_consumptions - 1
                 };
 
                 // verify that this is indeed always 1
@@ -774,11 +340,15 @@ impl<'a> Context<'a> {
         &self,
         xs: &[Symbol],
         ps: &[Param],
-        mut b: &'a Stmt<'a>,
+        b: &'a Stmt<'a>,
         live_vars_after: &LiveVarSet,
     ) -> &'a Stmt<'a> {
-        // TODO closure is actuall (fun i => not (ps.get! i).borrow)
-        self.add_inc_before_help(xs, |x| true, b, live_vars_after)
+        // default to owned arguments
+        let pred = |i: usize| match ps.get(i) {
+            Some(param) => !param.borrow,
+            None => true,
+        };
+        self.add_inc_before_help(xs, pred, b, live_vars_after)
     }
 
     fn add_dec_if_needed(
@@ -802,7 +372,7 @@ impl<'a> Context<'a> {
     fn add_dec_after_application(
         &self,
         xs: &[Symbol],
-        ps: &[Symbol],
+        ps: &[Param],
         mut b: &'a Stmt<'a>,
         b_live_vars: &LiveVarSet,
     ) -> &'a Stmt<'a> {
@@ -823,6 +393,7 @@ impl<'a> Context<'a> {
         b
     }
 
+    #[allow(clippy::many_single_char_names)]
     fn visit_variable_declaration(
         &self,
         z: Symbol,
@@ -845,7 +416,13 @@ impl<'a> Context<'a> {
                 ),
             AccessAtIndex { structure: x, .. } => {
                 let b = self.add_dec_if_needed(x, b, b_live_vars);
-                let b = if self.get_var_info(x).consume {
+                // NOTE deviation from Lean. I think lean assumes all structure elements live on
+                // the heap. Therefore any access to a Tag/Struct element must increment its
+                // refcount. But in roc, structure elements can be unboxed.
+                let info_x = self.get_var_info(x);
+                // let info_z = self.get_var_info(z);
+                let b = if info_x.consume {
+                    println!("inc on {}", z);
                     self.add_inc(z, b)
                 } else {
                     b
@@ -854,11 +431,17 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            RunLowLevel(_, ys) => {
-                // this is where the borrow signature would come in
-                //let ps := (getDecl ctx f).params;
-                let ps = &[] as &[_];
-                let b = self.add_dec_after_application(ys, ps, b, b_live_vars);
+            RunLowLevel(_, _) => {
+                // THEORY: runlowlevel only occurs
+                //
+                // - in a custom hard-coded function
+                // - when we insert them as compiler authors
+                //
+                // if we're carefule to only use RunLowLevel for non-rc'd types
+                // (e.g. when building a cond/switch, we check equality on integers, and to boolean and)
+                // then RunLowLevel should not change in any way the refcounts.
+
+                // let b = self.add_dec_after_application(ys, ps, b, b_live_vars);
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
@@ -886,11 +469,7 @@ impl<'a> Context<'a> {
         // TODO actually make these non-constant
 
         // can this type be reference-counted at runtime?
-        use crate::layout::Builtin;
-        let reference = match layout {
-            Layout::Builtin(Builtin::List(_, _)) => true,
-            _ => false,
-        };
+        let reference = is_layout_refcounted(layout);
 
         // is this value a constant?
         let persistent = false;
@@ -913,33 +492,60 @@ impl<'a> Context<'a> {
         //def updateVarInfoWithParams (ctx : Context) (ps : Array Param) : Context :=
         //let m := ps.foldl (fun (m : VarMap) p => m.insert p.x { ref := p.ty.isObj, consume := !p.borrow }) ctx.varMap;
         //{ ctx with varMap := m }
-        todo!()
+        let mut ctx = self.clone();
+
+        for p in ps.iter() {
+            let info = VarInfo {
+                reference: is_layout_refcounted(&p.layout),
+                consume: !p.borrow,
+                persistent: false,
+            };
+            ctx.vars.insert(p.symbol, info);
+        }
+
+        ctx
     }
 
     /* Add `dec` instructions for parameters that are references, are not alive in `b`, and are not borrow.
     That is, we must make sure these parameters are consumed. */
     fn add_dec_for_dead_params(
         &self,
-        ps: &[Symbol],
-        b: &'a Stmt<'a>,
+        ps: &[Param<'a>],
+        mut b: &'a Stmt<'a>,
         b_live_vars: &LiveVarSet,
     ) -> &'a Stmt<'a> {
-        /*
+        for p in ps.iter() {
+            if !p.borrow && is_layout_refcounted(&p.layout) && !b_live_vars.contains(&p.symbol) {
+                b = self.add_dec(p.symbol, b)
+            }
+        }
 
-        ps.foldl
-          (fun b p => if !p.borrow && p.ty.isObj && !bLiveVars.contains p.x then addDec ctx p.x b else b)
-          b
-                */
-        todo!()
+        b
     }
 
-    fn visit_stmt(&self, stmt: &'a Stmt<'a>) -> (&'a Stmt<'a>, LiveVarSet) {
+    fn add_dec_for_alt(
+        &self,
+        case_live_vars: &LiveVarSet,
+        alt_live_vars: &LiveVarSet,
+        mut b: &'a Stmt<'a>,
+    ) -> &'a Stmt<'a> {
+        for x in case_live_vars.iter() {
+            if !alt_live_vars.contains(x) && self.must_consume(*x) {
+                b = self.add_dec(*x, b);
+            }
+        }
+
+        b
+    }
+
+    // TODO should not be pub
+    pub fn visit_stmt(&self, stmt: &'a Stmt<'a>) -> (&'a Stmt<'a>, LiveVarSet) {
         use Stmt::*;
 
         match stmt {
             Let(symbol, expr, layout, cont) => {
                 let ctx = self.update_var_info(*symbol, layout, expr);
-                let (b, b_live_vars) = self.visit_stmt(cont);
+                let (b, b_live_vars) = ctx.visit_stmt(cont);
                 ctx.visit_variable_declaration(
                     *symbol,
                     expr.clone(),
@@ -951,12 +557,14 @@ impl<'a> Context<'a> {
 
             Join {
                 id: j,
-                parameters,
-                remainder: v,
-                continuation: b,
+                parameters: xs,
+                remainder: b,
+                continuation: v,
             } => {
-                let xs = Vec::from_iter_in(parameters.iter().map(|p| p.symbol), self.arena)
-                    .into_bump_slice();
+                let xs = *xs;
+
+                let v_orig = v;
+
                 let (v, v_live_vars) = {
                     let ctx = self.update_var_info_with_params(xs);
                     ctx.visit_stmt(v)
@@ -964,16 +572,20 @@ impl<'a> Context<'a> {
 
                 let v = self.add_dec_for_dead_params(xs, v, &v_live_vars);
                 let mut ctx = self.clone();
-                ctx.local_context.join_points.insert(*j, (xs, v));
+
+                // NOTE deviation from lean, insert into local context
+                ctx.local_context.join_points.insert(*j, (xs, v_orig));
+
+                update_jp_live_vars(*j, xs, v, &mut ctx.jp_live_vars);
 
                 let (b, b_live_vars) = ctx.visit_stmt(b);
 
                 (
                     ctx.arena.alloc(Join {
                         id: *j,
-                        parameters,
-                        remainder: v,
-                        continuation: b,
+                        parameters: xs,
+                        remainder: b,
+                        continuation: v,
                     }),
                     b_live_vars,
                 )
@@ -1001,14 +613,87 @@ impl<'a> Context<'a> {
                 let ps = self.local_context.join_points.get(j).unwrap().0;
                 let b = self.add_inc_before(xs, ps, stmt, j_live_vars);
 
-                let mut b_live_vars = MutSet::default();
-                crate::inc_dec::live_vars::collect_live_vars(
-                    b,
-                    &self.jp_live_vars,
-                    &mut b_live_vars,
-                );
+                let b_live_vars = collect_stmt(b, &self.jp_live_vars, MutSet::default());
 
                 (b, b_live_vars)
+            }
+
+            Cond {
+                pass,
+                fail,
+                cond_symbol,
+                cond_layout,
+                branching_symbol,
+                branching_layout,
+                ret_layout,
+            } => {
+                let case_live_vars = collect_stmt(stmt, &self.jp_live_vars, MutSet::default());
+
+                let pass = {
+                    // TODO should we use ctor info like Lean?
+                    let ctx = self.clone();
+                    let (b, alt_live_vars) = ctx.visit_stmt(pass);
+                    ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b)
+                };
+
+                let fail = {
+                    // TODO should we use ctor info like Lean?
+                    let ctx = self.clone();
+                    let (b, alt_live_vars) = ctx.visit_stmt(fail);
+                    ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b)
+                };
+
+                let cond = self.arena.alloc(Cond {
+                    cond_symbol: *cond_symbol,
+                    cond_layout: cond_layout.clone(),
+                    branching_symbol: *branching_symbol,
+                    branching_layout: branching_layout.clone(),
+                    pass,
+                    fail,
+                    ret_layout: ret_layout.clone(),
+                });
+
+                (cond, case_live_vars)
+            }
+
+            Switch {
+                cond_symbol,
+                cond_layout,
+                branches,
+                default_branch,
+                ret_layout,
+            } => {
+                let case_live_vars = collect_stmt(stmt, &self.jp_live_vars, MutSet::default());
+
+                let branches = Vec::from_iter_in(
+                    branches.iter().map(|(label, branch)| {
+                        // TODO should we use ctor info like Lean?
+                        let ctx = self.clone();
+                        let (b, alt_live_vars) = ctx.visit_stmt(branch);
+                        let b = ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b);
+
+                        (*label, b.clone())
+                    }),
+                    self.arena,
+                )
+                .into_bump_slice();
+
+                let default_branch = {
+                    // TODO should we use ctor info like Lean?
+                    let ctx = self.clone();
+                    let (b, alt_live_vars) = ctx.visit_stmt(default_branch);
+                    ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b)
+                };
+
+                let switch = self.arena.alloc(Switch {
+                    cond_symbol: *cond_symbol,
+                    branches,
+                    default_branch,
+                    cond_layout: cond_layout.clone(),
+                    ret_layout: ret_layout.clone(),
+                });
+
+                (switch, case_live_vars)
             }
 
             _ => todo!(),
@@ -1018,5 +703,111 @@ impl<'a> Context<'a> {
 
 #[derive(Clone, Debug, Default)]
 struct LocalContext<'a> {
-    join_points: MutMap<JoinPointId, (&'a [Symbol], &'a Stmt<'a>)>,
+    join_points: MutMap<JoinPointId, (&'a [Param<'a>], &'a Stmt<'a>)>,
+}
+
+pub fn collect_stmt(
+    stmt: &Stmt<'_>,
+    jp_live_vars: &JPLiveVarMap,
+    mut vars: LiveVarSet,
+) -> LiveVarSet {
+    use Stmt::*;
+
+    match stmt {
+        Let(symbol, expr, _, cont) => {
+            vars = collect_stmt(cont, jp_live_vars, vars);
+            vars.remove(symbol);
+            let mut result = MutSet::default();
+            occuring_variables_expr(expr, &mut result);
+            vars.extend(result);
+
+            vars
+        }
+        Ret(symbol) => {
+            vars.insert(*symbol);
+            vars
+        }
+
+        Inc(symbol, cont) | Dec(symbol, cont) => {
+            vars.insert(*symbol);
+            collect_stmt(cont, jp_live_vars, vars)
+        }
+
+        Jump(_, arguments) => {
+            vars.extend(arguments.iter().copied());
+            vars
+        }
+
+        Join {
+            id: j,
+            parameters,
+            remainder: b,
+            continuation: v,
+        } => {
+            let mut j_live_vars = collect_stmt(v, jp_live_vars, MutSet::default());
+            for param in parameters.iter() {
+                j_live_vars.remove(&param.symbol);
+            }
+
+            let mut jp_live_vars = jp_live_vars.clone();
+            jp_live_vars.insert(*j, j_live_vars);
+
+            collect_stmt(b, &jp_live_vars, vars)
+        }
+
+        Switch {
+            cond_symbol,
+            branches,
+            default_branch,
+            ..
+        } => {
+            vars.insert(*cond_symbol);
+
+            for (_, branch) in branches.iter() {
+                vars.extend(collect_stmt(branch, jp_live_vars, vars.clone()));
+            }
+
+            vars.extend(collect_stmt(default_branch, jp_live_vars, vars.clone()));
+
+            vars
+        }
+
+        Cond {
+            cond_symbol,
+            branching_symbol,
+            pass,
+            fail,
+            ..
+        } => {
+            vars.insert(*cond_symbol);
+            vars.insert(*branching_symbol);
+
+            vars.extend(collect_stmt(pass, jp_live_vars, vars.clone()));
+            vars.extend(collect_stmt(fail, jp_live_vars, vars.clone()));
+
+            vars
+        }
+
+        RuntimeError(_) => vars,
+    }
+}
+
+fn update_jp_live_vars(j: JoinPointId, ys: &[Param], v: &Stmt<'_>, m: &mut JPLiveVarMap) {
+    let j_live_vars = MutSet::default();
+    let mut j_live_vars = collect_stmt(v, m, j_live_vars);
+
+    for param in ys {
+        j_live_vars.remove(&param.symbol);
+    }
+
+    m.insert(j, j_live_vars);
+}
+
+pub fn visit_declaration<'a>(arena: &'a Bump, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
+    let ctx = Context::new(arena);
+
+    let params = &[] as &[_];
+    let ctx = ctx.update_var_info_with_params(params);
+    let (b, b_live_vars) = ctx.visit_stmt(stmt);
+    ctx.add_dec_for_dead_params(params, b, &b_live_vars)
 }

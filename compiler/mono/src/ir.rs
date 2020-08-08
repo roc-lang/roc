@@ -1288,14 +1288,31 @@ pub fn with_hole<'a>(
                 .from_var(env.arena, cond_var, env.subs, env.pointer_size)
                 .expect("invalid cond_layout");
 
+            let assigned_in_jump = env.unique_symbol();
             let id = JoinPointId(env.unique_symbol());
-            let jump = env.arena.alloc(Stmt::Jump(id, env.arena.alloc([assigned])));
+            let jump = env
+                .arena
+                .alloc(Stmt::Jump(id, env.arena.alloc([assigned_in_jump])));
 
-            let mut stmt = with_hole(env, final_else.value, procs, layout_cache, assigned, jump);
+            let mut stmt = with_hole(
+                env,
+                final_else.value,
+                procs,
+                layout_cache,
+                assigned_in_jump,
+                jump,
+            );
 
             for (loc_cond, loc_then) in branches.into_iter().rev() {
                 let branching_symbol = env.unique_symbol();
-                let then = with_hole(env, loc_then.value, procs, layout_cache, assigned, jump);
+                let then = with_hole(
+                    env,
+                    loc_then.value,
+                    procs,
+                    layout_cache,
+                    assigned_in_jump,
+                    jump,
+                );
 
                 stmt = Stmt::Cond {
                     cond_symbol: branching_symbol,

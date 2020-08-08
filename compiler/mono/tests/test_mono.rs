@@ -57,11 +57,8 @@ mod test_mono {
             roc_mono::ir::from_can(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
 
         // apply inc/dec
-        use roc_collections::all::MutMap;
-        use roc_mono::inc_dec::function_c;
-        let mut inc_dec_env = roc_mono::inc_dec::Env::new(mono_env.arena);
-
-        let ir_expr = function_c(&mut inc_dec_env, mono_env.arena.alloc(ir_expr));
+        let stmt = mono_env.arena.alloc(ir_expr);
+        let ir_expr = roc_mono::inc_dec::visit_declaration(mono_env.arena, stmt);
 
         // let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
         let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut LayoutCache::default());
@@ -676,6 +673,31 @@ mod test_mono {
     }
 
     #[test]
+    fn simple_if() {
+        compiles_to_ir(
+            r#"
+            if True then
+                1
+            else 
+                2
+            "#,
+            indoc!(
+                r#"
+                let Test.3 = true;
+                if Test.3 then
+                    let Test.1 = 1i64;
+                    jump Test.2 Test.1;
+                else
+                    let Test.1 = 2i64;
+                    jump Test.2 Test.1;
+                joinpoint Test.2 Test.0:
+                    ret Test.0;
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn if_multi_branch() {
         compiles_to_ir(
             r#"
@@ -688,21 +710,21 @@ mod test_mono {
             "#,
             indoc!(
                 r#"
-                let Test.4 = true;
-                if Test.4 then
-                    let Test.0 = 1i64;
-                    jump Test.1 Test.0;
+                let Test.6 = true;
+                if Test.6 then
+                    let Test.1 = 1i64;
+                    jump Test.2 Test.1;
                 else
-                    let Test.3 = false;
-                    if Test.3 then
-                        let Test.0 = 2i64;
-                        jump Test.2 Test.0;
+                    let Test.5 = false;
+                    if Test.5 then
+                        let Test.3 = 2i64;
+                        jump Test.4 Test.3;
                     else
-                        let Test.0 = 3i64;
-                        jump Test.2 Test.0;
-                    joinpoint Test.2 Test.0:
-                        jump Test.1 Test.0;
-                joinpoint Test.1 Test.0:
+                        let Test.3 = 3i64;
+                        jump Test.4 Test.3;
+                    joinpoint Test.4 Test.1:
+                        jump Test.2 Test.1;
+                joinpoint Test.2 Test.0:
                     ret Test.0;
                 "#
             ),
