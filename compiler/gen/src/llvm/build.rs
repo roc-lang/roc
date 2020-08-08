@@ -791,8 +791,33 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             // This doesn't currently do anything
             context.i64_type().const_zero().into()
         }
-        Inc(symbol, cont) | Dec(symbol, cont) => {
-            build_exp_stmt(env, layout_ids, scope, parent, cont)
+        Inc(symbol, cont) => {
+            let (value, layout) = load_symbol_and_layout(env, scope, symbol);
+            let layout = layout.clone();
+            // TODO exclude unique lists in the future
+            match layout {
+                Layout::Builtin(Builtin::List(_, _)) => {
+                    increment_refcount_list(env, value.into_struct_value());
+                    build_exp_stmt(env, layout_ids, scope, parent, cont)
+                }
+                _ => build_exp_stmt(env, layout_ids, scope, parent, cont),
+            }
+        }
+        Dec(symbol, cont) => {
+            let (value, layout) = load_symbol_and_layout(env, scope, symbol);
+            let layout = layout.clone();
+            // TODO exclude unique lists in the future
+            match layout {
+                Layout::Builtin(Builtin::List(_, _)) => decrement_refcount_list(
+                    env,
+                    layout_ids,
+                    scope,
+                    parent,
+                    cont,
+                    value.into_struct_value(),
+                ),
+                _ => build_exp_stmt(env, layout_ids, scope, parent, cont),
+            }
         }
         _ => todo!("unsupported expr {:?}", stmt),
     }
@@ -854,8 +879,7 @@ fn list_get_refcount_ptr<'a, 'ctx, 'env>(
 fn increment_refcount_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     original_wrapper: StructValue<'ctx>,
-    body: BasicValueEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
+) {
     let builder = env.builder;
     let ctx = env.context;
 
@@ -875,16 +899,16 @@ fn increment_refcount_list<'a, 'ctx, 'env>(
 
     // Mutate the new array in-place to change the element.
     builder.build_store(refcount_ptr, decremented);
-
-    body
 }
 
 #[allow(dead_code)]
 fn decrement_refcount_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    scope: &mut Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
+    stmt: &roc_mono::ir::Stmt<'a>,
     original_wrapper: StructValue<'ctx>,
-    body: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
     let ctx = env.context;
@@ -898,8 +922,16 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
 
     let comparison = refcount_is_one_comparison(builder, env.context, refcount);
 
-    // the refcount is higher than 1, write the decremented value
-    let build_then = || {
+    // build blocks
+    let then_block = ctx.append_basic_block(parent, "then");
+    let else_block = ctx.append_basic_block(parent, "else");
+    let cont_block = ctx.append_basic_block(parent, "branchcont");
+
+    builder.build_conditional_branch(comparison, then_block, else_block);
+
+    // build then block
+    {
+        builder.position_at_end(then_block);
         // our refcount 0 is actually usize::MAX, so decrementing the refcount means incrementing this value.
         let decremented = env.builder.build_int_add(
             ctx.i64_type().const_int(1 as u64, false),
@@ -910,21 +942,22 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
         // Mutate the new array in-place to change the element.
         builder.build_store(refcount_ptr, decremented);
 
-        body
-    };
+        builder.build_unconditional_branch(cont_block);
+    }
 
-    // refcount is one, and will be decremented. This list can be freed
-    let build_else = || {
+    // build else block
+    {
+        builder.position_at_end(else_block);
         if !env.leak {
             let free = builder.build_free(refcount_ptr);
             builder.insert_instruction(&free, None);
         }
+        builder.build_unconditional_branch(cont_block);
+    }
 
-        body
-    };
-    let ret_type = body.get_type();
-
-    build_basic_phi2(env, parent, comparison, build_then, build_else, ret_type)
+    // emit merge block
+    builder.position_at_end(cont_block);
+    build_exp_stmt(env, layout_ids, scope, parent, stmt)
 }
 
 fn load_symbol<'a, 'ctx, 'env>(
@@ -1539,7 +1572,6 @@ fn call_with_args<'a, 'ctx, 'env>(
         .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
 
-    dbg!(symbol, layout, &fn_name);
     let fn_val = env
         .module
         .get_function(fn_name.as_str())

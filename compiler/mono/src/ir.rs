@@ -96,9 +96,9 @@ impl<'a> Procs<'a> {
 
         for (key, in_prog_proc) in self.specialized.into_iter() {
             match in_prog_proc {
-                InProgress => unreachable!("should be done by now"),
+                InProgress => unreachable!("The procedure {:?} should have be done by now", key),
                 Done(mut proc) => {
-                    crate::inc_dec::visit_proc(arena, &mut proc).clone();
+                    crate::inc_dec::visit_proc(arena, &mut proc);
                     result.insert(key, proc);
                 }
             }

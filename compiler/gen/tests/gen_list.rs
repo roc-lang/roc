@@ -13,17 +13,10 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_list {
-    use crate::helpers::{can_expr, infer_expr, uniq_expr, with_larger_debug_stack, CanExprOut};
+    use crate::helpers::with_larger_debug_stack;
     use bumpalo::Bump;
     use inkwell::context::Context;
     use inkwell::execution_engine::JitFunction;
-    use inkwell::passes::PassManager;
-    use inkwell::types::BasicType;
-    use inkwell::OptimizationLevel;
-    use roc_gen::llvm::build::{build_proc, build_proc_header};
-    use roc_gen::llvm::convert::basic_type_from_layout;
-    use roc_mono::layout::Layout;
-    use roc_types::subs::Subs;
 
     #[test]
     fn empty_list_literal() {

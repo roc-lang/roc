@@ -271,11 +271,16 @@ impl<'a> Context<'a> {
                 // number of times the argument is used (in the body?)
                 let num_consumptions = get_num_consumptions(*x, xs, consume_param_pred.clone());
 
-                let num_incs = if !info.consume ||                     // `x` is not a variable that must be consumed by the current procedure
-                         live_vars_after.contains(x) ||          // `x` is live after executing instruction
-                         is_borrow_param_help(*x, xs, consume_param_pred.clone())
-                // `x` is used in a position that is passed as a borrow reference
-                {
+                let lives_on = 
+                        // `x` is not a variable that must be consumed by the current procedure
+                        !info.consume ||                     
+                        // `x` is live after executing instruction
+                        live_vars_after.contains(x) ||          
+                        // `x` is used in a position that is passed as a borrow reference
+                        is_borrow_param_help(*x, xs, consume_param_pred.clone());
+
+
+                let num_incs = if lives_on {  
                     num_consumptions
                 } else {
                     num_consumptions - 1
@@ -450,9 +455,9 @@ impl<'a> Context<'a> {
 
             FunctionCall {
                 args: ys,
-                ref layout,
                 call_type,
                 arg_layouts,
+                ..
             } => {
                 // this is where the borrow signature would come in
                 //let ps := (getDecl ctx f).params;
