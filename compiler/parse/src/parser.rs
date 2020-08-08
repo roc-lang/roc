@@ -446,21 +446,6 @@ pub fn ascii_char<'a>(expected: char) -> impl Parser<'a, ()> {
 }
 
 /// A single UTF-8-encoded char. This will both parse *and* validate that the
-/// char is valid UTF-8.
-pub fn utf8_char2<'a>() -> impl Parser<'a, char> {
-    move |_arena, state: State<'a>| {
-        if !state.bytes.is_empty() {
-            match char::from_utf8_slice_start(state.bytes) {
-                Ok((ch, bytes_parsed)) => Ok((ch, state.advance_without_indenting(bytes_parsed)?)),
-                Err(_) => state.fail(FailReason::BadUtf8),
-            }
-        } else {
-            Err(unexpected_eof(0, state.attempting, state))
-        }
-    }
-}
-
-/// A single UTF-8-encoded char. This will both parse *and* validate that the
 /// char is valid UTF-8, but it will *not* advance the state.
 pub fn peek_utf8_char<'a>(state: &State<'a>) -> Result<(char, usize), FailReason> {
     if !state.bytes.is_empty() {
