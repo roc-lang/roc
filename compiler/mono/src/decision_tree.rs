@@ -910,9 +910,6 @@ pub fn optimize_when<'a>(
         &jumps,
     );
 
-    // increase the jump counter by the number of jumps in this branching structure
-    *env.jump_counter += jumps.len() as u64;
-
     Expr::Store(stores, env.arena.alloc(expr))
 }
 
