@@ -1694,16 +1694,26 @@ fn list_join<'a, 'ctx, 'env>(
                             .build_load(wrapper_ptr, "inner_list_wrapper")
                             .into_struct_value()
                     };
-                    let inner_list_len = load_list_len(builder, inner_list_wrapper);
-                    let inner_list_ptr = load_list_ptr(builder, inner_list_wrapper, elem_ptr_type);
-
-                    let inner_index_name = "#inner_index";
-                    let inner_index_alloca = builder.build_alloca(ctx.i64_type(), inner_index_name);
 
                     // Inner Loop
                     {
-                        let inner_list_index = ctx.i64_type().const_int(0, false);
+                        let inner_list_len = load_list_len(builder, inner_list_wrapper);
+                        let inner_list_ptr =
+                            load_list_ptr(builder, inner_list_wrapper, elem_ptr_type);
 
+                        // inner_list_len > 0
+                        let inner_list_comparison = builder.build_int_compare(
+                            IntPredicate::UGT,
+                            inner_list_len,
+                            ctx.i64_type().const_int(0, false),
+                            "greaterthanzero",
+                        );
+
+                        let inner_index_name = "#inner_index";
+                        let inner_index_alloca =
+                            builder.build_alloca(ctx.i64_type(), inner_index_name);
+
+                        let inner_list_index = ctx.i64_type().const_int(0, false);
                         builder.build_store(inner_index_alloca, inner_list_index);
 
                         let inner_loop_bb = ctx.append_basic_block(parent, "loop");
@@ -1711,43 +1721,70 @@ fn list_join<'a, 'ctx, 'env>(
                         builder.position_at_end(inner_loop_bb);
 
                         // #index = #index + 1
-                        let curr_index = builder
+                        let curr_inner_index = builder
                             .build_load(inner_index_alloca, inner_index_name)
                             .into_int_value();
-                        let next_index = builder.build_int_add(
-                            curr_index,
+                        let next_inner_index = builder.build_int_add(
+                            curr_inner_index,
                             ctx.i64_type().const_int(1, false),
                             "nextindex",
                         );
 
-                        builder.build_store(inner_index_alloca, next_index);
+                        builder.build_store(inner_index_alloca, next_inner_index);
 
-                        let src_elem_ptr = unsafe {
-                            builder.build_in_bounds_gep(inner_list_ptr, &[curr_index], "load_index")
-                        };
-
-                        let src_elem = builder.build_load(src_elem_ptr, "get_elem");
-                        // TODO clone src_elem
-
-                        let curr_dest_elem_ptr = builder
-                            .build_load(dest_elem_ptr_alloca, "load_dest_elem_ptr")
-                            .into_pointer_value();
-
-                        builder.build_store(curr_dest_elem_ptr, src_elem);
-
-                        let next_dest_elem_ptr = unsafe {
-                            builder.build_in_bounds_gep(
-                                curr_dest_elem_ptr,
-                                &[env.ptr_int().const_int(1 as u64, false)],
-                                "increment_dest_elem",
+                        let build_empty = || {
+                            BasicValueEnum::PointerValue(
+                                builder
+                                    .build_load(dest_elem_ptr_alloca, "load_dest_elem_ptr")
+                                    // .into_int_value()
+                                    .into_pointer_value(),
                             )
                         };
+
+                        let build_non_empty = || {
+                            let src_elem_ptr = unsafe {
+                                builder.build_in_bounds_gep(
+                                    inner_list_ptr,
+                                    &[curr_inner_index],
+                                    "load_index",
+                                )
+                            };
+
+                            let src_elem = builder.build_load(src_elem_ptr, "get_elem");
+                            // TODO clone src_elem
+
+                            let curr_dest_elem_ptr = builder
+                                .build_load(dest_elem_ptr_alloca, "load_dest_elem_ptr")
+                                .into_pointer_value();
+
+                            builder.build_store(curr_dest_elem_ptr, src_elem);
+
+                            BasicValueEnum::PointerValue(unsafe {
+                                builder.build_in_bounds_gep(
+                                    curr_dest_elem_ptr,
+                                    &[env.ptr_int().const_int(1 as u64, false)],
+                                    "increment_dest_elem",
+                                )
+                            })
+                        };
+
+                        let next_dest_elem_ptr = build_basic_phi2(
+                            env,
+                            parent,
+                            inner_list_comparison,
+                            build_non_empty,
+                            build_empty,
+                            BasicTypeEnum::PointerType(get_ptr_type(
+                                &elem_type,
+                                AddressSpace::Generic,
+                            )),
+                        );
 
                         builder.build_store(dest_elem_ptr_alloca, next_dest_elem_ptr);
 
                         let inner_loop_end_cond = builder.build_int_compare(
                             IntPredicate::ULT,
-                            next_index,
+                            next_inner_index,
                             inner_list_len,
                             "loopcond",
                         );
