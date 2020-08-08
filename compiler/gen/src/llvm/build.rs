@@ -263,6 +263,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             call_type: ByName(name),
             layout,
             args,
+            ..
         } => {
             let mut arg_tuples: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
 
@@ -284,6 +285,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             call_type: ByPointer(name),
             layout: _,
             args,
+            ..
         } => {
             let sub_expr = load_symbol(env, scope, name);
 
@@ -788,6 +790,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
             // This doesn't currently do anything
             context.i64_type().const_zero().into()
+        }
+        Inc(symbol, cont) | Dec(symbol, cont) => {
+            build_exp_stmt(env, layout_ids, scope, parent, cont)
         }
         _ => todo!("unsupported expr {:?}", stmt),
     }
@@ -1533,6 +1538,8 @@ fn call_with_args<'a, 'ctx, 'env>(
     let fn_name = layout_ids
         .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
+
+    dbg!(symbol, layout, &fn_name);
     let fn_val = env
         .module
         .get_function(fn_name.as_str())

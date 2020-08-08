@@ -14,6 +14,7 @@ mod helpers;
 mod test_mono {
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
     use bumpalo::Bump;
+    use roc_collections::all::MutMap;
     use roc_mono::layout::LayoutCache;
     use roc_types::subs::Subs;
 
@@ -56,12 +57,12 @@ mod test_mono {
         let ir_expr =
             roc_mono::ir::from_can(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
 
+        // let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
+        let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut LayoutCache::default());
+
         // apply inc/dec
         let stmt = mono_env.arena.alloc(ir_expr);
         let ir_expr = roc_mono::inc_dec::visit_declaration(mono_env.arena, stmt);
-
-        // let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
-        let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut LayoutCache::default());
 
         assert_eq!(
             procs.runtime_errors,
@@ -72,15 +73,9 @@ mod test_mono {
         interns.all_ident_ids.insert(home, ident_ids);
 
         let mut procs_string = procs
-            .specialized
-            .iter()
-            .map(|(_, value)| {
-                if let roc_mono::ir::InProgressProc::Done(proc) = value {
-                    proc.to_pretty(200)
-                } else {
-                    String::new()
-                }
-            })
+            .to_specialized_procs(mono_env.arena)
+            .values()
+            .map(|proc| proc.to_pretty(200))
             .collect::<Vec<_>>();
 
         procs_string.push(ir_expr.to_pretty(200));
@@ -617,6 +612,31 @@ mod test_mono {
         compiles_to_ir(
             r#"
             List.push [1] 2
+            "#,
+            indoc!(
+                r#"
+                procedure List.5 (#Attr.2, #Attr.3):
+                    let Test.3 = lowlevel ListPush #Attr.2 #Attr.3;
+                    ret Test.3;
+
+                let Test.4 = 1i64;
+                let Test.1 = Array [Test.4];
+                let Test.2 = 2i64;
+                let Test.0 = CallByName List.5 Test.1 Test.2;
+                ret Test.0;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_len() {
+        compiles_to_ir(
+            r#"
+            x = [1,2,3]
+            y = [ 1.0 ]
+
+            List.len x + List.len y
             "#,
             indoc!(
                 r#"

@@ -292,20 +292,12 @@ macro_rules! assert_llvm_evals_to {
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
-        for ((symbol, layout), proc) in procs.specialized.drain() {
-            use roc_mono::ir::InProgressProc::*;
 
-            match proc {
-                InProgress => {
-                    panic!("A specialization was still marked InProgress after monomorphization had completed: {:?} with layout {:?}", symbol, layout);
-                }
-                Done(proc) => {
+        for ((symbol, layout), proc) in  procs.to_specialized_procs(env.arena).drain() {
                     let (fn_val, arg_basic_types) =
                         build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
                     headers.push((proc, fn_val, arg_basic_types));
-                }
-            }
         }
 
         // Build each proc using its header info.

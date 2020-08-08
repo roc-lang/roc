@@ -90,6 +90,22 @@ pub enum InProgressProc<'a> {
 }
 
 impl<'a> Procs<'a> {
+    // TODO investigate make this an iterator?
+    pub fn to_specialized_procs(self, arena: &'a Bump) -> MutMap<(Symbol, Layout<'a>), Proc<'a>> {
+        let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
+
+        for (key, in_prog_proc) in self.specialized.into_iter() {
+            match in_prog_proc {
+                InProgress => unreachable!("should be done by now"),
+                Done(mut proc) => {
+                    crate::inc_dec::visit_proc(arena, &mut proc).clone();
+                    result.insert(key, proc);
+                }
+            }
+        }
+        result
+    }
+
     // TODO trim down these arguments!
     #[allow(clippy::too_many_arguments)]
     pub fn insert_named(
@@ -398,6 +414,7 @@ pub enum Expr<'a> {
     FunctionCall {
         call_type: CallType,
         layout: Layout<'a>,
+        arg_layouts: &'a [Layout<'a>],
         args: &'a [Symbol],
     },
     RunLowLevel(LowLevel, &'a [Symbol]),
@@ -686,6 +703,20 @@ impl<'a> Stmt<'a> {
             .unwrap();
         w.push(b'\n');
         String::from_utf8(w).unwrap()
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        use Stmt::*;
+
+        match self {
+            Cond { .. } | Switch { .. } => {
+                // TODO is this the reason Lean only looks at the outermost `when`?
+                true
+            }
+            Ret(_) => true,
+            Jump(_, _) => true,
+            _ => false,
+        }
     }
 }
 
@@ -1620,6 +1651,11 @@ pub fn with_hole<'a>(
                             panic!("TODO turn fn_var into a RuntimeError {:?}", err)
                         });
 
+                    let arg_layouts = match layout {
+                        Layout::FunctionPointer(args, _) => args,
+                        _ => unreachable!("function has layout that is not function pointer"),
+                    };
+
                     let ret_layout = layout_cache
                         .from_var(env.arena, ret_var, env.subs, env.pointer_size)
                         .unwrap_or_else(|err| {
@@ -1634,6 +1670,7 @@ pub fn with_hole<'a>(
                             call_type: CallType::ByPointer(function_symbol),
                             layout,
                             args: arg_symbols,
+                            arg_layouts,
                         },
                         ret_layout,
                         arena.alloc(hole),
@@ -2285,10 +2322,11 @@ fn call_by_name<'a>(
             }
 
             // TODO does this work?
-            let layout = if let Layout::FunctionPointer(_, rlayout) = layout {
-                rlayout
+            let empty = &[] as &[_];
+            let (arg_layouts, layout) = if let Layout::FunctionPointer(args, rlayout) = layout {
+                (args, rlayout)
             } else {
-                &layout
+                (empty, &layout)
             };
 
             // If we've already specialized this one, no further work is needed.
@@ -2296,6 +2334,7 @@ fn call_by_name<'a>(
                 let call = Expr::FunctionCall {
                     call_type: CallType::ByName(proc_name),
                     layout: layout.clone(),
+                    arg_layouts,
                     args: field_symbols,
                 };
 
@@ -2345,6 +2384,7 @@ fn call_by_name<'a>(
                         let call = Expr::FunctionCall {
                             call_type: CallType::ByName(proc_name),
                             layout: layout.clone(),
+                            arg_layouts,
                             args: field_symbols,
                         };
 
@@ -2400,6 +2440,7 @@ fn call_by_name<'a>(
                                         let call = Expr::FunctionCall {
                                             call_type: CallType::ByName(proc_name),
                                             layout: layout.clone(),
+                                            arg_layouts,
                                             args: field_symbols,
                                         };
 

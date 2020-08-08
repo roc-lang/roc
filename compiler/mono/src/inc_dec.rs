@@ -1,4 +1,4 @@
-use crate::ir::{Expr, JoinPointId, Param, Stmt};
+use crate::ir::{Expr, JoinPointId, Param, Proc, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -106,8 +106,7 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
             result.extend(args.iter().copied());
         }
 
-        RunLowLevel(_, arguments)
-        | Tag { arguments, .. }
+        Tag { arguments, .. }
         | Struct(arguments)
         | Array {
             elems: arguments, ..
@@ -115,7 +114,7 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
             result.extend(arguments.iter().copied());
         }
 
-        EmptyArray | RuntimeErrorFunction(_) | Literal(_) => {}
+        RunLowLevel(_, _) | EmptyArray | RuntimeErrorFunction(_) | Literal(_) => {}
     }
 }
 
@@ -283,9 +282,11 @@ impl<'a> Context<'a> {
                 };
 
                 // Lean can increment by more than 1 at once. Is that needed?
-                debug_assert_eq!(num_incs, 1);
+                debug_assert!(num_incs <= 1);
 
-                b = self.add_inc(*x, b);
+                if num_incs == 1 {
+                    b = self.add_inc(*x, b);
+                }
             }
         }
 
@@ -328,9 +329,11 @@ impl<'a> Context<'a> {
                 };
 
                 // verify that this is indeed always 1
-                debug_assert_eq!(num_incs, 1);
+                debug_assert!(num_incs <= 1);
 
-                b = self.add_inc(*x, b)
+                if num_incs == 1 {
+                    b = self.add_inc(*x, b)
+                }
             }
         }
         b
@@ -445,19 +448,49 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            FunctionCall { args: ys, .. } => {
+            FunctionCall {
+                args: ys,
+                ref layout,
+                call_type,
+                arg_layouts,
+            } => {
                 // this is where the borrow signature would come in
                 //let ps := (getDecl ctx f).params;
-                let ps = &[] as &[_];
+                use crate::ir::CallType;
+                use crate::layout::Builtin;
+                let symbol = match call_type {
+                    CallType::ByName(s) => s,
+                    CallType::ByPointer(s) => s,
+                };
+
+                let ps = Vec::from_iter_in(
+                    arg_layouts.iter().map(|layout| {
+                        let borrow = match layout {
+                            Layout::Builtin(Builtin::List(_, _)) => true,
+                            _ => false,
+                        };
+
+                        Param {
+                            symbol,
+                            borrow,
+                            layout: layout.clone(),
+                        }
+                    }),
+                    self.arena,
+                )
+                .into_bump_slice();
+
                 let b = self.add_dec_after_application(ys, ps, b, b_live_vars);
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
             Alias(_) => unreachable!("well, it should be unreachable!"),
 
-            EmptyArray | FunctionPointer(_, _) => todo!("unsure about this one"),
-
-            Literal(_) | RuntimeErrorFunction(_) => self.arena.alloc(Stmt::Let(z, v, l, b)),
+            EmptyArray | FunctionPointer(_, _) | Literal(_) | RuntimeErrorFunction(_) => {
+                // EmptyArray is always stack-allocated
+                // function pointers are persistent
+                self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
         };
 
         (new_b, live_vars)
@@ -810,4 +843,25 @@ pub fn visit_declaration<'a>(arena: &'a Bump, stmt: &'a Stmt<'a>) -> &'a Stmt<'a
     let ctx = ctx.update_var_info_with_params(params);
     let (b, b_live_vars) = ctx.visit_stmt(stmt);
     ctx.add_dec_for_dead_params(params, b, &b_live_vars)
+}
+
+pub fn visit_proc<'a>(arena: &'a Bump, proc: &mut Proc<'a>) {
+    let ctx = Context::new(arena);
+
+    let params = Vec::from_iter_in(
+        proc.args.iter().map(|(layout, symbol)| Param {
+            symbol: *symbol,
+            layout: layout.clone(),
+            borrow: is_layout_refcounted(layout),
+        }),
+        arena,
+    )
+    .into_bump_slice();
+
+    let stmt = arena.alloc(proc.body.clone());
+    let ctx = ctx.update_var_info_with_params(params);
+    let (b, b_live_vars) = ctx.visit_stmt(stmt);
+    let b = ctx.add_dec_for_dead_params(params, b, &b_live_vars);
+
+    proc.body = b.clone();
 }
