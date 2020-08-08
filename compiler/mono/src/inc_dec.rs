@@ -239,7 +239,7 @@ impl<'a> Context<'a> {
         }
 
         // if this symbol is never a reference, don't emit
-        if !info.reference { 
+        if !info.reference {
             return stmt;
         }
 
@@ -255,7 +255,7 @@ impl<'a> Context<'a> {
         }
 
         // if this symbol is never a reference, don't emit
-        if !info.reference { 
+        if !info.reference {
             return stmt;
         }
 
@@ -280,16 +280,14 @@ impl<'a> Context<'a> {
                 // number of times the argument is used (in the body?)
                 let num_consumptions = get_num_consumptions(*x, xs, consume_param_pred.clone());
 
-                let lives_on = 
-                        // `x` is not a variable that must be consumed by the current procedure
-                        !info.consume ||                     
-                        // `x` is live after executing instruction
-                        live_vars_after.contains(x) ||          
-                        // `x` is used in a position that is passed as a borrow reference
-                        is_borrow_param_help(*x, xs, consume_param_pred.clone());
+                // `x` is not a variable that must be consumed by the current procedure
+                // `x` is live after executing instruction
+                // `x` is used in a position that is passed as a borrow reference
+                let lives_on = !info.consume
+                    || live_vars_after.contains(x)
+                    || is_borrow_param_help(*x, xs, consume_param_pred.clone());
 
-
-                let num_incs = if lives_on {  
+                let num_incs = if lives_on {
                     num_consumptions
                 } else {
                     num_consumptions - 1
@@ -492,7 +490,6 @@ impl<'a> Context<'a> {
                 let b = self.add_dec_after_application(ys, ps, b, b_live_vars);
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
-
 
             EmptyArray | FunctionPointer(_, _) | Literal(_) | RuntimeErrorFunction(_) => {
                 // EmptyArray is always stack-allocated
@@ -737,8 +734,7 @@ impl<'a> Context<'a> {
                 (switch, case_live_vars)
             }
 
-            RuntimeError(_) | Inc(_,_) | Dec(_,_) => (stmt, MutSet::default()),
-
+            RuntimeError(_) | Inc(_, _) | Dec(_, _) => (stmt, MutSet::default()),
         }
     }
 }
