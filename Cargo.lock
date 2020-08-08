@@ -70,6 +70,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d25d88fd6b8041580a654f9d0c581a047baee2b3efee13275f2fc392fc75034"
 
 [[package]]
+name = "arena-pool"
+version = "0.1.0"
+dependencies = [
+ "pretty_assertions",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -387,6 +394,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69323bff1fb41c635347b8ead484a5ca6c3f11914d784170b158d8449ab07f8e"
+dependencies = [
+ "cfg-if",
+ "crossbeam-channel",
+ "crossbeam-deque",
+ "crossbeam-epoch",
+ "crossbeam-queue",
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -526,6 +547,12 @@ name = "either"
 version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb1f6b1ce1c140482ea30ddd3335fc0024ac7ee112895426e0a629a6c20adfe3"
+
+[[package]]
+name = "encode_unicode"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a357d28ed41a50f9c765dbfe56cbc04a64e53e5fc58ba79fbc34c10ef3df831f"
 
 [[package]]
 name = "env_logger"
@@ -2167,9 +2194,11 @@ name = "roc_load"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "crossbeam",
  "indoc",
  "inlinable_string",
  "maplit",
+ "num_cpus",
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",
@@ -2184,7 +2213,6 @@ dependencies = [
  "roc_solve",
  "roc_types",
  "roc_unify",
- "tokio",
 ]
 
 [[package]]
@@ -2230,6 +2258,7 @@ name = "roc_parse"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "encode_unicode",
  "indoc",
  "inlinable_string",
  "pretty_assertions",

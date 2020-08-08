@@ -1,14 +1,17 @@
 use crate::ast::Attempting;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
+use encode_unicode::CharExt;
 use roc_region::all::{Located, Region};
+use std::fmt;
+use std::str::from_utf8;
 use std::{char, u16};
 
 /// A position in a source file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct State<'a> {
-    /// The raw input string.
-    pub input: &'a str,
+    /// The raw input bytes from the file.
+    pub bytes: &'a [u8],
 
     /// Current line of the input
     pub line: u32,
@@ -39,15 +42,15 @@ pub enum Either<First, Second> {
 }
 
 impl<'a> State<'a> {
-    pub fn new(input: &'a str, attempting: Attempting) -> State<'a> {
+    pub fn new(bytes: &'a [u8], attempting: Attempting) -> State<'a> {
         State {
-            input,
+            bytes,
             line: 0,
             column: 0,
             indent_col: 0,
             is_indenting: true,
             attempting,
-            original_len: input.len(),
+            original_len: bytes.len(),
         }
     }
 
@@ -69,7 +72,7 @@ impl<'a> State<'a> {
     ///
     /// So if the parser has consumed 8 bytes, this function will return 8.
     pub fn bytes_consumed(&self) -> usize {
-        self.original_len - self.input.len()
+        self.original_len - self.bytes.len()
     }
 
     /// Increments the line, then resets column, indent_col, and is_indenting.
@@ -77,7 +80,7 @@ impl<'a> State<'a> {
     pub fn newline(&self) -> Result<Self, (Fail, Self)> {
         match self.line.checked_add(1) {
             Some(line) => Ok(State {
-                input: &self.input[1..],
+                bytes: &self.bytes[1..],
                 line,
                 column: 0,
                 indent_col: 0,
@@ -99,11 +102,11 @@ impl<'a> State<'a> {
     /// This assumes we are *not* advancing with spaces, or at least that
     /// any spaces on the line were preceded by non-spaces - which would mean
     /// they weren't eligible to indent anyway.
-    pub fn advance_without_indenting(&self, quantity: usize) -> Result<Self, (Fail, Self)> {
+    pub fn advance_without_indenting(self, quantity: usize) -> Result<Self, (Fail, Self)> {
         match (self.column as usize).checked_add(quantity) {
             Some(column_usize) if column_usize <= u16::MAX as usize => {
                 Ok(State {
-                    input: &self.input[quantity..],
+                    bytes: &self.bytes[quantity..],
                     line: self.line,
                     column: column_usize as u16,
                     indent_col: self.indent_col,
@@ -141,7 +144,7 @@ impl<'a> State<'a> {
                 };
 
                 Ok(State {
-                    input: &self.input[spaces..],
+                    bytes: &self.bytes[spaces..],
                     line: self.line,
                     column: column_usize as u16,
                     indent_col,
@@ -169,6 +172,35 @@ impl<'a> State<'a> {
             end_line: self.line,
         }
     }
+
+    /// Return a failing ParseResult for the given FailReason
+    pub fn fail<T>(self, reason: FailReason) -> Result<(T, Self), (Fail, Self)> {
+        Err((
+            Fail {
+                reason,
+                attempting: self.attempting,
+            },
+            self,
+        ))
+    }
+}
+
+impl<'a> fmt::Debug for State<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "State {{")?;
+
+        match from_utf8(self.bytes) {
+            Ok(string) => write!(f, "\n\tbytes: [utf8] {:?}", string)?,
+            Err(_) => write!(f, "\n\tbytes: [invalid utf8] {:?}", self.bytes)?,
+        }
+
+        write!(f, "\n\t(line, col): ({}, {}),", self.line, self.column)?;
+        write!(f, "\n\tindent_col: {}", self.indent_col)?;
+        write!(f, "\n\tis_indenting: {:?}", self.is_indenting)?;
+        write!(f, "\n\tattempting: {:?}", self.attempting)?;
+        write!(f, "\n\toriginal_len: {}", self.original_len)?;
+        write!(f, "\n}}")
+    }
 }
 
 #[test]
@@ -182,13 +214,14 @@ pub type ParseResult<'a, Output> = Result<(Output, State<'a>), (Fail, State<'a>)
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FailReason {
-    Unexpected(char, Region),
+    Unexpected(Region),
     OutdentedTooFar,
     ConditionFailed,
     LineTooLong(u32 /* which line was too long */),
     TooManyLines,
     Eof(Region),
     InvalidPattern,
+    BadUtf8,
     ReservedKeyword(Region),
     ArgumentsBeforeEquals(Region),
 }
@@ -332,13 +365,12 @@ pub fn unexpected_eof(
 }
 
 pub fn unexpected(
-    ch: char,
     chars_consumed: usize,
     state: State<'_>,
     attempting: Attempting,
 ) -> (Fail, State<'_>) {
     checked_unexpected(chars_consumed, state, |region| Fail {
-        reason: FailReason::Unexpected(ch, region),
+        reason: FailReason::Unexpected(region),
         attempting,
     })
 }
@@ -385,9 +417,9 @@ fn line_too_long(attempting: Attempting, state: State<'_>) -> (Fail, State<'_>) 
     // (for example) the LineTooLong initially occurs in the middle of
     // a one_of chain, which would otherwise prevent it from propagating.
     let column = u16::MAX;
-    let input = state.input.get(0..state.input.len()).unwrap();
+    let bytes = state.bytes.get(0..state.bytes.len()).unwrap();
     let state = State {
-        input,
+        bytes,
         line: state.line,
         indent_col: state.indent_col,
         is_indenting: state.is_indenting,
@@ -399,29 +431,75 @@ fn line_too_long(attempting: Attempting, state: State<'_>) -> (Fail, State<'_>) 
     (fail, state)
 }
 
-/// A single char.
-pub fn char<'a>(expected: char) -> impl Parser<'a, ()> {
-    move |_arena, state: State<'a>| match state.input.chars().next() {
-        Some(actual) if expected == actual => Ok(((), state.advance_without_indenting(1)?)),
-        Some(other_ch) => Err(unexpected(other_ch, 0, state, Attempting::Keyword)),
+/// A single ASCII char.
+pub fn ascii_char<'a>(expected: char) -> impl Parser<'a, ()> {
+    // Make sure this really is an ASCII char!
+    debug_assert!(expected.len_utf8() == 1);
+
+    move |_arena, state: State<'a>| match state.bytes.first() {
+        Some(&actual) if expected == actual as char => {
+            Ok(((), state.advance_without_indenting(1)?))
+        }
+        Some(_) => Err(unexpected(0, state, Attempting::Keyword)),
         _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
     }
 }
 
-/// A hardcoded keyword string with no newlines in it.
-pub fn string<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
-    // We can't have newlines because we don't attempt to advance the row
-    // in the state, only the column.
-    debug_assert!(!keyword.contains('\n'));
+/// A single UTF-8-encoded char. This will both parse *and* validate that the
+/// char is valid UTF-8, but it will *not* advance the state.
+pub fn peek_utf8_char<'a>(state: &State<'a>) -> Result<(char, usize), FailReason> {
+    if !state.bytes.is_empty() {
+        match char::from_utf8_slice_start(state.bytes) {
+            Ok((ch, len_utf8)) => Ok((ch, len_utf8)),
+            Err(_) => Err(FailReason::BadUtf8),
+        }
+    } else {
+        Err(FailReason::Eof(
+            Region::zero(), /* TODO get a better region */
+        ))
+    }
+}
+
+/// A single UTF-8-encoded char, with an offset. This will both parse *and*
+/// validate that the char is valid UTF-8, but it will *not* advance the state.
+pub fn peek_utf8_char_at<'a>(
+    state: &State<'a>,
+    offset: usize,
+) -> Result<(char, usize), FailReason> {
+    if state.bytes.len() > offset {
+        let bytes = &state.bytes[offset..];
+
+        match char::from_utf8_slice_start(bytes) {
+            Ok((ch, len_utf8)) => Ok((ch, len_utf8)),
+            Err(_) => Err(FailReason::BadUtf8),
+        }
+    } else {
+        Err(FailReason::Eof(
+            Region::zero(), /* TODO get a better region */
+        ))
+    }
+}
+
+/// A hardcoded string with no newlines, consisting only of ASCII characters
+pub fn ascii_string<'a>(keyword: &'static str) -> impl Parser<'a, ()> {
+    // Verify that this really is exclusively ASCII characters.
+    // The `unsafe` block in this function relies upon this assumption!
+    //
+    // Also, this can't have newlines because we don't attempt to advance
+    // the row in the state, only the column.
+    debug_assert!(keyword.chars().all(|ch| ch.len_utf8() == 1 && ch != '\n'));
 
     move |_arena, state: State<'a>| {
-        let input = state.input;
         let len = keyword.len();
 
         // TODO do this comparison in one SIMD instruction (on supported systems)
-        match input.get(0..len) {
-            Some(next_str) if next_str == keyword => {
-                Ok(((), state.advance_without_indenting(len)?))
+        match state.bytes.get(0..len) {
+            Some(next_str) => {
+                if next_str == keyword.as_bytes() {
+                    Ok(((), state.advance_without_indenting(len)?))
+                } else {
+                    Err(unexpected(len, state, Attempting::Keyword))
+                }
             }
             _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
         }
@@ -686,7 +764,7 @@ macro_rules! collection {
                 // We could change the AST to add extra storage specifically to
                 // support empty literals containing newlines or comments, but this
                 // does not seem worth even the tiniest regression in compiler performance.
-                zero_or_more!($crate::parser::char(' ')),
+                zero_or_more!($crate::parser::ascii_char(' ')),
                 skip_second!(
                     $crate::parser::sep_by0(
                         $delimiter,
@@ -912,6 +990,7 @@ macro_rules! record_field {
             use $crate::ast::AssignedField::*;
             use $crate::blankspace::{space0, space0_before};
             use $crate::ident::lowercase_ident;
+            use $crate::parser::ascii_char;
             use $crate::parser::Either::*;
 
             // You must have a field name, e.g. "email"
@@ -922,8 +1001,8 @@ macro_rules! record_field {
             // Having a value is optional; both `{ email }` and `{ email: blah }` work.
             // (This is true in both literals and types.)
             let (opt_loc_val, state) = $crate::parser::optional(either!(
-                skip_first!(char(':'), space0_before($val_parser, $min_indent)),
-                skip_first!(char('?'), space0_before($val_parser, $min_indent))
+                skip_first!(ascii_char(':'), space0_before($val_parser, $min_indent)),
+                skip_first!(ascii_char('?'), space0_before($val_parser, $min_indent))
             ))
             .parse(arena, state)?;
 
@@ -952,10 +1031,10 @@ macro_rules! record_field {
 macro_rules! record_without_update {
     ($val_parser:expr, $min_indent:expr) => {
         collection!(
-            char('{'),
+            ascii_char('{'),
             loc!(record_field!($val_parser, $min_indent)),
-            char(','),
-            char('}'),
+            ascii_char(','),
+            ascii_char('}'),
             $min_indent
         )
     };
@@ -965,7 +1044,7 @@ macro_rules! record_without_update {
 macro_rules! record {
     ($val_parser:expr, $min_indent:expr) => {
         skip_first!(
-            $crate::parser::char('{'),
+            $crate::parser::ascii_char('{'),
             and!(
                 // You can optionally have an identifier followed by an '&' to
                 // make this a record update, e.g. { Foo.user & username: "blah" }.
@@ -981,7 +1060,7 @@ macro_rules! record {
                         )),
                         $min_indent
                     ),
-                    $crate::parser::char('&')
+                    $crate::parser::ascii_char('&')
                 )),
                 loc!(skip_first!(
                     // We specifically allow space characters inside here, so that
@@ -995,16 +1074,16 @@ macro_rules! record {
                     // We could change the AST to add extra storage specifically to
                     // support empty literals containing newlines or comments, but this
                     // does not seem worth even the tiniest regression in compiler performance.
-                    zero_or_more!($crate::parser::char(' ')),
+                    zero_or_more!($crate::parser::ascii_char(' ')),
                     skip_second!(
                         $crate::parser::sep_by0(
-                            $crate::parser::char(','),
+                            $crate::parser::ascii_char(','),
                             $crate::blankspace::space0_around(
                                 loc!(record_field!($val_parser, $min_indent)),
                                 $min_indent
                             )
                         ),
-                        $crate::parser::char('}')
+                        $crate::parser::ascii_char('}')
                     )
                 ))
             )
@@ -1066,4 +1145,11 @@ where
     P: Parser<'a, Val>,
 {
     attempt!(attempting, parser)
+}
+
+pub fn parse_utf8(bytes: &[u8]) -> Result<&str, FailReason> {
+    match from_utf8(bytes) {
+        Ok(string) => Ok(string),
+        Err(_) => Err(FailReason::BadUtf8),
+    }
 }

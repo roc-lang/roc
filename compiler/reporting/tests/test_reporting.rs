@@ -86,9 +86,6 @@ mod test_reporting {
             let mut procs = Procs::default();
             let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
 
-            // assume 64-bit pointers
-            let pointer_size = std::mem::size_of::<u64>() as u32;
-
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
             let mut mono_env = roc_mono::ir::Env {
                 arena: &arena,
@@ -96,7 +93,6 @@ mod test_reporting {
                 problems: &mut mono_problems,
                 home,
                 ident_ids: &mut ident_ids,
-                pointer_size,
                 jump_counter: arena.alloc(0),
             };
             let _mono_expr = Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
@@ -3768,6 +3764,50 @@ mod test_reporting {
 
                     { x : Int, y ? Int }
                 "#
+            ),
+        )
+    }
+
+    #[test]
+    fn first_wildcard_is_required() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when Foo 1 2 3 is
+                    Foo _ 1 _ -> 1
+                    _ -> 2
+                "#
+            ),
+            "",
+        )
+    }
+
+    #[test]
+    fn second_wildcard_is_redundant() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when Foo 1 2 3 is
+                    Foo _ 1 _ -> 1
+                    _ -> 2
+                    _ -> 3
+                "#
+            ),
+            indoc!(
+                r#"
+            -- REDUNDANT PATTERN -----------------------------------------------------------
+
+            The 3rd pattern is redundant:
+
+            1 ┆  when Foo 1 2 3 is
+            2 ┆      Foo _ 1 _ -> 1
+            3 ┆      _ -> 2
+            4 ┆      _ -> 3
+              ┆      ^
+
+            Any value of this shape will be handled by a previous pattern, so this
+            one should be removed.
+            "#
             ),
         )
     }

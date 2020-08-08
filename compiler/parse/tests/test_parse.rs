@@ -918,17 +918,12 @@ mod test_parse {
         let arena = Bump::new();
         let arg = arena.alloc(Located::new(0, 0, 5, 6, Num("1")));
         let args = bumpalo::vec![in &arena; &*arg];
+        let expr = Var {
+            module_name: "",
+            ident: "whee",
+        };
         let expected = Expr::Apply(
-            arena.alloc(Located::new(
-                0,
-                0,
-                0,
-                4,
-                Var {
-                    module_name: "",
-                    ident: "whee",
-                },
-            )),
+            arena.alloc(Located::new(0, 0, 0, 4, expr)),
             args,
             CalledVia::Space,
         );
@@ -1040,16 +1035,11 @@ mod test_parse {
     fn unary_negation() {
         let arena = Bump::new();
         let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Negate);
-        let loc_arg1_expr = Located::new(
-            0,
-            0,
-            1,
-            4,
-            Var {
-                module_name: "",
-                ident: "foo",
-            },
-        );
+        let arg1_expr = Var {
+            module_name: "",
+            ident: "foo",
+        };
+        let loc_arg1_expr = Located::new(0, 0, 1, 4, arg1_expr);
         let expected = UnaryOp(arena.alloc(loc_arg1_expr), loc_op);
         let actual = parse_with(&arena, "-foo");
 
@@ -1060,16 +1050,11 @@ mod test_parse {
     fn unary_not() {
         let arena = Bump::new();
         let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Not);
-        let loc_arg1_expr = Located::new(
-            0,
-            0,
-            1,
-            5,
-            Var {
-                module_name: "",
-                ident: "blah",
-            },
-        );
+        let arg1_expr = Var {
+            module_name: "",
+            ident: "blah",
+        };
+        let loc_arg1_expr = Located::new(0, 0, 1, 5, arg1_expr);
         let expected = UnaryOp(arena.alloc(loc_arg1_expr), loc_op);
         let actual = parse_with(&arena, "!blah");
 
@@ -2092,7 +2077,7 @@ mod test_parse {
             "#
         );
         let actual = interface_header()
-            .parse(&arena, State::new(&src, Attempting::Module))
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
             .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
@@ -2121,7 +2106,7 @@ mod test_parse {
             "#
         );
         let actual = interface_header()
-            .parse(&arena, State::new(&src, Attempting::Module))
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
             .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
@@ -2174,7 +2159,7 @@ mod test_parse {
             "#
         );
         let actual = module_defs()
-            .parse(&arena, State::new(&src, Attempting::Module))
+            .parse(&arena, State::new(src.as_bytes(), Attempting::Module))
             .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);

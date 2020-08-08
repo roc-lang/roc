@@ -168,7 +168,7 @@ impl<'a> Procs<'a> {
                 // by the surrounding context, so we can add pending specializations
                 // for them immediately.
                 let layout = layout_cache
-                    .from_var(env.arena, annotation, env.subs, env.pointer_size)
+                    .from_var(env.arena, annotation, env.subs)
                     .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
                 // if we've already specialized this one, no further work is needed.
@@ -306,7 +306,6 @@ pub struct Env<'a, 'i> {
     pub problems: &'i mut std::vec::Vec<MonoProblem>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
-    pub pointer_size: u32,
     pub jump_counter: &'a mut u64,
 }
 
@@ -976,13 +975,13 @@ fn specialize<'a>(
     );
 
     for (arg_var, arg_name) in pattern_vars.iter().zip(pattern_symbols.iter()) {
-        let layout = layout_cache.from_var(&env.arena, *arg_var, env.subs, env.pointer_size)?;
+        let layout = layout_cache.from_var(&env.arena, *arg_var, env.subs)?;
 
         proc_args.push((layout, *arg_name));
     }
 
     let ret_layout = layout_cache
-        .from_var(&env.arena, ret_var, env.subs, env.pointer_size)
+        .from_var(&env.arena, ret_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
     // TODO WRONG
@@ -1107,12 +1106,7 @@ pub fn with_hole<'a>(
             use crate::layout::UnionVariant::*;
             let arena = env.arena;
 
-            let variant = crate::layout::union_sorted_tags(
-                env.arena,
-                variant_var,
-                env.subs,
-                env.pointer_size,
-            );
+            let variant = crate::layout::union_sorted_tags(env.arena, variant_var, env.subs);
 
             match variant {
                 Never => unreachable!("The `[]` type has no constructors"),
@@ -1150,7 +1144,7 @@ pub fn with_hole<'a>(
 
                     // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
                     let layout = layout_cache
-                        .from_var(env.arena, variant_var, env.subs, env.pointer_size)
+                        .from_var(env.arena, variant_var, env.subs)
                         .unwrap_or_else(|err| {
                             panic!("TODO turn fn_var into a RuntimeError {:?}", err)
                         });
@@ -1255,12 +1249,7 @@ pub fn with_hole<'a>(
             mut fields,
             ..
         } => {
-            let sorted_fields = crate::layout::sort_record_fields(
-                env.arena,
-                record_var,
-                env.subs,
-                env.pointer_size,
-            );
+            let sorted_fields = crate::layout::sort_record_fields(env.arena, record_var, env.subs);
 
             let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
             let mut field_layouts = Vec::with_capacity_in(fields.len(), env.arena);
@@ -1281,7 +1270,7 @@ pub fn with_hole<'a>(
 
             // creating a record from the var will unpack it if it's just a single field.
             let layout = layout_cache
-                .from_var(env.arena, record_var, env.subs, env.pointer_size)
+                .from_var(env.arena, record_var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let field_symbols = field_symbols.into_bump_slice();
@@ -1313,10 +1302,10 @@ pub fn with_hole<'a>(
             final_else,
         } => {
             let ret_layout = layout_cache
-                .from_var(env.arena, branch_var, env.subs, env.pointer_size)
+                .from_var(env.arena, branch_var, env.subs)
                 .expect("invalid ret_layout");
             let cond_layout = layout_cache
-                .from_var(env.arena, cond_var, env.subs, env.pointer_size)
+                .from_var(env.arena, cond_var, env.subs)
                 .expect("invalid cond_layout");
 
             let assigned_in_jump = env.unique_symbol();
@@ -1367,7 +1356,7 @@ pub fn with_hole<'a>(
             }
 
             let layout = layout_cache
-                .from_var(env.arena, branch_var, env.subs, env.pointer_size)
+                .from_var(env.arena, branch_var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let param = Param {
@@ -1426,7 +1415,7 @@ pub fn with_hole<'a>(
             };
 
             let layout = layout_cache
-                .from_var(env.arena, expr_var, env.subs, env.pointer_size)
+                .from_var(env.arena, expr_var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let param = Param {
@@ -1464,7 +1453,7 @@ pub fn with_hole<'a>(
             let arg_symbols = arg_symbols.into_bump_slice();
 
             let elem_layout = layout_cache
-                .from_var(env.arena, elem_var, env.subs, env.pointer_size)
+                .from_var(env.arena, elem_var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let expr = Expr::Array {
@@ -1508,12 +1497,7 @@ pub fn with_hole<'a>(
             loc_expr,
             ..
         } => {
-            let sorted_fields = crate::layout::sort_record_fields(
-                env.arena,
-                record_var,
-                env.subs,
-                env.pointer_size,
-            );
+            let sorted_fields = crate::layout::sort_record_fields(env.arena, record_var, env.subs);
 
             let mut index = None;
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
@@ -1540,7 +1524,7 @@ pub fn with_hole<'a>(
             };
 
             let layout = layout_cache
-                .from_var(env.arena, field_var, env.subs, env.pointer_size)
+                .from_var(env.arena, field_var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let mut stmt = Stmt::Let(assigned, expr, layout, hole);
@@ -1646,7 +1630,7 @@ pub fn with_hole<'a>(
                     }
 
                     let layout = layout_cache
-                        .from_var(env.arena, fn_var, env.subs, env.pointer_size)
+                        .from_var(env.arena, fn_var, env.subs)
                         .unwrap_or_else(|err| {
                             panic!("TODO turn fn_var into a RuntimeError {:?}", err)
                         });
@@ -1657,7 +1641,7 @@ pub fn with_hole<'a>(
                     };
 
                     let ret_layout = layout_cache
-                        .from_var(env.arena, ret_var, env.subs, env.pointer_size)
+                        .from_var(env.arena, ret_var, env.subs)
                         .unwrap_or_else(|err| {
                             panic!("TODO turn fn_var into a RuntimeError {:?}", err)
                         });
@@ -1720,7 +1704,7 @@ pub fn with_hole<'a>(
 
             // layout of the return type
             let layout = layout_cache
-                .from_var(env.arena, ret_var, env.subs, env.pointer_size)
+                .from_var(env.arena, ret_var, env.subs)
                 .unwrap_or_else(|err| todo!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let mut result = Stmt::Let(assigned, Expr::RunLowLevel(op, arg_symbols), layout, hole);
@@ -1857,7 +1841,7 @@ pub fn from_can<'a>(
                 }
 
                 let layout = layout_cache
-                    .from_var(env.arena, def.expr_var, env.subs, env.pointer_size)
+                    .from_var(env.arena, def.expr_var, env.subs)
                     .expect("invalid layout");
 
                 // convert the continuation
@@ -1998,11 +1982,11 @@ fn from_can_when<'a>(
     let opt_branches = to_opt_branches(env, region, branches, layout_cache);
 
     let cond_layout = layout_cache
-        .from_var(env.arena, cond_var, env.subs, env.pointer_size)
+        .from_var(env.arena, cond_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
 
     let ret_layout = layout_cache
-        .from_var(env.arena, expr_var, env.subs, env.pointer_size)
+        .from_var(env.arena, expr_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO turn this into a RuntimeError {:?}", err));
 
     let arena = env.arena;
@@ -2291,7 +2275,7 @@ fn call_by_name<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     // Register a pending_specialization for this function
-    match layout_cache.from_var(env.arena, fn_var, env.subs, env.pointer_size) {
+    match layout_cache.from_var(env.arena, fn_var, env.subs) {
         Ok(layout) => {
             // Build the CallByName node
             let arena = env.arena;
@@ -2309,7 +2293,7 @@ fn call_by_name<'a>(
             let field_symbols = field_symbols.into_bump_slice();
 
             for (var, _) in &loc_args {
-                match layout_cache.from_var(&env.arena, *var, &env.subs, env.pointer_size) {
+                match layout_cache.from_var(&env.arena, *var, &env.subs) {
                     Ok(_) => {
                         pattern_vars.push(*var);
                     }
@@ -2591,8 +2575,7 @@ pub fn from_can_pattern<'a>(
             use crate::exhaustive::Union;
             use crate::layout::UnionVariant::*;
 
-            let variant =
-                crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.pointer_size);
+            let variant = crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs);
 
             match variant {
                 Never => unreachable!("there is no pattern of type `[]`"),
@@ -2745,12 +2728,7 @@ pub fn from_can_pattern<'a>(
             let mut it = destructs.iter();
             let mut opt_destruct = it.next();
 
-            let sorted_fields = crate::layout::sort_record_fields(
-                env.arena,
-                *whole_var,
-                env.subs,
-                env.pointer_size,
-            );
+            let sorted_fields = crate::layout::sort_record_fields(env.arena, *whole_var, env.subs);
 
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 

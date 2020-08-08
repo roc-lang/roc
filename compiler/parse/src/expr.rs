@@ -8,8 +8,8 @@ use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::keyword;
 use crate::number_literal::number_literal;
 use crate::parser::{
-    self, allocated, char, fail, not, not_followed_by, optional, sep_by1, string, then, unexpected,
-    unexpected_eof, Either, Fail, FailReason, ParseResult, Parser, State,
+    self, allocated, ascii_char, ascii_string, fail, not, not_followed_by, optional, sep_by1, then,
+    unexpected, unexpected_eof, Either, Fail, FailReason, ParseResult, Parser, State,
 };
 use crate::type_annotation;
 use bumpalo::collections::string::String;
@@ -22,7 +22,7 @@ pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     // Recursive parsers must not directly invoke functions which return (impl Parser),
     // as this causes rustc to stack overflow. Thus, parse_expr must be a
     // separate function which recurses by calling itself directly.
-    move |arena, state| parse_expr(min_indent, arena, state)
+    move |arena, state: State<'a>| parse_expr(min_indent, arena, state)
 }
 
 macro_rules! loc_parenthetical_expr {
@@ -30,7 +30,7 @@ macro_rules! loc_parenthetical_expr {
     then(
         loc!(and!(
             between!(
-                char('('),
+                ascii_char('(' ),
                 map_with_arena!(
                     space0_around(
                         loc!(move |arena, state| parse_expr($min_indent, arena, state)),
@@ -43,7 +43,7 @@ macro_rules! loc_parenthetical_expr {
                         }
                     }
                 ),
-                char(')')
+                ascii_char(')' )
             ),
             optional(either!(
                 // There may optionally be function args after the ')'
@@ -59,7 +59,7 @@ macro_rules! loc_parenthetical_expr {
                 // as if there were any args they'd have consumed it anyway
                 // e.g. in `((foo bar) baz.blah)` the `.blah` will be consumed by the `baz` parser
                 either!(
-                    one_or_more!(skip_first!(char('.'), lowercase_ident())),
+                    one_or_more!(skip_first!(ascii_char('.' ), lowercase_ident())),
                     and!(space0($min_indent), equals_with_indent())
                 )
             ))
@@ -170,7 +170,7 @@ pub fn unary_op<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     one_of!(
         map_with_arena!(
             and!(
-                loc!(char('!')),
+                loc!(ascii_char('!')),
                 loc!(move |arena, state| parse_expr(min_indent, arena, state))
             ),
             |arena: &'a Bump, (loc_op, loc_expr): (Located<()>, Located<Expr<'a>>)| {
@@ -179,7 +179,7 @@ pub fn unary_op<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
         ),
         map_with_arena!(
             and!(
-                loc!(char('-')),
+                loc!(ascii_char('-')),
                 loc!(move |arena, state| parse_expr(min_indent, arena, state))
             ),
             |arena: &'a Bump, (loc_op, loc_expr): (Located<()>, Located<Expr<'a>>)| {
@@ -450,9 +450,9 @@ pub fn loc_parenthetical_def<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
         let (loc_tuple, state) = loc!(and!(
             space0_after(
                 between!(
-                    char('('),
+                    ascii_char('('),
                     space0_around(loc_pattern(min_indent), min_indent),
-                    char(')')
+                    ascii_char(')')
                 ),
                 min_indent,
             ),
@@ -482,7 +482,7 @@ pub fn loc_parenthetical_def<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
 /// The '=' used in a def can't be followed by another '=' (or else it's actually
 /// an "==") and also it can't be followed by '>' (or else it's actually an "=>")
 fn equals_for_def<'a>() -> impl Parser<'a, ()> {
-    not_followed_by(char('='), one_of!(char('='), char('>')))
+    not_followed_by(ascii_char('='), one_of!(ascii_char('='), ascii_char('>')))
 }
 
 /// A definition, consisting of one of these:
@@ -513,7 +513,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
                 ),
                 // Annotation
                 skip_first!(
-                    char(':'),
+                    ascii_char(':'),
                     // Spaces after the ':' (at a normal indentation level) and then the type.
                     // The type itself must be indented more than the pattern and ':'
                     space0_before(type_annotation::located(indented_more), indented_more)
@@ -811,12 +811,12 @@ fn loc_parse_function_arg<'a>(
 
 fn reserved_keyword<'a>() -> impl Parser<'a, ()> {
     one_of!(
-        string(keyword::IF),
-        string(keyword::THEN),
-        string(keyword::ELSE),
-        string(keyword::WHEN),
-        string(keyword::IS),
-        string(keyword::AS)
+        ascii_string(keyword::IF),
+        ascii_string(keyword::THEN),
+        ascii_string(keyword::ELSE),
+        ascii_string(keyword::WHEN),
+        ascii_string(keyword::IS),
+        ascii_string(keyword::AS)
     )
 }
 
@@ -824,7 +824,7 @@ fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     map_with_arena!(
         skip_first!(
             // All closures start with a '\' - e.g. (\x -> x + 1)
-            char('\\'),
+            ascii_char('\\'),
             // Once we see the '\', we're committed to parsing this as a closure.
             // It may turn out to be malformed, but it is definitely a closure.
             optional(and!(
@@ -833,13 +833,13 @@ fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                     Attempting::ClosureParams,
                     // Params are comma-separated
                     sep_by1(
-                        char(','),
+                        ascii_char(','),
                         space0_around(loc_closure_param(min_indent), min_indent)
                     )
                 ),
                 skip_first!(
                     // Parse the -> which separates params from body
-                    string("->"),
+                    ascii_string("->"),
                     // Parse the body
                     attempt!(
                         Attempting::ClosureBody,
@@ -877,9 +877,9 @@ fn parse_closure_param<'a>(
         // If you wrap it in parens, you can match any arbitrary pattern at all.
         // e.g. \User.UserId userId -> ...
         between!(
-            char('('),
+            ascii_char('('),
             space0_around(loc_pattern(min_indent), min_indent),
-            char(')')
+            ascii_char(')')
         )
     )
     .parse(arena, state)
@@ -903,9 +903,9 @@ fn loc_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
 
 fn loc_parenthetical_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
     between!(
-        char('('),
+        ascii_char('('),
         move |arena, state| loc_pattern(min_indent).parse(arena, state),
-        char(')')
+        ascii_char(')')
     )
 }
 
@@ -923,13 +923,13 @@ fn string_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 }
 
 fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
-    map!(char('_'), |_| Pattern::Underscore)
+    map!(ascii_char('_'), |_| Pattern::Underscore)
 }
 
 fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
     then(
         collection!(
-            char('{'),
+            ascii_char('{'),
             move |arena: &'a bumpalo::Bump,
                   state: crate::parser::State<'a>|
                   -> crate::parser::ParseResult<'a, Located<crate::ast::Pattern<'a>>> {
@@ -947,10 +947,13 @@ fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
                 // (This is true in both literals and types.)
                 let (opt_loc_val, state) = crate::parser::optional(either!(
                     skip_first!(
-                        char(':'),
+                        ascii_char(':'),
                         space0_before(loc_pattern(min_indent), min_indent)
                     ),
-                    skip_first!(char('?'), space0_before(loc!(expr(min_indent)), min_indent))
+                    skip_first!(
+                        ascii_char('?'),
+                        space0_before(loc!(expr(min_indent)), min_indent)
+                    )
                 ))
                 .parse(arena, state)?;
 
@@ -987,8 +990,8 @@ fn record_destructure<'a>(min_indent: u16) -> impl Parser<'a, Pattern<'a>> {
 
                 Ok((answer, state))
             },
-            char(','),
-            char('}'),
+            ascii_char(','),
+            ascii_char('}'),
             min_indent
         ),
         move |_arena, state, loc_patterns| {
@@ -1109,7 +1112,7 @@ mod when {
                             loc!(move |arena, state| parse_expr(min_indent, arena, state)),
                             min_indent,
                         ),
-                        string(keyword::IS)
+                        ascii_string(keyword::IS)
                     )
                 )
             ),
@@ -1132,7 +1135,7 @@ mod when {
     /// Parsing when with indentation.
     fn when_with_indent<'a>() -> impl Parser<'a, u16> {
         move |arena, state: State<'a>| {
-            string(keyword::WHEN)
+            ascii_string(keyword::WHEN)
                 .parse(arena, state)
                 .map(|((), state)| (state.indent_col, state))
         }
@@ -1185,7 +1188,7 @@ mod when {
                 }
             );
 
-            loop {
+            while !state.bytes.is_empty() {
                 match branch_parser.parse(arena, state) {
                     Ok((next_output, next_state)) => {
                         state = next_state;
@@ -1210,11 +1213,11 @@ mod when {
     ) -> impl Parser<'a, (Vec<'a, Located<Pattern<'a>>>, Option<Located<Expr<'a>>>)> {
         and!(
             sep_by1(
-                char('|'),
+                ascii_char('|'),
                 space0_around(loc_pattern(min_indent), min_indent),
             ),
             optional(skip_first!(
-                string(keyword::IF),
+                ascii_string(keyword::IF),
                 // TODO we should require space before the expression but not after
                 space1_around(
                     loc!(move |arena, state| parse_expr(min_indent, arena, state)),
@@ -1240,7 +1243,7 @@ mod when {
     /// Parsing the righthandside of a branch in a when conditional.
     fn branch_result<'a>(indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
         skip_first!(
-            string("->"),
+            ascii_string("->"),
             space0_before(
                 loc!(move |arena, state| parse_expr(indent, arena, state)),
                 indent,
@@ -1253,7 +1256,7 @@ pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     map_with_arena!(
         and!(
             skip_first!(
-                string(keyword::IF),
+                ascii_string(keyword::IF),
                 space1_around(
                     loc!(move |arena, state| parse_expr(min_indent, arena, state)),
                     min_indent,
@@ -1261,14 +1264,14 @@ pub fn if_expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
             ),
             and!(
                 skip_first!(
-                    string(keyword::THEN),
+                    ascii_string(keyword::THEN),
                     space1_around(
                         loc!(move |arena, state| parse_expr(min_indent, arena, state)),
                         min_indent,
                     )
                 ),
                 skip_first!(
-                    string(keyword::ELSE),
+                    ascii_string(keyword::ELSE),
                     space1_before(
                         loc!(move |arena, state| parse_expr(min_indent, arena, state)),
                         min_indent,
@@ -1310,10 +1313,15 @@ fn unary_negate_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
                     // Try to parse a number literal *before* trying to parse unary negate,
                     // because otherwise (foo -1) will parse as (foo (Num.neg 1))
                     loc!(number_literal()),
-                    loc!(char('-'))
+                    loc!(ascii_char('-'))
                 )
             ),
-            one_of!(char(' '), char('#'), char('\n'), char('>')),
+            one_of!(
+                ascii_char(' '),
+                ascii_char('#'),
+                ascii_char('\n'),
+                ascii_char('>')
+            ),
         ),
         move |arena, state, (spaces, num_or_minus_char)| {
             match num_or_minus_char {
@@ -1530,17 +1538,15 @@ pub fn ident_without_apply<'a>() -> impl Parser<'a, Expr<'a>> {
 /// Like equals_for_def(), except it produces the indent_col of the state rather than ()
 pub fn equals_with_indent<'a>() -> impl Parser<'a, u16> {
     move |_arena, state: State<'a>| {
-        let mut iter = state.input.chars();
-
-        match iter.next() {
-            Some(ch) if ch == '=' => {
-                match iter.peekable().peek() {
+        match state.bytes.first() {
+            Some(&byte) if byte == b'=' => {
+                match state.bytes.get(1) {
                     // The '=' must not be followed by another `=` or `>`
                     // (See equals_for_def() for explanation)
-                    Some(next_ch) if next_ch != &'=' && next_ch != &'>' => {
+                    Some(&next_byte) if next_byte != b'=' && next_byte != b'>' => {
                         Ok((state.indent_col, state.advance_without_indenting(1)?))
                     }
-                    Some(next_ch) => Err(unexpected(*next_ch, 0, state, Attempting::Def)),
+                    Some(_) => Err(unexpected(0, state, Attempting::Def)),
                     None => Err(unexpected_eof(
                         1,
                         Attempting::Def,
@@ -1548,21 +1554,17 @@ pub fn equals_with_indent<'a>() -> impl Parser<'a, u16> {
                     )),
                 }
             }
-            Some(ch) => Err(unexpected(ch, 0, state, Attempting::Def)),
+            Some(_) => Err(unexpected(0, state, Attempting::Def)),
             None => Err(unexpected_eof(0, Attempting::Def, state)),
         }
     }
 }
 
 pub fn colon_with_indent<'a>() -> impl Parser<'a, u16> {
-    move |_arena, state: State<'a>| {
-        let mut iter = state.input.chars();
-
-        match iter.next() {
-            Some(ch) if ch == ':' => Ok((state.indent_col, state.advance_without_indenting(1)?)),
-            Some(ch) => Err(unexpected(ch, 0, state, Attempting::Def)),
-            None => Err(unexpected_eof(0, Attempting::Def, state)),
-        }
+    move |_arena, state: State<'a>| match state.bytes.first() {
+        Some(&byte) if byte == b':' => Ok((state.indent_col, state.advance_without_indenting(1)?)),
+        Some(_) => Err(unexpected(0, state, Attempting::Def)),
+        None => Err(unexpected_eof(0, Attempting::Def, state)),
     }
 }
 
@@ -1606,32 +1608,32 @@ fn binop<'a>() -> impl Parser<'a, BinOp> {
         // with other valid operators (e.g. "<=" begins with "<") must
         // come before the shorter ones; otherwise, they will never
         // be reached because the shorter one will pass and consume!
-        map!(string("|>"), |_| BinOp::Pizza),
-        map!(string("=="), |_| BinOp::Equals),
-        map!(string("!="), |_| BinOp::NotEquals),
-        map!(string("&&"), |_| BinOp::And),
-        map!(string("||"), |_| BinOp::Or),
-        map!(char('+'), |_| BinOp::Plus),
-        map!(char('*'), |_| BinOp::Star),
-        map!(char('-'), |_| BinOp::Minus),
-        map!(string("//"), |_| BinOp::DoubleSlash),
-        map!(char('/'), |_| BinOp::Slash),
-        map!(string("<="), |_| BinOp::LessThanOrEq),
-        map!(char('<'), |_| BinOp::LessThan),
-        map!(string(">="), |_| BinOp::GreaterThanOrEq),
-        map!(char('>'), |_| BinOp::GreaterThan),
-        map!(char('^'), |_| BinOp::Caret),
-        map!(string("%%"), |_| BinOp::DoublePercent),
-        map!(char('%'), |_| BinOp::Percent)
+        map!(ascii_string("|>"), |_| BinOp::Pizza),
+        map!(ascii_string("=="), |_| BinOp::Equals),
+        map!(ascii_string("!="), |_| BinOp::NotEquals),
+        map!(ascii_string("&&"), |_| BinOp::And),
+        map!(ascii_string("||"), |_| BinOp::Or),
+        map!(ascii_char('+'), |_| BinOp::Plus),
+        map!(ascii_char('*'), |_| BinOp::Star),
+        map!(ascii_char('-'), |_| BinOp::Minus),
+        map!(ascii_string("//"), |_| BinOp::DoubleSlash),
+        map!(ascii_char('/'), |_| BinOp::Slash),
+        map!(ascii_string("<="), |_| BinOp::LessThanOrEq),
+        map!(ascii_char('<'), |_| BinOp::LessThan),
+        map!(ascii_string(">="), |_| BinOp::GreaterThanOrEq),
+        map!(ascii_char('>'), |_| BinOp::GreaterThan),
+        map!(ascii_char('^'), |_| BinOp::Caret),
+        map!(ascii_string("%%"), |_| BinOp::DoublePercent),
+        map!(ascii_char('%'), |_| BinOp::Percent)
     )
 }
 
 pub fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     let elems = collection!(
-        char('['),
+        ascii_char('['),
         loc!(expr(min_indent)),
-        char(','),
-        char(']'),
+        ascii_char(','),
+        ascii_char(']'),
         min_indent
     );
 
@@ -1673,9 +1675,11 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                     };
 
                     // there can be field access, e.g. `{ x : 4 }.x`
-                    let (accesses, state) =
-                        optional(one_or_more!(skip_first!(char('.'), lowercase_ident())))
-                            .parse(arena, state)?;
+                    let (accesses, state) = optional(one_or_more!(skip_first!(
+                        ascii_char('.'),
+                        lowercase_ident()
+                    )))
+                    .parse(arena, state)?;
 
                     if let Some(fields) = accesses {
                         for field in fields {
@@ -1768,7 +1772,7 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 /// This is mainly for matching tags in closure params, e.g. \@Foo -> ...
 pub fn private_tag<'a>() -> impl Parser<'a, &'a str> {
     map_with_arena!(
-        skip_first!(char('@'), global_tag()),
+        skip_first!(ascii_char('@'), global_tag()),
         |arena: &'a Bump, name: &'a str| {
             let mut buf = String::with_capacity_in(1 + name.len(), arena);
 

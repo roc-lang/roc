@@ -14,7 +14,6 @@ mod helpers;
 mod test_mono {
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
     use bumpalo::Bump;
-    use roc_collections::all::MutMap;
     use roc_mono::layout::LayoutCache;
     use roc_types::subs::Subs;
 
@@ -38,8 +37,8 @@ mod test_mono {
         let mut procs = roc_mono::ir::Procs::default();
         let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
 
-        // assume 64-bit pointers
-        let pointer_size = std::mem::size_of::<u64>() as u32;
+        // Put this module's ident_ids back in the interns
+        interns.all_ident_ids.insert(home, ident_ids.clone());
 
         // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
         let mut mono_problems = Vec::new();
@@ -49,7 +48,6 @@ mod test_mono {
             problems: &mut mono_problems,
             home,
             ident_ids: &mut ident_ids,
-            pointer_size,
             jump_counter: arena.alloc(0),
         };
 
@@ -68,9 +66,6 @@ mod test_mono {
             procs.runtime_errors,
             roc_collections::all::MutMap::default()
         );
-
-        // Put this module's ident_ids back in the interns
-        interns.all_ident_ids.insert(home, ident_ids);
 
         let mut procs_string = procs
             .get_specialized_procs(mono_env.arena)

@@ -2275,9 +2275,9 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_push() {
+    fn list_append() {
         infer_eq(
-            "List.push",
+            "List.append",
             "Attr * (Attr * (List a), a -> Attr * (List a))",
         );
     }
@@ -2303,7 +2303,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                    singleton = \x -> List.push [] x
+                    singleton = \x -> List.append [] x
 
                     singleton
                 "#
@@ -2317,7 +2317,7 @@ mod solve_uniq_expr {
         infer_eq(
             indoc!(
                 r#"
-                    reverse = \list -> List.foldr list (\e, l -> List.push l e) []
+                    reverse = \list -> List.foldr list (\e, l -> List.append l e) []
 
                     reverse
                 "#
@@ -2742,7 +2742,7 @@ mod solve_uniq_expr {
                             []
 
                         Ok next ->
-                            List.push (reconstructPath cameFrom next) goal
+                            List.append (reconstructPath cameFrom next) goal
 
                 reconstructPath
                 "#
@@ -2812,7 +2812,7 @@ mod solve_uniq_expr {
                             []
 
                         Ok next ->
-                            List.push (reconstructPath cameFrom next) goal
+                            List.append (reconstructPath cameFrom next) goal
 
                 updateCost : position, position, Model position -> Model position
                 updateCost = \current, neighbour, model ->
@@ -2897,7 +2897,7 @@ mod solve_uniq_expr {
                                 []
 
                             Ok next ->
-                                List.push (reconstructPath cameFrom next) goal
+                                List.append (reconstructPath cameFrom next) goal
 
 
                     updateCost : position, position, Model position -> Model position

@@ -67,7 +67,7 @@ pub fn helper_without_uniqueness<'a>(
     fpm.initialize();
 
     // Compute main_fn_type before moving subs to Env
-    let layout = Layout::new(&arena, content, &subs, ptr_bytes).unwrap_or_else(|err| {
+    let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
         panic!(
             "Code gen error in NON-OPTIMIZED test: could not convert to layout. Err was {:?}",
             err
@@ -103,7 +103,6 @@ pub fn helper_without_uniqueness<'a>(
         problems: &mut mono_problems,
         home,
         ident_ids: &mut ident_ids,
-        pointer_size: ptr_bytes,
         jump_counter: arena.alloc(0),
     };
 
@@ -258,7 +257,7 @@ pub fn helper_with_uniqueness<'a>(
     fpm.initialize();
 
     // Compute main_fn_type before moving subs to Env
-    let layout = Layout::new(&arena, content, &subs, ptr_bytes).unwrap_or_else(|err| {
+    let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
         panic!(
             "Code gen error in OPTIMIZED test: could not convert to layout. Err was {:?}",
             err
@@ -296,7 +295,6 @@ pub fn helper_with_uniqueness<'a>(
         problems: &mut mono_problems,
         home,
         ident_ids: &mut ident_ids,
-        pointer_size: ptr_bytes,
         jump_counter: arena.alloc(0),
     };
 

@@ -64,17 +64,12 @@ pub enum Builtin<'a> {
 }
 
 impl<'a> Layout<'a> {
-    pub fn new(
-        arena: &'a Bump,
-        content: Content,
-        subs: &Subs,
-        pointer_size: u32,
-    ) -> Result<Self, LayoutProblem> {
+    pub fn new(arena: &'a Bump, content: Content, subs: &Subs) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
 
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar),
-            Structure(flat_type) => layout_from_flat_type(arena, flat_type, subs, pointer_size),
+            Structure(flat_type) => layout_from_flat_type(arena, flat_type, subs),
 
             Alias(Symbol::NUM_INT, args, _) => {
                 debug_assert!(args.is_empty());
@@ -84,12 +79,7 @@ impl<'a> Layout<'a> {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Float64))
             }
-            Alias(_, _, var) => Self::new(
-                arena,
-                subs.get_without_compacting(var).content,
-                subs,
-                pointer_size,
-            ),
+            Alias(_, _, var) => Self::new(arena, subs.get_without_compacting(var).content, subs),
             Error => Err(LayoutProblem::Erroneous),
         }
     }
@@ -97,15 +87,10 @@ impl<'a> Layout<'a> {
     /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
     /// Panics if given a FlexVar or RigidVar, since those should have been
     /// monomorphized away already!
-    fn from_var(
-        arena: &'a Bump,
-        var: Variable,
-        subs: &Subs,
-        pointer_size: u32,
-    ) -> Result<Self, LayoutProblem> {
+    fn from_var(arena: &'a Bump, var: Variable, subs: &Subs) -> Result<Self, LayoutProblem> {
         let content = subs.get_without_compacting(var).content;
 
-        Self::new(arena, content, subs, pointer_size)
+        Self::new(arena, content, subs)
     }
 
     pub fn safe_to_memcpy(&self) -> bool {
@@ -128,6 +113,13 @@ impl<'a> Layout<'a> {
                 false
             }
         }
+    }
+
+    pub fn is_zero_sized(&self) -> bool {
+        // For this calculation, we don't need an accurate
+        // stack size, we just need to know whether it's zero,
+        // so it's fine to use a pointer size of 1.
+        self.stack_size(1) == 0
     }
 
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
@@ -175,7 +167,6 @@ impl<'a> LayoutCache<'a> {
         arena: &'a Bump,
         var: Variable,
         subs: &Subs,
-        pointer_size: u32,
     ) -> Result<Layout<'a>, LayoutProblem> {
         // Store things according to the root Variable, to avoid duplicate work.
         let var = subs.get_root_key_without_compacting(var);
@@ -185,7 +176,7 @@ impl<'a> LayoutCache<'a> {
             .or_insert_with(|| {
                 let content = subs.get_without_compacting(var).content;
 
-                Layout::new(arena, content, subs, pointer_size)
+                Layout::new(arena, content, subs)
             })
             .clone()
     }
@@ -252,7 +243,6 @@ fn layout_from_flat_type<'a>(
     arena: &'a Bump,
     flat_type: FlatType,
     subs: &Subs,
-    pointer_size: u32,
 ) -> Result<Layout<'a>, LayoutProblem> {
     use roc_types::subs::FlatType::*;
 
@@ -277,7 +267,7 @@ fn layout_from_flat_type<'a>(
                     layout_from_num_content(content)
                 }
                 Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
-                Symbol::LIST_LIST => list_layout_from_elem(arena, subs, args[0], pointer_size),
+                Symbol::LIST_LIST => list_layout_from_elem(arena, subs, args[0]),
                 Symbol::ATTR_ATTR => {
                     debug_assert_eq!(args.len(), 2);
 
@@ -288,7 +278,7 @@ fn layout_from_flat_type<'a>(
                     // For now, layout is unaffected by uniqueness.
                     // (Incorporating refcounting may change this.)
                     // Unwrap and continue
-                    Layout::from_var(arena, wrapped_var, subs, pointer_size)
+                    Layout::from_var(arena, wrapped_var, subs)
                 }
                 _ => {
                     panic!("TODO layout_from_flat_type for {:?}", Apply(symbol, args));
@@ -301,11 +291,11 @@ fn layout_from_flat_type<'a>(
             for arg_var in args {
                 let arg_content = subs.get_without_compacting(arg_var).content;
 
-                fn_args.push(Layout::new(arena, arg_content, subs, pointer_size)?);
+                fn_args.push(Layout::new(arena, arg_content, subs)?);
             }
 
             let ret_content = subs.get_without_compacting(ret_var).content;
-            let ret = Layout::new(arena, ret_content, subs, pointer_size)?;
+            let ret = Layout::new(arena, ret_content, subs)?;
 
             Ok(Layout::FunctionPointer(
                 fn_args.into_bump_slice(),
@@ -333,10 +323,10 @@ fn layout_from_flat_type<'a>(
                 let field_var = field.into_inner();
                 let field_content = subs.get_without_compacting(field_var).content;
 
-                match Layout::new(arena, field_content, subs, pointer_size) {
+                match Layout::new(arena, field_content, subs) {
                     Ok(layout) => {
-                        // Drop any zero-sized fields like {}
-                        if layout.stack_size(pointer_size) != 0 {
+                        // Drop any zero-sized fields like {}.
+                        if !layout.is_zero_sized() {
                             layouts.push(layout);
                         }
                     }
@@ -358,7 +348,7 @@ fn layout_from_flat_type<'a>(
         TagUnion(tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
-            Ok(layout_from_tag_union(arena, tags, subs, pointer_size))
+            Ok(layout_from_tag_union(arena, tags, subs))
         }
         RecursiveTagUnion(_rec_var, _tags, _ext_var) => {
             panic!("TODO make Layout for empty RecursiveTagUnion");
@@ -378,7 +368,6 @@ pub fn sort_record_fields<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
-    pointer_size: u32,
 ) -> Vec<'a, (Lowercase, Layout<'a>)> {
     let mut fields_map = MutMap::default();
 
@@ -389,11 +378,10 @@ pub fn sort_record_fields<'a>(
 
             for (label, field) in fields_map {
                 let var = field.into_inner();
-                let layout = Layout::from_var(arena, var, subs, pointer_size)
-                    .expect("invalid layout from var");
+                let layout = Layout::from_var(arena, var, subs).expect("invalid layout from var");
 
                 // Drop any zero-sized fields like {}
-                if layout.stack_size(pointer_size) != 0 {
+                if !layout.is_zero_sized() {
                     sorted_fields.push((label, layout));
                 }
             }
@@ -416,17 +404,10 @@ pub enum UnionVariant<'a> {
     Wrapped(Vec<'a, (TagName, &'a [Layout<'a>])>),
 }
 
-pub fn union_sorted_tags<'a>(
-    arena: &'a Bump,
-    var: Variable,
-    subs: &Subs,
-    pointer_size: u32,
-) -> UnionVariant<'a> {
+pub fn union_sorted_tags<'a>(arena: &'a Bump, var: Variable, subs: &Subs) -> UnionVariant<'a> {
     let mut tags_vec = std::vec::Vec::new();
     match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => {
-            union_sorted_tags_help(arena, tags_vec, subs, pointer_size)
-        }
+        Ok(()) | Err((_, Content::FlexVar(_))) => union_sorted_tags_help(arena, tags_vec, subs),
         Err(other) => panic!("invalid content in tag union variable: {:?}", other),
     }
 }
@@ -435,7 +416,6 @@ fn union_sorted_tags_help<'a>(
     arena: &'a Bump,
     mut tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)>,
     subs: &Subs,
-    pointer_size: u32,
 ) -> UnionVariant<'a> {
     // sort up front; make sure the ordering stays intact!
     tags_vec.sort();
@@ -458,10 +438,10 @@ fn union_sorted_tags_help<'a>(
                 }
                 _ => {
                     for var in arguments {
-                        match Layout::from_var(arena, var, subs, pointer_size) {
+                        match Layout::from_var(arena, var, subs) {
                             Ok(layout) => {
                                 // Drop any zero-sized arguments like {}
-                                if layout.stack_size(pointer_size) != 0 {
+                                if !layout.is_zero_sized() {
                                     layouts.push(layout);
                                 }
                             }
@@ -497,10 +477,10 @@ fn union_sorted_tags_help<'a>(
                 arg_layouts.push(Layout::Builtin(Builtin::Int64));
 
                 for var in arguments {
-                    match Layout::from_var(arena, var, subs, pointer_size) {
+                    match Layout::from_var(arena, var, subs) {
                         Ok(layout) => {
                             // Drop any zero-sized arguments like {}
-                            if layout.stack_size(pointer_size) != 0 {
+                            if !layout.is_zero_sized() {
                                 has_any_arguments = true;
 
                                 arg_layouts.push(layout);
@@ -551,14 +531,13 @@ pub fn layout_from_tag_union<'a>(
     arena: &'a Bump,
     tags: MutMap<TagName, std::vec::Vec<Variable>>,
     subs: &Subs,
-    pointer_size: u32,
 ) -> Layout<'a> {
     use UnionVariant::*;
 
     let tags_vec: std::vec::Vec<_> = tags.into_iter().collect();
 
     if tags_vec[0].0 != TagName::Private(Symbol::NUM_AT_NUM) {
-        let variant = union_sorted_tags_help(arena, tags_vec, subs, pointer_size);
+        let variant = union_sorted_tags_help(arena, tags_vec, subs);
 
         match variant {
             Never => panic!("TODO gracefully handle trying to instantiate Never"),
@@ -692,7 +671,6 @@ pub fn list_layout_from_elem<'a>(
     arena: &'a Bump,
     subs: &Subs,
     var: Variable,
-    pointer_size: u32,
 ) -> Result<Layout<'a>, LayoutProblem> {
     match subs.get_without_compacting(var).content {
         Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
@@ -700,14 +678,14 @@ pub fn list_layout_from_elem<'a>(
 
             let arg_var = args.get(1).unwrap();
 
-            list_layout_from_elem(arena, subs, *arg_var, pointer_size)
+            list_layout_from_elem(arena, subs, *arg_var)
         }
         Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (List *) then it must have been an empty list
             Ok(Layout::Builtin(Builtin::EmptyList))
         }
         content => {
-            let elem_layout = Layout::new(arena, content, subs, pointer_size)?;
+            let elem_layout = Layout::new(arena, content, subs)?;
 
             // This is a normal list.
             Ok(Layout::Builtin(Builtin::List(

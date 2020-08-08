@@ -2,19 +2,17 @@
 extern crate clap;
 
 use bumpalo::Bump;
+use clap::{App, Arg, ArgMatches};
 use roc_build::program::gen;
 use roc_collections::all::MutMap;
 use roc_gen::llvm::build::OptLevel;
 use roc_load::file::LoadingProblem;
-use std::time::SystemTime;
-
-use clap::{App, Arg, ArgMatches};
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::process;
+use std::process::Command;
+use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
-use tokio::process::Command;
-use tokio::runtime::Builder;
 
 pub mod repl;
 
@@ -105,14 +103,6 @@ pub fn build(matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {
     let path = Path::new(filename).canonicalize().unwrap();
     let src_dir = path.parent().unwrap().canonicalize().unwrap();
 
-    // Create the runtime
-    let mut rt = Builder::new()
-        .thread_name("roc")
-        .threaded_scheduler()
-        .enable_io()
-        .build()
-        .expect("Error spawning initial compiler thread."); // TODO make this error nicer.
-
     // Spawn the root task
     let path = path.canonicalize().unwrap_or_else(|err| {
         use ErrorKind::*;
@@ -131,28 +121,31 @@ pub fn build(matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {
             }
         }
     });
-    let binary_path = rt
-        .block_on(build_file(src_dir, path, opt_level))
-        .expect("TODO gracefully handle block_on failing");
+
+    let binary_path =
+        build_file(src_dir, path, opt_level).expect("TODO gracefully handle build_file failing");
 
     if run_after_build {
         // Run the compiled app
-        rt.block_on(async {
-            Command::new(binary_path)
-                .spawn()
-                .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
-                .await
-                .map_err(|_| {
-                    todo!("gracefully handle error after `app` spawned");
-                })
-        })
-        .expect("TODO gracefully handle block_on failing");
+        Command::new(binary_path)
+            .spawn()
+            .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
+            .wait()
+            .expect("TODO gracefully handle block_on failing");
     }
 
     Ok(())
 }
 
-async fn build_file(
+fn report_timing(buf: &mut String, label: &str, duration: Duration) {
+    buf.push_str(&format!(
+        "        {:.3} ms   {}\n",
+        duration.as_secs_f64() * 1000.0,
+        label,
+    ));
+}
+
+fn build_file(
     src_dir: PathBuf,
     filename: PathBuf,
     opt_level: OptLevel,
@@ -168,8 +161,34 @@ async fn build_file(
         OptLevel::Normal => roc_builtins::std::standard_stdlib(),
         OptLevel::Optimize => roc_builtins::unique::uniq_stdlib(),
     };
-    let loaded = roc_load::file::load(&stdlib, src_dir, filename.clone(), subs_by_module).await?;
+    let loaded =
+        roc_load::file::load(filename.clone(), &stdlib, src_dir.as_path(), subs_by_module)?;
     let dest_filename = filename.with_extension("o");
+
+    let buf = &mut String::with_capacity(1024);
+
+    for (module_id, module_timing) in loaded.timings.iter() {
+        let module_name = loaded.interns.module_name(*module_id);
+
+        buf.push_str("    ");
+        buf.push_str(module_name);
+        buf.push_str("\n");
+
+        report_timing(buf, "Read .roc file from disk", module_timing.read_roc_file);
+        report_timing(buf, "Parse header", module_timing.parse_header);
+        report_timing(buf, "Parse body", module_timing.parse_body);
+        report_timing(buf, "Canonicalize", module_timing.canonicalize);
+        report_timing(buf, "Constrain", module_timing.constrain);
+        report_timing(buf, "Solve", module_timing.solve);
+        report_timing(buf, "Other", module_timing.other());
+        buf.push('\n');
+        report_timing(buf, "Total", module_timing.total());
+    }
+
+    println!(
+        "\n\nCompilation finished! Here's how long each module took to compile:\n\n{}",
+        buf
+    );
 
     gen(
         &arena,
@@ -201,7 +220,7 @@ async fn build_file(
         .map_err(|_| {
             todo!("gracefully handle `ar` failing to spawn.");
         })?
-        .await
+        .wait()
         .map_err(|_| {
             todo!("gracefully handle error after `ar` spawned");
         })?;
@@ -224,7 +243,7 @@ async fn build_file(
         .map_err(|_| {
             todo!("gracefully handle `rustc` failing to spawn.");
         })?
-        .await
+        .wait()
         .map_err(|_| {
             todo!("gracefully handle error after `rustc` spawned");
         })?;
