@@ -99,6 +99,66 @@ mod gen_list {
     }
 
     #[test]
+    fn list_join() {
+        assert_evals_to!("List.join []", &[], &'static [i64]);
+        assert_evals_to!("List.join [ [1, 2, 3 ] ]", &[1, 2, 3], &'static [i64]);
+        assert_evals_to!(
+            "List.join [ [1, 2, 3 ] , [4 ,5, 6] ]",
+            &[1, 2, 3, 4, 5, 6],
+            &'static [i64]
+        );
+        assert_evals_to!(
+            "List.join [ [ 1.2, 1.1 ], [ 2.1, 2.2 ] ]",
+            &[1.2, 1.1, 2.1, 2.2],
+            &'static [f64]
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    List.join
+                        [
+                            [ 1.2, 1.1 ],
+                            [ 2.1, 2.2 ],
+                            [ 3.0, 4.0, 5.0, 6.1, 9.0 ],
+                            [ 3.0, 4.0, 5.0, 6.1, 9.0 ],
+                            [ 3.0, 4.0, 5.0, 6.1, 9.0 ],
+                            [ 3.0, 4.0, 5.0, 6.1, 9.0 ],
+                            [ 3.0, 4.0, 5.0, 6.1, 9.0 ]
+                        ]
+                "#
+            ),
+            &[
+                1.2, 1.1, 2.1, 2.2, 3.0, 4.0, 5.0, 6.1, 9.0, 3.0, 4.0, 5.0, 6.1, 9.0, 3.0, 4.0,
+                5.0, 6.1, 9.0, 3.0, 4.0, 5.0, 6.1, 9.0, 3.0, 4.0, 5.0, 6.1, 9.0
+            ],
+            &'static [f64]
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    empty : List Float
+                    empty =
+                        []
+        
+                    List.join [ [ 0.2, 11.11 ], empty ]
+                "#
+            ),
+            &[0.2, 11.11],
+            &'static [f64]
+        );
+
+        assert_evals_to!("List.join [ [], [], [] ]", &[], &'static [f64]);
+
+        assert_evals_to!(
+            "List.join [ [ 1.2, 1.1 ], [] ]",
+            &[1.2, 1.1],
+            &'static [f64]
+        );
+    }
+
+    #[test]
     fn list_single() {
         assert_evals_to!("List.single 1", &[1], &'static [i64]);
         assert_evals_to!("List.single 5.6", &[5.6], &'static [f64]);
