@@ -86,11 +86,11 @@ enum Msg<'a> {
         src: &'a str,
         module_id: ModuleId,
         solved_module: SolvedModule,
-        solved_subs: Arc<Solved<Subs>>,
+        solved_subs: Solved<Subs>,
         module_timing: ModuleTiming,
     },
     Finished {
-        solved: Solved<Subs>,
+        solved_subs: Solved<Subs>,
         problems: Vec<solve::TypeError>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         src: &'a str,
@@ -479,7 +479,7 @@ pub fn load(
         for msg in msg_rx.iter() {
             match msg {
                 Msg::Finished {
-                    solved,
+                    solved_subs,
                     problems,
                     exposed_vars_by_symbol,
                     src,
@@ -494,7 +494,13 @@ pub fn load(
                             .map_err(|_| LoadingProblem::MsgChannelDied)?;
                     }
 
-                    return Ok(finish(state, solved, problems, exposed_vars_by_symbol, src));
+                    return Ok(finish(
+                        state,
+                        solved_subs,
+                        problems,
+                        exposed_vars_by_symbol,
+                        src,
+                    ));
                 }
                 msg => {
                     // This is where most of the main thread's work gets done.
@@ -760,13 +766,9 @@ fn update<'a>(
             state.timings.insert(module_id, module_timing);
 
             if module_id == state.root_id {
-                let solved = Arc::try_unwrap(solved_subs).unwrap_or_else(|_| {
-                    panic!("There were still outstanding Arc references to Solved<Subs>")
-                });
-
                 msg_tx
                     .send(Msg::Finished {
-                        solved,
+                        solved_subs,
                         problems: solved_module.problems,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
                         src,
@@ -1307,7 +1309,7 @@ fn run_solve<'a>(
     Msg::Solved {
         src,
         module_id,
-        solved_subs: Arc::new(solved_subs),
+        solved_subs,
         solved_module,
         module_timing,
     }
