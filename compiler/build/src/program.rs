@@ -137,14 +137,14 @@ pub fn gen(
     fpm.initialize();
 
     // Compute main_fn_type before moving subs to Env
-    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
-    let layout = Layout::new(&arena, content, &subs, ptr_bytes).unwrap_or_else(|err| {
+    let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
         panic!(
             "Code gen error in Program: could not convert to layout. Err was {:?}",
             err
         )
     });
 
+    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
     let main_fn_type =
         basic_type_from_layout(&arena, &context, &layout, ptr_bytes).fn_type(&[], false);
     let main_fn_name = "$main";
@@ -169,7 +169,6 @@ pub fn gen(
         problems: &mut mono_problems,
         home,
         ident_ids: &mut ident_ids,
-        pointer_size: ptr_bytes,
         jump_counter: arena.alloc(0),
     };
 
