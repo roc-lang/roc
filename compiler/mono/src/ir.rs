@@ -404,10 +404,6 @@ pub enum CallType {
 pub enum Expr<'a> {
     Literal(Literal<'a>),
 
-    /// A symbol will alias this symbol
-    /// in the long term we should get rid of this using copy propagation
-    Alias(Symbol),
-
     // Functions
     FunctionPointer(Symbol, Layout<'a>),
     FunctionCall {
@@ -490,7 +486,6 @@ impl<'a> Expr<'a> {
 
         match self {
             Literal(lit) => lit.to_doc(alloc),
-            Alias(symbol) => alloc.text("alias ").append(symbol_to_doc(alloc, *symbol)),
 
             FunctionPointer(symbol, _) => symbol_to_doc(alloc, *symbol),
 
@@ -1049,7 +1044,12 @@ pub fn with_hole<'a>(
         LetNonRec(def, cont, _, _) => {
             // WRONG! this is introduces new control flow, and should call `from_can` again
             if let roc_can::pattern::Pattern::Identifier(symbol) = def.loc_pattern.value {
-                let stmt = with_hole(env, cont.value, procs, layout_cache, assigned, hole);
+                let mut stmt = with_hole(env, cont.value, procs, layout_cache, assigned, hole);
+
+                // this is an alias of a variable
+                if let roc_can::expr::Expr::Var(original) = def.loc_expr.value {
+                    substitute_in_exprs(env.arena, &mut stmt, symbol, original);
+                }
 
                 with_hole(
                     env,
@@ -1060,7 +1060,51 @@ pub fn with_hole<'a>(
                     env.arena.alloc(stmt),
                 )
             } else {
-                todo!()
+                // this may be a destructure pattern
+                let mono_pattern = from_can_pattern(env, layout_cache, &def.loc_pattern.value);
+
+                if let Pattern::Identifier(symbol) = mono_pattern {
+                    let hole = env
+                        .arena
+                        .alloc(from_can(env, cont.value, procs, layout_cache));
+                    with_hole(env, def.loc_expr.value, procs, layout_cache, symbol, hole)
+                } else {
+                    let context = crate::exhaustive::Context::BadDestruct;
+                    match crate::exhaustive::check(
+                        def.loc_pattern.region,
+                        &[(
+                            Located::at(def.loc_pattern.region, mono_pattern.clone()),
+                            crate::exhaustive::Guard::NoGuard,
+                        )],
+                        context,
+                    ) {
+                        Ok(_) => {}
+                        Err(errors) => {
+                            for error in errors {
+                                env.problems.push(MonoProblem::PatternProblem(error))
+                            }
+                        } // TODO make all variables bound in the pattern evaluate to a runtime error
+                          // return Stmt::RuntimeError("TODO non-exhaustive pattern");
+                    }
+
+                    // convert the continuation
+                    let mut stmt = from_can(env, cont.value, procs, layout_cache);
+
+                    let outer_symbol = env.unique_symbol();
+                    stmt =
+                        store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
+                            .unwrap();
+
+                    // convert the def body, store in outer_symbol
+                    with_hole(
+                        env,
+                        def.loc_expr.value,
+                        procs,
+                        layout_cache,
+                        outer_symbol,
+                        env.arena.alloc(stmt),
+                    )
+                }
             }
         }
         Var(symbol) => {
@@ -1840,24 +1884,12 @@ pub fn from_can<'a>(
                       // return Stmt::RuntimeError("TODO non-exhaustive pattern");
                 }
 
-                let layout = layout_cache
-                    .from_var(env.arena, def.expr_var, env.subs)
-                    .expect("invalid layout");
-
                 // convert the continuation
                 let mut stmt = from_can(env, cont.value, procs, layout_cache);
 
                 let outer_symbol = env.unique_symbol();
-                stmt = store_pattern(
-                    env,
-                    procs,
-                    layout_cache,
-                    &mono_pattern,
-                    outer_symbol,
-                    layout,
-                    stmt,
-                )
-                .unwrap();
+                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
+                    .unwrap();
 
                 // convert the def body, store in outer_symbol
                 with_hole(
@@ -2012,15 +2044,7 @@ fn from_can_when<'a>(
 
                 let guard_stmt = with_hole(env, loc_expr.value, procs, layout_cache, symbol, jump);
 
-                match store_pattern(
-                    env,
-                    procs,
-                    layout_cache,
-                    &pattern,
-                    cond_symbol,
-                    cond_layout.clone(),
-                    guard_stmt,
-                ) {
+                match store_pattern(env, procs, layout_cache, &pattern, cond_symbol, guard_stmt) {
                     Ok(new_guard_stmt) => (
                         pattern,
                         Guard::Guard {
@@ -2037,15 +2061,7 @@ fn from_can_when<'a>(
                     ),
                 }
             } else {
-                match store_pattern(
-                    env,
-                    procs,
-                    layout_cache,
-                    &pattern,
-                    cond_symbol,
-                    cond_layout.clone(),
-                    branch_stmt,
-                ) {
+                match store_pattern(env, procs, layout_cache, &pattern, cond_symbol, branch_stmt) {
                     Ok(new_branch_stmt) => (pattern, Guard::NoGuard, new_branch_stmt),
                     Err(msg) => (
                         Pattern::Underscore,
@@ -2068,6 +2084,363 @@ fn from_can_when<'a>(
     )
 }
 
+fn substitute(substitutions: &MutMap<Symbol, Symbol>, s: Symbol) -> Option<Symbol> {
+    match substitutions.get(&s) {
+        Some(new) => {
+            debug_assert!(!substitutions.contains_key(new));
+            Some(*new)
+        }
+        None => None,
+    }
+}
+
+fn substitute_in_exprs<'a>(arena: &'a Bump, stmt: &mut Stmt<'a>, from: Symbol, to: Symbol) {
+    let mut subs = MutMap::default();
+    subs.insert(from, to);
+
+    // TODO clean this up
+    let ref_stmt = arena.alloc(stmt.clone());
+    if let Some(new) = substitute_in_stmt_help(arena, ref_stmt, &subs) {
+        *stmt = new.clone();
+    }
+}
+
+fn substitute_in_stmt_help<'a>(
+    arena: &'a Bump,
+    stmt: &'a Stmt<'a>,
+    subs: &MutMap<Symbol, Symbol>,
+) -> Option<&'a Stmt<'a>> {
+    use Stmt::*;
+
+    match stmt {
+        Let(symbol, expr, layout, cont) => {
+            let opt_cont = substitute_in_stmt_help(arena, cont, subs);
+            let opt_expr = substitute_in_expr(arena, expr, subs);
+
+            if opt_expr.is_some() || opt_cont.is_some() {
+                let cont = opt_cont.unwrap_or(cont);
+                let expr = opt_expr.unwrap_or_else(|| expr.clone());
+
+                Some(arena.alloc(Let(*symbol, expr, layout.clone(), cont)))
+            } else {
+                None
+            }
+        }
+        Join {
+            id,
+            parameters,
+            remainder,
+            continuation,
+        } => {
+            let opt_remainder = substitute_in_stmt_help(arena, remainder, subs);
+            let opt_continuation = substitute_in_stmt_help(arena, continuation, subs);
+
+            if opt_remainder.is_some() || opt_continuation.is_some() {
+                let remainder = opt_remainder.unwrap_or(remainder);
+                let continuation = opt_continuation.unwrap_or_else(|| *continuation);
+
+                Some(arena.alloc(Join {
+                    id: *id,
+                    parameters,
+                    remainder,
+                    continuation,
+                }))
+            } else {
+                None
+            }
+        }
+        Cond {
+            cond_symbol,
+            cond_layout,
+            branching_symbol,
+            branching_layout,
+            pass,
+            fail,
+            ret_layout,
+        } => {
+            let opt_pass = substitute_in_stmt_help(arena, pass, subs);
+            let opt_fail = substitute_in_stmt_help(arena, fail, subs);
+
+            if opt_pass.is_some() || opt_fail.is_some() {
+                let pass = opt_pass.unwrap_or(pass);
+                let fail = opt_fail.unwrap_or_else(|| *fail);
+
+                Some(arena.alloc(Cond {
+                    cond_symbol: *cond_symbol,
+                    cond_layout: cond_layout.clone(),
+                    branching_symbol: *branching_symbol,
+                    branching_layout: branching_layout.clone(),
+                    pass,
+                    fail,
+                    ret_layout: ret_layout.clone(),
+                }))
+            } else {
+                None
+            }
+        }
+        Switch {
+            cond_symbol,
+            cond_layout,
+            branches,
+            default_branch,
+            ret_layout,
+        } => {
+            let opt_default = substitute_in_stmt_help(arena, default_branch, subs);
+
+            let mut did_change = false;
+
+            let opt_branches = Vec::from_iter_in(
+                branches.iter().map(|(label, branch)| {
+                    match substitute_in_stmt_help(arena, branch, subs) {
+                        None => None,
+                        Some(branch) => {
+                            did_change = true;
+                            Some((*label, branch.clone()))
+                        }
+                    }
+                }),
+                arena,
+            );
+
+            if opt_default.is_some() || did_change {
+                let default_branch = opt_default.unwrap_or(default_branch);
+
+                let branches = if did_change {
+                    let new = Vec::from_iter_in(
+                        opt_branches.into_iter().zip(branches.iter()).map(
+                            |(opt_branch, branch)| match opt_branch {
+                                None => branch.clone(),
+                                Some(new_branch) => new_branch,
+                            },
+                        ),
+                        arena,
+                    );
+
+                    new.into_bump_slice()
+                } else {
+                    branches
+                };
+
+                Some(arena.alloc(Switch {
+                    cond_symbol: *cond_symbol,
+                    cond_layout: cond_layout.clone(),
+                    default_branch,
+                    branches,
+                    ret_layout: ret_layout.clone(),
+                }))
+            } else {
+                None
+            }
+        }
+        Ret(s) => match substitute(subs, *s) {
+            Some(s) => Some(arena.alloc(Ret(s))),
+            None => None,
+        },
+        Inc(symbol, cont) => match substitute_in_stmt_help(arena, cont, subs) {
+            Some(cont) => Some(arena.alloc(Inc(*symbol, cont))),
+            None => None,
+        },
+        Dec(symbol, cont) => match substitute_in_stmt_help(arena, cont, subs) {
+            Some(cont) => Some(arena.alloc(Dec(*symbol, cont))),
+            None => None,
+        },
+
+        Jump(id, args) => {
+            let mut did_change = false;
+            let new_args = Vec::from_iter_in(
+                args.iter().map(|s| match substitute(subs, *s) {
+                    None => *s,
+                    Some(s) => {
+                        did_change = true;
+                        s
+                    }
+                }),
+                arena,
+            );
+
+            if did_change {
+                let args = new_args.into_bump_slice();
+
+                Some(arena.alloc(Jump(*id, args)))
+            } else {
+                None
+            }
+        }
+
+        RuntimeError(_) => None,
+    }
+}
+
+fn substitute_in_expr<'a>(
+    arena: &'a Bump,
+    expr: &'a Expr<'a>,
+    subs: &MutMap<Symbol, Symbol>,
+) -> Option<Expr<'a>> {
+    use Expr::*;
+
+    match expr {
+        Literal(_) | FunctionPointer(_, _) | EmptyArray | RuntimeErrorFunction(_) => None,
+
+        FunctionCall {
+            call_type,
+            args,
+            arg_layouts,
+            layout,
+        } => {
+            let opt_call_type = match call_type {
+                CallType::ByName(s) => substitute(subs, *s).map(CallType::ByName),
+                CallType::ByPointer(s) => substitute(subs, *s).map(CallType::ByPointer),
+            };
+
+            let mut did_change = false;
+            let new_args = Vec::from_iter_in(
+                args.iter().map(|s| match substitute(subs, *s) {
+                    None => *s,
+                    Some(s) => {
+                        did_change = true;
+                        s
+                    }
+                }),
+                arena,
+            );
+
+            if did_change || opt_call_type.is_some() {
+                let call_type = opt_call_type.unwrap_or(*call_type);
+
+                let args = new_args.into_bump_slice();
+
+                Some(FunctionCall {
+                    call_type,
+                    args,
+                    arg_layouts: *arg_layouts,
+                    layout: layout.clone(),
+                })
+            } else {
+                None
+            }
+        }
+        RunLowLevel(op, args) => {
+            let mut did_change = false;
+            let new_args = Vec::from_iter_in(
+                args.iter().map(|s| match substitute(subs, *s) {
+                    None => *s,
+                    Some(s) => {
+                        did_change = true;
+                        s
+                    }
+                }),
+                arena,
+            );
+
+            if did_change {
+                let args = new_args.into_bump_slice();
+
+                Some(RunLowLevel(*op, args))
+            } else {
+                None
+            }
+        }
+
+        Tag {
+            tag_layout,
+            tag_name,
+            tag_id,
+            union_size,
+            arguments: args,
+        } => {
+            let mut did_change = false;
+            let new_args = Vec::from_iter_in(
+                args.iter().map(|s| match substitute(subs, *s) {
+                    None => *s,
+                    Some(s) => {
+                        did_change = true;
+                        s
+                    }
+                }),
+                arena,
+            );
+
+            if did_change {
+                let arguments = new_args.into_bump_slice();
+
+                Some(Tag {
+                    tag_layout: tag_layout.clone(),
+                    tag_name: tag_name.clone(),
+                    tag_id: *tag_id,
+                    union_size: *union_size,
+                    arguments,
+                })
+            } else {
+                None
+            }
+        }
+        Struct(args) => {
+            let mut did_change = false;
+            let new_args = Vec::from_iter_in(
+                args.iter().map(|s| match substitute(subs, *s) {
+                    None => *s,
+                    Some(s) => {
+                        did_change = true;
+                        s
+                    }
+                }),
+                arena,
+            );
+
+            if did_change {
+                let args = new_args.into_bump_slice();
+
+                Some(Struct(args))
+            } else {
+                None
+            }
+        }
+
+        Array {
+            elems: args,
+            elem_layout,
+        } => {
+            let mut did_change = false;
+            let new_args = Vec::from_iter_in(
+                args.iter().map(|s| match substitute(subs, *s) {
+                    None => *s,
+                    Some(s) => {
+                        did_change = true;
+                        s
+                    }
+                }),
+                arena,
+            );
+
+            if did_change {
+                let args = new_args.into_bump_slice();
+
+                Some(Array {
+                    elem_layout: elem_layout.clone(),
+                    elems: args,
+                })
+            } else {
+                None
+            }
+        }
+
+        AccessAtIndex {
+            index,
+            structure,
+            field_layouts,
+            is_unwrapped,
+        } => match substitute(subs, *structure) {
+            Some(structure) => Some(AccessAtIndex {
+                index: *index,
+                field_layouts: *field_layouts,
+                is_unwrapped: *is_unwrapped,
+                structure,
+            }),
+            None => None,
+        },
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn store_pattern<'a>(
     env: &mut Env<'a, '_>,
@@ -2075,15 +2448,13 @@ fn store_pattern<'a>(
     layout_cache: &mut LayoutCache<'a>,
     can_pat: &Pattern<'a>,
     outer_symbol: Symbol,
-    layout: Layout<'a>,
     mut stmt: Stmt<'a>,
 ) -> Result<Stmt<'a>, &'a str> {
     use Pattern::*;
 
     match can_pat {
         Identifier(symbol) => {
-            let expr = Expr::Alias(outer_symbol);
-            stmt = Stmt::Let(*symbol, expr, layout, env.arena.alloc(stmt));
+            substitute_in_exprs(env.arena, &mut stmt, *symbol, outer_symbol);
         }
         Underscore => {
             // do nothing
@@ -2134,15 +2505,7 @@ fn store_pattern<'a>(
                         let symbol = env.unique_symbol();
 
                         // first recurse, continuing to unpack symbol
-                        stmt = store_pattern(
-                            env,
-                            procs,
-                            layout_cache,
-                            argument,
-                            symbol,
-                            arg_layout.clone(),
-                            stmt,
-                        )?;
+                        stmt = store_pattern(env, procs, layout_cache, argument, symbol, stmt)?;
 
                         // then store the symbol
                         stmt = Stmt::Let(symbol, load, arg_layout.clone(), env.arena.alloc(stmt));
@@ -2244,15 +2607,7 @@ fn store_record_destruct<'a>(
             _ => {
                 let symbol = env.unique_symbol();
 
-                stmt = store_pattern(
-                    env,
-                    procs,
-                    layout_cache,
-                    guard_pattern,
-                    symbol,
-                    destruct.layout.clone(),
-                    stmt,
-                )?;
+                stmt = store_pattern(env, procs, layout_cache, guard_pattern, symbol, stmt)?;
 
                 stmt = Stmt::Let(symbol, load, destruct.layout.clone(), env.arena.alloc(stmt));
             }

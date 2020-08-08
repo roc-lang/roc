@@ -125,14 +125,14 @@ mod test_mono {
             "#,
             indoc!(
                 r#"
-                let Test.2 = true;
-                if Test.2 then
-                    let Test.0 = 1i64;
-                    jump Test.1 Test.0;
+                let Test.3 = true;
+                if Test.3 then
+                    let Test.1 = 1i64;
+                    jump Test.2 Test.1;
                 else
-                    let Test.0 = 2i64;
-                    jump Test.1 Test.0;
-                joinpoint Test.1 Test.0:
+                    let Test.1 = 2i64;
+                    jump Test.2 Test.1;
+                joinpoint Test.2 Test.0:
                     ret Test.0;
                 "#
             ),
@@ -310,19 +310,19 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Num.32 (#Attr.2, #Attr.3):
-                    let Test.20 = 0i64;
-                    let Test.17 = lowlevel NotEq #Attr.3 Test.20;
-                    if Test.17 then
-                        let Test.18 = 1i64;
-                        let Test.19 = lowlevel NumDivUnchecked #Attr.2 #Attr.3;
-                        let Test.13 = Ok Test.18 Test.19;
-                        jump Test.14 Test.13;
+                    let Test.21 = 0i64;
+                    let Test.18 = lowlevel NotEq #Attr.3 Test.21;
+                    if Test.18 then
+                        let Test.19 = 1i64;
+                        let Test.20 = lowlevel NumDivUnchecked #Attr.2 #Attr.3;
+                        let Test.14 = Ok Test.19 Test.20;
+                        jump Test.15 Test.14;
                     else
-                        let Test.15 = 0i64;
-                        let Test.16 = Struct {};
-                        let Test.13 = Err Test.15 Test.16;
-                        jump Test.14 Test.13;
-                    joinpoint Test.14 Test.13:
+                        let Test.16 = 0i64;
+                        let Test.17 = Struct {};
+                        let Test.14 = Err Test.16 Test.17;
+                        jump Test.15 Test.14;
+                    joinpoint Test.15 Test.13:
                         ret Test.13;
 
                 let Test.11 = 1000i64;
@@ -440,14 +440,14 @@ mod test_mono {
             "#,
             indoc!(
                 r#"
-                let Test.3 = true;
-                if Test.3 then
-                    let Test.0 = 1i64;
-                    jump Test.2 Test.0;
+                let Test.4 = true;
+                if Test.4 then
+                    let Test.2 = 1i64;
+                    jump Test.3 Test.2;
                 else
-                    let Test.0 = 2i64;
-                    jump Test.2 Test.0;
-                joinpoint Test.2 Test.0:
+                    let Test.2 = 2i64;
+                    jump Test.3 Test.2;
+                joinpoint Test.3 Test.0:
                     ret Test.0;
                 "#
             ),
@@ -603,21 +603,52 @@ mod test_mono {
     }
 
     #[test]
-    fn list_push() {
+    fn list_append_closure() {
         compiles_to_ir(
             r#"
-            List.push [1] 2
+            myFunction = \l -> List.append l 42
+
+            myFunction [ 1, 2 ]
+            "#,
+            indoc!(
+                r#"
+                procedure Test.0 (Test.2):
+                    let Test.6 = 42i64;
+                    let Test.5 = CallByName List.5 Test.2 Test.6;
+                    ret Test.5;
+
+                procedure List.5 (#Attr.2, #Attr.3):
+                    let Test.7 = lowlevel ListAppend #Attr.2 #Attr.3;
+                    ret Test.7;
+
+                let Test.8 = 1i64;
+                let Test.9 = 2i64;
+                let Test.4 = Array [Test.8, Test.9];
+                let Test.3 = CallByName Test.0 Test.4;
+                dec Test.4;
+                ret Test.3;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_append() {
+        compiles_to_ir(
+            r#"
+            List.append [1] 2
             "#,
             indoc!(
                 r#"
                 procedure List.5 (#Attr.2, #Attr.3):
-                    let Test.3 = lowlevel ListPush #Attr.2 #Attr.3;
+                    let Test.3 = lowlevel ListAppend #Attr.2 #Attr.3;
                     ret Test.3;
 
                 let Test.4 = 1i64;
                 let Test.1 = Array [Test.4];
                 let Test.2 = 2i64;
                 let Test.0 = CallByName List.5 Test.1 Test.2;
+                dec Test.1;
                 ret Test.0;
                 "#
             ),
@@ -635,15 +666,26 @@ mod test_mono {
             "#,
             indoc!(
                 r#"
-                procedure List.5 (#Attr.2, #Attr.3):
-                    let Test.3 = lowlevel ListPush #Attr.2 #Attr.3;
-                    ret Test.3;
+                procedure Num.14 (#Attr.2, #Attr.3):
+                    let Test.5 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.5;
 
-                let Test.4 = 1i64;
-                let Test.1 = Array [Test.4];
-                let Test.2 = 2i64;
-                let Test.0 = CallByName List.5 Test.1 Test.2;
-                ret Test.0;
+                procedure List.7 (#Attr.2):
+                    let Test.6 = lowlevel ListLen #Attr.2;
+                    ret Test.6;
+
+                let Test.10 = 1f64;
+                let Test.1 = Array [Test.10];
+                let Test.7 = 1i64;
+                let Test.8 = 2i64;
+                let Test.9 = 3i64;
+                let Test.0 = Array [Test.7, Test.8, Test.9];
+                let Test.3 = CallByName List.7 Test.0;
+                dec Test.0;
+                let Test.4 = CallByName List.7 Test.1;
+                dec Test.1;
+                let Test.2 = CallByName Num.14 Test.3 Test.4;
+                ret Test.2;
                 "#
             ),
         )
@@ -806,8 +848,30 @@ mod test_mono {
                 let Test.5 = 3.14f64;
                 let Test.3 = Struct {Test.4, Test.5};
                 let Test.0 = Index 0 Test.3;
+                ret Test.0;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn let_with_record_pattern_list() {
+        compiles_to_ir(
+            r#"
+            { x } = { x: [ 1, 3, 4 ], y: 3.14 }
+
+            x
+            "#,
+            indoc!(
+                r#"
+                let Test.6 = 1i64;
+                let Test.7 = 3i64;
+                let Test.8 = 4i64;
+                let Test.4 = Array [Test.6, Test.7, Test.8];
+                let Test.5 = 3.14f64;
+                let Test.3 = Struct {Test.4, Test.5};
+                let Test.0 = Index 0 Test.3;
                 inc Test.0;
-                dec Test.3;
                 ret Test.0;
                 "#
             ),
@@ -832,9 +896,8 @@ mod test_mono {
 
                 let Test.2 = 10i64;
                 let Test.11 = true;
-                let Test.0 = alias Test.2;
                 let Test.7 = 5i64;
-                let Test.6 = CallByName Bool.5 Test.0 Test.7;
+                let Test.6 = CallByName Bool.5 Test.2 Test.7;
                 jump Test.5 Test.6;
                 joinpoint Test.5 Test.12:
                     let Test.10 = lowlevel And Test.12 Test.11;
@@ -852,27 +915,66 @@ mod test_mono {
     }
 
     #[test]
-    fn beans_example_1() {
+    fn alias_variable() {
         compiles_to_ir(
             indoc!(
                 r#"
-                y = 10
+                x = 5
+                y = x
 
-                z = Num.add y y
-
-                z
+                3
                 "#
             ),
             indoc!(
                 r#"
-                procedure Num.14 (#Attr.2, #Attr.3):
-                    let Test.3 = lowlevel NumAdd #Attr.2 #Attr.3;
-                    ret Test.3;
+                let Test.0 = 5i64;
+                ret Test.0;
+                "#
+            ),
+        );
 
-                let Test.0 = 10i64;
-                inc Test.0;
-                let Test.1 = CallByName Num.14 Test.0 Test.0;
-                ret Test.1;
+        compiles_to_ir(
+            indoc!(
+                r#"
+                x = 5
+                y = x
+
+                y
+                "#
+            ),
+            indoc!(
+                r#"
+                let Test.0 = 5i64;
+                ret Test.0;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn branch_store_variable() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                when 0 is
+                    1 -> 12
+                    a -> a
+                "#
+            ),
+            indoc!(
+                r#"
+                let Test.2 = 0i64;
+                let Test.7 = true;
+                let Test.8 = 1i64;
+                let Test.9 = lowlevel Eq Test.8 Test.2;
+                let Test.6 = lowlevel And Test.9 Test.7;
+                if Test.6 then
+                    let Test.4 = 12i64;
+                    jump Test.3 Test.4;
+                else
+                    jump Test.3 Test.2;
+                joinpoint Test.3 Test.1:
+                    ret Test.1;
                 "#
             ),
         )

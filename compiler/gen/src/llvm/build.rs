@@ -256,7 +256,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
     match expr {
         Literal(literal) => build_exp_literal(env, literal),
-        Alias(symbol) => load_symbol(env, scope, symbol),
         RunLowLevel(op, symbols) => run_low_level(env, scope, parent, *op, symbols),
 
         FunctionCall {

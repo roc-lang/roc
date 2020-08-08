@@ -93,7 +93,6 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
 
     match expr {
         FunctionPointer(symbol, _)
-        | Alias(symbol)
         | AccessAtIndex {
             structure: symbol, ..
         } => {
@@ -239,6 +238,11 @@ impl<'a> Context<'a> {
             return stmt;
         }
 
+        // if this symbol is never a reference, don't emit
+        if !info.reference { 
+            return stmt;
+        }
+
         self.arena.alloc(Stmt::Inc(symbol, stmt))
     }
 
@@ -247,6 +251,11 @@ impl<'a> Context<'a> {
 
         if info.persistent {
             // persistent values are never reference counted
+            return stmt;
+        }
+
+        // if this symbol is never a reference, don't emit
+        if !info.reference { 
             return stmt;
         }
 
@@ -424,13 +433,8 @@ impl<'a> Context<'a> {
                 ),
             AccessAtIndex { structure: x, .. } => {
                 let b = self.add_dec_if_needed(x, b, b_live_vars);
-                // NOTE deviation from Lean. I think lean assumes all structure elements live on
-                // the heap. Therefore any access to a Tag/Struct element must increment its
-                // refcount. But in roc, structure elements can be unboxed.
                 let info_x = self.get_var_info(x);
-                // let info_z = self.get_var_info(z);
                 let b = if info_x.consume {
-                    println!("inc on {}", z);
                     self.add_inc(z, b)
                 } else {
                     b
@@ -489,7 +493,6 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            Alias(_) => unreachable!("well, it should be unreachable!"),
 
             EmptyArray | FunctionPointer(_, _) | Literal(_) | RuntimeErrorFunction(_) => {
                 // EmptyArray is always stack-allocated
@@ -734,7 +737,8 @@ impl<'a> Context<'a> {
                 (switch, case_live_vars)
             }
 
-            _ => todo!(),
+            RuntimeError(_) | Inc(_,_) | Dec(_,_) => (stmt, MutSet::default()),
+
         }
     }
 }
