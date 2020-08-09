@@ -12,12 +12,22 @@ mod helpers;
 // Test monomorphization
 #[cfg(test)]
 mod test_mono {
-    use crate::helpers::{can_expr, infer_expr, CanExprOut};
-    use bumpalo::Bump;
-    use roc_mono::layout::LayoutCache;
-    use roc_types::subs::Subs;
 
+    // NOTE because the Show instance of module names is different in --release mode,
+    // these tests would all fail. In the future, when we do interesting optimizations,
+    // we'll likely want some tests for --release too.
+    #[cfg(not(debug_assertions))]
+    fn compiles_to_ir(_src: &str, _expected: &str) {
+        // just do nothing
+    }
+
+    #[cfg(debug_assertions)]
     fn compiles_to_ir(src: &str, expected: &str) {
+        use crate::helpers::{can_expr, infer_expr, CanExprOut};
+        use bumpalo::Bump;
+        use roc_mono::layout::LayoutCache;
+        use roc_types::subs::Subs;
+
         let arena = Bump::new();
         let CanExprOut {
             loc_expr,
