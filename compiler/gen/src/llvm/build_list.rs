@@ -385,12 +385,8 @@ pub fn list_join<'a, 'ctx, 'env>(
                     builder.build_store(list_len_sum_alloca, next_list_sum);
 
                     // #index < outer_list_len
-                    let outer_loop_end_cond = builder.build_int_compare(
-                        IntPredicate::ULT,
-                        next_index,
-                        outer_list_len,
-                        "loopcond",
-                    );
+                    let outer_loop_end_cond =
+                        bounds_check_comparison(builder, next_index, outer_list_len);
 
                     let after_outer_loop_bb = ctx.append_basic_block(parent, "after_outer_loop");
 
@@ -522,12 +518,8 @@ pub fn list_join<'a, 'ctx, 'env>(
 
                         builder.build_store(dest_elem_ptr_alloca, inc_dest_elem_ptr);
 
-                        let inner_loop_end_cond = builder.build_int_compare(
-                            IntPredicate::ULT,
-                            next_inner_index,
-                            inner_list_len,
-                            "loopcond",
-                        );
+                        let inner_loop_end_cond =
+                            bounds_check_comparison(builder, next_inner_index, inner_list_len);
 
                         let after_inner_loop_bb =
                             ctx.append_basic_block(parent, "after_inner_loop");
@@ -544,12 +536,8 @@ pub fn list_join<'a, 'ctx, 'env>(
                     }
 
                     // #index < outer_list_len
-                    let outer_loop_end_cond = builder.build_int_compare(
-                        IntPredicate::ULT,
-                        next_index,
-                        outer_list_len,
-                        "loopcond",
-                    );
+                    let outer_loop_end_cond =
+                        bounds_check_comparison(builder, next_index, outer_list_len);
 
                     let after_outer_loop_bb = ctx.append_basic_block(parent, "after_outer_loop");
 
@@ -1267,11 +1255,10 @@ pub fn list_concat<'a, 'ctx, 'env>(
                                 builder.build_store(index_alloca, next_first_loop_index);
 
                                 // #index < first_list_len
-                                let first_loop_end_cond = builder.build_int_compare(
-                                    IntPredicate::ULT,
+                                let first_loop_end_cond = bounds_check_comparison(
+                                    builder,
                                     next_first_loop_index,
                                     first_list_len,
-                                    "loopcond",
                                 );
 
                                 let after_first_loop_bb =
@@ -1351,11 +1338,10 @@ pub fn list_concat<'a, 'ctx, 'env>(
                                 builder.build_store(index_alloca, next_second_index);
 
                                 // #index < second_list_len
-                                let second_loop_end_cond = builder.build_int_compare(
-                                    IntPredicate::ULT,
+                                let second_loop_end_cond = bounds_check_comparison(
+                                    builder,
                                     next_second_index,
                                     second_list_len,
-                                    "loopcond",
                                 );
 
                                 let after_second_loop_bb =
