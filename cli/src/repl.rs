@@ -258,7 +258,6 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
         problems: &mut mono_problems,
         home,
         ident_ids: &mut ident_ids,
-        jump_counter: arena.alloc(0),
     };
 
     let main_body = roc_mono::expr::Expr::new(&mut mono_env, loc_expr.value, &mut procs);

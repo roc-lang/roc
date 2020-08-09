@@ -169,7 +169,6 @@ pub fn gen(
         problems: &mut mono_problems,
         home,
         ident_ids: &mut ident_ids,
-        jump_counter: arena.alloc(0),
     };
 
     // Add modules' decls to Procs

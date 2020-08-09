@@ -58,7 +58,6 @@ mod test_mono {
             problems: &mut mono_problems,
             home,
             ident_ids: &mut ident_ids,
-            jump_counter: arena.alloc(0),
         };
         let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
         let procs =
