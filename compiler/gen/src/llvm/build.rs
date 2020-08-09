@@ -20,7 +20,7 @@ use roc_collections::all::ImMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::JoinPointId;
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::{Builtin, Layout, Ownership};
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -1800,6 +1800,17 @@ fn list_literal<'a, 'ctx, 'env>(
     )
 }
 
+// TODO investigate: does this cause problems when the layout is known? this value is now not refcounted!
+fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+
+    let struct_type = collection(ctx, env.ptr_bytes);
+
+    // The pointer should be null (aka zero) and the length should be zero,
+    // so the whole struct should be a const_zero
+    BasicValueEnum::StructValue(struct_type.const_zero())
+}
+
 fn bounds_check_comparison<'ctx>(
     builder: &Builder<'ctx>,
     elem_index: IntValue<'ctx>,
@@ -1914,9 +1925,10 @@ fn list_join<'a, 'ctx, 'env>(
         // If the input list is empty, or if it is a list of empty lists
         // then simply return an empty list
         Layout::Builtin(Builtin::EmptyList)
-        | Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::EmptyList))) => empty_list(env),
-        Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::List(elem_layout)))) => {
-            let inner_list_layout = Layout::Builtin(Builtin::List(elem_layout));
+        | Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::EmptyList))) => empty_list(env),
+        Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::List(_, elem_layout)))) => {
+            let inner_list_layout =
+                Layout::Builtin(Builtin::List(Ownership::Borrowed, elem_layout));
 
             let builder = env.builder;
             let ctx = env.context;
@@ -2615,10 +2627,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.join : List (List elem) -> List elem
             debug_assert_eq!(args.len(), 1);
 
-            let (list, outer_list_layout) = &args[0];
-
-            let outer_wrapper_struct =
-                build_expr(env, layout_ids, scope, parent, list).into_struct_value();
+            let (list, outer_list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+            let outer_wrapper_struct = list.into_struct_value();
 
             list_join(env, parent, outer_wrapper_struct, outer_list_layout)
         }
