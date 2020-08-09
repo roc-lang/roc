@@ -306,7 +306,6 @@ pub struct Env<'a, 'i> {
     pub problems: &'i mut std::vec::Vec<MonoProblem>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
-    pub jump_counter: &'a mut u64,
 }
 
 impl<'a, 'i> Env<'a, 'i> {

@@ -93,7 +93,6 @@ mod test_reporting {
                 problems: &mut mono_problems,
                 home,
                 ident_ids: &mut ident_ids,
-                jump_counter: arena.alloc(0),
             };
             let _mono_expr = Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
         }

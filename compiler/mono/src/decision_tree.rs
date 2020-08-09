@@ -910,7 +910,7 @@ pub fn optimize_when<'a>(
 
     let choice_decider = insert_choices(&choices, decider);
 
-    let expr = decide_to_branching(
+    decide_to_branching(
         env,
         procs,
         layout_cache,
@@ -919,12 +919,7 @@ pub fn optimize_when<'a>(
         ret_layout,
         choice_decider,
         &jumps,
-    );
-
-    // increase the jump counter by the number of jumps in this branching structure
-    *env.jump_counter += jumps.len() as u64;
-
-    expr
+    )
 }
 
 fn path_to_expr<'a>(
