@@ -1,6 +1,6 @@
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
-use crate::layout::{Builtin, Layout, LayoutCache, LayoutProblem, Ownership};
+use crate::layout::{Builtin, Layout, LayoutCache, LayoutProblem};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
@@ -1482,6 +1482,7 @@ pub fn with_hole<'a>(
         }
 
         List {
+            list_var,
             elem_var,
             loc_elems,
         } => {
@@ -1503,13 +1504,13 @@ pub fn with_hole<'a>(
                 elem_layout: elem_layout.clone(),
                 elems: arg_symbols,
             };
+
+            let mode = crate::layout::mode_from_var(list_var, env.subs);
+
             let mut stmt = Stmt::Let(
                 assigned,
                 expr,
-                Layout::Builtin(Builtin::List(
-                    Ownership::Owned,
-                    env.arena.alloc(elem_layout),
-                )),
+                Layout::Builtin(Builtin::List(mode, env.arena.alloc(elem_layout))),
                 hole,
             );
 

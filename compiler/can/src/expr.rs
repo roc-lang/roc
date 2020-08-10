@@ -58,6 +58,7 @@ pub enum Expr {
     Str(Box<str>),
     BlockStr(Box<str>),
     List {
+        list_var: Variable, // required for uniqueness of the list
         elem_var: Variable,
         loc_elems: Vec<Located<Expr>>,
     },
@@ -256,6 +257,7 @@ pub fn canonicalize_expr<'a>(
             if loc_elems.is_empty() {
                 (
                     List {
+                        list_var: var_store.fresh(),
                         elem_var: var_store.fresh(),
                         loc_elems: Vec::new(),
                     },
@@ -283,6 +285,7 @@ pub fn canonicalize_expr<'a>(
 
                 (
                     List {
+                        list_var: var_store.fresh(),
                         elem_var: var_store.fresh(),
                         loc_elems: can_elems,
                     },
@@ -1052,6 +1055,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ RunLowLevel { .. } => other,
 
         List {
+            list_var,
             elem_var,
             loc_elems,
         } => {
@@ -1067,6 +1071,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             }
 
             List {
+                list_var,
                 elem_var,
                 loc_elems: new_elems,
             }

@@ -989,4 +989,49 @@ mod test_mono {
             ),
         )
     }
+
+    #[test]
+    fn list_pass_to_function() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                x : List Int
+                x = [1,2,3]
+
+                id : List Int -> List Int
+                id = \y -> List.set y 0 0
+
+                id x
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure List.4 (#Attr.2, #Attr.3, #Attr.4):
+                    let Test.12 = lowlevel ListLen #Attr.2;
+                    let Test.11 = lowlevel NumLt #Attr.3 Test.12;
+                    if Test.11 then
+                        let Test.9 = lowlevel ListSet #Attr.2 #Attr.3 #Attr.4;
+                        jump Test.10 Test.9;
+                    else
+                        jump Test.10 #Attr.2;
+                    joinpoint Test.10 Test.8:
+                        ret Test.8;
+
+                procedure Test.1 (Test.3):
+                    let Test.6 = 0i64;
+                    let Test.7 = 0i64;
+                    let Test.5 = CallByName List.4 Test.3 Test.6 Test.7;
+                    ret Test.5;
+
+                let Test.13 = 1i64;
+                let Test.14 = 2i64;
+                let Test.15 = 3i64;
+                let Test.0 = Array [Test.13, Test.14, Test.15];
+                let Test.4 = CallByName Test.1 Test.0;
+                dec Test.0;
+                ret Test.4;
+                "#
+            ),
+        )
+    }
 }

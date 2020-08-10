@@ -28,17 +28,9 @@ pub enum Layout<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
-pub enum Ownership {
-    /// The default. Object is reference counted
-    Owned,
-
-    /// Do not update reference counter, surrounding context
-    /// keeps this value alive
-    Borrowed,
-
-    /// Object is unique, can be mutated in-place and
-    /// is not reference counted
+pub enum MemoryMode {
     Unique,
+    Refcounted,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -56,7 +48,7 @@ pub enum Builtin<'a> {
     Str,
     Map(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
-    List(Ownership, &'a Layout<'a>),
+    List(MemoryMode, &'a Layout<'a>),
     EmptyStr,
     EmptyList,
     EmptyMap,
@@ -270,7 +262,12 @@ impl<'a> Builtin<'a> {
         match self {
             Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Float128 | Float64 | Float32
             | Float16 | EmptyStr | EmptyMap | EmptyList | EmptySet => false,
-            Str | Map(_, _) | Set(_) | List(_, _) => true,
+            List(mode, element_layout) => match mode {
+                MemoryMode::Refcounted => true,
+                MemoryMode::Unique => element_layout.contains_refcounted(),
+            },
+
+            Str | Map(_, _) | Set(_) => true,
         }
     }
 }
@@ -308,13 +305,26 @@ fn layout_from_flat_type<'a>(
                     debug_assert_eq!(args.len(), 2);
 
                     // The first argument is the uniqueness info;
-                    // that doesn't affect layout, so we don't need it here.
+                    // second is the base type
                     let wrapped_var = args[1];
 
-                    // For now, layout is unaffected by uniqueness.
-                    // (Incorporating refcounting may change this.)
-                    // Unwrap and continue
-                    Layout::from_var(arena, wrapped_var, subs)
+                    // correct the memory mode of unique lists
+                    match Layout::from_var(arena, wrapped_var, subs)? {
+                        Layout::Builtin(Builtin::List(_, elem_layout)) => {
+                            let uniqueness_var = args[0];
+                            let uniqueness_content =
+                                subs.get_without_compacting(uniqueness_var).content;
+
+                            let mode = if uniqueness_content.is_unique(subs) {
+                                MemoryMode::Unique
+                            } else {
+                                MemoryMode::Refcounted
+                            };
+
+                            Ok(Layout::Builtin(Builtin::List(mode, elem_layout)))
+                        }
+                        other => Ok(other),
+                    }
                 }
                 _ => {
                     panic!("TODO layout_from_flat_type for {:?}", Apply(symbol, args));
@@ -706,15 +716,15 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
 pub fn list_layout_from_elem<'a>(
     arena: &'a Bump,
     subs: &Subs,
-    var: Variable,
+    elem_var: Variable,
 ) -> Result<Layout<'a>, LayoutProblem> {
-    match subs.get_without_compacting(var).content {
+    match subs.get_without_compacting(elem_var).content {
         Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
             debug_assert_eq!(args.len(), 2);
 
-            let arg_var = args.get(1).unwrap();
+            let var = *args.get(1).unwrap();
 
-            list_layout_from_elem(arena, subs, *arg_var)
+            list_layout_from_elem(arena, subs, var)
         }
         Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (List *) then it must have been an empty list
@@ -725,9 +735,27 @@ pub fn list_layout_from_elem<'a>(
 
             // This is a normal list.
             Ok(Layout::Builtin(Builtin::List(
-                Ownership::Owned,
+                MemoryMode::Refcounted,
                 arena.alloc(elem_layout),
             )))
         }
+    }
+}
+
+pub fn mode_from_var(var: Variable, subs: &Subs) -> MemoryMode {
+    match subs.get_without_compacting(var).content {
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
+            debug_assert_eq!(args.len(), 2);
+
+            let uvar = *args.get(0).unwrap();
+            let content = subs.get_without_compacting(uvar).content;
+
+            if content.is_unique(subs) {
+                MemoryMode::Unique
+            } else {
+                MemoryMode::Refcounted
+            }
+        }
+        _ => MemoryMode::Refcounted,
     }
 }

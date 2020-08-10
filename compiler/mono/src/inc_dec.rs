@@ -844,6 +844,11 @@ pub fn visit_declaration<'a>(arena: &'a Bump, stmt: &'a Stmt<'a>) -> &'a Stmt<'a
 pub fn visit_proc<'a>(arena: &'a Bump, proc: &mut Proc<'a>) {
     let ctx = Context::new(arena);
 
+    if proc.name.is_builtin() {
+        // we must take care of our own refcounting in builtins
+        return;
+    }
+
     let params = Vec::from_iter_in(
         proc.args.iter().map(|(layout, symbol)| Param {
             symbol: *symbol,
