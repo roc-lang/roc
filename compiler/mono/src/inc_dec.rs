@@ -568,8 +568,42 @@ impl<'a> Context<'a> {
     }
 
     // TODO should not be pub
-    pub fn visit_stmt(&self, stmt: &'a Stmt<'a>) -> (&'a Stmt<'a>, LiveVarSet) {
+    fn visit_stmt(&self, stmt: &'a Stmt<'a>) -> (&'a Stmt<'a>, LiveVarSet) {
         use Stmt::*;
+
+        // let-chains can be very long, especially for large (list) literals
+        // in (rust) debug mode, this function can overflow the stack for such values
+        // so we have to write an explicit loop.
+        {
+            let mut cont = stmt;
+            let mut triples = Vec::new_in(self.arena);
+            while let Stmt::Let(symbol, expr, layout, new_cont) = cont {
+                triples.push((symbol, expr, layout));
+                cont = new_cont;
+            }
+
+            if !triples.is_empty() {
+                let mut ctx = self.clone();
+                for (symbol, expr, layout) in triples.iter() {
+                    ctx = ctx.update_var_info(**symbol, layout, expr);
+                }
+                let (mut b, mut b_live_vars) = ctx.visit_stmt(cont);
+                for (symbol, expr, layout) in triples.into_iter().rev() {
+                    let pair = ctx.visit_variable_declaration(
+                        *symbol,
+                        (*expr).clone(),
+                        (*layout).clone(),
+                        b,
+                        &b_live_vars,
+                    );
+
+                    b = pair.0;
+                    b_live_vars = pair.1;
+                }
+
+                return (b, b_live_vars);
+            }
+        }
 
         match stmt {
             Let(symbol, expr, layout, cont) => {
