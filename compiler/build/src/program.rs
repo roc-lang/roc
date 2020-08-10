@@ -1,17 +1,14 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
-use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_gen::layout_id::LayoutIds;
 use roc_gen::llvm::build::{
     build_proc, build_proc_header, get_call_conventions, module_from_builtins, OptLevel,
 };
-use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_load::file::LoadedModule;
-use roc_module::symbol::Symbol;
-use roc_mono::ir::{Env, PartialProc, Procs, Stmt};
-use roc_mono::layout::{Layout, LayoutCache};
+use roc_mono::ir::{Env, PartialProc, Procs};
+use roc_mono::layout::LayoutCache;
 
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
@@ -60,68 +57,12 @@ pub fn gen(
     }
 
     // Look up the types and expressions of the `provided` values
-
-    // TODO instead of hardcoding this to `main`, use the `provided` list and gen all of them.
-    let ident_ids = loaded.interns.all_ident_ids.get(&home).unwrap();
-    let main_ident_id = *ident_ids.get_id(&"main".into()).unwrap_or_else(|| {
-        todo!("TODO gracefully handle the case where `main` wasn't declared in the app")
-    });
-    let main_symbol = Symbol::new(home, main_ident_id);
-    let mut main_var = None;
-    let mut main_expr = None;
-
-    for (symbol, var) in loaded.exposed_vars_by_symbol {
-        if symbol == main_symbol {
-            main_var = Some(var);
-
-            break;
-        }
-    }
-
     let mut decls_by_id = loaded.declarations_by_id;
     let home_decls = decls_by_id
         .remove(&loaded.module_id)
         .expect("Root module ID not found in loaded declarations_by_id");
 
-    // We use a loop label here so we can break all the way out of a nested
-    // loop inside DeclareRec if we find the expr there.
-    //
-    // https://doc.rust-lang.org/1.30.0/book/first-edition/loops.html#loop-labels
-    'find_expr: for decl in home_decls.iter() {
-        use roc_can::def::Declaration::*;
-
-        match decl {
-            Declare(def) => {
-                if def.pattern_vars.contains_key(&main_symbol) {
-                    main_expr = Some(def.loc_expr.clone());
-
-                    break 'find_expr;
-                }
-            }
-
-            DeclareRec(defs) => {
-                for def in defs {
-                    if def.pattern_vars.contains_key(&main_symbol) {
-                        main_expr = Some(def.loc_expr.clone());
-
-                        break 'find_expr;
-                    }
-                }
-            }
-            InvalidCycle(_, _) | Builtin(_) => {
-                // These can never contain main.
-            }
-        }
-    }
-
-    let loc_expr = main_expr.unwrap_or_else(|| {
-        panic!("TODO gracefully handle the case where `main` was declared but not exposed")
-    });
     let mut subs = loaded.solved.into_inner();
-    let content = match main_var {
-        Some(var) => subs.get_without_compacting(var).content,
-        None => todo!("TODO gracefully handle the case where `main` was declared but not exposed"),
-    };
 
     // Generate the binary
 
@@ -130,18 +71,7 @@ pub fn gen(
     let builder = context.create_builder();
     let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
-    // Compute main_fn_type before moving subs to Env
-    let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
-        panic!(
-            "Code gen error in Program: could not convert to layout. Err was {:?}",
-            err
-        )
-    });
-
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
-    let main_fn_type =
-        basic_type_from_layout(&arena, &context, &layout, ptr_bytes).fn_type(&[], false);
-    let main_fn_name = "$main";
 
     // Compile and add all the Procs before adding main
     let mut env = roc_gen::llvm::build::Env {
@@ -223,9 +153,6 @@ pub fn gen(
     }
 
     // Populate Procs further and get the low-level Expr from the canonical Expr
-    let main_body = Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
-    let main_body =
-        roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),
@@ -283,35 +210,22 @@ pub fn gen(
         }
     }
 
-    // Add main to the module.
-    let cc = get_call_conventions(target.default_calling_convention().unwrap());
-    let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
+    // Set exposed functions to external linkage and C calling conventions
+    {
+        let cc = get_call_conventions(target.default_calling_convention().unwrap());
+        let interns = &env.interns;
 
-    main_fn.set_call_conventions(cc);
-    main_fn.set_linkage(Linkage::External);
+        for (symbol, _) in loaded.exposed_vars_by_symbol {
+            let fn_name = format!(
+                "{}.{}",
+                symbol.module_string(interns),
+                symbol.ident_string(interns)
+            );
+            let fn_val = env.module.get_function(&fn_name).unwrap();
 
-    // Add main's body
-    let basic_block = context.append_basic_block(main_fn, "entry");
-
-    builder.position_at_end(basic_block);
-
-    let ret = roc_gen::llvm::build::build_exp_stmt(
-        &env,
-        &mut layout_ids,
-        &mut roc_gen::llvm::build::Scope::default(),
-        main_fn,
-        &main_body,
-    );
-
-    builder.build_return(Some(&ret));
-
-    // Uncomment this to see the module's un-optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    if main_fn.verify(true) {
-        fpm.run_on(&main_fn);
-    } else {
-        panic!("Function {} failed LLVM verification.", main_fn_name);
+            fn_val.set_linkage(Linkage::AvailableExternally);
+            fn_val.set_call_conventions(cc);
+        }
     }
 
     mpm.run_on(module);
