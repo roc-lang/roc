@@ -968,7 +968,6 @@ fn path_to_expr_help2<'a>(
                 let inner_expr = Expr::AccessAtIndex {
                     index: *index,
                     field_layouts: env.arena.alloc(field_layouts),
-                    //structure: env.arena.alloc(outer_expr),
                     structure: symbol,
                     is_unwrapped,
                 };
