@@ -15,7 +15,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartialProc<'a> {
     pub annotation: Variable,
-    pub pattern_symbols: Vec<'a, Symbol>,
+    pub pattern_symbols: &'a [Symbol],
     pub body: roc_can::expr::Expr,
 }
 
@@ -426,7 +426,7 @@ fn patterns_to_when<'a>(
 ) -> Result<
     (
         Vec<'a, Variable>,
-        Vec<'a, Symbol>,
+        &'a [Symbol],
         Located<roc_can::expr::Expr>,
     ),
     Located<RuntimeError>,
@@ -483,7 +483,7 @@ fn patterns_to_when<'a>(
     }
 
     match body {
-        Ok(body) => Ok((arg_vars, symbols, body)),
+        Ok(body) => Ok((arg_vars, symbols.into_bump_slice(), body)),
         Err(loc_error) => Err(loc_error),
     }
 }
