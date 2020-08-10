@@ -200,15 +200,6 @@ fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
     }
 }
 
-fn is_layout_refcounted(layout: &Layout<'_>) -> bool {
-    use crate::layout::Builtin;
-
-    match layout {
-        Layout::Builtin(Builtin::List(_, _)) => true,
-        _ => false,
-    }
-}
-
 impl<'a> Context<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         Self {
@@ -507,7 +498,7 @@ impl<'a> Context<'a> {
         // TODO actually make these non-constant
 
         // can this type be reference-counted at runtime?
-        let reference = is_layout_refcounted(layout);
+        let reference = layout.contains_refcounted();
 
         // is this value a constant?
         let persistent = false;
@@ -534,7 +525,7 @@ impl<'a> Context<'a> {
 
         for p in ps.iter() {
             let info = VarInfo {
-                reference: is_layout_refcounted(&p.layout),
+                reference: p.layout.contains_refcounted(),
                 consume: !p.borrow,
                 persistent: false,
             };
@@ -553,7 +544,7 @@ impl<'a> Context<'a> {
         b_live_vars: &LiveVarSet,
     ) -> &'a Stmt<'a> {
         for p in ps.iter() {
-            if !p.borrow && is_layout_refcounted(&p.layout) && !b_live_vars.contains(&p.symbol) {
+            if !p.borrow && p.layout.contains_refcounted() && !b_live_vars.contains(&p.symbol) {
                 b = self.add_dec(p.symbol, b)
             }
         }
@@ -857,7 +848,7 @@ pub fn visit_proc<'a>(arena: &'a Bump, proc: &mut Proc<'a>) {
         proc.args.iter().map(|(layout, symbol)| Param {
             symbol: *symbol,
             layout: layout.clone(),
-            borrow: is_layout_refcounted(layout),
+            borrow: layout.contains_refcounted(),
         }),
         arena,
     )

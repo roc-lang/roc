@@ -150,6 +150,31 @@ impl<'a> Layout<'a> {
             Pointer(_) => pointer_size,
         }
     }
+
+    pub fn is_refcounted(&self) -> bool {
+        match self {
+            Layout::Builtin(Builtin::List(_, _)) => true,
+            _ => false,
+        }
+    }
+
+    /// Even if a value (say, a record) is not itself reference counted,
+    /// it may contains values/fields that are. Therefore when this record
+    /// goes out of scope, the refcount on those values/fields must  be decremented.
+    pub fn contains_refcounted(&self) -> bool {
+        use Layout::*;
+
+        match self {
+            Builtin(builtin) => builtin.is_refcounted(),
+            Struct(fields) => fields.iter().any(|f| f.is_refcounted()),
+            Union(fields) => fields
+                .iter()
+                .map(|ls| ls.iter())
+                .flatten()
+                .any(|f| f.is_refcounted()),
+            FunctionPointer(_, _) | Pointer(_) => false,
+        }
+    }
 }
 
 /// Avoid recomputing Layout from Variable multiple times.
@@ -235,6 +260,17 @@ impl<'a> Builtin<'a> {
             Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Float128 | Float64 | Float32
             | Float16 | EmptyStr | EmptyMap | EmptyList | EmptySet => true,
             Str | Map(_, _) | Set(_) | List(_, _) => false,
+        }
+    }
+
+    // Question: does is_refcounted exactly correspond with the "safe to memcpy" property?
+    pub fn is_refcounted(&self) -> bool {
+        use Builtin::*;
+
+        match self {
+            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Float128 | Float64 | Float32
+            | Float16 | EmptyStr | EmptyMap | EmptyList | EmptySet => false,
+            Str | Map(_, _) | Set(_) | List(_, _) => true,
         }
     }
 }

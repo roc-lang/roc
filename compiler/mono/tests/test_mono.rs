@@ -881,6 +881,7 @@ mod test_mono {
                 let Test.3 = Struct {Test.4, Test.5};
                 let Test.0 = Index 0 Test.3;
                 inc Test.0;
+                dec Test.3;
                 ret Test.0;
                 "#
             ),
