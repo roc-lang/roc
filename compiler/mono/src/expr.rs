@@ -108,6 +108,41 @@ impl<'a> Procs<'a> {
         }
     }
 
+    /// Add a named function that will be publicly exposed to the host
+    pub fn insert_exposed(
+        &mut self,
+        name: Symbol,
+        layout: Layout<'a>,
+        pattern_vars: Vec<'a, Variable>,
+        fn_var: Variable,
+        ret_var: Variable,
+    ) {
+        let tuple = (name, layout);
+
+        // If we've already specialized this one, no further work is needed.
+        if self.specialized.contains_key(&tuple) {
+            return;
+        }
+
+        // We're done with that tuple, so move layout back out to avoid cloning it.
+        let (name, layout) = tuple;
+        let pending = PendingSpecialization {
+            pattern_vars,
+            ret_var,
+            fn_var,
+        };
+
+        // This should only be called when pending_specializations is Some.
+        // Otherwise, it's being called in the wrong pass!
+        match &mut self.pending_specializations {
+            Some(pending_specializations) => {
+                // register the pending specialization, so this gets code genned later
+                add_pending(pending_specializations, name, layout, pending)
+            }
+            None => unreachable!("insert_exposed was called after the pending specializations phase had already completed!"),
+        }
+    }
+
     // TODO trim these down
     #[allow(clippy::too_many_arguments)]
     pub fn insert_anonymous(

@@ -7,7 +7,7 @@ use std::time::SystemTime;
 #[link(name = "roc_app", kind = "static")]
 extern "C" {
     #[allow(improper_ctypes)]
-    #[link_name = "0#1"]
+    #[link_name = "main#1"]
     fn quicksort(list: Box<[i64]>) -> Box<[i64]>;
 }
 
@@ -46,13 +46,19 @@ pub fn main() {
         }
     };
 
+    // TODO FIXME don't truncate! This is just for testing.
+    nums.truncate(1000);
+
+    let nums: Box<[i64]> = nums.into();
+
+    println!("Running Roc quicksort on {} numbers...", nums.len());
     let start_time = SystemTime::now();
-    let answer = unsafe { quicksort(nums) };
+    let _answer = unsafe { quicksort(nums) };
     let end_time = SystemTime::now();
     let duration = end_time.duration_since(start_time).unwrap();
 
     println!(
-        "Roc quicksort took {:?} ms to compute this answer: {:?}",
+        "Roc quicksort took {:.4} ms to compute this answer: {:?}",
         duration.as_secs_f64() * 1000.0,
         list
     );

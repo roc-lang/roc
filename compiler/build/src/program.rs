@@ -1,7 +1,11 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
+use inkwell::targets::{
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
+};
 use inkwell::OptimizationLevel;
+use roc_collections::all::default_hasher;
 use roc_gen::layout_id::LayoutIds;
 use roc_gen::llvm::build::{
     build_proc, build_proc_header, get_call_conventions, module_from_builtins, OptLevel,
@@ -9,10 +13,7 @@ use roc_gen::llvm::build::{
 use roc_load::file::LoadedModule;
 use roc_mono::ir::{Env, PartialProc, Procs};
 use roc_mono::layout::LayoutCache;
-
-use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
-};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
 
@@ -95,6 +96,12 @@ pub fn gen(
         home,
         ident_ids: &mut ident_ids,
     };
+    let mut exposed_symbols =
+        HashSet::with_capacity_and_hasher(loaded.exposed_vars_by_symbol.len(), default_hasher());
+
+    for (symbol, _) in loaded.exposed_vars_by_symbol {
+        exposed_symbols.insert(symbol);
+    }
 
     // Add modules' decls to Procs
     for (_, mut decls) in decls_by_id
@@ -112,6 +119,34 @@ pub fn gen(
                         match def.loc_expr.value {
                             Closure(annotation, _, _, loc_args, boxed_body) => {
                                 let (loc_body, ret_var) = *boxed_body;
+
+                                // If this is an exposed symbol, we need to
+                                // register it as such. Otherwise, since it
+                                // never gets called by Roc code, it will never
+                                // get specialized!
+                                if exposed_symbols.contains(&symbol) {
+                                    let mut pattern_vars =
+                                        bumpalo::collections::Vec::with_capacity_in(
+                                            loc_args.len(),
+                                            arena,
+                                        );
+
+                                    for (var, _) in loc_args.iter() {
+                                        pattern_vars.push(*var);
+                                    }
+
+                                    let layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
+                                        todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
+                                    );
+
+                                    procs.insert_exposed(
+                                        symbol,
+                                        layout,
+                                        pattern_vars, //: Vec<'a, Variable>,
+                                        annotation,
+                                        ret_var,
+                                    );
+                                }
 
                                 procs.insert_named(
                                     &mut mono_env,
@@ -197,7 +232,7 @@ pub fn gen(
         // NOTE: This is here to be uncommented in case verification fails.
         // (This approach means we don't have to defensively clone name here.)
         //
-        // println!("\n\nBuilding and then verifying function {}\n\n", name);
+        // println!("\n\nBuilding and then verifying function {:?}\n\n", proc);
         build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
 
         if fn_val.verify(true) {
@@ -215,15 +250,13 @@ pub fn gen(
         let cc = get_call_conventions(target.default_calling_convention().unwrap());
         let interns = &env.interns;
 
-        for (symbol, _) in loaded.exposed_vars_by_symbol {
-            let fn_name = format!(
-                "{}.{}",
-                symbol.module_string(interns),
-                symbol.ident_string(interns)
-            );
+        for symbol in exposed_symbols {
+            // Since it was exposed, it will be monomorphic, so its LLVM name
+            // will be ___#1 (e.g. "main#1")
+            let fn_name = format!("{}#1", symbol.ident_string(interns));
             let fn_val = env.module.get_function(&fn_name).unwrap();
 
-            fn_val.set_linkage(Linkage::AvailableExternally);
+            fn_val.set_linkage(Linkage::External);
             fn_val.set_call_conventions(cc);
         }
     }
