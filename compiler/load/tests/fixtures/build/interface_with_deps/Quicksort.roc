@@ -27,23 +27,25 @@ partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
 partition = \low, high, initialList ->
     when List.get initialList high is
         Ok pivot ->
-            go = \i, j, list ->
-                if j < high then
-                    when List.get list j is
-                        Ok value ->
-                            if value <= pivot then
-                                go (i + 1) (j + 1) (swap (i + 1) j list)
-                            else
-                                go i (j + 1) list
-
-                        Err _ ->
-                            Pair i list
-                else
-                    Pair i list
-
-            when go (low - 1) low initialList is
+            when partitionHelp (low - 1) low initialList high pivot is
                 Pair newI newList ->
                     Pair (newI + 1) (swap (newI + 1) high newList)
 
         Err _ ->
             Pair (low - 1) initialList
+
+
+partitionHelp : Int, Int, List (Num a), Int, (Num a) -> [ Pair Int (List (Num a)) ]
+partitionHelp = \i, j, list, high, pivot ->
+    if j < high then
+        when List.get list j is
+            Ok value ->
+                if value <= pivot then
+                    partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+                else
+                    partitionHelp i (j + 1) list high pivot
+
+            Err _ ->
+                Pair i list
+    else
+        Pair i list
