@@ -117,12 +117,16 @@ impl<'a> Procs<'a> {
                     .from_var(env.arena, annotation, env.subs)
                     .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
+                let tuple = (symbol, layout);
+                let already_specialized = self.specialized.contains_key(&tuple);
+                let (symbol, layout) = tuple;
+
                 // if we've already specialized this one, no further work is needed.
                 //
                 // NOTE: this #[allow(clippy::map_entry)] here is for correctness!
                 // Changing it to use .entry() would necessarily make it incorrect.
                 #[allow(clippy::map_entry)]
-                if !self.specialized.contains_key(&(symbol, layout.clone())) {
+                if !already_specialized {
                     let pending = PendingSpecialization {
                         ret_var,
                         fn_var: annotation,
