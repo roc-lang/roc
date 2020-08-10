@@ -567,7 +567,6 @@ impl<'a> Context<'a> {
         b
     }
 
-    // TODO should not be pub
     fn visit_stmt(&self, stmt: &'a Stmt<'a>) -> (&'a Stmt<'a>, LiveVarSet) {
         use Stmt::*;
 
