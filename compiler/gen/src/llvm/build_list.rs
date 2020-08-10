@@ -379,10 +379,10 @@ pub fn list_join<'a, 'ctx, 'env>(
                 builder.build_store(dest_elem_ptr_alloca, final_list_ptr);
 
                 // Inner List Loop
-                let inner_list_loop = |curr_index| {
+                let inner_list_loop = |index| {
                     let inner_list_wrapper = {
                         let wrapper_ptr = unsafe {
-                            builder.build_in_bounds_gep(outer_list_ptr, &[curr_index], "load_index")
+                            builder.build_in_bounds_gep(outer_list_ptr, &[index], "load_index")
                         };
 
                         builder
@@ -990,14 +990,14 @@ pub fn list_concat<'a, 'ctx, 'env>(
                         .unwrap();
 
                     // FIRST LOOP
-                    let first_loop = |curr_first_loop_index| {
+                    let first_loop = |first_index| {
                         let first_list_ptr = load_list_ptr(builder, first_list_wrapper, ptr_type);
 
                         // The pointer to the element in the first list
                         let first_list_elem_ptr = unsafe {
                             builder.build_in_bounds_gep(
                                 first_list_ptr,
-                                &[curr_first_loop_index],
+                                &[first_index],
                                 "load_index",
                             )
                         };
@@ -1006,7 +1006,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
                         let combined_list_elem_ptr = unsafe {
                             builder.build_in_bounds_gep(
                                 combined_list_ptr,
-                                &[curr_first_loop_index],
+                                &[first_index],
                                 "load_index_combined_list",
                             )
                         };
@@ -1033,14 +1033,14 @@ pub fn list_concat<'a, 'ctx, 'env>(
                     builder.build_store(index_alloca, ctx.i64_type().const_int(0, false));
 
                     // SECOND LOOP
-                    let second_loop = |curr_second_index| {
+                    let second_loop = |second_index| {
                         let second_list_ptr = load_list_ptr(builder, second_list_wrapper, ptr_type);
 
                         // The pointer to the element in the second list
                         let second_list_elem_ptr = unsafe {
                             builder.build_in_bounds_gep(
                                 second_list_ptr,
-                                &[curr_second_index],
+                                &[second_index],
                                 "load_index",
                             )
                         };
@@ -1062,7 +1062,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
                         let combined_list_elem_ptr = unsafe {
                             builder.build_in_bounds_gep(
                                 offset_combined_list_elem_ptr,
-                                &[curr_second_index],
+                                &[second_index],
                                 "load_index_combined_list",
                             )
                         };
