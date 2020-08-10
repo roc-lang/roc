@@ -202,7 +202,7 @@ pub fn gen(
                                 let proc = PartialProc {
                                     annotation: def.expr_var,
                                     // This is a 0-arity thunk, so it has no arguments.
-                                    pattern_symbols: bumpalo::collections::Vec::new_in(arena),
+                                    pattern_symbols: &[],
                                     body,
                                 };
 
