@@ -31,6 +31,7 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
 #[cfg(not(debug_assertions))]
 const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 
+#[derive(Debug, Clone, Copy)]
 pub enum OptLevel {
     Normal,
     Optimize,
@@ -154,14 +155,18 @@ fn add_intrinsic<'ctx>(
     fn_val
 }
 
-pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>, opt_level: OptLevel) {
+pub fn construct_optimization_passes<'a>(
+    module: &'a Module,
+    opt_level: OptLevel,
+) -> (PassManager<Module<'a>>, PassManager<FunctionValue<'a>>) {
+    let mpm = PassManager::create(());
+    let fpm = PassManager::create(module);
+
     // tail-call elimination is always on
     fpm.add_instruction_combining_pass();
     fpm.add_tail_call_elimination_pass();
 
     let pmb = PassManagerBuilder::create();
-
-    // Enable more optimizations when running cargo test --release
     match opt_level {
         OptLevel::Normal => {
             pmb.set_optimization_level(OptimizationLevel::None);
@@ -171,24 +176,35 @@ pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>, opt_level: OptLevel) {
             //
             // See https://llvm.org/doxygen/CodeGen_8h_source.html
             pmb.set_optimization_level(OptimizationLevel::Aggressive);
+            pmb.set_inliner_with_threshold(4);
 
-            // TODO figure out how enabling these individually differs from
-            // the broad "aggressive optimizations" setting.
+            // TODO figure out which of these actually help
 
-            // fpm.add_reassociate_pass();
-            // fpm.add_basic_alias_analysis_pass();
-            // fpm.add_promote_memory_to_register_pass();
-            // fpm.add_cfg_simplification_pass();
-            // fpm.add_gvn_pass();
-            // TODO figure out why enabling any of these (even alone) causes LLVM to segfault
-            // fpm.add_strip_dead_prototypes_pass();
-            // fpm.add_dead_arg_elimination_pass();
-            // fpm.add_function_inlining_pass();
-            // pmb.set_inliner_with_threshold(4);
+            // function passes
+            fpm.add_basic_alias_analysis_pass();
+            fpm.add_memcpy_optimize_pass();
+            fpm.add_jump_threading_pass();
+            fpm.add_instruction_combining_pass();
+            fpm.add_licm_pass();
+            fpm.add_loop_unroll_pass();
+            fpm.add_scalar_repl_aggregates_pass_ssa();
+
+            // module passes
+            mpm.add_cfg_simplification_pass();
+            mpm.add_jump_threading_pass();
+            mpm.add_instruction_combining_pass();
+            mpm.add_memcpy_optimize_pass();
+            mpm.add_promote_memory_to_register_pass();
         }
     }
 
+    pmb.populate_module_pass_manager(&mpm);
     pmb.populate_function_pass_manager(&fpm);
+
+    fpm.initialize();
+
+    // For now, we have just one of each
+    (mpm, fpm)
 }
 
 pub fn build_exp_literal<'a, 'ctx, 'env>(
@@ -493,23 +509,14 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // This tricks comes from
             // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
 
-            let array_type = ctx.i8_type().array_type(whole_size);
+            let internal_type =
+                basic_type_from_layout(env.arena, env.context, tag_layout, env.ptr_bytes);
 
-            let result = cast_basic_basic(
+            cast_basic_basic(
                 builder,
                 struct_val.into_struct_value().into(),
-                array_type.into(),
-            );
-
-            // For unclear reasons, we can't cast an array to a struct on the other side.
-            // the solution is to wrap the array in a struct (yea...)
-            let wrapper_type = ctx.struct_type(&[array_type.into()], false);
-            let mut wrapper_val = wrapper_type.const_zero().into();
-            wrapper_val = builder
-                .build_insert_value(wrapper_val, result, 0, "insert_field")
-                .unwrap();
-
-            wrapper_val.into_struct_value().into()
+                internal_type,
+            )
         }
         AccessAtIndex {
             index,
@@ -805,18 +812,14 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         Dec(symbol, cont) => {
             let (value, layout) = load_symbol_and_layout(env, scope, symbol);
             let layout = layout.clone();
-            // TODO exclude unique lists in the future
-            match layout {
-                Layout::Builtin(Builtin::List(_, _)) => decrement_refcount_list(
-                    env,
-                    layout_ids,
-                    scope,
-                    parent,
-                    cont,
-                    value.into_struct_value(),
-                ),
-                _ => build_exp_stmt(env, layout_ids, scope, parent, cont),
+
+            /*
+            if layout.contains_refcounted() {
+                decrement_refcount_layout(env, parent, value, &layout);
             }
+            */
+
+            build_exp_stmt(env, layout_ids, scope, parent, cont)
         }
         _ => todo!("unsupported expr {:?}", stmt),
     }
@@ -874,7 +877,113 @@ fn list_get_refcount_ptr<'a, 'ctx, 'env>(
     )
 }
 
-#[allow(dead_code)]
+fn decrement_refcount_layout<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    value: BasicValueEnum<'ctx>,
+    layout: &Layout<'a>,
+) {
+    use Layout::*;
+
+    match layout {
+        Builtin(builtin) => decrement_refcount_builtin(env, parent, value, builtin),
+        Struct(layouts) => {
+            let wrapper_struct = value.into_struct_value();
+
+            for (i, field_layout) in layouts.iter().enumerate() {
+                if field_layout.contains_refcounted() {
+                    let field_ptr = env
+                        .builder
+                        .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
+                        .unwrap();
+
+                    decrement_refcount_layout(env, parent, field_ptr, field_layout)
+                }
+            }
+        }
+        Union(tags) => {
+            debug_assert!(!tags.is_empty());
+            let wrapper_struct = value.into_struct_value();
+
+            // read the tag_id
+            let tag_id = env
+                .builder
+                .build_extract_value(wrapper_struct, 0, "read_tag_id")
+                .unwrap()
+                .into_int_value();
+
+            // next, make a jump table for all possible values of the tag_id
+            let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
+
+            let merge_block = env.context.append_basic_block(parent, "decrement_merge");
+
+            for (tag_id, field_layouts) in tags.iter().enumerate() {
+                let block = env.context.append_basic_block(parent, "tag_id_decrement");
+                env.builder.position_at_end(block);
+
+                for (i, field_layout) in field_layouts.iter().enumerate() {
+                    if field_layout.contains_refcounted() {
+                        let field_ptr = env
+                            .builder
+                            .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
+                            .unwrap();
+
+                        decrement_refcount_layout(env, parent, field_ptr, field_layout)
+                    }
+                }
+
+                env.builder.build_unconditional_branch(merge_block);
+
+                cases.push((env.context.i8_type().const_int(tag_id as u64, false), block));
+            }
+
+            let (_, default_block) = cases.pop().unwrap();
+
+            env.builder.build_switch(tag_id, default_block, &cases);
+
+            env.builder.position_at_end(merge_block);
+        }
+
+        FunctionPointer(_, _) | Pointer(_) => {}
+    }
+}
+
+#[inline(always)]
+fn decrement_refcount_builtin<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    value: BasicValueEnum<'ctx>,
+    builtin: &Builtin<'a>,
+) {
+    use Builtin::*;
+
+    match builtin {
+        List(_, element_layout) => {
+            if element_layout.contains_refcounted() {
+                // TODO decrement all values
+            }
+            let wrapper_struct = value.into_struct_value();
+            decrement_refcount_list(env, parent, wrapper_struct);
+        }
+        Set(element_layout) => {
+            if element_layout.contains_refcounted() {
+                // TODO decrement all values
+            }
+            let wrapper_struct = value.into_struct_value();
+            decrement_refcount_list(env, parent, wrapper_struct);
+        }
+        Map(key_layout, value_layout) => {
+            if key_layout.contains_refcounted() || value_layout.contains_refcounted() {
+                // TODO decrement all values
+            }
+
+            let wrapper_struct = value.into_struct_value();
+            decrement_refcount_list(env, parent, wrapper_struct);
+        }
+        _ => {}
+    }
+}
+
 fn increment_refcount_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     original_wrapper: StructValue<'ctx>,
@@ -900,15 +1009,11 @@ fn increment_refcount_list<'a, 'ctx, 'env>(
     builder.build_store(refcount_ptr, decremented);
 }
 
-#[allow(dead_code)]
 fn decrement_refcount_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    scope: &mut Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
-    stmt: &roc_mono::ir::Stmt<'a>,
     original_wrapper: StructValue<'ctx>,
-) -> BasicValueEnum<'ctx> {
+) {
     let builder = env.builder;
     let ctx = env.context;
 
@@ -956,7 +1061,6 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
 
     // emit merge block
     builder.position_at_end(cont_block);
-    build_exp_stmt(env, layout_ids, scope, parent, stmt)
 }
 
 fn load_symbol<'a, 'ctx, 'env>(
@@ -987,6 +1091,17 @@ fn load_symbol_and_layout<'a, 'ctx, 'env, 'b>(
     }
 }
 
+fn get_symbol_and_layout<'a, 'ctx, 'env, 'b>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &'b Scope<'a, 'ctx>,
+    symbol: &Symbol,
+) -> (PointerValue<'ctx>, &'b Layout<'a>) {
+    match scope.get(symbol) {
+        Some((layout, ptr)) => (*ptr, layout),
+        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+    }
+}
+
 /// Cast a struct to another struct of the same (or smaller?) size
 fn cast_struct_struct<'ctx>(
     builder: &Builder<'ctx>,
@@ -1012,7 +1127,7 @@ fn cast_basic_basic<'ctx>(
         .build_bitcast(
             argument_pointer,
             to_type.ptr_type(inkwell::AddressSpace::Generic),
-            "",
+            "cast_basic_basic",
         )
         .into_pointer_value();
 

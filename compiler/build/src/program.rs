@@ -1,7 +1,6 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
-use inkwell::passes::PassManager;
 use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_gen::layout_id::LayoutIds;
@@ -127,13 +126,9 @@ pub fn gen(
     // Generate the binary
 
     let context = Context::create();
-    let module = module_from_builtins(&context, "app");
+    let module = arena.alloc(module_from_builtins(&context, "app"));
     let builder = context.create_builder();
-    let fpm = PassManager::create(&module);
-
-    roc_gen::llvm::build::add_passes(&fpm, opt_level);
-
-    fpm.initialize();
+    let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compute main_fn_type before moving subs to Env
     let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
@@ -154,7 +149,7 @@ pub fn gen(
         builder: &builder,
         context: &context,
         interns: loaded.interns,
-        module: arena.alloc(module),
+        module,
         ptr_bytes,
         leak: false,
     };
@@ -316,6 +311,8 @@ pub fn gen(
     } else {
         panic!("Function {} failed LLVM verification.", main_fn_name);
     }
+
+    mpm.run_on(module);
 
     // Verify the module
     if let Err(errors) = env.module.verify() {

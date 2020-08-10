@@ -7,7 +7,6 @@ pub fn helper_without_uniqueness<'a>(
     context: &'a inkwell::context::Context,
 ) -> (&'static str, inkwell::execution_engine::ExecutionEngine<'a>) {
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
-    use inkwell::passes::PassManager;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
     use roc_gen::llvm::build::Scope;
@@ -60,11 +59,10 @@ pub fn helper_without_uniqueness<'a>(
     } else {
         roc_gen::llvm::build::OptLevel::Optimize
     };
-    let fpm = PassManager::create(&module);
 
-    roc_gen::llvm::build::add_passes(&fpm, opt_level);
-
-    fpm.initialize();
+    let module = arena.alloc(module);
+    let (module_pass, function_pass) =
+        roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compute main_fn_type before moving subs to Env
     let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
@@ -87,7 +85,7 @@ pub fn helper_without_uniqueness<'a>(
         builder: &builder,
         context: context,
         interns,
-        module: arena.alloc(module),
+        module,
         ptr_bytes,
         leak: leak,
     };
@@ -143,7 +141,7 @@ pub fn helper_without_uniqueness<'a>(
         build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
 
         if fn_val.verify(true) {
-            fpm.run_on(&fn_val);
+            function_pass.run_on(&fn_val);
         } else {
             eprintln!(
                     "\n\nFunction {:?} failed LLVM verification in NON-OPTIMIZED build. Its content was:\n", fn_val.get_name().to_str().unwrap()
@@ -183,10 +181,12 @@ pub fn helper_without_uniqueness<'a>(
     // env.module.print_to_stderr();
 
     if main_fn.verify(true) {
-        fpm.run_on(&main_fn);
+        function_pass.run_on(&main_fn);
     } else {
         panic!("Main function {} failed LLVM verification in NON-OPTIMIZED build. Uncomment things nearby to see more details.", main_fn_name);
     }
+
+    module_pass.run_on(env.module);
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
@@ -194,7 +194,7 @@ pub fn helper_without_uniqueness<'a>(
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
+    env.module.print_to_stderr();
 
     (main_fn_name, execution_engine.clone())
 }
@@ -206,7 +206,6 @@ pub fn helper_with_uniqueness<'a>(
     context: &'a inkwell::context::Context,
 ) -> (&'static str, inkwell::execution_engine::ExecutionEngine<'a>) {
     use crate::helpers::{infer_expr, uniq_expr};
-    use inkwell::passes::PassManager;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
     use roc_gen::llvm::build::Scope;
@@ -242,18 +241,14 @@ pub fn helper_with_uniqueness<'a>(
         unify_problems
     );
 
-    let module = roc_gen::llvm::build::module_from_builtins(context, "app");
+    let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(context, "app"));
     let builder = context.create_builder();
     let opt_level = if cfg!(debug_assertions) {
         roc_gen::llvm::build::OptLevel::Normal
     } else {
         roc_gen::llvm::build::OptLevel::Optimize
     };
-    let fpm = PassManager::create(&module);
-
-    roc_gen::llvm::build::add_passes(&fpm, opt_level);
-
-    fpm.initialize();
+    let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compute main_fn_type before moving subs to Env
     let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
@@ -278,7 +273,7 @@ pub fn helper_with_uniqueness<'a>(
         builder: &builder,
         context: context,
         interns,
-        module: arena.alloc(module),
+        module,
         ptr_bytes,
         leak: leak,
     };
@@ -378,6 +373,8 @@ pub fn helper_with_uniqueness<'a>(
     } else {
         panic!("main function {} failed LLVM verification in OPTIMIZED build. Uncomment nearby statements to see more details.", main_fn_name);
     }
+
+    mpm.run_on(module);
 
     // Verify the module
     if let Err(errors) = env.module.verify() {

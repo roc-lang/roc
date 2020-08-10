@@ -1,7 +1,6 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::execution_engine::JitFunction;
-use inkwell::passes::PassManager;
 use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_builtins::unique::uniq_stdlib;
@@ -209,13 +208,9 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
     }
 
     let context = Context::create();
-    let module = roc_gen::llvm::build::module_from_builtins(&context, "app");
+    let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, "app"));
     let builder = context.create_builder();
-    let fpm = PassManager::create(&module);
-
-    roc_gen::llvm::build::add_passes(&fpm, opt_level);
-
-    fpm.initialize();
+    let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     // pretty-print the expr type string for later.
     name_all_type_vars(var, &mut subs);
@@ -243,7 +238,7 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
         builder: &builder,
         context: &context,
         interns,
-        module: arena.alloc(module),
+        module,
         ptr_bytes,
         leak: false,
     };
@@ -354,6 +349,8 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
     } else {
         panic!("Main function {} failed LLVM verification. Uncomment things near this error message for more details.", main_fn_name);
     }
+
+    mpm.run_on(module);
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
