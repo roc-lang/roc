@@ -287,7 +287,12 @@ pub fn gen(
             // Since it was exposed, it must have been monomorphic,
             // meaning its LLVM name will be ___#1 (e.g. "main#1")
             let fn_name = format!("{}#1", symbol.ident_string(interns));
-            let fn_val = env.module.get_function(&fn_name).unwrap();
+            let fn_val = env.module.get_function(&fn_name).unwrap_or_else(|| {
+                panic!(
+                    "module.get_function({:?}) did not find a function registered with LLVM",
+                    fn_name
+                )
+            });
 
             fn_val.set_linkage(Linkage::External);
             fn_val.set_call_conventions(cc);
