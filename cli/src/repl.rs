@@ -331,7 +331,6 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
 
     builder.position_at_end(basic_block);
 
-
     let ret = roc_gen::llvm::build::build_exp_stmt(
         &env,
         &mut layout_ids,
