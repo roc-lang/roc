@@ -1,7 +1,7 @@
 #[link(name = "roc_app", kind = "static")]
 extern "C" {
     #[allow(improper_ctypes)]
-    #[link_name = "$Test.main"]
+    #[link_name = "$main"]
     fn list_from_roc() -> Box<[i64]>;
 }
 
