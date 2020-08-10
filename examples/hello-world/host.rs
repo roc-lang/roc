@@ -3,7 +3,7 @@ use std::os::raw::c_char;
 
 #[link(name = "roc_app", kind = "static")]
 extern "C" {
-    #[link_name = "$main"]
+    #[link_name = "main#1"]
     fn str_from_roc() -> *const c_char;
 }
 
