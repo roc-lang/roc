@@ -12,7 +12,7 @@ use roc_gen::llvm::build::{
 };
 use roc_load::file::LoadedModule;
 use roc_mono::ir::{Env, PartialProc, Procs};
-use roc_mono::layout::LayoutCache;
+use roc_mono::layout::{Layout, LayoutCache};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
@@ -159,14 +159,47 @@ pub fn gen(
                                 );
                             }
                             body => {
+                                let annotation = def.expr_var;
                                 let proc = PartialProc {
-                                    annotation: def.expr_var,
+                                    annotation,
                                     // This is a 0-arity thunk, so it has no arguments.
                                     pattern_symbols: bumpalo::collections::Vec::new_in(
                                         mono_env.arena,
                                     ),
                                     body,
                                 };
+
+                                // If this is an exposed symbol, we need to
+                                // register it as such. Otherwise, since it
+                                // never gets called by Roc code, it will never
+                                // get specialized!
+                                if exposed_symbols.contains(&symbol) {
+                                    let pattern_vars = bumpalo::collections::Vec::new_in(arena);
+                                    let ret_layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
+                                        todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
+                                    );
+                                    let layout =
+                                        Layout::FunctionPointer(&[], arena.alloc(ret_layout));
+
+                                    procs.insert_exposed(
+                                        symbol,
+                                        layout,
+                                        pattern_vars,
+                                        // It seems brittle that we're passing
+                                        // annotation twice - especially since
+                                        // in both cases we're giving the
+                                        // annotation to the top-level value,
+                                        // not the thunk function it will code
+                                        // gen to. It seems to work, but that
+                                        // may only be because at present we
+                                        // only use the function annotation
+                                        // variable during specialization, and
+                                        // exposed values are never specialized
+                                        // because they must be monomorphic.
+                                        annotation,
+                                        annotation,
+                                    );
+                                }
 
                                 procs.partial_procs.insert(symbol, proc);
                                 procs.module_thunks.insert(symbol);
