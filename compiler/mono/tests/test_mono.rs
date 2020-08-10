@@ -621,14 +621,14 @@ mod test_mono {
             "#,
             indoc!(
                 r#"
+                procedure List.5 (#Attr.2, #Attr.3):
+                    let Test.7 = lowlevel ListAppend #Attr.2 #Attr.3;
+                    ret Test.7;
+
                 procedure Test.0 (Test.2):
                     let Test.6 = 42i64;
                     let Test.5 = CallByName List.5 Test.2 Test.6;
                     ret Test.5;
-
-                procedure List.5 (#Attr.2, #Attr.3):
-                    let Test.7 = lowlevel ListAppend #Attr.2 #Attr.3;
-                    ret Test.7;
 
                 let Test.8 = 1i64;
                 let Test.9 = 2i64;
