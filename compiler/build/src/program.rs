@@ -284,8 +284,8 @@ pub fn gen(
         let interns = &env.interns;
 
         for symbol in exposed_symbols {
-            // Since it was exposed, it will be monomorphic, so its LLVM name
-            // will be ___#1 (e.g. "main#1")
+            // Since it was exposed, it must have been monomorphic,
+            // meaning its LLVM name will be ___#1 (e.g. "main#1")
             let fn_name = format!("{}#1", symbol.ident_string(interns));
             let fn_val = env.module.get_function(&fn_name).unwrap();
 
