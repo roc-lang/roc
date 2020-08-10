@@ -1313,7 +1313,6 @@ fn decide_to_branching<'a>(
                 env.arena.alloc(cond),
             );
 
-            // (env.arena.alloc(stores), cond)
             cond
         }
         FanOut {
