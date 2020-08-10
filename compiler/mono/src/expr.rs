@@ -35,7 +35,7 @@ pub struct Proc<'a> {
     pub ret_layout: Layout<'a>,
 }
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Procs<'a> {
     pub partial_procs: MutMap<Symbol, PartialProc<'a>>,
     pub module_thunks: MutSet<Symbol>,
@@ -49,6 +49,18 @@ pub struct Procs<'a> {
 pub enum InProgressProc<'a> {
     InProgress,
     Done(Proc<'a>),
+}
+
+impl<'a> Default for Procs<'a> {
+    fn default() -> Self {
+        Self {
+            partial_procs: MutMap::default(),
+            module_thunks: MutSet::default(),
+            pending_specializations: Some(MutMap::default()),
+            specialized: MutMap::default(),
+            runtime_errors: MutMap::default(),
+        }
+    }
 }
 
 impl<'a> Procs<'a> {
