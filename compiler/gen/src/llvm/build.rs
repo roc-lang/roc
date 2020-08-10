@@ -20,7 +20,7 @@ use roc_collections::all::ImMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::JoinPointId;
-use roc_mono::layout::{Builtin, Layout, Ownership};
+use roc_mono::layout::{Builtin, Layout, MemoryMode};
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -441,7 +441,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             debug_assert!(*union_size > 1);
             let ptr_size = env.ptr_bytes;
 
-            let whole_size = tag_layout.stack_size(ptr_size);
             let mut filler = tag_layout.stack_size(ptr_size);
 
             let ctx = env.context;
@@ -800,9 +799,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         Inc(symbol, cont) => {
             let (value, layout) = load_symbol_and_layout(env, scope, symbol);
             let layout = layout.clone();
-            // TODO exclude unique lists in the future
+
             match layout {
-                Layout::Builtin(Builtin::List(_, _)) => {
+                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
                     increment_refcount_list(env, value.into_struct_value());
                     build_exp_stmt(env, layout_ids, scope, parent, cont)
                 }
@@ -813,11 +812,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let (value, layout) = load_symbol_and_layout(env, scope, symbol);
             let layout = layout.clone();
 
-            /*
             if layout.contains_refcounted() {
                 decrement_refcount_layout(env, parent, value, &layout);
             }
-            */
 
             build_exp_stmt(env, layout_ids, scope, parent, cont)
         }
@@ -830,15 +827,13 @@ fn refcount_is_one_comparison<'ctx>(
     context: &'ctx Context,
     refcount: IntValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let refcount_one: IntValue<'ctx> = context
-        .i64_type()
-        .const_int((std::usize::MAX - 1) as _, false);
+    let refcount_one: IntValue<'ctx> = context.i64_type().const_int((std::usize::MAX) as _, false);
     // Note: Check for refcount < refcount_1 as the "true" condition,
     // to avoid misprediction. (In practice this should usually pass,
     // and CPUs generally default to predicting that a forward jump
     // shouldn't be taken; that is, they predict "else" won't be taken.)
     builder.build_int_compare(
-        IntPredicate::ULT,
+        IntPredicate::EQ,
         refcount,
         refcount_one,
         "refcount_one_check",
@@ -867,13 +862,13 @@ fn list_get_refcount_ptr<'a, 'ctx, 'env>(
     let refcount_ptr = builder.build_int_sub(
         ptr_as_int,
         ctx.i64_type().const_int(env.ptr_bytes as u64, false),
-        "refcount_ptr",
+        "make_refcount_ptr",
     );
 
     builder.build_int_to_ptr(
         refcount_ptr,
         int_type.ptr_type(AddressSpace::Generic),
-        "make ptr",
+        "get_refcount_ptr",
     )
 }
 
@@ -958,12 +953,15 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
     use Builtin::*;
 
     match builtin {
-        List(_, element_layout) => {
+        List(MemoryMode::Refcounted, element_layout) => {
             if element_layout.contains_refcounted() {
                 // TODO decrement all values
             }
             let wrapper_struct = value.into_struct_value();
             decrement_refcount_list(env, parent, wrapper_struct);
+        }
+        List(MemoryMode::Unique, _element_layout) => {
+            // do nothing
         }
         Set(element_layout) => {
             if element_layout.contains_refcounted() {
@@ -1087,17 +1085,6 @@ fn load_symbol_and_layout<'a, 'ctx, 'env, 'b>(
                 .build_load(*ptr, symbol.ident_string(&env.interns)),
             layout,
         ),
-        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
-    }
-}
-
-fn get_symbol_and_layout<'a, 'ctx, 'env, 'b>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &'b Scope<'a, 'ctx>,
-    symbol: &Symbol,
-) -> (PointerValue<'ctx>, &'b Layout<'a>) {
-    match scope.get(symbol) {
-        Some((layout, ptr)) => (*ptr, layout),
         None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
     }
 }
@@ -1788,7 +1775,7 @@ fn clone_nonempty_list<'a, 'ctx, 'env>(
         .const_int(elem_layout.stack_size(env.ptr_bytes) as u64, false);
     let size = env
         .builder
-        .build_int_mul(elem_bytes, list_len, "mul_len_by_elem_bytes");
+        .build_int_mul(elem_bytes, list_len, "clone_mul_len_by_elem_bytes");
 
     // Allocate space for the new array that we'll copy into.
     let clone_ptr = allocate_list(env, elem_layout, list_len);
@@ -1839,6 +1826,7 @@ fn clone_nonempty_list<'a, 'ctx, 'env>(
     (answer, clone_ptr)
 }
 
+#[derive(Debug)]
 enum InPlace {
     InPlace,
     Clone,
@@ -2043,7 +2031,7 @@ fn list_join<'a, 'ctx, 'env>(
         | Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::EmptyList))) => empty_list(env),
         Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::List(_, elem_layout)))) => {
             let inner_list_layout =
-                Layout::Builtin(Builtin::List(Ownership::Borrowed, elem_layout));
+                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, elem_layout));
 
             let builder = env.builder;
             let ctx = env.context;

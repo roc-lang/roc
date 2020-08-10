@@ -224,6 +224,8 @@ pub fn gen(
 
     // Populate Procs further and get the low-level Expr from the canonical Expr
     let main_body = Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
+    let main_body =
+        roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),

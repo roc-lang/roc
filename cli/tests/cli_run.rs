@@ -107,6 +107,7 @@ mod cli_run {
         let out = run_roc(&[
             "run",
             example_file("quicksort", "Quicksort.roc").to_str().unwrap(),
+            "--optimize",
         ]);
 
         assert_eq!(&out.stderr, "");

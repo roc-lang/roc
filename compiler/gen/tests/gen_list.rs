@@ -134,7 +134,7 @@ mod gen_list {
                     empty : List Float
                     empty =
                         []
-        
+
                     List.join [ [ 0.2, 11.11 ], empty ]
                 "#
             ),
@@ -749,7 +749,8 @@ mod gen_list {
                     r#"
                     quicksort : List (Num a) -> List (Num a)
                     quicksort = \list ->
-                        quicksortHelp list 0 (List.len list - 1)
+                        n = List.len list
+                        quicksortHelp list 0 (n - 1)
 
 
                     quicksortHelp : List (Num a), Int, Int -> List (Num a)
@@ -787,7 +788,7 @@ mod gen_list {
                                 Pair (low - 1) initialList
 
 
-                    partitionHelp : Int, Int, List (Num a), Int, Int -> [ Pair Int (List (Num a)) ]
+                    partitionHelp : Int, Int, List (Num a), Int, (Num a) -> [ Pair Int (List (Num a)) ]
                     partitionHelp = \i, j, list, high, pivot ->
                         if j < high then
                             when List.get list j is
@@ -801,8 +802,6 @@ mod gen_list {
                                     Pair i list
                         else
                             Pair i list
-
-
 
                     quicksort [ 7, 4, 21, 19 ]
                 "#
@@ -1006,13 +1005,34 @@ mod gen_list {
                 x = [1,2,3]
 
                 id : List Int -> List Int
-                id = \y -> y 
+                id = \y -> y
 
                 id x
                 "#
             ),
             &[1, 2, 3],
             &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_pass_to_set() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x : List Int
+                x = [1,2,3]
+
+                id : List Int -> List Int
+                id = \y -> List.set y 0 0
+
+                id x
+                "#
+            ),
+            &[0, 2, 3],
+            &'static [i64],
+            |x| x,
+            true
         );
     }
 

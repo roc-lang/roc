@@ -104,6 +104,9 @@ pub fn helper_without_uniqueness<'a>(
     };
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
+    let main_body =
+        roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
+
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),
@@ -194,7 +197,7 @@ pub fn helper_without_uniqueness<'a>(
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
-    env.module.print_to_stderr();
+    // env.module.print_to_stderr();
 
     (main_fn_name, execution_engine.clone())
 }
@@ -216,6 +219,7 @@ pub fn helper_with_uniqueness<'a>(
     let target = target_lexicon::Triple::host();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
     let (loc_expr, _output, problems, subs, var, constraint, home, interns) = uniq_expr(src);
+
     let errors = problems
         .into_iter()
         .filter(|problem| {
@@ -292,6 +296,8 @@ pub fn helper_with_uniqueness<'a>(
     };
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
+    let main_body =
+        roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),
@@ -364,6 +370,8 @@ pub fn helper_with_uniqueness<'a>(
     );
 
     builder.build_return(Some(&ret));
+
+    // you're in the version with uniqueness!
 
     // Uncomment this to see the module's un-optimized LLVM instruction output:
     // env.module.print_to_stderr();

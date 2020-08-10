@@ -362,8 +362,6 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    panic!("are we here?");
-
     unsafe {
         let main: JitFunction<
             unsafe extern "C" fn() -> i64, /* TODO have this return Str, and in the generated code make sure to call the appropriate string conversion function on the return val based on its type! */
@@ -375,8 +373,6 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
 
         let result = main.call();
         let output = format!("{}", result);
-        std::mem::forget(result);
-
         Ok((output, expr_type_str))
     }
 }
