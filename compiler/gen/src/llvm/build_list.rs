@@ -1164,7 +1164,7 @@ fn incrementing_index_loop<'ctx, LoopFn>(
     mut loop_fn: LoopFn,
 ) -> PointerValue<'ctx>
 where
-    LoopFn: FnMut(IntValue<'ctx>) -> (),
+    LoopFn: FnMut(IntValue<'ctx>),
 {
     let index_alloca = match maybe_alloca {
         None => builder.build_alloca(ctx.i64_type(), index_name),
