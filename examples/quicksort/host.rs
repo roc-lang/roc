@@ -7,7 +7,7 @@ use std::time::SystemTime;
 #[link(name = "roc_app", kind = "static")]
 extern "C" {
     #[allow(improper_ctypes)]
-    #[link_name = "main#1"]
+    #[link_name = "quicksort#1"]
     fn quicksort(list: Box<[i64]>) -> Box<[i64]>;
 }
 
