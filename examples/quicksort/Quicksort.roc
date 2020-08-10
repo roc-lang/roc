@@ -1,11 +1,6 @@
 app Quicksort provides [ main ] imports []
 
-main =
-    quicksort : List (Num a) -> List (Num a)
-    quicksort = \list ->
-        quicksortHelp list 0 (List.len list - 1)
-
-
+main = \originalList ->
     quicksortHelp : List (Num a), Int, Int -> List (Num a)
     quicksortHelp = \list, low, high ->
         if low < high then
@@ -58,4 +53,4 @@ main =
 
 
 
-    quicksort [ 7, 4, 21, 19 ]
+    quicksortHelp originalList 0 (List.len originalList - 1)
