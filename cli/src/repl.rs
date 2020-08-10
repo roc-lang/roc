@@ -257,6 +257,8 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
     };
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
+    let main_body =
+        roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),
@@ -360,6 +362,8 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
+    panic!("are we here?");
+
     unsafe {
         let main: JitFunction<
             unsafe extern "C" fn() -> i64, /* TODO have this return Str, and in the generated code make sure to call the appropriate string conversion function on the return val based on its type! */
@@ -369,7 +373,11 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
             .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
             .expect("errored");
 
-        Ok((format!("{}", main.call()), expr_type_str))
+        let result = main.call();
+        let output = format!("{}", result);
+        std::mem::forget(result);
+
+        Ok((output, expr_type_str))
     }
 }
 
