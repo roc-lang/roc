@@ -1,13 +1,12 @@
-use crate::layout_id::LayoutIds;
-use crate::llvm::build::{build_expr, Env, InPlace, Scope};
+use crate::llvm::build::{load_symbol, load_symbol_and_layout, Env, InPlace, Scope};
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type, ptr_int};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::types::{BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
-use roc_mono::expr::Expr;
-use roc_mono::layout::{Builtin, Layout};
+use roc_module::symbol::Symbol;
+use roc_mono::layout::{Builtin, Layout, MemoryMode};
 
 /// List.single : a -> List a
 pub fn list_single<'a, 'ctx, 'env>(
@@ -18,20 +17,9 @@ pub fn list_single<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-
-    let ptr = {
-        let bytes_len = elem_bytes;
-        let len_type = env.ptr_int();
-        let len = len_type.const_int(bytes_len, false);
-
-        env.builder
-            .build_array_malloc(elem_type, len, "create_list_ptr")
-            .unwrap()
-
-        // TODO check if malloc returned null; if so, runtime error for OOM!
-    };
+    // allocate a list of size 1 on the heap
+    let size = ctx.i64_type().const_int(1, false);
+    let ptr = allocate_list(env, elem_layout, size);
 
     // Put the element into the list
     let elem_ptr = unsafe {
@@ -88,7 +76,6 @@ pub fn list_repeat<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
     let ctx = env.context;
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
 
     // list_len > 0
     // We have to do a loop below, continuously adding the `elem`
@@ -106,10 +93,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
 
     let build_then = || {
         // Allocate space for the new array that we'll copy into.
-        let list_ptr = builder
-            .build_array_malloc(elem_type, list_len, "create_list_ptr")
-            .unwrap();
-
+        let list_ptr = allocate_list(env, elem_layout, list_len);
         // TODO check if malloc returned null; if so, runtime error for OOM!
 
         let index_name = "#index";
@@ -183,7 +167,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
         )
     };
 
-    let build_else = || empty_list(env);
+    let build_else = || empty_polymorphic_list(env);
 
     let struct_type = collection(ctx, env.ptr_bytes);
 
@@ -305,9 +289,10 @@ pub fn list_join<'a, 'ctx, 'env>(
         // If the input list is empty, or if it is a list of empty lists
         // then simply return an empty list
         Layout::Builtin(Builtin::EmptyList)
-        | Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::EmptyList))) => empty_list(env),
-        Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::List(elem_layout)))) => {
-            let inner_list_layout = Layout::Builtin(Builtin::List(elem_layout));
+        | Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::EmptyList))) => empty_list(env),
+        Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::List(_, elem_layout)))) => {
+            let inner_list_layout =
+                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, elem_layout));
 
             let builder = env.builder;
             let ctx = env.context;
@@ -522,17 +507,16 @@ pub fn list_join<'a, 'ctx, 'env>(
 pub fn list_reverse<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
-    layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
-    list: &Expr<'a>,
-    list_layout: &Layout<'a>,
+    list: &Symbol,
 ) -> BasicValueEnum<'ctx> {
+    let (_, list_layout) = load_symbol_and_layout(env, scope, list);
+
     match list_layout {
         Layout::Builtin(Builtin::EmptyList) => empty_list(env),
 
-        Layout::Builtin(Builtin::List(elem_layout)) => {
-            let wrapper_struct =
-                build_expr(env, layout_ids, scope, parent, list).into_struct_value();
+        Layout::Builtin(Builtin::List(_, elem_layout)) => {
+            let wrapper_struct = load_symbol(env, scope, list).into_struct_value();
 
             let builder = env.builder;
             let ctx = env.context;
@@ -555,10 +539,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
 
                 let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-                let reversed_list_ptr = env
-                    .builder
-                    .build_array_malloc(elem_type, len, "create_reversed_list_ptr")
-                    .unwrap();
+                let reversed_list_ptr = allocate_list(env, elem_layout, len);
 
                 // TODO check if malloc returned null; if so, runtime error for OOM!
 
@@ -685,7 +666,7 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     match list_layout {
-        Layout::Builtin(Builtin::List(elem_layout)) => {
+        Layout::Builtin(Builtin::List(_, elem_layout)) => {
             let ctx = env.context;
             let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
             let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
@@ -746,9 +727,7 @@ pub fn list_append<'a, 'ctx, 'env>(
         .build_int_mul(elem_bytes, list_len, "mul_old_len_by_elem_bytes");
 
     // Allocate space for the new array that we'll copy into.
-    let clone_ptr = builder
-        .build_array_malloc(elem_type, new_list_len, "list_ptr")
-        .unwrap();
+    let clone_ptr = allocate_list(env, elem_layout, new_list_len);
     let int_type = ptr_int(ctx, ptr_bytes);
     let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
 
@@ -884,22 +863,20 @@ pub fn list_len<'ctx>(
 /// List.concat : List elem, List elem -> List elem
 pub fn list_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
-    args: &[(Expr<'a>, Layout<'a>)],
+    args: &[Symbol],
 ) -> BasicValueEnum<'ctx> {
     debug_assert_eq!(args.len(), 2);
 
     let builder = env.builder;
     let ctx = env.context;
 
-    let (first_list, list_layout) = &args[0];
+    let (first_list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
-    let (second_list, _) = &args[1];
+    let second_list = load_symbol(env, scope, &args[1]);
 
-    let second_list_wrapper =
-        build_expr(env, layout_ids, scope, parent, second_list).into_struct_value();
+    let second_list_wrapper = second_list.into_struct_value();
 
     let second_list_len = list_len(builder, second_list_wrapper);
 
@@ -908,9 +885,8 @@ pub fn list_concat<'a, 'ctx, 'env>(
     // necessarily have the same layout
     match list_layout {
         Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-        Layout::Builtin(Builtin::List(elem_layout)) => {
-            let first_list_wrapper =
-                build_expr(env, layout_ids, scope, parent, first_list).into_struct_value();
+        Layout::Builtin(Builtin::List(_, elem_layout)) => {
+            let first_list_wrapper = first_list.into_struct_value();
 
             let first_list_len = list_len(builder, first_list_wrapper);
 
@@ -1245,6 +1221,17 @@ where
     phi.as_basic_value()
 }
 
+pub fn empty_polymorphic_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+
+    let struct_type = collection(ctx, env.ptr_bytes);
+
+    // The pointer should be null (aka zero) and the length should be zero,
+    // so the whole struct should be a const_zero
+    BasicValueEnum::StructValue(struct_type.const_zero())
+}
+
+// TODO investigate: does this cause problems when the layout is known? this value is now not refcounted!
 pub fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
     let ctx = env.context;
 
@@ -1348,4 +1335,65 @@ fn clone_nonempty_list<'a, 'ctx, 'env>(
         .into_struct_value();
 
     (answer, clone_ptr)
+}
+
+pub fn allocate_list<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    elem_layout: &Layout<'a>,
+    length: IntValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+
+    let len_type = env.ptr_int();
+    // bytes per element
+    let bytes_len = len_type.const_int(elem_bytes, false);
+    let offset = (env.ptr_bytes as u64).max(elem_bytes);
+
+    let ptr = {
+        let len = builder.build_int_mul(bytes_len, length, "data_length");
+        let len =
+            builder.build_int_add(len, len_type.const_int(offset, false), "add_refcount_space");
+
+        env.builder
+            .build_array_malloc(ctx.i8_type(), len, "create_list_ptr")
+            .unwrap()
+
+        // TODO check if malloc returned null; if so, runtime error for OOM!
+    };
+
+    // We must return a pointer to the first element:
+    let ptr_bytes = env.ptr_bytes;
+    let int_type = ptr_int(ctx, ptr_bytes);
+    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+    let incremented = builder.build_int_add(
+        ptr_as_int,
+        ctx.i64_type().const_int(offset, false),
+        "increment_list_ptr",
+    );
+
+    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+    let list_element_ptr = builder.build_int_to_ptr(incremented, ptr_type, "list_cast_ptr");
+
+    // subtract ptr_size, to access the refcount
+    let refcount_ptr = builder.build_int_sub(
+        incremented,
+        ctx.i64_type().const_int(env.ptr_bytes as u64, false),
+        "refcount_ptr",
+    );
+
+    let refcount_ptr = builder.build_int_to_ptr(
+        refcount_ptr,
+        int_type.ptr_type(AddressSpace::Generic),
+        "make ptr",
+    );
+
+    // put our "refcount 0" in the first slot
+    let ref_count_zero = ctx.i64_type().const_int(std::usize::MAX as u64, false);
+    builder.build_store(refcount_ptr, ref_count_zero);
+
+    list_element_ptr
 }

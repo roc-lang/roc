@@ -639,6 +639,7 @@ pub fn constrain_expr(
             exists(vars, And(arg_cons))
         }
         List {
+            list_var,
             elem_var,
             loc_elems,
         } => {
@@ -676,9 +677,12 @@ pub fn constrain_expr(
                 }
 
                 let inferred = list_type(Bool::variable(uniq_var), entry_type);
-                constraints.push(Eq(inferred, expected, Category::List, region));
+                constraints.push(Eq(inferred, expected.clone(), Category::List, region));
 
-                exists(vec![*elem_var, uniq_var], And(constraints))
+                let stored = Type::Variable(*list_var);
+                constraints.push(Eq(stored, expected, Category::Storage, region));
+
+                exists(vec![*elem_var, *list_var, uniq_var], And(constraints))
             }
         }
         Var(symbol) => {

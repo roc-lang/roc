@@ -101,4 +101,19 @@ mod cli_run {
         assert!(&out.stdout.ends_with("Hello, World!\n"));
         assert!(out.status.success());
     }
+
+    #[test]
+    fn run_quicksort() {
+        let out = run_roc(&[
+            "run",
+            example_file("quicksort", "Quicksort.roc").to_str().unwrap(),
+            "--optimize",
+        ]);
+
+        assert_eq!(&out.stderr, "");
+        assert!(&out
+            .stdout
+            .ends_with("[5, 6, 10, 12, 20, 21, 22, 23, 24, 32, 33, 42, 45, 54]\n"));
+        assert!(out.status.success());
+    }
 }

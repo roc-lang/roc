@@ -1,23 +1,16 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
-use inkwell::module::Linkage;
-use inkwell::passes::PassManager;
-use inkwell::types::BasicType;
-use inkwell::OptimizationLevel;
-use roc_collections::all::ImMap;
-use roc_gen::layout_id::LayoutIds;
-use roc_gen::llvm::build::{
-    build_proc, build_proc_header, get_call_conventions, module_from_builtins, OptLevel,
-};
-use roc_gen::llvm::convert::basic_type_from_layout;
-use roc_load::file::LoadedModule;
-use roc_module::symbol::Symbol;
-use roc_mono::expr::{Env, Expr, PartialProc, Procs};
-use roc_mono::layout::{Layout, LayoutCache};
-
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
 };
+use inkwell::OptimizationLevel;
+use roc_collections::all::default_hasher;
+use roc_gen::layout_id::LayoutIds;
+use roc_gen::llvm::build::{build_proc, build_proc_header, module_from_builtins, OptLevel};
+use roc_load::file::LoadedModule;
+use roc_mono::ir::{Env, PartialProc, Procs};
+use roc_mono::layout::{Layout, LayoutCache};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
 
@@ -27,7 +20,7 @@ use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
 #[allow(clippy::cognitive_complexity)]
 pub fn gen(
     arena: &Bump,
-    loaded: LoadedModule,
+    mut loaded: LoadedModule,
     filename: PathBuf,
     target: Triple,
     dest_filename: &Path,
@@ -62,103 +55,30 @@ pub fn gen(
     }
 
     // Look up the types and expressions of the `provided` values
-
-    // TODO instead of hardcoding this to `main`, use the `provided` list and gen all of them.
-    let ident_ids = loaded.interns.all_ident_ids.get(&home).unwrap();
-    let main_ident_id = *ident_ids.get_id(&"main".into()).unwrap_or_else(|| {
-        todo!("TODO gracefully handle the case where `main` wasn't declared in the app")
-    });
-    let main_symbol = Symbol::new(home, main_ident_id);
-    let mut main_var = None;
-    let mut main_expr = None;
-
-    for (symbol, var) in loaded.exposed_vars_by_symbol {
-        if symbol == main_symbol {
-            main_var = Some(var);
-
-            break;
-        }
-    }
-
     let mut decls_by_id = loaded.declarations_by_id;
     let home_decls = decls_by_id
         .remove(&loaded.module_id)
         .expect("Root module ID not found in loaded declarations_by_id");
 
-    // We use a loop label here so we can break all the way out of a nested
-    // loop inside DeclareRec if we find the expr there.
-    //
-    // https://doc.rust-lang.org/1.30.0/book/first-edition/loops.html#loop-labels
-    'find_expr: for decl in home_decls.iter() {
-        use roc_can::def::Declaration::*;
-
-        match decl {
-            Declare(def) => {
-                if def.pattern_vars.contains_key(&main_symbol) {
-                    main_expr = Some(def.loc_expr.clone());
-
-                    break 'find_expr;
-                }
-            }
-
-            DeclareRec(defs) => {
-                for def in defs {
-                    if def.pattern_vars.contains_key(&main_symbol) {
-                        main_expr = Some(def.loc_expr.clone());
-
-                        break 'find_expr;
-                    }
-                }
-            }
-            InvalidCycle(_, _) | Builtin(_) => {
-                // These can never contain main.
-            }
-        }
-    }
-
-    let loc_expr = main_expr.unwrap_or_else(|| {
-        panic!("TODO gracefully handle the case where `main` was declared but not exposed")
-    });
     let mut subs = loaded.solved.into_inner();
-    let content = match main_var {
-        Some(var) => subs.get_without_compacting(var).content,
-        None => todo!("TODO gracefully handle the case where `main` was declared but not exposed"),
-    };
 
     // Generate the binary
 
     let context = Context::create();
-    let module = module_from_builtins(&context, "app");
+    let module = arena.alloc(module_from_builtins(&context, "app"));
     let builder = context.create_builder();
-    let fpm = PassManager::create(&module);
-
-    roc_gen::llvm::build::add_passes(&fpm, opt_level);
-
-    fpm.initialize();
-
-    // Compute main_fn_type before moving subs to Env
-    let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
-        panic!(
-            "Code gen error in Program: could not convert to layout. Err was {:?}",
-            err
-        )
-    });
+    let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
-    let main_fn_type =
-        basic_type_from_layout(&arena, &context, &layout, ptr_bytes).fn_type(&[], false);
-    let main_fn_name = "$main";
 
-    // Compile and add all the Procs before adding main
-    let mut env = roc_gen::llvm::build::Env {
-        arena: &arena,
-        builder: &builder,
-        context: &context,
-        interns: loaded.interns,
-        module: arena.alloc(module),
-        ptr_bytes,
-    };
-    let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
+    let mut exposed_to_host =
+        HashSet::with_capacity_and_hasher(loaded.exposed_vars_by_symbol.len(), default_hasher());
+
+    for (symbol, _) in loaded.exposed_vars_by_symbol {
+        exposed_to_host.insert(symbol);
+    }
+
+    let mut ident_ids = loaded.interns.all_ident_ids.remove(&home).unwrap();
     let mut layout_ids = LayoutIds::default();
     let mut procs = Procs::default();
     let mut mono_problems = std::vec::Vec::new();
@@ -188,6 +108,34 @@ pub fn gen(
                             Closure(annotation, _, _, loc_args, boxed_body) => {
                                 let (loc_body, ret_var) = *boxed_body;
 
+                                // If this is an exposed symbol, we need to
+                                // register it as such. Otherwise, since it
+                                // never gets called by Roc code, it will never
+                                // get specialized!
+                                if exposed_to_host.contains(&symbol) {
+                                    let mut pattern_vars =
+                                        bumpalo::collections::Vec::with_capacity_in(
+                                            loc_args.len(),
+                                            arena,
+                                        );
+
+                                    for (var, _) in loc_args.iter() {
+                                        pattern_vars.push(*var);
+                                    }
+
+                                    let layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
+                                        todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
+                                    );
+
+                                    procs.insert_exposed(
+                                        symbol,
+                                        layout,
+                                        pattern_vars, //: Vec<'a, Variable>,
+                                        annotation,
+                                        ret_var,
+                                    );
+                                }
+
                                 procs.insert_named(
                                     &mut mono_env,
                                     &mut layout_cache,
@@ -199,12 +147,47 @@ pub fn gen(
                                 );
                             }
                             body => {
+                                let annotation = def.expr_var;
                                 let proc = PartialProc {
-                                    annotation: def.expr_var,
+                                    annotation,
                                     // This is a 0-arity thunk, so it has no arguments.
-                                    pattern_symbols: &[],
+                                    pattern_symbols: bumpalo::collections::Vec::new_in(
+                                        mono_env.arena,
+                                    ),
                                     body,
                                 };
+
+                                // If this is an exposed symbol, we need to
+                                // register it as such. Otherwise, since it
+                                // never gets called by Roc code, it will never
+                                // get specialized!
+                                if exposed_to_host.contains(&symbol) {
+                                    let pattern_vars = bumpalo::collections::Vec::new_in(arena);
+                                    let ret_layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
+                                        todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
+                                    );
+                                    let layout =
+                                        Layout::FunctionPointer(&[], arena.alloc(ret_layout));
+
+                                    procs.insert_exposed(
+                                        symbol,
+                                        layout,
+                                        pattern_vars,
+                                        // It seems brittle that we're passing
+                                        // annotation twice - especially since
+                                        // in both cases we're giving the
+                                        // annotation to the top-level value,
+                                        // not the thunk function it will code
+                                        // gen to. It seems to work, but that
+                                        // may only be because at present we
+                                        // only use the function annotation
+                                        // variable during specialization, and
+                                        // exposed values are never specialized
+                                        // because they must be monomorphic.
+                                        annotation,
+                                        annotation,
+                                    );
+                                }
 
                                 procs.partial_procs.insert(symbol, proc);
                                 procs.module_thunks.insert(symbol);
@@ -225,8 +208,19 @@ pub fn gen(
         }
     }
 
+    // Compile and add all the Procs before adding main
+    let mut env = roc_gen::llvm::build::Env {
+        arena: &arena,
+        builder: &builder,
+        context: &context,
+        interns: loaded.interns,
+        module,
+        ptr_bytes,
+        leak: false,
+        exposed_to_host,
+    };
+
     // Populate Procs further and get the low-level Expr from the canonical Expr
-    let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),
@@ -235,7 +229,7 @@ pub fn gen(
 
         Vec::with_capacity(num_headers)
     };
-    let mut procs = roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
+    let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
     assert_eq!(
         procs.runtime_errors,
@@ -250,20 +244,11 @@ pub fn gen(
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    for ((symbol, layout), proc) in procs.specialized.drain() {
-        use roc_mono::expr::InProgressProc::*;
+    for ((symbol, layout), proc) in procs.get_specialized_procs(arena) {
+        let (fn_val, arg_basic_types) =
+            build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-        match proc {
-            InProgress => {
-                panic!("A specialization was still marked InProgress after monomorphization had completed: {:?} with layout {:?}", symbol, layout);
-            }
-            Done(proc) => {
-                let (fn_val, arg_basic_types) =
-                    build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
-
-                headers.push((proc, fn_val, arg_basic_types));
-            }
-        }
+        headers.push((proc, fn_val, arg_basic_types));
     }
 
     // Build each proc using its header info.
@@ -271,7 +256,7 @@ pub fn gen(
         // NOTE: This is here to be uncommented in case verification fails.
         // (This approach means we don't have to defensively clone name here.)
         //
-        // println!("\n\nBuilding and then verifying function {}\n\n", name);
+        // println!("\n\nBuilding and then verifying function {:?}\n\n", proc);
         build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
 
         if fn_val.verify(true) {
@@ -284,36 +269,7 @@ pub fn gen(
         }
     }
 
-    // Add main to the module.
-    let cc = get_call_conventions(target.default_calling_convention().unwrap());
-    let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
-
-    main_fn.set_call_conventions(cc);
-    main_fn.set_linkage(Linkage::External);
-
-    // Add main's body
-    let basic_block = context.append_basic_block(main_fn, "entry");
-
-    builder.position_at_end(basic_block);
-
-    let ret = roc_gen::llvm::build::build_expr(
-        &env,
-        &mut layout_ids,
-        &ImMap::default(),
-        main_fn,
-        &main_body,
-    );
-
-    builder.build_return(Some(&ret));
-
-    // Uncomment this to see the module's un-optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    if main_fn.verify(true) {
-        fpm.run_on(&main_fn);
-    } else {
-        panic!("Function {} failed LLVM verification.", main_fn_name);
-    }
+    mpm.run_on(module);
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
@@ -354,7 +310,7 @@ pub fn gen(
         ),
     };
 
-    let opt = OptimizationLevel::Default;
+    let opt = OptimizationLevel::Aggressive;
     let reloc = RelocMode::Default;
     let model = CodeModel::Default;
 

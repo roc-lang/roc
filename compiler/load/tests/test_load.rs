@@ -214,7 +214,21 @@ mod test_load {
             hashmap! {
                 "swap" => "Int, Int, List a -> List a",
                 "partition" => "Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]",
+                "partitionHelp" => "Int, Int, List (Num a), Int, Num a -> [ Pair Int (List (Num a)) ]",
                 "quicksort" => "List (Num a), Int, Int -> List (Num a)",
+            },
+        );
+    }
+
+    #[test]
+    fn quicksort_one_def() {
+        let subs_by_module = MutMap::default();
+        let loaded_module = load_fixture("app_with_deps", "QuicksortOneDef", subs_by_module);
+
+        expect_types(
+            loaded_module,
+            hashmap! {
+                "quicksort" => "List (Num a) -> List (Num a)",
             },
         );
     }
@@ -229,6 +243,7 @@ mod test_load {
             hashmap! {
                 "swap" => "Int, Int, List a -> List a",
                 "partition" => "Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]",
+                "partitionHelp" => "Int, Int, List (Num a), Int, Num a -> [ Pair Int (List (Num a)) ]",
                 "quicksort" => "List (Num a), Int, Int -> List (Num a)",
             },
         );

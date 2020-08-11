@@ -27,6 +27,12 @@ pub enum Layout<'a> {
     Pointer(&'a Layout<'a>),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
+pub enum MemoryMode {
+    Unique,
+    Refcounted,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Builtin<'a> {
     Int128,
@@ -42,7 +48,7 @@ pub enum Builtin<'a> {
     Str,
     Map(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
-    List(&'a Layout<'a>),
+    List(MemoryMode, &'a Layout<'a>),
     EmptyStr,
     EmptyList,
     EmptyMap,
@@ -136,6 +142,31 @@ impl<'a> Layout<'a> {
             Pointer(_) => pointer_size,
         }
     }
+
+    pub fn is_refcounted(&self) -> bool {
+        match self {
+            Layout::Builtin(Builtin::List(_, _)) => true,
+            _ => false,
+        }
+    }
+
+    /// Even if a value (say, a record) is not itself reference counted,
+    /// it may contains values/fields that are. Therefore when this record
+    /// goes out of scope, the refcount on those values/fields must  be decremented.
+    pub fn contains_refcounted(&self) -> bool {
+        use Layout::*;
+
+        match self {
+            Builtin(builtin) => builtin.is_refcounted(),
+            Struct(fields) => fields.iter().any(|f| f.is_refcounted()),
+            Union(fields) => fields
+                .iter()
+                .map(|ls| ls.iter())
+                .flatten()
+                .any(|f| f.is_refcounted()),
+            FunctionPointer(_, _) | Pointer(_) => false,
+        }
+    }
 }
 
 /// Avoid recomputing Layout from Variable multiple times.
@@ -210,7 +241,7 @@ impl<'a> Builtin<'a> {
             Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
             Map(_, _) | EmptyMap => Builtin::MAP_WORDS * pointer_size,
             Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
-            List(_) | EmptyList => Builtin::LIST_WORDS * pointer_size,
+            List(_, _) | EmptyList => Builtin::LIST_WORDS * pointer_size,
         }
     }
 
@@ -220,7 +251,23 @@ impl<'a> Builtin<'a> {
         match self {
             Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Float128 | Float64 | Float32
             | Float16 | EmptyStr | EmptyMap | EmptyList | EmptySet => true,
-            Str | Map(_, _) | Set(_) | List(_) => false,
+            Str | Map(_, _) | Set(_) | List(_, _) => false,
+        }
+    }
+
+    // Question: does is_refcounted exactly correspond with the "safe to memcpy" property?
+    pub fn is_refcounted(&self) -> bool {
+        use Builtin::*;
+
+        match self {
+            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Float128 | Float64 | Float32
+            | Float16 | EmptyStr | EmptyMap | EmptyList | EmptySet => false,
+            List(mode, element_layout) => match mode {
+                MemoryMode::Refcounted => true,
+                MemoryMode::Unique => element_layout.contains_refcounted(),
+            },
+
+            Str | Map(_, _) | Set(_) => true,
         }
     }
 }
@@ -258,13 +305,26 @@ fn layout_from_flat_type<'a>(
                     debug_assert_eq!(args.len(), 2);
 
                     // The first argument is the uniqueness info;
-                    // that doesn't affect layout, so we don't need it here.
+                    // second is the base type
                     let wrapped_var = args[1];
 
-                    // For now, layout is unaffected by uniqueness.
-                    // (Incorporating refcounting may change this.)
-                    // Unwrap and continue
-                    Layout::from_var(arena, wrapped_var, subs)
+                    // correct the memory mode of unique lists
+                    match Layout::from_var(arena, wrapped_var, subs)? {
+                        Layout::Builtin(Builtin::List(_, elem_layout)) => {
+                            let uniqueness_var = args[0];
+                            let uniqueness_content =
+                                subs.get_without_compacting(uniqueness_var).content;
+
+                            let mode = if uniqueness_content.is_unique(subs) {
+                                MemoryMode::Unique
+                            } else {
+                                MemoryMode::Refcounted
+                            };
+
+                            Ok(Layout::Builtin(Builtin::List(mode, elem_layout)))
+                        }
+                        other => Ok(other),
+                    }
                 }
                 _ => {
                     panic!("TODO layout_from_flat_type for {:?}", Apply(symbol, args));
@@ -336,8 +396,8 @@ fn layout_from_flat_type<'a>(
 
             Ok(layout_from_tag_union(arena, tags, subs))
         }
-        RecursiveTagUnion(_, _, _) => {
-            panic!("TODO make Layout for non-empty Tag Union");
+        RecursiveTagUnion(_rec_var, _tags, _ext_var) => {
+            panic!("TODO make Layout for empty RecursiveTagUnion");
         }
         EmptyTagUnion => {
             panic!("TODO make Layout for empty Tag Union");
@@ -656,15 +716,15 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
 pub fn list_layout_from_elem<'a>(
     arena: &'a Bump,
     subs: &Subs,
-    var: Variable,
+    elem_var: Variable,
 ) -> Result<Layout<'a>, LayoutProblem> {
-    match subs.get_without_compacting(var).content {
+    match subs.get_without_compacting(elem_var).content {
         Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
             debug_assert_eq!(args.len(), 2);
 
-            let arg_var = args.get(1).unwrap();
+            let var = *args.get(1).unwrap();
 
-            list_layout_from_elem(arena, subs, *arg_var)
+            list_layout_from_elem(arena, subs, var)
         }
         Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (List *) then it must have been an empty list
@@ -674,7 +734,28 @@ pub fn list_layout_from_elem<'a>(
             let elem_layout = Layout::new(arena, content, subs)?;
 
             // This is a normal list.
-            Ok(Layout::Builtin(Builtin::List(arena.alloc(elem_layout))))
+            Ok(Layout::Builtin(Builtin::List(
+                MemoryMode::Refcounted,
+                arena.alloc(elem_layout),
+            )))
         }
+    }
+}
+
+pub fn mode_from_var(var: Variable, subs: &Subs) -> MemoryMode {
+    match subs.get_without_compacting(var).content {
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
+            debug_assert_eq!(args.len(), 2);
+
+            let uvar = *args.get(0).unwrap();
+            let content = subs.get_without_compacting(uvar).content;
+
+            if content.is_unique(subs) {
+                MemoryMode::Unique
+            } else {
+                MemoryMode::Refcounted
+            }
+        }
+        _ => MemoryMode::Refcounted,
     }
 }

@@ -13,20 +13,6 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_records {
-    use crate::helpers::{can_expr, infer_expr, uniq_expr, CanExprOut};
-    use bumpalo::Bump;
-    use inkwell::context::Context;
-    use inkwell::execution_engine::JitFunction;
-    use inkwell::passes::PassManager;
-    use inkwell::types::BasicType;
-    use inkwell::OptimizationLevel;
-    use roc_collections::all::ImMap;
-    use roc_gen::llvm::build::{build_proc, build_proc_header};
-    use roc_gen::llvm::convert::basic_type_from_layout;
-    use roc_mono::expr::{Expr, Procs};
-    use roc_mono::layout::Layout;
-    use roc_types::subs::Subs;
-
     #[test]
     fn basic_record() {
         assert_evals_to!(
@@ -201,7 +187,10 @@ mod gen_records {
             5,
             i64
         );
+    }
 
+    #[test]
+    fn when_on_record_with_guard_pattern() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -212,7 +201,10 @@ mod gen_records {
             5,
             i64
         );
+    }
 
+    #[test]
+    fn let_with_record_pattern() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -389,6 +381,22 @@ mod gen_records {
             ),
             true,
             bool
+        );
+    }
+
+    #[test]
+    fn return_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x = 4
+                y = 3
+
+                { x, y }
+                "#
+            ),
+            (4, 3),
+            (i64, i64)
         );
     }
 }

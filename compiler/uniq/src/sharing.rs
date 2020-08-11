@@ -606,6 +606,7 @@ impl VarUsage {
         );
 
         closure_signatures.insert(Symbol::LIST_IS_EMPTY, vec![Usage::Simple(Mark::Seen)]);
+        closure_signatures.insert(Symbol::LIST_LEN, vec![Usage::Simple(Mark::Seen)]);
 
         closure_signatures.insert(
             Symbol::LIST_SET,

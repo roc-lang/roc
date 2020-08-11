@@ -13,19 +13,23 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_tags {
-    use crate::helpers::{can_expr, infer_expr, uniq_expr, CanExprOut};
-    use bumpalo::Bump;
-    use inkwell::context::Context;
-    use inkwell::execution_engine::JitFunction;
-    use inkwell::passes::PassManager;
-    use inkwell::types::BasicType;
-    use inkwell::OptimizationLevel;
-    use roc_collections::all::ImMap;
-    use roc_gen::llvm::build::{build_proc, build_proc_header};
-    use roc_gen::llvm::convert::basic_type_from_layout;
-    use roc_mono::expr::{Expr, Procs};
-    use roc_mono::layout::Layout;
-    use roc_types::subs::Subs;
+    #[test]
+    fn applied_tag_nothing_ir() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Maybe a : [ Just a, Nothing ]
+
+                x : Maybe Int
+                x = Nothing
+
+                0x1
+                "#
+            ),
+            1,
+            i64
+        );
+    }
 
     #[test]
     fn applied_tag_nothing() {
@@ -47,6 +51,24 @@ mod gen_tags {
 
     #[test]
     fn applied_tag_just() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Maybe a : [ Just a, Nothing ]
+
+                y : Maybe Int
+                y = Just 0x4
+
+                0x1
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    fn applied_tag_just_ir() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -618,6 +640,79 @@ mod gen_tags {
                 "#
             ),
             5,
+            i64
+        );
+    }
+
+    #[test]
+    fn join_point_if() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x =
+                    if True then 1 else 2
+
+                x
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    fn join_point_when() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+            x : [ Red, White, Blue ]
+            x = Blue
+
+            y = 
+                when x is
+                    Red -> 1
+                    White -> 2
+                    Blue -> 3.1
+
+            y
+            "#
+            ),
+            3.1,
+            f64
+        );
+    }
+
+    #[test]
+    fn join_point_with_cond_expr() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+            y = 
+                when 1 + 2 is
+                    3 -> 3
+                    1 -> 1
+                    _ -> 0
+
+            y
+            "#
+            ),
+            3,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+            y = 
+                if 1 + 2 > 0 then
+                    3
+                else
+                    0
+
+            y
+            "#
+            ),
+            3,
             i64
         );
     }

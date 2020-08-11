@@ -5,11 +5,11 @@ use ven_pretty::DocAllocator;
 pub fn mono_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
     filename: PathBuf,
-    problem: roc_mono::expr::MonoProblem,
+    problem: roc_mono::ir::MonoProblem,
 ) -> Report<'b> {
-    use roc_mono::expr::MonoProblem::*;
-    use roc_mono::pattern::Context::*;
-    use roc_mono::pattern::Error::*;
+    use roc_mono::exhaustive::Context::*;
+    use roc_mono::exhaustive::Error::*;
+    use roc_mono::ir::MonoProblem::*;
 
     match problem {
         PatternProblem(Incomplete(region, context, missing)) => match context {
@@ -111,7 +111,7 @@ pub fn mono_problem<'b>(
 
 pub fn unhandled_patterns_to_doc_block<'b>(
     alloc: &'b RocDocAllocator<'b>,
-    patterns: Vec<roc_mono::pattern::Pattern>,
+    patterns: Vec<roc_mono::exhaustive::Pattern>,
 ) -> RocDocBuilder<'b> {
     alloc
         .vcat(patterns.into_iter().map(|v| pattern_to_doc(alloc, v)))
@@ -121,19 +121,19 @@ pub fn unhandled_patterns_to_doc_block<'b>(
 
 fn pattern_to_doc<'b>(
     alloc: &'b RocDocAllocator<'b>,
-    pattern: roc_mono::pattern::Pattern,
+    pattern: roc_mono::exhaustive::Pattern,
 ) -> RocDocBuilder<'b> {
     pattern_to_doc_help(alloc, pattern, false)
 }
 
 fn pattern_to_doc_help<'b>(
     alloc: &'b RocDocAllocator<'b>,
-    pattern: roc_mono::pattern::Pattern,
+    pattern: roc_mono::exhaustive::Pattern,
     in_type_param: bool,
 ) -> RocDocBuilder<'b> {
-    use roc_mono::pattern::Literal::*;
-    use roc_mono::pattern::Pattern::*;
-    use roc_mono::pattern::RenderAs;
+    use roc_mono::exhaustive::Literal::*;
+    use roc_mono::exhaustive::Pattern::*;
+    use roc_mono::exhaustive::RenderAs;
 
     match pattern {
         Anything => alloc.text("_"),

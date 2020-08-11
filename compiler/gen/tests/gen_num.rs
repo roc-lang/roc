@@ -13,19 +13,15 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_num {
-    use crate::helpers::{can_expr, infer_expr, uniq_expr, CanExprOut};
-    use bumpalo::Bump;
-    use inkwell::context::Context;
-    use inkwell::execution_engine::JitFunction;
+    /*
     use inkwell::passes::PassManager;
     use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
-    use roc_collections::all::ImMap;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
     use roc_gen::llvm::convert::basic_type_from_layout;
-    use roc_mono::expr::{Expr, Procs};
     use roc_mono::layout::Layout;
     use roc_types::subs::Subs;
+    */
 
     #[test]
     fn f64_sqrt() {
@@ -44,7 +40,7 @@ mod gen_num {
     }
 
     #[test]
-    fn f64_round() {
+    fn f64_round_old() {
         assert_evals_to!("Num.round 3.6", 4, i64);
     }
 
@@ -68,6 +64,26 @@ mod gen_num {
 
     #[test]
     fn gen_if_fn() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    limitedNegate = \num ->
+                        x = 
+                            if num == 1 then
+                                -1
+                            else if num == -1 then
+                                1
+                            else
+                                num
+                        x
+
+                    limitedNegate 1
+                "#
+            ),
+            -1,
+            i64
+        );
+
         assert_evals_to!(
             indoc!(
                 r#"
@@ -462,7 +478,7 @@ mod gen_num {
     }
 
     #[test]
-    fn if_guard_bind_variable() {
+    fn if_guard_bind_variable_false() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -474,7 +490,10 @@ mod gen_num {
             42,
             i64
         );
+    }
 
+    #[test]
+    fn if_guard_bind_variable_true() {
         assert_evals_to!(
             indoc!(
                 r#"
