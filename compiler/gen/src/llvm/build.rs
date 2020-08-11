@@ -1365,10 +1365,10 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     }
 
     let fn_type = get_fn_type(&ret_type, &arg_basic_types);
+
     let fn_name = layout_ids
         .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
-
     let fn_val = env
         .module
         .add_function(fn_name.as_str(), fn_type, Some(Linkage::Private));
