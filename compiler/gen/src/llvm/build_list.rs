@@ -933,8 +933,6 @@ pub fn list_concat<'a, 'ctx, 'env>(
                 let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
                 let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-                let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-
                 let if_second_list_is_empty = || {
                     let (new_wrapper, _) = clone_nonempty_list(
                         env,
@@ -956,14 +954,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
                     let combined_list_len =
                         builder.build_int_add(first_list_len, second_list_len, "add_list_lengths");
 
-                    let combined_list_ptr = env
-                        .builder
-                        .build_array_malloc(
-                            elem_type,
-                            combined_list_len,
-                            "create_combined_list_ptr",
-                        )
-                        .unwrap();
+                    let combined_list_ptr = allocate_list(env, elem_layout, combined_list_len);
 
                     // FIRST LOOP
                     let first_loop = |first_index| {
