@@ -173,12 +173,19 @@ pub fn construct_optimization_passes<'a>(
         }
         OptLevel::Optimize => {
             // this threshold seems to do what we want
-            pmb.set_inliner_with_threshold(2);
+            pmb.set_inliner_with_threshold(0);
 
             // TODO figure out which of these actually help
 
             // function passes
 
+            fpm.add_cfg_simplification_pass();
+            mpm.add_cfg_simplification_pass();
+
+            fpm.add_jump_threading_pass();
+            mpm.add_jump_threading_pass();
+
+            //fpm.add_ind_var_simplify_pass();
             fpm.add_memcpy_optimize_pass(); // this one is very important
 
             // In my testing, these don't do much for quicksort
@@ -631,7 +638,17 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
             result
         }
-        Ret(symbol) => load_symbol(env, scope, symbol),
+        Ret(symbol) => {
+            let value = load_symbol(env, scope, symbol);
+
+            if let Some(block) = env.builder.get_insert_block() {
+                if block.get_terminator().is_none() {
+                    env.builder.build_return(Some(&value));
+                }
+            }
+
+            value
+        }
 
         Cond {
             branching_symbol,
@@ -659,7 +676,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         &dyn inkwell::values::BasicValue<'_>,
                         inkwell::basic_block::BasicBlock<'_>,
                     )> = std::vec::Vec::with_capacity(2);
-                    let cont_block = context.append_basic_block(parent, "branchcont");
+                    let cont_block = context.append_basic_block(parent, "condbranchcont");
 
                     builder.build_conditional_branch(value, then_block, else_block);
 
@@ -1025,7 +1042,7 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
     // build blocks
     let then_block = ctx.append_basic_block(parent, "then");
     let else_block = ctx.append_basic_block(parent, "else");
-    let cont_block = ctx.append_basic_block(parent, "branchcont");
+    let cont_block = ctx.append_basic_block(parent, "dec_ref_branchcont");
 
     builder.build_conditional_branch(comparison, then_block, else_block);
 
@@ -1283,7 +1300,7 @@ where
     // build blocks
     let then_block = context.append_basic_block(parent, "then");
     let else_block = context.append_basic_block(parent, "else");
-    let cont_block = context.append_basic_block(parent, "branchcont");
+    let cont_block = context.append_basic_block(parent, "phi2_branchcont");
 
     builder.build_conditional_branch(comparison, then_block, else_block);
 
@@ -1410,7 +1427,12 @@ pub fn build_proc<'a, 'ctx, 'env>(
 
     let body = build_exp_stmt(env, layout_ids, &mut scope, fn_val, &proc.body);
 
-    builder.build_return(Some(&body));
+    // only add a return if codegen did not already add one
+    if let Some(block) = builder.get_insert_block() {
+        if block.get_terminator().is_none() {
+            builder.build_return(Some(&body));
+        }
+    }
 }
 
 pub fn verify_fn(fn_val: FunctionValue<'_>) {

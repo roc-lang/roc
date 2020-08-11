@@ -170,15 +170,14 @@ pub fn helper_without_uniqueness<'a>(
 
     builder.position_at_end(basic_block);
 
-    let ret = roc_gen::llvm::build::build_exp_stmt(
+    // builds the function body (return statement included)
+    roc_gen::llvm::build::build_exp_stmt(
         &env,
         &mut layout_ids,
         &mut Scope::default(),
         main_fn,
         &main_body,
     );
-
-    builder.build_return(Some(&ret));
 
     // Uncomment this to see the module's un-optimized LLVM instruction output:
     // env.module.print_to_stderr();
@@ -361,15 +360,14 @@ pub fn helper_with_uniqueness<'a>(
 
     builder.position_at_end(basic_block);
 
-    let ret = roc_gen::llvm::build::build_exp_stmt(
+    // builds the function body (return statement included)
+    roc_gen::llvm::build::build_exp_stmt(
         &env,
         &mut layout_ids,
         &mut Scope::default(),
         main_fn,
         &main_body,
     );
-
-    builder.build_return(Some(&ret));
 
     // you're in the version with uniqueness!
 

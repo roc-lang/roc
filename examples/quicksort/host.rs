@@ -75,7 +75,7 @@ pub fn main() {
     };
 
     // TODO FIXME don't truncate! This is just for testing.
-    nums.truncate(1_000_00);
+    nums.truncate(1_000_000);
 
     let nums: Box<[i64]> = nums.into();
 

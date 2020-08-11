@@ -999,9 +999,10 @@ fn specialize<'a>(
 
     debug_assert!(matches!(unified, roc_unify::unify::Unified::Success(_)));
 
-    let ret_symbol = env.unique_symbol();
-    let hole = env.arena.alloc(Stmt::Ret(ret_symbol));
-    let specialized_body = with_hole(env, body, procs, layout_cache, ret_symbol, hole);
+    //let ret_symbol = env.unique_symbol();
+    //let hole = env.arena.alloc(Stmt::Ret(ret_symbol));
+    //let specialized_body = with_hole(env, body, procs, layout_cache, ret_symbol, hole);
+    let specialized_body = from_can(env, body, procs, layout_cache);
 
     // reset subs, so we don't get type errors when specializing for a different signature
     env.subs.rollback_to(snapshot);
@@ -1449,68 +1450,119 @@ pub fn with_hole<'a>(
                 .from_var(env.arena, cond_var, env.subs)
                 .expect("invalid cond_layout");
 
-            let assigned_in_jump = env.unique_symbol();
-            let id = JoinPointId(env.unique_symbol());
-            let jump = env
-                .arena
-                .alloc(Stmt::Jump(id, env.arena.alloc([assigned_in_jump])));
+            // if the hole is a return, then we don't need to merge the two
+            // branches together again, we can just immediately return
+            let is_terminated = matches!(hole, Stmt::Ret(_));
 
-            let mut stmt = with_hole(
-                env,
-                final_else.value,
-                procs,
-                layout_cache,
-                assigned_in_jump,
-                jump,
-            );
+            if is_terminated {
+                let terminator = hole;
 
-            for (loc_cond, loc_then) in branches.into_iter().rev() {
-                let branching_symbol = env.unique_symbol();
-                let then = with_hole(
+                let mut stmt = with_hole(
                     env,
-                    loc_then.value,
+                    final_else.value,
+                    procs,
+                    layout_cache,
+                    assigned,
+                    terminator,
+                );
+
+                for (loc_cond, loc_then) in branches.into_iter().rev() {
+                    let branching_symbol = env.unique_symbol();
+                    let then = with_hole(
+                        env,
+                        loc_then.value,
+                        procs,
+                        layout_cache,
+                        assigned,
+                        terminator,
+                    );
+
+                    stmt = Stmt::Cond {
+                        cond_symbol: branching_symbol,
+                        branching_symbol,
+                        cond_layout: cond_layout.clone(),
+                        branching_layout: cond_layout.clone(),
+                        pass: env.arena.alloc(then),
+                        fail: env.arena.alloc(stmt),
+                        ret_layout: ret_layout.clone(),
+                    };
+
+                    // add condition
+                    stmt = with_hole(
+                        env,
+                        loc_cond.value,
+                        procs,
+                        layout_cache,
+                        branching_symbol,
+                        env.arena.alloc(stmt),
+                    );
+                }
+                stmt
+            } else {
+                let assigned_in_jump = env.unique_symbol();
+                let id = JoinPointId(env.unique_symbol());
+
+                let terminator = env
+                    .arena
+                    .alloc(Stmt::Jump(id, env.arena.alloc([assigned_in_jump])));
+
+                let mut stmt = with_hole(
+                    env,
+                    final_else.value,
                     procs,
                     layout_cache,
                     assigned_in_jump,
-                    jump,
+                    terminator,
                 );
 
-                stmt = Stmt::Cond {
-                    cond_symbol: branching_symbol,
-                    branching_symbol,
-                    cond_layout: cond_layout.clone(),
-                    branching_layout: cond_layout.clone(),
-                    pass: env.arena.alloc(then),
-                    fail: env.arena.alloc(stmt),
-                    ret_layout: ret_layout.clone(),
+                for (loc_cond, loc_then) in branches.into_iter().rev() {
+                    let branching_symbol = env.unique_symbol();
+                    let then = with_hole(
+                        env,
+                        loc_then.value,
+                        procs,
+                        layout_cache,
+                        assigned_in_jump,
+                        terminator,
+                    );
+
+                    stmt = Stmt::Cond {
+                        cond_symbol: branching_symbol,
+                        branching_symbol,
+                        cond_layout: cond_layout.clone(),
+                        branching_layout: cond_layout.clone(),
+                        pass: env.arena.alloc(then),
+                        fail: env.arena.alloc(stmt),
+                        ret_layout: ret_layout.clone(),
+                    };
+
+                    // add condition
+                    stmt = with_hole(
+                        env,
+                        loc_cond.value,
+                        procs,
+                        layout_cache,
+                        branching_symbol,
+                        env.arena.alloc(stmt),
+                    );
+                }
+
+                let layout = layout_cache
+                    .from_var(env.arena, branch_var, env.subs)
+                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+                let param = Param {
+                    symbol: assigned,
+                    layout,
+                    borrow: false,
                 };
 
-                // add condition
-                stmt = with_hole(
-                    env,
-                    loc_cond.value,
-                    procs,
-                    layout_cache,
-                    branching_symbol,
-                    env.arena.alloc(stmt),
-                );
-            }
-
-            let layout = layout_cache
-                .from_var(env.arena, branch_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
-
-            let param = Param {
-                symbol: assigned,
-                layout,
-                borrow: false,
-            };
-
-            Stmt::Join {
-                id,
-                parameters: env.arena.alloc([param]),
-                remainder: env.arena.alloc(stmt),
-                continuation: hole,
+                Stmt::Join {
+                    id,
+                    parameters: env.arena.alloc([param]),
+                    remainder: env.arena.alloc(stmt),
+                    continuation: hole,
+                }
             }
         }
 
@@ -1883,6 +1935,89 @@ pub fn from_can<'a>(
     use roc_can::expr::Expr::*;
 
     match can_expr {
+        When {
+            cond_var,
+            expr_var,
+            region,
+            loc_cond,
+            branches,
+        } => {
+            let cond_symbol = if let roc_can::expr::Expr::Var(symbol) = loc_cond.value {
+                symbol
+            } else {
+                env.unique_symbol()
+            };
+
+            let mut stmt = from_can_when(
+                env,
+                cond_var,
+                expr_var,
+                region,
+                cond_symbol,
+                branches,
+                layout_cache,
+                procs,
+                None,
+            );
+
+            // define the `when` condition
+            if let roc_can::expr::Expr::Var(_) = loc_cond.value {
+                // do nothing
+            } else {
+                stmt = with_hole(
+                    env,
+                    loc_cond.value,
+                    procs,
+                    layout_cache,
+                    cond_symbol,
+                    env.arena.alloc(stmt),
+                );
+            };
+
+            stmt
+        }
+        If {
+            cond_var,
+            branch_var,
+            branches,
+            final_else,
+        } => {
+            let ret_layout = layout_cache
+                .from_var(env.arena, branch_var, env.subs)
+                .expect("invalid ret_layout");
+            let cond_layout = layout_cache
+                .from_var(env.arena, cond_var, env.subs)
+                .expect("invalid cond_layout");
+
+            let mut stmt = from_can(env, final_else.value, procs, layout_cache);
+
+            for (loc_cond, loc_then) in branches.into_iter().rev() {
+                let branching_symbol = env.unique_symbol();
+                let then = from_can(env, loc_then.value, procs, layout_cache);
+
+                stmt = Stmt::Cond {
+                    cond_symbol: branching_symbol,
+                    branching_symbol,
+                    cond_layout: cond_layout.clone(),
+                    branching_layout: cond_layout.clone(),
+                    pass: env.arena.alloc(then),
+                    fail: env.arena.alloc(stmt),
+                    ret_layout: ret_layout.clone(),
+                };
+
+                // add condition
+                stmt = with_hole(
+                    env,
+                    loc_cond.value,
+                    procs,
+                    layout_cache,
+                    branching_symbol,
+                    env.arena.alloc(stmt),
+                );
+            }
+
+            stmt
+        }
         LetRec(defs, cont, _, _) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
