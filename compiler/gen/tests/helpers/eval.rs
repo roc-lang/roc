@@ -1,3 +1,4 @@
+use roc_collections::all::MutSet;
 use roc_types::subs::Subs;
 
 pub fn helper_without_uniqueness<'a>(
@@ -88,6 +89,7 @@ pub fn helper_without_uniqueness<'a>(
         module,
         ptr_bytes,
         leak: leak,
+        exposed_to_host: MutSet::default(),
     };
     let mut procs = roc_mono::ir::Procs::default();
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
@@ -160,8 +162,7 @@ pub fn helper_without_uniqueness<'a>(
 
     // Add main to the module.
     let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
-    let cc =
-        roc_gen::llvm::build::get_call_conventions(target.default_calling_convention().unwrap());
+    let cc = roc_gen::llvm::build::FAST_CALL_CONV;
 
     main_fn.set_call_conventions(cc);
 
@@ -280,6 +281,7 @@ pub fn helper_with_uniqueness<'a>(
         module,
         ptr_bytes,
         leak: leak,
+        exposed_to_host: MutSet::default(),
     };
     let mut procs = roc_mono::ir::Procs::default();
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
@@ -351,8 +353,7 @@ pub fn helper_with_uniqueness<'a>(
 
     // Add main to the module.
     let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
-    let cc =
-        roc_gen::llvm::build::get_call_conventions(target.default_calling_convention().unwrap());
+    let cc = roc_gen::llvm::build::FAST_CALL_CONV;
 
     main_fn.set_call_conventions(cc);
 

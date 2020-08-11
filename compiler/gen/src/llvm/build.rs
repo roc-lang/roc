@@ -16,12 +16,11 @@ use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FloatValue, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
 use inkwell::{IntPredicate, OptimizationLevel};
-use roc_collections::all::ImMap;
+use roc_collections::all::{ImMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::JoinPointId;
 use roc_mono::layout::{Builtin, Layout, MemoryMode};
-use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -78,6 +77,7 @@ pub struct Env<'a, 'ctx, 'env> {
     pub interns: Interns,
     pub ptr_bytes: u32,
     pub leak: bool,
+    pub exposed_to_host: MutSet<Symbol>,
 }
 
 impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
@@ -150,6 +150,8 @@ fn add_intrinsic<'ctx>(
 ) -> FunctionValue<'ctx> {
     let fn_val = module.add_function(intrinsic_name, fn_type, None);
 
+    // LLVM intrinsics always use the C calling convention, because
+    // they are implemented in C libraries
     fn_val.set_call_conventions(C_CALL_CONV);
 
     fn_val
@@ -172,29 +174,27 @@ pub fn construct_optimization_passes<'a>(
             pmb.set_optimization_level(OptimizationLevel::None);
         }
         OptLevel::Optimize => {
-            // Default is O2, Aggressive is O3
-            //
-            // See https://llvm.org/doxygen/CodeGen_8h_source.html
-            pmb.set_optimization_level(OptimizationLevel::Aggressive);
-            pmb.set_inliner_with_threshold(4);
+            // this threshold seems to do what we want
+            pmb.set_inliner_with_threshold(2);
 
             // TODO figure out which of these actually help
 
             // function passes
-            fpm.add_basic_alias_analysis_pass();
-            fpm.add_memcpy_optimize_pass();
-            fpm.add_jump_threading_pass();
-            fpm.add_instruction_combining_pass();
-            fpm.add_licm_pass();
-            fpm.add_loop_unroll_pass();
-            fpm.add_scalar_repl_aggregates_pass_ssa();
+
+            fpm.add_memcpy_optimize_pass(); // this one is very important
+
+            // In my testing, these don't do much for quicksort
+            //            fpm.add_basic_alias_analysis_pass();
+            //            fpm.add_jump_threading_pass();
+            //            fpm.add_instruction_combining_pass();
+            //            fpm.add_licm_pass();
+            //            fpm.add_loop_unroll_pass();
+            //            fpm.add_scalar_repl_aggregates_pass_ssa();
+            //            fpm.add_cfg_simplification_pass();
+            //            fpm.add_jump_threading_pass();
 
             // module passes
-            mpm.add_cfg_simplification_pass();
-            mpm.add_jump_threading_pass();
-            mpm.add_instruction_combining_pass();
-            mpm.add_memcpy_optimize_pass();
-            mpm.add_promote_memory_to_register_pass();
+            // fpm.add_promote_memory_to_register_pass();
         }
     }
 
@@ -322,11 +322,13 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 }
             };
 
-            // TODO FIXME this should not be hardcoded!
-            // Need to look up what calling convention is the right one for that function.
-            // If this is an external-facing function, it'll use the C calling convention.
-            // If it's an internal-only function, it should (someday) use the fast calling conention.
-            call.set_call_convention(C_CALL_CONV);
+            if env.exposed_to_host.contains(name) {
+                // If this is an external-facing function, use the C calling convention.
+                call.set_call_convention(C_CALL_CONV);
+            } else {
+                // If it's an internal-only function, use the fast calling conention.
+                call.set_call_convention(FAST_CALL_CONV);
+            }
 
             call.try_as_basic_value()
                 .left()
@@ -1373,7 +1375,15 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
         .module
         .add_function(fn_name.as_str(), fn_type, Some(Linkage::Private));
 
-    fn_val.set_call_conventions(fn_val.get_call_conventions());
+    if env.exposed_to_host.contains(&symbol) {
+        // If this is an external-facing function, it'll use the C calling convention
+        // and external linkage.
+        fn_val.set_linkage(Linkage::External);
+        fn_val.set_call_conventions(C_CALL_CONV);
+    } else {
+        // If it's an internal-only function, it should use the fast calling conention.
+        fn_val.set_call_conventions(FAST_CALL_CONV);
+    }
 
     (fn_val, arg_basic_types)
 }
@@ -2494,22 +2504,9 @@ fn list_set<'a, 'ctx, 'env>(
     )
 }
 
-/// Translates a target_lexicon::Triple to a LLVM calling convention u32
-/// as described in https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
-pub fn get_call_conventions(cc: CallingConvention) -> u32 {
-    use CallingConvention::*;
-
-    // For now, we're returning 0 for the C calling convention on all of these.
-    // Not sure if we should be picking something more specific!
-    match cc {
-        SystemV => C_CALL_CONV,
-        WasmBasicCAbi => C_CALL_CONV,
-        WindowsFastcall => C_CALL_CONV,
-    }
-}
-
 /// Source: https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
 pub static C_CALL_CONV: u32 = 0;
+pub static FAST_CALL_CONV: u32 = 8;
 pub static COLD_CALL_CONV: u32 = 9;
 
 fn run_low_level<'a, 'ctx, 'env>(
@@ -2891,16 +2888,25 @@ fn run_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
-        ListSet => list_set(
-            parent,
-            &[
-                (load_symbol_and_layout(env, scope, &args[0])),
-                (load_symbol_and_layout(env, scope, &args[1])),
-                (load_symbol_and_layout(env, scope, &args[2])),
-            ],
-            env,
-            InPlace::Clone,
-        ),
+        ListSet => {
+            let (list_symbol, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let in_place = match &list_layout {
+                Layout::Builtin(Builtin::List(MemoryMode::Unique, _)) => InPlace::InPlace,
+                _ => InPlace::Clone,
+            };
+
+            list_set(
+                parent,
+                &[
+                    (list_symbol, list_layout),
+                    (load_symbol_and_layout(env, scope, &args[1])),
+                    (load_symbol_and_layout(env, scope, &args[2])),
+                ],
+                env,
+                in_place,
+            )
+        }
         ListSetInPlace => list_set(
             parent,
             &[

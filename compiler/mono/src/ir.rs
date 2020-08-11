@@ -73,7 +73,7 @@ impl<'a> Proc<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Procs<'a> {
     pub partial_procs: MutMap<Symbol, PartialProc<'a>>,
     pub module_thunks: MutSet<Symbol>,
@@ -81,6 +81,18 @@ pub struct Procs<'a> {
         Option<MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>>,
     pub specialized: MutMap<(Symbol, Layout<'a>), InProgressProc<'a>>,
     pub runtime_errors: MutMap<Symbol, &'a str>,
+}
+
+impl<'a> Default for Procs<'a> {
+    fn default() -> Self {
+        Self {
+            partial_procs: MutMap::default(),
+            module_thunks: MutSet::default(),
+            pending_specializations: Some(MutMap::default()),
+            specialized: MutMap::default(),
+            runtime_errors: MutMap::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -171,12 +183,16 @@ impl<'a> Procs<'a> {
                     .from_var(env.arena, annotation, env.subs)
                     .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
+                let tuple = (symbol, layout);
+                let already_specialized = self.specialized.contains_key(&tuple);
+                let (symbol, layout) = tuple;
+
                 // if we've already specialized this one, no further work is needed.
                 //
                 // NOTE: this #[allow(clippy::map_entry)] here is for correctness!
                 // Changing it to use .entry() would necessarily make it incorrect.
                 #[allow(clippy::map_entry)]
-                if !self.specialized.contains_key(&(symbol, layout.clone())) {
+                if !already_specialized {
                     let pending = PendingSpecialization {
                         ret_var,
                         fn_var: annotation,
@@ -235,6 +251,41 @@ impl<'a> Procs<'a> {
                 Ok(layout)
             }
             Err(loc_error) => Err(loc_error.value),
+        }
+    }
+
+    /// Add a named function that will be publicly exposed to the host
+    pub fn insert_exposed(
+        &mut self,
+        name: Symbol,
+        layout: Layout<'a>,
+        pattern_vars: Vec<'a, Variable>,
+        fn_var: Variable,
+        ret_var: Variable,
+    ) {
+        let tuple = (name, layout);
+
+        // If we've already specialized this one, no further work is needed.
+        if self.specialized.contains_key(&tuple) {
+            return;
+        }
+
+        // We're done with that tuple, so move layout back out to avoid cloning it.
+        let (name, layout) = tuple;
+        let pending = PendingSpecialization {
+            pattern_vars,
+            ret_var,
+            fn_var,
+        };
+
+        // This should only be called when pending_specializations is Some.
+        // Otherwise, it's being called in the wrong pass!
+        match &mut self.pending_specializations {
+            Some(pending_specializations) => {
+                // register the pending specialization, so this gets code genned later
+                add_pending(pending_specializations, name, layout, pending)
+            }
+            None => unreachable!("insert_exposed was called after the pending specializations phase had already completed!"),
         }
     }
 }
@@ -882,11 +933,6 @@ pub fn specialize_all<'a>(
     procs.pending_specializations = None;
 
     for (name, mut by_layout) in pending_specializations.drain() {
-        // Use the function's symbol's home module as the home module
-        // when doing canonicalization. This will be important to determine
-        // whether or not it's safe to defer specialization.
-        env.home = name.module_id();
-
         for (layout, pending) in by_layout.drain() {
             // If we've already seen this (Symbol, Layout) combination before,
             // don't try to specialize it again. If we do, we'll loop forever!
@@ -1041,7 +1087,34 @@ pub fn with_hole<'a>(
             ),
         },
         LetNonRec(def, cont, _, _) => {
-            // WRONG! this is introduces new control flow, and should call `from_can` again
+            if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
+                if let Closure(_, _, _, _, _) = &def.loc_expr.value {
+                    // Now that we know for sure it's a closure, get an owned
+                    // version of these variant args so we can use them properly.
+                    match def.loc_expr.value {
+                        Closure(ann, _, _, loc_args, boxed_body) => {
+                            // Extract Procs, but discard the resulting Expr::Load.
+                            // That Load looks up the pointer, which we won't use here!
+
+                            let (loc_body, ret_var) = *boxed_body;
+
+                            procs.insert_named(
+                                env,
+                                layout_cache,
+                                *symbol,
+                                ann,
+                                loc_args,
+                                loc_body,
+                                ret_var,
+                            );
+
+                            return with_hole(env, cont.value, procs, layout_cache, assigned, hole);
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+            }
+
             if let roc_can::pattern::Pattern::Identifier(symbol) = def.loc_pattern.value {
                 let mut stmt = with_hole(env, cont.value, procs, layout_cache, assigned, hole);
 
@@ -1062,49 +1135,74 @@ pub fn with_hole<'a>(
                 // this may be a destructure pattern
                 let mono_pattern = from_can_pattern(env, layout_cache, &def.loc_pattern.value);
 
-                if let Pattern::Identifier(symbol) = mono_pattern {
-                    let hole = env
-                        .arena
-                        .alloc(from_can(env, cont.value, procs, layout_cache));
-                    with_hole(env, def.loc_expr.value, procs, layout_cache, symbol, hole)
-                } else {
-                    let context = crate::exhaustive::Context::BadDestruct;
-                    match crate::exhaustive::check(
-                        def.loc_pattern.region,
-                        &[(
-                            Located::at(def.loc_pattern.region, mono_pattern.clone()),
-                            crate::exhaustive::Guard::NoGuard,
-                        )],
-                        context,
-                    ) {
-                        Ok(_) => {}
-                        Err(errors) => {
-                            for error in errors {
-                                env.problems.push(MonoProblem::PatternProblem(error))
-                            }
-                        } // TODO make all variables bound in the pattern evaluate to a runtime error
-                          // return Stmt::RuntimeError("TODO non-exhaustive pattern");
-                    }
-
-                    // convert the continuation
-                    let mut stmt = from_can(env, cont.value, procs, layout_cache);
-
-                    let outer_symbol = env.unique_symbol();
-                    stmt =
-                        store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
-                            .unwrap();
-
-                    // convert the def body, store in outer_symbol
-                    with_hole(
-                        env,
-                        def.loc_expr.value,
-                        procs,
-                        layout_cache,
-                        outer_symbol,
-                        env.arena.alloc(stmt),
-                    )
+                let context = crate::exhaustive::Context::BadDestruct;
+                match crate::exhaustive::check(
+                    def.loc_pattern.region,
+                    &[(
+                        Located::at(def.loc_pattern.region, mono_pattern.clone()),
+                        crate::exhaustive::Guard::NoGuard,
+                    )],
+                    context,
+                ) {
+                    Ok(_) => {}
+                    Err(errors) => {
+                        for error in errors {
+                            env.problems.push(MonoProblem::PatternProblem(error))
+                        }
+                    } // TODO make all variables bound in the pattern evaluate to a runtime error
+                      // return Stmt::RuntimeError("TODO non-exhaustive pattern");
                 }
+
+                // convert the continuation
+                let mut stmt = with_hole(env, cont.value, procs, layout_cache, assigned, hole);
+
+                let outer_symbol = env.unique_symbol();
+                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
+                    .unwrap();
+
+                // convert the def body, store in outer_symbol
+                with_hole(
+                    env,
+                    def.loc_expr.value,
+                    procs,
+                    layout_cache,
+                    outer_symbol,
+                    env.arena.alloc(stmt),
+                )
             }
+        }
+        LetRec(defs, cont, _, _) => {
+            // because Roc is strict, only functions can be recursive!
+            for def in defs.into_iter() {
+                if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
+                    // Now that we know for sure it's a closure, get an owned
+                    // version of these variant args so we can use them properly.
+                    match def.loc_expr.value {
+                        Closure(ann, _, _, loc_args, boxed_body) => {
+                            // Extract Procs, but discard the resulting Expr::Load.
+                            // That Load looks up the pointer, which we won't use here!
+
+                            let (loc_body, ret_var) = *boxed_body;
+
+                            procs.insert_named(
+                                env,
+                                layout_cache,
+                                *symbol,
+                                ann,
+                                loc_args,
+                                loc_body,
+                                ret_var,
+                            );
+
+                            continue;
+                        }
+                        _ => unreachable!("recursive value is not a function"),
+                    }
+                }
+                unreachable!("recursive value does not have Identifier pattern")
+            }
+
+            with_hole(env, cont.value, procs, layout_cache, assigned, hole)
         }
         Var(symbol) => {
             if procs.module_thunks.contains(&symbol) {
@@ -1532,7 +1630,6 @@ pub fn with_hole<'a>(
 
             stmt
         }
-        LetRec(_, _, _, _) => todo!("lets"),
 
         Access {
             record_var,

@@ -1,4 +1,4 @@
-app Quicksort provides [ quicksort ] imports []
+app QuicksortOneDef provides [ quicksort ] imports []
 
 quicksort = \originalList ->
     quicksortHelp : List (Num a), Int, Int -> List (Num a)
