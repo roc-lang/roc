@@ -221,6 +221,19 @@ mod test_load {
     }
 
     #[test]
+    fn quicksort_one_def() {
+        let subs_by_module = MutMap::default();
+        let loaded_module = load_fixture("app_with_deps", "QuicksortOneDef", subs_by_module);
+
+        expect_types(
+            loaded_module,
+            hashmap! {
+                "quicksort" => "List (Num a) -> List (Num a)",
+            },
+        );
+    }
+
+    #[test]
     fn app_quicksort() {
         let subs_by_module = MutMap::default();
         let loaded_module = load_fixture("app_with_deps", "Quicksort", subs_by_module);

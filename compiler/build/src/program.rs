@@ -229,7 +229,7 @@ pub fn gen(
 
         Vec::with_capacity(num_headers)
     };
-    let mut procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
+    let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
     assert_eq!(
         procs.runtime_errors,
@@ -244,20 +244,11 @@ pub fn gen(
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    for ((symbol, layout), proc) in procs.specialized.drain() {
-        use roc_mono::ir::InProgressProc::*;
+    for ((symbol, layout), proc) in procs.get_specialized_procs(arena) {
+        let (fn_val, arg_basic_types) =
+            build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-        match proc {
-            InProgress => {
-                panic!("A specialization was still marked InProgress after monomorphization had completed: {:?} with layout {:?}", symbol, layout);
-            }
-            Done(proc) => {
-                let (fn_val, arg_basic_types) =
-                    build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
-
-                headers.push((proc, fn_val, arg_basic_types));
-            }
-        }
+        headers.push((proc, fn_val, arg_basic_types));
     }
 
     // Build each proc using its header info.
@@ -340,7 +331,7 @@ pub fn gen(
         ),
     };
 
-    let opt = OptimizationLevel::Default;
+    let opt = OptimizationLevel::Aggressive;
     let reloc = RelocMode::Default;
     let model = CodeModel::Default;
 

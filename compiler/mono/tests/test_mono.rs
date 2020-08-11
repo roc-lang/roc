@@ -12,6 +12,7 @@ mod helpers;
 // Test monomorphization
 #[cfg(test)]
 mod test_mono {
+    use crate::helpers::with_larger_debug_stack;
 
     // NOTE because the Show instance of module names is different in --release mode,
     // these tests would all fail. In the future, when we do interesting optimizations,

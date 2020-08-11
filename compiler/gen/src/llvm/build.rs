@@ -172,29 +172,27 @@ pub fn construct_optimization_passes<'a>(
             pmb.set_optimization_level(OptimizationLevel::None);
         }
         OptLevel::Optimize => {
-            // Default is O2, Aggressive is O3
-            //
-            // See https://llvm.org/doxygen/CodeGen_8h_source.html
-            pmb.set_optimization_level(OptimizationLevel::Aggressive);
-            pmb.set_inliner_with_threshold(4);
+            // this threshold seems to do what we want
+            pmb.set_inliner_with_threshold(2);
 
             // TODO figure out which of these actually help
 
             // function passes
-            fpm.add_basic_alias_analysis_pass();
-            fpm.add_memcpy_optimize_pass();
-            fpm.add_jump_threading_pass();
-            fpm.add_instruction_combining_pass();
-            fpm.add_licm_pass();
-            fpm.add_loop_unroll_pass();
-            fpm.add_scalar_repl_aggregates_pass_ssa();
+
+            fpm.add_memcpy_optimize_pass(); // this one is very important
+
+            // In my testing, these don't do much for quicksort
+            //            fpm.add_basic_alias_analysis_pass();
+            //            fpm.add_jump_threading_pass();
+            //            fpm.add_instruction_combining_pass();
+            //            fpm.add_licm_pass();
+            //            fpm.add_loop_unroll_pass();
+            //            fpm.add_scalar_repl_aggregates_pass_ssa();
+            //            fpm.add_cfg_simplification_pass();
+            //            fpm.add_jump_threading_pass();
 
             // module passes
-            mpm.add_cfg_simplification_pass();
-            mpm.add_jump_threading_pass();
-            mpm.add_instruction_combining_pass();
-            mpm.add_memcpy_optimize_pass();
-            mpm.add_promote_memory_to_register_pass();
+            // fpm.add_promote_memory_to_register_pass();
         }
     }
 
@@ -2891,16 +2889,25 @@ fn run_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
-        ListSet => list_set(
-            parent,
-            &[
-                (load_symbol_and_layout(env, scope, &args[0])),
-                (load_symbol_and_layout(env, scope, &args[1])),
-                (load_symbol_and_layout(env, scope, &args[2])),
-            ],
-            env,
-            InPlace::Clone,
-        ),
+        ListSet => {
+            let (list_symbol, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let in_place = match &list_layout {
+                Layout::Builtin(Builtin::List(MemoryMode::Unique, _)) => InPlace::InPlace,
+                _ => InPlace::Clone,
+            };
+
+            list_set(
+                parent,
+                &[
+                    (list_symbol, list_layout),
+                    (load_symbol_and_layout(env, scope, &args[1])),
+                    (load_symbol_and_layout(env, scope, &args[2])),
+                ],
+                env,
+                in_place,
+            )
+        }
         ListSetInPlace => list_set(
             parent,
             &[

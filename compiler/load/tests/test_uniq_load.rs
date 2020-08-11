@@ -241,6 +241,19 @@ mod test_uniq_load {
     }
 
     #[test]
+    fn quickcheck_nested_let() {
+        let subs_by_module = MutMap::default();
+        let loaded_module = load_fixture("app_with_deps", "QuicksortOneDef", subs_by_module);
+
+        expect_types(
+            loaded_module,
+            hashmap! {
+                "quicksort" => "Attr * (Attr b (List (Attr Shared (Num (Attr Shared a)))) -> Attr b (List (Attr Shared (Num (Attr Shared a)))))",
+            },
+        );
+    }
+
+    #[test]
     fn load_principal_types() {
         let subs_by_module = MutMap::default();
         let loaded_module = load_fixture("no_deps", "Principal", subs_by_module);
