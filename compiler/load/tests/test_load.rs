@@ -214,6 +214,7 @@ mod test_load {
             hashmap! {
                 "swap" => "Int, Int, List a -> List a",
                 "partition" => "Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]",
+                "partitionHelp" => "Int, Int, List (Num a), Int, Num a -> [ Pair Int (List (Num a)) ]",
                 "quicksort" => "List (Num a), Int, Int -> List (Num a)",
             },
         );
@@ -229,6 +230,7 @@ mod test_load {
             hashmap! {
                 "swap" => "Int, Int, List a -> List a",
                 "partition" => "Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]",
+                "partitionHelp" => "Int, Int, List (Num a), Int, Num a -> [ Pair Int (List (Num a)) ]",
                 "quicksort" => "List (Num a), Int, Int -> List (Num a)",
             },
         );

@@ -1,7 +1,6 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::execution_engine::JitFunction;
-use inkwell::passes::PassManager;
 use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_builtins::unique::uniq_stdlib;
@@ -19,7 +18,7 @@ use roc_gen::llvm::build::{build_proc, build_proc_header, OptLevel};
 use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
-use roc_mono::expr::Procs;
+use roc_mono::ir::Procs;
 use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
@@ -209,13 +208,9 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
     }
 
     let context = Context::create();
-    let module = roc_gen::llvm::build::module_from_builtins(&context, "app");
+    let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, "app"));
     let builder = context.create_builder();
-    let fpm = PassManager::create(&module);
-
-    roc_gen::llvm::build::add_passes(&fpm, opt_level);
-
-    fpm.initialize();
+    let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     // pretty-print the expr type string for later.
     name_all_type_vars(var, &mut subs);
@@ -243,8 +238,9 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
         builder: &builder,
         context: &context,
         interns,
-        module: arena.alloc(module),
+        module,
         ptr_bytes,
+        leak: false,
     };
     let mut procs = Procs::default();
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
@@ -252,7 +248,7 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
 
     // Populate Procs and get the low-level Expr from the canonical Expr
     let mut mono_problems = Vec::new();
-    let mut mono_env = roc_mono::expr::Env {
+    let mut mono_env = roc_mono::ir::Env {
         arena: &arena,
         subs: &mut subs,
         problems: &mut mono_problems,
@@ -260,7 +256,9 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
         ident_ids: &mut ident_ids,
     };
 
-    let main_body = roc_mono::expr::Expr::new(&mut mono_env, loc_expr.value, &mut procs);
+    let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
+    let main_body =
+        roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),
@@ -270,7 +268,7 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
         Vec::with_capacity(num_headers)
     };
     let mut layout_cache = LayoutCache::default();
-    let mut procs = roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
+    let mut procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
     assert_eq!(
         procs.runtime_errors,
@@ -285,8 +283,10 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
+
+    let mut gen_scope = roc_gen::llvm::build::Scope::default();
     for ((symbol, layout), proc) in procs.specialized.drain() {
-        use roc_mono::expr::InProgressProc::*;
+        use roc_mono::ir::InProgressProc::*;
 
         match proc {
             InProgress => {
@@ -331,10 +331,10 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
 
     builder.position_at_end(basic_block);
 
-    let ret = roc_gen::llvm::build::build_expr(
+    let ret = roc_gen::llvm::build::build_exp_stmt(
         &env,
         &mut layout_ids,
-        &ImMap::default(),
+        &mut gen_scope,
         main_fn,
         &main_body,
     );
@@ -349,6 +349,8 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
     } else {
         panic!("Main function {} failed LLVM verification. Uncomment things near this error message for more details.", main_fn_name);
     }
+
+    mpm.run_on(module);
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
@@ -367,7 +369,9 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
             .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
             .expect("errored");
 
-        Ok((format!("{}", main.call()), expr_type_str))
+        let result = main.call();
+        let output = format!("{}", result);
+        Ok((output, expr_type_str))
     }
 }
 

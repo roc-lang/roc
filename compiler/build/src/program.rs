@@ -1,10 +1,8 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
-use inkwell::passes::PassManager;
 use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
-use roc_collections::all::ImMap;
 use roc_gen::layout_id::LayoutIds;
 use roc_gen::llvm::build::{
     build_proc, build_proc_header, get_call_conventions, module_from_builtins, OptLevel,
@@ -12,7 +10,7 @@ use roc_gen::llvm::build::{
 use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_load::file::LoadedModule;
 use roc_module::symbol::Symbol;
-use roc_mono::expr::{Env, Expr, PartialProc, Procs};
+use roc_mono::ir::{Env, PartialProc, Procs, Stmt};
 use roc_mono::layout::{Layout, LayoutCache};
 
 use inkwell::targets::{
@@ -128,13 +126,9 @@ pub fn gen(
     // Generate the binary
 
     let context = Context::create();
-    let module = module_from_builtins(&context, "app");
+    let module = arena.alloc(module_from_builtins(&context, "app"));
     let builder = context.create_builder();
-    let fpm = PassManager::create(&module);
-
-    roc_gen::llvm::build::add_passes(&fpm, opt_level);
-
-    fpm.initialize();
+    let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compute main_fn_type before moving subs to Env
     let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
@@ -155,8 +149,9 @@ pub fn gen(
         builder: &builder,
         context: &context,
         interns: loaded.interns,
-        module: arena.alloc(module),
+        module,
         ptr_bytes,
+        leak: false,
     };
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
     let mut layout_ids = LayoutIds::default();
@@ -202,7 +197,9 @@ pub fn gen(
                                 let proc = PartialProc {
                                     annotation: def.expr_var,
                                     // This is a 0-arity thunk, so it has no arguments.
-                                    pattern_symbols: &[],
+                                    pattern_symbols: bumpalo::collections::Vec::new_in(
+                                        mono_env.arena,
+                                    ),
                                     body,
                                 };
 
@@ -226,7 +223,9 @@ pub fn gen(
     }
 
     // Populate Procs further and get the low-level Expr from the canonical Expr
-    let main_body = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
+    let main_body = Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
+    let main_body =
+        roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),
@@ -235,7 +234,7 @@ pub fn gen(
 
         Vec::with_capacity(num_headers)
     };
-    let mut procs = roc_mono::expr::specialize_all(&mut mono_env, procs, &mut layout_cache);
+    let mut procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
     assert_eq!(
         procs.runtime_errors,
@@ -251,7 +250,7 @@ pub fn gen(
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
     for ((symbol, layout), proc) in procs.specialized.drain() {
-        use roc_mono::expr::InProgressProc::*;
+        use roc_mono::ir::InProgressProc::*;
 
         match proc {
             InProgress => {
@@ -296,10 +295,10 @@ pub fn gen(
 
     builder.position_at_end(basic_block);
 
-    let ret = roc_gen::llvm::build::build_expr(
+    let ret = roc_gen::llvm::build::build_exp_stmt(
         &env,
         &mut layout_ids,
-        &ImMap::default(),
+        &mut roc_gen::llvm::build::Scope::default(),
         main_fn,
         &main_body,
     );
@@ -314,6 +313,8 @@ pub fn gen(
     } else {
         panic!("Function {} failed LLVM verification.", main_fn_name);
     }
+
+    mpm.run_on(module);
 
     // Verify the module
     if let Err(errors) = env.module.verify() {

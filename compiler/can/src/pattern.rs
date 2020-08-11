@@ -77,7 +77,12 @@ pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
         }
         RecordDestructure { destructs, .. } => {
             for destruct in destructs {
-                symbols.push(destruct.value.symbol);
+                // when a record field has a pattern guard, only symbols in the guard are introduced
+                if let DestructType::Guard(_, subpattern) = &destruct.value.typ {
+                    symbols_from_pattern_help(&subpattern.value, symbols);
+                } else {
+                    symbols.push(destruct.value.symbol);
+                }
             }
         }
 

@@ -146,6 +146,17 @@ impl fmt::Debug for Symbol {
     }
 }
 
+impl fmt::Display for Symbol {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let module_id = self.module_id();
+        let ident_id = self.ident_id();
+
+        match ident_id {
+            IdentId(value) => write!(f, "{:?}.{:?}", module_id, value),
+        }
+    }
+}
+
 fn fallback_debug_fmt(symbol: Symbol, f: &mut fmt::Formatter) -> fmt::Result {
     let module_id = symbol.module_id();
     let ident_id = symbol.ident_id();

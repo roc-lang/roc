@@ -123,6 +123,8 @@ pub enum RuntimeError {
     InvalidInt(IntErrorKind, Base, Region, Box<str>),
     CircularDef(Vec<Symbol>, Vec<(Region /* pattern */, Region /* expr */)>),
 
+    NonExhaustivePattern,
+
     /// When the author specifies a type annotation but no implementation
     NoImplementation,
 }

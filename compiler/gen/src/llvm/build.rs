@@ -5,6 +5,7 @@ use crate::llvm::convert::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::memory_buffer::MemoryBuffer;
@@ -18,8 +19,8 @@ use inkwell::{IntPredicate, OptimizationLevel};
 use roc_collections::all::ImMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::expr::{Expr, Proc};
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::ir::JoinPointId;
+use roc_mono::layout::{Builtin, Layout, MemoryMode};
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -30,12 +31,44 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
 #[cfg(not(debug_assertions))]
 const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 
+#[derive(Debug, Clone, Copy)]
 pub enum OptLevel {
     Normal,
     Optimize,
 }
 
-pub type Scope<'a, 'ctx> = ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>;
+// pub type Scope<'a, 'ctx> = ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>;
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct Scope<'a, 'ctx> {
+    symbols: ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>,
+    join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, &'a [PointerValue<'ctx>])>,
+}
+
+impl<'a, 'ctx> Scope<'a, 'ctx> {
+    fn get(&self, symbol: &Symbol) -> Option<&(Layout<'a>, PointerValue<'ctx>)> {
+        self.symbols.get(symbol)
+    }
+    fn insert(&mut self, symbol: Symbol, value: (Layout<'a>, PointerValue<'ctx>)) {
+        self.symbols.insert(symbol, value);
+    }
+    fn remove(&mut self, symbol: &Symbol) {
+        self.symbols.remove(symbol);
+    }
+    /*
+    fn get_join_point(&self, symbol: &JoinPointId) -> Option<&PhiValue<'ctx>> {
+        self.join_points.get(symbol)
+    }
+    fn remove_join_point(&mut self, symbol: &JoinPointId) {
+        self.join_points.remove(symbol);
+    }
+    fn get_mut_join_point(&mut self, symbol: &JoinPointId) -> Option<&mut PhiValue<'ctx>> {
+        self.join_points.get_mut(symbol)
+    }
+    fn insert_join_point(&mut self, symbol: JoinPointId, value: PhiValue<'ctx>) {
+        self.join_points.insert(symbol, value);
+    }
+    */
+}
 
 pub struct Env<'a, 'ctx, 'env> {
     pub arena: &'a Bump,
@@ -44,6 +77,7 @@ pub struct Env<'a, 'ctx, 'env> {
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
     pub ptr_bytes: u32,
+    pub leak: bool,
 }
 
 impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
@@ -121,14 +155,18 @@ fn add_intrinsic<'ctx>(
     fn_val
 }
 
-pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>, opt_level: OptLevel) {
+pub fn construct_optimization_passes<'a>(
+    module: &'a Module,
+    opt_level: OptLevel,
+) -> (PassManager<Module<'a>>, PassManager<FunctionValue<'a>>) {
+    let mpm = PassManager::create(());
+    let fpm = PassManager::create(module);
+
     // tail-call elimination is always on
     fpm.add_instruction_combining_pass();
     fpm.add_tail_call_elimination_pass();
 
     let pmb = PassManagerBuilder::create();
-
-    // Enable more optimizations when running cargo test --release
     match opt_level {
         OptLevel::Normal => {
             pmb.set_optimization_level(OptimizationLevel::None);
@@ -138,215 +176,48 @@ pub fn add_passes(fpm: &PassManager<FunctionValue<'_>>, opt_level: OptLevel) {
             //
             // See https://llvm.org/doxygen/CodeGen_8h_source.html
             pmb.set_optimization_level(OptimizationLevel::Aggressive);
+            pmb.set_inliner_with_threshold(4);
 
-            // TODO figure out how enabling these individually differs from
-            // the broad "aggressive optimizations" setting.
+            // TODO figure out which of these actually help
 
-            // fpm.add_reassociate_pass();
-            // fpm.add_basic_alias_analysis_pass();
-            // fpm.add_promote_memory_to_register_pass();
-            // fpm.add_cfg_simplification_pass();
-            // fpm.add_gvn_pass();
-            // TODO figure out why enabling any of these (even alone) causes LLVM to segfault
-            // fpm.add_strip_dead_prototypes_pass();
-            // fpm.add_dead_arg_elimination_pass();
-            // fpm.add_function_inlining_pass();
-            // pmb.set_inliner_with_threshold(4);
+            // function passes
+            fpm.add_basic_alias_analysis_pass();
+            fpm.add_memcpy_optimize_pass();
+            fpm.add_jump_threading_pass();
+            fpm.add_instruction_combining_pass();
+            fpm.add_licm_pass();
+            fpm.add_loop_unroll_pass();
+            fpm.add_scalar_repl_aggregates_pass_ssa();
+
+            // module passes
+            mpm.add_cfg_simplification_pass();
+            mpm.add_jump_threading_pass();
+            mpm.add_instruction_combining_pass();
+            mpm.add_memcpy_optimize_pass();
+            mpm.add_promote_memory_to_register_pass();
         }
     }
 
+    pmb.populate_module_pass_manager(&mpm);
     pmb.populate_function_pass_manager(&fpm);
+
+    fpm.initialize();
+
+    // For now, we have just one of each
+    (mpm, fpm)
 }
 
-#[allow(clippy::cognitive_complexity)]
-pub fn build_expr<'a, 'ctx, 'env>(
+pub fn build_exp_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    scope: &Scope<'a, 'ctx>,
-    parent: FunctionValue<'ctx>,
-    expr: &Expr<'a>,
+    literal: &roc_mono::ir::Literal<'a>,
 ) -> BasicValueEnum<'ctx> {
-    use roc_mono::expr::Expr::*;
+    use roc_mono::ir::Literal::*;
 
-    match expr {
+    match literal {
         Int(num) => env.context.i64_type().const_int(*num as u64, true).into(),
         Float(num) => env.context.f64_type().const_float(*num).into(),
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
-        Cond {
-            branch_symbol,
-            pass: (pass_stores, pass_expr),
-            fail: (fail_stores, fail_expr),
-            ret_layout,
-            ..
-        } => {
-            let pass = env.arena.alloc(Expr::Store(pass_stores, pass_expr));
-            let fail = env.arena.alloc(Expr::Store(fail_stores, fail_expr));
-
-            let ret_type =
-                basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
-
-            let cond_expr = load_symbol(env, scope, branch_symbol);
-
-            match cond_expr {
-                IntValue(value) => {
-                    // This is a call tobuild_basic_phi2, except inlined to prevent
-                    // problems with lifetimes and closures involving layout_ids.
-                    let builder = env.builder;
-                    let context = env.context;
-
-                    // build blocks
-                    let then_block = context.append_basic_block(parent, "then");
-                    let else_block = context.append_basic_block(parent, "else");
-                    let cont_block = context.append_basic_block(parent, "branchcont");
-
-                    builder.build_conditional_branch(value, then_block, else_block);
-
-                    // build then block
-                    builder.position_at_end(then_block);
-                    let then_val = build_expr(env, layout_ids, scope, parent, pass);
-                    builder.build_unconditional_branch(cont_block);
-
-                    let then_block = builder.get_insert_block().unwrap();
-
-                    // build else block
-                    builder.position_at_end(else_block);
-                    let else_val = build_expr(env, layout_ids, scope, parent, fail);
-                    builder.build_unconditional_branch(cont_block);
-
-                    let else_block = builder.get_insert_block().unwrap();
-
-                    // emit merge block
-                    builder.position_at_end(cont_block);
-
-                    let phi = builder.build_phi(ret_type, "branch");
-
-                    phi.add_incoming(&[(&then_val, then_block), (&else_val, else_block)]);
-
-                    phi.as_basic_value()
-                }
-                _ => panic!(
-                    "Tried to make a branch out of an invalid condition: cond_expr = {:?}",
-                    cond_expr,
-                ),
-            }
-        }
-        Switch {
-            cond,
-            branches,
-            default_branch: (default_stores, default_expr),
-            ret_layout,
-            cond_layout,
-        } => {
-            let ret_type =
-                basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
-
-            let default_branch = env.arena.alloc(Expr::Store(default_stores, default_expr));
-
-            let mut combined = Vec::with_capacity_in(branches.len(), env.arena);
-
-            for (int, stores, expr) in branches.iter() {
-                combined.push((*int, Expr::Store(stores, expr)));
-            }
-
-            let switch_args = SwitchArgs {
-                cond_layout: cond_layout.clone(),
-                cond_expr: cond,
-                branches: combined.into_bump_slice(),
-                default_branch,
-                ret_type,
-            };
-
-            build_switch(env, layout_ids, scope, parent, switch_args)
-        }
-        Store(stores, ret) => {
-            let mut scope = im_rc::HashMap::clone(scope);
-            let context = &env.context;
-
-            for (symbol, layout, expr) in stores.iter() {
-                let val = build_expr(env, layout_ids, &scope, parent, &expr);
-                let expr_bt = basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes);
-                let alloca = create_entry_block_alloca(
-                    env,
-                    parent,
-                    expr_bt,
-                    symbol.ident_string(&env.interns),
-                );
-
-                env.builder.build_store(alloca, val);
-
-                // Make a new scope which includes the binding we just encountered.
-                // This should be done *after* compiling the bound expr, since any
-                // recursive (in the LetRec sense) bindings should already have
-                // been extracted as procedures. Nothing in here should need to
-                // access itself!
-                scope = im_rc::HashMap::clone(&scope);
-
-                scope.insert(*symbol, (layout.clone(), alloca));
-            }
-
-            build_expr(env, layout_ids, &scope, parent, ret)
-        }
-        CallByName { name, layout, args } => {
-            let mut arg_tuples: Vec<(BasicValueEnum, &'a Layout<'a>)> =
-                Vec::with_capacity_in(args.len(), env.arena);
-
-            for (arg, arg_layout) in args.iter() {
-                arg_tuples.push((build_expr(env, layout_ids, scope, parent, arg), arg_layout));
-            }
-
-            call_with_args(
-                env,
-                layout_ids,
-                layout,
-                *name,
-                parent,
-                arg_tuples.into_bump_slice(),
-            )
-        }
-        FunctionPointer(symbol, layout) => {
-            let fn_name = layout_ids
-                .get(*symbol, layout)
-                .to_symbol_string(*symbol, &env.interns);
-            let ptr = env
-                .module
-                .get_function(fn_name.as_str())
-                .unwrap_or_else(|| panic!("Could not get pointer to unknown function {:?}", symbol))
-                .as_global_value()
-                .as_pointer_value();
-
-            BasicValueEnum::PointerValue(ptr)
-        }
-        CallByPointer(sub_expr, args, _var) => {
-            let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
-
-            for arg in args.iter() {
-                arg_vals.push(build_expr(env, layout_ids, scope, parent, arg));
-            }
-
-            let call = match build_expr(env, layout_ids, scope, parent, sub_expr) {
-                BasicValueEnum::PointerValue(ptr) => {
-                    env.builder.build_call(ptr, arg_vals.as_slice(), "tmp")
-                }
-                non_ptr => {
-                    panic!(
-                        "Tried to call by pointer, but encountered a non-pointer: {:?}",
-                        non_ptr
-                    );
-                }
-            };
-
-            // TODO FIXME this should not be hardcoded!
-            // Need to look up what calling convention is the right one for that function.
-            // If this is an external-facing function, it'll use the C calling convention.
-            // If it's an internal-only function, it should (someday) use the fast calling conention.
-            call.set_call_convention(C_CALL_CONV);
-
-            call.try_as_basic_value()
-                .left()
-                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
-        }
-        Load(symbol) => load_symbol(env, scope, symbol),
         Str(str_literal) => {
             if str_literal.is_empty() {
                 panic!("TODO build an empty string in LLVM");
@@ -386,75 +257,80 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 BasicValueEnum::PointerValue(ptr)
             }
         }
-        EmptyArray => {
-            let struct_type = collection(env.context, env.ptr_bytes);
+    }
+}
 
-            // The pointer should be null (aka zero) and the length should be zero,
-            // so the whole struct should be a const_zero
-            BasicValueEnum::StructValue(struct_type.const_zero())
-        }
-        Array { elem_layout, elems } => {
-            let ctx = env.context;
-            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-            let builder = env.builder;
+pub fn build_exp_expr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    expr: &roc_mono::ir::Expr<'a>,
+) -> BasicValueEnum<'ctx> {
+    use roc_mono::ir::CallType::*;
+    use roc_mono::ir::Expr::*;
 
-            if elems.is_empty() {
-                empty_list(env)
-            } else {
-                let len_u64 = elems.len() as u64;
-                let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+    match expr {
+        Literal(literal) => build_exp_literal(env, literal),
+        RunLowLevel(op, symbols) => run_low_level(env, scope, parent, *op, symbols),
 
-                let ptr = {
-                    let bytes_len = elem_bytes * len_u64;
-                    let len_type = env.ptr_int();
-                    let len = len_type.const_int(bytes_len, false);
+        FunctionCall {
+            call_type: ByName(name),
+            layout,
+            args,
+            ..
+        } => {
+            let mut arg_tuples: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
 
-                    env.builder
-                        .build_array_malloc(elem_type, len, "create_list_ptr")
-                        .unwrap()
-
-                    // TODO check if malloc returned null; if so, runtime error for OOM!
-                };
-
-                // Copy the elements from the list literal into the array
-                for (index, elem) in elems.iter().enumerate() {
-                    let index_val = ctx.i64_type().const_int(index as u64, false);
-                    let elem_ptr =
-                        unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
-                    let val = build_expr(env, layout_ids, &scope, parent, &elem);
-
-                    builder.build_store(elem_ptr, val);
-                }
-
-                let ptr_bytes = env.ptr_bytes;
-                let int_type = ptr_int(ctx, ptr_bytes);
-                let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
-                let struct_type = collection(ctx, ptr_bytes);
-                let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
-                let mut struct_val;
-
-                // Store the pointer
-                struct_val = builder
-                    .build_insert_value(
-                        struct_type.get_undef(),
-                        ptr_as_int,
-                        Builtin::WRAPPER_PTR,
-                        "insert_ptr",
-                    )
-                    .unwrap();
-
-                // Store the length
-                struct_val = builder
-                    .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
-                    .unwrap();
-
-                // Bitcast to an array of raw bytes
-                builder.build_bitcast(
-                    struct_val.into_struct_value(),
-                    collection(ctx, ptr_bytes),
-                    "cast_collection",
-                )
+            for symbol in args.iter() {
+                arg_tuples.push(load_symbol(env, scope, symbol));
             }
+
+            call_with_args(
+                env,
+                layout_ids,
+                layout,
+                *name,
+                parent,
+                arg_tuples.into_bump_slice(),
+            )
+        }
+
+        FunctionCall {
+            call_type: ByPointer(name),
+            layout: _,
+            args,
+            ..
+        } => {
+            let sub_expr = load_symbol(env, scope, name);
+
+            let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
+
+            for arg in args.iter() {
+                arg_vals.push(load_symbol(env, scope, arg));
+            }
+
+            let call = match sub_expr {
+                BasicValueEnum::PointerValue(ptr) => {
+                    env.builder.build_call(ptr, arg_vals.as_slice(), "tmp")
+                }
+                non_ptr => {
+                    panic!(
+                        "Tried to call by pointer, but encountered a non-pointer: {:?}",
+                        non_ptr
+                    );
+                }
+            };
+
+            // TODO FIXME this should not be hardcoded!
+            // Need to look up what calling convention is the right one for that function.
+            // If this is an external-facing function, it'll use the C calling convention.
+            // If it's an internal-only function, it should (someday) use the fast calling conention.
+            call.set_call_convention(C_CALL_CONV);
+
+            call.try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
         }
 
         Struct(sorted_fields) => {
@@ -467,9 +343,10 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            for (field_expr, field_layout) in sorted_fields.iter() {
+            for symbol in sorted_fields.iter() {
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
+                let (field_expr, field_layout) = load_symbol_and_layout(env, scope, symbol);
                 if field_layout.stack_size(ptr_bytes) != 0 {
                     field_types.push(basic_type_from_layout(
                         env.arena,
@@ -478,7 +355,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                         env.ptr_bytes,
                     ));
 
-                    field_vals.push(build_expr(env, layout_ids, &scope, parent, field_expr));
+                    field_vals.push(field_expr);
                 }
             }
 
@@ -501,6 +378,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 BasicValueEnum::StructValue(struct_val.into_struct_value())
             }
         }
+
         Tag {
             union_size,
             arguments,
@@ -517,11 +395,11 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            for (field_expr, field_layout) in it {
+            for field_symbol in it {
+                let (val, field_layout) = load_symbol_and_layout(env, scope, field_symbol);
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
                 if field_layout.stack_size(ptr_bytes) != 0 {
-                    let val = build_expr(env, layout_ids, &scope, parent, field_expr);
                     let field_type = basic_type_from_layout(
                         env.arena,
                         env.context,
@@ -553,14 +431,16 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 BasicValueEnum::StructValue(struct_val.into_struct_value())
             }
         }
+
         Tag {
             arguments,
             tag_layout,
+            union_size,
             ..
         } => {
+            debug_assert!(*union_size > 1);
             let ptr_size = env.ptr_bytes;
 
-            let whole_size = tag_layout.stack_size(ptr_size);
             let mut filler = tag_layout.stack_size(ptr_size);
 
             let ctx = env.context;
@@ -571,15 +451,15 @@ pub fn build_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            for (field_expr, field_layout) in arguments.iter() {
+            for field_symbol in arguments.iter() {
+                let (val, field_layout) = load_symbol_and_layout(env, scope, field_symbol);
                 let field_size = field_layout.stack_size(ptr_size);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
                 if field_size != 0 {
-                    let val = build_expr(env, layout_ids, &scope, parent, field_expr);
                     let field_type =
-                        basic_type_from_layout(env.arena, env.context, &field_layout, ptr_size);
+                        basic_type_from_layout(env.arena, env.context, field_layout, ptr_size);
 
                     field_types.push(field_type);
                     field_vals.push(val);
@@ -628,27 +508,18 @@ pub fn build_expr<'a, 'ctx, 'env>(
             // This tricks comes from
             // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
 
-            let array_type = ctx.i8_type().array_type(whole_size);
+            let internal_type =
+                basic_type_from_layout(env.arena, env.context, tag_layout, env.ptr_bytes);
 
-            let result = cast_basic_basic(
+            cast_basic_basic(
                 builder,
                 struct_val.into_struct_value().into(),
-                array_type.into(),
-            );
-
-            // For unclear reasons, we can't cast an array to a struct on the other side.
-            // the solution is to wrap the array in a struct (yea...)
-            let wrapper_type = ctx.struct_type(&[array_type.into()], false);
-            let mut wrapper_val = wrapper_type.const_zero().into();
-            wrapper_val = builder
-                .build_insert_value(wrapper_val, result, 0, "insert_field")
-                .unwrap();
-
-            wrapper_val.into_struct_value().into()
+                internal_type,
+            )
         }
         AccessAtIndex {
             index,
-            expr,
+            structure,
             is_unwrapped,
             ..
         } if *is_unwrapped => {
@@ -661,7 +532,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
             // right away. However, that struct might have only one field which
             // is not zero-sized, which would make it unwrapped. If that happens,
             // we must be
-            match build_expr(env, layout_ids, &scope, parent, expr) {
+            match load_symbol(env, scope, structure) {
                 StructValue(argument) => builder
                     .build_extract_value(
                         argument,
@@ -679,7 +550,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
 
         AccessAtIndex {
             index,
-            expr,
+            structure,
             field_layouts,
             ..
         } => {
@@ -702,7 +573,7 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .struct_type(field_types.into_bump_slice(), false);
 
             // cast the argument bytes into the desired shape for this tag
-            let argument = build_expr(env, layout_ids, &scope, parent, expr).into_struct_value();
+            let argument = load_symbol(env, scope, structure).into_struct_value();
 
             let struct_value = cast_struct_struct(builder, argument, struct_type);
 
@@ -710,14 +581,484 @@ pub fn build_expr<'a, 'ctx, 'env>(
                 .build_extract_value(struct_value, *index as u32, "")
                 .expect("desired field did not decode")
         }
-        RuntimeErrorFunction(_) => {
-            todo!("LLVM build runtime error function of {:?}", expr);
+        EmptyArray => empty_polymorphic_list(env),
+        Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
+        FunctionPointer(symbol, layout) => {
+            let fn_name = layout_ids
+                .get(*symbol, layout)
+                .to_symbol_string(*symbol, &env.interns);
+            let ptr = env
+                .module
+                .get_function(fn_name.as_str())
+                .unwrap_or_else(|| panic!("Could not get pointer to unknown function {:?}", symbol))
+                .as_global_value()
+                .as_pointer_value();
+
+            BasicValueEnum::PointerValue(ptr)
         }
-        RuntimeError(_) => {
-            todo!("LLVM build runtime error of {:?}", expr);
-        }
-        RunLowLevel(op, args) => run_low_level(env, layout_ids, scope, parent, *op, args),
+        RuntimeErrorFunction(_) => todo!(),
     }
+}
+
+pub fn build_exp_stmt<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    scope: &mut Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    stmt: &roc_mono::ir::Stmt<'a>,
+) -> BasicValueEnum<'ctx> {
+    use roc_mono::ir::Stmt::*;
+
+    match stmt {
+        Let(symbol, expr, layout, cont) => {
+            let context = &env.context;
+
+            let val = build_exp_expr(env, layout_ids, &scope, parent, &expr);
+            let expr_bt = basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes);
+            let alloca =
+                create_entry_block_alloca(env, parent, expr_bt, symbol.ident_string(&env.interns));
+
+            env.builder.build_store(alloca, val);
+
+            // Make a new scope which includes the binding we just encountered.
+            // This should be done *after* compiling the bound expr, since any
+            // recursive (in the LetRec sense) bindings should already have
+            // been extracted as procedures. Nothing in here should need to
+            // access itself!
+            // scope = scope.clone();
+
+            scope.insert(*symbol, (layout.clone(), alloca));
+            let result = build_exp_stmt(env, layout_ids, scope, parent, cont);
+            scope.remove(symbol);
+
+            result
+        }
+        Ret(symbol) => load_symbol(env, scope, symbol),
+
+        Cond {
+            branching_symbol,
+            pass: pass_stmt,
+            fail: fail_stmt,
+            ret_layout,
+            ..
+        } => {
+            let ret_type =
+                basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
+
+            let cond_expr = load_symbol(env, scope, branching_symbol);
+
+            match cond_expr {
+                IntValue(value) => {
+                    // This is a call tobuild_basic_phi2, except inlined to prevent
+                    // problems with lifetimes and closures involving layout_ids.
+                    let builder = env.builder;
+                    let context = env.context;
+
+                    // build blocks
+                    let then_block = context.append_basic_block(parent, "then");
+                    let else_block = context.append_basic_block(parent, "else");
+                    let mut blocks: std::vec::Vec<(
+                        &dyn inkwell::values::BasicValue<'_>,
+                        inkwell::basic_block::BasicBlock<'_>,
+                    )> = std::vec::Vec::with_capacity(2);
+                    let cont_block = context.append_basic_block(parent, "branchcont");
+
+                    builder.build_conditional_branch(value, then_block, else_block);
+
+                    // build then block
+                    builder.position_at_end(then_block);
+                    let then_val = build_exp_stmt(env, layout_ids, scope, parent, pass_stmt);
+                    if then_block.get_terminator().is_none() {
+                        builder.build_unconditional_branch(cont_block);
+                        let then_block = builder.get_insert_block().unwrap();
+                        blocks.push((&then_val, then_block));
+                    }
+
+                    // build else block
+                    builder.position_at_end(else_block);
+                    let else_val = build_exp_stmt(env, layout_ids, scope, parent, fail_stmt);
+                    if else_block.get_terminator().is_none() {
+                        let else_block = builder.get_insert_block().unwrap();
+                        builder.build_unconditional_branch(cont_block);
+                        blocks.push((&else_val, else_block));
+                    }
+
+                    // emit merge block
+                    if blocks.is_empty() {
+                        // SAFETY there are no other references to this block in this case
+                        unsafe {
+                            cont_block.delete().unwrap();
+                        }
+
+                        // return garbage value
+                        context.i64_type().const_int(0, false).into()
+                    } else {
+                        builder.position_at_end(cont_block);
+
+                        let phi = builder.build_phi(ret_type, "branch");
+
+                        // phi.add_incoming(&[(&then_val, then_block), (&else_val, else_block)]);
+                        phi.add_incoming(&blocks);
+
+                        phi.as_basic_value()
+                    }
+                }
+                _ => panic!(
+                    "Tried to make a branch out of an invalid condition: cond_expr = {:?}",
+                    cond_expr,
+                ),
+            }
+        }
+
+        Switch {
+            branches,
+            default_branch,
+            ret_layout,
+            cond_layout,
+            cond_symbol,
+        } => {
+            let ret_type =
+                basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
+
+            let switch_args = SwitchArgsIr {
+                cond_layout: cond_layout.clone(),
+                cond_symbol: *cond_symbol,
+                branches,
+                default_branch,
+                ret_type,
+            };
+
+            build_switch_ir(env, layout_ids, scope, parent, switch_args)
+        }
+        Join {
+            id,
+            parameters,
+            remainder,
+            continuation,
+        } => {
+            let builder = env.builder;
+            let context = env.context;
+
+            let mut joinpoint_args = Vec::with_capacity_in(parameters.len(), env.arena);
+
+            for param in parameters.iter() {
+                let btype =
+                    basic_type_from_layout(env.arena, env.context, &param.layout, env.ptr_bytes);
+                joinpoint_args.push(create_entry_block_alloca(
+                    env,
+                    parent,
+                    btype,
+                    "joinpointarg",
+                ));
+            }
+
+            // create new block
+            let cont_block = context.append_basic_block(parent, "joinpointcont");
+
+            // store this join point
+            let joinpoint_args = joinpoint_args.into_bump_slice();
+            scope.join_points.insert(*id, (cont_block, joinpoint_args));
+
+            // construct the blocks that may jump to this join point
+            build_exp_stmt(env, layout_ids, scope, parent, remainder);
+
+            // remove this join point again
+            scope.join_points.remove(&id);
+
+            for (ptr, param) in joinpoint_args.iter().zip(parameters.iter()) {
+                scope.insert(param.symbol, (param.layout.clone(), *ptr));
+            }
+
+            let phi_block = builder.get_insert_block().unwrap();
+
+            // put the cont block at the back
+            builder.position_at_end(cont_block);
+
+            // put the continuation in
+            let result = build_exp_stmt(env, layout_ids, scope, parent, continuation);
+
+            cont_block.move_after(phi_block).unwrap();
+
+            result
+        }
+        Jump(join_point, arguments) => {
+            let builder = env.builder;
+            let context = env.context;
+            let (cont_block, argument_pointers) = scope.join_points.get(join_point).unwrap();
+
+            for (pointer, argument) in argument_pointers.iter().zip(arguments.iter()) {
+                let value = load_symbol(env, scope, argument);
+                builder.build_store(*pointer, value);
+            }
+
+            builder.build_unconditional_branch(*cont_block);
+
+            // This doesn't currently do anything
+            context.i64_type().const_zero().into()
+        }
+        Inc(symbol, cont) => {
+            let (value, layout) = load_symbol_and_layout(env, scope, symbol);
+            let layout = layout.clone();
+
+            match layout {
+                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
+                    increment_refcount_list(env, value.into_struct_value());
+                    build_exp_stmt(env, layout_ids, scope, parent, cont)
+                }
+                _ => build_exp_stmt(env, layout_ids, scope, parent, cont),
+            }
+        }
+        Dec(symbol, cont) => {
+            let (value, layout) = load_symbol_and_layout(env, scope, symbol);
+            let layout = layout.clone();
+
+            if layout.contains_refcounted() {
+                decrement_refcount_layout(env, parent, value, &layout);
+            }
+
+            build_exp_stmt(env, layout_ids, scope, parent, cont)
+        }
+        _ => todo!("unsupported expr {:?}", stmt),
+    }
+}
+
+fn refcount_is_one_comparison<'ctx>(
+    builder: &Builder<'ctx>,
+    context: &'ctx Context,
+    refcount: IntValue<'ctx>,
+) -> IntValue<'ctx> {
+    let refcount_one: IntValue<'ctx> = context.i64_type().const_int((std::usize::MAX) as _, false);
+    // Note: Check for refcount < refcount_1 as the "true" condition,
+    // to avoid misprediction. (In practice this should usually pass,
+    // and CPUs generally default to predicting that a forward jump
+    // shouldn't be taken; that is, they predict "else" won't be taken.)
+    builder.build_int_compare(
+        IntPredicate::EQ,
+        refcount,
+        refcount_one,
+        "refcount_one_check",
+    )
+}
+
+#[allow(dead_code)]
+fn list_get_refcount_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    list_wrapper: StructValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    // pointer to usize
+    let ptr_bytes = env.ptr_bytes;
+    let int_type = ptr_int(ctx, ptr_bytes);
+
+    // fetch the pointer to the array data, as an integer
+    let ptr_as_int = builder
+        .build_extract_value(list_wrapper, Builtin::WRAPPER_PTR, "read_list_ptr")
+        .unwrap()
+        .into_int_value();
+
+    // subtract ptr_size, to access the refcount
+    let refcount_ptr = builder.build_int_sub(
+        ptr_as_int,
+        ctx.i64_type().const_int(env.ptr_bytes as u64, false),
+        "make_refcount_ptr",
+    );
+
+    builder.build_int_to_ptr(
+        refcount_ptr,
+        int_type.ptr_type(AddressSpace::Generic),
+        "get_refcount_ptr",
+    )
+}
+
+fn decrement_refcount_layout<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    value: BasicValueEnum<'ctx>,
+    layout: &Layout<'a>,
+) {
+    use Layout::*;
+
+    match layout {
+        Builtin(builtin) => decrement_refcount_builtin(env, parent, value, builtin),
+        Struct(layouts) => {
+            let wrapper_struct = value.into_struct_value();
+
+            for (i, field_layout) in layouts.iter().enumerate() {
+                if field_layout.contains_refcounted() {
+                    let field_ptr = env
+                        .builder
+                        .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
+                        .unwrap();
+
+                    decrement_refcount_layout(env, parent, field_ptr, field_layout)
+                }
+            }
+        }
+        Union(tags) => {
+            debug_assert!(!tags.is_empty());
+            let wrapper_struct = value.into_struct_value();
+
+            // read the tag_id
+            let tag_id = env
+                .builder
+                .build_extract_value(wrapper_struct, 0, "read_tag_id")
+                .unwrap()
+                .into_int_value();
+
+            // next, make a jump table for all possible values of the tag_id
+            let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
+
+            let merge_block = env.context.append_basic_block(parent, "decrement_merge");
+
+            for (tag_id, field_layouts) in tags.iter().enumerate() {
+                let block = env.context.append_basic_block(parent, "tag_id_decrement");
+                env.builder.position_at_end(block);
+
+                for (i, field_layout) in field_layouts.iter().enumerate() {
+                    if field_layout.contains_refcounted() {
+                        let field_ptr = env
+                            .builder
+                            .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
+                            .unwrap();
+
+                        decrement_refcount_layout(env, parent, field_ptr, field_layout)
+                    }
+                }
+
+                env.builder.build_unconditional_branch(merge_block);
+
+                cases.push((env.context.i8_type().const_int(tag_id as u64, false), block));
+            }
+
+            let (_, default_block) = cases.pop().unwrap();
+
+            env.builder.build_switch(tag_id, default_block, &cases);
+
+            env.builder.position_at_end(merge_block);
+        }
+
+        FunctionPointer(_, _) | Pointer(_) => {}
+    }
+}
+
+#[inline(always)]
+fn decrement_refcount_builtin<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    value: BasicValueEnum<'ctx>,
+    builtin: &Builtin<'a>,
+) {
+    use Builtin::*;
+
+    match builtin {
+        List(MemoryMode::Refcounted, element_layout) => {
+            if element_layout.contains_refcounted() {
+                // TODO decrement all values
+            }
+            let wrapper_struct = value.into_struct_value();
+            decrement_refcount_list(env, parent, wrapper_struct);
+        }
+        List(MemoryMode::Unique, _element_layout) => {
+            // do nothing
+        }
+        Set(element_layout) => {
+            if element_layout.contains_refcounted() {
+                // TODO decrement all values
+            }
+            let wrapper_struct = value.into_struct_value();
+            decrement_refcount_list(env, parent, wrapper_struct);
+        }
+        Map(key_layout, value_layout) => {
+            if key_layout.contains_refcounted() || value_layout.contains_refcounted() {
+                // TODO decrement all values
+            }
+
+            let wrapper_struct = value.into_struct_value();
+            decrement_refcount_list(env, parent, wrapper_struct);
+        }
+        _ => {}
+    }
+}
+
+fn increment_refcount_list<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    original_wrapper: StructValue<'ctx>,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let refcount_ptr = list_get_refcount_ptr(env, original_wrapper);
+
+    let refcount = env
+        .builder
+        .build_load(refcount_ptr, "get_refcount")
+        .into_int_value();
+
+    // our refcount 0 is actually usize::MAX, so incrementing the refcount means decrementing this value.
+    let decremented = env.builder.build_int_sub(
+        refcount,
+        ctx.i64_type().const_int(1 as u64, false),
+        "incremented_refcount",
+    );
+
+    // Mutate the new array in-place to change the element.
+    builder.build_store(refcount_ptr, decremented);
+}
+
+fn decrement_refcount_list<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    original_wrapper: StructValue<'ctx>,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let refcount_ptr = list_get_refcount_ptr(env, original_wrapper);
+
+    let refcount = env
+        .builder
+        .build_load(refcount_ptr, "get_refcount")
+        .into_int_value();
+
+    let comparison = refcount_is_one_comparison(builder, env.context, refcount);
+
+    // build blocks
+    let then_block = ctx.append_basic_block(parent, "then");
+    let else_block = ctx.append_basic_block(parent, "else");
+    let cont_block = ctx.append_basic_block(parent, "branchcont");
+
+    builder.build_conditional_branch(comparison, then_block, else_block);
+
+    // build then block
+    {
+        builder.position_at_end(then_block);
+        // our refcount 0 is actually usize::MAX, so decrementing the refcount means incrementing this value.
+        let decremented = env.builder.build_int_add(
+            ctx.i64_type().const_int(1 as u64, false),
+            refcount,
+            "decremented_refcount",
+        );
+
+        // Mutate the new array in-place to change the element.
+        builder.build_store(refcount_ptr, decremented);
+
+        builder.build_unconditional_branch(cont_block);
+    }
+
+    // build else block
+    {
+        builder.position_at_end(else_block);
+        if !env.leak {
+            let free = builder.build_free(refcount_ptr);
+            builder.insert_instruction(&free, None);
+        }
+        builder.build_unconditional_branch(cont_block);
+    }
+
+    // emit merge block
+    builder.position_at_end(cont_block);
 }
 
 fn load_symbol<'a, 'ctx, 'env>(
@@ -729,6 +1070,21 @@ fn load_symbol<'a, 'ctx, 'env>(
         Some((_, ptr)) => env
             .builder
             .build_load(*ptr, symbol.ident_string(&env.interns)),
+        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+    }
+}
+
+fn load_symbol_and_layout<'a, 'ctx, 'env, 'b>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &'b Scope<'a, 'ctx>,
+    symbol: &Symbol,
+) -> (BasicValueEnum<'ctx>, &'b Layout<'a>) {
+    match scope.get(symbol) {
+        Some((layout, ptr)) => (
+            env.builder
+                .build_load(*ptr, symbol.ident_string(&env.interns)),
+            layout,
+        ),
         None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
     }
 }
@@ -758,7 +1114,7 @@ fn cast_basic_basic<'ctx>(
         .build_bitcast(
             argument_pointer,
             to_type.ptr_type(inkwell::AddressSpace::Generic),
-            "",
+            "cast_basic_basic",
         )
         .into_pointer_value();
 
@@ -781,32 +1137,37 @@ fn extract_tag_discriminant<'a, 'ctx, 'env>(
         .into_int_value()
 }
 
-struct SwitchArgs<'a, 'ctx> {
-    pub cond_expr: &'a Expr<'a>,
+struct SwitchArgsIr<'a, 'ctx> {
+    pub cond_symbol: Symbol,
     pub cond_layout: Layout<'a>,
-    pub branches: &'a [(u64, Expr<'a>)],
-    pub default_branch: &'a Expr<'a>,
+    pub branches: &'a [(u64, roc_mono::ir::Stmt<'a>)],
+    pub default_branch: &'a roc_mono::ir::Stmt<'a>,
     pub ret_type: BasicTypeEnum<'ctx>,
 }
 
-fn build_switch<'a, 'ctx, 'env>(
+fn build_switch_ir<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
-    switch_args: SwitchArgs<'a, 'ctx>,
+    switch_args: SwitchArgsIr<'a, 'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let arena = env.arena;
     let builder = env.builder;
     let context = env.context;
-    let SwitchArgs {
+    let SwitchArgsIr {
         branches,
-        cond_expr,
+        cond_symbol,
         mut cond_layout,
         default_branch,
         ret_type,
         ..
     } = switch_args;
+
+    let mut copy = scope.clone();
+    let scope = &mut copy;
+
+    let cond_symbol = &cond_symbol;
 
     let cont_block = context.append_basic_block(parent, "cont");
 
@@ -815,7 +1176,7 @@ fn build_switch<'a, 'ctx, 'env>(
         Layout::Builtin(Builtin::Float64) => {
             // float matches are done on the bit pattern
             cond_layout = Layout::Builtin(Builtin::Int64);
-            let full_cond = build_expr(env, layout_ids, scope, parent, cond_expr);
+            let full_cond = load_symbol(env, scope, cond_symbol);
 
             builder
                 .build_bitcast(full_cond, env.context.i64_type(), "")
@@ -824,14 +1185,11 @@ fn build_switch<'a, 'ctx, 'env>(
         Layout::Union(_) => {
             // we match on the discriminant, not the whole Tag
             cond_layout = Layout::Builtin(Builtin::Int64);
-            let full_cond =
-                build_expr(env, layout_ids, scope, parent, cond_expr).into_struct_value();
+            let full_cond = load_symbol(env, scope, cond_symbol).into_struct_value();
 
             extract_tag_discriminant(env, full_cond)
         }
-        Layout::Builtin(_) => {
-            build_expr(env, layout_ids, scope, parent, cond_expr).into_int_value()
-        }
+        Layout::Builtin(_) => load_symbol(env, scope, cond_symbol).into_int_value(),
         other => todo!("Build switch value from layout: {:?}", other),
     };
 
@@ -871,32 +1229,42 @@ fn build_switch<'a, 'ctx, 'env>(
     for ((_, branch_expr), (_, block)) in branches.iter().zip(cases) {
         builder.position_at_end(block);
 
-        let branch_val = build_expr(env, layout_ids, scope, parent, branch_expr);
+        let branch_val = build_exp_stmt(env, layout_ids, scope, parent, branch_expr);
 
-        builder.build_unconditional_branch(cont_block);
-
-        incoming.push((branch_val, block));
+        if block.get_terminator().is_none() {
+            builder.build_unconditional_branch(cont_block);
+            incoming.push((branch_val, block));
+        }
     }
 
     // The block for the conditional's default branch.
     builder.position_at_end(default_block);
 
-    let default_val = build_expr(env, layout_ids, scope, parent, default_branch);
+    let default_val = build_exp_stmt(env, layout_ids, scope, parent, default_branch);
 
-    builder.build_unconditional_branch(cont_block);
-
-    incoming.push((default_val, default_block));
-
-    // emit merge block
-    builder.position_at_end(cont_block);
-
-    let phi = builder.build_phi(ret_type, "branch");
-
-    for (branch_val, block) in incoming {
-        phi.add_incoming(&[(&Into::<BasicValueEnum>::into(branch_val), block)]);
+    if default_block.get_terminator().is_none() {
+        builder.build_unconditional_branch(cont_block);
+        incoming.push((default_val, default_block));
     }
 
-    phi.as_basic_value()
+    // emit merge block
+    if incoming.is_empty() {
+        unsafe {
+            cont_block.delete().unwrap();
+        }
+        // produce unused garbage value
+        context.i64_type().const_zero().into()
+    } else {
+        builder.position_at_end(cont_block);
+
+        let phi = builder.build_phi(ret_type, "branch");
+
+        for (branch_val, block) in incoming {
+            phi.add_incoming(&[(&Into::<BasicValueEnum>::into(branch_val), block)]);
+        }
+
+        phi.as_basic_value()
+    }
 }
 
 fn build_basic_phi2<'a, 'ctx, 'env, PassFn, FailFn>(
@@ -980,7 +1348,7 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     symbol: Symbol,
     layout: &Layout<'a>,
-    proc: &Proc<'a>,
+    proc: &roc_mono::ir::Proc<'a>,
 ) -> (FunctionValue<'ctx>, Vec<'a, BasicTypeEnum<'ctx>>) {
     let args = proc.args;
     let arena = env.arena;
@@ -1013,7 +1381,7 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
 pub fn build_proc<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    proc: Proc<'a>,
+    proc: roc_mono::ir::Proc<'a>,
     fn_val: FunctionValue<'ctx>,
     arg_basic_types: Vec<'a, BasicTypeEnum<'ctx>>,
 ) {
@@ -1026,7 +1394,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    let mut scope = ImMap::default();
+    let mut scope = Scope::default();
 
     // Add args to scope
     for ((arg_val, arg_type), (layout, arg_symbol)) in
@@ -1042,7 +1410,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
         scope.insert(*arg_symbol, (layout.clone(), alloca));
     }
 
-    let body = build_expr(env, layout_ids, &scope, fn_val, &proc.body);
+    let body = build_exp_stmt(env, layout_ids, &mut scope, fn_val, &proc.body);
 
     builder.build_return(Some(&body));
 }
@@ -1057,6 +1425,67 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
     }
 }
 
+pub fn allocate_list<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    elem_layout: &Layout<'a>,
+    length: IntValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+
+    let len_type = env.ptr_int();
+    // bytes per element
+    let bytes_len = len_type.const_int(elem_bytes, false);
+    let offset = (env.ptr_bytes as u64).max(elem_bytes);
+
+    let ptr = {
+        let len = builder.build_int_mul(bytes_len, length, "data_length");
+        let len =
+            builder.build_int_add(len, len_type.const_int(offset, false), "add_refcount_space");
+
+        env.builder
+            .build_array_malloc(ctx.i8_type(), len, "create_list_ptr")
+            .unwrap()
+
+        // TODO check if malloc returned null; if so, runtime error for OOM!
+    };
+
+    // We must return a pointer to the first element:
+    let ptr_bytes = env.ptr_bytes;
+    let int_type = ptr_int(ctx, ptr_bytes);
+    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+    let incremented = builder.build_int_add(
+        ptr_as_int,
+        ctx.i64_type().const_int(offset, false),
+        "increment_list_ptr",
+    );
+
+    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+    let list_element_ptr = builder.build_int_to_ptr(incremented, ptr_type, "list_cast_ptr");
+
+    // subtract ptr_size, to access the refcount
+    let refcount_ptr = builder.build_int_sub(
+        incremented,
+        ctx.i64_type().const_int(env.ptr_bytes as u64, false),
+        "refcount_ptr",
+    );
+
+    let refcount_ptr = builder.build_int_to_ptr(
+        refcount_ptr,
+        int_type.ptr_type(AddressSpace::Generic),
+        "make ptr",
+    );
+
+    // put our "refcount 0" in the first slot
+    let ref_count_zero = ctx.i64_type().const_int(std::usize::MAX as u64, false);
+    builder.build_store(refcount_ptr, ref_count_zero);
+
+    list_element_ptr
+}
+
 /// List.single : a -> List a
 fn list_single<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -1066,20 +1495,9 @@ fn list_single<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
-
-    let ptr = {
-        let bytes_len = elem_bytes;
-        let len_type = env.ptr_int();
-        let len = len_type.const_int(bytes_len, false);
-
-        env.builder
-            .build_array_malloc(elem_type, len, "create_list_ptr")
-            .unwrap()
-
-        // TODO check if malloc returned null; if so, runtime error for OOM!
-    };
+    // allocate a list of size 1 on the heap
+    let size = ctx.i64_type().const_int(1, false);
+    let ptr = allocate_list(env, elem_layout, size);
 
     // Put the element into the list
     let elem_ptr = unsafe {
@@ -1136,7 +1554,6 @@ fn list_repeat<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
     let ctx = env.context;
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
 
     // list_len > 0
     // We have to do a loop below, continuously adding the `elem`
@@ -1154,10 +1571,7 @@ fn list_repeat<'a, 'ctx, 'env>(
 
     let build_then = || {
         // Allocate space for the new array that we'll copy into.
-        let list_ptr = builder
-            .build_array_malloc(elem_type, list_len, "create_list_ptr")
-            .unwrap();
-
+        let list_ptr = allocate_list(env, elem_layout, list_len);
         // TODO check if malloc returned null; if so, runtime error for OOM!
 
         let index_name = "#index";
@@ -1231,7 +1645,7 @@ fn list_repeat<'a, 'ctx, 'env>(
         )
     };
 
-    let build_else = || empty_list(env);
+    let build_else = || empty_polymorphic_list(env);
 
     let struct_type = collection(ctx, env.ptr_bytes);
 
@@ -1245,19 +1659,20 @@ fn list_repeat<'a, 'ctx, 'env>(
     )
 }
 
+// #[allow(clippy::cognitive_complexity)]
 #[inline(always)]
-#[allow(clippy::cognitive_complexity)]
 fn call_with_args<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
     symbol: Symbol,
     _parent: FunctionValue<'ctx>,
-    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
+    args: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
     let fn_name = layout_ids
         .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
+
     let fn_val = env
         .module
         .get_function(fn_name.as_str())
@@ -1268,15 +1683,8 @@ fn call_with_args<'a, 'ctx, 'env>(
                 panic!("Unrecognized non-builtin function: {:?}", symbol)
             }
         });
-    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
 
-    for (arg, _layout) in args.iter() {
-        arg_vals.push(*arg);
-    }
-
-    let call = env
-        .builder
-        .build_call(fn_val, arg_vals.into_bump_slice(), "call");
+    let call = env.builder.build_call(fn_val, args, "call");
 
     call.set_call_convention(fn_val.get_call_conventions());
 
@@ -1367,13 +1775,11 @@ fn clone_nonempty_list<'a, 'ctx, 'env>(
         .const_int(elem_layout.stack_size(env.ptr_bytes) as u64, false);
     let size = env
         .builder
-        .build_int_mul(elem_bytes, list_len, "mul_len_by_elem_bytes");
+        .build_int_mul(elem_bytes, list_len, "clone_mul_len_by_elem_bytes");
 
     // Allocate space for the new array that we'll copy into.
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-    let clone_ptr = builder
-        .build_array_malloc(elem_type, list_len, "list_ptr")
-        .unwrap();
+    let clone_ptr = allocate_list(env, elem_layout, list_len);
+
     let int_type = ptr_int(ctx, ptr_bytes);
     let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
 
@@ -1420,11 +1826,84 @@ fn clone_nonempty_list<'a, 'ctx, 'env>(
     (answer, clone_ptr)
 }
 
+#[derive(Debug)]
 enum InPlace {
     InPlace,
     Clone,
 }
 
+fn empty_polymorphic_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+
+    let struct_type = collection(ctx, env.ptr_bytes);
+
+    // The pointer should be null (aka zero) and the length should be zero,
+    // so the whole struct should be a const_zero
+    BasicValueEnum::StructValue(struct_type.const_zero())
+}
+
+fn list_literal<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    elem_layout: &Layout<'a>,
+    elems: &&[Symbol],
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+    let builder = env.builder;
+
+    let len_u64 = elems.len() as u64;
+    let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+
+    let ptr = {
+        let bytes_len = elem_bytes * len_u64;
+        let len_type = env.ptr_int();
+        let len = len_type.const_int(bytes_len, false);
+
+        allocate_list(env, elem_layout, len)
+
+        // TODO check if malloc returned null; if so, runtime error for OOM!
+    };
+
+    // Copy the elements from the list literal into the array
+    for (index, symbol) in elems.iter().enumerate() {
+        let val = load_symbol(env, scope, symbol);
+        let index_val = ctx.i64_type().const_int(index as u64, false);
+        let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+
+        builder.build_store(elem_ptr, val);
+    }
+
+    let ptr_bytes = env.ptr_bytes;
+    let int_type = ptr_int(ctx, ptr_bytes);
+    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+    let struct_type = collection(ctx, ptr_bytes);
+    let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
+    let mut struct_val;
+
+    // Store the pointer
+    struct_val = builder
+        .build_insert_value(
+            struct_type.get_undef(),
+            ptr_as_int,
+            Builtin::WRAPPER_PTR,
+            "insert_ptr",
+        )
+        .unwrap();
+
+    // Store the length
+    struct_val = builder
+        .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
+        .unwrap();
+
+    // Bitcast to an array of raw bytes
+    builder.build_bitcast(
+        struct_val.into_struct_value(),
+        collection(ctx, ptr_bytes),
+        "cast_collection",
+    )
+}
+
+// TODO investigate: does this cause problems when the layout is known? this value is now not refcounted!
 fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
     let ctx = env.context;
 
@@ -1485,9 +1964,7 @@ fn list_append<'a, 'ctx, 'env>(
         .build_int_mul(elem_bytes, list_len, "mul_old_len_by_elem_bytes");
 
     // Allocate space for the new array that we'll copy into.
-    let clone_ptr = builder
-        .build_array_malloc(elem_type, new_list_len, "list_ptr")
-        .unwrap();
+    let clone_ptr = allocate_list(env, elem_layout, new_list_len);
     let int_type = ptr_int(ctx, ptr_bytes);
     let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
 
@@ -1551,9 +2028,10 @@ fn list_join<'a, 'ctx, 'env>(
         // If the input list is empty, or if it is a list of empty lists
         // then simply return an empty list
         Layout::Builtin(Builtin::EmptyList)
-        | Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::EmptyList))) => empty_list(env),
-        Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::List(elem_layout)))) => {
-            let inner_list_layout = Layout::Builtin(Builtin::List(elem_layout));
+        | Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::EmptyList))) => empty_list(env),
+        Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::List(_, elem_layout)))) => {
+            let inner_list_layout =
+                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, elem_layout));
 
             let builder = env.builder;
             let ctx = env.context;
@@ -2036,11 +2514,10 @@ pub static COLD_CALL_CONV: u32 = 9;
 
 fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     op: LowLevel,
-    args: &[(Expr<'a>, Layout<'a>)],
+    args: &[Symbol],
 ) -> BasicValueEnum<'ctx> {
     use LowLevel::*;
 
@@ -2049,7 +2526,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.len : List * -> Int
             debug_assert_eq!(args.len(), 1);
 
-            let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let arg = load_symbol(env, scope, &args[0]);
 
             load_list_len(env.builder, arg.into_struct_value()).into()
         }
@@ -2057,17 +2534,16 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.single : a -> List a
             debug_assert_eq!(args.len(), 1);
 
-            let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let (arg, arg_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
-            list_single(env, arg, &args[0].1)
+            list_single(env, arg, arg_layout)
         }
         ListRepeat => {
             // List.repeat : Int, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let list_len = build_expr(env, layout_ids, scope, parent, &args[0].0).into_int_value();
-            let elem = build_expr(env, layout_ids, scope, parent, &args[1].0);
-            let elem_layout = &args[1].1;
+            let list_len = load_symbol(env, scope, &args[0]).into_int_value();
+            let (elem, elem_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
             list_repeat(env, parent, list_len, elem, elem_layout)
         }
@@ -2075,12 +2551,12 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.reverse : List elem -> List elem
             debug_assert_eq!(args.len(), 1);
 
-            let (list, list_layout) = &args[0];
+            let list = &args[0];
+            let (_, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
             match list_layout {
-                Layout::Builtin(Builtin::List(elem_layout)) => {
-                    let wrapper_struct =
-                        build_expr(env, layout_ids, scope, parent, list).into_struct_value();
+                Layout::Builtin(Builtin::List(_, elem_layout)) => {
+                    let wrapper_struct = load_symbol(env, scope, list).into_struct_value();
 
                     let builder = env.builder;
                     let ctx = env.context;
@@ -2104,10 +2580,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
                         let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-                        let reversed_list_ptr = env
-                            .builder
-                            .build_array_malloc(elem_type, list_len, "create_reversed_list_ptr")
-                            .unwrap();
+                        let reversed_list_ptr = allocate_list(env, elem_layout, list_len);
 
                         // TODO check if malloc returned null; if so, runtime error for OOM!
 
@@ -2215,7 +2688,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                         )
                     };
 
-                    let build_else = || empty_list(env);
+                    let build_else = || empty_polymorphic_list(env);
 
                     let struct_type = collection(ctx, env.ptr_bytes);
 
@@ -2228,21 +2701,19 @@ fn run_low_level<'a, 'ctx, 'env>(
                         BasicTypeEnum::StructType(struct_type),
                     )
                 }
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::EmptyList) => empty_polymorphic_list(env),
                 _ => {
                     unreachable!("Invalid List layout for List.reverse {:?}", list_layout);
                 }
             }
         }
-        ListConcat => list_concat(env, layout_ids, scope, parent, args),
+        ListConcat => list_concat(env, scope, parent, args),
         ListAppend => {
             // List.append : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let original_wrapper =
-                build_expr(env, layout_ids, scope, parent, &args[0].0).into_struct_value();
-            let elem = build_expr(env, layout_ids, scope, parent, &args[1].0);
-            let elem_layout = &args[1].1;
+            let original_wrapper = load_symbol(env, scope, &args[0]).into_struct_value();
+            let (elem, elem_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
             list_append(env, original_wrapper, elem, elem_layout)
         }
@@ -2250,10 +2721,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.prepend : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let original_wrapper =
-                build_expr(env, layout_ids, scope, parent, &args[0].0).into_struct_value();
-            let elem = build_expr(env, layout_ids, scope, parent, &args[1].0);
-            let elem_layout = &args[1].1;
+            let original_wrapper = load_symbol(env, scope, &args[0]).into_struct_value();
+            let (elem, elem_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
             list_prepend(env, original_wrapper, elem, elem_layout)
         }
@@ -2261,18 +2730,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.join : List (List elem) -> List elem
             debug_assert_eq!(args.len(), 1);
 
-            let (list, outer_list_layout) = &args[0];
-
-            let outer_wrapper_struct =
-                build_expr(env, layout_ids, scope, parent, list).into_struct_value();
+            let (list, outer_list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+            let outer_wrapper_struct = list.into_struct_value();
 
             list_join(env, parent, outer_wrapper_struct, outer_list_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumToFloat => {
             debug_assert_eq!(args.len(), 1);
 
-            let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
-            let arg_layout = &args[0].1;
+            let (arg, arg_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
             match arg_layout {
                 Layout::Builtin(arg_builtin) => {
@@ -2302,10 +2768,8 @@ fn run_low_level<'a, 'ctx, 'env>(
         | NumDivUnchecked => {
             debug_assert_eq!(args.len(), 2);
 
-            let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
-            let lhs_layout = &args[0].1;
-            let rhs_arg = build_expr(env, layout_ids, scope, parent, &args[1].0);
-            let rhs_layout = &args[1].1;
+            let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
+            let (rhs_arg, rhs_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
             match (lhs_layout, rhs_layout) {
                 (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
@@ -2343,20 +2807,16 @@ fn run_low_level<'a, 'ctx, 'env>(
         Eq => {
             debug_assert_eq!(args.len(), 2);
 
-            let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
-            let lhs_layout = &args[0].1;
-            let rhs_arg = build_expr(env, layout_ids, scope, parent, &args[1].0);
-            let rhs_layout = &args[1].1;
+            let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
+            let (rhs_arg, rhs_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
             build_eq(env, lhs_arg, rhs_arg, lhs_layout, rhs_layout)
         }
         NotEq => {
             debug_assert_eq!(args.len(), 2);
 
-            let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
-            let lhs_layout = &args[0].1;
-            let rhs_arg = build_expr(env, layout_ids, scope, parent, &args[1].0);
-            let rhs_layout = &args[1].1;
+            let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
+            let (rhs_arg, rhs_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
             build_neq(env, lhs_arg, rhs_arg, lhs_layout, rhs_layout)
         }
@@ -2364,8 +2824,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             // The (&&) operator
             debug_assert_eq!(args.len(), 2);
 
-            let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
-            let rhs_arg = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let lhs_arg = load_symbol(env, scope, &args[0]);
+            let rhs_arg = load_symbol(env, scope, &args[1]);
             let bool_val = env.builder.build_and(
                 lhs_arg.into_int_value(),
                 rhs_arg.into_int_value(),
@@ -2378,8 +2838,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             // The (||) operator
             debug_assert_eq!(args.len(), 2);
 
-            let lhs_arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
-            let rhs_arg = build_expr(env, layout_ids, scope, parent, &args[1].0);
+            let lhs_arg = load_symbol(env, scope, &args[0]);
+            let rhs_arg = load_symbol(env, scope, &args[1]);
             let bool_val = env.builder.build_or(
                 lhs_arg.into_int_value(),
                 rhs_arg.into_int_value(),
@@ -2392,7 +2852,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // The (!) operator
             debug_assert_eq!(args.len(), 1);
 
-            let arg = build_expr(env, layout_ids, scope, parent, &args[0].0);
+            let arg = load_symbol(env, scope, &args[0]);
             let bool_val = env.builder.build_not(arg.into_int_value(), "bool_not");
 
             BasicValueEnum::IntValue(bool_val)
@@ -2402,14 +2862,12 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 2);
 
             let builder = env.builder;
-            let (_, list_layout) = &args[0];
-            let wrapper_struct =
-                build_expr(env, layout_ids, scope, parent, &args[0].0).into_struct_value();
-            let elem_index =
-                build_expr(env, layout_ids, scope, parent, &args[1].0).into_int_value();
+            let (wrapper_struct, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+            let wrapper_struct = wrapper_struct.into_struct_value();
+            let elem_index = load_symbol(env, scope, &args[1]).into_int_value();
 
             match list_layout {
-                Layout::Builtin(Builtin::List(elem_layout)) => {
+                Layout::Builtin(Builtin::List(_, elem_layout)) => {
                     let ctx = env.context;
                     let elem_type =
                         basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
@@ -2436,18 +2894,9 @@ fn run_low_level<'a, 'ctx, 'env>(
         ListSet => list_set(
             parent,
             &[
-                (
-                    build_expr(env, layout_ids, scope, parent, &args[0].0),
-                    &args[0].1,
-                ),
-                (
-                    build_expr(env, layout_ids, scope, parent, &args[1].0),
-                    &args[1].1,
-                ),
-                (
-                    build_expr(env, layout_ids, scope, parent, &args[2].0),
-                    &args[2].1,
-                ),
+                (load_symbol_and_layout(env, scope, &args[0])),
+                (load_symbol_and_layout(env, scope, &args[1])),
+                (load_symbol_and_layout(env, scope, &args[2])),
             ],
             env,
             InPlace::Clone,
@@ -2455,18 +2904,9 @@ fn run_low_level<'a, 'ctx, 'env>(
         ListSetInPlace => list_set(
             parent,
             &[
-                (
-                    build_expr(env, layout_ids, scope, parent, &args[0].0),
-                    &args[0].1,
-                ),
-                (
-                    build_expr(env, layout_ids, scope, parent, &args[1].0),
-                    &args[1].1,
-                ),
-                (
-                    build_expr(env, layout_ids, scope, parent, &args[2].0),
-                    &args[2].1,
-                ),
+                (load_symbol_and_layout(env, scope, &args[0])),
+                (load_symbol_and_layout(env, scope, &args[1])),
+                (load_symbol_and_layout(env, scope, &args[2])),
             ],
             env,
             InPlace::InPlace,
@@ -2505,10 +2945,9 @@ fn build_int_binop<'a, 'ctx, 'env>(
 
 fn list_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
-    args: &[(Expr<'a>, Layout<'a>)],
+    args: &[Symbol],
 ) -> BasicValueEnum<'ctx> {
     // List.concat : List elem, List elem -> List elem
     debug_assert_eq!(args.len(), 2);
@@ -2546,20 +2985,19 @@ fn list_concat<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    let (first_list, first_list_layout) = &args[0];
+    let (first_list, first_list_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
-    let (second_list, second_list_layout) = &args[1];
+    let (second_list, second_list_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-    let second_list_wrapper =
-        build_expr(env, layout_ids, scope, parent, second_list).into_struct_value();
+    let second_list_wrapper = second_list.into_struct_value();
 
     let second_list_len = load_list_len(builder, second_list_wrapper);
 
     match first_list_layout {
         Layout::Builtin(Builtin::EmptyList) => {
             match second_list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(elem_layout)) => {
+                Layout::Builtin(Builtin::EmptyList) => empty_polymorphic_list(env),
+                Layout::Builtin(Builtin::List(_, elem_layout)) => {
                     // THIS IS A COPY AND PASTE
                     // All the code under the Layout::Builtin(Builtin::List()) match branch
                     // is the same as what is under `if_first_list_is_empty`. Re-using
@@ -2586,7 +3024,7 @@ fn list_concat<'a, 'ctx, 'env>(
                         BasicValueEnum::StructValue(new_wrapper)
                     };
 
-                    let build_second_list_else = || empty_list(env);
+                    let build_second_list_else = || empty_polymorphic_list(env);
 
                     build_basic_phi2(
                         env,
@@ -2605,9 +3043,8 @@ fn list_concat<'a, 'ctx, 'env>(
                 }
             }
         }
-        Layout::Builtin(Builtin::List(elem_layout)) => {
-            let first_list_wrapper =
-                build_expr(env, layout_ids, scope, parent, first_list).into_struct_value();
+        Layout::Builtin(Builtin::List(_, elem_layout)) => {
+            let first_list_wrapper = first_list.into_struct_value();
 
             let first_list_len = load_list_len(builder, first_list_wrapper);
 
@@ -2619,8 +3056,6 @@ fn list_concat<'a, 'ctx, 'env>(
             let if_first_list_is_not_empty = || {
                 let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
                 let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-                let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
 
                 let if_second_list_is_empty = || {
                     let (new_wrapper, _) = clone_nonempty_list(
@@ -2644,7 +3079,7 @@ fn list_concat<'a, 'ctx, 'env>(
 
                         BasicValueEnum::StructValue(new_wrapper)
                     }
-                    Layout::Builtin(Builtin::List(_)) => {
+                    Layout::Builtin(Builtin::List(_, _)) => {
                         // second_list_len > 0
                         // We do this check to avoid allocating memory. If the second input
                         // list is empty, then we can just return the first list cloned
@@ -2658,14 +3093,8 @@ fn list_concat<'a, 'ctx, 'env>(
                                 "add_list_lengths",
                             );
 
-                            let combined_list_ptr = env
-                                .builder
-                                .build_array_malloc(
-                                    elem_type,
-                                    combined_list_len,
-                                    "create_combined_list_ptr",
-                                )
-                                .unwrap();
+                            let combined_list_ptr =
+                                allocate_list(env, elem_layout, combined_list_len);
 
                             let index_name = "#index";
                             let index_alloca = builder.build_alloca(ctx.i64_type(), index_name);
@@ -2882,8 +3311,8 @@ fn list_concat<'a, 'ctx, 'env>(
 
             let if_first_list_is_empty = || {
                 match second_list_layout {
-                    Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                    Layout::Builtin(Builtin::List(elem_layout)) => {
+                    Layout::Builtin(Builtin::EmptyList) => empty_polymorphic_list(env),
+                    Layout::Builtin(Builtin::List(_, elem_layout)) => {
                         // second_list_len > 0
                         // We do this check to avoid allocating memory. If the second input
                         // list is empty, then we can just return the first list cloned
@@ -2905,7 +3334,7 @@ fn list_concat<'a, 'ctx, 'env>(
                             BasicValueEnum::StructValue(new_wrapper)
                         };
 
-                        let build_second_list_else = || empty_list(env);
+                        let build_second_list_else = || empty_polymorphic_list(env);
 
                         build_basic_phi2(
                             env,

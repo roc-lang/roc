@@ -233,6 +233,8 @@ mod test_uniq_load {
             hashmap! {
                 "swap" => "Attr * (Attr * Int, Attr * Int, Attr * (List (Attr Shared a)) -> Attr * (List (Attr Shared a)))",
                 "partition" => "Attr * (Attr Shared Int, Attr Shared Int, Attr b (List (Attr Shared (Num (Attr Shared a)))) -> Attr * [ Pair (Attr * Int) (Attr b (List (Attr Shared (Num (Attr Shared a))))) ])",
+
+                "partitionHelp" => "Attr Shared (Attr b Int, Attr Shared Int, Attr c (List (Attr Shared (Num (Attr Shared a)))), Attr Shared Int, Attr Shared (Num (Attr Shared a)) -> Attr * [ Pair (Attr b Int) (Attr c (List (Attr Shared (Num (Attr Shared a))))) ])",
                 "quicksort" => "Attr Shared (Attr b (List (Attr Shared (Num (Attr Shared a)))), Attr Shared Int, Attr Shared Int -> Attr b (List (Attr Shared (Num (Attr Shared a)))))",
             },
         );

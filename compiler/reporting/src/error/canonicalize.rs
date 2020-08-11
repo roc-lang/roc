@@ -525,6 +525,9 @@ fn pretty_runtime_error<'b>(
             alloc.reflow("Only variables can be updated with record update syntax."),
         ]),
         RuntimeError::NoImplementation => todo!("no implementation, unreachable"),
+        RuntimeError::NonExhaustivePattern => {
+            unreachable!("not currently reported (but can blow up at runtime)")
+        }
     }
 }
 

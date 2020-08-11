@@ -12,7 +12,7 @@ mod test_reporting {
     use crate::helpers::test_home;
     use bumpalo::Bump;
     use roc_module::symbol::{Interns, ModuleId};
-    use roc_mono::expr::{Expr, Procs};
+    use roc_mono::ir::{Procs, Stmt};
     use roc_reporting::report::{
         can_problem, mono_problem, parse_problem, type_problem, Report, BLUE_CODE, BOLD_CODE,
         CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE,
@@ -47,7 +47,7 @@ mod test_reporting {
         (
             Vec<solve::TypeError>,
             Vec<roc_problem::can::Problem>,
-            Vec<roc_mono::expr::MonoProblem>,
+            Vec<roc_mono::ir::MonoProblem>,
             ModuleId,
             Interns,
         ),
@@ -87,14 +87,14 @@ mod test_reporting {
             let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let mut mono_env = roc_mono::expr::Env {
+            let mut mono_env = roc_mono::ir::Env {
                 arena: &arena,
                 subs: &mut subs,
                 problems: &mut mono_problems,
                 home,
                 ident_ids: &mut ident_ids,
             };
-            let _mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
+            let _mono_expr = Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
         }
 
         Ok((unify_problems, can_problems, mono_problems, home, interns))
