@@ -87,11 +87,15 @@ mod test_mono {
         let result = procs_string.join("\n");
 
         let the_same = result == expected;
+
         if !the_same {
             println!("{}", result);
-        }
 
-        assert_eq!(result, expected);
+            let expected_lines = expected.split("\n").collect::<Vec<&str>>();
+            let result_lines = result.split("\n").collect::<Vec<&str>>();
+
+            assert_eq!(expected_lines, result_lines);
+        }
     }
 
     #[test]
