@@ -73,7 +73,7 @@ impl<'a> Proc<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Procs<'a> {
     pub partial_procs: MutMap<Symbol, PartialProc<'a>>,
     pub module_thunks: MutSet<Symbol>,
@@ -81,6 +81,18 @@ pub struct Procs<'a> {
         Option<MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>>,
     pub specialized: MutMap<(Symbol, Layout<'a>), InProgressProc<'a>>,
     pub runtime_errors: MutMap<Symbol, &'a str>,
+}
+
+impl<'a> Default for Procs<'a> {
+    fn default() -> Self {
+        Self {
+            partial_procs: MutMap::default(),
+            module_thunks: MutSet::default(),
+            pending_specializations: Some(MutMap::default()),
+            specialized: MutMap::default(),
+            runtime_errors: MutMap::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
