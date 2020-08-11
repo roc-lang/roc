@@ -1284,13 +1284,11 @@ fn clone_nonempty_list<'a, 'ctx, 'env>(
         .const_int(elem_layout.stack_size(env.ptr_bytes) as u64, false);
     let size = env
         .builder
-        .build_int_mul(elem_bytes, list_len, "mul_len_by_elem_bytes");
+        .build_int_mul(elem_bytes, list_len, "clone_mul_len_by_elem_bytes");
 
     // Allocate space for the new array that we'll copy into.
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-    let clone_ptr = builder
-        .build_array_malloc(elem_type, list_len, "list_ptr")
-        .unwrap();
+    let clone_ptr = allocate_list(env, elem_layout, list_len);
+
     let int_type = ptr_int(ctx, ptr_bytes);
     let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
 
