@@ -10,7 +10,7 @@ use roc_can::expected::Expected;
 use roc_can::expr::{canonicalize_expr, Output};
 use roc_can::operator;
 use roc_can::scope::Scope;
-use roc_collections::all::{ImMap, ImSet, MutMap, SendMap, SendSet};
+use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap, SendSet};
 use roc_constrain::expr::constrain_expr;
 use roc_constrain::module::{constrain_imported_values, load_builtin_aliases, Import};
 use roc_gen::layout_id::LayoutIds;
@@ -241,6 +241,7 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
         module,
         ptr_bytes,
         leak: false,
+        exposed_to_host: MutSet::default(),
     };
     let mut procs = Procs::default();
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
@@ -321,8 +322,7 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
 
     // Add main to the module.
     let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
-    let cc =
-        roc_gen::llvm::build::get_call_conventions(target.default_calling_convention().unwrap());
+    let cc = roc_gen::llvm::build::FAST_CALL_CONV;
 
     main_fn.set_call_conventions(cc);
 
