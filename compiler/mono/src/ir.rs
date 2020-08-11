@@ -933,11 +933,6 @@ pub fn specialize_all<'a>(
     procs.pending_specializations = None;
 
     for (name, mut by_layout) in pending_specializations.drain() {
-        // Use the function's symbol's home module as the home module
-        // when doing canonicalization. This will be important to determine
-        // whether or not it's safe to defer specialization.
-        env.home = name.module_id();
-
         for (layout, pending) in by_layout.drain() {
             // If we've already seen this (Symbol, Layout) combination before,
             // don't try to specialize it again. If we do, we'll loop forever!
