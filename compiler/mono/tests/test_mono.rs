@@ -943,17 +943,15 @@ mod test_mono {
             ),
             indoc!(
                 r#"
-                procedure Test.0 (Test.4):
-                    let Test.2 = Index 0 Test.4;
-                    let Test.3 = Index 1 Test.4;
-                    let Test.11 = CallByName Num.14 Test.2 Test.3;
-                    jump Test.10 Test.11;
-                    joinpoint Test.10 Test.9:
-                        ret Test.9;
+                procedure Test.0 (Test.2):
+                    let Test.3 = Index 0 Test.2;
+                    let Test.4 = Index 1 Test.2;
+                    let Test.9 = CallByName Num.14 Test.3 Test.4;
+                    ret Test.9;
 
                 procedure Num.14 (#Attr.2, #Attr.3):
-                    let Test.12 = lowlevel NumAdd #Attr.2 #Attr.3;
-                    ret Test.12;
+                    let Test.10 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.10;
 
                 let Test.7 = 4i64;
                 let Test.8 = 9i64;
@@ -980,17 +978,15 @@ mod test_mono {
             ),
             indoc!(
                 r#"
-                procedure Test.0 (Test.4):
-                    let Test.2 = 10i64;
-                    let Test.3 = Index 1 Test.4;
-                    let Test.10 = CallByName Num.14 Test.2 Test.3;
-                    jump Test.9 Test.10;
-                    joinpoint Test.9 Test.8:
-                        ret Test.8;
+                procedure Test.0 (Test.2):
+                    let Test.3 = 10i64;
+                    let Test.4 = Index 1 Test.2;
+                    let Test.8 = CallByName Num.14 Test.3 Test.4;
+                    ret Test.8;
 
                 procedure Num.14 (#Attr.2, #Attr.3):
-                    let Test.11 = lowlevel NumAdd #Attr.2 #Attr.3;
-                    ret Test.11;
+                    let Test.9 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.9;
 
                 let Test.7 = 9i64;
                 let Test.6 = Struct {Test.7};

@@ -467,7 +467,8 @@ pub enum Expr<'a> {
     FunctionPointer(Symbol, Layout<'a>),
     FunctionCall {
         call_type: CallType,
-        layout: Layout<'a>,
+        full_layout: Layout<'a>,
+        ret_layout: Layout<'a>,
         arg_layouts: &'a [Layout<'a>],
         args: &'a [Symbol],
     },
@@ -1849,13 +1850,13 @@ pub fn with_hole<'a>(
                         arg_symbols.push(env.unique_symbol());
                     }
 
-                    let layout = layout_cache
+                    let full_layout = layout_cache
                         .from_var(env.arena, fn_var, env.subs)
                         .unwrap_or_else(|err| {
                             panic!("TODO turn fn_var into a RuntimeError {:?}", err)
                         });
 
-                    let arg_layouts = match layout {
+                    let arg_layouts = match full_layout {
                         Layout::FunctionPointer(args, _) => args,
                         _ => unreachable!("function has layout that is not function pointer"),
                     };
@@ -1872,7 +1873,8 @@ pub fn with_hole<'a>(
                         assigned,
                         Expr::FunctionCall {
                             call_type: CallType::ByPointer(function_symbol),
-                            layout,
+                            full_layout: full_layout,
+                            ret_layout: ret_layout.clone(),
                             args: arg_symbols,
                             arg_layouts,
                         },
@@ -2154,19 +2156,25 @@ pub fn from_can<'a>(
                 // convert the continuation
                 let mut stmt = from_can(env, cont.value, procs, layout_cache);
 
-                let outer_symbol = env.unique_symbol();
-                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
-                    .unwrap();
+                if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
+                    store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
+                        .unwrap()
+                } else {
+                    let outer_symbol = env.unique_symbol();
+                    stmt =
+                        store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
+                            .unwrap();
 
-                // convert the def body, store in outer_symbol
-                with_hole(
-                    env,
-                    def.loc_expr.value,
-                    procs,
-                    layout_cache,
-                    outer_symbol,
-                    env.arena.alloc(stmt),
-                )
+                    // convert the def body, store in outer_symbol
+                    with_hole(
+                        env,
+                        def.loc_expr.value,
+                        procs,
+                        layout_cache,
+                        outer_symbol,
+                        env.arena.alloc(stmt),
+                    )
+                }
             }
         }
 
@@ -2552,7 +2560,8 @@ fn substitute_in_expr<'a>(
             call_type,
             args,
             arg_layouts,
-            layout,
+            ret_layout,
+            full_layout,
         } => {
             let opt_call_type = match call_type {
                 CallType::ByName(s) => substitute(subs, *s).map(CallType::ByName),
@@ -2580,7 +2589,8 @@ fn substitute_in_expr<'a>(
                     call_type,
                     args,
                     arg_layouts: *arg_layouts,
-                    layout: layout.clone(),
+                    ret_layout: ret_layout.clone(),
+                    full_layout: full_layout.clone(),
                 })
             } else {
                 None
@@ -2934,24 +2944,30 @@ fn call_by_name<'a>(
                 }
             }
 
+            let full_layout = layout.clone();
+
             // TODO does this work?
             let empty = &[] as &[_];
-            let (arg_layouts, layout) = if let Layout::FunctionPointer(args, rlayout) = layout {
+            let (arg_layouts, ret_layout) = if let Layout::FunctionPointer(args, rlayout) = layout {
                 (args, rlayout)
             } else {
                 (empty, &layout)
             };
 
             // If we've already specialized this one, no further work is needed.
-            if procs.specialized.contains_key(&(proc_name, layout.clone())) {
+            if procs
+                .specialized
+                .contains_key(&(proc_name, full_layout.clone()))
+            {
                 let call = Expr::FunctionCall {
                     call_type: CallType::ByName(proc_name),
-                    layout: layout.clone(),
+                    ret_layout: ret_layout.clone(),
+                    full_layout: full_layout.clone(),
                     arg_layouts,
                     args: field_symbols,
                 };
 
-                let mut result = Stmt::Let(assigned, call, layout.clone(), hole);
+                let mut result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
 
                 for ((_, loc_arg), symbol) in
                     loc_args.into_iter().rev().zip(field_symbols.iter().rev())
@@ -2992,16 +3008,22 @@ fn call_by_name<'a>(
                 match &mut procs.pending_specializations {
                     Some(pending_specializations) => {
                         // register the pending specialization, so this gets code genned later
-                        add_pending(pending_specializations, proc_name, layout.clone(), pending);
+                        add_pending(
+                            pending_specializations,
+                            proc_name,
+                            full_layout.clone(),
+                            pending,
+                        );
 
                         let call = Expr::FunctionCall {
                             call_type: CallType::ByName(proc_name),
-                            layout: layout.clone(),
+                            ret_layout: ret_layout.clone(),
+                            full_layout: full_layout.clone(),
                             arg_layouts,
                             args: field_symbols,
                         };
 
-                        let mut result = Stmt::Let(assigned, call, layout.clone(), hole);
+                        let mut result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
 
                         for ((_, loc_arg), symbol) in
                             loc_args.into_iter().rev().zip(field_symbols.iter().rev())
@@ -3035,7 +3057,7 @@ fn call_by_name<'a>(
                                 // (We had a bug around this before this system existed!)
                                 procs
                                     .specialized
-                                    .insert((proc_name, layout.clone()), InProgress);
+                                    .insert((proc_name, full_layout.clone()), InProgress);
 
                                 match specialize(
                                     env,
@@ -3048,17 +3070,18 @@ fn call_by_name<'a>(
                                     Ok(proc) => {
                                         procs
                                             .specialized
-                                            .insert((proc_name, layout.clone()), Done(proc));
+                                            .insert((proc_name, full_layout.clone()), Done(proc));
 
                                         let call = Expr::FunctionCall {
                                             call_type: CallType::ByName(proc_name),
-                                            layout: layout.clone(),
+                                            ret_layout: ret_layout.clone(),
+                                            full_layout: full_layout.clone(),
                                             arg_layouts,
                                             args: field_symbols,
                                         };
 
                                         let mut result =
-                                            Stmt::Let(assigned, call, layout.clone(), hole);
+                                            Stmt::Let(assigned, call, ret_layout.clone(), hole);
 
                                         for ((_, loc_arg), symbol) in loc_args
                                             .into_iter()

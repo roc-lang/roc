@@ -401,7 +401,81 @@ mod gen_records {
     }
 
     #[test]
-    fn optional_field_use_default() {
+    fn optional_field_when_use_default() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \r ->
+                    when r is
+                        { x: Blue, y ? 3 } -> y
+                        { x: Red, y ? 5 } -> y
+
+                a = f { x: Blue, y: 7 } 
+                b = f { x: Blue }
+                c = f { x: Red, y: 11 } 
+                d = f { x: Red }
+
+                a * b * c * d
+                "#
+            ),
+            3 * 5 * 7 * 11,
+            i64
+        );
+    }
+
+    #[test]
+    fn optional_field_when_no_use_default() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \r ->
+                    { x ? 10, y } = r
+                    x + y
+
+                f { x: 4, y: 9 }
+                "#
+            ),
+            13,
+            i64
+        );
+    }
+
+    #[test]
+    fn optional_field_let_use_default() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \r ->
+                    { x ? 10, y } = r
+                    x + y
+
+                f { y: 9 }
+                "#
+            ),
+            19,
+            i64
+        );
+    }
+
+    #[test]
+    fn optional_field_let_no_use_default() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \r ->
+                    { x ? 10, y } = r
+                    x + y
+
+                f { x: 4, y: 9 }
+                "#
+            ),
+            13,
+            i64
+        );
+    }
+
+    #[test]
+    fn optional_field_function_use_default() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -417,7 +491,7 @@ mod gen_records {
     }
 
     #[test]
-    fn optional_field_no_use_default() {
+    fn optional_field_function_no_use_default() {
         assert_evals_to!(
             indoc!(
                 r#"
