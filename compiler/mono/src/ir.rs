@@ -23,6 +23,7 @@ pub struct PartialProc<'a> {
     pub annotation: Variable,
     pub pattern_symbols: Vec<'a, Symbol>,
     pub body: roc_can::expr::Expr,
+    pub is_tail_recursive: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -39,6 +40,7 @@ pub struct Proc<'a> {
     pub body: Stmt<'a>,
     pub closes_over: Layout<'a>,
     pub ret_layout: Layout<'a>,
+    pub is_tail_recursive: bool,
 }
 
 impl<'a> Proc<'a> {
@@ -128,6 +130,7 @@ impl<'a> Procs<'a> {
         annotation: Variable,
         loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
         loc_body: Located<roc_can::expr::Expr>,
+        is_tail_recursive: bool,
         ret_var: Variable,
     ) {
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
@@ -142,6 +145,7 @@ impl<'a> Procs<'a> {
                         annotation,
                         pattern_symbols,
                         body: body.value,
+                        is_tail_recursive,
                     },
                 );
             }
@@ -174,6 +178,9 @@ impl<'a> Procs<'a> {
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
     ) -> Result<Layout<'a>, RuntimeError> {
+        // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
+        let is_tail_recursive = false;
+
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((pattern_vars, pattern_symbols, body)) => {
                 // an anonymous closure. These will always be specialized already
@@ -212,6 +219,7 @@ impl<'a> Procs<'a> {
                                     annotation,
                                     pattern_symbols,
                                     body: body.value,
+                                    is_tail_recursive,
                                 },
                             );
                         }
@@ -221,6 +229,7 @@ impl<'a> Procs<'a> {
                                 annotation,
                                 pattern_symbols,
                                 body: body.value,
+                                is_tail_recursive,
                             };
 
                             // Mark this proc as in-progress, so if we're dealing with
@@ -991,6 +1000,7 @@ fn specialize<'a>(
         annotation,
         pattern_symbols,
         body,
+        is_tail_recursive,
     } = partial_proc;
 
     // unify the called function with the specialized signature, then specialize the function body
@@ -1034,6 +1044,7 @@ fn specialize<'a>(
         body: specialized_body,
         closes_over: closes_over_layout,
         ret_layout,
+        is_tail_recursive,
     };
 
     Ok(proc)
@@ -1089,30 +1100,27 @@ pub fn with_hole<'a>(
         },
         LetNonRec(def, cont, _, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                if let Closure(_, _, _, _, _) = &def.loc_expr.value {
-                    // Now that we know for sure it's a closure, get an owned
-                    // version of these variant args so we can use them properly.
-                    match def.loc_expr.value {
-                        Closure(ann, _, _, loc_args, boxed_body) => {
-                            // Extract Procs, but discard the resulting Expr::Load.
-                            // That Load looks up the pointer, which we won't use here!
+                if let Closure(ann, _, recursivity, loc_args, boxed_body) = def.loc_expr.value {
+                    // Extract Procs, but discard the resulting Expr::Load.
+                    // That Load looks up the pointer, which we won't use here!
 
-                            let (loc_body, ret_var) = *boxed_body;
+                    let (loc_body, ret_var) = *boxed_body;
 
-                            procs.insert_named(
-                                env,
-                                layout_cache,
-                                *symbol,
-                                ann,
-                                loc_args,
-                                loc_body,
-                                ret_var,
-                            );
+                    let is_tail_recursive =
+                        matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
 
-                            return with_hole(env, cont.value, procs, layout_cache, assigned, hole);
-                        }
-                        _ => unreachable!(),
-                    }
+                    procs.insert_named(
+                        env,
+                        layout_cache,
+                        *symbol,
+                        ann,
+                        loc_args,
+                        loc_body,
+                        is_tail_recursive,
+                        ret_var,
+                    );
+
+                    return with_hole(env, cont.value, procs, layout_cache, assigned, hole);
                 }
             }
 
@@ -1176,28 +1184,27 @@ pub fn with_hole<'a>(
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                    // Now that we know for sure it's a closure, get an owned
-                    // version of these variant args so we can use them properly.
-                    match def.loc_expr.value {
-                        Closure(ann, _, _, loc_args, boxed_body) => {
-                            // Extract Procs, but discard the resulting Expr::Load.
-                            // That Load looks up the pointer, which we won't use here!
+                    if let Closure(ann, _, recursivity, loc_args, boxed_body) = def.loc_expr.value {
+                        // Extract Procs, but discard the resulting Expr::Load.
+                        // That Load looks up the pointer, which we won't use here!
 
-                            let (loc_body, ret_var) = *boxed_body;
+                        let (loc_body, ret_var) = *boxed_body;
 
-                            procs.insert_named(
-                                env,
-                                layout_cache,
-                                *symbol,
-                                ann,
-                                loc_args,
-                                loc_body,
-                                ret_var,
-                            );
+                        let is_tail_recursive =
+                            matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
 
-                            continue;
-                        }
-                        _ => unreachable!("recursive value is not a function"),
+                        procs.insert_named(
+                            env,
+                            layout_cache,
+                            *symbol,
+                            ann,
+                            loc_args,
+                            loc_body,
+                            is_tail_recursive,
+                            ret_var,
+                        );
+
+                        continue;
                     }
                 }
                 unreachable!("recursive value does not have Identifier pattern")
@@ -2025,11 +2032,14 @@ pub fn from_can<'a>(
                     // Now that we know for sure it's a closure, get an owned
                     // version of these variant args so we can use them properly.
                     match def.loc_expr.value {
-                        Closure(ann, _, _, loc_args, boxed_body) => {
+                        Closure(ann, _, recursivity, loc_args, boxed_body) => {
                             // Extract Procs, but discard the resulting Expr::Load.
                             // That Load looks up the pointer, which we won't use here!
 
                             let (loc_body, ret_var) = *boxed_body;
+
+                            let is_tail_recursive =
+                                matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
 
                             procs.insert_named(
                                 env,
@@ -2038,6 +2048,7 @@ pub fn from_can<'a>(
                                 ann,
                                 loc_args,
                                 loc_body,
+                                is_tail_recursive,
                                 ret_var,
                             );
 
@@ -2057,11 +2068,14 @@ pub fn from_can<'a>(
                     // Now that we know for sure it's a closure, get an owned
                     // version of these variant args so we can use them properly.
                     match def.loc_expr.value {
-                        Closure(ann, _, _, loc_args, boxed_body) => {
+                        Closure(ann, _, recursivity, loc_args, boxed_body) => {
                             // Extract Procs, but discard the resulting Expr::Load.
                             // That Load looks up the pointer, which we won't use here!
 
                             let (loc_body, ret_var) = *boxed_body;
+
+                            let is_tail_recursive =
+                                matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
 
                             procs.insert_named(
                                 env,
@@ -2070,6 +2084,7 @@ pub fn from_can<'a>(
                                 ann,
                                 loc_args,
                                 loc_body,
+                                is_tail_recursive,
                                 ret_var,
                             );
 
@@ -2765,11 +2780,11 @@ fn store_pattern<'a>(
         }
 
         Shadowed(_region, _ident) => {
-            return Err(&"TODO");
+            return Err(&"shadowed");
         }
 
         UnsupportedPattern(_region) => {
-            return Err(&"TODO");
+            return Err(&"unsupported pattern");
         }
     }
 

@@ -1064,4 +1064,51 @@ mod test_mono {
             )
         })
     }
+
+    #[test]
+    fn factorial() {
+        compiles_to_ir(
+            r#"
+            factorial = \n, accum ->
+                when n is
+                    0 -> 
+                        accum
+
+                    _ -> 
+                        factorial (n - 1) (n * accum)
+
+            factorial 10 1
+            "#,
+            indoc!(
+                r#"
+                procedure Test.0 (Test.2, Test.3):
+                    let Test.15 = true;
+                    let Test.16 = 0i64;
+                    let Test.17 = lowlevel Eq Test.16 Test.2;
+                    let Test.14 = lowlevel And Test.17 Test.15;
+                    if Test.14 then
+                        ret Test.3;
+                    else
+                        let Test.12 = 1i64;
+                        let Test.9 = CallByName Num.15 Test.2 Test.12;
+                        let Test.10 = CallByName Num.16 Test.2 Test.3;
+                        let Test.8 = CallByName Test.0 Test.9 Test.10;
+                        ret Test.8;
+
+                procedure Num.15 (#Attr.2, #Attr.3):
+                    let Test.13 = lowlevel NumSub #Attr.2 #Attr.3;
+                    ret Test.13;
+
+                procedure Num.16 (#Attr.2, #Attr.3):
+                    let Test.11 = lowlevel NumMul #Attr.2 #Attr.3;
+                    ret Test.11;
+
+                let Test.5 = 10i64;
+                let Test.6 = 1i64;
+                let Test.4 = CallByName Test.0 Test.5 Test.6;
+                ret Test.4;
+                "#
+            ),
+        )
+    }
 }

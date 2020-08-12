@@ -173,7 +173,7 @@ pub fn construct_optimization_passes<'a>(
         }
         OptLevel::Optimize => {
             // this threshold seems to do what we want
-            pmb.set_inliner_with_threshold(0);
+            pmb.set_inliner_with_threshold(2);
 
             // TODO figure out which of these actually help
 
@@ -185,21 +185,18 @@ pub fn construct_optimization_passes<'a>(
             fpm.add_jump_threading_pass();
             mpm.add_jump_threading_pass();
 
-            //fpm.add_ind_var_simplify_pass();
             fpm.add_memcpy_optimize_pass(); // this one is very important
 
             // In my testing, these don't do much for quicksort
+            //fpm.add_ind_var_simplify_pass();
             //            fpm.add_basic_alias_analysis_pass();
             //            fpm.add_jump_threading_pass();
-            //            fpm.add_instruction_combining_pass();
             //            fpm.add_licm_pass();
-            //            fpm.add_loop_unroll_pass();
             //            fpm.add_scalar_repl_aggregates_pass_ssa();
             //            fpm.add_cfg_simplification_pass();
             //            fpm.add_jump_threading_pass();
 
             // module passes
-            // fpm.add_promote_memory_to_register_pass();
         }
     }
 

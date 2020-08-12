@@ -117,7 +117,10 @@ pub fn gen(
                 Declare(def) | Builtin(def) => match def.loc_pattern.value {
                     Identifier(symbol) => {
                         match def.loc_expr.value {
-                            Closure(annotation, _, _, loc_args, boxed_body) => {
+                            Closure(annotation, _, recursivity, loc_args, boxed_body) => {
+                                let is_tail_recursive =
+                                    matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
+
                                 let (loc_body, ret_var) = *boxed_body;
 
                                 // If this is an exposed symbol, we need to
@@ -155,6 +158,7 @@ pub fn gen(
                                     annotation,
                                     loc_args,
                                     loc_body,
+                                    is_tail_recursive,
                                     ret_var,
                                 );
                             }
@@ -166,6 +170,7 @@ pub fn gen(
                                     pattern_symbols: bumpalo::collections::Vec::new_in(
                                         mono_env.arena,
                                     ),
+                                    is_tail_recursive: false,
                                     body,
                                 };
 
