@@ -265,9 +265,7 @@ mod gen_list {
         assert_evals_to!(
             &format!("List.concat {} {}", slice_str1, slice_str2),
             expected_slice,
-            &'static [i64],
-            |x| x,
-            true
+            &'static [i64]
         );
     }
 
@@ -816,9 +814,7 @@ mod gen_list {
                 "#
                 ),
                 &[4, 7, 19, 21],
-                &'static [i64],
-                |x| x,
-                true
+                &'static [i64]
             );
         })
     }
@@ -892,8 +888,6 @@ mod gen_list {
     //                ),
     //                &[19, 7, 4, 21],
     //                &'static [i64],
-    //                |x| x,
-    //                true
     //            );
     //        })
     //    }
@@ -967,8 +961,6 @@ mod gen_list {
     //                ),
     //                4,
     //                i64,
-    //                |x| x,
-    //                false
     //            );
     //        })
     //    }
@@ -1020,9 +1012,7 @@ mod gen_list {
                 "#
             ),
             &[1, 2, 3],
-            &'static [i64],
-            |x| x,
-            true
+            &'static [i64]
         );
     }
 
@@ -1041,9 +1031,7 @@ mod gen_list {
                 "#
             ),
             &[0, 2, 3],
-            &'static [i64],
-            |x| x,
-            true
+            &'static [i64]
         );
     }
 
@@ -1060,9 +1048,7 @@ mod gen_list {
                 "#
             ),
             &[1, 2, 3],
-            &'static [i64],
-            |x| x,
-            true
+            &'static [i64]
         );
     }
 }

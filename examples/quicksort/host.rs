@@ -7,7 +7,7 @@ extern "C" {
     fn quicksort(list: Box<[i64]>) -> Box<[i64]>;
 }
 
-const NUM_NUMS: usize = 1_000_00;
+const NUM_NUMS: usize = 1_000_000;
 
 pub fn main() {
     let nums: Box<[i64]> = {
@@ -18,10 +18,8 @@ pub fn main() {
 
             nums.push(num);
         }
-
-        nums
-    }
-    .into();
+        nums.into()
+    };
 
     println!("Running Roc quicksort on {} numbers...", nums.len());
     let start_time = SystemTime::now();

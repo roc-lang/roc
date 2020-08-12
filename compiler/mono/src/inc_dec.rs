@@ -627,16 +627,17 @@ impl<'a> Context<'a> {
 
                 let v_orig = v;
 
+                // NOTE deviation from lean, insert into local context
+                let mut ctx = self.clone();
+                ctx.local_context.join_points.insert(*j, (xs, v_orig));
+
                 let (v, v_live_vars) = {
-                    let ctx = self.update_var_info_with_params(xs);
+                    let ctx = ctx.update_var_info_with_params(xs);
                     ctx.visit_stmt(v)
                 };
 
-                let v = self.add_dec_for_dead_params(xs, v, &v_live_vars);
-                let mut ctx = self.clone();
-
-                // NOTE deviation from lean, insert into local context
-                ctx.local_context.join_points.insert(*j, (xs, v_orig));
+                let v = ctx.add_dec_for_dead_params(xs, v, &v_live_vars);
+                let mut ctx = ctx.clone();
 
                 update_jp_live_vars(*j, xs, v, &mut ctx.jp_live_vars);
 
