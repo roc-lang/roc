@@ -366,7 +366,17 @@ fn layout_from_flat_type<'a>(
             for (_, field) in sorted_fields {
                 use LayoutProblem::*;
 
-                let field_var = field.into_inner();
+                let field_var = {
+                    use roc_types::types::RecordField::*;
+                    match field {
+                        Optional(_) => {
+                            // optional values are not available at this point
+                            continue;
+                        }
+                        Required(var) => var,
+                        Demanded(var) => var,
+                    }
+                };
                 let field_content = subs.get_without_compacting(field_var).content;
 
                 match Layout::new(arena, field_content, subs) {
@@ -414,7 +424,7 @@ pub fn sort_record_fields<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
-) -> Vec<'a, (Lowercase, Layout<'a>)> {
+) -> Vec<'a, (Lowercase, Result<Layout<'a>, Layout<'a>>)> {
     let mut fields_map = MutMap::default();
 
     match roc_types::pretty_print::chase_ext_record(subs, var, &mut fields_map) {
@@ -422,13 +432,24 @@ pub fn sort_record_fields<'a>(
             // Sort the fields by label
             let mut sorted_fields = Vec::with_capacity_in(fields_map.len(), arena);
 
+            use roc_types::types::RecordField;
             for (label, field) in fields_map {
-                let var = field.into_inner();
+                let var = match field {
+                    RecordField::Demanded(v) => v,
+                    RecordField::Required(v) => v,
+                    RecordField::Optional(v) => {
+                        let layout =
+                            Layout::from_var(arena, v, subs).expect("invalid layout from var");
+                        sorted_fields.push((label, Err(layout)));
+                        continue;
+                    }
+                };
+
                 let layout = Layout::from_var(arena, var, subs).expect("invalid layout from var");
 
                 // Drop any zero-sized fields like {}
                 if !layout.is_zero_sized() {
-                    sorted_fields.push((label, layout));
+                    sorted_fields.push((label, Ok(layout)));
                 }
             }
 

@@ -399,4 +399,36 @@ mod gen_records {
             (i64, i64)
         );
     }
+
+    #[test]
+    fn optional_field_use_default() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \{ x ? 10, y } -> x + y
+
+
+                f { y: 9 }
+                "#
+            ),
+            19,
+            i64
+        );
+    }
+
+    #[test]
+    fn optional_field_no_use_default() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \{ x ? 10, y } -> x + y
+
+
+                f { x: 4, y: 9 }
+                "#
+            ),
+            13,
+            i64
+        );
+    }
 }

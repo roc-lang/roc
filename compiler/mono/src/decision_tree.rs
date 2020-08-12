@@ -409,7 +409,8 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
                                 arguments.push((Pattern::Underscore, destruct.layout.clone()));
                             }
                             DestructType::Optional(_expr) => {
-                                todo!("test_at_type for optional destruct");
+                                // todo!("test_at_type for optional destruct");
+                                arguments.push((Pattern::Underscore, destruct.layout.clone()));
                             }
                         }
                     }
@@ -542,7 +543,8 @@ fn to_relevant_branch_help<'a>(
                         DestructType::Guard(guard) => guard.clone(),
                         DestructType::Required => Pattern::Underscore,
                         DestructType::Optional(_expr) => {
-                            todo!("TODO decision tree for optional field branch");
+                            // todo!("TODO decision tree for optional field branch");
+                            Pattern::Underscore
                         }
                     };
 

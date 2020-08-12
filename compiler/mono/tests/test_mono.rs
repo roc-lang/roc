@@ -710,7 +710,7 @@ mod test_mono {
             x : [ Red, White, Blue ]
             x = Blue
 
-            y = 
+            y =
                 when x is
                     Red -> 1
                     White -> 2
@@ -747,7 +747,7 @@ mod test_mono {
             r#"
             if True then
                 1
-            else 
+            else
                 2
             "#,
             indoc!(
@@ -774,7 +774,7 @@ mod test_mono {
                 1
             else if False then
                 2
-            else 
+            else
                 3
             "#,
             indoc!(
@@ -807,7 +807,7 @@ mod test_mono {
             x : Result Int Int
             x = Ok 2
 
-            y = 
+            y =
                 when x is
                     Ok 3 -> 1
                     Ok _ -> 2
@@ -1033,6 +1033,75 @@ mod test_mono {
                 let Test.4 = CallByName Test.1 Test.0;
                 dec Test.0;
                 ret Test.4;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_optional_field_no_use_default() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                f = \{ x ? 10, y } -> x + y
+
+
+                f { x: 4, y: 9 }
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure Test.0 (Test.4):
+                    let Test.2 = Index 0 Test.4;
+                    let Test.3 = Index 1 Test.4;
+                    let Test.11 = CallByName Num.14 Test.2 Test.3;
+                    jump Test.10 Test.11;
+                    joinpoint Test.10 Test.9:
+                        ret Test.9;
+
+                procedure Num.14 (#Attr.2, #Attr.3):
+                    let Test.12 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.12;
+
+                let Test.7 = 4i64;
+                let Test.8 = 9i64;
+                let Test.6 = Struct {Test.7, Test.8};
+                let Test.5 = CallByName Test.0 Test.6;
+                ret Test.5;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_optional_field_use_default() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                f = \{ x ? 10, y } -> x + y
+
+
+                f { y: 9 }
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure Test.0 (Test.4):
+                    let Test.2 = 10i64;
+                    let Test.3 = Index 1 Test.4;
+                    let Test.10 = CallByName Num.14 Test.2 Test.3;
+                    jump Test.9 Test.10;
+                    joinpoint Test.9 Test.8:
+                        ret Test.8;
+
+                procedure Num.14 (#Attr.2, #Attr.3):
+                    let Test.11 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.11;
+
+                let Test.7 = 9i64;
+                let Test.6 = Struct {Test.7};
+                let Test.5 = CallByName Test.0 Test.6;
+                ret Test.5;
                 "#
             ),
         )
