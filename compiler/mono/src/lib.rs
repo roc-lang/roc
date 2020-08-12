@@ -14,6 +14,7 @@
 pub mod inc_dec;
 pub mod ir;
 pub mod layout;
+pub mod tail_recursion;
 
 // Temporary, while we can build up test cases and optimize the exhaustiveness checking.
 // For now, following this warning's advice will lead to nasty type inference errors.

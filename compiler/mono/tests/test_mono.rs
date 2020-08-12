@@ -587,8 +587,8 @@ mod test_mono {
                     ret Test.9;
 
                 procedure Num.14 (#Attr.2, #Attr.3):
-                    let Test.10 = lowlevel NumAdd #Attr.2 #Attr.3;
-                    ret Test.10;
+                    let Test.11 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.11;
 
                 let Test.8 = 1f64;
                 let Test.1 = Array [Test.8];
@@ -1082,22 +1082,23 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Test.0 (Test.2, Test.3):
-                    let Test.15 = true;
-                    let Test.16 = 0i64;
-                    let Test.17 = lowlevel Eq Test.16 Test.2;
-                    let Test.14 = lowlevel And Test.17 Test.15;
-                    if Test.14 then
-                        ret Test.3;
-                    else
-                        let Test.12 = 1i64;
-                        let Test.9 = CallByName Num.15 Test.2 Test.12;
-                        let Test.10 = CallByName Num.16 Test.2 Test.3;
-                        let Test.8 = CallByName Test.0 Test.9 Test.10;
-                        ret Test.8;
+                    jump Test.20 Test.2 Test.3;
+                    joinpoint Test.20 Test.2 Test.3:
+                        let Test.17 = true;
+                        let Test.18 = 0i64;
+                        let Test.19 = lowlevel Eq Test.18 Test.2;
+                        let Test.16 = lowlevel And Test.19 Test.17;
+                        if Test.16 then
+                            ret Test.3;
+                        else
+                            let Test.13 = 1i64;
+                            let Test.9 = CallByName Num.15 Test.2 Test.13;
+                            let Test.10 = CallByName Num.16 Test.2 Test.3;
+                            jump Test.20 Test.9 Test.10;
 
                 procedure Num.15 (#Attr.2, #Attr.3):
-                    let Test.13 = lowlevel NumSub #Attr.2 #Attr.3;
-                    ret Test.13;
+                    let Test.14 = lowlevel NumSub #Attr.2 #Attr.3;
+                    ret Test.14;
 
                 procedure Num.16 (#Attr.2, #Attr.3):
                     let Test.11 = lowlevel NumMul #Attr.2 #Attr.3;

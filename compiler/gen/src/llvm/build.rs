@@ -774,9 +774,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             // construct the blocks that may jump to this join point
             build_exp_stmt(env, layout_ids, scope, parent, remainder);
 
-            // remove this join point again
-            scope.join_points.remove(&id);
-
             for (ptr, param) in joinpoint_args.iter().zip(parameters.iter()) {
                 scope.insert(param.symbol, (param.layout.clone(), *ptr));
             }
@@ -788,6 +785,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
             // put the continuation in
             let result = build_exp_stmt(env, layout_ids, scope, parent, continuation);
+
+            // remove this join point again
+            scope.join_points.remove(&id);
 
             cont_block.move_after(phi_block).unwrap();
 

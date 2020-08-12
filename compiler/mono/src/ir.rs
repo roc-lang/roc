@@ -379,7 +379,7 @@ impl<'a, 'i> Env<'a, 'i> {
 }
 
 #[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
-pub struct JoinPointId(Symbol);
+pub struct JoinPointId(pub Symbol);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Param<'a> {
@@ -1009,9 +1009,6 @@ fn specialize<'a>(
 
     debug_assert!(matches!(unified, roc_unify::unify::Unified::Success(_)));
 
-    //let ret_symbol = env.unique_symbol();
-    //let hole = env.arena.alloc(Stmt::Ret(ret_symbol));
-    //let specialized_body = with_hole(env, body, procs, layout_cache, ret_symbol, hole);
     let specialized_body = from_can(env, body, procs, layout_cache);
 
     // reset subs, so we don't get type errors when specializing for a different signature
@@ -1031,6 +1028,11 @@ fn specialize<'a>(
         proc_args.push((layout, *arg_name));
     }
 
+    let proc_args = proc_args.into_bump_slice();
+
+    let specialized_body =
+        crate::tail_recursion::make_tail_recursive(env, proc_name, specialized_body, proc_args);
+
     let ret_layout = layout_cache
         .from_var(&env.arena, ret_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
@@ -1040,7 +1042,7 @@ fn specialize<'a>(
 
     let proc = Proc {
         name: proc_name,
-        args: proc_args.into_bump_slice(),
+        args: proc_args,
         body: specialized_body,
         closes_over: closes_over_layout,
         ret_layout,

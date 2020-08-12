@@ -449,4 +449,25 @@ mod gen_primitives {
             i64
         );
     }
+
+    #[test]
+    fn factorial() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                factorial = \n, accum ->
+                    when n is
+                        0 ->
+                            accum
+
+                        _ ->
+                            factorial (n - 1) (n * accum)
+
+                factorial 10 1
+                "#
+            ),
+            3628800,
+            i64
+        );
+    }
 }
