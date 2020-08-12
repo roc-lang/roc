@@ -1039,7 +1039,80 @@ mod test_mono {
     }
 
     #[test]
-    fn record_optional_field_no_use_default() {
+    fn record_optional_field_let_no_use_default() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                f = \r ->
+                    { x ? 10, y } = r
+                    x + y
+
+
+                f { x: 4, y: 9 }
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure Test.0 (Test.4):
+                    let Test.2 = Index 0 Test.4;
+                    let Test.3 = Index 1 Test.4;
+                    let Test.11 = CallByName Num.14 Test.2 Test.3;
+                    jump Test.10 Test.11;
+                    joinpoint Test.10 Test.9:
+                        ret Test.9;
+
+                procedure Num.14 (#Attr.2, #Attr.3):
+                    let Test.12 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.12;
+
+                let Test.7 = 4i64;
+                let Test.8 = 9i64;
+                let Test.6 = Struct {Test.7, Test.8};
+                let Test.5 = CallByName Test.0 Test.6;
+                ret Test.5;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_optional_field_let_use_default() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                f = \r ->
+                    { x ? 10, y } = r
+                    x + y
+
+
+                f { y: 9 }
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure Test.0 (Test.4):
+                    let Test.2 = 10i64;
+                    let Test.3 = Index 1 Test.4;
+                    let Test.10 = CallByName Num.14 Test.2 Test.3;
+                    jump Test.9 Test.10;
+                    joinpoint Test.9 Test.8:
+                        ret Test.8;
+
+                procedure Num.14 (#Attr.2, #Attr.3):
+                    let Test.11 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.11;
+
+                let Test.7 = 9i64;
+                let Test.6 = Struct {Test.7};
+                let Test.5 = CallByName Test.0 Test.6;
+                ret Test.5;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_optional_field_function_no_use_default() {
         compiles_to_ir(
             indoc!(
                 r#"
@@ -1074,7 +1147,7 @@ mod test_mono {
     }
 
     #[test]
-    fn record_optional_field_use_default() {
+    fn record_optional_field_function_use_default() {
         compiles_to_ir(
             indoc!(
                 r#"
