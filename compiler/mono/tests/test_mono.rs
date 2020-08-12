@@ -12,8 +12,6 @@ mod helpers;
 // Test monomorphization
 #[cfg(test)]
 mod test_mono {
-    use crate::helpers::with_larger_debug_stack;
-
     // NOTE because the Show instance of module names is different in --release mode,
     // these tests would all fail. In the future, when we do interesting optimizations,
     // we'll likely want some tests for --release too.
@@ -932,7 +930,7 @@ mod test_mono {
 
     #[allow(dead_code)]
     fn quicksort_help() {
-        with_larger_debug_stack(|| {
+        crate::helpers::with_larger_debug_stack(|| {
             compiles_to_ir(
                 indoc!(
                     r#"
@@ -960,7 +958,7 @@ mod test_mono {
 
     #[allow(dead_code)]
     fn quicksort_partition_help() {
-        with_larger_debug_stack(|| {
+        crate::helpers::with_larger_debug_stack(|| {
             compiles_to_ir(
                 indoc!(
                     r#"
@@ -994,7 +992,7 @@ mod test_mono {
 
     #[allow(dead_code)]
     fn quicksort_full() {
-        with_larger_debug_stack(|| {
+        crate::helpers::with_larger_debug_stack(|| {
             compiles_to_ir(
                 indoc!(
                     r#"

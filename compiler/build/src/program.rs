@@ -1,15 +1,12 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
-use inkwell::module::Linkage;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
 };
 use inkwell::OptimizationLevel;
 use roc_collections::all::default_hasher;
 use roc_gen::layout_id::LayoutIds;
-use roc_gen::llvm::build::{
-    build_proc, build_proc_header, get_call_conventions, module_from_builtins, OptLevel,
-};
+use roc_gen::llvm::build::{build_proc, build_proc_header, module_from_builtins, OptLevel};
 use roc_load::file::LoadedModule;
 use roc_mono::ir::{Env, PartialProc, Procs};
 use roc_mono::layout::{Layout, LayoutCache};
@@ -23,7 +20,7 @@ use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
 #[allow(clippy::cognitive_complexity)]
 pub fn gen(
     arena: &Bump,
-    loaded: LoadedModule,
+    mut loaded: LoadedModule,
     filename: PathBuf,
     target: Triple,
     dest_filename: &Path,
@@ -74,17 +71,14 @@ pub fn gen(
 
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
-    // Compile and add all the Procs before adding main
-    let mut env = roc_gen::llvm::build::Env {
-        arena: &arena,
-        builder: &builder,
-        context: &context,
-        interns: loaded.interns,
-        module,
-        ptr_bytes,
-        leak: false,
-    };
-    let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
+    let mut exposed_to_host =
+        HashSet::with_capacity_and_hasher(loaded.exposed_vars_by_symbol.len(), default_hasher());
+
+    for (symbol, _) in loaded.exposed_vars_by_symbol {
+        exposed_to_host.insert(symbol);
+    }
+
+    let mut ident_ids = loaded.interns.all_ident_ids.remove(&home).unwrap();
     let mut layout_ids = LayoutIds::default();
     let mut procs = Procs::default();
     let mut mono_problems = std::vec::Vec::new();
@@ -96,12 +90,6 @@ pub fn gen(
         home,
         ident_ids: &mut ident_ids,
     };
-    let mut exposed_symbols =
-        HashSet::with_capacity_and_hasher(loaded.exposed_vars_by_symbol.len(), default_hasher());
-
-    for (symbol, _) in loaded.exposed_vars_by_symbol {
-        exposed_symbols.insert(symbol);
-    }
 
     // Add modules' decls to Procs
     for (_, mut decls) in decls_by_id
@@ -127,7 +115,7 @@ pub fn gen(
                                 // register it as such. Otherwise, since it
                                 // never gets called by Roc code, it will never
                                 // get specialized!
-                                if exposed_symbols.contains(&symbol) {
+                                if exposed_to_host.contains(&symbol) {
                                     let mut pattern_vars =
                                         bumpalo::collections::Vec::with_capacity_in(
                                             loc_args.len(),
@@ -178,7 +166,7 @@ pub fn gen(
                                 // register it as such. Otherwise, since it
                                 // never gets called by Roc code, it will never
                                 // get specialized!
-                                if exposed_symbols.contains(&symbol) {
+                                if exposed_to_host.contains(&symbol) {
                                     let pattern_vars = bumpalo::collections::Vec::new_in(arena);
                                     let ret_layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
                                         todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
@@ -224,6 +212,18 @@ pub fn gen(
             }
         }
     }
+
+    // Compile and add all the Procs before adding main
+    let mut env = roc_gen::llvm::build::Env {
+        arena: &arena,
+        builder: &builder,
+        context: &context,
+        interns: loaded.interns,
+        module,
+        ptr_bytes,
+        leak: false,
+        exposed_to_host,
+    };
 
     // Populate Procs further and get the low-level Expr from the canonical Expr
     let mut headers = {
@@ -271,27 +271,6 @@ pub fn gen(
             panic!(
                 "Non-main function failed LLVM verification. Uncomment the above println to debug!"
             );
-        }
-    }
-
-    // Set exposed functions to external linkage and C calling conventions
-    {
-        let cc = get_call_conventions(target.default_calling_convention().unwrap());
-        let interns = &env.interns;
-
-        for symbol in exposed_symbols {
-            // Since it was exposed, it must have been monomorphic,
-            // meaning its LLVM name will be ___#1 (e.g. "main#1")
-            let fn_name = format!("{}#1", symbol.ident_string(interns));
-            let fn_val = env.module.get_function(&fn_name).unwrap_or_else(|| {
-                panic!(
-                    "module.get_function({:?}) did not find a function registered with LLVM",
-                    fn_name
-                )
-            });
-
-            fn_val.set_linkage(Linkage::External);
-            fn_val.set_call_conventions(cc);
         }
     }
 
