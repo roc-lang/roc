@@ -625,11 +625,11 @@ impl<'a> Stmt<'a> {
         env: &mut Env<'a, '_>,
         can_expr: roc_can::expr::Expr,
         procs: &mut Procs<'a>,
+        layout_cache: &mut LayoutCache<'a>,
     ) -> Self {
-        let mut layout_cache = LayoutCache::default();
-
-        from_can(env, can_expr, procs, &mut layout_cache)
+        from_can(env, can_expr, procs, layout_cache)
     }
+
     pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,

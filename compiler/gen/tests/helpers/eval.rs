@@ -13,7 +13,7 @@ pub fn helper_without_uniqueness<'a>(
     use roc_gen::llvm::build::Scope;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
     use roc_gen::llvm::convert::basic_type_from_layout;
-    use roc_mono::layout::Layout;
+    use roc_mono::layout::{Layout, LayoutCache};
 
     let target = target_lexicon::Triple::host();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
@@ -105,7 +105,9 @@ pub fn helper_without_uniqueness<'a>(
         ident_ids: &mut ident_ids,
     };
 
-    let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
+    let mut layout_cache = LayoutCache::default();
+    let main_body =
+        roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
     let main_body =
         roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
 
@@ -214,7 +216,7 @@ pub fn helper_with_uniqueness<'a>(
     use roc_gen::llvm::build::Scope;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
     use roc_gen::llvm::convert::basic_type_from_layout;
-    use roc_mono::layout::Layout;
+    use roc_mono::layout::{Layout, LayoutCache};
 
     let target = target_lexicon::Triple::host();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
@@ -296,7 +298,9 @@ pub fn helper_with_uniqueness<'a>(
         ident_ids: &mut ident_ids,
     };
 
-    let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
+    let mut layout_cache = LayoutCache::default();
+    let main_body =
+        roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
     let main_body =
         roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
     let mut headers = {

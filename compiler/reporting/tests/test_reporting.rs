@@ -10,21 +10,21 @@ mod helpers;
 #[cfg(test)]
 mod test_reporting {
     use crate::helpers::test_home;
+    use crate::helpers::{can_expr, infer_expr, CanExprOut, ParseErrOut};
     use bumpalo::Bump;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_mono::ir::{Procs, Stmt};
+    use roc_mono::layout::LayoutCache;
     use roc_reporting::report::{
         can_problem, mono_problem, parse_problem, type_problem, Report, BLUE_CODE, BOLD_CODE,
         CYAN_CODE, DEFAULT_PALETTE, GREEN_CODE, MAGENTA_CODE, RED_CODE, RESET_CODE, UNDERLINE_CODE,
         WHITE_CODE, YELLOW_CODE,
     };
+    use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
+    use roc_solve::solve;
     use roc_types::pretty_print::name_all_type_vars;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
-    // use roc_region::all;
-    use crate::helpers::{can_expr, infer_expr, CanExprOut, ParseErrOut};
-    use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
-    use roc_solve::solve;
 
     fn filename_from_string(str: &str) -> PathBuf {
         let mut filename = PathBuf::new();
@@ -87,6 +87,7 @@ mod test_reporting {
             let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
+            let mut layout_cache = LayoutCache::default();
             let mut mono_env = roc_mono::ir::Env {
                 arena: &arena,
                 subs: &mut subs,
@@ -94,7 +95,8 @@ mod test_reporting {
                 home,
                 ident_ids: &mut ident_ids,
             };
-            let _mono_expr = Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
+            let _mono_expr =
+                Stmt::new(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
         }
 
         Ok((unify_problems, can_problems, mono_problems, home, interns))

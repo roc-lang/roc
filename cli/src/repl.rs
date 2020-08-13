@@ -257,7 +257,9 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
         ident_ids: &mut ident_ids,
     };
 
-    let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
+    let mut layout_cache = LayoutCache::default();
+    let main_body =
+        roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
     let main_body =
         roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
     let mut headers = {
