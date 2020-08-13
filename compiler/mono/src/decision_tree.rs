@@ -409,7 +409,6 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
                                 arguments.push((Pattern::Underscore, destruct.layout.clone()));
                             }
                             DestructType::Optional(_expr) => {
-                                // todo!("test_at_type for optional destruct");
                                 arguments.push((Pattern::Underscore, destruct.layout.clone()));
                             }
                         }
