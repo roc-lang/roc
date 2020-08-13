@@ -30,7 +30,7 @@ pub struct PartialProc<'a> {
 pub struct PendingSpecialization<'a> {
     pub fn_var: Variable,
     pub ret_var: Variable,
-    pub pattern_vars: Vec<'a, Variable>,
+    pub pattern_vars: &'a [Variable],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -203,7 +203,7 @@ impl<'a> Procs<'a> {
                     let pending = PendingSpecialization {
                         ret_var,
                         fn_var: annotation,
-                        pattern_vars,
+                        pattern_vars: pattern_vars.into_bump_slice(),
                     };
 
                     match &mut self.pending_specializations {
@@ -268,7 +268,7 @@ impl<'a> Procs<'a> {
         &mut self,
         name: Symbol,
         layout: Layout<'a>,
-        pattern_vars: Vec<'a, Variable>,
+        pattern_vars: &'a [Variable],
         fn_var: Variable,
         ret_var: Variable,
     ) {
@@ -2948,7 +2948,7 @@ fn call_by_name<'a>(
                 result
             } else {
                 let pending = PendingSpecialization {
-                    pattern_vars,
+                    pattern_vars: pattern_vars.into_bump_slice(),
                     ret_var,
                     fn_var,
                 };

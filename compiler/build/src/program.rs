@@ -133,7 +133,7 @@ pub fn gen(
                                     procs.insert_exposed(
                                         symbol,
                                         layout,
-                                        pattern_vars, //: Vec<'a, Variable>,
+                                        pattern_vars.into_bump_slice(),
                                         annotation,
                                         ret_var,
                                     );
@@ -177,7 +177,7 @@ pub fn gen(
                                     procs.insert_exposed(
                                         symbol,
                                         layout,
-                                        pattern_vars,
+                                        pattern_vars.into_bump_slice(),
                                         // It seems brittle that we're passing
                                         // annotation twice - especially since
                                         // in both cases we're giving the
