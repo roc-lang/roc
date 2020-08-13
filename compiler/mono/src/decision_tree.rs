@@ -541,9 +541,7 @@ fn to_relevant_branch_help<'a>(
                     let pattern = match destruct.typ {
                         DestructType::Guard(guard) => guard.clone(),
                         DestructType::Required => Pattern::Underscore,
-                        DestructType::Optional(_expr) => {
-                            Pattern::Underscore
-                        }
+                        DestructType::Optional(_expr) => Pattern::Underscore,
                     };
 
                     (
