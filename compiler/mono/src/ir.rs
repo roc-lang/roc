@@ -1873,7 +1873,7 @@ pub fn with_hole<'a>(
                         assigned,
                         Expr::FunctionCall {
                             call_type: CallType::ByPointer(function_symbol),
-                            full_layout: full_layout,
+                            full_layout,
                             ret_layout: ret_layout.clone(),
                             args: arg_symbols,
                             arg_layouts,
