@@ -184,20 +184,15 @@ pub fn construct_optimization_passes<'a>(
 
             // function passes
 
+            fpm.add_cfg_simplification_pass();
+            mpm.add_cfg_simplification_pass();
+
+            fpm.add_jump_threading_pass();
+            mpm.add_jump_threading_pass();
+
             fpm.add_memcpy_optimize_pass(); // this one is very important
 
-            // In my testing, these don't do much for quicksort
-            //            fpm.add_basic_alias_analysis_pass();
-            //            fpm.add_jump_threading_pass();
-            //            fpm.add_instruction_combining_pass();
-            //            fpm.add_licm_pass();
-            //            fpm.add_loop_unroll_pass();
-            //            fpm.add_scalar_repl_aggregates_pass_ssa();
-            //            fpm.add_cfg_simplification_pass();
-            //            fpm.add_jump_threading_pass();
-
-            // module passes
-            // fpm.add_promote_memory_to_register_pass();
+            fpm.add_licm_pass();
         }
     }
 
@@ -699,7 +694,17 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
             result
         }
-        Ret(symbol) => load_symbol(env, scope, symbol),
+        Ret(symbol) => {
+            let value = load_symbol(env, scope, symbol);
+
+            if let Some(block) = env.builder.get_insert_block() {
+                if block.get_terminator().is_none() {
+                    env.builder.build_return(Some(&value));
+                }
+            }
+
+            value
+        }
 
         Cond {
             branching_symbol,
@@ -727,7 +732,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         &dyn inkwell::values::BasicValue<'_>,
                         inkwell::basic_block::BasicBlock<'_>,
                     )> = std::vec::Vec::with_capacity(2);
-                    let cont_block = context.append_basic_block(parent, "branchcont");
+                    let cont_block = context.append_basic_block(parent, "condbranchcont");
 
                     builder.build_conditional_branch(value, then_block, else_block);
 
@@ -828,9 +833,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             // construct the blocks that may jump to this join point
             build_exp_stmt(env, layout_ids, scope, parent, remainder);
 
-            // remove this join point again
-            scope.join_points.remove(&id);
-
             for (ptr, param) in joinpoint_args.iter().zip(parameters.iter()) {
                 scope.insert(param.symbol, (param.layout.clone(), *ptr));
             }
@@ -842,6 +844,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
             // put the continuation in
             let result = build_exp_stmt(env, layout_ids, scope, parent, continuation);
+
+            // remove this join point again
+            scope.join_points.remove(&id);
 
             cont_block.move_after(phi_block).unwrap();
 
@@ -1093,7 +1098,7 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
     // build blocks
     let then_block = ctx.append_basic_block(parent, "then");
     let else_block = ctx.append_basic_block(parent, "else");
-    let cont_block = ctx.append_basic_block(parent, "branchcont");
+    let cont_block = ctx.append_basic_block(parent, "dec_ref_branchcont");
 
     builder.build_conditional_branch(comparison, then_block, else_block);
 
@@ -1440,7 +1445,12 @@ pub fn build_proc<'a, 'ctx, 'env>(
 
     let body = build_exp_stmt(env, layout_ids, &mut scope, fn_val, &proc.body);
 
-    builder.build_return(Some(&body));
+    // only add a return if codegen did not already add one
+    if let Some(block) = builder.get_insert_block() {
+        if block.get_terminator().is_none() {
+            builder.build_return(Some(&body));
+        }
+    }
 }
 
 pub fn verify_fn(fn_val: FunctionValue<'_>) {

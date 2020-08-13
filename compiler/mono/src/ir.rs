@@ -23,6 +23,7 @@ pub struct PartialProc<'a> {
     pub annotation: Variable,
     pub pattern_symbols: Vec<'a, Symbol>,
     pub body: roc_can::expr::Expr,
+    pub is_tail_recursive: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -39,6 +40,7 @@ pub struct Proc<'a> {
     pub body: Stmt<'a>,
     pub closes_over: Layout<'a>,
     pub ret_layout: Layout<'a>,
+    pub is_tail_recursive: bool,
 }
 
 impl<'a> Proc<'a> {
@@ -128,6 +130,7 @@ impl<'a> Procs<'a> {
         annotation: Variable,
         loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
         loc_body: Located<roc_can::expr::Expr>,
+        is_tail_recursive: bool,
         ret_var: Variable,
     ) {
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
@@ -142,6 +145,7 @@ impl<'a> Procs<'a> {
                         annotation,
                         pattern_symbols,
                         body: body.value,
+                        is_tail_recursive,
                     },
                 );
             }
@@ -174,6 +178,9 @@ impl<'a> Procs<'a> {
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
     ) -> Result<Layout<'a>, RuntimeError> {
+        // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
+        let is_tail_recursive = false;
+
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((pattern_vars, pattern_symbols, body)) => {
                 // an anonymous closure. These will always be specialized already
@@ -212,6 +219,7 @@ impl<'a> Procs<'a> {
                                     annotation,
                                     pattern_symbols,
                                     body: body.value,
+                                    is_tail_recursive,
                                 },
                             );
                         }
@@ -221,6 +229,7 @@ impl<'a> Procs<'a> {
                                 annotation,
                                 pattern_symbols,
                                 body: body.value,
+                                is_tail_recursive,
                             };
 
                             // Mark this proc as in-progress, so if we're dealing with
@@ -370,7 +379,7 @@ impl<'a, 'i> Env<'a, 'i> {
 }
 
 #[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
-pub struct JoinPointId(Symbol);
+pub struct JoinPointId(pub Symbol);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Param<'a> {
@@ -991,6 +1000,7 @@ fn specialize<'a>(
         annotation,
         pattern_symbols,
         body,
+        is_tail_recursive,
     } = partial_proc;
 
     // unify the called function with the specialized signature, then specialize the function body
@@ -999,9 +1009,7 @@ fn specialize<'a>(
 
     debug_assert!(matches!(unified, roc_unify::unify::Unified::Success(_)));
 
-    let ret_symbol = env.unique_symbol();
-    let hole = env.arena.alloc(Stmt::Ret(ret_symbol));
-    let specialized_body = with_hole(env, body, procs, layout_cache, ret_symbol, hole);
+    let specialized_body = from_can(env, body, procs, layout_cache);
 
     // reset subs, so we don't get type errors when specializing for a different signature
     env.subs.rollback_to(snapshot);
@@ -1020,6 +1028,11 @@ fn specialize<'a>(
         proc_args.push((layout, *arg_name));
     }
 
+    let proc_args = proc_args.into_bump_slice();
+
+    let specialized_body =
+        crate::tail_recursion::make_tail_recursive(env, proc_name, specialized_body, proc_args);
+
     let ret_layout = layout_cache
         .from_var(&env.arena, ret_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
@@ -1029,10 +1042,11 @@ fn specialize<'a>(
 
     let proc = Proc {
         name: proc_name,
-        args: proc_args.into_bump_slice(),
+        args: proc_args,
         body: specialized_body,
         closes_over: closes_over_layout,
         ret_layout,
+        is_tail_recursive,
     };
 
     Ok(proc)
@@ -1088,30 +1102,27 @@ pub fn with_hole<'a>(
         },
         LetNonRec(def, cont, _, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                if let Closure(_, _, _, _, _) = &def.loc_expr.value {
-                    // Now that we know for sure it's a closure, get an owned
-                    // version of these variant args so we can use them properly.
-                    match def.loc_expr.value {
-                        Closure(ann, _, _, loc_args, boxed_body) => {
-                            // Extract Procs, but discard the resulting Expr::Load.
-                            // That Load looks up the pointer, which we won't use here!
+                if let Closure(ann, _, recursivity, loc_args, boxed_body) = def.loc_expr.value {
+                    // Extract Procs, but discard the resulting Expr::Load.
+                    // That Load looks up the pointer, which we won't use here!
 
-                            let (loc_body, ret_var) = *boxed_body;
+                    let (loc_body, ret_var) = *boxed_body;
 
-                            procs.insert_named(
-                                env,
-                                layout_cache,
-                                *symbol,
-                                ann,
-                                loc_args,
-                                loc_body,
-                                ret_var,
-                            );
+                    let is_tail_recursive =
+                        matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
 
-                            return with_hole(env, cont.value, procs, layout_cache, assigned, hole);
-                        }
-                        _ => unreachable!(),
-                    }
+                    procs.insert_named(
+                        env,
+                        layout_cache,
+                        *symbol,
+                        ann,
+                        loc_args,
+                        loc_body,
+                        is_tail_recursive,
+                        ret_var,
+                    );
+
+                    return with_hole(env, cont.value, procs, layout_cache, assigned, hole);
                 }
             }
 
@@ -1175,28 +1186,27 @@ pub fn with_hole<'a>(
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                    // Now that we know for sure it's a closure, get an owned
-                    // version of these variant args so we can use them properly.
-                    match def.loc_expr.value {
-                        Closure(ann, _, _, loc_args, boxed_body) => {
-                            // Extract Procs, but discard the resulting Expr::Load.
-                            // That Load looks up the pointer, which we won't use here!
+                    if let Closure(ann, _, recursivity, loc_args, boxed_body) = def.loc_expr.value {
+                        // Extract Procs, but discard the resulting Expr::Load.
+                        // That Load looks up the pointer, which we won't use here!
 
-                            let (loc_body, ret_var) = *boxed_body;
+                        let (loc_body, ret_var) = *boxed_body;
 
-                            procs.insert_named(
-                                env,
-                                layout_cache,
-                                *symbol,
-                                ann,
-                                loc_args,
-                                loc_body,
-                                ret_var,
-                            );
+                        let is_tail_recursive =
+                            matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
 
-                            continue;
-                        }
-                        _ => unreachable!("recursive value is not a function"),
+                        procs.insert_named(
+                            env,
+                            layout_cache,
+                            *symbol,
+                            ann,
+                            loc_args,
+                            loc_body,
+                            is_tail_recursive,
+                            ret_var,
+                        );
+
+                        continue;
                     }
                 }
                 unreachable!("recursive value does not have Identifier pattern")
@@ -1449,68 +1459,119 @@ pub fn with_hole<'a>(
                 .from_var(env.arena, cond_var, env.subs)
                 .expect("invalid cond_layout");
 
-            let assigned_in_jump = env.unique_symbol();
-            let id = JoinPointId(env.unique_symbol());
-            let jump = env
-                .arena
-                .alloc(Stmt::Jump(id, env.arena.alloc([assigned_in_jump])));
+            // if the hole is a return, then we don't need to merge the two
+            // branches together again, we can just immediately return
+            let is_terminated = matches!(hole, Stmt::Ret(_));
 
-            let mut stmt = with_hole(
-                env,
-                final_else.value,
-                procs,
-                layout_cache,
-                assigned_in_jump,
-                jump,
-            );
+            if is_terminated {
+                let terminator = hole;
 
-            for (loc_cond, loc_then) in branches.into_iter().rev() {
-                let branching_symbol = env.unique_symbol();
-                let then = with_hole(
+                let mut stmt = with_hole(
                     env,
-                    loc_then.value,
+                    final_else.value,
+                    procs,
+                    layout_cache,
+                    assigned,
+                    terminator,
+                );
+
+                for (loc_cond, loc_then) in branches.into_iter().rev() {
+                    let branching_symbol = env.unique_symbol();
+                    let then = with_hole(
+                        env,
+                        loc_then.value,
+                        procs,
+                        layout_cache,
+                        assigned,
+                        terminator,
+                    );
+
+                    stmt = Stmt::Cond {
+                        cond_symbol: branching_symbol,
+                        branching_symbol,
+                        cond_layout: cond_layout.clone(),
+                        branching_layout: cond_layout.clone(),
+                        pass: env.arena.alloc(then),
+                        fail: env.arena.alloc(stmt),
+                        ret_layout: ret_layout.clone(),
+                    };
+
+                    // add condition
+                    stmt = with_hole(
+                        env,
+                        loc_cond.value,
+                        procs,
+                        layout_cache,
+                        branching_symbol,
+                        env.arena.alloc(stmt),
+                    );
+                }
+                stmt
+            } else {
+                let assigned_in_jump = env.unique_symbol();
+                let id = JoinPointId(env.unique_symbol());
+
+                let terminator = env
+                    .arena
+                    .alloc(Stmt::Jump(id, env.arena.alloc([assigned_in_jump])));
+
+                let mut stmt = with_hole(
+                    env,
+                    final_else.value,
                     procs,
                     layout_cache,
                     assigned_in_jump,
-                    jump,
+                    terminator,
                 );
 
-                stmt = Stmt::Cond {
-                    cond_symbol: branching_symbol,
-                    branching_symbol,
-                    cond_layout: cond_layout.clone(),
-                    branching_layout: cond_layout.clone(),
-                    pass: env.arena.alloc(then),
-                    fail: env.arena.alloc(stmt),
-                    ret_layout: ret_layout.clone(),
+                for (loc_cond, loc_then) in branches.into_iter().rev() {
+                    let branching_symbol = env.unique_symbol();
+                    let then = with_hole(
+                        env,
+                        loc_then.value,
+                        procs,
+                        layout_cache,
+                        assigned_in_jump,
+                        terminator,
+                    );
+
+                    stmt = Stmt::Cond {
+                        cond_symbol: branching_symbol,
+                        branching_symbol,
+                        cond_layout: cond_layout.clone(),
+                        branching_layout: cond_layout.clone(),
+                        pass: env.arena.alloc(then),
+                        fail: env.arena.alloc(stmt),
+                        ret_layout: ret_layout.clone(),
+                    };
+
+                    // add condition
+                    stmt = with_hole(
+                        env,
+                        loc_cond.value,
+                        procs,
+                        layout_cache,
+                        branching_symbol,
+                        env.arena.alloc(stmt),
+                    );
+                }
+
+                let layout = layout_cache
+                    .from_var(env.arena, branch_var, env.subs)
+                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+                let param = Param {
+                    symbol: assigned,
+                    layout,
+                    borrow: false,
                 };
 
-                // add condition
-                stmt = with_hole(
-                    env,
-                    loc_cond.value,
-                    procs,
-                    layout_cache,
-                    branching_symbol,
-                    env.arena.alloc(stmt),
-                );
-            }
-
-            let layout = layout_cache
-                .from_var(env.arena, branch_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
-
-            let param = Param {
-                symbol: assigned,
-                layout,
-                borrow: false,
-            };
-
-            Stmt::Join {
-                id,
-                parameters: env.arena.alloc([param]),
-                remainder: env.arena.alloc(stmt),
-                continuation: hole,
+                Stmt::Join {
+                    id,
+                    parameters: env.arena.alloc([param]),
+                    remainder: env.arena.alloc(stmt),
+                    continuation: hole,
+                }
             }
         }
 
@@ -1883,6 +1944,89 @@ pub fn from_can<'a>(
     use roc_can::expr::Expr::*;
 
     match can_expr {
+        When {
+            cond_var,
+            expr_var,
+            region,
+            loc_cond,
+            branches,
+        } => {
+            let cond_symbol = if let roc_can::expr::Expr::Var(symbol) = loc_cond.value {
+                symbol
+            } else {
+                env.unique_symbol()
+            };
+
+            let mut stmt = from_can_when(
+                env,
+                cond_var,
+                expr_var,
+                region,
+                cond_symbol,
+                branches,
+                layout_cache,
+                procs,
+                None,
+            );
+
+            // define the `when` condition
+            if let roc_can::expr::Expr::Var(_) = loc_cond.value {
+                // do nothing
+            } else {
+                stmt = with_hole(
+                    env,
+                    loc_cond.value,
+                    procs,
+                    layout_cache,
+                    cond_symbol,
+                    env.arena.alloc(stmt),
+                );
+            };
+
+            stmt
+        }
+        If {
+            cond_var,
+            branch_var,
+            branches,
+            final_else,
+        } => {
+            let ret_layout = layout_cache
+                .from_var(env.arena, branch_var, env.subs)
+                .expect("invalid ret_layout");
+            let cond_layout = layout_cache
+                .from_var(env.arena, cond_var, env.subs)
+                .expect("invalid cond_layout");
+
+            let mut stmt = from_can(env, final_else.value, procs, layout_cache);
+
+            for (loc_cond, loc_then) in branches.into_iter().rev() {
+                let branching_symbol = env.unique_symbol();
+                let then = from_can(env, loc_then.value, procs, layout_cache);
+
+                stmt = Stmt::Cond {
+                    cond_symbol: branching_symbol,
+                    branching_symbol,
+                    cond_layout: cond_layout.clone(),
+                    branching_layout: cond_layout.clone(),
+                    pass: env.arena.alloc(then),
+                    fail: env.arena.alloc(stmt),
+                    ret_layout: ret_layout.clone(),
+                };
+
+                // add condition
+                stmt = with_hole(
+                    env,
+                    loc_cond.value,
+                    procs,
+                    layout_cache,
+                    branching_symbol,
+                    env.arena.alloc(stmt),
+                );
+            }
+
+            stmt
+        }
         LetRec(defs, cont, _, _) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
@@ -1890,11 +2034,14 @@ pub fn from_can<'a>(
                     // Now that we know for sure it's a closure, get an owned
                     // version of these variant args so we can use them properly.
                     match def.loc_expr.value {
-                        Closure(ann, _, _, loc_args, boxed_body) => {
+                        Closure(ann, _, recursivity, loc_args, boxed_body) => {
                             // Extract Procs, but discard the resulting Expr::Load.
                             // That Load looks up the pointer, which we won't use here!
 
                             let (loc_body, ret_var) = *boxed_body;
+
+                            let is_tail_recursive =
+                                matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
 
                             procs.insert_named(
                                 env,
@@ -1903,6 +2050,7 @@ pub fn from_can<'a>(
                                 ann,
                                 loc_args,
                                 loc_body,
+                                is_tail_recursive,
                                 ret_var,
                             );
 
@@ -1922,11 +2070,14 @@ pub fn from_can<'a>(
                     // Now that we know for sure it's a closure, get an owned
                     // version of these variant args so we can use them properly.
                     match def.loc_expr.value {
-                        Closure(ann, _, _, loc_args, boxed_body) => {
+                        Closure(ann, _, recursivity, loc_args, boxed_body) => {
                             // Extract Procs, but discard the resulting Expr::Load.
                             // That Load looks up the pointer, which we won't use here!
 
                             let (loc_body, ret_var) = *boxed_body;
+
+                            let is_tail_recursive =
+                                matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
 
                             procs.insert_named(
                                 env,
@@ -1935,6 +2086,7 @@ pub fn from_can<'a>(
                                 ann,
                                 loc_args,
                                 loc_body,
+                                is_tail_recursive,
                                 ret_var,
                             );
 
@@ -2630,11 +2782,11 @@ fn store_pattern<'a>(
         }
 
         Shadowed(_region, _ident) => {
-            return Err(&"TODO");
+            return Err(&"shadowed");
         }
 
         UnsupportedPattern(_region) => {
-            return Err(&"TODO");
+            return Err(&"unsupported pattern");
         }
     }
 

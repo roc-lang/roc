@@ -113,7 +113,7 @@ mod cli_run {
         assert_eq!(&out.stderr, "");
         assert!(&out
             .stdout
-            .ends_with("[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n"));
+            .ends_with("[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]\n"));
         assert!(out.status.success());
     }
 }
