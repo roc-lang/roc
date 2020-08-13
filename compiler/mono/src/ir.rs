@@ -104,6 +104,39 @@ pub enum InProgressProc<'a> {
 }
 
 impl<'a> Procs<'a> {
+    /// Absorb the contents of another Procs into this one.
+    pub fn absorb(&mut self, mut other: Procs<'a>) {
+        debug_assert!(self.pending_specializations.is_some());
+        debug_assert!(other.pending_specializations.is_some());
+
+        match self.pending_specializations {
+            Some(ref mut pending_specializations) => {
+                for (k, v) in other.pending_specializations.unwrap().drain() {
+                    pending_specializations.insert(k, v);
+                }
+            }
+            None => {
+                unreachable!();
+            }
+        }
+
+        for (k, v) in other.partial_procs.drain() {
+            self.partial_procs.insert(k, v);
+        }
+
+        for (k, v) in other.specialized.drain() {
+            self.specialized.insert(k, v);
+        }
+
+        for (k, v) in other.runtime_errors.drain() {
+            self.runtime_errors.insert(k, v);
+        }
+
+        for symbol in other.module_thunks.drain() {
+            self.module_thunks.insert(symbol);
+        }
+    }
+
     // TODO investigate make this an iterator?
     pub fn get_specialized_procs(self, arena: &'a Bump) -> MutMap<(Symbol, Layout<'a>), Proc<'a>> {
         let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());

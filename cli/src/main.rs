@@ -6,7 +6,7 @@ use clap::{App, Arg, ArgMatches};
 use roc_build::program::gen;
 use roc_collections::all::MutMap;
 use roc_gen::llvm::build::OptLevel;
-use roc_load::file::LoadingProblem;
+use roc_load::file::{LoadingProblem, Phases};
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::process;
@@ -161,8 +161,13 @@ fn build_file(
         OptLevel::Normal => roc_builtins::std::standard_stdlib(),
         OptLevel::Optimize => roc_builtins::unique::uniq_stdlib(),
     };
-    let loaded =
-        roc_load::file::load(filename.clone(), &stdlib, src_dir.as_path(), subs_by_module)?;
+    let loaded = roc_load::file::load(
+        filename.clone(),
+        &stdlib,
+        src_dir.as_path(),
+        subs_by_module,
+        Phases::Monomorphize,
+    )?;
     let dest_filename = filename.with_extension("o");
 
     let buf = &mut String::with_capacity(1024);

@@ -13,6 +13,8 @@ use roc_constrain::module::{
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
+use roc_mono::expr::{MonoProblem, PartialProc, PendingSpecialization, Procs};
+use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{self, Fail, Parser};
@@ -85,8 +87,10 @@ enum Msg<'a> {
     Solved {
         src: &'a str,
         module_id: ModuleId,
+        ident_ids: IdentIds,
         solved_module: SolvedModule,
         solved_subs: Solved<Subs>,
+        decls: Vec<Declaration>,
         module_timing: ModuleTiming,
     },
     Finished {
@@ -94,6 +98,14 @@ enum Msg<'a> {
         problems: Vec<solve::TypeError>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         src: &'a str,
+    },
+    PendingSpecializationsDone {
+        module_id: ModuleId,
+        layout_cache: LayoutCache<'a>,
+        pending_specializations: MutMap<(Symbol, Layout<'a>), PendingSpecialization<'a>>,
+    },
+    Specialized {
+        specialization: (),
     },
 }
 
@@ -103,6 +115,7 @@ struct State<'a> {
     pub exposed_types: SubsByModule,
 
     pub can_problems: Vec<roc_problem::can::Problem>,
+    pub mono_problems: Vec<MonoProblem>,
     pub headers_parsed: MutSet<ModuleId>,
     pub type_problems: Vec<solve::TypeError>,
 
@@ -143,7 +156,29 @@ struct State<'a> {
 
     pub unsolved_modules: MutMap<ModuleId, UnsolvedModule<'a>>,
 
+    /// These are the modules which need to add their pending specializations to
+    /// the queue. Adding specializations to the queue can be done completely in
+    /// parallel, and order doesn't matter, so as soon as a module has been solved,
+    /// it gets an entry in here, and then immediately begins working on its
+    /// pending specializations in the same thread.
+    pub needs_specialization: MutSet<ModuleId>,
+
+    pub pending_specializations_needed: bool,
+
+    pub all_pending_specializations: MutMap<(Symbol, Layout<'a>), PendingSpecialization<'a>>,
+
+    pub specializations_in_flight: u32,
+
     pub timings: MutMap<ModuleId, ModuleTiming>,
+
+    // Each thread gets its own layout cache. When one "pending specializations"
+    // pass completes, it returns its layout cache so another thread can use it.
+    // We don't bother trying to union them all together to maximize cache hits,
+    // since the unioning process could potentially take longer than the savings.
+    // (Granted, this has not been attempted or measured!)
+    pub layout_caches: Vec<LayoutCache<'a>>,
+
+    pub procs: Procs<'a>,
 }
 
 #[derive(Debug)]
@@ -151,9 +186,11 @@ struct UnsolvedModule<'a> {
     module: Module,
     src: &'a str,
     imported_modules: MutSet<ModuleId>,
+    ident_ids: IdentIds,
     constraint: Constraint,
     var_store: VarStore,
     module_timing: ModuleTiming,
+    declarations: Vec<Declaration>,
 }
 
 #[derive(Debug)]
@@ -222,15 +259,24 @@ enum BuildTask<'a> {
         dep_idents: IdentIdsByModule,
         exposed_symbols: MutSet<Symbol>,
     },
-
     Solve {
         module: Module,
+        ident_ids: IdentIds,
         imported_symbols: Vec<Import>,
         imported_aliases: MutMap<Symbol, Alias>,
         module_timing: ModuleTiming,
         constraint: Constraint,
         var_store: VarStore,
+        declarations: Vec<Declaration>,
         src: &'a str,
+    },
+    BuildPendingSpecializations {
+        module_timing: ModuleTiming,
+        layout_cache: LayoutCache<'a>,
+        solved_subs: Solved<Subs>,
+        module_id: ModuleId,
+        ident_ids: IdentIds,
+        decls: Vec<Declaration>,
     },
 }
 
@@ -252,6 +298,13 @@ pub enum LoadingProblem {
     MsgChannelDied,
     ErrJoiningWorkerThreads,
     TriedToImportAppModule,
+}
+
+pub enum Phases {
+    /// Parse, canonicalize, check types
+    TypeCheck,
+    /// Parse, canonicalize, check types, monomorphize
+    Monomorphize,
 }
 
 type IdentIdsByModule = MutMap<ModuleId, IdentIds>;
@@ -323,7 +376,16 @@ pub fn load(
     stdlib: &StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
+    phases: Phases,
 ) -> Result<LoadedModule, LoadingProblem> {
+    // Initialize the need to specialize based on whether we're going all the
+    // way to that phase. This is mut because we switch it off after we're
+    // done specializing, and that indicates that all the pending specializations
+    // have been at least enqueued (even if they haven't all been specialized yet.)
+    let pending_specializations_needed = match phases {
+        Phases::TypeCheck => false,
+        Phases::Monomorphize => true,
+    };
     let arena = Bump::new();
 
     // Reserve one CPU for the main thread, and let all the others be eligible
@@ -412,6 +474,12 @@ pub fn load(
             solve_listeners: MutMap::default(),
             unsolved_modules: MutMap::default(),
             timings: MutMap::default(),
+            needs_specialization: MutSet::default(),
+            all_pending_specializations: MutMap::default(),
+            pending_specializations_needed,
+            specializations_in_flight: 0,
+            layout_caches: Vec::with_capacity(num_cpus::get()),
+            procs: Procs::default(),
         };
 
         let mut worker_listeners = bumpalo::collections::Vec::with_capacity_in(num_workers, &arena);
@@ -697,16 +765,10 @@ fn update<'a>(
                 )
             });
 
-            // Record the final IdentIds
-            debug_assert!(!constrained_ident_ids.contains_key(&module_id));
-            constrained_ident_ids.insert(module_id, ident_ids);
-
             // It's possible that some modules have been solved since
             // we began waiting for them. Remove those from waiting_for,
             // because we no longer need to wait for them!
             waiting_for.retain(|id| !exposed_types.contains_key(id));
-
-            declarations_by_id.insert(module_id, declarations);
 
             if waiting_for.is_empty() {
                 // All of our dependencies have already been solved. Great!
@@ -716,6 +778,7 @@ fn update<'a>(
                     worker_listeners,
                     BuildTask::solve_module(
                         module,
+                        ident_ids,
                         module_timing,
                         src,
                         constraint,
@@ -723,6 +786,7 @@ fn update<'a>(
                         imported_modules,
                         &mut state.exposed_types,
                         stdlib,
+                        declarations,
                     ),
                 )?;
             } else {
@@ -733,10 +797,12 @@ fn update<'a>(
                     UnsolvedModule {
                         module,
                         src,
+                        ident_ids,
                         imported_modules,
                         constraint,
                         var_store,
                         module_timing,
+                        declarations,
                     },
                 );
 
@@ -755,39 +821,181 @@ fn update<'a>(
         Solved {
             src,
             module_id,
+            ident_ids,
             solved_module,
             solved_subs,
+            decls,
             mut module_timing,
         } => {
             module_timing.end_time = SystemTime::now();
 
-            // We've finished recording all the timings for this module,
-            // add them to state.timings
-            state.timings.insert(module_id, module_timing);
+            if true {
+                todo!("After getting this to work with Procs and combining all the things recursively (which will have bad asymptotics - need to keep iterating over the entire Procs every single time we get a new thing, to diff it and add all the new entries to the main list)...well, actually, is that true though? Or can we just clone Procs and give that to each module? No, that's the bare minimum - we have to do that, *and* we have to traverse it again afterwards to reabsorb. So we can improve on this by having two Procs (or something) which we pass to Expr::new - first, all_procs, and second, new_procs. Every time we want to look something up, first we check all_procs, then we check new_procs. That way, it's exactly 2 lookups every time in the Expr logic, but outside the expr, we don't have to re-traverse the entire massive list of Procs every time. Instead, we can just traverse new_procs and that's it!");
+            }
 
             if module_id == state.root_id {
-                msg_tx
-                    .send(Msg::Finished {
-                        solved_subs,
-                        problems: solved_module.problems,
-                        exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
-                        src,
-                    })
-                    .map_err(|_| LoadingProblem::MsgChannelDied)?;
+                // If we don't need to specialize at this point, it's
+                // because we aren't supposed to go past normal type-checking.
+                if !state.pending_specializations_needed {
+                    // We've finished recording all the timings for this module,
+                    // so add them to state.timings
+                    state.timings.insert(module_id, module_timing);
+
+                    msg_tx
+                        .send(Msg::Finished {
+                            solved_subs,
+                            problems: solved_module.problems,
+                            exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
+                            src,
+                        })
+                        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+
+                    // As far as type-checking goes, once we've solved
+                    // the originally requested module, we're all done!
+                    return Ok(state);
+                }
             } else {
                 state.type_problems.extend(solved_module.problems);
 
-                // This was a dependency. Write it down and keep processing messages.
+                // This was not the root module, but rather a dependency.
+                // Write it down and keep processing messages.
                 debug_assert!(!state.exposed_types.contains_key(&module_id));
                 state.exposed_types.insert(
                     module_id,
                     ExposedModuleTypes::Valid(solved_module.solved_types, solved_module.aliases),
                 );
+            }
 
+            // If we're specializing, record that this module needs
+            // specialization. After we fire its listeners, we'll start
+            // working on assembling its pending specializations.
+            if state.pending_specializations_needed {
+                state.needs_specialization.insert(module_id);
+            }
+
+            // Notify all the listeners that this solved.
+            if let Some(listeners) = state.solve_listeners.remove(&module_id) {
+                for listener_id in listeners {
+                    // This listener is no longer waiting for this module,
+                    // because this module has now been solved!
+                    let waiting_for = state
+                        .waiting_for_solve
+                        .get_mut(&listener_id)
+                        .expect("Unable to find module ID in waiting_for_solve");
+
+                    waiting_for.remove(&module_id);
+
+                    // If it's no longer waiting for anything else, solve it.
+                    if waiting_for.is_empty() {
+                        let UnsolvedModule {
+                            module,
+                            src,
+                            imported_modules,
+                            ident_ids,
+                            constraint,
+                            var_store,
+                            module_timing,
+                            declarations,
+                        } = state
+                            .unsolved_modules
+                            .remove(&listener_id)
+                            .expect("Could not find listener ID in unsolved_modules");
+
+                        enqueue_task(
+                            injector,
+                            worker_listeners,
+                            BuildTask::solve_module(
+                                module,
+                                ident_ids,
+                                module_timing,
+                                src,
+                                constraint,
+                                var_store,
+                                imported_modules,
+                                &mut state.exposed_types,
+                                stdlib,
+                                declarations,
+                            ),
+                        )?;
+                    }
+                }
+            }
+
+            // If we're specializing, now we need to start building all the
+            // pending specializations
+            if state.pending_specializations_needed {
+                // Reuse an existing layout cache if possible, since
+                // it may have useful entries in there!
+                let layout_cache = state.layout_caches.pop().unwrap_or_default();
+
+                enqueue_task(
+                    injector,
+                    worker_listeners,
+                    BuildTask::BuildPendingSpecializations {
+                        module_timing,
+                        layout_cache,
+                        module_id,
+                        solved_subs,
+                        ident_ids,
+                        decls,
+                    },
+                )?;
+            }
+
+            Ok(state)
+        }
+        PendingSpecializationsDone {
+            module_id,
+            layout_cache,
+            problems,
+            procs: new_procs,
+        } => {
+            state.mono_problems.extend(problems);
+
+            if module_id == state.root_id {
+                // If we just finished pending specializations for the root,
+                // then these will be the last specializations that we need!
+                //
+                // This means once the current queue of specializations has
+                // been completely processed, we're all done, so change this
+                // flag so that when we get a Specialized message we know
+                // it's okay to stop - rather than continuing to wait for
+                // more specializations to come in (if, for example, we
+                // were still waiting on some other module to type-check).
+                state.pending_specializations_needed = false;
+            }
+
+            // We're done with this layout cache, so return it to the pool.
+            // That way, other specialization processes can reuse it later.
+            state.layout_caches.push(layout_cache);
+
+            // Absorb the contents of the new procs into our state's procs.
+            state.procs.absorb(new_procs);
+
+            state.needs_specialization.remove(&module_id);
+
+            // If no remaining pending specializations are needed, we're done!
+            if state.needs_specialization.is_empty() {
+                let mut mono_env = roc_mono::expr::Env {
+                    arena: root_arena,
+                    problems: &mut state.mono_problems,
+                    subs: state.root_subs.unwrap(),
+                    home: state.root_id,
+                    ident_ids: &mut state.ident_ids,
+                };
+
+                // TODO: for now this final specialization pass is sequential,
+                // with no parallelization at all. We should try to parallelize
+                // this, but doing so will require a redesign of Procs.
+                let mut procs =
+                    roc_mono::expr::specialize_all(&mut mono_env, state.procs, &mut layout_cache);
+
+                todo!("We're finished! Send off the final Procs, ident_ids, etc.");
+            } else {
                 // Notify all the listeners that this solved.
                 if let Some(listeners) = state.solve_listeners.remove(&module_id) {
                     for listener_id in listeners {
-                        // This listener is longer waiting for this module,
+                        // This listener is no longer waiting for this module,
                         // because this module has now been solved!
                         let waiting_for = state
                             .waiting_for_solve
@@ -802,9 +1010,11 @@ fn update<'a>(
                                 module,
                                 src,
                                 imported_modules,
+                                ident_ids,
                                 constraint,
                                 var_store,
                                 module_timing,
+                                declarations,
                             } = state
                                 .unsolved_modules
                                 .remove(&listener_id)
@@ -815,6 +1025,7 @@ fn update<'a>(
                                 worker_listeners,
                                 BuildTask::solve_module(
                                     module,
+                                    ident_ids,
                                     module_timing,
                                     src,
                                     constraint,
@@ -822,6 +1033,7 @@ fn update<'a>(
                                     imported_modules,
                                     &mut state.exposed_types,
                                     stdlib,
+                                    declarations,
                                 ),
                             )?;
                         }
@@ -829,7 +1041,7 @@ fn update<'a>(
                 }
             }
 
-            Ok(state)
+            todo!();
         }
         Msg::Finished { .. } => {
             unreachable!();
@@ -1147,6 +1359,7 @@ impl<'a> BuildTask<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn solve_module(
         module: Module,
+        ident_ids: IdentIds,
         module_timing: ModuleTiming,
         src: &'a str,
         constraint: Constraint,
@@ -1154,6 +1367,7 @@ impl<'a> BuildTask<'a> {
         imported_modules: MutSet<ModuleId>,
         exposed_types: &mut SubsByModule,
         stdlib: &StdLib,
+        declarations: Vec<Declaration>,
     ) -> Self {
         let home = module.module_id;
 
@@ -1183,11 +1397,13 @@ impl<'a> BuildTask<'a> {
         // Next, solve this module in the background.
         Self::Solve {
             module,
+            ident_ids,
             imported_symbols,
             imported_aliases,
             constraint,
             var_store,
             src,
+            declarations,
             module_timing,
         }
     }
@@ -1261,12 +1477,14 @@ impl<'a> BuildTask<'a> {
 #[allow(clippy::too_many_arguments)]
 fn run_solve<'a>(
     module: Module,
+    ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
     stdlib: &StdLib,
     imported_symbols: Vec<Import>,
     imported_aliases: MutMap<Symbol, Alias>,
     constraint: Constraint,
     mut var_store: VarStore,
+    decls: Vec<Declaration>,
     src: &'a str,
 ) -> Msg<'a> {
     // Rebuild the aliases in this thread, so we don't have to clone all of
@@ -1310,6 +1528,8 @@ fn run_solve<'a>(
         src,
         module_id,
         solved_subs,
+        ident_ids,
+        decls,
         solved_module,
         module_timing,
     }
@@ -1444,6 +1664,88 @@ fn ident_from_exposed(entry: &ExposesEntry<'_>) -> Ident {
     }
 }
 
+fn build_pending_specializations<'a>(
+    arena: &'a Bump,
+    solved_subs: Solved<Subs>,
+    home: ModuleId,
+    mut ident_ids: IdentIds,
+    decls: Vec<Declaration>,
+    module_timing: ModuleTiming,
+    mut layout_cache: LayoutCache<'a>,
+) -> Msg<'a> {
+    // pub solved_types: MutMap<Symbol, SolvedType>,
+    // pub aliases: MutMap<Symbol, Alias>,
+    // pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    // pub problems: Vec<solve::TypeError>,
+
+    // let mut decls_by_id = loaded.declarations_by_id;
+    // let home_decls = decls_by_id
+    //     .remove(&loaded.module_id)
+    //     .expect("Root module ID not found in loaded declarations_by_id");
+
+    // let mut layout_ids = LayoutIds::default();
+    let mut procs = Procs::default();
+    let mut mono_problems = std::vec::Vec::new();
+    let mut mono_env = roc_mono::expr::Env {
+        arena,
+        problems: &mut mono_problems,
+        subs: arena.alloc(solved_subs.into_inner()),
+        home,
+        ident_ids: &mut ident_ids,
+    };
+
+    // Add modules' decls to Procs
+    for decl in decls {
+        use roc_can::def::Declaration::*;
+        use roc_can::expr::Expr::*;
+        use roc_can::pattern::Pattern::*;
+
+        match decl {
+            Declare(def) | Builtin(def) => match def.loc_pattern.value {
+                Identifier(symbol) => {
+                    match def.loc_expr.value {
+                        Closure(annotation, _, _, loc_args, boxed_body) => {
+                            let (loc_body, ret_var) = *boxed_body;
+
+                            procs.insert_named(
+                                &mut mono_env,
+                                &mut layout_cache,
+                                symbol,
+                                annotation,
+                                loc_args,
+                                loc_body,
+                                ret_var,
+                            );
+                        }
+                        body => {
+                            let proc = PartialProc {
+                                annotation: def.expr_var,
+                                // This is a 0-arity thunk, so it has no arguments.
+                                pattern_symbols: bumpalo::collections::Vec::new_in(arena),
+                                body,
+                            };
+
+                            procs.partial_procs.insert(symbol, proc);
+                            procs.module_thunks.insert(symbol);
+                        }
+                    };
+                }
+                other => {
+                    todo!("TODO gracefully handle Declare({:?})", other);
+                }
+            },
+            DeclareRec(_defs) => {
+                todo!("TODO support DeclareRec");
+            }
+            InvalidCycle(_loc_idents, _regions) => {
+                todo!("TODO handle InvalidCycle");
+            }
+        }
+    }
+
+    todo!("Make sure to return not only procs, but also ident_ids - we need that back!!");
+}
+
 fn run_task<'a>(
     task: BuildTask<'a>,
     arena: &'a Bump,
@@ -1474,16 +1776,36 @@ fn run_task<'a>(
             imported_aliases,
             constraint,
             var_store,
+            ident_ids,
+            declarations,
             src,
         } => Ok(run_solve(
             module,
+            ident_ids,
             module_timing,
             stdlib,
             imported_symbols,
             imported_aliases,
             constraint,
             var_store,
+            declarations,
             src,
+        )),
+        BuildPendingSpecializations {
+            module_id,
+            ident_ids,
+            decls,
+            module_timing,
+            layout_cache,
+            mut solved_subs,
+        } => Ok(build_pending_specializations(
+            arena,
+            solved_subs,
+            module_id,
+            ident_ids,
+            decls,
+            module_timing,
+            layout_cache,
         )),
     }?;
 
