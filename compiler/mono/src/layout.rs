@@ -170,7 +170,7 @@ impl<'a> Layout<'a> {
 }
 
 /// Avoid recomputing Layout from Variable multiple times.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct LayoutCache<'a> {
     layouts: MutMap<Variable, Result<Layout<'a>, LayoutProblem>>,
 }
