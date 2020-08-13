@@ -543,7 +543,6 @@ fn to_relevant_branch_help<'a>(
                         DestructType::Guard(guard) => guard.clone(),
                         DestructType::Required => Pattern::Underscore,
                         DestructType::Optional(_expr) => {
-                            // todo!("TODO decision tree for optional field branch");
                             Pattern::Underscore
                         }
                     };
