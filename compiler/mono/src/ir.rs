@@ -467,7 +467,8 @@ pub enum Expr<'a> {
     FunctionPointer(Symbol, Layout<'a>),
     FunctionCall {
         call_type: CallType,
-        layout: Layout<'a>,
+        full_layout: Layout<'a>,
+        ret_layout: Layout<'a>,
         arg_layouts: &'a [Layout<'a>],
         args: &'a [Symbol],
     },
@@ -1409,13 +1410,20 @@ pub fn with_hole<'a>(
             for (label, layout) in sorted_fields.into_iter() {
                 field_layouts.push(layout);
 
-                let field = fields.remove(&label).unwrap();
-                if let roc_can::expr::Expr::Var(symbol) = field.loc_expr.value {
-                    field_symbols.push(symbol);
-                    can_fields.push(None);
-                } else {
-                    field_symbols.push(env.unique_symbol());
-                    can_fields.push(Some(field));
+                match fields.remove(&label) {
+                    Some(field) => {
+                        if let roc_can::expr::Expr::Var(symbol) = field.loc_expr.value {
+                            field_symbols.push(symbol);
+                            can_fields.push(None);
+                        } else {
+                            field_symbols.push(env.unique_symbol());
+                            can_fields.push(Some(field));
+                        }
+                    }
+                    None => {
+                        // this field was optional, but not given
+                        continue;
+                    }
                 }
             }
 
@@ -1704,11 +1712,22 @@ pub fn with_hole<'a>(
             let mut index = None;
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 
-            for (current, (label, field_layout)) in sorted_fields.into_iter().enumerate() {
-                field_layouts.push(field_layout);
+            let mut current = 0;
+            for (label, opt_field_layout) in sorted_fields.into_iter() {
+                match opt_field_layout {
+                    Err(_) => {
+                        // this was an optional field, and now does not exist!
+                        // do not increment `current`!
+                    }
+                    Ok(field_layout) => {
+                        field_layouts.push(field_layout);
 
-                if label == field {
-                    index = Some(current);
+                        if label == field {
+                            index = Some(current);
+                        }
+
+                        current += 1;
+                    }
                 }
             }
 
@@ -1831,13 +1850,13 @@ pub fn with_hole<'a>(
                         arg_symbols.push(env.unique_symbol());
                     }
 
-                    let layout = layout_cache
+                    let full_layout = layout_cache
                         .from_var(env.arena, fn_var, env.subs)
                         .unwrap_or_else(|err| {
                             panic!("TODO turn fn_var into a RuntimeError {:?}", err)
                         });
 
-                    let arg_layouts = match layout {
+                    let arg_layouts = match full_layout {
                         Layout::FunctionPointer(args, _) => args,
                         _ => unreachable!("function has layout that is not function pointer"),
                     };
@@ -1854,7 +1873,8 @@ pub fn with_hole<'a>(
                         assigned,
                         Expr::FunctionCall {
                             call_type: CallType::ByPointer(function_symbol),
-                            layout,
+                            full_layout,
+                            ret_layout: ret_layout.clone(),
                             args: arg_symbols,
                             arg_layouts,
                         },
@@ -2136,19 +2156,25 @@ pub fn from_can<'a>(
                 // convert the continuation
                 let mut stmt = from_can(env, cont.value, procs, layout_cache);
 
-                let outer_symbol = env.unique_symbol();
-                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
-                    .unwrap();
+                if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
+                    store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
+                        .unwrap()
+                } else {
+                    let outer_symbol = env.unique_symbol();
+                    stmt =
+                        store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
+                            .unwrap();
 
-                // convert the def body, store in outer_symbol
-                with_hole(
-                    env,
-                    def.loc_expr.value,
-                    procs,
-                    layout_cache,
-                    outer_symbol,
-                    env.arena.alloc(stmt),
-                )
+                    // convert the def body, store in outer_symbol
+                    with_hole(
+                        env,
+                        def.loc_expr.value,
+                        procs,
+                        layout_cache,
+                        outer_symbol,
+                        env.arena.alloc(stmt),
+                    )
+                }
             }
         }
 
@@ -2534,7 +2560,8 @@ fn substitute_in_expr<'a>(
             call_type,
             args,
             arg_layouts,
-            layout,
+            ret_layout,
+            full_layout,
         } => {
             let opt_call_type = match call_type {
                 CallType::ByName(s) => substitute(subs, *s).map(CallType::ByName),
@@ -2562,7 +2589,8 @@ fn substitute_in_expr<'a>(
                     call_type,
                     args,
                     arg_layouts: *arg_layouts,
-                    layout: layout.clone(),
+                    ret_layout: ret_layout.clone(),
+                    full_layout: full_layout.clone(),
                 })
             } else {
                 None
@@ -2822,8 +2850,15 @@ fn store_record_destruct<'a>(
                 env.arena.alloc(stmt),
             );
         }
-        DestructType::Optional(_expr) => {
-            todo!("TODO monomorphize optional field destructure's default expr");
+        DestructType::Optional(expr) => {
+            stmt = with_hole(
+                env,
+                expr.clone(),
+                procs,
+                layout_cache,
+                destruct.symbol,
+                env.arena.alloc(stmt),
+            );
         }
         DestructType::Guard(guard_pattern) => match &guard_pattern {
             Identifier(symbol) => {
@@ -2909,24 +2944,30 @@ fn call_by_name<'a>(
                 }
             }
 
+            let full_layout = layout.clone();
+
             // TODO does this work?
             let empty = &[] as &[_];
-            let (arg_layouts, layout) = if let Layout::FunctionPointer(args, rlayout) = layout {
+            let (arg_layouts, ret_layout) = if let Layout::FunctionPointer(args, rlayout) = layout {
                 (args, rlayout)
             } else {
                 (empty, &layout)
             };
 
             // If we've already specialized this one, no further work is needed.
-            if procs.specialized.contains_key(&(proc_name, layout.clone())) {
+            if procs
+                .specialized
+                .contains_key(&(proc_name, full_layout.clone()))
+            {
                 let call = Expr::FunctionCall {
                     call_type: CallType::ByName(proc_name),
-                    layout: layout.clone(),
+                    ret_layout: ret_layout.clone(),
+                    full_layout: full_layout.clone(),
                     arg_layouts,
                     args: field_symbols,
                 };
 
-                let mut result = Stmt::Let(assigned, call, layout.clone(), hole);
+                let mut result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
 
                 for ((_, loc_arg), symbol) in
                     loc_args.into_iter().rev().zip(field_symbols.iter().rev())
@@ -2967,16 +3008,22 @@ fn call_by_name<'a>(
                 match &mut procs.pending_specializations {
                     Some(pending_specializations) => {
                         // register the pending specialization, so this gets code genned later
-                        add_pending(pending_specializations, proc_name, layout.clone(), pending);
+                        add_pending(
+                            pending_specializations,
+                            proc_name,
+                            full_layout.clone(),
+                            pending,
+                        );
 
                         let call = Expr::FunctionCall {
                             call_type: CallType::ByName(proc_name),
-                            layout: layout.clone(),
+                            ret_layout: ret_layout.clone(),
+                            full_layout: full_layout.clone(),
                             arg_layouts,
                             args: field_symbols,
                         };
 
-                        let mut result = Stmt::Let(assigned, call, layout.clone(), hole);
+                        let mut result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
 
                         for ((_, loc_arg), symbol) in
                             loc_args.into_iter().rev().zip(field_symbols.iter().rev())
@@ -3010,7 +3057,7 @@ fn call_by_name<'a>(
                                 // (We had a bug around this before this system existed!)
                                 procs
                                     .specialized
-                                    .insert((proc_name, layout.clone()), InProgress);
+                                    .insert((proc_name, full_layout.clone()), InProgress);
 
                                 match specialize(
                                     env,
@@ -3023,17 +3070,18 @@ fn call_by_name<'a>(
                                     Ok(proc) => {
                                         procs
                                             .specialized
-                                            .insert((proc_name, layout.clone()), Done(proc));
+                                            .insert((proc_name, full_layout.clone()), Done(proc));
 
                                         let call = Expr::FunctionCall {
                                             call_type: CallType::ByName(proc_name),
-                                            layout: layout.clone(),
+                                            ret_layout: ret_layout.clone(),
+                                            full_layout: full_layout.clone(),
                                             arg_layouts,
                                             args: field_symbols,
                                         };
 
                                         let mut result =
-                                            Stmt::Let(assigned, call, layout.clone(), hole);
+                                            Stmt::Let(assigned, call, ret_layout.clone(), hole);
 
                                         for ((_, loc_arg), symbol) in loc_args
                                             .into_iter()
@@ -3325,6 +3373,7 @@ pub fn from_can_pattern<'a>(
             destructs,
             ..
         } => {
+            // sorted fields based on the destruct
             let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
             let mut destructs = destructs.clone();
             destructs.sort_by(|a, b| a.value.label.cmp(&b.value.label));
@@ -3332,40 +3381,100 @@ pub fn from_can_pattern<'a>(
             let mut it = destructs.iter();
             let mut opt_destruct = it.next();
 
+            // sorted fields based on the type
             let sorted_fields = crate::layout::sort_record_fields(env.arena, *whole_var, env.subs);
 
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 
-            for (label, field_layout) in sorted_fields.into_iter() {
-                if let Some(destruct) = opt_destruct {
-                    if destruct.value.label == label {
-                        opt_destruct = it.next();
+            // next we step through both sequences of fields. The outer loop is the sequence based
+            // on the type, since not all fields need to actually be destructured in the source
+            // language.
+            //
+            // However in mono patterns, we do destruct all patterns (but use Underscore) when
+            // in the source the field is not matche in the source language.
+            //
+            // Optional fields somewhat complicate the matter here
+            for (label, opt_field_layout) in sorted_fields.into_iter() {
+                match opt_field_layout {
+                    Ok(field_layout) => {
+                        match opt_destruct {
+                            Some(destruct) => {
+                                if destruct.value.label == label {
+                                    opt_destruct = it.next();
 
-                        mono_destructs.push(from_can_record_destruct(
-                            env,
-                            layout_cache,
-                            &destruct.value,
-                            field_layout.clone(),
-                        ));
-                    } else {
-                        // insert underscore pattern
-                        mono_destructs.push(RecordDestruct {
-                            label: label.clone(),
-                            symbol: env.unique_symbol(),
-                            layout: field_layout.clone(),
-                            typ: DestructType::Guard(Pattern::Underscore),
-                        });
+                                    mono_destructs.push(from_can_record_destruct(
+                                        env,
+                                        layout_cache,
+                                        &destruct.value,
+                                        field_layout.clone(),
+                                    ));
+                                } else {
+                                    // insert underscore pattern
+                                    mono_destructs.push(RecordDestruct {
+                                        label: label.clone(),
+                                        symbol: env.unique_symbol(),
+                                        layout: field_layout.clone(),
+                                        typ: DestructType::Guard(Pattern::Underscore),
+                                    });
+                                }
+                            }
+                            None => {
+                                // the remainder of the fields (from the type) is not matched on in
+                                // this pattern; to fill it out, we put underscores
+                                mono_destructs.push(RecordDestruct {
+                                    label: label.clone(),
+                                    symbol: env.unique_symbol(),
+                                    layout: field_layout.clone(),
+                                    typ: DestructType::Guard(Pattern::Underscore),
+                                });
+                            }
+                        }
+
+                        field_layouts.push(field_layout);
                     }
-                } else {
-                    // insert underscore pattern
-                    mono_destructs.push(RecordDestruct {
-                        label: label.clone(),
-                        symbol: env.unique_symbol(),
-                        layout: field_layout.clone(),
-                        typ: DestructType::Guard(Pattern::Underscore),
-                    });
+                    Err(field_layout) => {
+                        // this field was optional, and now does not exist
+                        // if it was actually matched on, we need to evaluate the default
+                        match opt_destruct {
+                            Some(destruct) => {
+                                if destruct.value.label == label {
+                                    opt_destruct = it.next();
+
+                                    mono_destructs.push(RecordDestruct {
+                                        label: destruct.value.label.clone(),
+                                        symbol: destruct.value.symbol,
+                                        layout: field_layout,
+                                        typ: match &destruct.value.typ {
+                                            roc_can::pattern::DestructType::Optional(
+                                                _,
+                                                loc_expr,
+                                            ) => {
+                                                // if we reach this stage, the optional field is not present
+                                                // so use the default
+                                                DestructType::Optional(loc_expr.value.clone())
+                                            }
+                                            _ => unreachable!(
+                                                "only optional destructs can be optional fields"
+                                            ),
+                                        },
+                                    });
+                                } else {
+                                    // insert underscore pattern
+                                    mono_destructs.push(RecordDestruct {
+                                        label: label.clone(),
+                                        symbol: env.unique_symbol(),
+                                        layout: field_layout.clone(),
+                                        typ: DestructType::Guard(Pattern::Underscore),
+                                    });
+                                }
+                            }
+                            None => {
+                                // this field does not exist, and was not request in the pattern match
+                                continue;
+                            }
+                        }
+                    }
                 }
-                field_layouts.push(field_layout);
             }
 
             Pattern::RecordDestructure(
@@ -3388,8 +3497,10 @@ fn from_can_record_destruct<'a>(
         layout: field_layout,
         typ: match &can_rd.typ {
             roc_can::pattern::DestructType::Required => DestructType::Required,
-            roc_can::pattern::DestructType::Optional(_, loc_expr) => {
-                DestructType::Optional(loc_expr.value.clone())
+            roc_can::pattern::DestructType::Optional(_, _) => {
+                // if we reach this stage, the optional field is present
+                // DestructType::Optional(loc_expr.value.clone())
+                DestructType::Required
             }
             roc_can::pattern::DestructType::Guard(_, loc_pattern) => {
                 DestructType::Guard(from_can_pattern(env, layout_cache, &loc_pattern.value))

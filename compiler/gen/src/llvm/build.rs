@@ -274,7 +274,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
         FunctionCall {
             call_type: ByName(name),
-            layout,
+            full_layout,
             args,
             ..
         } => {
@@ -287,7 +287,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             call_with_args(
                 env,
                 layout_ids,
-                layout,
+                &full_layout,
                 *name,
                 parent,
                 arg_tuples.into_bump_slice(),
@@ -296,7 +296,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
         FunctionCall {
             call_type: ByPointer(name),
-            layout: _,
             args,
             ..
         } => {
