@@ -67,8 +67,9 @@ mod test_mono {
         let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut LayoutCache::default());
 
         // apply inc/dec
+        let param_map = mono_env.arena.alloc(roc_mono::borrow::ParamMap::default());
         let stmt = mono_env.arena.alloc(ir_expr);
-        let ir_expr = roc_mono::inc_dec::visit_declaration(mono_env.arena, stmt);
+        let ir_expr = roc_mono::inc_dec::visit_declaration(mono_env.arena, param_map, stmt);
 
         assert_eq!(
             procs.runtime_errors,
@@ -1244,6 +1245,51 @@ mod test_mono {
                 let Test.6 = 1i64;
                 let Test.4 = CallByName Test.0 Test.5 Test.6;
                 ret Test.4;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn is_nil() {
+        compiles_to_ir(
+            r#"
+            isNil : List a -> Bool
+            isNil = \list ->
+                when List.isEmpty list is
+                    True -> True
+                    False -> False
+
+            isNil [ 1, 3, 4 ]
+            "#,
+            indoc!(
+                r#"
+                procedure List.2 (#Attr.2):
+                    let Test.16 = 0i64;
+                    let Test.17 = lowlevel ListLen #Attr.2;
+                    let Test.15 = lowlevel Eq Test.16 Test.17;
+                    ret Test.15;
+
+                procedure Test.0 (Test.2):
+                    let Test.8 = CallByName List.2 Test.2;
+                    let Test.12 = true;
+                    let Test.13 = true;
+                    let Test.14 = lowlevel Eq Test.13 Test.8;
+                    let Test.11 = lowlevel And Test.14 Test.12;
+                    if Test.11 then
+                        let Test.9 = true;
+                        ret Test.9;
+                    else
+                        let Test.10 = false;
+                        ret Test.10;
+
+                let Test.5 = 1i64;
+                let Test.6 = 3i64;
+                let Test.7 = 4i64;
+                let Test.4 = Array [Test.5, Test.6, Test.7];
+                let Test.3 = CallByName Test.0 Test.4;
+                dec Test.4;
+                ret Test.3;
                 "#
             ),
         )

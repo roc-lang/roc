@@ -1,3 +1,4 @@
+use crate::borrow::ParamMap;
 use crate::ir::{Expr, JoinPointId, Param, Proc, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
@@ -139,7 +140,7 @@ pub struct Context<'a> {
     vars: VarMap,
     jp_live_vars: JPLiveVarMap,      // map: join point => live variables
     local_context: LocalContext<'a>, // we use it to store the join point declarations
-    function_params: MutMap<Symbol, &'a [Param<'a>]>,
+    param_map: &'a ParamMap<'a>,
 }
 
 fn update_live_vars<'a>(expr: &Expr<'a>, v: &LiveVarSet) -> LiveVarSet {
@@ -201,13 +202,13 @@ fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
 }
 
 impl<'a> Context<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
+    pub fn new(arena: &'a Bump, param_map: &'a ParamMap<'a>) -> Self {
         Self {
             arena,
             vars: MutMap::default(),
             jp_live_vars: MutMap::default(),
             local_context: LocalContext::default(),
-            function_params: MutMap::default(),
+            param_map,
         }
     }
 
@@ -866,8 +867,13 @@ fn update_jp_live_vars(j: JoinPointId, ys: &[Param], v: &Stmt<'_>, m: &mut JPLiv
     m.insert(j, j_live_vars);
 }
 
-pub fn visit_declaration<'a>(arena: &'a Bump, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
-    let ctx = Context::new(arena);
+/// used to process the main function in the repl
+pub fn visit_declaration<'a>(
+    arena: &'a Bump,
+    param_map: &'a ParamMap<'a>,
+    stmt: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    let ctx = Context::new(arena, param_map);
 
     let params = &[] as &[_];
     let ctx = ctx.update_var_info_with_params(params);
@@ -875,8 +881,8 @@ pub fn visit_declaration<'a>(arena: &'a Bump, stmt: &'a Stmt<'a>) -> &'a Stmt<'a
     ctx.add_dec_for_dead_params(params, b, &b_live_vars)
 }
 
-pub fn visit_proc<'a>(arena: &'a Bump, proc: &mut Proc<'a>) {
-    let ctx = Context::new(arena);
+pub fn visit_proc<'a>(arena: &'a Bump, param_map: &'a ParamMap<'a>, proc: &mut Proc<'a>) {
+    let ctx = Context::new(arena, param_map);
 
     if proc.name.is_builtin() {
         // we must take care of our own refcounting in builtins

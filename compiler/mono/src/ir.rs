@@ -111,12 +111,18 @@ impl<'a> Procs<'a> {
         for (key, in_prog_proc) in self.specialized.into_iter() {
             match in_prog_proc {
                 InProgress => unreachable!("The procedure {:?} should have be done by now", key),
-                Done(mut proc) => {
-                    crate::inc_dec::visit_proc(arena, &mut proc);
+                Done(proc) => {
                     result.insert(key, proc);
                 }
             }
         }
+
+        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
+
+        for (_, proc) in result.iter_mut() {
+            crate::inc_dec::visit_proc(arena, borrow_params, proc);
+        }
+
         result
     }
 
@@ -457,6 +463,15 @@ pub enum Literal<'a> {
 pub enum CallType {
     ByName(Symbol),
     ByPointer(Symbol),
+}
+
+impl CallType {
+    pub fn into_inner(&self) -> Symbol {
+        match self {
+            CallType::ByName(s) => *s,
+            CallType::ByPointer(s) => *s,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
