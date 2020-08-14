@@ -92,6 +92,28 @@ mod gen_list {
     }
 
     #[test]
+    fn list_map() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    empty : List Str
+                    empty =
+                        []
+                    
+                    intIdentity : Str -> Str
+                    intIdentity = \i ->
+                        "hi"
+                        
+                    List.map intIdentity empty
+                "#
+            ),
+            &[],
+            &'static [i64]
+        );
+        // assert_evals_to!("List.map (\\a -> a) []", &[], &'static [i64]);
+    }
+
+    #[test]
     fn list_join() {
         assert_evals_to!("List.join []", &[], &'static [i64]);
         assert_evals_to!("List.join [ [1, 2, 3 ] ]", &[1, 2, 3], &'static [i64]);

@@ -1,7 +1,7 @@
 use crate::layout_id::LayoutIds;
 use crate::llvm::build_list::{
     allocate_list, empty_polymorphic_list, list_append, list_concat, list_get_unsafe, list_join,
-    list_len, list_prepend, list_repeat, list_reverse, list_set, list_single,
+    list_len, list_map, list_prepend, list_repeat, list_reverse, list_set, list_single,
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{basic_type_from_layout, collection, get_fn_type, ptr_int};
@@ -1594,6 +1594,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             list_reverse(env, parent, scope, list)
         }
         ListConcat => list_concat(env, scope, parent, args),
+        ListMap => {
+            // List.map : List a, (a -> elem) -> List elem
+
+            let original_wrapper = load_symbol(env, scope, &args[0]).into_struct_value();
+
+            list_map(env, original_wrapper)
+        }
         ListAppend => {
             // List.append : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);

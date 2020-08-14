@@ -860,6 +860,16 @@ pub fn list_len<'ctx>(
         .into_int_value()
 }
 
+/// List.map : List a, (a -> elem) -> List elem
+pub fn list_map<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    original_wrapper: StructValue<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+
+    empty_list(env)
+}
+
 /// List.concat : List elem, List elem -> List elem
 pub fn list_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

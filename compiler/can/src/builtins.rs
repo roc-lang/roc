@@ -62,6 +62,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_CONCAT => list_concat,
         Symbol::LIST_PREPEND => list_prepend,
         Symbol::LIST_JOIN => list_join,
+        Symbol::LIST_MAP => list_map,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_SUB => num_sub,
         Symbol::NUM_MUL => num_mul,
@@ -921,6 +922,30 @@ fn list_join(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         list_var,
+    )
+}
+
+/// List.map : List a, (a -> elem) -> List elem
+fn list_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let func_var = var_store.fresh();
+    let ret_list_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListMap,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (func_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: ret_list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1), (func_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_list_var,
     )
 }
 
