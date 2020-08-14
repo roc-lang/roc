@@ -596,11 +596,12 @@ impl<'a> Context<'a> {
 
             Join {
                 id: j,
-                parameters: xs,
+                parameters: _,
                 remainder: b,
                 continuation: v,
             } => {
-                let xs = *xs;
+                // get the parameters with borrow signature
+                let xs = self.param_map.get_join_point(*j);
 
                 let v_orig = v;
 
