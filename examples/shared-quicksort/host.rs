@@ -7,7 +7,7 @@ extern "C" {
     fn quicksort(list: &[i64]) -> Box<[i64]>;
 }
 
-const NUM_NUMS: usize = 1_00;
+const NUM_NUMS: usize = 1_000_000;
 
 pub fn main() {
     let nums = {

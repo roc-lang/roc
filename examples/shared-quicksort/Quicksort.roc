@@ -57,9 +57,10 @@ quicksort = \originalList ->
 
     result = quicksortHelp originalList 0 (List.len originalList - 1)
 
-    # Absolutely make the `originalList` Shared by using it again here
-    if List.len (List.set originalList 0 3) > 3 then
+    if List.len originalList > 3 then
         result
     else
-        result
+        # Absolutely make the `originalList` Shared by using it again here
+        # but this branch is not evaluated, so should not affect performance
+        List.set originalList 0 (List.len originalList)
 

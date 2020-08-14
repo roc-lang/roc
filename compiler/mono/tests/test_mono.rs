@@ -66,18 +66,18 @@ mod test_mono {
         // let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
         let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut LayoutCache::default());
 
-        // apply inc/dec
-        let param_map = mono_env.arena.alloc(roc_mono::borrow::ParamMap::default());
-        let stmt = mono_env.arena.alloc(ir_expr);
-        let ir_expr = roc_mono::inc_dec::visit_declaration(mono_env.arena, param_map, stmt);
-
         assert_eq!(
             procs.runtime_errors,
             roc_collections::all::MutMap::default()
         );
 
+        let (procs, param_map) = procs.get_specialized_procs_help(mono_env.arena);
+
+        // apply inc/dec
+        let stmt = mono_env.arena.alloc(ir_expr);
+        let ir_expr = roc_mono::inc_dec::visit_declaration(mono_env.arena, param_map, stmt);
+
         let mut procs_string = procs
-            .get_specialized_procs(mono_env.arena)
             .values()
             .map(|proc| proc.to_pretty(200))
             .collect::<Vec<_>>();
@@ -1250,46 +1250,173 @@ mod test_mono {
         )
     }
 
-    #[test]
+    #[ignore]
     fn is_nil() {
         compiles_to_ir(
             r#"
-            isNil : List a -> Bool
-            isNil = \list ->
-                when List.isEmpty list is
-                    True -> True
-                    False -> False
+            ConsList a : [ Cons a (ConsList a), Nil ]
 
-            isNil [ 1, 3, 4 ]
+            isNil : ConsList a -> Bool
+            isNil = \list ->
+                when list is 
+                    Nil -> True
+                    Cons _ _ -> False
+
+            isNil (Cons 0x2 Nil) 
             "#,
             indoc!(
                 r#"
-                procedure List.2 (#Attr.2):
-                    let Test.16 = 0i64;
-                    let Test.17 = lowlevel ListLen #Attr.2;
-                    let Test.15 = lowlevel Eq Test.16 Test.17;
-                    ret Test.15;
-
-                procedure Test.0 (Test.2):
-                    let Test.8 = CallByName List.2 Test.2;
-                    let Test.12 = true;
+                procedure Test.1 (Test.3):
                     let Test.13 = true;
-                    let Test.14 = lowlevel Eq Test.13 Test.8;
-                    let Test.11 = lowlevel And Test.14 Test.12;
-                    if Test.11 then
-                        let Test.9 = true;
-                        ret Test.9;
-                    else
-                        let Test.10 = false;
+                    let Test.15 = Index 0 Test.3;
+                    let Test.14 = 1i64;
+                    let Test.16 = lowlevel Eq Test.14 Test.15;
+                    let Test.12 = lowlevel And Test.16 Test.13;
+                    if Test.12 then
+                        let Test.10 = true;
                         ret Test.10;
+                    else
+                        let Test.11 = false;
+                        ret Test.11;
+
+                let Test.6 = 0i64;
+                let Test.7 = 2i64;
+                let Test.9 = 1i64;
+                let Test.8 = Nil Test.9;
+                let Test.5 = Cons Test.6 Test.7 Test.8;
+                let Test.4 = CallByName Test.1 Test.5;
+                ret Test.4;
+                "#
+            ),
+        )
+    }
+
+    #[ignore]
+    fn has_none() {
+        compiles_to_ir(
+            r#"
+            Maybe a : [ Just a, Nothing ]
+            ConsList a : [ Cons a (ConsList a), Nil ]
+
+            hasNone : ConsList (Maybe a) -> Bool
+            hasNone = \list ->
+                when list is 
+                    Nil -> False
+                    Cons Nothing _ -> True
+                    Cons (Just _) xs -> hasNone xs
+
+            hasNone (Cons (Just 3) Nil) 
+            "#,
+            indoc!(
+                r#"
+                procedure Test.1 (Test.3):
+                    let Test.13 = true;
+                    let Test.15 = Index 0 Test.3;
+                    let Test.14 = 1i64;
+                    let Test.16 = lowlevel Eq Test.14 Test.15;
+                    let Test.12 = lowlevel And Test.16 Test.13;
+                    if Test.12 then
+                        let Test.10 = true;
+                        ret Test.10;
+                    else
+                        let Test.11 = false;
+                        ret Test.11;
+
+                let Test.6 = 0i64;
+                let Test.7 = 2i64;
+                let Test.9 = 1i64;
+                let Test.8 = Nil Test.9;
+                let Test.5 = Cons Test.6 Test.7 Test.8;
+                let Test.4 = CallByName Test.1 Test.5;
+                ret Test.4;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn mk_pair_of() {
+        compiles_to_ir(
+            r#"
+            mkPairOf = \x -> Pair x x
+
+            mkPairOf [1,2,3]
+            "#,
+            indoc!(
+                r#"
+                procedure Test.0 (Test.2):
+                    inc Test.2;
+                    let Test.8 = Struct {Test.2, Test.2};
+                    ret Test.8;
 
                 let Test.5 = 1i64;
-                let Test.6 = 3i64;
-                let Test.7 = 4i64;
+                let Test.6 = 2i64;
+                let Test.7 = 3i64;
                 let Test.4 = Array [Test.5, Test.6, Test.7];
                 let Test.3 = CallByName Test.0 Test.4;
                 dec Test.4;
                 ret Test.3;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn fst() {
+        compiles_to_ir(
+            r#"
+            fst = \x, y -> x 
+
+            fst [1,2,3] [3,2,1]
+            "#,
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_cannot_update_inplace() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                main = \{} -> 
+                    x : List Int
+                    x = [1,2,3]
+
+                    add : List Int -> List Int
+                    add = \y -> List.set y 0 0
+                    
+                    List.len (add x) + List.len x
+
+                main {}
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure Test.1 (Test.3):
+                    let Test.9 = 0i64;
+                    let Test.10 = 0i64;
+                    let Test.8 = CallByName List.4 Test.3 Test.9 Test.10;
+                    ret Test.8;
+
+                procedure List.4 (#Attr.2, #Attr.3, #Attr.4):
+                    let Test.14 = lowlevel ListLen #Attr.2;
+                    let Test.12 = lowlevel NumLt #Attr.3 Test.14;
+                    if Test.12 then
+                        let Test.13 = lowlevel ListSet #Attr.2 #Attr.3 #Attr.4;
+                        ret Test.13;
+                    else
+                        ret #Attr.2;
+
+                let Test.5 = 1i64;
+                let Test.6 = 2i64;
+                let Test.7 = 3i64;
+                let Test.0 = Array [Test.5, Test.6, Test.7];
+                let Test.4 = CallByName Test.1 Test.0;
+                dec Test.0;
+                ret Test.4;
                 "#
             ),
         )

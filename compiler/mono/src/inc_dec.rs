@@ -114,7 +114,11 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
             result.extend(arguments.iter().copied());
         }
 
-        RunLowLevel(_, _) | EmptyArray | RuntimeErrorFunction(_) | Literal(_) => {}
+        RunLowLevel(_, args) => {
+            result.extend(args.iter());
+        }
+
+        EmptyArray | RuntimeErrorFunction(_) | Literal(_) => {}
     }
 }
 
@@ -433,54 +437,25 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            RunLowLevel(_, _) => {
-                // THEORY: runlowlevel only occurs
-                //
-                // - in a custom hard-coded function
-                // - when we insert them as compiler authors
-                //
-                // if we're carefule to only use RunLowLevel for non-rc'd types
-                // (e.g. when building a cond/switch, we check equality on integers, and to boolean and)
-                // then RunLowLevel should not change in any way the refcounts.
-
-                // let b = self.add_dec_after_application(ys, ps, b, b_live_vars);
+            RunLowLevel(_op, _args) => {
+                // Assumption: we never need to modify the refcount for these
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
             FunctionCall {
                 args: ys,
                 call_type,
-                arg_layouts,
                 ..
             } => {
-                // this is where the borrow signature would come in
-                //let ps := (getDecl ctx f).params;
-                use crate::ir::CallType;
-                use crate::layout::Builtin;
-                let symbol = match call_type {
-                    CallType::ByName(s) => s,
-                    CallType::ByPointer(s) => s,
-                };
+                let symbol = call_type.into_inner();
 
-                let ps = Vec::from_iter_in(
-                    arg_layouts.iter().map(|layout| {
-                        let borrow = match layout {
-                            Layout::Builtin(Builtin::List(_, _)) => true,
-                            _ => false,
-                        };
-
-                        Param {
-                            symbol,
-                            borrow,
-                            layout: layout.clone(),
-                        }
-                    }),
-                    self.arena,
-                )
-                .into_bump_slice();
+                // get the borrow signature
+                let ps = self.param_map.get_symbol(symbol);
 
                 let b = self.add_dec_after_application(ys, ps, b, b_live_vars);
-                self.arena.alloc(Stmt::Let(z, v, l, b))
+                let b = self.arena.alloc(Stmt::Let(z, v, l, b));
+
+                self.add_inc_before(ys, ps, b, b_live_vars)
             }
 
             EmptyArray | FunctionPointer(_, _) | Literal(_) | RuntimeErrorFunction(_) => {
@@ -496,13 +471,14 @@ impl<'a> Context<'a> {
     fn update_var_info(&self, symbol: Symbol, layout: &Layout<'a>, expr: &Expr<'a>) -> Self {
         let mut ctx = self.clone();
 
-        // TODO actually make these non-constant
-
         // can this type be reference-counted at runtime?
         let reference = layout.contains_refcounted();
 
         // is this value a constant?
-        let persistent = false;
+        let persistent = match expr {
+            Expr::FunctionCall { args, .. } => args.is_empty(),
+            _ => false,
+        };
 
         // must this value be consumed?
         let consume = consume_expr(&ctx.vars, expr);
@@ -884,20 +860,7 @@ pub fn visit_declaration<'a>(
 pub fn visit_proc<'a>(arena: &'a Bump, param_map: &'a ParamMap<'a>, proc: &mut Proc<'a>) {
     let ctx = Context::new(arena, param_map);
 
-    if proc.name.is_builtin() {
-        // we must take care of our own refcounting in builtins
-        return;
-    }
-
-    let params = Vec::from_iter_in(
-        proc.args.iter().map(|(layout, symbol)| Param {
-            symbol: *symbol,
-            layout: layout.clone(),
-            borrow: layout.contains_refcounted(),
-        }),
-        arena,
-    )
-    .into_bump_slice();
+    let params = param_map.get_symbol(proc.name);
 
     let stmt = arena.alloc(proc.body.clone());
     let ctx = ctx.update_var_info_with_params(params);

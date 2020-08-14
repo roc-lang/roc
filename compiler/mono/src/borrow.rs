@@ -26,7 +26,13 @@ pub fn infer_borrow<'a>(
         arena,
     };
 
-    for proc in procs.values() {
+    // sort the symbols (roughly) in definition order.
+    // TODO in the future I think we need to do this properly, and group
+    // mutually recursive functions (or just make all their arguments owned)
+    let mut values = procs.values().collect::<std::vec::Vec<_>>();
+    values.sort_by(|a, b| b.name.cmp(&a.name));
+
+    for proc in values.iter() {
         env.collect_proc(proc);
     }
 
@@ -34,14 +40,27 @@ pub fn infer_borrow<'a>(
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub enum Key {
+enum Key {
     Declaration(Symbol),
-    JoinPoint(Symbol, JoinPointId),
+    JoinPoint(JoinPointId),
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ParamMap<'a> {
-    pub items: MutMap<Key, &'a [Param<'a>]>,
+    items: MutMap<Key, &'a [Param<'a>]>,
+}
+
+impl<'a> ParamMap<'a> {
+    pub fn get_symbol(&self, symbol: Symbol) -> &'a [Param<'a>] {
+        let key = Key::Declaration(symbol);
+
+        self.items.get(&key).unwrap()
+    }
+    pub fn get_join_point(&self, id: JoinPointId) -> &'a [Param<'a>] {
+        let key = Key::JoinPoint(id);
+
+        self.items.get(&key).unwrap()
+    }
 }
 
 impl<'a> ParamMap<'a> {
@@ -91,10 +110,8 @@ impl<'a> ParamMap<'a> {
                     remainder: v,
                     continuation: b,
                 } => {
-                    self.items.insert(
-                        Key::JoinPoint(fnid, *j),
-                        Self::init_borrow_params(arena, xs),
-                    );
+                    self.items
+                        .insert(Key::JoinPoint(*j), Self::init_borrow_params(arena, xs));
 
                     stack.push(v);
                     stack.push(b);
@@ -186,6 +203,19 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
+    /// This looks at an application `f x1 x2 x3`
+    /// If the parameter (based on the definition of `f`) is owned,
+    /// then the argument must also be owned
+    fn own_args_using_bools(&mut self, xs: &[Symbol], ps: &[bool]) {
+        debug_assert_eq!(xs.len(), ps.len());
+
+        for (x, borrow) in xs.iter().zip(ps.iter()) {
+            if !borrow {
+                self.own_var(*x);
+            }
+        }
+    }
+
     /// For each xs[i], if xs[i] is owned, then mark ps[i] as owned.
     /// We use this action to preserve tail calls. That is, if we have
     /// a tail call `f xs`, if the i-th parameter is borrowed, but `xs[i]` is owned
@@ -251,8 +281,46 @@ impl<'a> BorrowInfState<'a> {
             }
 
             RunLowLevel(op, args) => {
-                // base borrowing on the `op`
-                // todo!()
+                use roc_module::low_level::LowLevel::*;
+
+                self.own_var(z);
+
+                // TODO is true or false more efficient for non-refcounted layouts?
+                let irrelevant = true;
+                let owned = false;
+                let borrowed = true;
+
+                let arena = self.arena;
+
+                // Here we define the borrow signature of low-level operations
+                //
+                // - arguments with non-refcounted layouts (ints, floats) are `irrelevant`
+                // - arguments that we may want to update destructively must be Owned
+                // - other refcounted arguments are Borrowed
+                let ps = match op {
+                    ListLen => arena.alloc_slice_copy(&[borrowed]),
+                    ListSet => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+                    ListSetInPlace => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+
+                    ListGetUnsafe => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
+                    ListSingle => arena.alloc_slice_copy(&[irrelevant]),
+                    ListRepeat => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
+                    ListReverse => arena.alloc_slice_copy(&[owned]),
+                    ListConcat => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
+                    ListAppend => arena.alloc_slice_copy(&[owned, owned]),
+                    ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
+                    ListJoin => arena.alloc_slice_copy(&[irrelevant]),
+
+                    Eq | NotEq | And | Or | NumAdd | NumSub | NumMul | NumGt | NumGte | NumLt
+                    | NumLte | NumDivUnchecked | NumRemUnchecked => {
+                        arena.alloc_slice_copy(&[irrelevant, irrelevant])
+                    }
+
+                    NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumRound
+                    | NumToFloat | Not => arena.alloc_slice_copy(&[irrelevant]),
+                };
+
+                self.own_args_using_bools(args, ps);
             }
             Literal(_) | FunctionPointer(_, _) | RuntimeErrorFunction(_) => {}
         }
@@ -308,7 +376,7 @@ impl<'a> BorrowInfState<'a> {
                 self.collect_stmt(v);
                 self.param_set = old;
 
-                self.update_param_map(Key::JoinPoint(self.current_proc, *j));
+                self.update_param_map(Key::JoinPoint(*j));
 
                 self.collect_stmt(b);
             }
@@ -319,12 +387,7 @@ impl<'a> BorrowInfState<'a> {
                 self.preserve_tail_call(*x, v, b);
             }
             Jump(j, ys) => {
-                let ps = self
-                    .param_map
-                    .items
-                    .get(&Key::JoinPoint(self.current_proc, *j))
-                    .unwrap()
-                    .clone();
+                let ps = self.param_map.get_join_point(*j).clone();
 
                 // for making sure the join point can reuse
                 self.own_args_using_params(ys, ps);

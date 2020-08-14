@@ -33,6 +33,9 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
 #[cfg(not(debug_assertions))]
 const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 
+pub const REFCOUNT_0: usize = std::usize::MAX;
+pub const REFCOUNT_1: usize = REFCOUNT_0 - 1;
+
 #[derive(Debug, Clone, Copy)]
 pub enum OptLevel {
     Normal,
@@ -871,7 +874,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let layout = layout.clone();
 
             match layout {
-                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
+                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) if false => {
                     increment_refcount_list(env, value.into_struct_value());
                     build_exp_stmt(env, layout_ids, scope, parent, cont)
                 }
@@ -882,9 +885,11 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let (value, layout) = load_symbol_and_layout(env, scope, symbol);
             let layout = layout.clone();
 
+            /*
             if layout.contains_refcounted() {
                 decrement_refcount_layout(env, parent, value, &layout);
             }
+            */
 
             build_exp_stmt(env, layout_ids, scope, parent, cont)
         }
@@ -897,11 +902,7 @@ fn refcount_is_one_comparison<'ctx>(
     context: &'ctx Context,
     refcount: IntValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let refcount_one: IntValue<'ctx> = context.i64_type().const_int((std::usize::MAX) as _, false);
-    // Note: Check for refcount < refcount_1 as the "true" condition,
-    // to avoid misprediction. (In practice this should usually pass,
-    // and CPUs generally default to predicting that a forward jump
-    // shouldn't be taken; that is, they predict "else" won't be taken.)
+    let refcount_one: IntValue<'ctx> = context.i64_type().const_int(REFCOUNT_1 as _, false);
     builder.build_int_compare(
         IntPredicate::EQ,
         refcount,
@@ -966,6 +967,7 @@ fn decrement_refcount_layout<'a, 'ctx, 'env>(
                 }
             }
         }
+        RecursiveUnion(_) => todo!("TODO implement decrement layout of recursive tag union"),
         Union(tags) => {
             debug_assert!(!tags.is_empty());
             let wrapper_struct = value.into_struct_value();
@@ -1099,11 +1101,24 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
     let else_block = ctx.append_basic_block(parent, "else");
     let cont_block = ctx.append_basic_block(parent, "dec_ref_branchcont");
 
+    // TODO what would be most optimial for the branch predictor
+    //
+    // are most refcounts 1 most of the time? or not?
     builder.build_conditional_branch(comparison, then_block, else_block);
 
     // build then block
     {
         builder.position_at_end(then_block);
+        if !env.leak {
+            let free = builder.build_free(refcount_ptr);
+            builder.insert_instruction(&free, None);
+        }
+        builder.build_unconditional_branch(cont_block);
+    }
+
+    // build else block
+    {
+        builder.position_at_end(else_block);
         // our refcount 0 is actually usize::MAX, so decrementing the refcount means incrementing this value.
         let decremented = env.builder.build_int_add(
             ctx.i64_type().const_int(1 as u64, false),
@@ -1114,16 +1129,6 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
         // Mutate the new array in-place to change the element.
         builder.build_store(refcount_ptr, decremented);
 
-        builder.build_unconditional_branch(cont_block);
-    }
-
-    // build else block
-    {
-        builder.position_at_end(else_block);
-        if !env.leak {
-            let free = builder.build_free(refcount_ptr);
-            builder.insert_instruction(&free, None);
-        }
         builder.build_unconditional_branch(cont_block);
     }
 
@@ -1753,13 +1758,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_get_unsafe(env, list_layout, elem_index, wrapper_struct)
         }
-        ListSet => {
+        ListSetInPlace => {
             let (list_symbol, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
-
-            let in_place = match &list_layout {
-                Layout::Builtin(Builtin::List(MemoryMode::Unique, _)) => InPlace::InPlace,
-                _ => InPlace::Clone,
-            };
 
             list_set(
                 parent,
@@ -1769,19 +1769,57 @@ fn run_low_level<'a, 'ctx, 'env>(
                     (load_symbol_and_layout(env, scope, &args[2])),
                 ],
                 env,
-                in_place,
+                InPlace::InPlace,
             )
         }
-        ListSetInPlace => list_set(
-            parent,
-            &[
-                (load_symbol_and_layout(env, scope, &args[0])),
+        ListSet => {
+            let (list_symbol, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let arguments = &[
+                (list_symbol, list_layout),
                 (load_symbol_and_layout(env, scope, &args[1])),
                 (load_symbol_and_layout(env, scope, &args[2])),
-            ],
-            env,
-            InPlace::InPlace,
-        ),
+            ];
+
+            match list_layout {
+                Layout::Builtin(Builtin::List(MemoryMode::Unique, _)) => {
+                    // the layout tells us this List.set can be done in-place
+                    list_set(parent, arguments, env, InPlace::InPlace)
+                }
+                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
+                    // no static guarantees, but all is not lost: we can check the refcount
+                    // if it is one, we hold the final reference, and can mutate it in-place!
+                    let builder = env.builder;
+                    let ctx = env.context;
+
+                    let ret_type =
+                        basic_type_from_layout(env.arena, ctx, list_layout, env.ptr_bytes);
+
+                    let refcount_ptr = list_get_refcount_ptr(env, list_symbol.into_struct_value());
+
+                    let refcount = env
+                        .builder
+                        .build_load(refcount_ptr, "get_refcount")
+                        .into_int_value();
+
+                    let comparison = refcount_is_one_comparison(builder, env.context, refcount);
+
+                    // build then block
+                    // refcount is 1, so work in-place
+                    let build_pass = || list_set(parent, arguments, env, InPlace::InPlace);
+
+                    // build else block
+                    // refcount != 1, so clone first
+                    let build_fail = || list_set(parent, arguments, env, InPlace::Clone);
+
+                    crate::llvm::build_list::build_basic_phi2(
+                        env, parent, comparison, build_pass, build_fail, ret_type,
+                    )
+                }
+                Layout::Builtin(Builtin::EmptyList) => list_symbol,
+                other => unreachable!("List.set: weird layout {:?}", other),
+            }
+        }
     }
 }
 

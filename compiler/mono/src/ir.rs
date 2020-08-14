@@ -126,6 +126,33 @@ impl<'a> Procs<'a> {
         result
     }
 
+    pub fn get_specialized_procs_help(
+        self,
+        arena: &'a Bump,
+    ) -> (
+        MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+        &'a crate::borrow::ParamMap<'a>,
+    ) {
+        let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
+
+        for (key, in_prog_proc) in self.specialized.into_iter() {
+            match in_prog_proc {
+                InProgress => unreachable!("The procedure {:?} should have be done by now", key),
+                Done(proc) => {
+                    result.insert(key, proc);
+                }
+            }
+        }
+
+        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
+
+        for (_, proc) in result.iter_mut() {
+            crate::inc_dec::visit_proc(arena, borrow_params, proc);
+        }
+
+        (result, borrow_params)
+    }
+
     // TODO trim down these arguments!
     #[allow(clippy::too_many_arguments)]
     pub fn insert_named(

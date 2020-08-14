@@ -1166,7 +1166,7 @@ where
     index_alloca
 }
 
-fn build_basic_phi2<'a, 'ctx, 'env, PassFn, FailFn>(
+pub fn build_basic_phi2<'a, 'ctx, 'env, PassFn, FailFn>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     comparison: IntValue<'ctx>,
@@ -1380,9 +1380,12 @@ pub fn allocate_list<'a, 'ctx, 'env>(
         "make ptr",
     );
 
-    // put our "refcount 0" in the first slot
-    let ref_count_zero = ctx.i64_type().const_int(std::usize::MAX as u64, false);
-    builder.build_store(refcount_ptr, ref_count_zero);
+    // the refcount of a new list is initially 1
+    // we assume that the list is indeed used (dead variables are eliminated)
+    let ref_count_one = ctx
+        .i64_type()
+        .const_int(crate::llvm::build::REFCOUNT_1 as _, false);
+    builder.build_store(refcount_ptr, ref_count_one);
 
     list_element_ptr
 }
