@@ -766,7 +766,7 @@ because `x` has a `'` in one place but not everywhere.
 
 Elm has `List`, `Array`, `Set`, and `Dict` in the standard library.
 
-Roc has `List`, `Bytes`, `Set`, and `Map` in the standard library.
+Roc has `List`, `Set`, and `Map` in the standard library.
 
 Here are the differences:
 
@@ -776,10 +776,10 @@ Here are the differences:
 
 > The main reason it's called `Map` instead of `Dict` is that it's annoying to have a conversation about `Dict` out loud, let alone to teach it in a workshop, because you have to be so careful to enunciate. `Map` is one letter shorter, doesn't have this problem, is widely used, and never seems to be confused with the `map` function in practice (in e.g. JavaScript and Rust, both of which have both `Map` and `map`) even though it seems like it would in theory.
 
-Roc also has a special literal syntax for maps and sets. Here's how to write a `Map` literal:
+Roc also has a literal syntax for maps and sets. Here's how to write a `Map` literal:
 
 ```elm
-{{ "Sam" => 1, "Ali" => 2, firstName => 3 }}
+{: "Sam" => 1, "Ali" => 2, firstName => 3 :}
 ```
 
 This expression has the type `Map Str Int`, and the `firstName` variable would
@@ -797,17 +797,18 @@ This works, but is not nearly as nice to read.
 
 Additionally, map literals can compile direcly to efficient initialization code without needing to (hopefully be able to) optimize away the intermediate `List` involved in  `fromList`.
 
-`{{}}` is an empty `Map`.
+`{::}` is an empty `Map`.
 
 You can write a `Set` literal like this:
 
 ```elm
-{[ "Sam", "Ali", firstName ]}
+[: "Sam", "Ali", firstName :]
 ```
+
 The `Set` literal syntax is partly for the initialization benefit, and also for symmetry
 with the `Map` literal syntax.
 
-`{[]}` is an empty `Set`.
+`[::]` is an empty `Set`.
 
 Roc does not have syntax for pattern matching on data structures - not even `[` `]` like Elm does.
 
