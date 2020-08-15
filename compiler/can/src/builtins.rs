@@ -1257,12 +1257,15 @@ fn defn(
         .map(|(var, symbol)| (var, no_region(Identifier(symbol))))
         .collect();
 
+    // Builtins are all top-level functions, so they never close over anything.
+    let closed_over = Vec::new();
     let expr = Closure(
         var_store.fresh(),
         fn_name,
         Recursive::NotRecursive,
         closure_args,
         Box::new((no_region(body), ret_var)),
+        closed_over,
     );
 
     Def {

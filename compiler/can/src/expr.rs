@@ -6,7 +6,7 @@ use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
     int_expr_from_result, num_expr_from_result,
 };
-use crate::pattern::{canonicalize_pattern, Pattern};
+use crate::pattern::{canonicalize_pattern, symbols_from_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
@@ -103,6 +103,8 @@ pub enum Expr {
         Recursive,
         Vec<(Variable, Located<Pattern>)>,
         Box<(Located<Expr>, Variable)>,
+        // Closed-over symbols
+        Vec<(Symbol, Variable)>,
     ),
 
     // Product Types
@@ -418,8 +420,8 @@ pub fn canonicalize_expr<'a>(
             )
         }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
-            // The globally unique symbol that will refer to this closure once it gets converted
-            // into a top-level procedure for code gen.
+            // The globally unique symbol that will refer to this closure once it
+            // gets converted into a top-level procedure for code gen.
             //
             // In the Foo module, this will look something like Foo.$1 or Foo.$2.
             let symbol = env.gen_unique_symbol();
@@ -431,6 +433,7 @@ pub fn canonicalize_expr<'a>(
             let mut scope = original_scope.clone();
             let mut can_args = Vec::with_capacity(loc_arg_patterns.len());
             let mut output = Output::default();
+            let mut arg_symbols: MutSet<Symbol> = MutSet::default();
 
             for loc_pattern in loc_arg_patterns.into_iter() {
                 let (new_output, can_arg) = canonicalize_pattern(
@@ -442,12 +445,14 @@ pub fn canonicalize_expr<'a>(
                     loc_pattern.region,
                 );
 
+                arg_symbols.extend(symbols_from_pattern(&can_arg.value).into_iter());
+
                 output.union(new_output);
 
                 can_args.push((var_store.fresh(), can_arg));
             }
 
-            let (loc_body_expr, new_output) = canonicalize_expr(
+            let (loc_body_expr, body_output) = canonicalize_expr(
                 env,
                 var_store,
                 &mut scope,
@@ -455,7 +460,30 @@ pub fn canonicalize_expr<'a>(
                 &loc_body_expr.value,
             );
 
-            output.union(new_output);
+            let mut closed_over_symbols = MutSet::default();
+
+            for symbol in body_output.references.lookups.iter() {
+                if !arg_symbols.contains(symbol) {
+                    closed_over_symbols.insert(symbol);
+                }
+            }
+
+            for symbol in body_output.references.calls.iter() {
+                todo!("TODO Recursively incorporate all the closed-over values necessary to perform this call");
+                // if !arg_symbols.contains(symbol) {
+                //     closed_over_symbols.insert(symbol);
+                // }
+            }
+
+            let mut closed_over = closed_over_symbols
+                .into_iter()
+                .map(|symbol| (*symbol, var_store.fresh()))
+                .collect::<Vec<_>>();
+
+            // These need to be sorted because eventually we'll use them in a struct.
+            closed_over.sort_by_key(|(symbol, _)| *symbol);
+
+            output.union(body_output);
 
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
@@ -482,6 +510,7 @@ pub fn canonicalize_expr<'a>(
                     Recursive::NotRecursive,
                     can_args,
                     Box::new((loc_body_expr, var_store.fresh())),
+                    closed_over,
                 ),
                 output,
             )
@@ -1199,7 +1228,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             LetNonRec(Box::new(def), Box::new(loc_expr), var, aliases)
         }
 
-        Closure(var, symbol, recursive, patterns, boxed_expr) => {
+        Closure(var, symbol, recursive, patterns, boxed_expr, closed_over) => {
             let (loc_expr, expr_var) = *boxed_expr;
             let loc_expr = Located {
                 value: inline_calls(var_store, scope, loc_expr.value),
@@ -1212,6 +1241,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 recursive,
                 patterns,
                 Box::new((loc_expr, expr_var)),
+                closed_over,
             )
         }
 
@@ -1256,11 +1286,16 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                     Some(Def {
                         loc_expr:
                             Located {
-                                value: Closure(_var, _, recursive, params, boxed_body),
+                                value: Closure(_var, _, recursive, params, boxed_body, closed_over),
                                 ..
                             },
                         ..
                     }) => {
+                        debug_assert_eq!(
+                            closed_over,
+                            &Vec::new(),
+                            "Tried to inline a builtin that somehow closed over things"
+                        );
                         debug_assert_eq!(*recursive, Recursive::NotRecursive);
 
                         // Since this is a canonicalized Expr, we should have

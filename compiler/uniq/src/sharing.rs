@@ -924,7 +924,7 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
                 annotate_usage(&arg.value, usage);
             }
         }
-        Closure(_, _, _, args, body) => {
+        Closure(_, _, _, args, body, _) => {
             // annotate defaults of optional record fields
             for (_, loc_pattern) in args {
                 annotate_usage_pattern(&loc_pattern.value, usage);

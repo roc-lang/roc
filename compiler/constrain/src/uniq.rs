@@ -697,7 +697,7 @@ pub fn constrain_expr(
                 expected,
             )
         }
-        Closure(fn_var, _symbol, recursion, args, boxed) => {
+        Closure(fn_var, _symbol, recursion, args, boxed, _closed_over) => {
             use roc_can::expr::Recursive;
 
             let (loc_body_expr, ret_var) = &**boxed;

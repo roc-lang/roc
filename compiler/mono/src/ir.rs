@@ -24,6 +24,7 @@ pub struct PartialProc<'a> {
     pub pattern_symbols: Vec<'a, Symbol>,
     pub body: roc_can::expr::Expr,
     pub is_tail_recursive: bool,
+    pub closed_over: &'a [(Symbol, Variable)],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,7 +39,7 @@ pub struct Proc<'a> {
     pub name: Symbol,
     pub args: &'a [(Layout<'a>, Symbol)],
     pub body: Stmt<'a>,
-    pub closes_over: Layout<'a>,
+    pub closed_over: &'a [(Symbol, Layout<'a>)],
     pub ret_layout: Layout<'a>,
     pub is_tail_recursive: bool,
 }
@@ -132,6 +133,7 @@ impl<'a> Procs<'a> {
         loc_body: Located<roc_can::expr::Expr>,
         is_tail_recursive: bool,
         ret_var: Variable,
+        closed_over: &'a [(Symbol, Variable)],
     ) {
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
@@ -146,6 +148,7 @@ impl<'a> Procs<'a> {
                         pattern_symbols,
                         body: body.value,
                         is_tail_recursive,
+                        closed_over,
                     },
                 );
             }
@@ -177,6 +180,7 @@ impl<'a> Procs<'a> {
         loc_body: Located<roc_can::expr::Expr>,
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
+        closed_over: &'a [(Symbol, Variable)],
     ) -> Result<Layout<'a>, RuntimeError> {
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
         let is_tail_recursive = false;
@@ -220,6 +224,7 @@ impl<'a> Procs<'a> {
                                     pattern_symbols,
                                     body: body.value,
                                     is_tail_recursive,
+                                    closed_over,
                                 },
                             );
                         }
@@ -230,6 +235,7 @@ impl<'a> Procs<'a> {
                                 pattern_symbols,
                                 body: body.value,
                                 is_tail_recursive,
+                                closed_over,
                             };
 
                             // Mark this proc as in-progress, so if we're dealing with
@@ -1002,7 +1008,10 @@ fn specialize<'a>(
         pattern_symbols,
         body,
         is_tail_recursive,
+        closed_over,
     } = partial_proc;
+
+    let arena = env.arena;
 
     // unify the called function with the specialized signature, then specialize the function body
     let snapshot = env.subs.snapshot();
@@ -1010,7 +1019,7 @@ fn specialize<'a>(
 
     debug_assert!(matches!(unified, roc_unify::unify::Unified::Success(_)));
 
-    let specialized_body = from_can(env, body, procs, layout_cache);
+    let mut specialized_body = from_can(env, body, procs, layout_cache);
 
     // reset subs, so we don't get type errors when specializing for a different signature
     env.subs.rollback_to(snapshot);
@@ -1029,6 +1038,49 @@ fn specialize<'a>(
         proc_args.push((layout, *arg_name));
     }
 
+    if closed_over.is_empty() {
+        // If we don't close over anything, we take a null pointer as the last (unused) arg.
+        // This way, we don't get LLVM verification errors when calling this
+        // proc passing a null pointer. There shouldn't be a runtime cost to the,
+        // proc itself, thanks to LLVM's dead arg elimination and the fact that
+        // this is the last argument, so the stack base pointer won't be affected.
+        //
+        // (The caller may push a needless null pointer onto the stack, but
+        // that's unavoidable.)
+        proc_args.push((Layout::NullPointer, env.unique_symbol()));
+    } else {
+        let mut struct_layouts = Vec::with_capacity_in(closed_over.len(), env.arena);
+        let closed_over_symbol = env.unique_symbol();
+
+        for (_, var) in closed_over.iter() {
+            let layout = layout_cache
+                .from_var(&env.arena, *var, env.subs)
+                .unwrap_or_else(|err| panic!("TODO handle invalid closed-over value {:?}", err));
+
+            struct_layouts.push(layout);
+        }
+
+        // Step 1: Add a new struct arg to the end of the proc
+        let field_layouts = struct_layouts.into_bump_slice();
+
+        proc_args.push((Layout::Struct(field_layouts), closed_over_symbol));
+
+        // Step 2: Have the proc start by destructuring that struct into local variables
+        let iter = closed_over.iter().zip(field_layouts);
+
+        for (index, ((symbol, _), layout)) in iter.enumerate() {
+            let expr = Expr::AccessAtIndex {
+                index: index as u64,
+                field_layouts,
+                structure: closed_over_symbol,
+                is_unwrapped: true,
+            };
+
+            specialized_body =
+                Stmt::Let(*symbol, expr, layout.clone(), arena.alloc(specialized_body));
+        }
+    };
+
     let proc_args = proc_args.into_bump_slice();
 
     let specialized_body =
@@ -1038,16 +1090,24 @@ fn specialize<'a>(
         .from_var(&env.arena, ret_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
-    // TODO WRONG
-    let closes_over_layout = Layout::Struct(&[]);
+    let mut closed_over_layouts = Vec::with_capacity_in(closed_over.len(), env.arena);
 
+    for (symbol, var) in closed_over {
+        let layout = layout_cache
+            .from_var(&env.arena, *var, env.subs)
+            .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
+
+        closed_over_layouts.push((*symbol, layout));
+    }
+
+    let closed_over = closed_over_layouts.into_bump_slice();
     let proc = Proc {
         name: proc_name,
         args: proc_args,
         body: specialized_body,
-        closes_over: closes_over_layout,
         ret_layout,
         is_tail_recursive,
+        closed_over,
     };
 
     Ok(proc)
@@ -1103,14 +1163,13 @@ pub fn with_hole<'a>(
         },
         LetNonRec(def, cont, _, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                if let Closure(ann, _, recursivity, loc_args, boxed_body) = def.loc_expr.value {
-                    // Extract Procs, but discard the resulting Expr::Load.
-                    // That Load looks up the pointer, which we won't use here!
-
+                if let Closure(ann, _, recursivity, loc_args, boxed_body, closed_over) =
+                    def.loc_expr.value
+                {
                     let (loc_body, ret_var) = *boxed_body;
-
                     let is_tail_recursive =
                         matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
+                    let closed_over = Vec::from_iter_in(closed_over.into_iter(), env.arena);
 
                     procs.insert_named(
                         env,
@@ -1121,6 +1180,7 @@ pub fn with_hole<'a>(
                         loc_body,
                         is_tail_recursive,
                         ret_var,
+                        closed_over.into_bump_slice(),
                     );
 
                     return with_hole(env, cont.value, procs, layout_cache, assigned, hole);
@@ -1187,7 +1247,9 @@ pub fn with_hole<'a>(
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                    if let Closure(ann, _, recursivity, loc_args, boxed_body) = def.loc_expr.value {
+                    if let Closure(ann, _, recursivity, loc_args, boxed_body, closed_over) =
+                        def.loc_expr.value
+                    {
                         // Extract Procs, but discard the resulting Expr::Load.
                         // That Load looks up the pointer, which we won't use here!
 
@@ -1195,6 +1257,7 @@ pub fn with_hole<'a>(
 
                         let is_tail_recursive =
                             matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
+                        let closed_over = Vec::from_iter_in(closed_over.into_iter(), env.arena);
 
                         procs.insert_named(
                             env,
@@ -1205,6 +1268,7 @@ pub fn with_hole<'a>(
                             loc_body,
                             is_tail_recursive,
                             ret_var,
+                            closed_over.into_bump_slice(),
                         );
 
                         continue;
@@ -1768,11 +1832,20 @@ pub fn with_hole<'a>(
 
         Accessor { .. } | Update { .. } => todo!("record access/accessor/update"),
 
-        Closure(ann, name, _, loc_args, boxed_body) => {
+        Closure(ann, name, _, loc_args, boxed_body, closed_over) => {
             let (loc_body, ret_var) = *boxed_body;
+            let closed_over = Vec::from_iter_in(closed_over.into_iter(), env.arena);
 
-            match procs.insert_anonymous(env, name, ann, loc_args, loc_body, ret_var, layout_cache)
-            {
+            match procs.insert_anonymous(
+                env,
+                name,
+                ann,
+                loc_args,
+                loc_body,
+                ret_var,
+                layout_cache,
+                closed_over.into_bump_slice(),
+            ) {
                 Ok(layout) => {
                     // TODO should the let have layout Pointer?
                     Stmt::Let(
@@ -2054,7 +2127,7 @@ pub fn from_can<'a>(
                     // Now that we know for sure it's a closure, get an owned
                     // version of these variant args so we can use them properly.
                     match def.loc_expr.value {
-                        Closure(ann, _, recursivity, loc_args, boxed_body) => {
+                        Closure(ann, _, recursivity, loc_args, boxed_body, closed_over) => {
                             // Extract Procs, but discard the resulting Expr::Load.
                             // That Load looks up the pointer, which we won't use here!
 
@@ -2062,6 +2135,7 @@ pub fn from_can<'a>(
 
                             let is_tail_recursive =
                                 matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
+                            let closed_over = Vec::from_iter_in(closed_over.into_iter(), env.arena);
 
                             procs.insert_named(
                                 env,
@@ -2072,6 +2146,7 @@ pub fn from_can<'a>(
                                 loc_body,
                                 is_tail_recursive,
                                 ret_var,
+                                closed_over.into_bump_slice(),
                             );
 
                             continue;
@@ -2086,11 +2161,11 @@ pub fn from_can<'a>(
         }
         LetNonRec(def, cont, _, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                if let Closure(_, _, _, _, _) = &def.loc_expr.value {
+                if let Closure(_, _, _, _, _, _) = &def.loc_expr.value {
                     // Now that we know for sure it's a closure, get an owned
                     // version of these variant args so we can use them properly.
                     match def.loc_expr.value {
-                        Closure(ann, _, recursivity, loc_args, boxed_body) => {
+                        Closure(ann, _, recursivity, loc_args, boxed_body, closed_over) => {
                             // Extract Procs, but discard the resulting Expr::Load.
                             // That Load looks up the pointer, which we won't use here!
 
@@ -2098,6 +2173,7 @@ pub fn from_can<'a>(
 
                             let is_tail_recursive =
                                 matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
+                            let closed_over = Vec::from_iter_in(closed_over.into_iter(), env.arena);
 
                             procs.insert_named(
                                 env,
@@ -2108,6 +2184,7 @@ pub fn from_can<'a>(
                                 loc_body,
                                 is_tail_recursive,
                                 ret_var,
+                                closed_over.into_bump_slice(),
                             );
 
                             return from_can(env, cont.value, procs, layout_cache);

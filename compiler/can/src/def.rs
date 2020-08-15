@@ -650,12 +650,13 @@ fn group_to_declaration(
                 let mut new_def = can_def.clone();
 
                 // Determine recursivity of closures that are not tail-recursive
-                if let Closure(fn_var, name, Recursive::NotRecursive, args, body) =
+                if let Closure(fn_var, name, Recursive::NotRecursive, args, body, closed_over) =
                     new_def.loc_expr.value
                 {
                     let recursion = closure_recursivity(*symbol, closures);
 
-                    new_def.loc_expr.value = Closure(fn_var, name, recursion, args, body);
+                    new_def.loc_expr.value =
+                        Closure(fn_var, name, recursion, args, body, closed_over);
                 }
 
                 let is_recursive = successors(&symbol).contains(&symbol);
@@ -678,12 +679,13 @@ fn group_to_declaration(
                     let mut new_def = can_def.clone();
 
                     // Determine recursivity of closures that are not tail-recursive
-                    if let Closure(fn_var, name, Recursive::NotRecursive, args, body) =
+                    if let Closure(fn_var, name, Recursive::NotRecursive, args, body, closed_over) =
                         new_def.loc_expr.value
                     {
                         let recursion = closure_recursivity(symbol, closures);
 
-                        new_def.loc_expr.value = Closure(fn_var, name, recursion, args, body);
+                        new_def.loc_expr.value =
+                            Closure(fn_var, name, recursion, args, body, closed_over);
                     }
 
                     if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
@@ -810,6 +812,10 @@ fn canonicalize_pending_def<'a>(
 
                 let body = Box::new((body_expr, var_store.fresh()));
 
+                // This doesn't close over anything, because it's an
+                // annotation-only implementation that will immediately crash.
+                let closes_over = Vec::new();
+
                 Located {
                     value: Closure(
                         var_store.fresh(),
@@ -817,6 +823,7 @@ fn canonicalize_pending_def<'a>(
                         Recursive::NotRecursive,
                         underscores,
                         body,
+                        closes_over,
                     ),
                     region: loc_ann.region,
                 }
@@ -962,7 +969,7 @@ fn canonicalize_pending_def<'a>(
             if let (
                 &ast::Pattern::Identifier(ref _name),
                 &Pattern::Identifier(ref defined_symbol),
-                &Closure(fn_var, ref symbol, _, ref arguments, ref body),
+                &Closure(fn_var, ref symbol, _, ref arguments, ref body, ref closed_over),
             ) = (
                 &loc_pattern.value,
                 &loc_can_pattern.value,
@@ -1006,6 +1013,7 @@ fn canonicalize_pending_def<'a>(
                     is_recursive,
                     arguments.clone(),
                     body.clone(),
+                    closed_over.clone(),
                 );
             }
 
@@ -1086,7 +1094,7 @@ fn canonicalize_pending_def<'a>(
             if let (
                 &ast::Pattern::Identifier(ref _name),
                 &Pattern::Identifier(ref defined_symbol),
-                &Closure(fn_var, ref symbol, _, ref arguments, ref body),
+                &Closure(fn_var, ref symbol, _, ref arguments, ref body, ref closed_over),
             ) = (
                 &loc_pattern.value,
                 &loc_can_pattern.value,
@@ -1124,11 +1132,12 @@ fn canonicalize_pending_def<'a>(
                     });
 
                 loc_can_expr.value = Closure(
-                    fn_var,
+                    fn_var.clone(),
                     *symbol,
                     is_recursive,
                     arguments.clone(),
                     body.clone(),
+                    closed_over.clone(),
                 );
             }
 

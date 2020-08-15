@@ -305,7 +305,7 @@ mod test_can {
         match expr {
             LetRec(assignments, body, _, _) => {
                 match &assignments.get(i).map(|def| &def.loc_expr.value) {
-                    Some(Closure(_, _, recursion, _, _)) => recursion.clone(),
+                    Some(Closure(_, _, recursion, _, _, _)) => recursion.clone(),
                     Some(other @ _) => {
                         panic!("assignment at {} is not a closure, but a {:?}", i, other)
                     }
@@ -324,7 +324,7 @@ mod test_can {
                     get_closure(&body.value, i - 1)
                 } else {
                     match &def.loc_expr.value {
-                        Closure(_, _, recursion, _, _) => recursion.clone(),
+                        Closure(_, _, recursion, _, _, _) => recursion.clone(),
                         other @ _ => {
                             panic!("assignment at {} is not a closure, but a {:?}", i, other)
                         }

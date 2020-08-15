@@ -25,6 +25,7 @@ pub enum Layout<'a> {
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
     Pointer(&'a Layout<'a>),
+    NullPointer,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
@@ -104,6 +105,10 @@ impl<'a> Layout<'a> {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
             }
+            NullPointer => {
+                // Null pointers are always the number zero, so safe to memcpy.
+                true
+            }
         }
     }
 
@@ -138,8 +143,7 @@ impl<'a> Layout<'a> {
                 })
                 .max()
                 .unwrap_or_default(),
-            FunctionPointer(_, _) => pointer_size,
-            Pointer(_) => pointer_size,
+            FunctionPointer(_, _) | Pointer(_) | NullPointer => pointer_size,
         }
     }
 
@@ -164,7 +168,7 @@ impl<'a> Layout<'a> {
                 .map(|ls| ls.iter())
                 .flatten()
                 .any(|f| f.is_refcounted()),
-            FunctionPointer(_, _) | Pointer(_) => false,
+            FunctionPointer(_, _) | Pointer(_) | NullPointer => false,
         }
     }
 }

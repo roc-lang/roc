@@ -278,10 +278,23 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             args,
             ..
         } => {
-            let mut arg_tuples: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
+            let mut arg_values: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
 
             for symbol in args.iter() {
-                arg_tuples.push(load_symbol(env, scope, symbol));
+                arg_values.push(load_symbol(env, scope, symbol));
+            }
+
+            let is_closure = false; // TODO look up whether this is a closure using the symbol we're calling
+
+            if !is_closure {
+                // When calling by name, we always pass a null pointer as the last
+                // argument if it's not a closure. This will get dead-arg eliminated
+                // by LLVM when it's not needed (which it usually is not).
+                let null_ptr = env.ptr_int().ptr_type(AddressSpace::Generic).const_zero();
+
+                arg_values.push(null_ptr.into());
+            } else {
+                // TODO
             }
 
             call_with_args(
@@ -290,7 +303,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 &full_layout,
                 *name,
                 parent,
-                arg_tuples.into_bump_slice(),
+                arg_values.into_bump_slice(),
             )
         }
 
@@ -1008,8 +1021,7 @@ fn decrement_refcount_layout<'a, 'ctx, 'env>(
 
             env.builder.position_at_end(merge_block);
         }
-
-        FunctionPointer(_, _) | Pointer(_) => {}
+        FunctionPointer(_, _) | Pointer(_) | NullPointer => {}
     }
 }
 

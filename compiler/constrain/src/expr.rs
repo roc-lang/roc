@@ -306,7 +306,7 @@ pub fn constrain_expr(
             )
         }
         Var(symbol) => Lookup(*symbol, expected, region),
-        Closure(fn_var, _symbol, _recursive, args, boxed) => {
+        Closure(fn_var, _symbol, _recursive, args, boxed, _closed_over) => {
             let (loc_body_expr, ret_var) = boxed.as_ref();
             let mut state = PatternState {
                 headers: SendMap::default(),
@@ -1029,7 +1029,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
             // instead of the more generic "something is wrong with the body of `f`"
             match (&def.loc_expr.value, &signature) {
                 (
-                    Closure(fn_var, _symbol, _recursive, args, boxed),
+                    Closure(fn_var, _symbol, _recursive, args, boxed, _closed_over),
                     Type::Function(arg_types, _),
                 ) => {
                     let expected = annotation_expected;

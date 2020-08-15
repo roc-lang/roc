@@ -104,8 +104,11 @@ pub fn gen(
             match decl {
                 Declare(def) | Builtin(def) => match def.loc_pattern.value {
                     Identifier(symbol) => {
+                        // Top-level values never close over anything.
+                        let closed_over = &[];
+
                         match def.loc_expr.value {
-                            Closure(annotation, _, recursivity, loc_args, boxed_body) => {
+                            Closure(annotation, _, recursivity, loc_args, boxed_body, _) => {
                                 let is_tail_recursive =
                                     matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
 
@@ -148,6 +151,7 @@ pub fn gen(
                                     loc_body,
                                     is_tail_recursive,
                                     ret_var,
+                                    closed_over,
                                 );
                             }
                             body => {
@@ -160,6 +164,7 @@ pub fn gen(
                                     ),
                                     is_tail_recursive: false,
                                     body,
+                                    closed_over,
                                 };
 
                                 // If this is an exposed symbol, we need to
