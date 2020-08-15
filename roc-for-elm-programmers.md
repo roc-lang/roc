@@ -752,7 +752,7 @@ Whenever a named type variable in Roc has a `'` at the beginning, that means
 it is a *functionless* type - a type which cannot involve functions.
 If there are any functions in that type, it's a type mismatch. This is true
 whether `val` itself is a function, or if it's a type that wraps a function,
-like `{ predicate: Int -> Bool }` or `List (Bool -> Bool)`.
+like `{ predicate: (Int -> Bool) }` or `List (Bool -> Bool)`.
 
 So if you write `(\a -> a) == (\a -> a)` in Roc, you'll get a type mismatch.
 If you wrap both sides of that `==` in a record or list, you'll still get a
