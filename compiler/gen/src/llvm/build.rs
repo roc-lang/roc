@@ -1560,6 +1560,16 @@ fn run_low_level<'a, 'ctx, 'env>(
     use LowLevel::*;
 
     match op {
+        StrConcat => {
+            // Str.concat : Str, Str -> Str
+            debug_assert_eq!(args.len(), 2);
+
+            let first_str = load_symbol(env, scope, &args[0]);
+
+            let second_str = load_symbol(env, scope, &args[1]);
+
+            str_concat(env, first_str, second_str)
+        }
         ListLen => {
             // List.len : List * -> Int
             debug_assert_eq!(args.len(), 1);
@@ -1783,6 +1793,14 @@ fn run_low_level<'a, 'ctx, 'env>(
             InPlace::InPlace,
         ),
     }
+}
+
+fn str_concat<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    first_str: BasicValueEnum<'ctx>,
+    second_str: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    first_str
 }
 
 fn build_int_binop<'a, 'ctx, 'env>(

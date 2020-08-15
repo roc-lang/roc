@@ -3,6 +3,7 @@
 /// into an Expr when added directly by can::builtins
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LowLevel {
+    StrConcat,
     ListLen,
     ListGetUnsafe,
     ListSet,

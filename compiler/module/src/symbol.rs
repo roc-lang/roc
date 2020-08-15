@@ -652,6 +652,7 @@ define_builtins! {
         1 STR_AT_STR: "@Str" // the Str.@Str private tag
         2 STR_ISEMPTY: "isEmpty"
         3 STR_APPEND: "append"
+        4 STR_CONCAT: "concat"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

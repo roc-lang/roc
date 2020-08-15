@@ -1043,8 +1043,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![str_type(star1)], bool_type(star2))
     });
 
-    // append : Attr * Str, Attr * Str -> Attr * Str
-    add_type(Symbol::STR_APPEND, {
+    // Str.concat : Attr * Str, Attr * Str -> Attr * Str
+    add_type(Symbol::STR_CONCAT, {
         let_tvars! { star1, star2, star3 };
         unique_function(vec![str_type(star1), str_type(star2)], str_type(star3))
     });
