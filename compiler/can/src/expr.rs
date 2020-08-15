@@ -233,7 +233,7 @@ pub enum Expr {
         Vec<(Variable, Located<Pattern>)>,
         Box<(Located<Expr>, Variable)>,
         // Closed-over symbols
-        Vec<Symbol>,
+        Vec<(Symbol, Variable)>,
     ),
 
     // Product Types
@@ -595,10 +595,13 @@ pub fn canonicalize_expr<'a>(
                 free_vars.remove(&s);
             }
 
-            let mut closed_over = free_vars.into_iter().collect::<Vec<_>>();
+            let mut closed_over = free_vars
+                .into_iter()
+                .map(|symbol| (symbol, var_store.fresh()))
+                .collect::<Vec<_>>();
 
             // These need to be sorted because eventually we'll use them in a struct.
-            closed_over.sort();
+            closed_over.sort_by_key(|(symbol, _)| *symbol);
 
             output.union(body_output);
 

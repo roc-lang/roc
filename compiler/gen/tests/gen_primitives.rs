@@ -289,11 +289,11 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                    (\a -> a) 5.0
+                    (\a -> a) 5
                 "#
             ),
-            5.0,
-            f64
+            5,
+            i64
         );
     }
 
