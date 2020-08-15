@@ -24,7 +24,7 @@ pub struct PartialProc<'a> {
     pub pattern_symbols: Vec<'a, Symbol>,
     pub body: roc_can::expr::Expr,
     pub is_tail_recursive: bool,
-    pub closed_over: &'a [(Symbol, Variable)],
+    pub closed_over: &'a [Symbol],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -39,7 +39,7 @@ pub struct Proc<'a> {
     pub name: Symbol,
     pub args: &'a [(Layout<'a>, Symbol)],
     pub body: Stmt<'a>,
-    pub closed_over: &'a [(Symbol, Layout<'a>)],
+    pub closed_over: &'a [Symbol],
     pub ret_layout: Layout<'a>,
     pub is_tail_recursive: bool,
 }
@@ -133,10 +133,14 @@ impl<'a> Procs<'a> {
         loc_body: Located<roc_can::expr::Expr>,
         is_tail_recursive: bool,
         ret_var: Variable,
-        closed_over: &'a [(Symbol, Variable)],
+        closed_over: &'a [Symbol],
     ) {
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
+                let mut pattern_symbols =
+                    Vec::from_iter_in(pattern_symbols.iter().copied(), env.arena);
+                pattern_symbols.push(Symbol::UNDERSCORE);
+
                 // a named closure. Since these aren't specialized by the surrounding
                 // context, we can't add pending specializations for them yet.
                 // (If we did, all named polymorphic functions would immediately error
@@ -180,19 +184,29 @@ impl<'a> Procs<'a> {
         loc_body: Located<roc_can::expr::Expr>,
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
-        closed_over: &'a [(Symbol, Variable)],
+        closed_over: &'a [Symbol],
     ) -> Result<Layout<'a>, RuntimeError> {
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
         let is_tail_recursive = false;
 
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
-            Ok((pattern_vars, pattern_symbols, body)) => {
+            Ok((pattern_vars, mut pattern_symbols, body)) => {
                 // an anonymous closure. These will always be specialized already
                 // by the surrounding context, so we can add pending specializations
                 // for them immediately.
                 let layout = layout_cache
                     .from_var(env.arena, annotation, env.subs)
                     .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+                let layout = if let Layout::FunctionPointer(args, result) = layout {
+                    let mut args = Vec::from_iter_in(args.iter().cloned(), env.arena);
+                    args.push(Layout::NullPointer);
+                    Layout::FunctionPointer(args.into_bump_slice(), result)
+                } else {
+                    layout
+                };
+
+                pattern_symbols.push(Symbol::UNDERSCORE);
 
                 let tuple = (symbol, layout);
                 let already_specialized = self.specialized.contains_key(&tuple);
@@ -1027,15 +1041,20 @@ fn specialize<'a>(
     let mut proc_args = Vec::with_capacity_in(pattern_vars.len(), &env.arena);
 
     debug_assert_eq!(
-        &pattern_vars.len(),
-        &pattern_symbols.len(),
+        pattern_vars.len() + 1,
+        pattern_symbols.len(),
         "Tried to zip two vecs with different lengths!"
     );
-
     for (arg_var, arg_name) in pattern_vars.iter().zip(pattern_symbols.iter()) {
         let layout = layout_cache.from_var(&env.arena, *arg_var, env.subs)?;
 
         proc_args.push((layout, *arg_name));
+    }
+
+    if let Some(&Symbol::UNDERSCORE) = pattern_symbols.last() {
+        proc_args.push((Layout::NullPointer, Symbol::UNDERSCORE));
+    } else {
+        panic!("final argument should always be UNDERSCORE");
     }
 
     if closed_over.is_empty() {
@@ -1047,38 +1066,31 @@ fn specialize<'a>(
         //
         // (The caller may push a needless null pointer onto the stack, but
         // that's unavoidable.)
-        proc_args.push((Layout::NullPointer, env.unique_symbol()));
+        // proc_args.push((Layout::NullPointer, Symbol::UNDERSCORE));
     } else {
-        let mut struct_layouts = Vec::with_capacity_in(closed_over.len(), env.arena);
+        //        let mut struct_layouts = Vec::with_capacity_in(closed_over.len(), env.arena);
         let closed_over_symbol = env.unique_symbol();
+        //
+        //        // Step 1: Add a new struct arg to the end of the proc
+        //        let field_layouts = struct_layouts.into_bump_slice();
 
-        for (_, var) in closed_over.iter() {
-            let layout = layout_cache
-                .from_var(&env.arena, *var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO handle invalid closed-over value {:?}", err));
+        let placeholder = Layout::NullPointer;
+        proc_args.push((placeholder, closed_over_symbol));
 
-            struct_layouts.push(layout);
-        }
-
-        // Step 1: Add a new struct arg to the end of the proc
-        let field_layouts = struct_layouts.into_bump_slice();
-
-        proc_args.push((Layout::Struct(field_layouts), closed_over_symbol));
-
-        // Step 2: Have the proc start by destructuring that struct into local variables
-        let iter = closed_over.iter().zip(field_layouts);
-
-        for (index, ((symbol, _), layout)) in iter.enumerate() {
-            let expr = Expr::AccessAtIndex {
-                index: index as u64,
-                field_layouts,
-                structure: closed_over_symbol,
-                is_unwrapped: true,
-            };
-
-            specialized_body =
-                Stmt::Let(*symbol, expr, layout.clone(), arena.alloc(specialized_body));
-        }
+        //        // Step 2: Have the proc start by destructuring that struct into local variables
+        //        let iter = closed_over.iter().zip(field_layouts);
+        //
+        //        for (index, ((symbol, _), layout)) in iter.enumerate() {
+        //            let expr = Expr::AccessAtIndex {
+        //                index: index as u64,
+        //                field_layouts,
+        //                structure: closed_over_symbol,
+        //                is_unwrapped: true,
+        //            };
+        //
+        //            specialized_body =
+        //                Stmt::Let(*symbol, expr, layout.clone(), arena.alloc(specialized_body));
+        //        }
     };
 
     let proc_args = proc_args.into_bump_slice();
@@ -1086,21 +1098,14 @@ fn specialize<'a>(
     let specialized_body =
         crate::tail_recursion::make_tail_recursive(env, proc_name, specialized_body, proc_args);
 
-    let ret_layout = layout_cache
-        .from_var(&env.arena, ret_var, env.subs)
-        .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
+    let ret_layout = add_null_pointer(
+        env.arena,
+        layout_cache
+            .from_var(&env.arena, ret_var, env.subs)
+            .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err)),
+    );
 
-    let mut closed_over_layouts = Vec::with_capacity_in(closed_over.len(), env.arena);
-
-    for (symbol, var) in closed_over {
-        let layout = layout_cache
-            .from_var(&env.arena, *var, env.subs)
-            .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
-
-        closed_over_layouts.push((*symbol, layout));
-    }
-
-    let closed_over = closed_over_layouts.into_bump_slice();
+    let closed_over = closed_over;
     let proc = Proc {
         name: proc_name,
         args: proc_args,
@@ -1111,6 +1116,19 @@ fn specialize<'a>(
     };
 
     Ok(proc)
+}
+
+pub fn add_null_pointer<'a>(arena: &'a Bump, layout: Layout<'a>) -> Layout<'a> {
+    match layout {
+        Layout::FunctionPointer(args, ret) => {
+            let mut temp = Vec::from_iter_in(args.iter().cloned(), arena);
+            temp.push(Layout::NullPointer);
+
+            let ret = arena.alloc(add_null_pointer(arena, ret.clone()));
+            Layout::FunctionPointer(temp.into_bump_slice(), ret)
+        }
+        other => other,
+    }
 }
 
 pub fn with_hole<'a>(
@@ -1923,14 +1941,18 @@ pub fn with_hole<'a>(
                         arg_symbols.push(env.unique_symbol());
                     }
 
-                    let full_layout = layout_cache
-                        .from_var(env.arena, fn_var, env.subs)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
-                        });
+                    let full_layout = add_null_pointer(
+                        env.arena,
+                        layout_cache
+                            .from_var(env.arena, fn_var, env.subs)
+                            .unwrap_or_else(|err| {
+                                panic!("TODO turn fn_var into a RuntimeError {:?}", err)
+                            }),
+                    );
 
-                    let arg_layouts = match full_layout {
+                    let mut arg_layouts = match full_layout {
                         Layout::FunctionPointer(args, _) => args,
+
                         _ => unreachable!("function has layout that is not function pointer"),
                     };
 
@@ -1941,6 +1963,7 @@ pub fn with_hole<'a>(
                         });
 
                     let function_symbol = env.unique_symbol();
+
                     let arg_symbols = arg_symbols.into_bump_slice();
                     let mut result = Stmt::Let(
                         assigned,

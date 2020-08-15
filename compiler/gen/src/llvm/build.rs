@@ -294,7 +294,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                 arg_values.push(null_ptr.into());
             } else {
-                // TODO
+                let null_ptr = env.ptr_int().ptr_type(AddressSpace::Generic).const_zero();
+
+                arg_values.push(null_ptr.into());
             }
 
             call_with_args(
@@ -319,6 +321,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             for arg in args.iter() {
                 arg_vals.push(load_symbol(env, scope, arg));
             }
+
+            // by LLVM when it's not needed (which it usually is not).
+            let null_ptr = env.ptr_int().ptr_type(AddressSpace::Generic).const_zero();
+            arg_vals.push(null_ptr.into());
 
             let call = match sub_expr {
                 BasicValueEnum::PointerValue(ptr) => {
@@ -685,6 +691,8 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
     match stmt {
         Let(symbol, expr, layout, cont) => {
             let context = &env.context;
+
+            dbg!(&layout, symbol, &expr);
 
             let val = build_exp_expr(env, layout_ids, &scope, parent, &expr);
             let expr_bt = basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes);

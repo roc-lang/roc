@@ -185,6 +185,7 @@ pub fn helper_without_uniqueness<'a>(
     if main_fn.verify(true) {
         function_pass.run_on(&main_fn);
     } else {
+        env.module.print_to_stderr();
         panic!("Main function {} failed LLVM verification in NON-OPTIMIZED build. Uncomment things nearby to see more details.", main_fn_name);
     }
 
