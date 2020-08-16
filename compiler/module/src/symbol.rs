@@ -1,6 +1,6 @@
 use crate::ident::Ident;
 use inlinable_string::InlinableString;
-use roc_collections::all::{default_hasher, ImMap, MutMap};
+use roc_collections::all::{default_hasher, ImMap, MutMap, MutSet};
 use roc_region::all::Region;
 use std::collections::HashMap;
 use std::{fmt, u32};
@@ -553,6 +553,22 @@ macro_rules! define_builtins {
                     pub const $ident_const: Symbol = Symbol::new(ModuleId($module_id), IdentId($ident_id));
                 )+
             )+
+
+            /// The top-level builtin symbols.
+            ///
+            /// This is for closures; nothing should ever close over a top-level
+            /// builtin symbol.
+            pub fn top_level_builtins() -> MutSet<Symbol> {
+                let mut symbols = MutSet::default();
+
+                $(
+                    $(
+                        symbols.insert(Symbol::new(ModuleId($module_id), IdentId($ident_id)));
+                    )+
+                )+
+
+                symbols
+            }
 
             /// The default idents that should be in scope,
             /// and what symbols they should resolve to.

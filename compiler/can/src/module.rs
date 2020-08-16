@@ -73,7 +73,13 @@ pub fn canonicalize_module_defs<'a>(
         }));
     }
 
-    let mut env = Env::new(home, dep_idents, module_ids, exposed_ident_ids);
+    let mut env = Env::new(
+        home,
+        dep_idents,
+        module_ids,
+        exposed_ident_ids,
+        Symbol::top_level_builtins(),
+    );
     let mut lookups = Vec::with_capacity(num_deps);
     let mut rigid_variables = MutMap::default();
 

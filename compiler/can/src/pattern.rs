@@ -62,7 +62,7 @@ pub fn symbols_from_pattern(pattern: &Pattern) -> Vec<Symbol> {
     symbols
 }
 
-pub fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
+fn symbols_from_pattern_help(pattern: &Pattern, symbols: &mut Vec<Symbol>) {
     use Pattern::*;
 
     match pattern {

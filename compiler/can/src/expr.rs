@@ -595,7 +595,11 @@ pub fn canonicalize_expr<'a>(
                 free_vars.remove(&s);
             }
 
-            let mut closed_over = free_vars.into_iter().collect::<Vec<_>>();
+            let mut closed_over = free_vars
+                .into_iter()
+                // Never close over top-level symbols
+                .filter(|symbol| !env.top_level_symbols.contains(symbol))
+                .collect::<Vec<_>>();
 
             // These need to be sorted because eventually we'll use them in a struct.
             closed_over.sort();

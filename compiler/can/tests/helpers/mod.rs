@@ -7,7 +7,7 @@ use roc_can::expr::{canonicalize_expr, Expr};
 use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
-use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::parser::{loc, Fail, Parser, State};
@@ -75,7 +75,13 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
 
     let mut scope = Scope::new(home);
     let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(home, dep_idents, &module_ids, IdentIds::default());
+    let mut env = Env::new(
+        home,
+        dep_idents,
+        &module_ids,
+        IdentIds::default(),
+        Symbol::top_level_builtins(),
+    );
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,

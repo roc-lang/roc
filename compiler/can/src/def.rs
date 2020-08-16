@@ -6,7 +6,7 @@ use crate::expr::{
     canonicalize_expr, local_successors, references_from_call, references_from_local, Output,
     Recursive,
 };
-use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
+use crate::pattern::{bindings_from_patterns, canonicalize_pattern, symbols_from_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
@@ -45,6 +45,13 @@ pub struct CanDefs {
     pub can_defs_by_symbol: MutMap<Symbol, Def>,
     pub aliases: SendMap<Symbol, Alias>,
 }
+
+struct PendingDefOutput<'a> {
+    output: Output,
+    pending_def: PendingDef<'a>,
+    top_level_symbols: Vec<Symbol>,
+}
+
 /// A Def that has had patterns and type annnotations canonicalized,
 /// but no Expr canonicalization has happened yet. Also, it has had spaces
 /// and nesting resolved, and knows whether annotations are standalone or not.
@@ -148,7 +155,11 @@ pub fn canonicalize_defs<'a>(
         // Any time we have an Annotation followed immediately by a Body,
         // check to see if their patterns are equivalent. If they are,
         // turn it into a TypedBody. Otherwise, give an error.
-        let (new_output, pending_def) = match &loc_def.value {
+        let PendingDefOutput {
+            output: new_output,
+            pending_def,
+            top_level_symbols,
+        } = match &loc_def.value {
             Annotation(pattern, annotation) | Nested(Annotation(pattern, annotation)) => {
                 match iter.peek() {
                     Some(Located {
@@ -196,6 +207,8 @@ pub fn canonicalize_defs<'a>(
         // the exprs right now, they wouldn't have symbols in scope from defs
         // that get would have gotten added later in the defs list!
         pending.push(pending_def);
+
+        env.top_level_symbols.extend(top_level_symbols.into_iter());
     }
 
     if cfg!(debug_assertions) {
@@ -1299,7 +1312,7 @@ fn to_pending_def<'a>(
     def: &'a ast::Def<'a>,
     scope: &mut Scope,
     pattern_type: PatternType,
-) -> (Output, PendingDef<'a>) {
+) -> PendingDefOutput<'a> {
     use roc_parse::ast::Def::*;
 
     match def {
@@ -1313,11 +1326,18 @@ fn to_pending_def<'a>(
                 &loc_pattern.value,
                 loc_pattern.region,
             );
+            let top_level_symbols = if pattern_type == PatternType::TopLevelDef {
+                symbols_from_pattern(&loc_can_pattern.value)
+            } else {
+                Vec::new()
+            };
+            let pending_def = PendingDef::AnnotationOnly(loc_pattern, loc_can_pattern, loc_ann);
 
-            (
+            PendingDefOutput {
                 output,
-                PendingDef::AnnotationOnly(loc_pattern, loc_can_pattern, loc_ann),
-            )
+                pending_def,
+                top_level_symbols,
+            }
         }
         Body(loc_pattern, loc_expr) => {
             // This takes care of checking for shadowing and adding idents to scope.
@@ -1329,11 +1349,18 @@ fn to_pending_def<'a>(
                 &loc_pattern.value,
                 loc_pattern.region,
             );
+            let top_level_symbols = if pattern_type == PatternType::TopLevelDef {
+                symbols_from_pattern(&loc_can_pattern.value)
+            } else {
+                Vec::new()
+            };
+            let pending_def = PendingDef::Body(loc_pattern, loc_can_pattern, loc_expr);
 
-            (
+            PendingDefOutput {
                 output,
-                PendingDef::Body(loc_pattern, loc_can_pattern, loc_expr),
-            )
+                pending_def,
+                top_level_symbols,
+            }
         }
         TypedBody(loc_pattern, loc_ann, loc_expr) => pending_typed_body(
             env,
@@ -1344,7 +1371,6 @@ fn to_pending_def<'a>(
             scope,
             pattern_type,
         ),
-
         Alias { name, vars, ann } => {
             let region = Region::span_across(&name.region, &ann.region);
 
@@ -1375,31 +1401,52 @@ fn to_pending_def<'a>(
                                     region: loc_var.region,
                                 });
 
-                                return (Output::default(), PendingDef::InvalidAlias);
+                                let top_level_symbols = if pattern_type == PatternType::TopLevelDef
+                                {
+                                    vec![symbol]
+                                } else {
+                                    Vec::new()
+                                };
+
+                                return PendingDefOutput {
+                                    output: Output::default(),
+                                    pending_def: PendingDef::InvalidAlias,
+                                    top_level_symbols,
+                                };
                             }
                         }
                     }
-
-                    (
-                        Output::default(),
-                        PendingDef::Alias {
-                            name: Located {
-                                region: name.region,
-                                value: symbol,
-                            },
-                            vars: can_rigids,
-                            ann,
+                    let top_level_symbols = if pattern_type == PatternType::TopLevelDef {
+                        vec![symbol]
+                    } else {
+                        Vec::new()
+                    };
+                    let pending_def = PendingDef::Alias {
+                        name: Located {
+                            region: name.region,
+                            value: symbol,
                         },
-                    )
-                }
+                        vars: can_rigids,
+                        ann,
+                    };
 
-                Err((original_region, loc_shadowed_symbol)) => {
+                    PendingDefOutput {
+                        output: Output::default(),
+                        pending_def,
+                        top_level_symbols,
+                    }
+                }
+                Err((original_region, loc_shadowed_ident)) => {
                     env.problem(Problem::ShadowingInAnnotation {
                         original_region,
-                        shadow: loc_shadowed_symbol,
+                        shadow: loc_shadowed_ident,
                     });
 
-                    (Output::default(), PendingDef::InvalidAlias)
+                    PendingDefOutput {
+                        output: Output::default(),
+                        pending_def: PendingDef::InvalidAlias,
+                        top_level_symbols: Vec::new(),
+                    }
                 }
             }
         }
@@ -1418,7 +1465,7 @@ fn pending_typed_body<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     pattern_type: PatternType,
-) -> (Output, PendingDef<'a>) {
+) -> PendingDefOutput<'a> {
     // This takes care of checking for shadowing and adding idents to scope.
     let (output, loc_can_pattern) = canonicalize_pattern(
         env,
@@ -1428,11 +1475,18 @@ fn pending_typed_body<'a>(
         &loc_pattern.value,
         loc_pattern.region,
     );
+    let top_level_symbols = if pattern_type == PatternType::TopLevelDef {
+        symbols_from_pattern(&loc_can_pattern.value)
+    } else {
+        Vec::new()
+    };
+    let pending_def = PendingDef::TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr);
 
-    (
+    PendingDefOutput {
         output,
-        PendingDef::TypedBody(loc_pattern, loc_can_pattern, loc_ann, loc_expr),
-    )
+        pending_def,
+        top_level_symbols,
+    }
 }
 
 /// Make aliases recursive

@@ -29,6 +29,7 @@ pub struct Env<'a> {
 
     pub ident_ids: IdentIds,
     pub exposed_ident_ids: IdentIds,
+    pub top_level_symbols: MutSet<Symbol>,
 }
 
 impl<'a> Env<'a> {
@@ -37,6 +38,7 @@ impl<'a> Env<'a> {
         dep_idents: MutMap<ModuleId, IdentIds>,
         module_ids: &'a ModuleIds,
         exposed_ident_ids: IdentIds,
+        top_level_symbols: MutSet<Symbol>,
     ) -> Env<'a> {
         Env {
             home,
@@ -48,6 +50,7 @@ impl<'a> Env<'a> {
             closures: MutMap::default(),
             referenced_symbols: MutSet::default(),
             tailcallable_symbol: None,
+            top_level_symbols,
         }
     }
 

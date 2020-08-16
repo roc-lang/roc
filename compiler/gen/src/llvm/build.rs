@@ -13,7 +13,7 @@ use inkwell::context::Context;
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
-use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
+use inkwell::types::{BasicTypeEnum, FunctionType, IntType, PointerType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{FloatValue, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
@@ -21,7 +21,7 @@ use inkwell::{IntPredicate, OptimizationLevel};
 use roc_collections::all::{ImMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::ir::JoinPointId;
+use roc_mono::ir::{JoinPointId, Proc};
 use roc_mono::layout::{Builtin, Layout, MemoryMode};
 use target_lexicon::CallingConvention;
 
@@ -86,6 +86,10 @@ pub struct Env<'a, 'ctx, 'env> {
 impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     pub fn ptr_int(&self) -> IntType<'ctx> {
         ptr_int(self.context, self.ptr_bytes)
+    }
+
+    pub fn null_ptr_type(&self) -> PointerType<'ctx> {
+        self.ptr_int().ptr_type(AddressSpace::Generic)
     }
 }
 
@@ -290,7 +294,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // When calling by name, we always pass a null pointer as the last
                 // argument if it's not a closure. This will get dead-arg eliminated
                 // by LLVM when it's not needed (which it usually is not).
-                let null_ptr = env.ptr_int().ptr_type(AddressSpace::Generic).const_zero();
+                let null_ptr = env.null_ptr_type().const_zero();
 
                 arg_values.push(null_ptr.into());
             } else {
@@ -1384,24 +1388,31 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     symbol: Symbol,
     layout: &Layout<'a>,
-    proc: &roc_mono::ir::Proc<'a>,
+    proc: &Proc<'a>,
 ) -> FunctionValue<'ctx> {
     let args = proc.args;
     let arena = env.arena;
     let context = &env.context;
     let ret_type = basic_type_from_layout(arena, context, &proc.ret_layout, env.ptr_bytes);
-    let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
-    let mut arg_symbols = Vec::new_in(arena);
+    let mut arg_basic_types = Vec::with_capacity_in(args.len() + 1, arena);
 
-    for (layout, arg_symbol) in args.iter() {
+    for (layout, _symbol) in args.iter() {
         let arg_type = basic_type_from_layout(arena, env.context, &layout, env.ptr_bytes);
 
         arg_basic_types.push(arg_type);
-        arg_symbols.push(arg_symbol);
     }
 
-    let fn_type = get_fn_type(&ret_type, &arg_basic_types);
+    // Add the closed-over arg
+    let closed_over_arg = if proc.closed_over.is_empty() {
+        // We don't close over anything, so accept a null pointer
+        env.null_ptr_type().into()
+    } else {
+        todo!("TODO make a header for a proc that closes over things.");
+    };
 
+    arg_basic_types.push(closed_over_arg);
+
+    let fn_type = get_fn_type(&ret_type, &arg_basic_types);
     let fn_name = layout_ids
         .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
@@ -1425,7 +1436,7 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
 pub fn build_proc<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    proc: roc_mono::ir::Proc<'a>,
+    proc: Proc<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
     let args = proc.args;
@@ -1438,9 +1449,11 @@ pub fn build_proc<'a, 'ctx, 'env>(
     builder.position_at_end(entry);
 
     let mut scope = Scope::default();
+    let param_iter = &mut fn_val.get_param_iter();
+    let mut params_remaining = args.len();
 
     // Add args to scope
-    for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {
+    for (arg_val, (layout, arg_symbol)) in param_iter.zip(args) {
         set_name(arg_val, arg_symbol.ident_string(&env.interns));
 
         let alloca = create_entry_block_alloca(
@@ -1453,7 +1466,20 @@ pub fn build_proc<'a, 'ctx, 'env>(
         builder.build_store(alloca, arg_val);
 
         scope.insert(*arg_symbol, (layout.clone(), alloca));
+
+        params_remaining -= 1;
     }
+
+    debug_assert_eq!(
+        param_iter.next(),
+        None,
+        "There were leftover params that did not have a corresponding arg_basic_type and/or arg"
+    );
+
+    debug_assert_eq!(
+        params_remaining, 0,
+        "There were leftover params remaining after processing headers"
+    );
 
     let body = build_exp_stmt(env, layout_ids, &mut scope, fn_val, &proc.body);
 

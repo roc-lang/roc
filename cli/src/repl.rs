@@ -533,7 +533,13 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_bytes: &[u8]) -> Result<
 
     let mut scope = Scope::new(home);
     let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(home, dep_idents, &module_ids, IdentIds::default());
+    let mut env = Env::new(
+        home,
+        dep_idents,
+        &module_ids,
+        IdentIds::default(),
+        Symbol::top_level_builtins(),
+    );
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,
