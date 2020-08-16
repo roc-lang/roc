@@ -383,6 +383,30 @@ impl<'a, 'i> Env<'a, 'i> {
 
         Symbol::new(self.home, ident_id)
     }
+
+    pub fn closed_over_layouts(
+        &self,
+        layout_cache: &mut LayoutCache<'a>,
+        closed_over: &[Symbol],
+    ) -> &'a [(Symbol, Layout<'a>)] {
+        let arena = self.arena;
+        let subs = &self.subs;
+        let vars_by_symbol = &self.vars_by_symbol;
+        let mut closed_over_layouts = Vec::with_capacity_in(closed_over.len(), arena);
+
+        for symbol in closed_over {
+            let var = vars_by_symbol.get(&symbol).unwrap_or_else(|| {
+                unreachable!("vars_by_symbol did not contain symbol {:?}", symbol)
+            });
+            let layout = layout_cache
+                .from_var(arena, *var, subs)
+                .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
+
+            closed_over_layouts.push((*symbol, layout));
+        }
+
+        closed_over_layouts.into_bump_slice()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
@@ -1094,28 +1118,13 @@ fn specialize<'a>(
         .from_var(&env.arena, ret_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
-    let mut closed_over_layouts = Vec::with_capacity_in(closed_over.len(), env.arena);
-
-    for symbol in closed_over {
-        let var = env
-            .vars_by_symbol
-            .get(&symbol)
-            .unwrap_or_else(|| unreachable!("vars_by_symbol did not contain symbol {:?}", symbol));
-        let layout = layout_cache
-            .from_var(&env.arena, *var, env.subs)
-            .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
-
-        closed_over_layouts.push((*symbol, layout));
-    }
-
-    let closed_over = closed_over_layouts.into_bump_slice();
     let proc = Proc {
         name: proc_name,
         args: proc_args,
         body: specialized_body,
         ret_layout,
         is_tail_recursive,
-        closed_over,
+        closed_over: env.closed_over_layouts(layout_cache, closed_over),
     };
 
     Ok(proc)
