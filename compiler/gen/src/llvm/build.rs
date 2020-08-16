@@ -1373,7 +1373,7 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     symbol: Symbol,
     layout: &Layout<'a>,
     proc: &roc_mono::ir::Proc<'a>,
-) -> (FunctionValue<'ctx>, Vec<'a, BasicTypeEnum<'ctx>>) {
+) -> FunctionValue<'ctx> {
     let args = proc.args;
     let arena = env.arena;
     let context = &env.context;
@@ -1407,15 +1407,14 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
         fn_val.set_call_conventions(FAST_CALL_CONV);
     }
 
-    (fn_val, arg_basic_types)
+    fn_val
 }
 
 pub fn build_proc<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+    env: &'a Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     proc: roc_mono::ir::Proc<'a>,
     fn_val: FunctionValue<'ctx>,
-    arg_basic_types: Vec<'a, BasicTypeEnum<'ctx>>,
 ) {
     let args = proc.args;
     let context = &env.context;
@@ -1429,13 +1428,15 @@ pub fn build_proc<'a, 'ctx, 'env>(
     let mut scope = Scope::default();
 
     // Add args to scope
-    for ((arg_val, arg_type), (layout, arg_symbol)) in
-        fn_val.get_param_iter().zip(arg_basic_types).zip(args)
-    {
+    for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {
         set_name(arg_val, arg_symbol.ident_string(&env.interns));
 
-        let alloca =
-            create_entry_block_alloca(env, fn_val, arg_type, arg_symbol.ident_string(&env.interns));
+        let alloca = create_entry_block_alloca(
+            env,
+            fn_val,
+            arg_val.get_type(),
+            arg_symbol.ident_string(&env.interns),
+        );
 
         builder.build_store(alloca, arg_val);
 
