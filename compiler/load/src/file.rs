@@ -6,7 +6,7 @@ use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::all::{default_hasher, MutMap, MutSet};
+use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
 use roc_constrain::module::{
     constrain_imports, load_builtin_aliases, pre_constrain_imports, ConstrainableImports, Import,
 };
@@ -46,6 +46,7 @@ pub struct LoadedModule {
     pub type_problems: Vec<solve::TypeError>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub all_vars_by_symbol: SendMap<Symbol, Variable>,
     pub src: Box<str>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
 }
@@ -93,6 +94,7 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         problems: Vec<solve::TypeError>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+        all_vars_by_symbol: SendMap<Symbol, Variable>,
         src: &'a str,
     },
 }
@@ -481,6 +483,7 @@ pub fn load(
                 Msg::Finished {
                     solved_subs,
                     problems,
+                    all_vars_by_symbol,
                     exposed_vars_by_symbol,
                     src,
                 } => {
@@ -499,6 +502,7 @@ pub fn load(
                         solved_subs,
                         problems,
                         exposed_vars_by_symbol,
+                        all_vars_by_symbol,
                         src,
                     ));
                 }
@@ -771,6 +775,7 @@ fn update<'a>(
                         solved_subs,
                         problems: solved_module.problems,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
+                        all_vars_by_symbol: solved_module.all_vars_by_symbol,
                         src,
                     })
                     .map_err(|_| LoadingProblem::MsgChannelDied)?;
@@ -842,6 +847,7 @@ fn finish<'a>(
     solved: Solved<Subs>,
     problems: Vec<solve::TypeError>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    all_vars_by_symbol: SendMap<Symbol, Variable>,
     src: &'a str,
 ) -> LoadedModule {
     state.type_problems.extend(problems);
@@ -865,6 +871,7 @@ fn finish<'a>(
         declarations_by_id: state.declarations_by_id,
         exposed_vars_by_symbol,
         src: src.into(),
+        all_vars_by_symbol,
         timings: state.timings,
     }
 }

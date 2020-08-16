@@ -3,7 +3,7 @@ use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{Builtin, Layout, LayoutCache, LayoutProblem};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::{default_hasher, MutMap, MutSet};
+use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -24,7 +24,7 @@ pub struct PartialProc<'a> {
     pub pattern_symbols: Vec<'a, Symbol>,
     pub body: roc_can::expr::Expr,
     pub is_tail_recursive: bool,
-    pub closed_over: &'a [(Symbol, Variable)],
+    pub closed_over: &'a [Symbol],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -133,7 +133,7 @@ impl<'a> Procs<'a> {
         loc_body: Located<roc_can::expr::Expr>,
         is_tail_recursive: bool,
         ret_var: Variable,
-        closed_over: &'a [(Symbol, Variable)],
+        closed_over: &'a [Symbol],
     ) {
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
@@ -180,7 +180,7 @@ impl<'a> Procs<'a> {
         loc_body: Located<roc_can::expr::Expr>,
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
-        closed_over: &'a [(Symbol, Variable)],
+        closed_over: &'a [Symbol],
     ) -> Result<Layout<'a>, RuntimeError> {
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
         let is_tail_recursive = false;
@@ -372,6 +372,7 @@ pub struct Env<'a, 'i> {
     pub problems: &'i mut std::vec::Vec<MonoProblem>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
+    pub vars_by_symbol: SendMap<Symbol, Variable>,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -1052,7 +1053,10 @@ fn specialize<'a>(
         let mut struct_layouts = Vec::with_capacity_in(closed_over.len(), env.arena);
         let closed_over_symbol = env.unique_symbol();
 
-        for (_, var) in closed_over.iter() {
+        for symbol in closed_over.iter() {
+            let var = env.vars_by_symbol.get(&symbol).unwrap_or_else(|| {
+                unreachable!("vars_by_symbol did not contain symbol {:?}", symbol)
+            });
             let layout = layout_cache
                 .from_var(&env.arena, *var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO handle invalid closed-over value {:?}", err));
@@ -1068,7 +1072,7 @@ fn specialize<'a>(
         // Step 2: Have the proc start by destructuring that struct into local variables
         let iter = closed_over.iter().zip(field_layouts);
 
-        for (index, ((symbol, _), layout)) in iter.enumerate() {
+        for (index, (symbol, layout)) in iter.enumerate() {
             let expr = Expr::AccessAtIndex {
                 index: index as u64,
                 field_layouts,
@@ -1092,7 +1096,11 @@ fn specialize<'a>(
 
     let mut closed_over_layouts = Vec::with_capacity_in(closed_over.len(), env.arena);
 
-    for (symbol, var) in closed_over {
+    for symbol in closed_over {
+        let var = env
+            .vars_by_symbol
+            .get(&symbol)
+            .unwrap_or_else(|| unreachable!("vars_by_symbol did not contain symbol {:?}", symbol));
         let layout = layout_cache
             .from_var(&env.arena, *var, env.subs)
             .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));

@@ -71,7 +71,8 @@ mod test_reporting {
         }
 
         let mut unify_problems = Vec::new();
-        let (_content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+        let (_content, mut subs, vars_by_symbol) =
+            infer_expr(subs, &mut unify_problems, &constraint, var);
 
         name_all_type_vars(var, &mut subs);
 
@@ -93,6 +94,7 @@ mod test_reporting {
                 problems: &mut mono_problems,
                 home,
                 ident_ids: &mut ident_ids,
+                vars_by_symbol,
             };
             let _mono_expr = Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
         }

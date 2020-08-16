@@ -40,7 +40,8 @@ mod test_mono {
 
         let subs = Subs::new(var_store.into());
         let mut unify_problems = Vec::new();
-        let (_content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+        let (_content, mut subs, vars_by_symbol) =
+            infer_expr(subs, &mut unify_problems, &constraint, var);
 
         // Compile and add all the Procs before adding main
         let mut procs = roc_mono::ir::Procs::default();
@@ -57,6 +58,7 @@ mod test_mono {
             problems: &mut mono_problems,
             home,
             ident_ids: &mut ident_ids,
+            vars_by_symbol,
         };
 
         let mut layout_cache = LayoutCache::default();

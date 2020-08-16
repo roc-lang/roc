@@ -89,6 +89,7 @@ pub fn gen(
         problems: &mut mono_problems,
         home,
         ident_ids: &mut ident_ids,
+        vars_by_symbol: loaded.all_vars_by_symbol,
     };
 
     // Add modules' decls to Procs

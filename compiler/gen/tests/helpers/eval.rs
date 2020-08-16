@@ -44,7 +44,8 @@ pub fn helper_without_uniqueness<'a>(
 
     let subs = Subs::new(var_store.into());
     let mut unify_problems = Vec::new();
-    let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+    let (content, mut subs, vars_by_symbol) =
+        infer_expr(subs, &mut unify_problems, &constraint, var);
 
     assert_eq!(
         unify_problems,
@@ -103,6 +104,7 @@ pub fn helper_without_uniqueness<'a>(
         problems: &mut mono_problems,
         home,
         ident_ids: &mut ident_ids,
+        vars_by_symbol,
     };
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
@@ -235,7 +237,8 @@ pub fn helper_with_uniqueness<'a>(
     assert_eq!(errors, Vec::new(), "Encountered errors: {:?}", errors);
 
     let mut unify_problems = Vec::new();
-    let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+    let (content, mut subs, vars_by_symbol) =
+        infer_expr(subs, &mut unify_problems, &constraint, var);
 
     assert_eq!(
         unify_problems,
@@ -293,6 +296,7 @@ pub fn helper_with_uniqueness<'a>(
         problems: &mut mono_problems,
         home,
         ident_ids: &mut ident_ids,
+        vars_by_symbol,
     };
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);

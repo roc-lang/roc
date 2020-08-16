@@ -173,7 +173,8 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
 
     let subs = Subs::new(var_store.into());
     let mut type_problems = Vec::new();
-    let (content, mut subs) = infer_expr(subs, &mut type_problems, &constraint, var);
+    let (content, mut subs, vars_by_symbol) =
+        infer_expr(subs, &mut type_problems, &constraint, var);
 
     // SAFETY: we've already verified that this is valid UTF-8 during parsing.
     let src_lines: Vec<&str> = unsafe { from_utf8_unchecked(src).split('\n').collect() };
@@ -255,6 +256,7 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
         problems: &mut mono_problems,
         home,
         ident_ids: &mut ident_ids,
+        vars_by_symbol,
     };
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
@@ -379,7 +381,7 @@ pub fn infer_expr(
     problems: &mut Vec<solve::TypeError>,
     constraint: &Constraint,
     expr_var: Variable,
-) -> (Content, Subs) {
+) -> (Content, Subs, SendMap<Symbol, Variable>) {
     let env = solve::Env {
         aliases: MutMap::default(),
         vars_by_symbol: SendMap::default(),
@@ -388,7 +390,7 @@ pub fn infer_expr(
 
     let content = solved.inner().get_without_compacting(expr_var).content;
 
-    (content, solved.into_inner())
+    (content, solved.into_inner(), env.vars_by_symbol)
 }
 
 pub fn parse_loc_with<'a>(

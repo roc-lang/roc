@@ -12,6 +12,7 @@ pub struct SolvedModule {
     pub solved_types: MutMap<Symbol, SolvedType>,
     pub aliases: MutMap<Symbol, Alias>,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub all_vars_by_symbol: SendMap<Symbol, Variable>,
     pub problems: Vec<solve::TypeError>,
 }
 
@@ -70,6 +71,7 @@ pub fn solve_module(
         exposed_vars_by_symbol,
         solved_types,
         problems,
+        all_vars_by_symbol: env.vars_by_symbol,
         aliases: env.aliases,
     };
 
