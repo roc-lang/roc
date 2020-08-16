@@ -1475,7 +1475,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
     debug_assert_eq!(
         param_iter.next(),
         None,
-        "There were leftover params that did not have a corresponding arg_basic_type and/or arg"
+        "There were leftover params that did not have a corresponding arg"
     );
 
     debug_assert_eq!(
