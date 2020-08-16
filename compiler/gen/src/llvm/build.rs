@@ -1439,7 +1439,6 @@ pub fn build_proc<'a, 'ctx, 'env>(
     proc: Proc<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
-    let args = proc.args;
     let context = &env.context;
 
     // Add a basic block for the entry point
@@ -1450,10 +1449,10 @@ pub fn build_proc<'a, 'ctx, 'env>(
 
     let mut scope = Scope::default();
     let param_iter = &mut fn_val.get_param_iter();
-    let mut params_remaining = args.len();
+    let mut params_remaining = proc.args.len();
 
     // Add args to scope
-    for (arg_val, (layout, arg_symbol)) in param_iter.zip(args) {
+    for (arg_val, (layout, arg_symbol)) in param_iter.zip(proc.args) {
         set_name(arg_val, arg_symbol.ident_string(&env.interns));
 
         let alloca = create_entry_block_alloca(
@@ -1465,7 +1464,10 @@ pub fn build_proc<'a, 'ctx, 'env>(
 
         builder.build_store(alloca, arg_val);
 
-        scope.insert(*arg_symbol, (layout.clone(), alloca));
+        // Don't insert `_` symbols (like the closed-over arg) into scope
+        if *arg_symbol != Symbol::UNDERSCORE {
+            scope.insert(*arg_symbol, (layout.clone(), alloca));
+        }
 
         params_remaining -= 1;
     }

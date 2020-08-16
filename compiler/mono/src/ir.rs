@@ -1072,7 +1072,7 @@ fn specialize<'a>(
         //
         // (The caller may push a needless null pointer onto the stack, but
         // that's unavoidable.)
-        proc_args.push((Layout::NullPointer, env.unique_symbol()));
+        proc_args.push((Layout::NullPointer, Symbol::UNDERSCORE));
     } else {
         let mut struct_layouts = Vec::with_capacity_in(closed_over.len(), env.arena);
         let closed_over_symbol = env.unique_symbol();
