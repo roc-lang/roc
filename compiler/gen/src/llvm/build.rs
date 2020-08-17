@@ -1,7 +1,7 @@
 use crate::layout_id::LayoutIds;
 use crate::llvm::build_list::{
-    allocate_list, empty_polymorphic_list, list_append, list_concat, list_get_unsafe, list_join,
-    list_len, list_prepend, list_repeat, list_reverse, list_set, list_single,
+    allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_get_unsafe,
+    list_join, list_len, list_prepend, list_repeat, list_reverse, list_set, list_single,
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{basic_type_from_layout, collection, get_fn_type, ptr_int};
@@ -15,7 +15,7 @@ use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
-use inkwell::values::{FloatValue, FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{BasicValue, FloatValue, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
 use inkwell::{IntPredicate, OptimizationLevel};
 use roc_collections::all::{ImMap, MutSet};
@@ -218,41 +218,68 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
             if str_literal.is_empty() {
-                panic!("TODO build an empty string in LLVM");
+                empty_list(env)
             } else {
                 let ctx = env.context;
                 let builder = env.builder;
-                let str_len = str_literal.len() + 1/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
 
-                let byte_type = ctx.i8_type();
-                let nul_terminator = byte_type.const_zero();
-                let len_val = ctx.i64_type().const_int(str_len as u64, false);
-                let ptr = env
-                    .builder
-                    .build_array_malloc(ctx.i8_type(), len_val, "str_ptr")
-                    .unwrap();
+                let len_u64 = str_literal.len() as u64;
+                let elem_layout = Layout::Builtin(Builtin::Int8);
 
-                // TODO check if malloc returned null; if so, runtime error for OOM!
+                let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
 
-                // Copy the bytes from the string literal into the array
-                for (index, byte) in str_literal.bytes().enumerate() {
+                let ptr = {
+                    let bytes_len = elem_bytes * len_u64;
+                    let len_type = env.ptr_int();
+                    let len = len_type.const_int(bytes_len, false);
+
+                    allocate_list(env, &elem_layout, len)
+
+                    // TODO check if malloc returned null; if so, runtime error for OOM!
+                };
+
+                // Copy the elements from the list literal into the array
+                for (index, char) in str_literal.as_bytes().iter().enumerate() {
+                    let val = env
+                        .context
+                        .i8_type()
+                        .const_int(*char as u64, false)
+                        .as_basic_value_enum();
                     let index_val = ctx.i64_type().const_int(index as u64, false);
                     let elem_ptr =
-                        unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "byte") };
+                        unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
 
-                    builder.build_store(elem_ptr, byte_type.const_int(byte as u64, false));
+                    builder.build_store(elem_ptr, val);
                 }
 
-                // Add a NUL terminator at the end.
-                // TODO: Instead of NUL-terminating, return a struct
-                // with the pointer and also the length and capacity.
-                let index_val = ctx.i64_type().const_int(str_len as u64 - 1, false);
-                let elem_ptr =
-                    unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "nul_terminator") };
+                let ptr_bytes = env.ptr_bytes;
+                let int_type = ptr_int(ctx, ptr_bytes);
+                let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+                let struct_type = collection(ctx, ptr_bytes);
+                let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
+                let mut struct_val;
 
-                builder.build_store(elem_ptr, nul_terminator);
+                // Store the pointer
+                struct_val = builder
+                    .build_insert_value(
+                        struct_type.get_undef(),
+                        ptr_as_int,
+                        Builtin::WRAPPER_PTR,
+                        "insert_ptr",
+                    )
+                    .unwrap();
 
-                BasicValueEnum::PointerValue(ptr)
+                // Store the length
+                struct_val = builder
+                    .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
+                    .unwrap();
+
+                // Bitcast to an array of raw bytes
+                builder.build_bitcast(
+                    struct_val.into_struct_value(),
+                    collection(ctx, ptr_bytes),
+                    "cast_collection",
+                )
             }
         }
     }
