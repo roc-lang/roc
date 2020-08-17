@@ -17,7 +17,7 @@ mod gen_primitives {
     #[test]
     fn basic_str() {
         assert_evals_to!("\"\"", "", &'static str);
-        // assert_evals_to!("\"shirt and hat\"", "shirt and hat", &'static str);
+        assert_evals_to!("\"shirt and hat\"", "shirt and hat", &'static str);
     }
 
     #[test]
