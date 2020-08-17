@@ -396,7 +396,10 @@ impl<'a, 'i> Env<'a, 'i> {
 
         for symbol in closed_over {
             let var = vars_by_symbol.get(&symbol).unwrap_or_else(|| {
-                unreachable!("vars_by_symbol did not contain symbol {:?}", symbol)
+                unreachable!(
+                    "vars_by_symbol did not contain symbol {:?} in closed_over_layouts",
+                    symbol
+                )
             });
             let layout = layout_cache
                 .from_var(arena, *var, subs)
@@ -1079,7 +1082,10 @@ fn specialize<'a>(
 
         for symbol in closed_over.iter() {
             let var = env.vars_by_symbol.get(&symbol).unwrap_or_else(|| {
-                unreachable!("vars_by_symbol did not contain symbol {:?}", symbol)
+                unreachable!(
+                    "vars_by_symbol did not contain symbol {:?} during specialization",
+                    symbol
+                )
             });
             let layout = layout_cache
                 .from_var(&env.arena, *var, env.subs)
