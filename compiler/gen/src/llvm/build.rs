@@ -1402,16 +1402,6 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
         arg_basic_types.push(arg_type);
     }
 
-    // Add the closed-over arg
-    let closed_over_arg = if proc.closed_over.is_empty() {
-        // We don't close over anything, so accept a null pointer
-        env.null_ptr_type().into()
-    } else {
-        todo!("TODO make a header for a proc that closes over things.");
-    };
-
-    arg_basic_types.push(closed_over_arg);
-
     let fn_type = get_fn_type(&ret_type, &arg_basic_types);
     let fn_name = layout_ids
         .get(symbol, layout)
