@@ -324,6 +324,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 arg_vals.push(load_symbol(env, scope, arg));
             }
 
+            // Every function's last argument is a pointer to closed-over values.
+            arg_vals.push(env.null_ptr_type().const_zero().into());
+
             let call = match sub_expr {
                 BasicValueEnum::PointerValue(ptr) => {
                     env.builder.build_call(ptr, arg_vals.as_slice(), "tmp")
@@ -1394,7 +1397,7 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     let arena = env.arena;
     let context = &env.context;
     let ret_type = basic_type_from_layout(arena, context, &proc.ret_layout, env.ptr_bytes);
-    let mut arg_basic_types = Vec::with_capacity_in(args.len() + 1, arena);
+    let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
     for (layout, _symbol) in args.iter() {
         let arg_type = basic_type_from_layout(arena, env.context, &layout, env.ptr_bytes);

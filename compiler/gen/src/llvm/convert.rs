@@ -60,13 +60,18 @@ pub fn basic_type_from_layout<'ctx>(
     match layout {
         FunctionPointer(args, ret_layout) => {
             let ret_type = basic_type_from_layout(arena, context, &ret_layout, ptr_bytes);
-            let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
+            let mut arg_basic_types = Vec::with_capacity_in(args.len() + 1, arena);
 
             for arg_layout in args.iter() {
                 arg_basic_types.push(basic_type_from_layout(
                     arena, context, arg_layout, ptr_bytes,
                 ));
             }
+
+            // Every function's last argument is a pointer to closed-over values.
+            let ptr_type = context.i64_type().ptr_type(AddressSpace::Generic).into();
+
+            arg_basic_types.push(ptr_type);
 
             let fn_type = get_fn_type(&ret_type, arg_basic_types.into_bump_slice());
             let ptr_type = fn_type.ptr_type(AddressSpace::Generic);
