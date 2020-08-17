@@ -14,7 +14,8 @@ len : Set * -> Len
 
 add : Set 'elem, 'elem -> Set 'elem
 
-rem : Set 'elem, 'elem -> Set 'elem
+## Drops the given element from the set.
+drop : Set 'elem, 'elem -> Set 'elem
 
 ## Convert each element in the set to something new, by calling a conversion
 ## function on each of them. Then return a new set of the converted values.
