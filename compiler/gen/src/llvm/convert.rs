@@ -150,13 +150,9 @@ pub fn basic_type_from_layout<'ctx>(
             Float64 => context.f64_type().as_basic_type_enum(),
             Float32 => context.f32_type().as_basic_type_enum(),
             Float16 => context.f16_type().as_basic_type_enum(),
-            Str | EmptyStr => context
-                .i8_type()
-                .ptr_type(AddressSpace::Generic)
-                .as_basic_type_enum(),
             Map(_, _) | EmptyMap => panic!("TODO layout_to_basic_type for Builtin::Map"),
             Set(_) | EmptySet => panic!("TODO layout_to_basic_type for Builtin::Set"),
-            List(_, _) => collection(context, ptr_bytes).into(),
+            List(_, _) | Str | EmptyStr => collection(context, ptr_bytes).into(),
             EmptyList => BasicTypeEnum::StructType(collection(context, ptr_bytes)),
         },
     }
