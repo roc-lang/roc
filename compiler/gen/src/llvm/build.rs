@@ -1159,7 +1159,10 @@ pub fn load_symbol<'a, 'ctx, 'env>(
         Some((_, ptr)) => env
             .builder
             .build_load(*ptr, symbol.ident_string(&env.interns)),
-        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+        None => panic!(
+            "During load_symbol, there was no entry for {:?} in scope {:?}",
+            symbol, scope
+        ),
     }
 }
 
@@ -1174,7 +1177,10 @@ pub fn load_symbol_and_layout<'a, 'ctx, 'env, 'b>(
                 .build_load(*ptr, symbol.ident_string(&env.interns)),
             layout,
         ),
-        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+        None => panic!(
+            "During load_symbol_and_layout, there was no entry for {:?} in scope {:?}",
+            symbol, scope
+        ),
     }
 }
 
