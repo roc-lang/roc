@@ -1220,8 +1220,8 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Test.0 (Test.2, Test.3, #Attr.0):
-                    jump Test.20 Test.2 Test.3;
-                    joinpoint Test.20 Test.2 Test.3:
+                    jump Test.20 Test.2 Test.3 #Attr.0;
+                    joinpoint Test.20 Test.2 Test.3 #Attr.0:
                         let Test.17 = true;
                         let Test.18 = 0i64;
                         let Test.19 = lowlevel Eq Test.18 Test.2;

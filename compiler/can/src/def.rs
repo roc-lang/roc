@@ -981,7 +981,7 @@ fn canonicalize_pending_def<'a>(
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
             if let (
                 &ast::Pattern::Identifier(ref _name),
-                &Pattern::Identifier(ref defined_symbol),
+                &Pattern::Identifier(defined_symbol),
                 &Closure(fn_var, ref symbol, _, ref arguments, ref body, ref closed_over),
             ) = (
                 &loc_pattern.value,
@@ -1003,21 +1003,28 @@ fn canonicalize_pending_def<'a>(
                 // closures don't have a name, and therefore pick a fresh symbol. But in this
                 // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
                 // and we want to reference it by that name.
-                env.closures.insert(*defined_symbol, references);
+                env.closures.insert(defined_symbol, references);
 
                 // The closure is self tail recursive iff it tail calls itself (by defined name).
                 let is_recursive = match can_output.tail_call {
-                    Some(ref symbol) if symbol == defined_symbol => Recursive::TailRecursive,
+                    Some(symbol) if symbol == defined_symbol => Recursive::TailRecursive,
                     _ => Recursive::NotRecursive,
                 };
 
                 // Recursion doesn't count as referencing. (If it did, all recursive functions
                 // would result in circular def errors!)
                 refs_by_symbol
-                    .entry(*defined_symbol)
+                    .entry(defined_symbol)
                     .and_modify(|(_, refs)| {
-                        refs.lookups = refs.lookups.without(defined_symbol);
+                        refs.lookups = refs.lookups.without(&defined_symbol);
                     });
+
+                // Recursive functions should not close over themselves.
+                let closed_over = closed_over
+                    .iter()
+                    .cloned()
+                    .filter(|&sym| sym != defined_symbol)
+                    .collect::<Vec<Symbol>>();
 
                 // renamed_closure_def = Some(&defined_symbol);
                 loc_can_expr.value = Closure(
@@ -1026,7 +1033,7 @@ fn canonicalize_pending_def<'a>(
                     is_recursive,
                     arguments.clone(),
                     body.clone(),
-                    closed_over.clone(),
+                    closed_over,
                 );
             }
 
@@ -1106,7 +1113,7 @@ fn canonicalize_pending_def<'a>(
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
             if let (
                 &ast::Pattern::Identifier(ref _name),
-                &Pattern::Identifier(ref defined_symbol),
+                &Pattern::Identifier(defined_symbol),
                 &Closure(fn_var, ref symbol, _, ref arguments, ref body, ref closed_over),
             ) = (
                 &loc_pattern.value,
@@ -1128,21 +1135,28 @@ fn canonicalize_pending_def<'a>(
                 // closures don't have a name, and therefore pick a fresh symbol. But in this
                 // case, the closure has a proper name (e.g. `foo` in `foo = \x y -> ...`
                 // and we want to reference it by that name.
-                env.closures.insert(*defined_symbol, references);
+                env.closures.insert(defined_symbol, references);
 
                 // The closure is self tail recursive iff it tail calls itself (by defined name).
                 let is_recursive = match can_output.tail_call {
-                    Some(ref symbol) if symbol == defined_symbol => Recursive::TailRecursive,
+                    Some(symbol) if symbol == defined_symbol => Recursive::TailRecursive,
                     _ => Recursive::NotRecursive,
                 };
 
                 // Recursion doesn't count as referencing. (If it did, all recursive functions
                 // would result in circular def errors!)
                 refs_by_symbol
-                    .entry(*defined_symbol)
+                    .entry(defined_symbol)
                     .and_modify(|(_, refs)| {
-                        refs.lookups = refs.lookups.without(defined_symbol);
+                        refs.lookups = refs.lookups.without(&defined_symbol);
                     });
+
+                // Recursive functions should not close over themselves.
+                let closed_over = closed_over
+                    .iter()
+                    .cloned()
+                    .filter(|&sym| sym != defined_symbol)
+                    .collect::<Vec<Symbol>>();
 
                 loc_can_expr.value = Closure(
                     fn_var.clone(),
@@ -1150,7 +1164,7 @@ fn canonicalize_pending_def<'a>(
                     is_recursive,
                     arguments.clone(),
                     body.clone(),
-                    closed_over.clone(),
+                    closed_over,
                 );
             }
 
