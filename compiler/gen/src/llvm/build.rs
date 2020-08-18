@@ -876,9 +876,15 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let context = env.context;
             let (cont_block, argument_pointers) = scope.join_points.get(join_point).unwrap();
 
-            for (pointer, argument) in argument_pointers.iter().zip(arguments.iter()) {
-                let value = load_symbol(env, scope, argument);
-                builder.build_store(*pointer, value);
+            for (pointer, &argument) in argument_pointers.iter().zip(arguments.iter()) {
+                // Don't pass underscore arguments along, because there may be
+                // more than one argument with that name (and none of them
+                // will be in `scope`). This is fine because they'll never
+                // be loaded on the other side anyway.
+                if argument != Symbol::UNDERSCORE {
+                    let value = load_symbol(env, scope, &argument);
+                    builder.build_store(*pointer, value);
+                }
             }
 
             builder.build_unconditional_branch(*cont_block);
