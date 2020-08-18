@@ -39,11 +39,11 @@ pub fn infer_expr(
         aliases: MutMap::default(),
         vars_by_symbol: SendMap::default(),
     };
-    let (solved, _) = solve::run(&env, problems, subs, constraint);
+    let (solved, _, vars_by_symbol) = solve::run(&env, problems, subs, constraint);
 
     let content = solved.inner().get_without_compacting(expr_var).content;
 
-    (content, solved.into_inner(), env.vars_by_symbol)
+    (content, solved.into_inner(), vars_by_symbol)
 }
 
 #[allow(dead_code)]

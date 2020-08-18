@@ -38,7 +38,8 @@ pub fn solve_module(
     let mut problems = Vec::new();
 
     // Run the solver to populate Subs.
-    let (solved_subs, solved_env) = solve::run(&env, &mut problems, subs, &constraint);
+    let (solved_subs, solved_env, all_vars_by_symbol) =
+        solve::run(&env, &mut problems, subs, &constraint);
     let mut solved_types = MutMap::default();
 
     for (symbol, alias) in solved_env.aliases {
@@ -71,7 +72,7 @@ pub fn solve_module(
         exposed_vars_by_symbol,
         solved_types,
         problems,
-        all_vars_by_symbol: env.vars_by_symbol,
+        all_vars_by_symbol,
         aliases: env.aliases,
     };
 

@@ -127,6 +127,7 @@ impl Pools {
 
 #[derive(Clone)]
 struct State {
+    all_vars_by_symbol: SendMap<Symbol, Variable>,
     env: Env,
     mark: Mark,
 }
@@ -136,11 +137,12 @@ pub fn run(
     problems: &mut Vec<TypeError>,
     mut subs: Subs,
     constraint: &Constraint,
-) -> (Solved<Subs>, Env) {
+) -> (Solved<Subs>, Env, SendMap<Symbol, Variable>) {
     let mut pools = Pools::default();
     let state = State {
         env: env.clone(),
         mark: Mark::NONE.next(),
+        all_vars_by_symbol: env.vars_by_symbol.clone(),
     };
     let rank = Rank::toplevel();
     let state = solve(
@@ -154,7 +156,7 @@ pub fn run(
         constraint,
     );
 
-    (Solved(subs), state.env)
+    (Solved(subs), state.env, state.all_vars_by_symbol)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -361,7 +363,7 @@ fn solve(
                     )
                 }
                 ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
-                    let state = solve(
+                    let mut state = solve(
                         env,
                         state,
                         rank,
@@ -388,10 +390,13 @@ fn solve(
                     }
 
                     let mut new_env = env.clone();
+
                     for (symbol, loc_var) in local_def_vars.iter() {
                         if !new_env.vars_by_symbol.contains_key(&symbol) {
                             new_env.vars_by_symbol.insert(*symbol, loc_var.value);
                         }
+
+                        state.all_vars_by_symbol.insert(*symbol, loc_var.value);
                     }
 
                     let new_state = solve(
@@ -455,7 +460,7 @@ fn solve(
                         // run solver in next pool
 
                         // Solve the assignments' constraints first.
-                        let new_state = solve(
+                        let mut new_state = solve(
                             &new_env,
                             state,
                             next_rank,
@@ -517,6 +522,8 @@ fn solve(
                             if !new_env.vars_by_symbol.contains_key(&symbol) {
                                 new_env.vars_by_symbol.insert(*symbol, loc_var.value);
                             }
+
+                            new_state.all_vars_by_symbol.insert(*symbol, loc_var.value);
                         }
 
                         // Note that this vars_by_symbol is the one returned by the
@@ -524,6 +531,7 @@ fn solve(
                         let temp_state = State {
                             env: new_state.env,
                             mark: final_mark,
+                            all_vars_by_symbol: new_state.all_vars_by_symbol,
                         };
 
                         // Now solve the body, using the new vars_by_symbol which includes
