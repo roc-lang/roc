@@ -8,10 +8,11 @@ use roc_module::symbol::Symbol;
 ///
 /// e.g.
 ///
-/// factorial n accum = if n == 1 then accum else factorial (n - 1) (n * accum)
+/// > factorial n accum = if n == 1 then accum else factorial (n - 1) (n * accum)
 ///
 /// becomes
 ///
+/// ```elm
 /// factorial n1 accum1 =
 ///     let joinpoint j n accum =
 ///             if n == 1 then
@@ -21,6 +22,7 @@ use roc_module::symbol::Symbol;
 ///
 ///     in
 ///         jump j n1 accum1
+/// ```
 ///
 /// This will effectively compile into a loop in llvm, and
 /// won't grow the call stack for each iteration
