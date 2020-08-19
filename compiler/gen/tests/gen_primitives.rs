@@ -13,17 +13,11 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_primitives {
-    use std::ffi::{CStr, CString};
-    use std::os::raw::c_char;
 
     #[test]
     fn basic_str() {
-        assert_evals_to!(
-            "\"shirt and hat\"",
-            CString::new("shirt and hat").unwrap().as_c_str(),
-            *const c_char,
-            CStr::from_ptr
-        );
+        assert_evals_to!("\"\"", "", &'static str);
+        assert_evals_to!("\"shirt and hat\"", "shirt and hat", &'static str);
     }
 
     #[test]

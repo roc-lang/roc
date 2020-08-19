@@ -139,15 +139,14 @@ pub fn helper_without_uniqueness<'a>(
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
     for ((symbol, layout), proc) in procs.drain() {
-        let (fn_val, arg_basic_types) =
-            build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-        headers.push((proc, fn_val, arg_basic_types));
+        headers.push((proc, fn_val));
     }
 
     // Build each proc using its header info.
-    for (proc, fn_val, arg_basic_types) in headers {
-        build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
+    for (proc, fn_val) in headers {
+        build_proc(&env, &mut layout_ids, proc, fn_val);
 
         if fn_val.verify(true) {
             function_pass.run_on(&fn_val);
@@ -333,15 +332,14 @@ pub fn helper_with_uniqueness<'a>(
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
     for ((symbol, layout), proc) in procs.drain() {
-        let (fn_val, arg_basic_types) =
-            build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-        headers.push((proc, fn_val, arg_basic_types));
+        headers.push((proc, fn_val));
     }
 
     // Build each proc using its header info.
-    for (proc, fn_val, arg_basic_types) in headers {
-        build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
+    for (proc, fn_val) in headers {
+        build_proc(&env, &mut layout_ids, proc, fn_val);
 
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);
