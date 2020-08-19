@@ -863,18 +863,13 @@ pub fn list_len<'ctx>(
 /// List.concat : List elem, List elem -> List elem
 pub fn list_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
-    args: &[Symbol],
+    first_list: BasicValueEnum<'ctx>,
+    second_list: BasicValueEnum<'ctx>,
+    list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    debug_assert_eq!(args.len(), 2);
-
     let builder = env.builder;
     let ctx = env.context;
-
-    let (first_list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
-
-    let second_list = load_symbol(env, scope, &args[1]);
 
     let second_list_wrapper = second_list.into_struct_value();
 

@@ -1631,7 +1631,15 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_reverse(env, parent, scope, list)
         }
-        ListConcat => list_concat(env, scope, parent, args),
+        ListConcat => {
+            debug_assert_eq!(args.len(), 2);
+
+            let (first_list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let second_list = load_symbol(env, scope, &args[1]);
+
+            list_concat(env, parent, first_list, second_list, list_layout)
+        }
         ListAppend => {
             // List.append : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
