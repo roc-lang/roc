@@ -313,7 +313,7 @@ impl<'a> BorrowInfState<'a> {
                 ..
             } => {
                 // get the borrow signature of the applied function
-                let ps = match self.param_map.get_symbol(call_type.into_inner()) {
+                let ps = match self.param_map.get_symbol(call_type.get_inner()) {
                     Some(slice) => slice,
                     None => Vec::from_iter_in(
                         arg_layouts.iter().cloned().map(|layout| Param {
@@ -356,7 +356,7 @@ impl<'a> BorrowInfState<'a> {
             Stmt::Ret(z),
         ) = (v, b)
         {
-            let g = call_type.into_inner();
+            let g = call_type.get_inner();
             if self.current_proc == g && x == *z {
                 // anonymous functions (for which the ps may not be known)
                 // can never be tail-recursive, so this is fine
@@ -460,7 +460,7 @@ impl<'a> BorrowInfState<'a> {
     }
 }
 
-pub fn lowlevel_borrow_signature<'a>(arena: &'a Bump, op: LowLevel) -> &'a [bool] {
+pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     use LowLevel::*;
 
     // TODO is true or false more efficient for non-refcounted layouts?

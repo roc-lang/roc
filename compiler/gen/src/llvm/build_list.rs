@@ -207,7 +207,6 @@ pub fn list_prepend<'a, 'ctx, 'env>(
     let ptr_bytes = env.ptr_bytes;
 
     // Allocate space for the new array that we'll copy into.
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
     let clone_ptr = allocate_list(env, elem_layout, new_list_len);
     let int_type = ptr_int(ctx, ptr_bytes);
     let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");

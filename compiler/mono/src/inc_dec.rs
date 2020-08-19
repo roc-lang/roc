@@ -444,10 +444,8 @@ impl<'a> Context<'a> {
                 call_type,
                 ..
             } => {
-                let symbol = call_type.into_inner();
-
                 // get the borrow signature
-                let ps = match self.param_map.get_symbol(call_type.into_inner()) {
+                let ps = match self.param_map.get_symbol(call_type.get_inner()) {
                     Some(slice) => slice,
                     None => Vec::from_iter_in(
                         arg_layouts.iter().cloned().map(|layout| Param {
@@ -786,13 +784,9 @@ pub fn collect_stmt(
             vars.extend(arguments.iter().copied());
 
             // NOTE deviation from Lean
-            match jp_live_vars.get(id) {
-                Some(jvars) => {
-                    vars.extend(jvars);
-                }
-                None => {
-                    // a jump occured in the "remainder" of the join point, e.g.
-                }
+            // we fall through when no join point is available
+            if let Some(jvars) = jp_live_vars.get(id) {
+                vars.extend(jvars);
             }
 
             vars

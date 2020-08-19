@@ -525,7 +525,7 @@ pub enum CallType {
 }
 
 impl CallType {
-    pub fn into_inner(&self) -> Symbol {
+    pub fn get_inner(&self) -> Symbol {
         match self {
             CallType::ByName(s) => *s,
             CallType::ByPointer(s) => *s,
