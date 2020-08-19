@@ -2416,9 +2416,9 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn str_append() {
+    fn str_concat() {
         infer_eq(
-            "Str.append",
+            "Str.concat",
             "Attr * (Attr * Str, Attr * Str -> Attr * Str)",
         );
     }
