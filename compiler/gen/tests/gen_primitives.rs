@@ -289,7 +289,10 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
+                main = \{} -> 
                     (\a -> a) 5
+
+                main {}
                 "#
             ),
             5,
@@ -302,11 +305,14 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
+                main = \{} -> 
                     alwaysFloatIdentity : Int -> (Float -> Float)
                     alwaysFloatIdentity = \num ->
                         (\a -> a)
 
                     (alwaysFloatIdentity 2) 3.14
+
+                main {}
                 "#
             ),
             3.14,

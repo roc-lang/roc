@@ -874,8 +874,8 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let layout = layout.clone();
 
             match layout {
-                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) if false => {
-                    increment_refcount_list(env, value.into_struct_value());
+                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
+                    increment_refcount_list(env, parent, value.into_struct_value());
                     build_exp_stmt(env, layout_ids, scope, parent, cont)
                 }
                 _ => build_exp_stmt(env, layout_ids, scope, parent, cont),
@@ -885,11 +885,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let (value, layout) = load_symbol_and_layout(env, scope, symbol);
             let layout = layout.clone();
 
-            /*
             if layout.contains_refcounted() {
                 decrement_refcount_layout(env, parent, value, &layout);
             }
-            */
 
             build_exp_stmt(env, layout_ids, scope, parent, cont)
         }
@@ -1056,10 +1054,28 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
 
 fn increment_refcount_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
     original_wrapper: StructValue<'ctx>,
 ) {
     let builder = env.builder;
     let ctx = env.context;
+
+    let len = list_len(builder, original_wrapper);
+
+    let is_non_empty = builder.build_int_compare(
+        IntPredicate::UGT,
+        len,
+        ctx.i64_type().const_zero(),
+        "len > 0",
+    );
+
+    // build blocks
+    let increment_block = ctx.append_basic_block(parent, "increment_block");
+    let cont_block = ctx.append_basic_block(parent, "after_increment_block");
+
+    builder.build_conditional_branch(is_non_empty, increment_block, cont_block);
+
+    builder.position_at_end(increment_block);
 
     let refcount_ptr = list_get_refcount_ptr(env, original_wrapper);
 
@@ -1077,6 +1093,9 @@ fn increment_refcount_list<'a, 'ctx, 'env>(
 
     // Mutate the new array in-place to change the element.
     builder.build_store(refcount_ptr, decremented);
+    builder.build_unconditional_branch(cont_block);
+
+    builder.position_at_end(cont_block);
 }
 
 fn decrement_refcount_list<'a, 'ctx, 'env>(
@@ -1087,6 +1106,30 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
+    // the block we'll always jump to when we're done
+    let cont_block = ctx.append_basic_block(parent, "after_decrement_block");
+    let decrement_block = ctx.append_basic_block(parent, "decrement_block");
+
+    // currently, an empty list has a null-pointer in its length is 0
+    // so we must first check the length
+
+    let len = list_len(builder, original_wrapper);
+    let is_non_empty = builder.build_int_compare(
+        IntPredicate::UGT,
+        len,
+        ctx.i64_type().const_zero(),
+        "len > 0",
+    );
+
+    // if the length is 0, we're done and jump to the continuation block
+    // otherwise, actually read and check the refcount
+    builder.build_conditional_branch(is_non_empty, decrement_block, cont_block);
+    builder.position_at_end(decrement_block);
+
+    // build blocks
+    let then_block = ctx.append_basic_block(parent, "then");
+    let else_block = ctx.append_basic_block(parent, "else");
+
     let refcount_ptr = list_get_refcount_ptr(env, original_wrapper);
 
     let refcount = env
@@ -1095,11 +1138,6 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
         .into_int_value();
 
     let comparison = refcount_is_one_comparison(builder, env.context, refcount);
-
-    // build blocks
-    let then_block = ctx.append_basic_block(parent, "then");
-    let else_block = ctx.append_basic_block(parent, "else");
-    let cont_block = ctx.append_basic_block(parent, "dec_ref_branchcont");
 
     // TODO what would be most optimial for the branch predictor
     //

@@ -3,6 +3,7 @@ use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
 pub fn infer_borrow<'a>(
@@ -20,20 +21,35 @@ pub fn infer_borrow<'a>(
     let mut env = BorrowInfState {
         current_proc: Symbol::ATTR_ATTR,
         param_set: MutSet::default(),
-        owned: MutSet::default(),
+        owned: MutMap::default(),
         modified: false,
         param_map,
         arena,
     };
 
-    // sort the symbols (roughly) in definition order.
-    // TODO in the future I think we need to do this properly, and group
-    // mutually recursive functions (or just make all their arguments owned)
-    let mut values = procs.values().collect::<std::vec::Vec<_>>();
-    values.sort_by(|a, b| b.name.cmp(&a.name));
+    // This is a fixed-point analysis
+    //
+    // all functions initiall own all their paramters
+    // through a series of checks and heuristics, some arguments are set to borrowed
+    // when that doesn't lead to conflicts the change is kept, otherwise it may be reverted
+    //
+    // when the signatures no longer change, the analysis stops and returns the signatures
+    loop {
+        // sort the symbols (roughly) in definition order.
+        // TODO in the future I think we need to do this properly, and group
+        // mutually recursive functions (or just make all their arguments owned)
 
-    for proc in values.iter() {
-        env.collect_proc(proc);
+        for proc in procs.values() {
+            env.collect_proc(proc);
+        }
+
+        if !env.modified {
+            // if there were no modifications, we're done
+            break;
+        } else {
+            // otherwise see if there are changes after another iteration
+            env.modified = false;
+        }
     }
 
     env.param_map
@@ -51,15 +67,18 @@ pub struct ParamMap<'a> {
 }
 
 impl<'a> ParamMap<'a> {
-    pub fn get_symbol(&self, symbol: Symbol) -> &'a [Param<'a>] {
+    pub fn get_symbol(&self, symbol: Symbol) -> Option<&'a [Param<'a>]> {
         let key = Key::Declaration(symbol);
 
-        self.items.get(&key).unwrap()
+        self.items.get(&key).copied()
     }
     pub fn get_join_point(&self, id: JoinPointId) -> &'a [Param<'a>] {
         let key = Key::JoinPoint(id);
 
-        self.items.get(&key).unwrap()
+        match self.items.get(&key) {
+            Some(slice) => slice,
+            None => unreachable!("join point not in param map: {:?}", id),
+        }
     }
 }
 
@@ -97,7 +116,7 @@ impl<'a> ParamMap<'a> {
         self.visit_stmt(arena, proc.name, &proc.body);
     }
 
-    fn visit_stmt(&mut self, arena: &'a Bump, fnid: Symbol, stmt: &Stmt<'a>) {
+    fn visit_stmt(&mut self, arena: &'a Bump, _fnid: Symbol, stmt: &Stmt<'a>) {
         use Stmt::*;
 
         let mut stack = bumpalo::vec![ in arena; stmt ];
@@ -146,7 +165,7 @@ impl<'a> ParamMap<'a> {
 struct BorrowInfState<'a> {
     current_proc: Symbol,
     param_set: MutSet<Symbol>,
-    owned: MutSet<Symbol>,
+    owned: MutMap<Symbol, MutSet<Symbol>>,
     modified: bool,
     param_map: ParamMap<'a>,
     arena: &'a Bump,
@@ -154,16 +173,24 @@ struct BorrowInfState<'a> {
 
 impl<'a> BorrowInfState<'a> {
     pub fn own_var(&mut self, x: Symbol) {
-        if self.owned.contains(&x) {
+        let current = self.owned.get_mut(&self.current_proc).unwrap();
+
+        if current.contains(&x) {
             // do nothing
         } else {
-            self.owned.insert(x);
+            current.insert(x);
             self.modified = true;
         }
     }
 
     fn is_owned(&self, x: Symbol) -> bool {
-        self.owned.contains(&x)
+        match self.owned.get(&self.current_proc) {
+            None => unreachable!(
+                "the current procedure symbol {:?} is not in the owned map",
+                self.current_proc
+            ),
+            Some(set) => set.contains(&x),
+        }
     }
 
     fn update_param_map(&mut self, k: Key) {
@@ -235,11 +262,10 @@ impl<'a> BorrowInfState<'a> {
     /// We use this action to mark function parameters that are being "packed" inside constructors.
     /// This is a heuristic, and is not related with the effectiveness of the reset/reuse optimization.
     /// It is useful for code such as
-    /// ```
-    /// def f (x y : obj) :=
-    /// let z := ctor_1 x y;
-    /// ret z
-    /// ```
+    ///
+    /// > def f (x y : obj) :=
+    /// > let z := ctor_1 x y;
+    /// > ret z
     fn own_args_if_param(&mut self, xs: &[Symbol]) {
         for x in xs.iter() {
             // TODO may also be asking for the index here? see Lean
@@ -249,79 +275,73 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
+    /// This looks at the assignement
+    ///
+    /// let z = e in ...
+    ///
+    /// and determines whether z and which of the symbols used in e
+    /// must be taken as owned paramters
     fn collect_expr(&mut self, z: Symbol, e: &Expr<'a>) {
         use Expr::*;
 
         match e {
             Tag { arguments: xs, .. } | Struct(xs) | Array { elems: xs, .. } => {
                 self.own_var(z);
+
+                // if the used symbol is an argument to the current function,
+                // the function must take it as an owned parameter
                 self.own_args_if_param(xs);
             }
             EmptyArray => {
                 self.own_var(z);
             }
             AccessAtIndex { structure: x, .. } => {
+                // if the structure (record/tag/array) is owned, the extracted value is
                 if self.is_owned(*x) {
-                    self.own_var(*x);
-                }
-                if self.is_owned(z) {
                     self.own_var(z);
+                }
+
+                // if the extracted value is owned, the structure must be too
+                if self.is_owned(z) {
+                    self.own_var(*x);
                 }
             }
             FunctionCall {
-                call_type, args, ..
+                call_type,
+                args,
+                arg_layouts,
+                ..
             } => {
-                let g = Key::Declaration(call_type.into_inner());
+                // get the borrow signature of the applied function
+                let ps = match self.param_map.get_symbol(call_type.into_inner()) {
+                    Some(slice) => slice,
+                    None => Vec::from_iter_in(
+                        arg_layouts.iter().cloned().map(|layout| Param {
+                            symbol: Symbol::UNDERSCORE,
+                            borrow: false,
+                            layout,
+                        }),
+                        self.arena,
+                    )
+                    .into_bump_slice(),
+                };
 
-                // DEVIATION: the two lines below are swapped for borrow checker reasons
-                // I think it should be fine.
+                // the return value will be owned
                 self.own_var(z);
-                let ps = self.param_map.items.get(&g).unwrap().clone();
+
+                // if the function exects an owned argument (ps), the argument must be owned (args)
                 self.own_args_using_params(args, ps);
             }
 
             RunLowLevel(op, args) => {
-                use roc_module::low_level::LowLevel::*;
-
+                // very unsure what demand RunLowLevel should place upon its arguments
                 self.own_var(z);
 
-                // TODO is true or false more efficient for non-refcounted layouts?
-                let irrelevant = true;
-                let owned = false;
-                let borrowed = true;
-
-                let arena = self.arena;
-
-                // Here we define the borrow signature of low-level operations
-                //
-                // - arguments with non-refcounted layouts (ints, floats) are `irrelevant`
-                // - arguments that we may want to update destructively must be Owned
-                // - other refcounted arguments are Borrowed
-                let ps = match op {
-                    ListLen => arena.alloc_slice_copy(&[borrowed]),
-                    ListSet => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
-                    ListSetInPlace => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
-
-                    ListGetUnsafe => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
-                    ListSingle => arena.alloc_slice_copy(&[irrelevant]),
-                    ListRepeat => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
-                    ListReverse => arena.alloc_slice_copy(&[owned]),
-                    ListConcat => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
-                    ListAppend => arena.alloc_slice_copy(&[owned, owned]),
-                    ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
-                    ListJoin => arena.alloc_slice_copy(&[irrelevant]),
-
-                    Eq | NotEq | And | Or | NumAdd | NumSub | NumMul | NumGt | NumGte | NumLt
-                    | NumLte | NumDivUnchecked | NumRemUnchecked => {
-                        arena.alloc_slice_copy(&[irrelevant, irrelevant])
-                    }
-
-                    NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumRound
-                    | NumToFloat | Not => arena.alloc_slice_copy(&[irrelevant]),
-                };
+                let ps = lowlevel_borrow_signature(self.arena, *op);
 
                 self.own_args_using_bools(args, ps);
             }
+
             Literal(_) | FunctionPointer(_, _) | RuntimeErrorFunction(_) => {}
         }
     }
@@ -338,13 +358,11 @@ impl<'a> BorrowInfState<'a> {
         {
             let g = call_type.into_inner();
             if self.current_proc == g && x == *z {
-                let ps = self
-                    .param_map
-                    .items
-                    .get(&Key::Declaration(g))
-                    .unwrap()
-                    .clone();
-                self.own_params_using_args(ys, ps)
+                // anonymous functions (for which the ps may not be known)
+                // can never be tail-recursive, so this is fine
+                if let Some(ps) = self.param_map.get_symbol(g) {
+                    self.own_params_using_args(ys, ps)
+                }
             }
         }
     }
@@ -375,19 +393,27 @@ impl<'a> BorrowInfState<'a> {
                 self.update_param_set(ys);
                 self.collect_stmt(v);
                 self.param_set = old;
-
                 self.update_param_map(Key::JoinPoint(*j));
 
                 self.collect_stmt(b);
             }
 
+            Let(x, Expr::FunctionPointer(fsymbol, layout), _, b) => {
+                // ensure that the function pointed to is in the param map
+                if let Some(params) = self.param_map.get_symbol(*fsymbol) {
+                    self.param_map.items.insert(Key::Declaration(*x), params);
+                }
+
+                self.collect_stmt(b);
+                self.preserve_tail_call(*x, &Expr::FunctionPointer(*fsymbol, layout.clone()), b);
+            }
             Let(x, v, _, b) => {
                 self.collect_stmt(b);
                 self.collect_expr(*x, v);
                 self.preserve_tail_call(*x, v, b);
             }
             Jump(j, ys) => {
-                let ps = self.param_map.get_join_point(*j).clone();
+                let ps = self.param_map.get_join_point(*j);
 
                 // for making sure the join point can reuse
                 self.own_args_using_params(ys, ps);
@@ -424,9 +450,48 @@ impl<'a> BorrowInfState<'a> {
         self.update_param_set_symbols(ys);
         self.current_proc = proc.name;
 
+        // ensure that current_proc is in the owned map
+        self.owned.entry(proc.name).or_default();
+
         self.collect_stmt(&proc.body);
         self.update_param_map(Key::Declaration(proc.name));
 
         self.param_set = old;
+    }
+}
+
+pub fn lowlevel_borrow_signature<'a>(arena: &'a Bump, op: LowLevel) -> &'a [bool] {
+    use LowLevel::*;
+
+    // TODO is true or false more efficient for non-refcounted layouts?
+    let irrelevant = false;
+    let owned = false;
+    let borrowed = true;
+
+    // Here we define the borrow signature of low-level operations
+    //
+    // - arguments with non-refcounted layouts (ints, floats) are `irrelevant`
+    // - arguments that we may want to update destructively must be Owned
+    // - other refcounted arguments are Borrowed
+    match op {
+        ListLen => arena.alloc_slice_copy(&[borrowed]),
+        ListSet => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+        ListSetInPlace => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+        ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+
+        ListSingle => arena.alloc_slice_copy(&[irrelevant]),
+        ListRepeat => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
+        ListReverse => arena.alloc_slice_copy(&[owned]),
+        ListConcat => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
+        ListAppend => arena.alloc_slice_copy(&[owned, owned]),
+        ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
+        ListJoin => arena.alloc_slice_copy(&[irrelevant]),
+
+        Eq | NotEq | And | Or | NumAdd | NumSub | NumMul | NumGt | NumGte | NumLt | NumLte
+        | NumDivUnchecked | NumRemUnchecked => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
+
+        NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumRound | NumToFloat | Not => {
+            arena.alloc_slice_copy(&[irrelevant])
+        }
     }
 }

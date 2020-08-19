@@ -1,19 +1,18 @@
-use crate::ir::{CallType, Env, Expr, JoinPointId, Param, Stmt};
+use crate::ir::{CallType, Expr, JoinPointId, Param, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::symbol::Symbol;
 
 pub fn make_tail_recursive<'a>(
-    env: &mut Env<'a, '_>,
+    arena: &'a Bump,
+    id: JoinPointId,
     needle: Symbol,
     stmt: Stmt<'a>,
     args: &'a [(Layout<'a>, Symbol)],
 ) -> Stmt<'a> {
-    let id = JoinPointId(env.unique_symbol());
-
-    let alloced = env.arena.alloc(stmt);
-    match insert_jumps(env.arena, alloced, id, needle) {
+    let alloced = arena.alloc(stmt);
+    match insert_jumps(arena, alloced, id, needle) {
         None => alloced.clone(),
         Some(new) => {
             // jumps were inserted, we must now add a join point
@@ -24,13 +23,14 @@ pub fn make_tail_recursive<'a>(
                     layout: layout.clone(),
                     borrow: true,
                 }),
-                env.arena,
+                arena,
             )
             .into_bump_slice();
 
-            let args = Vec::from_iter_in(args.iter().map(|t| t.1), env.arena).into_bump_slice();
+            // TODO could this be &[]?
+            let args = Vec::from_iter_in(args.iter().map(|t| t.1), arena).into_bump_slice();
 
-            let jump = env.arena.alloc(Stmt::Jump(id, args));
+            let jump = arena.alloc(Stmt::Jump(id, args));
 
             Stmt::Join {
                 id,

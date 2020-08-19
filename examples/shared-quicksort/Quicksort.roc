@@ -1,7 +1,10 @@
 app Quicksort provides [ quicksort ] imports []
 
 quicksort : List Int -> List Int
-quicksort = \originalList ->
+quicksort = \originalList -> helper originalList
+
+helper : List Int -> List Int
+helper = \originalList ->
     
     quicksortHelp : List (Num a), Int, Int -> List (Num a)
     quicksortHelp = \list, low, high ->

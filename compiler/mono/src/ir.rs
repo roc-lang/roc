@@ -23,7 +23,7 @@ pub struct PartialProc<'a> {
     pub annotation: Variable,
     pub pattern_symbols: Vec<'a, Symbol>,
     pub body: roc_can::expr::Expr,
-    pub is_tail_recursive: bool,
+    pub is_self_recursive: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -40,7 +40,13 @@ pub struct Proc<'a> {
     pub body: Stmt<'a>,
     pub closes_over: Layout<'a>,
     pub ret_layout: Layout<'a>,
-    pub is_tail_recursive: bool,
+    pub is_self_recursive: SelfRecursive,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SelfRecursive {
+    NotSelfRecursive,
+    SelfRecursive(JoinPointId),
 }
 
 impl<'a> Proc<'a> {
@@ -117,6 +123,19 @@ impl<'a> Procs<'a> {
             }
         }
 
+        for (_, proc) in result.iter_mut() {
+            use self::SelfRecursive::*;
+            if let SelfRecursive(id) = proc.is_self_recursive {
+                proc.body = crate::tail_recursion::make_tail_recursive(
+                    arena,
+                    id,
+                    proc.name,
+                    proc.body.clone(),
+                    proc.args,
+                );
+            }
+        }
+
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
         for (_, proc) in result.iter_mut() {
@@ -144,6 +163,19 @@ impl<'a> Procs<'a> {
             }
         }
 
+        for (_, proc) in result.iter_mut() {
+            use self::SelfRecursive::*;
+            if let SelfRecursive(id) = proc.is_self_recursive {
+                proc.body = crate::tail_recursion::make_tail_recursive(
+                    arena,
+                    id,
+                    proc.name,
+                    proc.body.clone(),
+                    proc.args,
+                );
+            }
+        }
+
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
         for (_, proc) in result.iter_mut() {
@@ -163,7 +195,7 @@ impl<'a> Procs<'a> {
         annotation: Variable,
         loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
         loc_body: Located<roc_can::expr::Expr>,
-        is_tail_recursive: bool,
+        is_self_recursive: bool,
         ret_var: Variable,
     ) {
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
@@ -178,7 +210,7 @@ impl<'a> Procs<'a> {
                         annotation,
                         pattern_symbols,
                         body: body.value,
-                        is_tail_recursive,
+                        is_self_recursive,
                     },
                 );
             }
@@ -212,7 +244,7 @@ impl<'a> Procs<'a> {
         layout_cache: &mut LayoutCache<'a>,
     ) -> Result<Layout<'a>, RuntimeError> {
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
-        let is_tail_recursive = false;
+        let is_self_recursive = false;
 
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((pattern_vars, pattern_symbols, body)) => {
@@ -252,7 +284,7 @@ impl<'a> Procs<'a> {
                                     annotation,
                                     pattern_symbols,
                                     body: body.value,
-                                    is_tail_recursive,
+                                    is_self_recursive,
                                 },
                             );
                         }
@@ -262,7 +294,7 @@ impl<'a> Procs<'a> {
                                 annotation,
                                 pattern_symbols,
                                 body: body.value,
-                                is_tail_recursive,
+                                is_self_recursive,
                             };
 
                             // Mark this proc as in-progress, so if we're dealing with
@@ -1043,7 +1075,7 @@ fn specialize<'a>(
         annotation,
         pattern_symbols,
         body,
-        is_tail_recursive,
+        is_self_recursive,
     } = partial_proc;
 
     // unify the called function with the specialized signature, then specialize the function body
@@ -1073,9 +1105,6 @@ fn specialize<'a>(
 
     let proc_args = proc_args.into_bump_slice();
 
-    let specialized_body =
-        crate::tail_recursion::make_tail_recursive(env, proc_name, specialized_body, proc_args);
-
     let ret_layout = layout_cache
         .from_var(&env.arena, ret_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
@@ -1083,13 +1112,19 @@ fn specialize<'a>(
     // TODO WRONG
     let closes_over_layout = Layout::Struct(&[]);
 
+    let recursivity = if is_self_recursive {
+        SelfRecursive::SelfRecursive(JoinPointId(env.unique_symbol()))
+    } else {
+        SelfRecursive::NotSelfRecursive
+    };
+
     let proc = Proc {
         name: proc_name,
         args: proc_args,
         body: specialized_body,
         closes_over: closes_over_layout,
         ret_layout,
-        is_tail_recursive,
+        is_self_recursive: recursivity,
     };
 
     Ok(proc)
@@ -1151,8 +1186,8 @@ pub fn with_hole<'a>(
 
                     let (loc_body, ret_var) = *boxed_body;
 
-                    let is_tail_recursive =
-                        matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
+                    let is_self_recursive =
+                        !matches!(recursivity, roc_can::expr::Recursive::NotRecursive);
 
                     procs.insert_named(
                         env,
@@ -1161,7 +1196,7 @@ pub fn with_hole<'a>(
                         ann,
                         loc_args,
                         loc_body,
-                        is_tail_recursive,
+                        is_self_recursive,
                         ret_var,
                     );
 
@@ -1235,8 +1270,8 @@ pub fn with_hole<'a>(
 
                         let (loc_body, ret_var) = *boxed_body;
 
-                        let is_tail_recursive =
-                            matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
+                        let is_self_recursive =
+                            !matches!(recursivity, roc_can::expr::Recursive::NotRecursive);
 
                         procs.insert_named(
                             env,
@@ -1245,7 +1280,7 @@ pub fn with_hole<'a>(
                             ann,
                             loc_args,
                             loc_body,
-                            is_tail_recursive,
+                            is_self_recursive,
                             ret_var,
                         );
 
@@ -2102,8 +2137,8 @@ pub fn from_can<'a>(
 
                             let (loc_body, ret_var) = *boxed_body;
 
-                            let is_tail_recursive =
-                                matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
+                            let is_self_recursive =
+                                !matches!(recursivity, roc_can::expr::Recursive::NotRecursive);
 
                             procs.insert_named(
                                 env,
@@ -2112,7 +2147,7 @@ pub fn from_can<'a>(
                                 ann,
                                 loc_args,
                                 loc_body,
-                                is_tail_recursive,
+                                is_self_recursive,
                                 ret_var,
                             );
 
@@ -2138,8 +2173,8 @@ pub fn from_can<'a>(
 
                             let (loc_body, ret_var) = *boxed_body;
 
-                            let is_tail_recursive =
-                                matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
+                            let is_self_recursive =
+                                !matches!(recursivity, roc_can::expr::Recursive::NotRecursive);
 
                             procs.insert_named(
                                 env,
@@ -2148,7 +2183,7 @@ pub fn from_can<'a>(
                                 ann,
                                 loc_args,
                                 loc_body,
-                                is_tail_recursive,
+                                is_self_recursive,
                                 ret_var,
                             );
 
