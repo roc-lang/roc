@@ -4,6 +4,26 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::symbol::Symbol;
 
+/// Make tail calls into loops (using join points)
+///
+/// e.g.
+///
+/// factorial n accum = if n == 1 then accum else factorial (n - 1) (n * accum)
+///
+/// becomes
+///
+/// factorial n1 accum1 =
+///     let joinpoint j n accum =
+///             if n == 1 then
+///                 accum
+///             else
+///                 jump j (n - 1) (n * accum)
+///
+///     in
+///         jump j n1 accum1
+///
+/// This will effectively compile into a loop in llvm, and
+/// won't grow the call stack for each iteration
 pub fn make_tail_recursive<'a>(
     arena: &'a Bump,
     id: JoinPointId,
@@ -185,7 +205,6 @@ fn insert_jumps<'a>(
                 None
             }
         }
-        Ret(_) => None,
         Inc(symbol, cont) => match insert_jumps(arena, cont, goal_id, needle) {
             Some(cont) => Some(arena.alloc(Inc(*symbol, cont))),
             None => None,
@@ -195,6 +214,7 @@ fn insert_jumps<'a>(
             None => None,
         },
 
+        Ret(_) => None,
         Jump(_, _) => None,
         RuntimeError(_) => None,
     }
