@@ -1,10 +1,14 @@
 use crate::layout_id::LayoutIds;
 use crate::llvm::build_list::{
-    allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_get_unsafe,
+    allocate_list, build_basic_phi2, clone_nonempty_list, empty_list, empty_polymorphic_list,
+    incrementing_index_loop, list_append, list_concat, list_get_unsafe, list_is_not_empty,
     list_join, list_len, list_prepend, list_repeat, list_reverse, list_set, list_single,
+    load_list_ptr,
 };
 use crate::llvm::compare::{build_eq, build_neq};
-use crate::llvm::convert::{basic_type_from_layout, collection, get_fn_type, ptr_int};
+use crate::llvm::convert::{
+    basic_type_from_layout, collection, get_fn_type, get_ptr_type, ptr_int,
+};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inkwell::basic_block::BasicBlock;
@@ -224,16 +228,15 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                 let builder = env.builder;
 
                 let len_u64 = str_literal.len() as u64;
-                let elem_layout = Layout::Builtin(Builtin::Int8);
 
-                let elem_bytes = elem_layout.stack_size(env.ptr_bytes) as u64;
+                let elem_bytes = CHAR_LAYOUT.stack_size(env.ptr_bytes) as u64;
 
                 let ptr = {
                     let bytes_len = elem_bytes * len_u64;
                     let len_type = env.ptr_int();
                     let len = len_type.const_int(bytes_len, false);
 
-                    allocate_list(env, &elem_layout, len)
+                    allocate_list(env, &CHAR_LAYOUT, len)
 
                     // TODO check if malloc returned null; if so, runtime error for OOM!
                 };
@@ -284,6 +287,8 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         }
     }
 }
+
+static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
 
 pub fn build_exp_expr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -1596,7 +1601,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let second_str = load_symbol(env, scope, &args[1]);
 
-            str_concat(env, first_str, second_str)
+            str_concat(env, parent, first_str, second_str)
         }
         ListLen => {
             // List.len : List * -> Int
@@ -1831,12 +1836,220 @@ fn run_low_level<'a, 'ctx, 'env>(
     }
 }
 
+/// Str.concat : Str, Str -> Str
 fn str_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
     first_str: BasicValueEnum<'ctx>,
     second_str: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    first_str
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let second_str_wrapper = second_str.into_struct_value();
+    let second_str_len = list_len(builder, second_str_wrapper);
+
+    let first_str_wrapper = first_str.into_struct_value();
+    let first_str_len = list_len(builder, first_str_wrapper);
+
+    // first_str_len > 0
+    // We do this check to avoid allocating memory. If the first input
+    // str is empty, then we can just return the second str cloned
+    let first_str_length_comparison = list_is_not_empty(builder, ctx, first_str_len);
+
+    let if_first_str_is_empty = || {
+        // second_str_len > 0
+        // We do this check to avoid allocating memory. If the second input
+        // str is empty, then we can just return an empty str
+        let second_str_length_comparison = list_is_not_empty(builder, ctx, second_str_len);
+
+        let build_second_str_then = || {
+            let elem_type = basic_type_from_layout(env.arena, ctx, &CHAR_LAYOUT, env.ptr_bytes);
+            let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+            let (new_wrapper, _) = clone_nonempty_list(
+                env,
+                second_str_len,
+                load_list_ptr(builder, second_str_wrapper, ptr_type),
+                &CHAR_LAYOUT,
+            );
+
+            BasicValueEnum::StructValue(new_wrapper)
+        };
+
+        let build_second_str_else = || empty_list(env);
+
+        build_basic_phi2(
+            env,
+            parent,
+            second_str_length_comparison,
+            build_second_str_then,
+            build_second_str_else,
+            BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
+        )
+    };
+
+    let if_first_str_is_not_empty = || {
+        let elem_type = basic_type_from_layout(env.arena, ctx, &CHAR_LAYOUT, env.ptr_bytes);
+        let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+        let if_second_str_is_empty = || {
+            let (new_wrapper, _) = clone_nonempty_list(
+                env,
+                first_str_len,
+                load_list_ptr(builder, first_str_wrapper, ptr_type),
+                &CHAR_LAYOUT,
+            );
+
+            BasicValueEnum::StructValue(new_wrapper)
+        };
+
+        // second_list_len > 0
+        // We do this check to avoid allocating memory. If the second input
+        // list is empty, then we can just return the first list cloned
+        let second_str_length_comparison = list_is_not_empty(builder, ctx, second_str_len);
+
+        let if_second_str_is_not_empty = || {
+            let combined_str_len =
+                builder.build_int_add(first_str_len, second_str_len, "add_list_lengths");
+
+            let combined_str_ptr = allocate_list(env, &CHAR_LAYOUT, combined_str_len);
+
+            // FIRST LOOP
+            let first_loop = |first_index| {
+                let first_str_ptr = load_list_ptr(builder, first_str_wrapper, ptr_type);
+
+                // The pointer to the element in the first list
+                let first_str_elem_ptr = unsafe {
+                    builder.build_in_bounds_gep(first_str_ptr, &[first_index], "load_index")
+                };
+
+                // The pointer to the element in the combined list
+                let combined_str_elem_ptr = unsafe {
+                    builder.build_in_bounds_gep(
+                        combined_str_ptr,
+                        &[first_index],
+                        "load_index_combined_list",
+                    )
+                };
+
+                let first_str_elem = builder.build_load(first_str_elem_ptr, "get_elem");
+
+                // Mutate the new array in-place to change the element.
+                builder.build_store(combined_str_elem_ptr, first_str_elem);
+            };
+
+            let index_name = "#index";
+
+            let index_alloca = incrementing_index_loop(
+                builder,
+                parent,
+                ctx,
+                first_str_len,
+                index_name,
+                None,
+                first_loop,
+            );
+
+            // Reset the index variable to 0
+            builder.build_store(index_alloca, ctx.i64_type().const_int(0, false));
+
+            // SECOND LOOP
+            let second_loop = |second_index| {
+                let second_str_ptr = load_list_ptr(builder, second_str_wrapper, ptr_type);
+
+                // The pointer to the element in the second list
+                let second_str_elem_ptr = unsafe {
+                    builder.build_in_bounds_gep(second_str_ptr, &[second_index], "load_index")
+                };
+
+                // The pointer to the element in the combined list.
+                // Note that the pointer does not start at the index
+                // 0, it starts at the index of first_list_len. In that
+                // sense it is "offset".
+                let offset_combined_str_elem_ptr = unsafe {
+                    builder.build_in_bounds_gep(combined_str_ptr, &[first_str_len], "elem")
+                };
+
+                // The pointer to the element from the second list
+                // in the combined list
+                let combined_str_elem_ptr = unsafe {
+                    builder.build_in_bounds_gep(
+                        offset_combined_str_elem_ptr,
+                        &[second_index],
+                        "load_index_combined_list",
+                    )
+                };
+
+                let second_str_elem = builder.build_load(second_str_elem_ptr, "get_elem");
+
+                // Mutate the new array in-place to change the element.
+                builder.build_store(combined_str_elem_ptr, second_str_elem);
+            };
+
+            incrementing_index_loop(
+                builder,
+                parent,
+                ctx,
+                second_str_len,
+                index_name,
+                Some(index_alloca),
+                second_loop,
+            );
+
+            let ptr_bytes = env.ptr_bytes;
+            let int_type = ptr_int(ctx, ptr_bytes);
+            let ptr_as_int = builder.build_ptr_to_int(combined_str_ptr, int_type, "list_cast_ptr");
+
+            let struct_type = collection(ctx, ptr_bytes);
+
+            let mut struct_val;
+
+            // Store the pointer
+            struct_val = builder
+                .build_insert_value(
+                    struct_type.get_undef(),
+                    ptr_as_int,
+                    Builtin::WRAPPER_PTR,
+                    "insert_ptr",
+                )
+                .unwrap();
+
+            // Store the length
+            struct_val = builder
+                .build_insert_value(
+                    struct_val,
+                    combined_str_len,
+                    Builtin::WRAPPER_LEN,
+                    "insert_len",
+                )
+                .unwrap();
+
+            builder.build_bitcast(
+                struct_val.into_struct_value(),
+                collection(ctx, ptr_bytes),
+                "cast_collection",
+            )
+        };
+
+        build_basic_phi2(
+            env,
+            parent,
+            second_str_length_comparison,
+            if_second_str_is_not_empty,
+            if_second_str_is_empty,
+            BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
+        )
+    };
+
+    build_basic_phi2(
+        env,
+        parent,
+        first_str_length_comparison,
+        if_first_str_is_not_empty,
+        if_first_str_is_empty,
+        BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
+    )
 }
 
 fn build_int_binop<'a, 'ctx, 'env>(
