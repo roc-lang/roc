@@ -1192,7 +1192,20 @@ pub fn with_hole<'a>(
                     let (loc_body, ret_var) = *boxed_body;
                     let is_tail_recursive =
                         matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
-                    let closed_over = Vec::from_iter_in(closed_over.into_iter(), env.arena);
+                    let mut closed_over_bump = Vec::with_capacity_in(closed_over.len(), arena);
+                    let mut closed_over_layouts = Vec::with_capacity_in(closed_over.len(), arena);
+
+                    for &symbol in closed_over.iter() {
+                        let var = env.vars_by_symbol.get(&symbol).unwrap();
+                        let layout = layout_cache
+                            .from_var(arena, *var, &env.subs)
+                            .unwrap_or_else(|err| {
+                                todo!("Gracefully handle invalid closed-over layout: {:?}", err)
+                            });
+
+                        closed_over_layouts.push(layout);
+                        closed_over_bump.push(symbol);
+                    }
 
                     procs.insert_named(
                         env,
@@ -1203,10 +1216,48 @@ pub fn with_hole<'a>(
                         loc_body,
                         is_tail_recursive,
                         ret_var,
-                        closed_over.into_bump_slice(),
+                        closed_over_bump.into_bump_slice(),
                     );
 
-                    return with_hole(env, cont.value, procs, layout_cache, assigned, hole);
+                    let layout = layout_cache
+                        .from_var(env.arena, ann, env.subs)
+                        .unwrap_or_else(|err| {
+                            panic!("TODO turn closure layout into a RuntimeError {:?}", err)
+                        });
+
+                    let hole = with_hole(env, cont.value, procs, layout_cache, assigned, hole);
+
+                    let fn_ptr = Expr::FunctionPointer(*symbol, layout.clone());
+                    let fn_ptr: Symbol = todo!("TODO turn fn_ptr into a Symbol");
+
+                    let closed_over_struct = Expr::Struct(arena.alloc(closed_over)); // TODO use MallocStruct here if the struct would be bigger than usize, and smaller-than-struct values if they fit
+                    let closed_over_struct: Symbol = todo!("turn closed_over into a Symbol");
+
+                    let closure_struct = Expr::Struct(
+                        bumpalo::vec![in arena;
+                            fn_ptr,
+                            closed_over_struct,
+                        ]
+                        .into_bump_slice(),
+                    );
+                    let arg_layouts = todo!("Compute arg_layouts");
+                    let ret_layout = todo!("Compute ret_layout");
+                    let closure_struct_layout = Layout::Struct(
+                        bumpalo::vec![in arena;
+                            Layout::FunctionPointer(arg_layouts, ret_layout),
+                            Layout::Struct(closed_over_layouts.into_bump_slice())
+                        ]
+                        .into_bump_slice(),
+                    );
+
+                    // todo!("Insert a Let which stores a (fn_ptr, closed_over) tuple in this symbol, so when I try to call that function by name later, the tuple is in scope and we can convert it from a CallByName to CallByPointer using the (fn_ptr, closed_over) to get the pointer and the final arg, respectively. Important: This `Let` must be *first* - but I think canonicalization will have sorted it that way already.");
+
+                    return Stmt::Let(
+                        assigned,
+                        closure_struct,
+                        closure_struct_layout,
+                        arena.alloc(hole),
+                    );
                 }
             }
 
