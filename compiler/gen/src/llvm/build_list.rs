@@ -858,18 +858,13 @@ pub fn list_len<'ctx>(
 /// List.concat : List elem, List elem -> List elem
 pub fn list_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
-    args: &[Symbol],
+    first_list: BasicValueEnum<'ctx>,
+    second_list: BasicValueEnum<'ctx>,
+    list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    debug_assert_eq!(args.len(), 2);
-
     let builder = env.builder;
     let ctx = env.context;
-
-    let (first_list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
-
-    let second_list = load_symbol(env, scope, &args[1]);
 
     let second_list_wrapper = second_list.into_struct_value();
 
@@ -893,7 +888,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
             let if_first_list_is_empty = || {
                 // second_list_len > 0
                 // We do this check to avoid allocating memory. If the second input
-                // list is empty, then we can just return the first list cloned
+                // list is empty, then we can just return an empty list
                 let second_list_length_comparison =
                     list_is_not_empty(builder, ctx, second_list_len);
 
@@ -1111,7 +1106,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
 
 // This helper simulates a basic for loop, where
 // and index increments up from 0 to some end value
-fn incrementing_index_loop<'ctx, LoopFn>(
+pub fn incrementing_index_loop<'ctx, LoopFn>(
     builder: &Builder<'ctx>,
     parent: FunctionValue<'ctx>,
     ctx: &'ctx Context,
@@ -1228,7 +1223,7 @@ pub fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'
     BasicValueEnum::StructValue(struct_type.const_zero())
 }
 
-fn list_is_not_empty<'ctx>(
+pub fn list_is_not_empty<'ctx>(
     builder: &Builder<'ctx>,
     ctx: &'ctx Context,
     list_len: IntValue<'ctx>,
@@ -1241,7 +1236,7 @@ fn list_is_not_empty<'ctx>(
     )
 }
 
-fn load_list_ptr<'ctx>(
+pub fn load_list_ptr<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
     ptr_type: PointerType<'ctx>,
@@ -1254,7 +1249,7 @@ fn load_list_ptr<'ctx>(
     builder.build_int_to_ptr(ptr_as_int, ptr_type, "list_cast_ptr")
 }
 
-fn clone_nonempty_list<'a, 'ctx, 'env>(
+pub fn clone_nonempty_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     list_len: IntValue<'ctx>,
     elems_ptr: PointerValue<'ctx>,
