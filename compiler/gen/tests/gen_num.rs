@@ -482,9 +482,12 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                when 10 is
-                    x if x == 5 -> 0
-                    _ -> 42
+                main = \{} -> 
+                    when 10 is
+                        x if x == 5 -> 0
+                        _ -> 42
+
+                main {}
                 "#
             ),
             42,
@@ -497,9 +500,12 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                when 10 is
-                    x if x == 10 -> 42
-                    _ -> 0
+                main = \{} -> 
+                    when 10 is
+                        x if x == 10 -> 42
+                        _ -> 0
+
+                main {}
                 "#
             ),
             42,

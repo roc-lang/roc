@@ -258,8 +258,13 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
     };
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
-    let main_body =
-        roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
+
+    let param_map = roc_mono::borrow::ParamMap::default();
+    let main_body = roc_mono::inc_dec::visit_declaration(
+        mono_env.arena,
+        mono_env.arena.alloc(param_map),
+        mono_env.arena.alloc(main_body),
+    );
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),
