@@ -22,6 +22,7 @@ pub enum Layout<'a> {
     Builtin(Builtin<'a>),
     Struct(&'a [Layout<'a>]),
     Union(&'a [&'a [Layout<'a>]]),
+    RecursiveUnion(&'a [&'a [Layout<'a>]]),
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
     Pointer(&'a Layout<'a>),
@@ -96,6 +97,10 @@ impl<'a> Layout<'a> {
             Union(tags) => tags
                 .iter()
                 .all(|tag_layout| tag_layout.iter().all(|field| field.safe_to_memcpy())),
+            RecursiveUnion(_) => {
+                // a recursive union will always contain a pointer, and are thus not safe to memcpy
+                false
+            }
             FunctionPointer(_, _) => {
                 // Function pointers are immutable and can always be safely copied
                 true
@@ -138,6 +143,16 @@ impl<'a> Layout<'a> {
                 })
                 .max()
                 .unwrap_or_default(),
+            RecursiveUnion(fields) => fields
+                .iter()
+                .map(|tag_layout| {
+                    tag_layout
+                        .iter()
+                        .map(|field| field.stack_size(pointer_size))
+                        .sum()
+                })
+                .max()
+                .unwrap_or_default(),
             FunctionPointer(_, _) => pointer_size,
             Pointer(_) => pointer_size,
         }
@@ -146,6 +161,7 @@ impl<'a> Layout<'a> {
     pub fn is_refcounted(&self) -> bool {
         match self {
             Layout::Builtin(Builtin::List(_, _)) => true,
+            Layout::RecursiveUnion(_) => true,
             _ => false,
         }
     }
@@ -164,6 +180,7 @@ impl<'a> Layout<'a> {
                 .map(|ls| ls.iter())
                 .flatten()
                 .any(|f| f.is_refcounted()),
+            RecursiveUnion(_) => true,
             FunctionPointer(_, _) | Pointer(_) => false,
         }
     }
@@ -406,8 +423,41 @@ fn layout_from_flat_type<'a>(
 
             Ok(layout_from_tag_union(arena, tags, subs))
         }
-        RecursiveTagUnion(_rec_var, _tags, _ext_var) => {
-            panic!("TODO make Layout for empty RecursiveTagUnion");
+        RecursiveTagUnion(_rec_var, _tags, ext_var) => {
+            debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
+
+            // some observations
+            //
+            // * recursive tag unions are always recursive
+            // * therefore at least one tag has a pointer (non-zero sized) field
+            // * they must (to be instantiated) have 2 or more tags
+            //
+            // That means none of the optimizations for enums or single tag tag unions apply
+
+            //            let rec_var = subs.get_root_key_without_compacting(rec_var);
+            //            let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
+            //
+            //            // tags: MutMap<TagName, std::vec::Vec<Variable>>,
+            //            for (_name, variables) in tags {
+            //                let mut tag_layout = Vec::with_capacity_in(variables.len(), arena);
+            //
+            //                for var in variables {
+            //                    // TODO does this still cause problems with mutually recursive unions?
+            //                    if rec_var == subs.get_root_key_without_compacting(var) {
+            //                        // TODO make this a pointer?
+            //                        continue;
+            //                    }
+            //
+            //                    let var_content = subs.get_without_compacting(var).content;
+            //
+            //                    tag_layout.push(Layout::new(arena, var_content, subs)?);
+            //                }
+            //
+            //                tag_layouts.push(tag_layout.into_bump_slice());
+            //            }
+            //
+            //            Ok(Layout::RecursiveUnion(tag_layouts.into_bump_slice()))
+            Ok(Layout::RecursiveUnion(&[]))
         }
         EmptyTagUnion => {
             panic!("TODO make Layout for empty Tag Union");
