@@ -998,6 +998,7 @@ fn decrement_refcount_layout<'a, 'ctx, 'env>(
             }
         }
         RecursiveUnion(_) => todo!("TODO implement decrement layout of recursive tag union"),
+        RecursivePointer => todo!("TODO implement decrement layout of recursive tag union"),
         Union(tags) => {
             debug_assert!(!tags.is_empty());
             let wrapper_struct = value.into_struct_value();

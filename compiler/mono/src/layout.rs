@@ -23,6 +23,7 @@ pub enum Layout<'a> {
     Struct(&'a [Layout<'a>]),
     Union(&'a [&'a [Layout<'a>]]),
     RecursiveUnion(&'a [&'a [Layout<'a>]]),
+    RecursivePointer,
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
     Pointer(&'a Layout<'a>),
@@ -109,6 +110,10 @@ impl<'a> Layout<'a> {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
             }
+            RecursivePointer => {
+                // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
+                false
+            }
         }
     }
 
@@ -154,6 +159,7 @@ impl<'a> Layout<'a> {
                 .max()
                 .unwrap_or_default(),
             FunctionPointer(_, _) => pointer_size,
+            RecursivePointer => pointer_size,
             Pointer(_) => pointer_size,
         }
     }
@@ -181,7 +187,7 @@ impl<'a> Layout<'a> {
                 .flatten()
                 .any(|f| f.is_refcounted()),
             RecursiveUnion(_) => true,
-            FunctionPointer(_, _) | Pointer(_) => false,
+            FunctionPointer(_, _) | RecursivePointer | Pointer(_) => false,
         }
     }
 }
@@ -423,7 +429,7 @@ fn layout_from_flat_type<'a>(
 
             Ok(layout_from_tag_union(arena, tags, subs))
         }
-        RecursiveTagUnion(_rec_var, _tags, ext_var) => {
+        RecursiveTagUnion(rec_var, tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
             // some observations
@@ -434,30 +440,33 @@ fn layout_from_flat_type<'a>(
             //
             // That means none of the optimizations for enums or single tag tag unions apply
 
-            //            let rec_var = subs.get_root_key_without_compacting(rec_var);
-            //            let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
-            //
-            //            // tags: MutMap<TagName, std::vec::Vec<Variable>>,
-            //            for (_name, variables) in tags {
-            //                let mut tag_layout = Vec::with_capacity_in(variables.len(), arena);
-            //
-            //                for var in variables {
-            //                    // TODO does this still cause problems with mutually recursive unions?
-            //                    if rec_var == subs.get_root_key_without_compacting(var) {
-            //                        // TODO make this a pointer?
-            //                        continue;
-            //                    }
-            //
-            //                    let var_content = subs.get_without_compacting(var).content;
-            //
-            //                    tag_layout.push(Layout::new(arena, var_content, subs)?);
-            //                }
-            //
-            //                tag_layouts.push(tag_layout.into_bump_slice());
-            //            }
-            //
-            //            Ok(Layout::RecursiveUnion(tag_layouts.into_bump_slice()))
-            Ok(Layout::RecursiveUnion(&[]))
+            let rec_var = subs.get_root_key_without_compacting(rec_var);
+            let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
+
+            // tags: MutMap<TagName, std::vec::Vec<Variable>>,
+            for (_name, variables) in tags {
+                let mut tag_layout = Vec::with_capacity_in(variables.len() + 1, arena);
+
+                // store the discriminant
+                tag_layout.push(Layout::Builtin(Builtin::Int8));
+
+                for var in variables {
+                    // TODO does this cause problems with mutually recursive unions?
+                    if rec_var == subs.get_root_key_without_compacting(var) {
+                        tag_layout.push(Layout::RecursivePointer);
+                        continue;
+                    }
+
+                    let var_content = subs.get_without_compacting(var).content;
+
+                    tag_layout.push(Layout::new(arena, var_content, subs)?);
+                }
+
+                tag_layouts.push(tag_layout.into_bump_slice());
+            }
+
+            dbg!(&tag_layouts);
+            Ok(Layout::RecursiveUnion(tag_layouts.into_bump_slice()))
         }
         EmptyTagUnion => {
             panic!("TODO make Layout for empty Tag Union");
@@ -594,8 +603,10 @@ fn union_sorted_tags_help<'a>(
                 arg_layouts.push(Layout::Builtin(Builtin::Int64));
 
                 for var in arguments {
-                    match Layout::from_var(arena, var, subs) {
+                    dbg!(&var);
+                    match dbg!(Layout::from_var(arena, var, subs)) {
                         Ok(layout) => {
+                            dbg!(&layout);
                             // Drop any zero-sized arguments like {}
                             if !layout.is_zero_sized() {
                                 has_any_arguments = true;

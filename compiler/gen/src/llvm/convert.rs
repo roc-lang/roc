@@ -108,6 +108,7 @@ pub fn basic_type_from_layout<'ctx>(
                 .as_basic_type_enum()
         }
         RecursiveUnion(_) => todo!("TODO implement layout of recursive tag union"),
+        RecursivePointer => todo!("TODO implement layout of recursive tag union"),
         Union(_) => {
             // TODO make this dynamic
             let ptr_size = std::mem::size_of::<i64>();

@@ -1528,4 +1528,25 @@ mod test_mono {
             ),
         )
     }
+
+    #[test]
+    fn peano() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                Peano : [ S Peano, Z ]
+
+                three : Peano
+                three = S (S (S Z))
+
+                three
+
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
 }
