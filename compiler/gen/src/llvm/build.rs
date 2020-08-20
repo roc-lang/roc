@@ -1966,7 +1966,7 @@ fn str_concat<'a, 'ctx, 'env>(
     };
 
     let if_first_str_is_not_empty = || {
-        let char_type = basic_type_from_layout(env.arena, ctx, &CHAR_LAYOUT, env.ptr_bytes);
+        let char_type = ctx.i8_type().into();
         let ptr_type = get_ptr_type(&char_type, AddressSpace::Generic);
 
         let if_second_str_is_empty = || {
