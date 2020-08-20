@@ -1864,8 +1864,8 @@ fn str_concat<'a, 'ctx, 'env>(
         let second_str_length_comparison = list_is_not_empty(builder, ctx, second_str_len);
 
         let build_second_str_then = || {
-            let elem_type = basic_type_from_layout(env.arena, ctx, &CHAR_LAYOUT, env.ptr_bytes);
-            let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+            let char_type = basic_type_from_layout(env.arena, ctx, &CHAR_LAYOUT, env.ptr_bytes);
+            let ptr_type = get_ptr_type(&char_type, AddressSpace::Generic);
 
             let (new_wrapper, _) = clone_nonempty_list(
                 env,
@@ -1890,8 +1890,8 @@ fn str_concat<'a, 'ctx, 'env>(
     };
 
     let if_first_str_is_not_empty = || {
-        let elem_type = basic_type_from_layout(env.arena, ctx, &CHAR_LAYOUT, env.ptr_bytes);
-        let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+        let char_type = basic_type_from_layout(env.arena, ctx, &CHAR_LAYOUT, env.ptr_bytes);
+        let ptr_type = get_ptr_type(&char_type, AddressSpace::Generic);
 
         let if_second_str_is_empty = || {
             let (new_wrapper, _) = clone_nonempty_list(
@@ -1904,9 +1904,9 @@ fn str_concat<'a, 'ctx, 'env>(
             BasicValueEnum::StructValue(new_wrapper)
         };
 
-        // second_list_len > 0
+        // second_str_len > 0
         // We do this check to avoid allocating memory. If the second input
-        // list is empty, then we can just return the first list cloned
+        // str is empty, then we can just return the first str cloned
         let second_str_length_comparison = list_is_not_empty(builder, ctx, second_str_len);
 
         let if_second_str_is_not_empty = || {
@@ -1920,7 +1920,7 @@ fn str_concat<'a, 'ctx, 'env>(
                 let first_str_ptr = load_list_ptr(builder, first_str_wrapper, ptr_type);
 
                 // The pointer to the element in the first list
-                let first_str_elem_ptr = unsafe {
+                let first_str_char_ptr = unsafe {
                     builder.build_in_bounds_gep(first_str_ptr, &[first_index], "load_index")
                 };
 
@@ -1933,7 +1933,7 @@ fn str_concat<'a, 'ctx, 'env>(
                     )
                 };
 
-                let first_str_elem = builder.build_load(first_str_elem_ptr, "get_elem");
+                let first_str_elem = builder.build_load(first_str_char_ptr, "get_elem");
 
                 // Mutate the new array in-place to change the element.
                 builder.build_store(combined_str_elem_ptr, first_str_elem);
@@ -1959,32 +1959,32 @@ fn str_concat<'a, 'ctx, 'env>(
                 let second_str_ptr = load_list_ptr(builder, second_str_wrapper, ptr_type);
 
                 // The pointer to the element in the second list
-                let second_str_elem_ptr = unsafe {
+                let second_str_char_ptr = unsafe {
                     builder.build_in_bounds_gep(second_str_ptr, &[second_index], "load_index")
                 };
 
-                // The pointer to the element in the combined list.
+                // The pointer to the element in the combined str.
                 // Note that the pointer does not start at the index
-                // 0, it starts at the index of first_list_len. In that
+                // 0, it starts at the index of first_str_len. In that
                 // sense it is "offset".
-                let offset_combined_str_elem_ptr = unsafe {
+                let offset_combined_str_char_ptr = unsafe {
                     builder.build_in_bounds_gep(combined_str_ptr, &[first_str_len], "elem")
                 };
 
-                // The pointer to the element from the second list
+                // The pointer to the char from the second str
                 // in the combined list
-                let combined_str_elem_ptr = unsafe {
+                let combined_str_char_ptr = unsafe {
                     builder.build_in_bounds_gep(
-                        offset_combined_str_elem_ptr,
+                        offset_combined_str_char_ptr,
                         &[second_index],
                         "load_index_combined_list",
                     )
                 };
 
-                let second_str_elem = builder.build_load(second_str_elem_ptr, "get_elem");
+                let second_str_elem = builder.build_load(second_str_char_ptr, "get_elem");
 
                 // Mutate the new array in-place to change the element.
-                builder.build_store(combined_str_elem_ptr, second_str_elem);
+                builder.build_store(combined_str_char_ptr, second_str_elem);
             };
 
             incrementing_index_loop(
