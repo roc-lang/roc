@@ -11,6 +11,7 @@
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
 
+pub mod borrow;
 pub mod inc_dec;
 pub mod ir;
 pub mod layout;

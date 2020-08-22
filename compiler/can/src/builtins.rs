@@ -50,6 +50,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::BOOL_AND => bool_and,
         Symbol::BOOL_OR => bool_or,
         Symbol::BOOL_NOT => bool_not,
+        Symbol::STR_CONCAT => str_concat,
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
         Symbol::LIST_SET => list_set,
@@ -617,6 +618,25 @@ fn list_reverse(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         list_var,
+    )
+}
+
+/// Str.concat : Str, Str -> Str
+fn str_concat(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let str_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrConcat,
+        args: vec![(str_var, Var(Symbol::ARG_1)), (str_var, Var(Symbol::ARG_2))],
+        ret_var: str_var,
+    };
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1), (str_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        str_var,
     )
 }
 

@@ -158,7 +158,7 @@ pub fn gen(
                                     pattern_symbols: bumpalo::collections::Vec::new_in(
                                         mono_env.arena,
                                     ),
-                                    is_tail_recursive: false,
+                                    is_self_recursive: false,
                                     body,
                                 };
 
@@ -250,19 +250,18 @@ pub fn gen(
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
     for ((symbol, layout), proc) in procs.get_specialized_procs(arena) {
-        let (fn_val, arg_basic_types) =
-            build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-        headers.push((proc, fn_val, arg_basic_types));
+        headers.push((proc, fn_val));
     }
 
     // Build each proc using its header info.
-    for (proc, fn_val, arg_basic_types) in headers {
+    for (proc, fn_val) in headers {
         // NOTE: This is here to be uncommented in case verification fails.
         // (This approach means we don't have to defensively clone name here.)
         //
         // println!("\n\nBuilding and then verifying function {:?}\n\n", proc);
-        build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
+        build_proc(&env, &mut layout_ids, proc, fn_val);
 
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);

@@ -106,8 +106,6 @@ pub fn helper_without_uniqueness<'a>(
     };
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
-    let main_body =
-        roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
 
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
@@ -125,6 +123,13 @@ pub fn helper_without_uniqueness<'a>(
         roc_collections::all::MutMap::default()
     );
 
+    let (mut procs, param_map) = procs.get_specialized_procs_help(mono_env.arena);
+    let main_body = roc_mono::inc_dec::visit_declaration(
+        mono_env.arena,
+        param_map,
+        mono_env.arena.alloc(main_body),
+    );
+
     // Put this module's ident_ids back in the interns, so we can use them in env.
     // This must happen *after* building the headers, because otherwise there's
     // a conflicting mutable borrow on ident_ids.
@@ -133,17 +138,15 @@ pub fn helper_without_uniqueness<'a>(
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
+    for ((symbol, layout), proc) in procs.drain() {
+        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-    for ((symbol, layout), proc) in procs.get_specialized_procs(env.arena).drain() {
-        let (fn_val, arg_basic_types) =
-            build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
-
-        headers.push((proc, fn_val, arg_basic_types));
+        headers.push((proc, fn_val));
     }
 
     // Build each proc using its header info.
-    for (proc, fn_val, arg_basic_types) in headers {
-        build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
+    for (proc, fn_val) in headers {
+        build_proc(&env, &mut layout_ids, proc, fn_val);
 
         if fn_val.verify(true) {
             function_pass.run_on(&fn_val);
@@ -297,8 +300,6 @@ pub fn helper_with_uniqueness<'a>(
     };
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
-    let main_body =
-        roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),
@@ -315,6 +316,13 @@ pub fn helper_with_uniqueness<'a>(
         roc_collections::all::MutMap::default()
     );
 
+    let (mut procs, param_map) = procs.get_specialized_procs_help(mono_env.arena);
+    let main_body = roc_mono::inc_dec::visit_declaration(
+        mono_env.arena,
+        param_map,
+        mono_env.arena.alloc(main_body),
+    );
+
     // Put this module's ident_ids back in the interns, so we can use them in env.
     // This must happen *after* building the headers, because otherwise there's
     // a conflicting mutable borrow on ident_ids.
@@ -323,16 +331,15 @@ pub fn helper_with_uniqueness<'a>(
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    for ((symbol, layout), proc) in procs.get_specialized_procs(env.arena).drain() {
-        let (fn_val, arg_basic_types) =
-            build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+    for ((symbol, layout), proc) in procs.drain() {
+        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-        headers.push((proc, fn_val, arg_basic_types));
+        headers.push((proc, fn_val));
     }
 
     // Build each proc using its header info.
-    for (proc, fn_val, arg_basic_types) in headers {
-        build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
+    for (proc, fn_val) in headers {
+        build_proc(&env, &mut layout_ids, proc, fn_val);
 
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);

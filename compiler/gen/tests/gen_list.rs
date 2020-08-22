@@ -232,7 +232,28 @@ mod gen_list {
     }
 
     #[test]
-    fn list_concat() {
+    fn foobarbaz() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    firstList : List Int
+                    firstList =
+                        []
+
+                    secondList : List Int
+                    secondList =
+                        []
+
+                    List.concat firstList secondList
+                "#
+            ),
+            &[],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_concat_vanilla() {
         assert_evals_to!("List.concat [] []", &[], &'static [i64]);
 
         assert_evals_to!(
@@ -538,7 +559,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                    shared = [ 2.1, 4.3 ]
+                main = \shared -> 
 
                     # This should not mutate the original
                     x =
@@ -552,6 +573,8 @@ mod gen_list {
                             Err _ -> 0
 
                     { x, y }
+
+                main [ 2.1, 4.3 ]
                 "#
             ),
             (7.7, 4.3),
@@ -564,6 +587,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
+                main = \{} -> 
                     shared = [ 2, 4 ]
 
                     # This List.set is out of bounds, and should have no effect
@@ -578,6 +602,8 @@ mod gen_list {
                             Err _ -> 0
 
                     { x, y }
+
+                main {}
                 "#
             ),
             (4, 4),

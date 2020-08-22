@@ -258,8 +258,13 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
     };
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
-    let main_body =
-        roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
+
+    let param_map = roc_mono::borrow::ParamMap::default();
+    let main_body = roc_mono::inc_dec::visit_declaration(
+        mono_env.arena,
+        mono_env.arena.alloc(param_map),
+        mono_env.arena.alloc(main_body),
+    );
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),
@@ -294,21 +299,20 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
                 panic!("A specialization was still marked InProgress after monomorphization had completed: {:?} with layout {:?}", symbol, layout);
             }
             Done(proc) => {
-                let (fn_val, arg_basic_types) =
-                    build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+                let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-                headers.push((proc, fn_val, arg_basic_types));
+                headers.push((proc, fn_val));
             }
         }
     }
 
     // Build each proc using its header info.
-    for (proc, fn_val, arg_basic_types) in headers {
+    for (proc, fn_val) in headers {
         // NOTE: This is here to be uncommented in case verification fails.
         // (This approach means we don't have to defensively clone name here.)
         //
         // println!("\n\nBuilding and then verifying function {}\n\n", name);
-        build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
+        build_proc(&env, &mut layout_ids, proc, fn_val);
 
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);

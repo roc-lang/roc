@@ -772,15 +772,42 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //     , Attr Shared (a -> b)
     //    -> Attr * (List b)
     add_type(Symbol::LIST_MAP, {
-        let_tvars! { a, b, star1, star2 };
-
+        let_tvars! { star1, star2, star3, a, b };
         unique_function(
             vec![
-                list_type(star1, a),
-                shared(SolvedType::Func(vec![flex(a)], Box::new(flex(b)))),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        flex(star1),
+                        SolvedType::Apply(Symbol::LIST_LIST, vec![flex(a)]),
+                    ],
+                ),
+                SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![
+                        flex(star2),
+                        SolvedType::Func(vec![flex(a)], Box::new(flex(b))),
+                    ],
+                ),
             ],
-            list_type(star2, b),
+            SolvedType::Apply(
+                Symbol::ATTR_ATTR,
+                vec![
+                    flex(star3),
+                    SolvedType::Apply(Symbol::LIST_LIST, vec![flex(b)]),
+                ],
+            ),
         )
+
+        // let_tvars! { a, b, star1, star2 };
+        //
+        // unique_function(
+        //     vec![
+        //         list_type(star1, a),
+        //         shared(SolvedType::Func(vec![flex(a)], Box::new(flex(b)))),
+        //     ],
+        //     list_type(star2, b),
+        // )
     });
 
     // foldr : Attr (* | u) (List (Attr u a))
@@ -1043,8 +1070,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![str_type(star1)], bool_type(star2))
     });
 
-    // append : Attr * Str, Attr * Str -> Attr * Str
-    add_type(Symbol::STR_APPEND, {
+    // Str.concat : Attr * Str, Attr * Str -> Attr * Str
+    add_type(Symbol::STR_CONCAT, {
         let_tvars! { star1, star2, star3 };
         unique_function(vec![str_type(star1), str_type(star2)], str_type(star3))
     });
