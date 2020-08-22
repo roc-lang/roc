@@ -1092,7 +1092,12 @@ fn specialize<'a>(
             });
             let layout = layout_cache
                 .from_var(&env.arena, *var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO handle invalid closed-over value {:?}", err));
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "TODO handle invalid closed-over value in {:?}: {:?} {:?}",
+                        proc_name, err, &closed_over
+                    )
+                });
 
             struct_layouts.push(layout);
         }
@@ -1281,7 +1286,7 @@ pub fn with_hole<'a>(
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                    if let Closure(ann, _, recursivity, loc_args, boxed_body, closed_over) =
+                    if let Closure(ann, _, recursivity, loc_args, boxed_body, _closed_over) =
                         def.loc_expr.value
                     {
                         // Extract Procs, but discard the resulting Expr::Load.
@@ -1291,7 +1296,16 @@ pub fn with_hole<'a>(
 
                         let is_tail_recursive =
                             matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
-                        let closed_over = Vec::from_iter_in(closed_over.into_iter(), env.arena);
+
+                        let closed_over = env.closures.get(symbol).unwrap();
+                        let closed_over = Vec::from_iter_in(
+                            closed_over
+                                .calls
+                                .iter()
+                                .copied()
+                                .chain(closed_over.lookups.iter().copied()),
+                            env.arena,
+                        );
 
                         procs.insert_named(
                             env,
@@ -1868,7 +1882,16 @@ pub fn with_hole<'a>(
 
         Closure(ann, name, _, loc_args, boxed_body, closed_over) => {
             let (loc_body, ret_var) = *boxed_body;
-            let closed_over = Vec::from_iter_in(closed_over.into_iter(), env.arena);
+
+            let closed_over = env.closures.get(&name).unwrap();
+            let closed_over = Vec::from_iter_in(
+                closed_over
+                    .calls
+                    .iter()
+                    .copied()
+                    .chain(closed_over.lookups.iter().copied()),
+                env.arena,
+            );
 
             match procs.insert_anonymous(
                 env,
@@ -2161,7 +2184,7 @@ pub fn from_can<'a>(
                     // Now that we know for sure it's a closure, get an owned
                     // version of these variant args so we can use them properly.
                     match def.loc_expr.value {
-                        Closure(ann, _, recursivity, loc_args, boxed_body, closed_over) => {
+                        Closure(ann, _, recursivity, loc_args, boxed_body, _closed_over) => {
                             // Extract Procs, but discard the resulting Expr::Load.
                             // That Load looks up the pointer, which we won't use here!
 
@@ -2169,7 +2192,16 @@ pub fn from_can<'a>(
 
                             let is_tail_recursive =
                                 matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
-                            let closed_over = Vec::from_iter_in(closed_over.into_iter(), env.arena);
+
+                            let closed_over = env.closures.get(symbol).unwrap();
+                            let closed_over = Vec::from_iter_in(
+                                closed_over
+                                    .calls
+                                    .iter()
+                                    .copied()
+                                    .chain(closed_over.lookups.iter().copied()),
+                                env.arena,
+                            );
 
                             procs.insert_named(
                                 env,
@@ -2199,7 +2231,7 @@ pub fn from_can<'a>(
                     // Now that we know for sure it's a closure, get an owned
                     // version of these variant args so we can use them properly.
                     match def.loc_expr.value {
-                        Closure(ann, _, recursivity, loc_args, boxed_body, closed_over) => {
+                        Closure(ann, _, recursivity, loc_args, boxed_body, _closed_over) => {
                             // Extract Procs, but discard the resulting Expr::Load.
                             // That Load looks up the pointer, which we won't use here!
 
@@ -2207,7 +2239,18 @@ pub fn from_can<'a>(
 
                             let is_tail_recursive =
                                 matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
-                            let closed_over = Vec::from_iter_in(closed_over.into_iter(), env.arena);
+
+                            let closed_over = match env.closures.get(symbol) {
+                                Some(closed_over) => Vec::from_iter_in(
+                                    closed_over
+                                        .calls
+                                        .iter()
+                                        .copied()
+                                        .chain(closed_over.lookups.iter().copied()),
+                                    env.arena,
+                                ),
+                                None => Vec::new_in(env.arena),
+                            };
 
                             procs.insert_named(
                                 env,

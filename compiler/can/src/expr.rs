@@ -622,7 +622,21 @@ pub fn canonicalize_expr<'a>(
                 }
             }
 
-            env.register_closure(symbol, output.references.clone());
+            let mut closure_references = References::default();
+
+            for symbol in &output.references.lookups {
+                if closed_over.binary_search(symbol).is_ok() {
+                    closure_references.lookups.insert(*symbol);
+                }
+            }
+
+            for symbol in &output.references.calls {
+                if closed_over.binary_search(symbol).is_ok() {
+                    closure_references.calls.insert(*symbol);
+                }
+            }
+
+            env.register_closure(symbol, closure_references);
 
             (
                 Closure(
