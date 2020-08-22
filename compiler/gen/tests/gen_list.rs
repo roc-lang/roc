@@ -96,21 +96,24 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                    empty : List Str
-                    empty =
-                        []
+                    main = \{} ->
+                        empty : List Int
+                        empty =
+                            []
+            
+                        intIdentity : Int -> Int
+                        intIdentity = \i ->
+                            2
+            
+                        List.map empty intIdentity 
                     
-                    intIdentity : Str -> Str
-                    intIdentity = \i ->
-                        "hi"
-                        
-                    List.map intIdentity empty
+                    main {}
                 "#
             ),
             &[],
             &'static [i64]
         );
-        // assert_evals_to!("List.map (\\a -> a) []", &[], &'static [i64]);
+        // assert_evals_to!("List.map [] (\\a -> a)", &[], &'static [i64]);
     }
 
     #[test]
