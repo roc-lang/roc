@@ -2,7 +2,7 @@ use crate::layout_id::LayoutIds;
 use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, clone_nonempty_list, empty_list, empty_polymorphic_list,
     incrementing_index_loop, list_append, list_concat, list_get_unsafe, list_is_not_empty,
-    list_join, list_len, list_prepend, list_repeat, list_reverse, list_set, list_single,
+    list_join, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set, list_single,
     load_list_ptr,
 };
 use crate::llvm::compare::{build_eq, build_neq};
