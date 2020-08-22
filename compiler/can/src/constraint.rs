@@ -1,5 +1,5 @@
 use crate::expected::{Expected, PExpected};
-use roc_collections::all::{ImMap, ImSet, SendMap};
+use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -18,14 +18,14 @@ pub enum Constraint {
 
 impl Constraint {
     pub fn instantiate_aliases(&mut self, var_store: &mut VarStore) {
-        Self::instantiate_aliases_help(self, &ImMap::default(), var_store, &mut ImSet::default())
+        Self::instantiate_aliases_help(self, &ImMap::default(), var_store, &mut MutSet::default())
     }
 
     fn instantiate_aliases_help(
         &mut self,
         aliases: &ImMap<Symbol, Alias>,
         var_store: &mut VarStore,
-        introduced: &mut ImSet<Variable>,
+        introduced: &mut MutSet<Variable>,
     ) {
         use Constraint::*;
 
@@ -72,7 +72,7 @@ impl Constraint {
                     new_aliases.insert(*k, v.clone());
                 }
 
-                let mut introduced = ImSet::default();
+                let mut introduced = MutSet::default();
                 for Located { region, value: typ } in letcon.def_types.iter_mut() {
                     typ.instantiate_aliases(*region, &new_aliases, var_store, &mut introduced);
                 }

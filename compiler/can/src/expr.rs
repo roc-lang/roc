@@ -9,7 +9,7 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, symbols_from_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
+use roc_collections::all::{MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
@@ -934,11 +934,11 @@ fn canonicalize_when_branch<'a>(
 pub fn local_successors<'a>(
     references: &'a References,
     closures: &'a MutMap<Symbol, References>,
-) -> ImSet<Symbol> {
-    let mut answer = im_rc::hashset::HashSet::clone(&references.lookups);
+) -> MutSet<Symbol> {
+    let mut answer = references.lookups.clone();
 
     for call_symbol in references.calls.iter() {
-        answer = answer.union(call_successors(*call_symbol, closures));
+        answer.extend(call_successors(*call_symbol, closures));
     }
 
     answer
@@ -947,8 +947,8 @@ pub fn local_successors<'a>(
 fn call_successors<'a>(
     call_symbol: Symbol,
     closures: &'a MutMap<Symbol, References>,
-) -> ImSet<Symbol> {
-    let mut answer = im_rc::hashset::HashSet::default();
+) -> MutSet<Symbol> {
+    let mut answer = MutSet::default();
     let mut seen = MutSet::default();
     let mut queue = vec![call_symbol];
 

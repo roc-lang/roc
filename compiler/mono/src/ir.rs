@@ -3,6 +3,7 @@ use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{Builtin, Layout, LayoutCache, LayoutProblem};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_can::procedure::References;
 use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -373,6 +374,7 @@ pub struct Env<'a, 'i> {
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub vars_by_symbol: SendMap<Symbol, Variable>,
+    pub closures: MutMap<Symbol, References>,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -1067,6 +1069,7 @@ fn specialize<'a>(
     }
 
     if closed_over.is_empty() {
+        dbg!(&closed_over, &proc_name);
         // If we don't close over anything, we take a null pointer as the last (unused) arg.
         // This way, we don't get LLVM verification errors when calling this
         // proc passing a null pointer. There shouldn't be a runtime cost to the,
@@ -1186,13 +1189,21 @@ pub fn with_hole<'a>(
         },
         LetNonRec(def, cont, _, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                if let Closure(ann, _, recursivity, loc_args, boxed_body, closed_over) =
+                if let Closure(ann, _, recursivity, loc_args, boxed_body, _closed_over) =
                     def.loc_expr.value
                 {
+                    let closed_over = env.closures.get(symbol).unwrap();
                     let (loc_body, ret_var) = *boxed_body;
                     let is_tail_recursive =
                         matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
-                    let closed_over = Vec::from_iter_in(closed_over.into_iter(), env.arena);
+                    let closed_over = Vec::from_iter_in(
+                        closed_over
+                            .calls
+                            .iter()
+                            .copied()
+                            .chain(closed_over.lookups.iter().copied()),
+                        env.arena,
+                    );
 
                     procs.insert_named(
                         env,

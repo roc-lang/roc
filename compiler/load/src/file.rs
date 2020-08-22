@@ -6,6 +6,7 @@ use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
+use roc_can::procedure::References;
 use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
 use roc_constrain::module::{
     constrain_imports, load_builtin_aliases, pre_constrain_imports, ConstrainableImports, Import,
@@ -49,6 +50,7 @@ pub struct LoadedModule {
     pub all_vars_by_symbol: SendMap<Symbol, Variable>,
     pub src: Box<str>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
+    pub closures: MutMap<Symbol, References>,
 }
 
 #[derive(Debug)]
@@ -82,6 +84,7 @@ enum Msg<'a> {
         problems: Vec<roc_problem::can::Problem>,
         var_store: VarStore,
         module_timing: ModuleTiming,
+        closures: MutMap<Symbol, References>,
     },
     Solved {
         src: &'a str,
@@ -124,6 +127,8 @@ struct State<'a> {
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
 
     pub exposed_symbols_by_module: MutMap<ModuleId, MutSet<Symbol>>,
+
+    pub closures: MutMap<Symbol, References>,
 
     /// Modules which are waiting for certain headers to be parsed
     pub waiting_for_headers: MutMap<ModuleId, MutSet<ModuleId>>,
@@ -414,6 +419,7 @@ pub fn load(
             solve_listeners: MutMap::default(),
             unsolved_modules: MutMap::default(),
             timings: MutMap::default(),
+            closures: MutMap::default(),
         };
 
         let mut worker_listeners = bumpalo::collections::Vec::with_capacity_in(num_workers, &arena);
@@ -681,8 +687,21 @@ fn update<'a>(
             problems,
             var_store,
             module_timing,
+            closures,
         } => {
             state.can_problems.extend(problems);
+
+            for (symbol, references) in closures {
+                match state.closures.get_mut(&symbol) {
+                    Some(current) => {
+                        current.lookups.extend(references.lookups.iter().copied());
+                        current.calls.extend(references.calls.iter().copied());
+                    }
+                    None => {
+                        state.closures.insert(symbol, references);
+                    }
+                }
+            }
 
             let module_id = module.module_id;
             let State {
@@ -873,6 +892,7 @@ fn finish<'a>(
         src: src.into(),
         all_vars_by_symbol,
         timings: state.timings,
+        closures: state.closures,
     }
 }
 
@@ -1355,7 +1375,7 @@ fn parse_and_constrain<'a>(
         &mut var_store,
     );
     let canonicalize_end = SystemTime::now();
-    let (module, declarations, ident_ids, constraint, problems) = match canonicalized {
+    let (module, declarations, ident_ids, constraint, problems, closures) = match canonicalized {
         Ok(mut module_output) => {
             // Add builtin defs (e.g. List.get) to the module's defs
             let builtin_defs = roc_can::builtins::builtin_defs(&mut var_store);
@@ -1390,6 +1410,7 @@ fn parse_and_constrain<'a>(
                 module_output.ident_ids,
                 constraint,
                 module_output.problems,
+                module_output.closures,
             )
         }
         Err(runtime_error) => {
@@ -1418,6 +1439,7 @@ fn parse_and_constrain<'a>(
         problems,
         var_store,
         module_timing,
+        closures,
     })
 }
 

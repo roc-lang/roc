@@ -3,6 +3,7 @@ use crate::def::{canonicalize_defs, sort_can_defs, Declaration};
 use crate::env::Env;
 use crate::expr::Output;
 use crate::operator::desugar_def;
+use crate::procedure::References;
 use crate::scope::Scope;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
@@ -37,6 +38,7 @@ pub struct ModuleOutput {
     pub ident_ids: IdentIds,
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     pub references: MutSet<Symbol>,
+    pub closures: MutMap<Symbol, References>,
 }
 
 // TODO trim these down
@@ -266,6 +268,7 @@ pub fn canonicalize_module_defs<'a>(
                 lookups,
                 exposed_vars_by_symbol,
                 ident_ids: env.ident_ids,
+                closures: env.closures,
             })
         }
         (Err(runtime_error), _) => Err(runtime_error),

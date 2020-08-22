@@ -10,6 +10,7 @@ use roc_can::env::Env;
 use roc_can::expected::Expected;
 use roc_can::expr::{canonicalize_expr, Expr, Output};
 use roc_can::operator;
+use roc_can::procedure::References;
 use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, SendMap};
 use roc_constrain::expr::constrain_expr;
@@ -111,6 +112,7 @@ pub fn uniq_expr(
     Constraint,
     ModuleId,
     Interns,
+    MutMap<Symbol, References>,
 ) {
     let declared_idents: &ImMap<Ident, (Symbol, Region)> = &ImMap::default();
 
@@ -130,6 +132,7 @@ pub fn uniq_expr_with(
     Constraint,
     ModuleId,
     Interns,
+    MutMap<Symbol, References>,
 ) {
     let home = test_home();
     let CanExprOut {
@@ -139,6 +142,7 @@ pub fn uniq_expr_with(
         var_store: mut old_var_store,
         var,
         interns,
+        closures,
         ..
     } = can_expr_with(arena, home, expr_str);
 
@@ -180,7 +184,7 @@ pub fn uniq_expr_with(
     let subs2 = Subs::new(var_store.into());
 
     (
-        loc_expr, output, problems, subs2, var, constraint, home, interns,
+        loc_expr, output, problems, subs2, var, constraint, home, interns, closures,
     )
 }
 
@@ -193,6 +197,7 @@ pub struct CanExprOut {
     pub var_store: VarStore,
     pub var: Variable,
     pub constraint: Constraint,
+    pub closures: MutMap<Symbol, References>,
 }
 
 pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut {
@@ -318,5 +323,6 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         interns,
         var,
         constraint,
+        closures: env.closures,
     }
 }

@@ -1,6 +1,6 @@
 use crate::expr::Expr;
 use crate::pattern::Pattern;
-use roc_collections::all::ImSet;
+use roc_collections::all::MutSet;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
@@ -44,21 +44,21 @@ impl Procedure {
 /// so it's important that building the same code gives the same order every time!
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct References {
-    pub lookups: ImSet<Symbol>,
-    pub calls: ImSet<Symbol>,
+    pub lookups: MutSet<Symbol>,
+    pub calls: MutSet<Symbol>,
 }
 
 impl References {
     pub fn new() -> References {
         References {
-            lookups: ImSet::default(),
-            calls: ImSet::default(),
+            lookups: MutSet::default(),
+            calls: MutSet::default(),
         }
     }
 
     pub fn union(mut self, other: References) -> Self {
-        self.lookups = self.lookups.union(other.lookups);
-        self.calls = self.calls.union(other.calls);
+        self.lookups.extend(other.lookups);
+        self.calls.extend(other.calls);
 
         self
     }

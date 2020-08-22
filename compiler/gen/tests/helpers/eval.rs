@@ -25,6 +25,7 @@ pub fn helper_without_uniqueness<'a>(
         home,
         interns,
         problems,
+        closures,
         ..
     } = can_expr(src);
     let errors = problems
@@ -105,6 +106,7 @@ pub fn helper_without_uniqueness<'a>(
         home,
         ident_ids: &mut ident_ids,
         vars_by_symbol,
+        closures,
     };
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
@@ -219,7 +221,8 @@ pub fn helper_with_uniqueness<'a>(
 
     let target = target_lexicon::Triple::host();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
-    let (loc_expr, _output, problems, subs, var, constraint, home, interns) = uniq_expr(src);
+    let (loc_expr, _output, problems, subs, var, constraint, home, interns, closures) =
+        uniq_expr(src);
 
     let errors = problems
         .into_iter()
@@ -297,6 +300,7 @@ pub fn helper_with_uniqueness<'a>(
         home,
         ident_ids: &mut ident_ids,
         vars_by_symbol,
+        closures,
     };
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);

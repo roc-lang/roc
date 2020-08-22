@@ -249,6 +249,7 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
     let mut layout_ids = LayoutIds::default();
 
     // Populate Procs and get the low-level Expr from the canonical Expr
+    let closures = todo!("thread this through");
     let mut mono_problems = Vec::new();
     let mut mono_env = roc_mono::ir::Env {
         arena: &arena,
@@ -257,6 +258,7 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
         home,
         ident_ids: &mut ident_ids,
         vars_by_symbol,
+        closures,
     };
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);

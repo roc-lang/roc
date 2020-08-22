@@ -93,7 +93,7 @@ impl RecordField<Type> {
         region: Region,
         aliases: &ImMap<Symbol, Alias>,
         var_store: &mut VarStore,
-        introduced: &mut ImSet<Variable>,
+        introduced: &mut MutSet<Variable>,
     ) {
         use RecordField::*;
 
@@ -518,8 +518,8 @@ impl Type {
         }
     }
 
-    pub fn symbols(&self) -> ImSet<Symbol> {
-        let mut found_symbols = ImSet::default();
+    pub fn symbols(&self) -> MutSet<Symbol> {
+        let mut found_symbols = MutSet::default();
         symbols_help(self, &mut found_symbols);
 
         found_symbols
@@ -538,7 +538,7 @@ impl Type {
         region: Region,
         aliases: &ImMap<Symbol, Alias>,
         var_store: &mut VarStore,
-        introduced: &mut ImSet<Variable>,
+        introduced: &mut MutSet<Variable>,
     ) {
         use Type::*;
 
@@ -712,7 +712,7 @@ impl Type {
     }
 }
 
-fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
+fn symbols_help(tipe: &Type, accum: &mut MutSet<Symbol>) {
     use Type::*;
 
     match tipe {

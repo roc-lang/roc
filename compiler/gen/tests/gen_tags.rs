@@ -232,9 +232,24 @@ mod gen_tags {
     //            bool
     //        );
     //    }
+    //
 
+    // even -> [ odd ]
+    // odd -> [ even ]
+    //
+    // even -> [ odd, even ]
+    // odd -> [ even, odd ]
+    //
+    //
+    // ----
+    //
+    // even -> [ odd, arg ]
+    // odd -> [ even ]
+    //
+    // even -> [ even, odd, arg ]
+    // odd -> [ even, odd, arg ]
     #[test]
-    fn even_odd() {
+    fn even_odd_vanilla() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -251,6 +266,34 @@ mod gen_tags {
                         _ -> even (n - 1)
 
                 odd 5 && even 42
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn even_odd_capture() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                main = \arg -> 
+                    even = \n ->
+                        when n is
+                            0 -> True
+                            1 -> False
+                            _ -> odd (n - arg)
+
+                    odd = \n ->
+                        when n is
+                            0 -> False
+                            1 -> True
+                            _ -> even (n - arg)
+
+                    odd 5 && even 42
+
+                main 1
                 "#
             ),
             true,

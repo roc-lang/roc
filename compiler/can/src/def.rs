@@ -9,7 +9,7 @@ use crate::expr::{
 use crate::pattern::{bindings_from_patterns, canonicalize_pattern, symbols_from_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::all::{default_hasher, ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
@@ -348,7 +348,7 @@ pub fn sort_can_defs(
 
     // Determine the full set of references by traversing the graph.
     let mut visited_symbols = MutSet::default();
-    let returned_lookups = ImSet::clone(&output.references.lookups);
+    let returned_lookups = output.references.lookups.clone();
 
     // Start with the return expression's referenced locals. They're the only ones that count!
     //
@@ -372,7 +372,7 @@ pub fn sort_can_defs(
         }
     }
 
-    for symbol in ImSet::clone(&output.references.calls).into_iter() {
+    for symbol in output.references.calls.clone() {
         // Traverse the graph and look up *all* the references for this call.
         // Reuse the same visited_symbols as before; if we already visited it,
         // we won't learn anything new from visiting it again!
@@ -383,7 +383,7 @@ pub fn sort_can_defs(
     }
 
     let mut defined_symbols: Vec<Symbol> = Vec::new();
-    let mut defined_symbols_set: ImSet<Symbol> = ImSet::default();
+    let mut defined_symbols_set: MutSet<Symbol> = MutSet::default();
 
     for symbol in can_defs_by_symbol.keys().into_iter() {
         defined_symbols.push(*symbol);
@@ -397,7 +397,7 @@ pub fn sort_can_defs(
     // recursive definitions.
 
     // All successors that occur in the body of a symbol.
-    let all_successors_without_self = |symbol: &Symbol| -> ImSet<Symbol> {
+    let all_successors_without_self = |symbol: &Symbol| -> MutSet<Symbol> {
         // This may not be in refs_by_symbol. For example, the `f` in `f x` here:
         //
         // f = \z -> z
@@ -439,7 +439,7 @@ pub fn sort_can_defs(
 
                 loc_succ
             }
-            None => ImSet::default(),
+            None => MutSet::default(),
         }
     };
 
@@ -447,7 +447,7 @@ pub fn sort_can_defs(
     // This is required to determine whether a symbol is recursive. Recursive symbols
     // (that are not faulty) always need a DeclareRec, even if there is just one symbol in the
     // group
-    let mut all_successors_with_self = |symbol: &Symbol| -> ImSet<Symbol> {
+    let mut all_successors_with_self = |symbol: &Symbol| -> MutSet<Symbol> {
         // This may not be in refs_by_symbol. For example, the `f` in `f x` here:
         //
         // f = \z -> z
@@ -482,14 +482,14 @@ pub fn sort_can_defs(
 
                 loc_succ
             }
-            None => ImSet::default(),
+            None => MutSet::default(),
         }
     };
 
     // If a symbol is a direct successor of itself, there is an invalid cycle.
     // The difference with the function above is that this one does not look behind lambdas,
     // but does consider direct self-recursion.
-    let direct_successors = |symbol: &Symbol| -> ImSet<Symbol> {
+    let direct_successors = |symbol: &Symbol| -> MutSet<Symbol> {
         match refs_by_symbol.get(symbol) {
             Some((_, references)) => {
                 let mut loc_succ = local_successors(&references, &env.closures);
@@ -503,7 +503,7 @@ pub fn sort_can_defs(
 
                 loc_succ
             }
-            None => ImSet::default(),
+            None => MutSet::default(),
         }
     };
 
@@ -632,14 +632,14 @@ pub fn sort_can_defs(
 fn group_to_declaration(
     group: Vec<Symbol>,
     closures: &MutMap<Symbol, References>,
-    successors: &mut dyn FnMut(&Symbol) -> ImSet<Symbol>,
+    successors: &mut dyn FnMut(&Symbol) -> MutSet<Symbol>,
     can_defs_by_symbol: &MutMap<Symbol, Def>,
     declarations: &mut Vec<Declaration>,
 ) {
     use Declaration::*;
 
     // We want only successors in the current group, otherwise definitions get duplicated
-    let filtered_successors = |symbol: &Symbol| -> ImSet<Symbol> {
+    let filtered_successors = |symbol: &Symbol| -> MutSet<Symbol> {
         let mut result = successors(symbol);
 
         result.retain(|key| group.contains(key));
@@ -653,7 +653,7 @@ fn group_to_declaration(
     // Can bind multiple symbols. When not incorrectly recursive (which is guaranteed in this function),
     // normally `someDef` would be inserted twice. We use the region of the pattern as a unique key
     // for a definition, so every definition is only inserted (thus typechecked and emitted) once
-    let mut seen_pattern_regions: ImSet<Region> = ImSet::default();
+    let mut seen_pattern_regions: MutSet<Region> = MutSet::default();
 
     for cycle in strongly_connected_components(&group, filtered_successors) {
         if cycle.len() == 1 {
@@ -1016,7 +1016,7 @@ fn canonicalize_pending_def<'a>(
                 refs_by_symbol
                     .entry(defined_symbol)
                     .and_modify(|(_, refs)| {
-                        refs.lookups = refs.lookups.without(&defined_symbol);
+                        refs.lookups.remove(&defined_symbol);
                     });
 
                 // Recursive functions should not close over themselves.
@@ -1148,7 +1148,7 @@ fn canonicalize_pending_def<'a>(
                 refs_by_symbol
                     .entry(defined_symbol)
                     .and_modify(|(_, refs)| {
-                        refs.lookups = refs.lookups.without(&defined_symbol);
+                        refs.lookups.remove(&defined_symbol);
                     });
 
                 // Recursive functions should not close over themselves.
@@ -1253,7 +1253,13 @@ pub fn can_defs_with_return<'a>(
             for declaration in decls.into_iter().rev() {
                 loc_expr = Located {
                     region: Region::zero(),
-                    value: decl_to_let(var_store, declaration, loc_expr, output.aliases.clone()),
+                    value: decl_to_let(
+                        env,
+                        var_store,
+                        declaration,
+                        loc_expr,
+                        output.aliases.clone(),
+                    ),
                 };
             }
 
@@ -1263,7 +1269,8 @@ pub fn can_defs_with_return<'a>(
     }
 }
 
-fn decl_to_let(
+fn decl_to_let<'a>(
+    env: &mut Env<'a>,
     var_store: &mut VarStore,
     decl: Declaration,
     loc_ret: Located<Expr>,
@@ -1274,6 +1281,66 @@ fn decl_to_let(
             Expr::LetNonRec(Box::new(def), Box::new(loc_ret), var_store.fresh(), aliases)
         }
         Declaration::DeclareRec(defs) => {
+            loop {
+                let mut did_change = false;
+
+                for symbol in defs
+                    .iter()
+                    .map(|def| symbols_from_pattern(&def.loc_pattern.value))
+                    .flatten()
+                {
+                    // TODO remove clone
+                    let closures = env.closures.clone();
+
+                    if let Some(current) = env.closures.get_mut(&symbol) {
+                        let before = current.lookups.len() + current.calls.len();
+
+                        let lookup_iter = current.lookups.clone();
+                        let calls_iter = current.calls.clone();
+
+                        for referenced_sym in lookup_iter.iter().chain(calls_iter.iter()) {
+                            for referenced in closures.get(referenced_sym) {
+                                current.lookups.extend(referenced.lookups.iter().copied());
+                                current.calls.extend(referenced.calls.iter().copied());
+                            }
+                        }
+                        let after = current.lookups.len() + current.calls.len();
+
+                        if before != after {
+                            did_change = true;
+                        }
+                    }
+                }
+
+                if !did_change {
+                    break;
+                }
+            }
+
+            let symbols_from_letrec = defs
+                .iter()
+                .map(|def| symbols_from_pattern(&def.loc_pattern.value))
+                .flatten()
+                .collect::<MutSet<_>>();
+
+            'outer: for symbol in symbols_from_letrec.clone() {
+                if let Some(current) = env.closures.get_mut(&symbol) {
+                    for s in &current.lookups {
+                        if !symbols_from_letrec.contains(s) && !env.top_level_symbols.contains(s) {
+                            break 'outer;
+                        }
+                    }
+
+                    // all closed-over symbols are from this letrec block
+                    // therefore the function does not need to be a closure
+
+                    current.lookups.clear();
+                    current.calls.clear();
+                }
+            }
+
+            dbg!(&env.closures);
+
             Expr::LetRec(defs, Box::new(loc_ret), var_store.fresh(), aliases)
         }
         Declaration::InvalidCycle(symbols, regions) => {
@@ -1509,13 +1576,13 @@ fn correct_mutual_recursive_type_alias<'a>(
     aliases: &mut SendMap<Symbol, Alias>,
     var_store: &mut VarStore,
 ) {
-    let mut symbols_introduced = ImSet::default();
+    let mut symbols_introduced = MutSet::default();
 
     for (key, _) in aliases.iter() {
         symbols_introduced.insert(*key);
     }
 
-    let all_successors_with_self = |symbol: &Symbol| -> ImSet<Symbol> {
+    let all_successors_with_self = |symbol: &Symbol| -> MutSet<Symbol> {
         match aliases.get(symbol) {
             Some(alias) => {
                 let mut loc_succ = alias.typ.symbols();
@@ -1524,11 +1591,11 @@ fn correct_mutual_recursive_type_alias<'a>(
 
                 loc_succ
             }
-            None => ImSet::default(),
+            None => MutSet::default(),
         }
     };
 
-    let all_successors_without_self = |symbol: &Symbol| -> ImSet<Symbol> {
+    let all_successors_without_self = |symbol: &Symbol| -> MutSet<Symbol> {
         match aliases.get(symbol) {
             Some(alias) => {
                 let mut loc_succ = alias.typ.symbols();
@@ -1538,7 +1605,7 @@ fn correct_mutual_recursive_type_alias<'a>(
 
                 loc_succ
             }
-            None => ImSet::default(),
+            None => MutSet::default(),
         }
     };
 
@@ -1579,7 +1646,7 @@ fn correct_mutual_recursive_type_alias<'a>(
                             alias.region,
                             &to_instantiate,
                             var_store,
-                            &mut ImSet::default(),
+                            &mut MutSet::default(),
                         );
                         make_tag_union_recursive(
                             env,
