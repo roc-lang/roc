@@ -184,7 +184,7 @@ pub fn helper_without_uniqueness<'a>(
     );
 
     // Uncomment this to see the module's un-optimized LLVM instruction output:
-    // env.module.print_to_stderr();
+    env.module.print_to_stderr();
 
     if main_fn.verify(true) {
         function_pass.run_on(&main_fn);

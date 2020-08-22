@@ -470,4 +470,45 @@ mod gen_primitives {
             i64
         );
     }
+
+    #[test]
+    fn peano() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Peano : [ S Peano, Z ]
+
+                three : Peano
+                three = S (S (S Z))
+
+                when three is
+                    S _ -> 1
+                    Z -> 0
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    fn peano2() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Peano : [ S Peano, Z ]
+
+                three : Peano
+                three = S (S (S Z))
+
+                when three is
+                    S (S _) -> 1
+                    S (_) -> 0
+                    Z -> 0
+                "#
+            ),
+            1,
+            i64
+        );
+    }
 }

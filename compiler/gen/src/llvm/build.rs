@@ -468,13 +468,17 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
         Tag {
             arguments,
-            tag_layout,
+            tag_layout: Layout::Union(fields),
             union_size,
+            tag_id,
             ..
         } => {
+            let tag_layout = Layout::Union(fields);
+
             debug_assert!(*union_size > 1);
             let ptr_size = env.ptr_bytes;
 
+            dbg!(&tag_layout);
             let mut filler = tag_layout.stack_size(ptr_size);
 
             let ctx = env.context;
@@ -485,18 +489,35 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            for field_symbol in arguments.iter() {
+            for (field_symbol, tag_field_layout) in
+                arguments.iter().zip(fields[*tag_id as usize].iter())
+            {
+                // note field_layout is the layout of the argument.
+                // tag_field_layout is the layout that the tag will store
+                // these are different for recursive tag unions
                 let (val, field_layout) = load_symbol_and_layout(env, scope, field_symbol);
-                let field_size = field_layout.stack_size(ptr_size);
+                let field_size = tag_field_layout.stack_size(ptr_size);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
                 if field_size != 0 {
                     let field_type =
-                        basic_type_from_layout(env.arena, env.context, field_layout, ptr_size);
+                        basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
 
                     field_types.push(field_type);
-                    field_vals.push(val);
+
+                    if let Layout::RecursivePointer = tag_field_layout {
+                        let ptr = allocate_with_refcount(env, field_layout, val).into();
+                        let ptr = cast_basic_basic(
+                            builder,
+                            ptr,
+                            ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
+                        );
+                        dbg!(&ptr);
+                        field_vals.push(ptr);
+                    } else {
+                        field_vals.push(val);
+                    }
 
                     filler -= field_size;
                 }
@@ -543,7 +564,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
 
             let internal_type =
-                basic_type_from_layout(env.arena, env.context, tag_layout, env.ptr_bytes);
+                basic_type_from_layout(env.arena, env.context, &tag_layout, env.ptr_bytes);
 
             cast_basic_basic(
                 builder,
@@ -551,6 +572,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 internal_type,
             )
         }
+        Tag { .. } => unreachable!("tags should have a union layout"),
         AccessAtIndex {
             index,
             structure,
@@ -611,9 +633,24 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             let struct_value = cast_struct_struct(builder, argument, struct_type);
 
-            builder
+            let result = builder
                 .build_extract_value(struct_value, *index as u32, "")
-                .expect("desired field did not decode")
+                .expect("desired field did not decode");
+
+            if let Some(Layout::RecursivePointer) = field_layouts.get(*index as usize) {
+                // the value is a pointer to the actual value; load that value!
+                let ptr = cast_basic_basic(
+                    builder,
+                    result,
+                    struct_value
+                        .get_type()
+                        .ptr_type(AddressSpace::Generic)
+                        .into(),
+                );
+                builder.build_load(ptr.into_pointer_value(), "load_recursive_field")
+            } else {
+                result
+            }
         }
         EmptyArray => empty_polymorphic_list(env),
         Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
@@ -632,6 +669,73 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         }
         RuntimeErrorFunction(_) => todo!(),
     }
+}
+
+pub fn allocate_with_refcount<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
+    value: BasicValueEnum<'ctx>,
+) -> PointerValue<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let value_type = basic_type_from_layout(env.arena, ctx, layout, env.ptr_bytes);
+    let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
+
+    let len_type = env.ptr_int();
+    // bytes per element
+    let bytes_len = len_type.const_int(value_bytes, false);
+    let offset = (env.ptr_bytes as u64).max(value_bytes);
+
+    let ptr = {
+        let len = bytes_len;
+        let len =
+            builder.build_int_add(len, len_type.const_int(offset, false), "add_refcount_space");
+
+        env.builder
+            .build_array_malloc(ctx.i8_type(), len, "create_list_ptr")
+            .unwrap()
+
+        // TODO check if malloc returned null; if so, runtime error for OOM!
+    };
+
+    // We must return a pointer to the first element:
+    let ptr_bytes = env.ptr_bytes;
+    let int_type = ptr_int(ctx, ptr_bytes);
+    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+    let incremented = builder.build_int_add(
+        ptr_as_int,
+        ctx.i64_type().const_int(offset, false),
+        "increment_list_ptr",
+    );
+
+    let ptr_type = get_ptr_type(&value_type, AddressSpace::Generic);
+    let list_element_ptr = builder.build_int_to_ptr(incremented, ptr_type, "list_cast_ptr");
+
+    // subtract ptr_size, to access the refcount
+    let refcount_ptr = builder.build_int_sub(
+        incremented,
+        ctx.i64_type().const_int(env.ptr_bytes as u64, false),
+        "refcount_ptr",
+    );
+
+    let refcount_ptr = builder.build_int_to_ptr(
+        refcount_ptr,
+        int_type.ptr_type(AddressSpace::Generic),
+        "make ptr",
+    );
+
+    // the refcount of a new list is initially 1
+    // we assume that the list is indeed used (dead variables are eliminated)
+    let ref_count_one = ctx
+        .i64_type()
+        .const_int(crate::llvm::build::REFCOUNT_1 as _, false);
+    builder.build_store(refcount_ptr, ref_count_one);
+
+    // store the value in the pointer
+    builder.build_store(list_element_ptr, value);
+
+    list_element_ptr
 }
 
 fn list_literal<'a, 'ctx, 'env>(
@@ -702,6 +806,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     stmt: &roc_mono::ir::Stmt<'a>,
 ) -> BasicValueEnum<'ctx> {
+    use roc_mono::ir::Expr;
     use roc_mono::ir::Stmt::*;
 
     match stmt {
@@ -709,7 +814,20 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let context = &env.context;
 
             let val = build_exp_expr(env, layout_ids, &scope, parent, &expr);
-            let expr_bt = basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes);
+            let expr_bt = if let Layout::RecursivePointer = layout {
+                match expr {
+                    Expr::AccessAtIndex { field_layouts, .. } => {
+                        let layout = Layout::Struct(field_layouts);
+
+                        basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes)
+                    }
+                    _ => unreachable!(
+                        "a recursive pointer can only be loaded from a recursive tag union"
+                    ),
+                }
+            } else {
+                basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes)
+            };
             let alloca =
                 create_entry_block_alloca(env, parent, expr_bt, symbol.ident_string(&env.interns));
 

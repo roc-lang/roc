@@ -563,9 +563,12 @@ fn unify_shared_tags(
             // > RecursiveTagUnion(rvar, [ Cons a [ Cons a rvar, Nil ], Nil ], ext)
             //
             // and so on until the whole non-recursive tag union can be unified with it.
-            let problems = if let Some(rvar) = recursion_var {
+            let mut problems = Vec::new();
+
+            if let Some(rvar) = recursion_var {
                 if expected == rvar {
-                    unify_pool(subs, pool, actual, ctx.second)
+                    problems.extend(unify_pool(subs, pool, actual, ctx.second));
+                    println!("A");
                 } else if is_structure(actual, subs) {
                     // the recursion variable is hidden behind some structure (commonly an Attr
                     // with uniqueness inference). Thus we must expand the recursive tag union to
@@ -578,19 +581,29 @@ fn unify_shared_tags(
                     // when `actual` is just a flex/rigid variable, the substitution would expand a
                     // recursive tag union infinitely!
 
-                    unify_pool(subs, pool, actual, expected)
+                    problems.extend(unify_pool(subs, pool, actual, expected));
+                    println!("B");
                 } else {
                     // unification with a non-structure is trivial
-                    unify_pool(subs, pool, actual, expected)
+                    problems.extend(unify_pool(subs, pool, actual, expected));
+                    println!("C");
                 }
             } else {
                 // we always unify NonRecursive with Recursive, so this should never happen
                 debug_assert_ne!(Some(actual), recursion_var);
 
-                unify_pool(subs, pool, actual, expected)
+                problems.extend(unify_pool(subs, pool, actual, expected));
+                println!("D");
             };
 
+            // TODO this changes some error messages
+            // but is important for the inference of recursive types
             if problems.is_empty() {
+                problems.extend(unify_pool(subs, pool, expected, actual));
+            }
+
+            if problems.is_empty() {
+                // debug_assert_eq!(subs.get_root_key(actual), subs.get_root_key(expected));
                 matching_vars.push(actual);
             }
         }

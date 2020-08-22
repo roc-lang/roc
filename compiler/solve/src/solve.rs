@@ -1295,6 +1295,8 @@ fn deep_copy_var_help(
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
                     let mut new_tags = MutMap::default();
 
+                    let new_rec_var = deep_copy_var_help(subs, max_rank, pools, rec_var);
+
                     for (tag, vars) in tags {
                         let new_vars: Vec<Variable> = vars
                             .into_iter()
@@ -1304,7 +1306,7 @@ fn deep_copy_var_help(
                     }
 
                     RecursiveTagUnion(
-                        deep_copy_var_help(subs, max_rank, pools, rec_var),
+                        new_rec_var,
                         new_tags,
                         deep_copy_var_help(subs, max_rank, pools, ext_var),
                     )

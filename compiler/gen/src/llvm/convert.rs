@@ -107,9 +107,7 @@ pub fn basic_type_from_layout<'ctx>(
                 .struct_type(field_types.into_bump_slice(), false)
                 .as_basic_type_enum()
         }
-        RecursiveUnion(_) => todo!("TODO implement layout of recursive tag union"),
-        RecursivePointer => todo!("TODO implement layout of recursive tag union"),
-        Union(_) => {
+        RecursiveUnion(_) | Union(_) => {
             // TODO make this dynamic
             let ptr_size = std::mem::size_of::<i64>();
             let union_size = layout.stack_size(ptr_size as u32);
@@ -139,6 +137,13 @@ pub fn basic_type_from_layout<'ctx>(
                     .struct_type(&[i64_array_type, i8_array_type], false)
                     .into()
             }
+        }
+        RecursivePointer => {
+            // TODO make this dynamic
+            context
+                .i64_type()
+                .ptr_type(AddressSpace::Generic)
+                .as_basic_type_enum()
         }
 
         Builtin(builtin) => match builtin {
