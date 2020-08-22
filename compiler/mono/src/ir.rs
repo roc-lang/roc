@@ -1219,73 +1219,45 @@ pub fn with_hole<'a>(
                         closed_over_bump.into_bump_slice(),
                     );
 
-                    let stmt = with_hole(env, cont.value, procs, layout_cache, assigned, hole);
+                    let layout = layout_cache
+                        .from_var(env.arena, ann, env.subs)
+                        .unwrap_or_else(|err| {
+                            panic!("TODO turn closure layout into a RuntimeError {:?}", err)
+                        });
 
-                    if closed_over.is_empty() {
-                        // If this function doesn't close over anything, it can
-                        // be registered as a top-level Proc and we're done.
-                        return stmt;
-                    } else {
-                        // Since this function closes over things, we need to
-                        // create a wrapper struct for it and add it to scope,
-                        // so when we call the function later, we will pass it
-                        // the closed-over values it needs.
-                        let layout = layout_cache
-                            .from_var(env.arena, ann, env.subs)
-                            .unwrap_or_else(|err| {
-                                panic!("TODO turn closure layout into a RuntimeError {:?}", err)
-                            });
+                    let hole = with_hole(env, cont.value, procs, layout_cache, assigned, hole);
 
-                        let fn_ptr = Expr::FunctionPointer(*symbol, layout.clone());
-                        let fn_ptr_layout = todo!("Compute fn_ptr_layout");
-                        let fn_ptr_symbol = env.unique_symbol();
+                    let fn_ptr = Expr::FunctionPointer(*symbol, layout.clone());
+                    let fn_ptr: Symbol = todo!("TODO turn fn_ptr into a Symbol");
 
-                        // Add a Let for the function pointer, so we have a
-                        // Symbol for it. (We need the Symbol in order to store
-                        // it in the closure struct later.)
-                        let stmt =
-                            Stmt::Let(fn_ptr_symbol, fn_ptr, fn_ptr_layout, arena.alloc(stmt));
+                    let closed_over_struct = Expr::Struct(arena.alloc(closed_over)); // TODO use MallocStruct here if the struct would be bigger than usize, and smaller-than-struct values if they fit
+                    let closed_over_struct: Symbol = todo!("turn closed_over into a Symbol");
 
-                        let closed_over_struct = Expr::Struct(arena.alloc(closed_over)); // TODO use MallocStruct here if the struct would be bigger than usize, and smaller-than-struct values if they fit
-                        let closed_over_struct_layout = todo!("Compute closed_over_struct_layout");
-                        let closed_over_struct_symbol = env.unique_symbol();
-
-                        // Add a Let for the closed_over struct, so we have a
-                        // Symbol for it. (We need the Symbol in order to store
-                        // it in the closure struct later.)
-                        let stmt = Stmt::Let(
-                            closed_over_struct_symbol,
+                    let closure_struct = Expr::Struct(
+                        bumpalo::vec![in arena;
+                            fn_ptr,
                             closed_over_struct,
-                            closed_over_struct_layout,
-                            arena.alloc(stmt),
-                        );
+                        ]
+                        .into_bump_slice(),
+                    );
+                    let arg_layouts = todo!("Compute arg_layouts");
+                    let ret_layout = todo!("Compute ret_layout");
+                    let closure_struct_layout = Layout::Struct(
+                        bumpalo::vec![in arena;
+                            Layout::FunctionPointer(arg_layouts, ret_layout),
+                            Layout::Struct(closed_over_layouts.into_bump_slice())
+                        ]
+                        .into_bump_slice(),
+                    );
 
-                        // Build the closure struct - the thing we'll be
-                        // returning here, and passing around.
-                        let closure_struct = Expr::Struct(
-                            bumpalo::vec![in arena;
-                                fn_ptr_symbol,
-                                closed_over_struct_symbol,
-                            ]
-                            .into_bump_slice(),
-                        );
-                        let arg_layouts = todo!("Compute arg_layouts");
-                        let ret_layout = todo!("Compute ret_layout");
-                        let closure_struct_layout = Layout::Struct(
-                            bumpalo::vec![in arena;
-                                Layout::FunctionPointer(arg_layouts, ret_layout),
-                                Layout::Struct(closed_over_layouts.into_bump_slice())
-                            ]
-                            .into_bump_slice(),
-                        );
+                    // todo!("Insert a Let which stores a (fn_ptr, closed_over) tuple in this symbol, so when I try to call that function by name later, the tuple is in scope and we can convert it from a CallByName to CallByPointer using the (fn_ptr, closed_over) to get the pointer and the final arg, respectively. Important: This `Let` must be *first* - but I think canonicalization will have sorted it that way already.");
 
-                        return Stmt::Let(
-                            assigned,
-                            closure_struct,
-                            closure_struct_layout,
-                            arena.alloc(stmt),
-                        );
-                    }
+                    return Stmt::Let(
+                        assigned,
+                        closure_struct,
+                        closure_struct_layout,
+                        arena.alloc(hole),
+                    );
                 }
             }
 
@@ -3092,20 +3064,6 @@ fn call_by_name<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let is_top_level_fn = procs
-        .partial_procs
-        .get(&proc_name)
-        .unwrap_or_else(|| {
-            unreachable!(
-                "Tried to call function {} before it was defined!",
-                proc_name
-            )
-        })
-        .closed_over
-        .is_empty();
-
-    todo!("if is_top_level_fn, then proceed as normal. Otherwise, do a call-by-closure: expect that if we do a lookup on proc_name, it'll resolve to a closure struct, which we can then use to do a call by pointer on its fn_ptr (first struct field) passing its closed-over struct (second field)");
-
     // Register a pending_specialization for this function
     match layout_cache.from_var(env.arena, fn_var, env.subs) {
         Ok(layout) => {
