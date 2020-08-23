@@ -210,12 +210,13 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
     let context = Context::create();
     let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, "app"));
     let builder = context.create_builder();
-    let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     // pretty-print the expr type string for later.
     name_all_type_vars(var, &mut subs);
 
     let expr_type_str = content_to_string(content.clone(), &subs, home, &interns);
+    let (module_pass, function_pass) =
+        roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compute main_fn_type before moving subs to Env
     let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
@@ -274,11 +275,18 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
         Vec::with_capacity(num_headers)
     };
     let mut layout_cache = LayoutCache::default();
-    let mut procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
+    let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
     assert_eq!(
         procs.runtime_errors,
         roc_collections::all::MutMap::default()
+    );
+
+    let (mut procs, param_map) = procs.get_specialized_procs_help(mono_env.arena);
+    let main_body = roc_mono::inc_dec::visit_declaration(
+        mono_env.arena,
+        param_map,
+        mono_env.arena.alloc(main_body),
     );
 
     // Put this module's ident_ids back in the interns, so we can use them in env.
@@ -289,21 +297,10 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
+    for ((symbol, layout), proc) in procs.drain() {
+        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-    let mut gen_scope = roc_gen::llvm::build::Scope::default();
-    for ((symbol, layout), proc) in procs.specialized.drain() {
-        use roc_mono::ir::InProgressProc::*;
-
-        match proc {
-            InProgress => {
-                panic!("A specialization was still marked InProgress after monomorphization had completed: {:?} with layout {:?}", symbol, layout);
-            }
-            Done(proc) => {
-                let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
-
-                headers.push((proc, fn_val));
-            }
-        }
+        headers.push((proc, fn_val));
     }
 
     // Build each proc using its header info.
@@ -315,11 +312,18 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
         build_proc(&env, &mut layout_ids, proc, fn_val);
 
         if fn_val.verify(true) {
-            fpm.run_on(&fn_val);
+            function_pass.run_on(&fn_val);
         } else {
-            // NOTE: If this fails, uncomment the above println to debug.
+            eprintln!(
+                "\n\nFunction {:?} failed LLVM verification in build. Its content was:\n",
+                fn_val.get_name().to_str().unwrap()
+            );
+
+            fn_val.print_to_stderr();
+
             panic!(
-                "Non-main function failed LLVM verification. Uncomment the above println to debug!"
+                "The preceding code was from {:?}, which failed LLVM verification in build.",
+                fn_val.get_name().to_str().unwrap()
             );
         }
     }
@@ -335,26 +339,25 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
 
     builder.position_at_end(basic_block);
 
-    let ret = roc_gen::llvm::build::build_exp_stmt(
+    // builds the function body (return statement included)
+    roc_gen::llvm::build::build_exp_stmt(
         &env,
         &mut layout_ids,
-        &mut gen_scope,
+        &mut roc_gen::llvm::build::Scope::default(),
         main_fn,
         &main_body,
     );
-
-    builder.build_return(Some(&ret));
 
     // Uncomment this to see the module's un-optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
     if main_fn.verify(true) {
-        fpm.run_on(&main_fn);
+        function_pass.run_on(&main_fn);
     } else {
-        panic!("Main function {} failed LLVM verification. Uncomment things near this error message for more details.", main_fn_name);
+        panic!("Main function {} failed LLVM verification in build. Uncomment things nearby to see more details.", main_fn_name);
     }
 
-    mpm.run_on(module);
+    module_pass.run_on(env.module);
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
