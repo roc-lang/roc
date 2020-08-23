@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
-use inkwell::execution_engine::JitFunction;
+use inkwell::execution_engine::{ExecutionEngine, JitFunction};
 use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_builtins::unique::uniq_stdlib;
@@ -19,7 +19,7 @@ use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::ir::Procs;
-use roc_mono::layout::{Layout, LayoutCache};
+use roc_mono::layout::{Builtin, Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::parser::{loc, Fail, FailReason, Parser, State};
@@ -35,13 +35,28 @@ use std::path::PathBuf;
 use std::str::from_utf8_unchecked;
 use target_lexicon::Triple;
 
+macro_rules! jit_map {
+    ($execution_engine: expr, $main_fn_name: expr, $ty: ty, $transform: expr) => {{
+        let main: JitFunction<unsafe extern "C" fn() -> $ty> = $execution_engine
+            .get_function($main_fn_name)
+            .ok()
+            .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
+            .expect("errored");
+
+        $transform(main.call())
+    }};
+}
+
+pub const WELCOME_MESSAGE: &str = "\n  The rockin’ \u{001b}[36mroc repl\u{001b}[0m\n\u{001b}[35m────────────────────────\u{001b}[0m\n\n";
+pub const INSTRUCTIONS: &str =
+    "Enter an expression, or :help for a list of commands, or :exit to exit.\n";
+pub const PROMPT: &str = "\n\u{001b}[36m»\u{001b}[0m ";
+pub const ELLIPSIS: &str = "\u{001b}[36m…\u{001b}[0m ";
+
 pub fn main() -> io::Result<()> {
     use std::io::BufRead;
 
-    println!(
-        "\n  The rockin’ \u{001b}[36mroc repl\u{001b}[0m\n\u{001b}[35m────────────────────────\u{001b}[0m\n\n{}",
-        WELCOME_MESSAGE
-    );
+    print!("{}{}", WELCOME_MESSAGE, INSTRUCTIONS);
 
     // Loop
 
@@ -50,9 +65,9 @@ pub fn main() -> io::Result<()> {
 
     loop {
         if pending_src.is_empty() {
-            print!("\n\u{001b}[36m»\u{001b}[0m ");
+            print!("{}", PROMPT);
         } else {
-            print!("\u{001b}[36m…\u{001b}[0m ");
+            print!("{}", ELLIPSIS);
         }
 
         io::stdout().flush().unwrap();
@@ -71,7 +86,7 @@ pub fn main() -> io::Result<()> {
             }
             "" => {
                 if pending_src.is_empty() {
-                    println!("\n{}", WELCOME_MESSAGE);
+                    print!("\n{}", INSTRUCTIONS);
                 } else if prev_line_blank {
                     // After two blank lines in a row, give up and try parsing it
                     // even though it's going to fail. This way you don't get stuck.
@@ -136,9 +151,6 @@ pub fn main() -> io::Result<()> {
 
     Ok(())
 }
-
-const WELCOME_MESSAGE: &str =
-    "Enter an expression, or :help for a list of commands, or :exit to exit.";
 
 fn report_parse_error(fail: Fail) {
     println!("TODO Gracefully report parse error in repl: {:?}", fail);
@@ -206,9 +218,9 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
         // Compute main_fn_type before moving subs to Env
-        let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
+        let main_ret_layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
             panic!(
-                "Code gen error in test: could not convert to layout. Err was {:?}",
+                "Code gen error in test: could not convert Content to main_layout. Err was {:?}",
                 err
             )
         });
@@ -216,8 +228,12 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             .create_jit_execution_engine(OptimizationLevel::None)
             .expect("Error creating JIT execution engine for test");
 
-        let main_fn_type =
-            basic_type_from_layout(&arena, &context, &layout, ptr_bytes).fn_type(&[], false);
+        // Without calling this, we get a linker error when building this crate
+        // in --release mode and then trying to eval anything in the repl.
+        ExecutionEngine::link_in_mc_jit();
+
+        let main_fn_type = basic_type_from_layout(&arena, &context, &main_ret_layout, ptr_bytes)
+            .fn_type(&[], false);
         let main_fn_name = "$Test.main";
 
         // Compile and add all the Procs before adding main
@@ -355,16 +371,70 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         // env.module.print_to_stderr();
 
         unsafe {
-            let main: JitFunction<
-                unsafe extern "C" fn() -> i64, /* TODO have this return Str, and in the generated code make sure to call the appropriate string conversion function on the return val based on its type! */
-            > = execution_engine
-                .get_function(main_fn_name)
-                .ok()
-                .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
-                .expect("errored");
-
-            let result = main.call();
-            let output = format!("{}", result);
+            let output = match main_ret_layout {
+                Layout::Builtin(Builtin::Int64) => {
+                    jit_map!(execution_engine, main_fn_name, i64, |num| format!(
+                        "{}",
+                        num
+                    ))
+                }
+                Layout::Builtin(Builtin::Float64) => {
+                    jit_map!(execution_engine, main_fn_name, f64, |num| format!(
+                        "{}",
+                        num
+                    ))
+                }
+                Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => jit_map!(
+                    execution_engine,
+                    main_fn_name,
+                    &'static str,
+                    |string| format!("\"{}\"", string)
+                ),
+                Layout::Builtin(Builtin::EmptyList) => "[]".to_string(),
+                Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Int64))) => jit_map!(
+                    execution_engine,
+                    main_fn_name,
+                    &'static [i64],
+                    |nums: &'static [i64]| format!(
+                        "[ {} ]",
+                        nums.iter()
+                            .map(|num| format!("{}", num))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )
+                ),
+                Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Float64))) => jit_map!(
+                    execution_engine,
+                    main_fn_name,
+                    &'static [f64],
+                    |nums: &'static [f64]| format!(
+                        "[ {} ]",
+                        nums.iter()
+                            .map(|num| format!("{}", num))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )
+                ),
+                Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Str)))
+                | Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::EmptyStr))) => {
+                    jit_map!(
+                        execution_engine,
+                        main_fn_name,
+                        &'static [&'static str],
+                        |strings: &'static [&'static str]| format!(
+                            "[ {} ]",
+                            strings
+                                .iter()
+                                .map(|string| format!("\"{}\"", string))
+                                .collect::<Vec<String>>()
+                                .join(", ")
+                        )
+                    )
+                }
+                other => {
+                    todo!("TODO add support for rendering {:?} in the REPL", other);
+                }
+            };
 
             Ok(ReplOutput::NoProblems {
                 expr: output,
