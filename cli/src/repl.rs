@@ -145,8 +145,11 @@ fn report_parse_error(fail: Fail) {
 }
 
 fn print_output(src: &str) -> Result<String, Fail> {
-    gen(src.as_bytes(), Triple::host(), OptLevel::Normal).map(|(answer, answer_type)| {
-        format!("\n{} \u{001b}[35m:\u{001b}[0m {}", answer, answer_type)
+    gen(src.as_bytes(), Triple::host(), OptLevel::Normal).map(|output| match output {
+        ReplOutput::NoProblems { expr, expr_type } => {
+            format!("\n{} \u{001b}[35m:\u{001b}[0m {}", expr, expr_type)
+        }
+        ReplOutput::Problems(lines) => format!("\n{}\n", lines.join("\n\n")),
     })
 }
 
@@ -154,7 +157,7 @@ pub fn repl_home() -> ModuleId {
     ModuleIds::default().get_or_insert(&"REPL".into())
 }
 
-pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, String), Fail> {
+fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fail> {
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
 
     // Look up the types and expressions of the `provided` values
@@ -188,198 +191,215 @@ pub fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<(String, S
     //
     // TODO: maybe Reporting should have this be an Option?
     let path = PathBuf::new();
+    let total_problems = can_problems.len() + type_problems.len();
 
-    for problem in can_problems.into_iter() {
-        let report = can_problem(&alloc, path.clone(), problem);
-        let mut buf = String::new();
+    if total_problems == 0 {
+        let context = Context::create();
+        let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, "app"));
+        let builder = context.create_builder();
 
-        report.render_color_terminal(&mut buf, &alloc, &palette);
+        // pretty-print the expr type string for later.
+        name_all_type_vars(var, &mut subs);
 
-        println!("\n{}\n", buf);
-    }
+        let expr_type_str = content_to_string(content.clone(), &subs, home, &interns);
+        let (module_pass, function_pass) =
+            roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
-    for problem in type_problems.into_iter() {
-        let report = type_problem(&alloc, path.clone(), problem);
-        let mut buf = String::new();
+        // Compute main_fn_type before moving subs to Env
+        let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
+            panic!(
+                "Code gen error in test: could not convert to layout. Err was {:?}",
+                err
+            )
+        });
+        let execution_engine = module
+            .create_jit_execution_engine(OptimizationLevel::None)
+            .expect("Error creating JIT execution engine for test");
 
-        report.render_color_terminal(&mut buf, &alloc, &palette);
+        let main_fn_type =
+            basic_type_from_layout(&arena, &context, &layout, ptr_bytes).fn_type(&[], false);
+        let main_fn_name = "$Test.main";
 
-        println!("\n{}\n", buf);
-    }
+        // Compile and add all the Procs before adding main
+        let mut env = roc_gen::llvm::build::Env {
+            arena: &arena,
+            builder: &builder,
+            context: &context,
+            interns,
+            module,
+            ptr_bytes,
+            leak: false,
+            exposed_to_host: MutSet::default(),
+        };
+        let mut procs = Procs::default();
+        let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
+        let mut layout_ids = LayoutIds::default();
 
-    let context = Context::create();
-    let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, "app"));
-    let builder = context.create_builder();
-
-    // pretty-print the expr type string for later.
-    name_all_type_vars(var, &mut subs);
-
-    let expr_type_str = content_to_string(content.clone(), &subs, home, &interns);
-    let (module_pass, function_pass) =
-        roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
-
-    // Compute main_fn_type before moving subs to Env
-    let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
-        panic!(
-            "Code gen error in test: could not convert to layout. Err was {:?}",
-            err
-        )
-    });
-    let execution_engine = module
-        .create_jit_execution_engine(OptimizationLevel::None)
-        .expect("Error creating JIT execution engine for test");
-
-    let main_fn_type =
-        basic_type_from_layout(&arena, &context, &layout, ptr_bytes).fn_type(&[], false);
-    let main_fn_name = "$Test.main";
-
-    // Compile and add all the Procs before adding main
-    let mut env = roc_gen::llvm::build::Env {
-        arena: &arena,
-        builder: &builder,
-        context: &context,
-        interns,
-        module,
-        ptr_bytes,
-        leak: false,
-        exposed_to_host: MutSet::default(),
-    };
-    let mut procs = Procs::default();
-    let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
-    let mut layout_ids = LayoutIds::default();
-
-    // Populate Procs and get the low-level Expr from the canonical Expr
-    let mut mono_problems = Vec::new();
-    let mut mono_env = roc_mono::ir::Env {
-        arena: &arena,
-        subs: &mut subs,
-        problems: &mut mono_problems,
-        home,
-        ident_ids: &mut ident_ids,
-    };
-
-    let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
-
-    let param_map = roc_mono::borrow::ParamMap::default();
-    let main_body = roc_mono::inc_dec::visit_declaration(
-        mono_env.arena,
-        mono_env.arena.alloc(param_map),
-        mono_env.arena.alloc(main_body),
-    );
-    let mut headers = {
-        let num_headers = match &procs.pending_specializations {
-            Some(map) => map.len(),
-            None => 0,
+        // Populate Procs and get the low-level Expr from the canonical Expr
+        let mut mono_problems = Vec::new();
+        let mut mono_env = roc_mono::ir::Env {
+            arena: &arena,
+            subs: &mut subs,
+            problems: &mut mono_problems,
+            home,
+            ident_ids: &mut ident_ids,
         };
 
-        Vec::with_capacity(num_headers)
-    };
-    let mut layout_cache = LayoutCache::default();
-    let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
+        let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
 
-    assert_eq!(
-        procs.runtime_errors,
-        roc_collections::all::MutMap::default()
-    );
+        let param_map = roc_mono::borrow::ParamMap::default();
+        let main_body = roc_mono::inc_dec::visit_declaration(
+            mono_env.arena,
+            mono_env.arena.alloc(param_map),
+            mono_env.arena.alloc(main_body),
+        );
+        let mut headers = {
+            let num_headers = match &procs.pending_specializations {
+                Some(map) => map.len(),
+                None => 0,
+            };
 
-    let (mut procs, param_map) = procs.get_specialized_procs_help(mono_env.arena);
-    let main_body = roc_mono::inc_dec::visit_declaration(
-        mono_env.arena,
-        param_map,
-        mono_env.arena.alloc(main_body),
-    );
+            Vec::with_capacity(num_headers)
+        };
+        let mut layout_cache = LayoutCache::default();
+        let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
-    // Put this module's ident_ids back in the interns, so we can use them in env.
-    // This must happen *after* building the headers, because otherwise there's
-    // a conflicting mutable borrow on ident_ids.
-    env.interns.all_ident_ids.insert(home, ident_ids);
+        assert_eq!(
+            procs.runtime_errors,
+            roc_collections::all::MutMap::default()
+        );
 
-    // Add all the Proc headers to the module.
-    // We have to do this in a separate pass first,
-    // because their bodies may reference each other.
-    for ((symbol, layout), proc) in procs.drain() {
-        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+        let (mut procs, param_map) = procs.get_specialized_procs_help(mono_env.arena);
+        let main_body = roc_mono::inc_dec::visit_declaration(
+            mono_env.arena,
+            param_map,
+            mono_env.arena.alloc(main_body),
+        );
 
-        headers.push((proc, fn_val));
-    }
+        // Put this module's ident_ids back in the interns, so we can use them in env.
+        // This must happen *after* building the headers, because otherwise there's
+        // a conflicting mutable borrow on ident_ids.
+        env.interns.all_ident_ids.insert(home, ident_ids);
 
-    // Build each proc using its header info.
-    for (proc, fn_val) in headers {
-        // NOTE: This is here to be uncommented in case verification fails.
-        // (This approach means we don't have to defensively clone name here.)
-        //
-        // println!("\n\nBuilding and then verifying function {}\n\n", name);
-        build_proc(&env, &mut layout_ids, proc, fn_val);
+        // Add all the Proc headers to the module.
+        // We have to do this in a separate pass first,
+        // because their bodies may reference each other.
+        for ((symbol, layout), proc) in procs.drain() {
+            let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-        if fn_val.verify(true) {
-            function_pass.run_on(&fn_val);
-        } else {
-            eprintln!(
-                "\n\nFunction {:?} failed LLVM verification in build. Its content was:\n",
-                fn_val.get_name().to_str().unwrap()
-            );
-
-            fn_val.print_to_stderr();
-
-            panic!(
-                "The preceding code was from {:?}, which failed LLVM verification in build.",
-                fn_val.get_name().to_str().unwrap()
-            );
+            headers.push((proc, fn_val));
         }
-    }
 
-    // Add main to the module.
-    let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
-    let cc = roc_gen::llvm::build::FAST_CALL_CONV;
+        // Build each proc using its header info.
+        for (proc, fn_val) in headers {
+            // NOTE: This is here to be uncommented in case verification fails.
+            // (This approach means we don't have to defensively clone name here.)
+            //
+            // println!("\n\nBuilding and then verifying function {}\n\n", name);
+            build_proc(&env, &mut layout_ids, proc, fn_val);
 
-    main_fn.set_call_conventions(cc);
+            if fn_val.verify(true) {
+                function_pass.run_on(&fn_val);
+            } else {
+                eprintln!(
+                    "\n\nFunction {:?} failed LLVM verification in build. Its content was:\n",
+                    fn_val.get_name().to_str().unwrap()
+                );
 
-    // Add main's body
-    let basic_block = context.append_basic_block(main_fn, "entry");
+                fn_val.print_to_stderr();
 
-    builder.position_at_end(basic_block);
+                panic!(
+                    "The preceding code was from {:?}, which failed LLVM verification in build.",
+                    fn_val.get_name().to_str().unwrap()
+                );
+            }
+        }
 
-    // builds the function body (return statement included)
-    roc_gen::llvm::build::build_exp_stmt(
-        &env,
-        &mut layout_ids,
-        &mut roc_gen::llvm::build::Scope::default(),
-        main_fn,
-        &main_body,
-    );
+        // Add main to the module.
+        let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
+        let cc = roc_gen::llvm::build::FAST_CALL_CONV;
 
-    // Uncomment this to see the module's un-optimized LLVM instruction output:
-    // env.module.print_to_stderr();
+        main_fn.set_call_conventions(cc);
 
-    if main_fn.verify(true) {
-        function_pass.run_on(&main_fn);
+        // Add main's body
+        let basic_block = context.append_basic_block(main_fn, "entry");
+
+        builder.position_at_end(basic_block);
+
+        // builds the function body (return statement included)
+        roc_gen::llvm::build::build_exp_stmt(
+            &env,
+            &mut layout_ids,
+            &mut roc_gen::llvm::build::Scope::default(),
+            main_fn,
+            &main_body,
+        );
+
+        // Uncomment this to see the module's un-optimized LLVM instruction output:
+        // env.module.print_to_stderr();
+
+        if main_fn.verify(true) {
+            function_pass.run_on(&main_fn);
+        } else {
+            panic!("Main function {} failed LLVM verification in build. Uncomment things nearby to see more details.", main_fn_name);
+        }
+
+        module_pass.run_on(env.module);
+
+        // Verify the module
+        if let Err(errors) = env.module.verify() {
+            panic!("Errors defining module: {:?}", errors);
+        }
+
+        // Uncomment this to see the module's optimized LLVM instruction output:
+        // env.module.print_to_stderr();
+
+        unsafe {
+            let main: JitFunction<
+                unsafe extern "C" fn() -> i64, /* TODO have this return Str, and in the generated code make sure to call the appropriate string conversion function on the return val based on its type! */
+            > = execution_engine
+                .get_function(main_fn_name)
+                .ok()
+                .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
+                .expect("errored");
+
+            let result = main.call();
+            let output = format!("{}", result);
+
+            Ok(ReplOutput::NoProblems {
+                expr: output,
+                expr_type: expr_type_str,
+            })
+        }
     } else {
-        panic!("Main function {} failed LLVM verification in build. Uncomment things nearby to see more details.", main_fn_name);
+        // There were problems; report them and return.
+        let mut lines = Vec::with_capacity(total_problems);
+
+        for problem in can_problems.into_iter() {
+            let report = can_problem(&alloc, path.clone(), problem);
+            let mut buf = String::new();
+
+            report.render_color_terminal(&mut buf, &alloc, &palette);
+
+            lines.push(buf);
+        }
+
+        for problem in type_problems.into_iter() {
+            let report = type_problem(&alloc, path.clone(), problem);
+            let mut buf = String::new();
+
+            report.render_color_terminal(&mut buf, &alloc, &palette);
+
+            lines.push(buf);
+        }
+
+        Ok(ReplOutput::Problems(lines))
     }
+}
 
-    module_pass.run_on(env.module);
-
-    // Verify the module
-    if let Err(errors) = env.module.verify() {
-        panic!("Errors defining module: {:?}", errors);
-    }
-
-    // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    unsafe {
-        let main: JitFunction<
-            unsafe extern "C" fn() -> i64, /* TODO have this return Str, and in the generated code make sure to call the appropriate string conversion function on the return val based on its type! */
-        > = execution_engine
-            .get_function(main_fn_name)
-            .ok()
-            .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
-            .expect("errored");
-
-        let result = main.call();
-        let output = format!("{}", result);
-        Ok((output, expr_type_str))
-    }
+enum ReplOutput {
+    Problems(Vec<String>),
+    NoProblems { expr: String, expr_type: String },
 }
 
 pub fn infer_expr(
