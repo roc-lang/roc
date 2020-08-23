@@ -2039,6 +2039,7 @@ dependencies = [
  "indoc",
  "inkwell",
  "inlinable_string",
+ "libc",
  "maplit",
  "pretty_assertions",
  "quickcheck",

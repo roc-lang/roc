@@ -32,21 +32,20 @@ use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
 use std::hash::Hash;
 use std::io::{self, Write};
+use std::mem;
 use std::path::PathBuf;
 use std::str::from_utf8_unchecked;
 use target_lexicon::Triple;
 
 macro_rules! jit_map {
     ($execution_engine: expr, $main_fn_name: expr, $ty: ty, $transform: expr) => {{
-        unsafe {
-            let main: JitFunction<unsafe extern "C" fn() -> $ty> = $execution_engine
-                .get_function($main_fn_name)
-                .ok()
-                .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
-                .expect("errored");
+        let main: JitFunction<unsafe extern "C" fn() -> $ty> = $execution_engine
+            .get_function($main_fn_name)
+            .ok()
+            .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
+            .expect("errored");
 
-            $transform(main.call())
-        }
+        $transform(main.call())
     }};
 }
 
@@ -373,7 +372,15 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         // Uncomment this to see the module's optimized LLVM instruction output:
         // env.module.print_to_stderr();
 
-        let answer = layout_to_ast(&arena, execution_engine, main_fn_name, main_ret_layout);
+        let answer = unsafe {
+            jit_to_ast(
+                &arena,
+                execution_engine,
+                main_fn_name,
+                &main_ret_layout,
+                ptr_bytes,
+            )
+        };
         let mut expr = bumpalo::collections::String::new_in(&arena);
 
         answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
@@ -811,11 +818,12 @@ fn variable_usage_help(con: &Constraint, declared: &mut SeenVariables, used: &mu
     }
 }
 
-fn layout_to_ast<'a>(
+unsafe fn jit_to_ast<'a>(
     arena: &'a Bump,
     execution_engine: ExecutionEngine,
     main_fn_name: &str,
-    layout: Layout<'a>,
+    layout: &Layout<'a>,
+    ptr_bytes: u32,
 ) -> ast::Expr<'a> {
     match layout {
         Layout::Builtin(Builtin::Int64) => {
@@ -828,78 +836,97 @@ fn layout_to_ast<'a>(
                 arena.alloc(format!("{}", num))
             ))
         }
-        Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => {
-            jit_map!(execution_engine, main_fn_name, &'static str, |string| {
-                ast::Expr::Str(string)
-            })
-        }
+        Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => jit_map!(
+            execution_engine,
+            main_fn_name,
+            &'static str,
+            |string: &'static str| { ast::Expr::Str(arena.alloc(string)) }
+        ),
         Layout::Builtin(Builtin::EmptyList) => {
             jit_map!(execution_engine, main_fn_name, &'static str, |_| {
                 ast::Expr::List(bumpalo::collections::Vec::new_in(&arena))
             })
         }
-        Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Int64))) => jit_map!(
+        Layout::Builtin(Builtin::List(_, elem_layout)) => jit_map!(
             execution_engine,
             main_fn_name,
-            &'static [i64],
-            |nums: &'static [i64]| {
-                let mut output_nums =
-                    bumpalo::collections::Vec::with_capacity_in(nums.len(), &arena);
-
-                for num in nums {
-                    let loc_expr = &*arena.alloc(Located {
-                        value: ast::Expr::Num(arena.alloc(format!("{}", num))),
-                        region: Region::zero(),
-                    });
-
-                    output_nums.push(loc_expr);
-                }
-
-                ast::Expr::List(output_nums)
-            }
-        ),
-        Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Float64))) => jit_map!(
-            execution_engine,
-            main_fn_name,
-            &'static [f64],
-            |nums: &'static [f64]| {
-                let mut output_nums =
-                    bumpalo::collections::Vec::with_capacity_in(nums.len(), &arena);
-
-                for num in nums {
-                    let loc_expr = &*arena.alloc(Located {
-                        value: ast::Expr::Num(arena.alloc(format!("{}", num))),
-                        region: Region::zero(),
-                    });
-
-                    output_nums.push(loc_expr);
-                }
-
-                ast::Expr::List(output_nums)
-            }
-        ),
-        Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Str))) => jit_map!(
-            execution_engine,
-            main_fn_name,
-            &'static [&'static str],
-            |strings: &'static [&'static str]| {
-                let mut output_strings =
-                    bumpalo::collections::Vec::with_capacity_in(strings.len(), &arena);
-
-                for string in strings {
-                    let loc_expr = &*arena.alloc(Located {
-                        value: ast::Expr::Str(string),
-                        region: Region::zero(),
-                    });
-
-                    output_strings.push(loc_expr);
-                }
-
-                ast::Expr::List(output_strings)
+            (*const libc::c_void, usize),
+            |(ptr, len): (*const libc::c_void, usize)| {
+                list_to_ast(arena, ptr, len, elem_layout, ptr_bytes)
             }
         ),
         other => {
             todo!("TODO add support for rendering {:?} in the REPL", other);
         }
     }
+}
+
+fn ptr_to_ast<'a>(
+    arena: &'a Bump,
+    ptr: *const libc::c_void,
+    layout: &Layout<'a>,
+    ptr_bytes: u32,
+) -> ast::Expr<'a> {
+    match layout {
+        Layout::Builtin(Builtin::Int64) => {
+            let num = unsafe { *mem::transmute::<*const libc::c_void, *const i64>(ptr) };
+
+            ast::Expr::Num(arena.alloc(format!("{}", num)))
+        }
+        Layout::Builtin(Builtin::Float64) => {
+            let num = unsafe { *mem::transmute::<*const libc::c_void, *const f64>(ptr) };
+
+            ast::Expr::Num(arena.alloc(format!("{}", num)))
+        }
+        Layout::Builtin(Builtin::EmptyList) => {
+            ast::Expr::List(bumpalo::collections::Vec::new_in(&arena))
+        }
+        Layout::Builtin(Builtin::List(_, elem_layout)) => {
+            // Turn the (ptr, len) wrapper struct into actual ptr and len values.
+            let len = unsafe {
+                *mem::transmute::<*const libc::c_void, *const usize>(ptr.offset(ptr_bytes as isize))
+            };
+            let ptr =
+                unsafe { *mem::transmute::<*const libc::c_void, *const *const libc::c_void>(ptr) };
+
+            list_to_ast(arena, ptr, len, elem_layout, ptr_bytes)
+        }
+        Layout::Builtin(Builtin::EmptyStr) => ast::Expr::Str(""),
+        Layout::Builtin(Builtin::Str) => {
+            let arena_str = arena
+                .alloc(unsafe { *mem::transmute::<*const libc::c_void, *const &'static str>(ptr) });
+
+            ast::Expr::Str(arena_str)
+        }
+        other => {
+            todo!(
+                "TODO add support for rendering pointer to {:?} in the REPL",
+                other
+            );
+        }
+    }
+}
+
+fn list_to_ast<'a>(
+    arena: &'a Bump,
+    ptr: *const libc::c_void,
+    len: usize,
+    elem_layout: &Layout<'a>,
+    ptr_bytes: u32,
+) -> ast::Expr<'a> {
+    let mut output = bumpalo::collections::Vec::with_capacity_in(len, &arena);
+    let elem_size = elem_layout.stack_size(ptr_bytes);
+
+    for index in 0..(len as isize) {
+        let offset_bytes: isize = index * elem_size as isize;
+        let elem_ptr = unsafe { ptr.offset(offset_bytes) };
+        let loc_expr = &*arena.alloc(Located {
+            value: ptr_to_ast(arena, elem_ptr, elem_layout, ptr_bytes),
+            region: Region::zero(),
+        });
+
+        output.push(loc_expr);
+    }
+
+    ast::Expr::List(output)
 }
