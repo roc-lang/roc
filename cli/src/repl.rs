@@ -19,7 +19,7 @@ use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::ir::Procs;
-use roc_mono::layout::{Layout, LayoutCache};
+use roc_mono::layout::{Builtin, Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::parser::{loc, Fail, FailReason, Parser, State};
@@ -34,6 +34,18 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::str::from_utf8_unchecked;
 use target_lexicon::Triple;
+
+macro_rules! jit_map {
+    ($execution_engine: expr, $main_fn_name: expr, $ty: ty, $transform: expr) => {{
+        let main: JitFunction<unsafe extern "C" fn() -> $ty> = $execution_engine
+            .get_function($main_fn_name)
+            .ok()
+            .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
+            .expect("errored");
+
+        $transform(main.call())
+    }};
+}
 
 pub fn main() -> io::Result<()> {
     use std::io::BufRead;
@@ -206,9 +218,9 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
         // Compute main_fn_type before moving subs to Env
-        let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
+        let main_ret_layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
             panic!(
-                "Code gen error in test: could not convert to layout. Err was {:?}",
+                "Code gen error in test: could not convert Content to main_layout. Err was {:?}",
                 err
             )
         });
@@ -216,8 +228,8 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             .create_jit_execution_engine(OptimizationLevel::None)
             .expect("Error creating JIT execution engine for test");
 
-        let main_fn_type =
-            basic_type_from_layout(&arena, &context, &layout, ptr_bytes).fn_type(&[], false);
+        let main_fn_type = basic_type_from_layout(&arena, &context, &main_ret_layout, ptr_bytes)
+            .fn_type(&[], false);
         let main_fn_name = "$Test.main";
 
         // Compile and add all the Procs before adding main
@@ -355,16 +367,70 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         // env.module.print_to_stderr();
 
         unsafe {
-            let main: JitFunction<
-                unsafe extern "C" fn() -> i64, /* TODO have this return Str, and in the generated code make sure to call the appropriate string conversion function on the return val based on its type! */
-            > = execution_engine
-                .get_function(main_fn_name)
-                .ok()
-                .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
-                .expect("errored");
-
-            let result = main.call();
-            let output = format!("{}", result);
+            let output = match main_ret_layout {
+                Layout::Builtin(Builtin::Int64) => {
+                    jit_map!(execution_engine, main_fn_name, i64, |num| format!(
+                        "{}",
+                        num
+                    ))
+                }
+                Layout::Builtin(Builtin::Float64) => {
+                    jit_map!(execution_engine, main_fn_name, f64, |num| format!(
+                        "{}",
+                        num
+                    ))
+                }
+                Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => jit_map!(
+                    execution_engine,
+                    main_fn_name,
+                    &'static str,
+                    |string| format!("\"{}\"", string)
+                ),
+                Layout::Builtin(Builtin::EmptyList) => "[]".to_string(),
+                Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Int64))) => jit_map!(
+                    execution_engine,
+                    main_fn_name,
+                    &'static [i64],
+                    |nums: &'static [i64]| format!(
+                        "[ {} ]",
+                        nums.iter()
+                            .map(|num| format!("{}", num))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )
+                ),
+                Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Float64))) => jit_map!(
+                    execution_engine,
+                    main_fn_name,
+                    &'static [f64],
+                    |nums: &'static [f64]| format!(
+                        "[ {} ]",
+                        nums.iter()
+                            .map(|num| format!("{}", num))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )
+                ),
+                Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Str)))
+                | Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::EmptyStr))) => {
+                    jit_map!(
+                        execution_engine,
+                        main_fn_name,
+                        &'static [&'static str],
+                        |strings: &'static [&'static str]| format!(
+                            "[ {} ]",
+                            strings
+                                .iter()
+                                .map(|string| format!("\"{}\"", string))
+                                .collect::<Vec<String>>()
+                                .join(", ")
+                        )
+                    )
+                }
+                other => {
+                    todo!("TODO add support for rendering {:?} in the REPL", other);
+                }
+            };
 
             Ok(ReplOutput::NoProblems {
                 expr: output,
