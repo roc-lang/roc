@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
-use inkwell::execution_engine::JitFunction;
+use inkwell::execution_engine::{ExecutionEngine, JitFunction};
 use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_builtins::unique::uniq_stdlib;
@@ -227,6 +227,10 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         let execution_engine = module
             .create_jit_execution_engine(OptimizationLevel::None)
             .expect("Error creating JIT execution engine for test");
+
+        // Without calling this, we get a linker error when building this crate
+        // in --release mode and then trying to eval anything in the repl.
+        ExecutionEngine::link_in_mc_jit();
 
         let main_fn_type = basic_type_from_layout(&arena, &context, &main_ret_layout, ptr_bytes)
             .fn_type(&[], false);
