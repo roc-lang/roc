@@ -4,7 +4,7 @@ extern crate pretty_assertions;
 mod helpers;
 
 #[cfg(test)]
-mod repl_run {
+mod repl_eval {
     use crate::helpers::repl_eval;
 
     fn expect_success(input: &str, expected: &str) {
