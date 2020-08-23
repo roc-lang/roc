@@ -47,13 +47,16 @@ macro_rules! jit_map {
     }};
 }
 
+pub const WELCOME_MESSAGE: &str = "\n  The rockin’ \u{001b}[36mroc repl\u{001b}[0m\n\u{001b}[35m────────────────────────\u{001b}[0m\n\n";
+pub const INSTRUCTIONS: &str =
+    "Enter an expression, or :help for a list of commands, or :exit to exit.\n";
+pub const PROMPT: &str = "\n\u{001b}[36m»\u{001b}[0m ";
+pub const ELLIPSIS: &str = "\u{001b}[36m…\u{001b}[0m ";
+
 pub fn main() -> io::Result<()> {
     use std::io::BufRead;
 
-    println!(
-        "\n  The rockin’ \u{001b}[36mroc repl\u{001b}[0m\n\u{001b}[35m────────────────────────\u{001b}[0m\n\n{}",
-        WELCOME_MESSAGE
-    );
+    print!("{}{}", WELCOME_MESSAGE, INSTRUCTIONS);
 
     // Loop
 
@@ -62,9 +65,9 @@ pub fn main() -> io::Result<()> {
 
     loop {
         if pending_src.is_empty() {
-            print!("\n\u{001b}[36m»\u{001b}[0m ");
+            print!("{}", PROMPT);
         } else {
-            print!("\u{001b}[36m…\u{001b}[0m ");
+            print!("{}", ELLIPSIS);
         }
 
         io::stdout().flush().unwrap();
@@ -83,7 +86,7 @@ pub fn main() -> io::Result<()> {
             }
             "" => {
                 if pending_src.is_empty() {
-                    println!("\n{}", WELCOME_MESSAGE);
+                    print!("\n{}", INSTRUCTIONS);
                 } else if prev_line_blank {
                     // After two blank lines in a row, give up and try parsing it
                     // even though it's going to fail. This way you don't get stuck.
@@ -148,9 +151,6 @@ pub fn main() -> io::Result<()> {
 
     Ok(())
 }
-
-const WELCOME_MESSAGE: &str =
-    "Enter an expression, or :help for a list of commands, or :exit to exit.";
 
 fn report_parse_error(fail: Fail) {
     println!("TODO Gracefully report parse error in repl: {:?}", fail);

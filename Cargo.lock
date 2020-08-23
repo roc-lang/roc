@@ -1953,43 +1953,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "roc-cli"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "clap 3.0.0-beta.1",
- "im",
- "im-rc",
- "indoc",
- "inkwell",
- "inlinable_string",
- "maplit",
- "pretty_assertions",
- "quickcheck",
- "quickcheck_macros",
- "roc_build",
- "roc_builtins",
- "roc_can",
- "roc_collections",
- "roc_constrain",
- "roc_editor",
- "roc_gen",
- "roc_load",
- "roc_module",
- "roc_mono",
- "roc_parse",
- "roc_problem",
- "roc_region",
- "roc_reporting",
- "roc_solve",
- "roc_types",
- "roc_unify",
- "roc_uniq",
- "target-lexicon",
- "tokio",
-]
-
-[[package]]
 name = "roc_build"
 version = "0.1.0"
 dependencies = [
@@ -2063,6 +2026,44 @@ dependencies = [
  "roc_region",
  "roc_types",
  "ven_graph",
+]
+
+[[package]]
+name = "roc_cli"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "clap 3.0.0-beta.1",
+ "im",
+ "im-rc",
+ "indoc",
+ "inkwell",
+ "inlinable_string",
+ "maplit",
+ "pretty_assertions",
+ "quickcheck",
+ "quickcheck_macros",
+ "roc_build",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_constrain",
+ "roc_editor",
+ "roc_gen",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve",
+ "roc_types",
+ "roc_unify",
+ "roc_uniq",
+ "strip-ansi-escapes",
+ "target-lexicon",
+ "tokio",
 ]
 
 [[package]]
@@ -2596,6 +2597,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "strip-ansi-escapes"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d63676e2abafa709460982ddc02a3bb586b6d15a49b75c212e06edd3933acee"
+dependencies = [
+ "vte",
+]
+
+[[package]]
 name = "strsim"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2790,6 +2800,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af41d708427f8fd0e915dcebb2cae0f0e6acb2a939b2d399c265c39a38a18942"
 
 [[package]]
+name = "utf8parse"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8772a4ccbb4e89959023bc5b7cb8623a795caa7092d99f3aa9501b9484d4557d"
+
+[[package]]
 name = "vec_map"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2832,6 +2848,15 @@ name = "void"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a02e4885ed3bc0f2de90ea6dd45ebcbb66dacffe03547fadbb0eeae2770887d"
+
+[[package]]
+name = "vte"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f42f536e22f7fcbb407639765c8fd78707a33109301f834a594758bedd6e8cf"
+dependencies = [
+ "utf8parse",
+]
 
 [[package]]
 name = "walkdir"
