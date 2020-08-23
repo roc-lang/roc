@@ -7,7 +7,7 @@ use roc_builtins::unique::uniq_stdlib;
 use roc_can::constraint::Constraint;
 use roc_can::env::Env;
 use roc_can::expected::Expected;
-use roc_can::expr::{canonicalize_expr, Output};
+use roc_can::expr::{canonicalize_expr, Expr, Output};
 use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap, SendSet};
@@ -544,6 +544,31 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_bytes: &[u8]) -> Result<
         Region::zero(),
         &loc_expr.value,
     );
+
+    // Add builtin defs (e.g. List.get) directly to the canonical Expr,
+    // since we aren't using modules here.
+    let mut with_builtins = loc_expr.value;
+    let builtin_defs = roc_can::builtins::builtin_defs(&mut var_store);
+
+    for (symbol, def) in builtin_defs {
+        if output.references.lookups.contains(&symbol) || output.references.calls.contains(&symbol)
+        {
+            with_builtins = Expr::LetNonRec(
+                Box::new(def),
+                Box::new(Located {
+                    region: Region::zero(),
+                    value: with_builtins,
+                }),
+                var_store.fresh(),
+                SendMap::default(),
+            );
+        }
+    }
+
+    let loc_expr = Located {
+        region: loc_expr.region,
+        value: with_builtins,
+    };
 
     let constraint = constrain_expr(
         &roc_constrain::expr::Env {
