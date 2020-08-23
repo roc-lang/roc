@@ -37,13 +37,15 @@ use target_lexicon::Triple;
 
 macro_rules! jit_map {
     ($execution_engine: expr, $main_fn_name: expr, $ty: ty, $transform: expr) => {{
-        let main: JitFunction<unsafe extern "C" fn() -> $ty> = $execution_engine
-            .get_function($main_fn_name)
-            .ok()
-            .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
-            .expect("errored");
+        unsafe {
+            let main: JitFunction<unsafe extern "C" fn() -> $ty> = $execution_engine
+                .get_function($main_fn_name)
+                .ok()
+                .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
+                .expect("errored");
 
-        $transform(main.call())
+            $transform(main.call())
+        }
     }};
 }
 
@@ -370,77 +372,71 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         // Uncomment this to see the module's optimized LLVM instruction output:
         // env.module.print_to_stderr();
 
-        unsafe {
-            let output = match main_ret_layout {
-                Layout::Builtin(Builtin::Int64) => {
-                    jit_map!(execution_engine, main_fn_name, i64, |num| format!(
-                        "{}",
-                        num
-                    ))
-                }
-                Layout::Builtin(Builtin::Float64) => {
-                    jit_map!(execution_engine, main_fn_name, f64, |num| format!(
-                        "{}",
-                        num
-                    ))
-                }
-                Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => jit_map!(
+        let answer = unsafe { execution_engine.run_function(main_fn, &[]) };
+
+        let output = match main_ret_layout {
+            Layout::Builtin(Builtin::Int64) => format!("{}", answer.as_int(true)),
+            Layout::Builtin(Builtin::Float64) => {
+                format!("{}", answer.as_float(&context.f64_type()))
+            }
+            Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => {
+                assert_eq!(answer.int_width(), 128);
+
+                jit_map!(
                     execution_engine,
                     main_fn_name,
                     &'static str,
                     |string| format!("\"{}\"", string)
-                ),
-                Layout::Builtin(Builtin::EmptyList) => "[]".to_string(),
-                Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Int64))) => jit_map!(
-                    execution_engine,
-                    main_fn_name,
-                    &'static [i64],
-                    |nums: &'static [i64]| format!(
-                        "[ {} ]",
-                        nums.iter()
-                            .map(|num| format!("{}", num))
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )
-                ),
-                Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Float64))) => jit_map!(
-                    execution_engine,
-                    main_fn_name,
-                    &'static [f64],
-                    |nums: &'static [f64]| format!(
-                        "[ {} ]",
-                        nums.iter()
-                            .map(|num| format!("{}", num))
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )
-                ),
-                Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Str)))
-                | Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::EmptyStr))) => {
-                    jit_map!(
-                        execution_engine,
-                        main_fn_name,
-                        &'static [&'static str],
-                        |strings: &'static [&'static str]| format!(
-                            "[ {} ]",
-                            strings
-                                .iter()
-                                .map(|string| format!("\"{}\"", string))
-                                .collect::<Vec<String>>()
-                                .join(", ")
-                        )
-                    )
-                }
-                other => {
-                    todo!("TODO add support for rendering {:?} in the REPL", other);
-                }
-            };
+                )
+            }
+            Layout::Builtin(Builtin::EmptyList) => "[]".to_string(),
+            Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Int64))) => jit_map!(
+                execution_engine,
+                main_fn_name,
+                &'static [i64],
+                |nums: &'static [i64]| format!(
+                    "[ {} ]",
+                    nums.iter()
+                        .map(|num| format!("{}", num))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                )
+            ),
+            Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Float64))) => jit_map!(
+                execution_engine,
+                main_fn_name,
+                &'static [f64],
+                |nums: &'static [f64]| format!(
+                    "[ {} ]",
+                    nums.iter()
+                        .map(|num| format!("{}", num))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                )
+            ),
+            Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Str)))
+            | Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::EmptyStr))) => jit_map!(
+                execution_engine,
+                main_fn_name,
+                &'static [&'static str],
+                |strings: &'static [&'static str]| format!(
+                    "[ {} ]",
+                    strings
+                        .iter()
+                        .map(|string| format!("\"{}\"", string))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                )
+            ),
+            other => {
+                todo!("TODO add support for rendering {:?} in the REPL", other);
+            }
+        };
 
-            Ok(ReplOutput::NoProblems {
-                expr: output,
-                expr_type: expr_type_str,
-            })
-        }
+        Ok(ReplOutput::NoProblems {
+            expr: output,
+            expr_type: expr_type_str,
+        })
     } else {
         // There were problems; report them and return.
         let mut lines = Vec::with_capacity(total_problems);
