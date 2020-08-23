@@ -147,4 +147,64 @@ mod repl_run {
             "[ 1.1, 2.2, 3.3, 4.4, 5.5 ] : List Float",
         );
     }
+
+    #[test]
+    fn basic_1_field_record() {
+        // Even though this gets unwrapped at runtime, the repl should still
+        // report it as a record
+        expect_success("{ foo: 42 }", "{ foo: 42 } : { foo : Num * }");
+    }
+
+    #[test]
+    fn nested_1_field_record() {
+        // Even though this gets unwrapped at runtime, the repl should still
+        // report it as a record
+        expect_success(
+            "{ foo: { bar: { baz: 42 } } }",
+            "{ foo: { bar: { baz: 42 } } } : { foo : { bar : { baz : Num * } } }",
+        );
+    }
+
+    #[test]
+    fn basic_2_field_record() {
+        expect_success(
+            "{ foo: 4.1, bar: 2 }",
+            "{ foo: 4.1, bar: 2 } : { foo : Float, bar : Num * }",
+        );
+    }
+
+    // TODO uncomment this once https://github.com/rtfeldman/roc/issues/295 is done
+    //
+    // #[test]
+    // fn basic_3_field_record() {
+    //     expect_success(
+    //         "{ foo: 4.1, bar: 2, baz: 0x5 }",
+    //         "{ foo: 4.1, bar: 2, baz: 0x5 } : { foo : Float, bar : Num *, baz : Int }",
+    //     );
+    // }
+
+    #[test]
+    fn list_of_1_field_records() {
+        // Even though these get unwrapped at runtime, the repl should still
+        // report them as records
+        expect_success("[ { foo: 42 } ]", "[ { foo: 42 } ] : List { foo : Num * }");
+    }
+
+    #[test]
+    fn list_of_2_field_records() {
+        expect_success(
+            "[ { foo: 4.1, bar: 2 } ]",
+            "[ { foo: 4.1, bar: 2 } ] : List { foo : Float, bar : Num * }",
+        );
+    }
+
+    // TODO uncomment this once https://github.com/rtfeldman/roc/issues/295 is done
+    //
+    // #[test]
+    // fn list_of_3_field_records() {
+    //     expect_success(
+    //         "[ { foo: 4.1, bar: 2, baz: 0x3 } ]",
+    //         "[ { foo: 4.1, bar: 2, baz: 0x3 } ] : List { foo : Float, bar : Num *, baz : Int }",
+    //     );
+    // }
 }
