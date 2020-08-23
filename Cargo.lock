@@ -2049,6 +2049,7 @@ dependencies = [
  "roc_collections",
  "roc_constrain",
  "roc_editor",
+ "roc_fmt",
  "roc_gen",
  "roc_load",
  "roc_module",

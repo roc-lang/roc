@@ -13,6 +13,7 @@ use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap, SendSet};
 use roc_constrain::expr::constrain_expr;
 use roc_constrain::module::{constrain_imported_values, load_builtin_aliases, Import};
+use roc_fmt::annotation::{Formattable, Newlines, Parens};
 use roc_gen::layout_id::LayoutIds;
 use roc_gen::llvm::build::{build_proc, build_proc_header, OptLevel};
 use roc_gen::llvm::convert::basic_type_from_layout;
@@ -372,71 +373,13 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         // Uncomment this to see the module's optimized LLVM instruction output:
         // env.module.print_to_stderr();
 
-        let output = match main_ret_layout {
-            Layout::Builtin(Builtin::Int64) => {
-                jit_map!(execution_engine, main_fn_name, i64, |num| format!(
-                    "{}",
-                    num
-                ))
-            }
-            Layout::Builtin(Builtin::Float64) => {
-                jit_map!(execution_engine, main_fn_name, f64, |num| format!(
-                    "{}",
-                    num
-                ))
-            }
-            Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => jit_map!(
-                execution_engine,
-                main_fn_name,
-                &'static str,
-                |string| format!("\"{}\"", string)
-            ),
-            Layout::Builtin(Builtin::EmptyList) => "[]".to_string(),
-            Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Int64))) => jit_map!(
-                execution_engine,
-                main_fn_name,
-                &'static [i64],
-                |nums: &'static [i64]| format!(
-                    "[ {} ]",
-                    nums.iter()
-                        .map(|num| format!("{}", num))
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                )
-            ),
-            Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Float64))) => jit_map!(
-                execution_engine,
-                main_fn_name,
-                &'static [f64],
-                |nums: &'static [f64]| format!(
-                    "[ {} ]",
-                    nums.iter()
-                        .map(|num| format!("{}", num))
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                )
-            ),
-            Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Str)))
-            | Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::EmptyStr))) => jit_map!(
-                execution_engine,
-                main_fn_name,
-                &'static [&'static str],
-                |strings: &'static [&'static str]| format!(
-                    "[ {} ]",
-                    strings
-                        .iter()
-                        .map(|string| format!("\"{}\"", string))
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                )
-            ),
-            other => {
-                todo!("TODO add support for rendering {:?} in the REPL", other);
-            }
-        };
+        let answer = layout_to_ast(&arena, execution_engine, main_fn_name, main_ret_layout);
+        let mut expr = bumpalo::collections::String::new_in(&arena);
+
+        answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
 
         Ok(ReplOutput::NoProblems {
-            expr: output,
+            expr: expr.into_bump_str().to_string(),
             expr_type: expr_type_str,
         })
     } else {
@@ -864,6 +807,99 @@ fn variable_usage_help(con: &Constraint, declared: &mut SeenVariables, used: &mu
             for sub in constraints {
                 variable_usage_help(sub, declared, used);
             }
+        }
+    }
+}
+
+fn layout_to_ast<'a>(
+    arena: &'a Bump,
+    execution_engine: ExecutionEngine,
+    main_fn_name: &str,
+    layout: Layout<'a>,
+) -> ast::Expr<'a> {
+    match layout {
+        Layout::Builtin(Builtin::Int64) => {
+            jit_map!(execution_engine, main_fn_name, i64, |num| ast::Expr::Num(
+                arena.alloc(format!("{}", num))
+            ))
+        }
+        Layout::Builtin(Builtin::Float64) => {
+            jit_map!(execution_engine, main_fn_name, f64, |num| ast::Expr::Num(
+                arena.alloc(format!("{}", num))
+            ))
+        }
+        Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => {
+            jit_map!(execution_engine, main_fn_name, &'static str, |string| {
+                ast::Expr::Str(string)
+            })
+        }
+        Layout::Builtin(Builtin::EmptyList) => {
+            jit_map!(execution_engine, main_fn_name, &'static str, |_| {
+                ast::Expr::List(bumpalo::collections::Vec::new_in(&arena))
+            })
+        }
+        Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Int64))) => jit_map!(
+            execution_engine,
+            main_fn_name,
+            &'static [i64],
+            |nums: &'static [i64]| {
+                let mut output_nums =
+                    bumpalo::collections::Vec::with_capacity_in(nums.len(), &arena);
+
+                for num in nums {
+                    let loc_expr = &*arena.alloc(Located {
+                        value: ast::Expr::Num(arena.alloc(format!("{}", num))),
+                        region: Region::zero(),
+                    });
+
+                    output_nums.push(loc_expr);
+                }
+
+                ast::Expr::List(output_nums)
+            }
+        ),
+        Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Float64))) => jit_map!(
+            execution_engine,
+            main_fn_name,
+            &'static [f64],
+            |nums: &'static [f64]| {
+                let mut output_nums =
+                    bumpalo::collections::Vec::with_capacity_in(nums.len(), &arena);
+
+                for num in nums {
+                    let loc_expr = &*arena.alloc(Located {
+                        value: ast::Expr::Num(arena.alloc(format!("{}", num))),
+                        region: Region::zero(),
+                    });
+
+                    output_nums.push(loc_expr);
+                }
+
+                ast::Expr::List(output_nums)
+            }
+        ),
+        Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Str))) => jit_map!(
+            execution_engine,
+            main_fn_name,
+            &'static [&'static str],
+            |strings: &'static [&'static str]| {
+                let mut output_strings =
+                    bumpalo::collections::Vec::with_capacity_in(strings.len(), &arena);
+
+                for string in strings {
+                    let loc_expr = &*arena.alloc(Located {
+                        value: ast::Expr::Str(string),
+                        region: Region::zero(),
+                    });
+
+                    output_strings.push(loc_expr);
+                }
+
+                ast::Expr::List(output_strings)
+            }
+        ),
+        other => {
+            todo!("TODO add support for rendering {:?} in the REPL", other);
         }
     }
 }
