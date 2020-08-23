@@ -32,7 +32,6 @@ use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
 use std::hash::Hash;
 use std::io::{self, Write};
-use std::mem;
 use std::path::PathBuf;
 use std::str::from_utf8_unchecked;
 use target_lexicon::Triple;
@@ -869,12 +868,12 @@ fn ptr_to_ast<'a>(
 ) -> ast::Expr<'a> {
     match layout {
         Layout::Builtin(Builtin::Int64) => {
-            let num = unsafe { *mem::transmute::<*const libc::c_void, *const i64>(ptr) };
+            let num = unsafe { *(ptr as *const i64) };
 
             ast::Expr::Num(arena.alloc(format!("{}", num)))
         }
         Layout::Builtin(Builtin::Float64) => {
-            let num = unsafe { *mem::transmute::<*const libc::c_void, *const f64>(ptr) };
+            let num = unsafe { *(ptr as *const f64) };
 
             ast::Expr::Num(arena.alloc(format!("{}", num)))
         }
@@ -883,18 +882,14 @@ fn ptr_to_ast<'a>(
         }
         Layout::Builtin(Builtin::List(_, elem_layout)) => {
             // Turn the (ptr, len) wrapper struct into actual ptr and len values.
-            let len = unsafe {
-                *mem::transmute::<*const libc::c_void, *const usize>(ptr.offset(ptr_bytes as isize))
-            };
-            let ptr =
-                unsafe { *mem::transmute::<*const libc::c_void, *const *const libc::c_void>(ptr) };
+            let len = unsafe { *(ptr.offset(ptr_bytes as isize) as *const usize) };
+            let ptr = unsafe { *(ptr as *const *const libc::c_void) };
 
             list_to_ast(arena, ptr, len, elem_layout, ptr_bytes)
         }
         Layout::Builtin(Builtin::EmptyStr) => ast::Expr::Str(""),
         Layout::Builtin(Builtin::Str) => {
-            let arena_str = arena
-                .alloc(unsafe { *mem::transmute::<*const libc::c_void, *const &'static str>(ptr) });
+            let arena_str = unsafe { *(ptr as *const &'static str) };
 
             ast::Expr::Str(arena_str)
         }
