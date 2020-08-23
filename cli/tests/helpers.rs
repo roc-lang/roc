@@ -158,11 +158,13 @@ pub fn repl_eval(input: &str) -> Out {
 
         assert!(
             answer.ends_with(&expected_after_answer),
-            "Unexpected repl output: {}",
+            "Unexpected repl output after answer: {}",
             answer
         );
 
-        let (answer, _) = answer[1..].split_at(answer.len() - expected_after_answer.len());
+        // Use [1..] to trim the leading '\n'
+        // and (len - 1) to trim the trailing '\n'
+        let (answer, _) = answer[1..].split_at(answer.len() - expected_after_answer.len() - 1);
 
         // Remove ANSI escape codes from the answer - for example:
         //
