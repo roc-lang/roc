@@ -104,6 +104,11 @@ mod repl_run {
     }
 
     #[test]
+    fn literal_string_list() {
+        expect_success(r#"[ "a", "b", "cd" ]"#, r#"[ "a", "b", "cd" ] : List Str"#);
+    }
+
+    #[test]
     fn list_concat() {
         expect_success(
             "List.concat [ 1.1, 2.2 ] [ 3.3, 4.4, 5.5 ]",

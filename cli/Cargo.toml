@@ -47,6 +47,7 @@ roc_mono = { path = "../compiler/mono" }
 roc_load = { path = "../compiler/load" }
 roc_gen = { path = "../compiler/gen" }
 roc_build = { path = "../compiler/build" }
+roc_fmt = { path = "../compiler/fmt" }
 roc_reporting = { path = "../compiler/reporting" }
 roc_editor = { path = "../editor" }
 # TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
