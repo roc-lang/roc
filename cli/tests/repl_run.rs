@@ -149,19 +149,36 @@ mod repl_run {
     }
 
     #[test]
-    fn basic_1_field_record() {
+    fn basic_1_field_i64_record() {
         // Even though this gets unwrapped at runtime, the repl should still
         // report it as a record
         expect_success("{ foo: 42 }", "{ foo: 42 } : { foo : Num * }");
     }
 
     #[test]
-    fn nested_1_field_record() {
+    fn basic_1_field_f64_record() {
+        // Even though this gets unwrapped at runtime, the repl should still
+        // report it as a record
+        expect_success("{ foo: 4.2 }", "{ foo: 4.2 } : { foo : Float }");
+    }
+
+    #[test]
+    fn nested_1_field_i64_record() {
         // Even though this gets unwrapped at runtime, the repl should still
         // report it as a record
         expect_success(
             "{ foo: { bar: { baz: 42 } } }",
             "{ foo: { bar: { baz: 42 } } } : { foo : { bar : { baz : Num * } } }",
+        );
+    }
+
+    #[test]
+    fn nested_1_field_f64_record() {
+        // Even though this gets unwrapped at runtime, the repl should still
+        // report it as a record
+        expect_success(
+            "{ foo: { bar: { baz: 4.2 } } }",
+            "{ foo: { bar: { baz: 4.2 } } } : { foo : { bar : { baz : Float } } }",
         );
     }
 
