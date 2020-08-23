@@ -358,7 +358,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // If this is an external-facing function, use the C calling convention.
                 call.set_call_convention(C_CALL_CONV);
             } else {
-                // If it's an internal-only function, use the fast calling conention.
+                // If it's an internal-only function, use the fast calling convention.
                 call.set_call_convention(FAST_CALL_CONV);
             }
 
@@ -1689,11 +1689,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             list_concat(env, parent, first_list, second_list, list_layout)
         }
         ListMap => {
-            // List.map : List a, (a -> elem) -> List elem
+            // List.map : List before, (before -> after) -> List after
 
-            let original_wrapper = load_symbol(env, scope, &args[0]).into_struct_value();
+            let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
-            list_map(env, original_wrapper)
+            let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            list_map(env, parent, func, func_layout, list, list_layout)
         }
         ListAppend => {
             // List.append : List elem, elem -> List elem

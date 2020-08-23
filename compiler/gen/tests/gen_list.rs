@@ -100,18 +100,84 @@ mod gen_list {
                         empty : List Int
                         empty =
                             []
+        
             
-                        intIdentity : Int -> Int
-                        intIdentity = \i ->
-                            2
-            
-                        List.map empty intIdentity 
+                        List.map empty (\x -> x)
                     
                     main {}
                 "#
             ),
             &[],
             &'static [i64]
+        );
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    main = \{} ->
+                        nonEmpty : List Int
+                        nonEmpty =
+                            [ 1 ]
+        
+            
+                        List.map nonEmpty (\x -> x)
+                    
+                    main {}
+                "#
+            ),
+            &[1],
+            &'static [i64]
+        );
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    main = \{} ->
+                        nonEmpty : List Int
+                        nonEmpty =
+                            [ 1 ]
+        
+            
+                        List.map nonEmpty (\x -> x + 1)
+                    
+                    main {}
+                "#
+            ),
+            &[2],
+            &'static [i64]
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    main = \{} ->
+                        nonEmpty : List Int
+                        nonEmpty =
+                            [ 1, 2, 3, 4, 5 ]
+        
+                        List.map nonEmpty (\x -> x * 2)
+                    
+                    main {}
+                "#
+            ),
+            &[2, 4, 6, 8, 10],
+            &'static [i64]
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    main = \{} ->
+                        nonEmpty : List Int
+                        nonEmpty =
+                            [ 1, 1, -4, 1, 2 ]
+        
+            
+                        List.map nonEmpty (\x -> x > 0)
+                    
+                    main {}
+                "#
+            ),
+            &[true, true, false, true, true],
+            &'static [bool]
         );
         // assert_evals_to!("List.map [] (\\a -> a)", &[], &'static [i64]);
     }

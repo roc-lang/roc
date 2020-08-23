@@ -855,14 +855,127 @@ pub fn list_len<'ctx>(
         .into_int_value()
 }
 
-/// List.map : List a, (a -> elem) -> List elem
+/// List.map : List before, (before -> after) -> List after
 pub fn list_map<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    original_wrapper: StructValue<'ctx>,
+    parent: FunctionValue<'ctx>,
+    func: BasicValueEnum<'ctx>,
+    func_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
+    match (func, func_layout) {
+        (BasicValueEnum::PointerValue(func_ptr), Layout::FunctionPointer(_, ret_elem_layout)) => {
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(_, elem_layout)) => {
+                    let ctx = env.context;
+                    let builder = env.builder;
 
-    empty_list(env)
+                    let list_wrapper = list.into_struct_value();
+
+                    let len = list_len(builder, list_wrapper);
+
+                    // len > 0
+                    // We do this check to avoid allocating memory. If the input
+                    // list is empty, then we can just return an empty list.
+                    let list_length_comparison = list_is_not_empty(builder, ctx, len);
+
+                    let if_list_is_empty = || empty_list(env);
+
+                    let if_list_is_not_empty = || {
+                        let ret_list_ptr = allocate_list(env, ret_elem_layout, len);
+
+                        let elem_type =
+                            basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+                        let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                        let list_ptr = load_list_ptr(builder, list_wrapper, ptr_type);
+
+                        let list_loop = |index| {
+                            // The pointer to the element in the input list
+                            let before_elem_ptr = unsafe {
+                                builder.build_in_bounds_gep(list_ptr, &[index], "load_index")
+                            };
+
+                            // The pointer to the element in the mapped-over list
+                            let after_elem_ptr = unsafe {
+                                builder.build_in_bounds_gep(
+                                    ret_list_ptr,
+                                    &[index],
+                                    "load_index_after_list",
+                                )
+                            };
+
+                            let before_elem =
+                                builder.build_load(before_elem_ptr, "get_before_elem");
+
+                            let after_elem = builder
+                                .build_call(func_ptr, &[before_elem], "map_func")
+                                .try_as_basic_value()
+                                .left()
+                                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
+
+                            // Mutate the new array in-place to change the element.
+                            builder.build_store(after_elem_ptr, after_elem);
+                        };
+
+                        incrementing_index_loop(
+                            builder, parent, ctx, len, "#index", None, list_loop,
+                        );
+
+                        let ptr_bytes = env.ptr_bytes;
+                        let int_type = ptr_int(ctx, ptr_bytes);
+                        let ptr_as_int =
+                            builder.build_ptr_to_int(ret_list_ptr, int_type, "list_cast_ptr");
+
+                        let struct_type = collection(ctx, ptr_bytes);
+
+                        let mut struct_val;
+
+                        // Store the pointer
+                        struct_val = builder
+                            .build_insert_value(
+                                struct_type.get_undef(),
+                                ptr_as_int,
+                                Builtin::WRAPPER_PTR,
+                                "insert_ptr",
+                            )
+                            .unwrap();
+
+                        // Store the length
+                        struct_val = builder
+                            .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
+                            .unwrap();
+
+                        builder.build_bitcast(
+                            struct_val.into_struct_value(),
+                            collection(ctx, ptr_bytes),
+                            "cast_collection",
+                        )
+                    };
+
+                    build_basic_phi2(
+                        env,
+                        parent,
+                        list_length_comparison,
+                        if_list_is_not_empty,
+                        if_list_is_empty,
+                        BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
+                    )
+                }
+                _ => {
+                    unreachable!("Invalid List layout for List.map : {:?}", list_layout);
+                }
+            }
+        }
+        _ => {
+            unreachable!(
+                "Invalid function basic value enum or layout for List.map : {:?}",
+                (func, func_layout)
+            );
+        }
+    }
 }
 
 /// List.concat : List elem, List elem -> List elem
@@ -956,10 +1069,10 @@ pub fn list_concat<'a, 'ctx, 'env>(
 
                     let combined_list_ptr = allocate_list(env, elem_layout, combined_list_len);
 
+                    let first_list_ptr = load_list_ptr(builder, first_list_wrapper, ptr_type);
+
                     // FIRST LOOP
                     let first_loop = |first_index| {
-                        let first_list_ptr = load_list_ptr(builder, first_list_wrapper, ptr_type);
-
                         // The pointer to the element in the first list
                         let first_list_elem_ptr = unsafe {
                             builder.build_in_bounds_gep(
