@@ -391,6 +391,45 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
                 &'static str,
                 |string| format!("\"{}\"", string)
             ),
+            Layout::Builtin(Builtin::EmptyList) => "[]".to_string(),
+            Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Int64))) => jit_map!(
+                execution_engine,
+                main_fn_name,
+                &'static [i64],
+                |nums: &'static [i64]| format!(
+                    "[ {} ]",
+                    nums.iter()
+                        .map(|num| format!("{}", num))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                )
+            ),
+            Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Float64))) => jit_map!(
+                execution_engine,
+                main_fn_name,
+                &'static [f64],
+                |nums: &'static [f64]| format!(
+                    "[ {} ]",
+                    nums.iter()
+                        .map(|num| format!("{}", num))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                )
+            ),
+            Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::Str)))
+            | Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::EmptyStr))) => jit_map!(
+                execution_engine,
+                main_fn_name,
+                &'static [&'static str],
+                |strings: &'static [&'static str]| format!(
+                    "[ {} ]",
+                    strings
+                        .iter()
+                        .map(|string| format!("\"{}\"", string))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                )
+            ),
             other => {
                 todo!("TODO add support for rendering {:?} in the REPL", other);
             }
