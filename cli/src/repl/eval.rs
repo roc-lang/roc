@@ -1,0 +1,313 @@
+use bumpalo::Bump;
+use inkwell::execution_engine::{ExecutionEngine, JitFunction};
+use roc_collections::all::MutMap;
+use roc_module::ident::Lowercase;
+use roc_module::symbol::Symbol;
+use roc_mono::layout::{Builtin, Layout};
+use roc_parse::ast::{self, AssignedField};
+use roc_region::all::{Located, Region};
+use roc_types::subs::{Content, FlatType, Subs, Variable};
+use roc_types::types::RecordField;
+
+struct Env<'a, 'env> {
+    arena: &'a Bump,
+    subs: &'env Subs,
+    ptr_bytes: u32,
+}
+
+/// JIT execute the given main function, and then wrap its results in an Expr
+/// so we can display them to the user using the formatter.
+///
+/// We need the original types in order to properly render records and tag unions,
+/// because at runtime those are structs - that is, unlabeled memory offsets.
+/// By traversing the type signature while we're traversing the layout, once
+/// we get to a struct or tag, we know what the labels are and can turn them
+/// back into the appropriate user-facing literals.
+pub unsafe fn jit_to_ast<'a>(
+    arena: &'a Bump,
+    execution_engine: ExecutionEngine,
+    main_fn_name: &str,
+    layout: &Layout<'a>,
+    content: &Content,
+    subs: &Subs,
+    ptr_bytes: u32,
+) -> ast::Expr<'a> {
+    let env = Env {
+        arena,
+        subs,
+        ptr_bytes,
+    };
+
+    jit_to_ast_help(&env, execution_engine, main_fn_name, layout, content)
+}
+
+macro_rules! jit_map {
+    ($execution_engine: expr, $main_fn_name: expr, $ty: ty, $transform: expr) => {{
+        unsafe {
+            let main: JitFunction<unsafe extern "C" fn() -> $ty> = $execution_engine
+                .get_function($main_fn_name)
+                .ok()
+                .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
+                .expect("errored");
+
+            $transform(main.call())
+        }
+    }};
+}
+
+fn jit_to_ast_help<'a>(
+    env: &Env<'a, '_>,
+    execution_engine: ExecutionEngine,
+    main_fn_name: &str,
+    layout: &Layout<'a>,
+    content: &Content,
+) -> ast::Expr<'a> {
+    match layout {
+        Layout::Builtin(Builtin::Int64) => {
+            jit_map!(execution_engine, main_fn_name, i64, |num| i64_to_ast(
+                env, num, content
+            ))
+        }
+        Layout::Builtin(Builtin::Float64) => {
+            jit_map!(execution_engine, main_fn_name, f64, |num| ast::Expr::Num(
+                env.arena.alloc(format!("{}", num))
+            ))
+        }
+        Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => jit_map!(
+            execution_engine,
+            main_fn_name,
+            &'static str,
+            |string: &'static str| { ast::Expr::Str(env.arena.alloc(string)) }
+        ),
+        Layout::Builtin(Builtin::EmptyList) => {
+            jit_map!(execution_engine, main_fn_name, &'static str, |_| {
+                ast::Expr::List(bumpalo::collections::Vec::new_in(env.arena))
+            })
+        }
+        Layout::Builtin(Builtin::List(_, elem_layout)) => jit_map!(
+            execution_engine,
+            main_fn_name,
+            (*const libc::c_void, usize),
+            |(ptr, len): (*const libc::c_void, usize)| {
+                list_to_ast(env, ptr, len, elem_layout, content)
+            }
+        ),
+        Layout::Struct(field_layouts) => {
+            jit_map!(
+                execution_engine,
+                main_fn_name,
+                [u8; 16 /* TODO don't hardcode this! do 2 branches based on ptr_bytes*/],
+                |bytes: [u8; 16]| {
+                    match content {
+                        Content::Structure(FlatType::Record(fields, _)) => {
+                            let ptr = (&bytes).as_ptr() as *const libc::c_void;
+
+                            struct_to_ast(env, ptr, field_layouts, fields)
+                        }
+                        other => {
+                            unreachable!(
+                                "Something had a Struct layout, but instead of a Record type, it had: {:?}",
+                                other
+                            );
+                        }
+                    }
+                }
+            )
+        }
+        other => {
+            todo!("TODO add support for rendering {:?} in the REPL", other);
+        }
+    }
+}
+
+fn ptr_to_ast<'a>(
+    env: &Env<'a, '_>,
+    ptr: *const libc::c_void,
+    layout: &Layout<'a>,
+    content: &Content,
+) -> ast::Expr<'a> {
+    match layout {
+        Layout::Builtin(Builtin::Int64) => {
+            let num = unsafe { *(ptr as *const i64) };
+
+            ast::Expr::Num(env.arena.alloc(format!("{}", num)))
+        }
+        Layout::Builtin(Builtin::Float64) => {
+            let num = unsafe { *(ptr as *const f64) };
+
+            ast::Expr::Num(env.arena.alloc(format!("{}", num)))
+        }
+        Layout::Builtin(Builtin::EmptyList) => {
+            ast::Expr::List(bumpalo::collections::Vec::new_in(env.arena))
+        }
+        Layout::Builtin(Builtin::List(_, elem_layout)) => {
+            // Turn the (ptr, len) wrapper struct into actual ptr and len values.
+            let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
+            let ptr = unsafe { *(ptr as *const *const libc::c_void) };
+
+            list_to_ast(env, ptr, len, elem_layout, content)
+        }
+        Layout::Builtin(Builtin::EmptyStr) => ast::Expr::Str(""),
+        Layout::Builtin(Builtin::Str) => {
+            let arena_str = unsafe { *(ptr as *const &'static str) };
+
+            ast::Expr::Str(arena_str)
+        }
+        Layout::Struct(field_layouts) => match content {
+            Content::Structure(FlatType::Record(fields, _)) => {
+                struct_to_ast(env, ptr, field_layouts, fields)
+            }
+            other => {
+                unreachable!(
+                    "Something had a Struct layout, but instead of a Record type, it had: {:?}",
+                    other
+                );
+            }
+        },
+        other => {
+            todo!(
+                "TODO add support for rendering pointer to {:?} in the REPL",
+                other
+            );
+        }
+    }
+}
+
+fn list_to_ast<'a>(
+    env: &Env<'a, '_>,
+    ptr: *const libc::c_void,
+    len: usize,
+    elem_layout: &Layout<'a>,
+    content: &Content,
+) -> ast::Expr<'a> {
+    let elem_content = match content {
+        Content::Structure(FlatType::Apply(Symbol::LIST_LIST, vars)) => {
+            debug_assert_eq!(vars.len(), 1);
+
+            let elem_var = *vars.first().unwrap();
+
+            env.subs.get_without_compacting(elem_var).content
+        }
+        other => {
+            unreachable!(
+                "Something had a Struct layout, but instead of a Record type, it had: {:?}",
+                other
+            );
+        }
+    };
+
+    let arena = env.arena;
+    let mut output = bumpalo::collections::Vec::with_capacity_in(len, &arena);
+    let elem_size = elem_layout.stack_size(env.ptr_bytes);
+
+    for index in 0..(len as isize) {
+        let offset_bytes: isize = index * elem_size as isize;
+        let elem_ptr = unsafe { ptr.offset(offset_bytes) };
+        let loc_expr = &*arena.alloc(Located {
+            value: ptr_to_ast(env, elem_ptr, elem_layout, &elem_content),
+            region: Region::zero(),
+        });
+
+        output.push(loc_expr);
+    }
+
+    ast::Expr::List(output)
+}
+
+fn struct_to_ast<'a>(
+    env: &Env<'a, '_>,
+    ptr: *const libc::c_void,
+    field_layouts: &[Layout<'a>],
+    fields: &MutMap<Lowercase, RecordField<Variable>>,
+) -> ast::Expr<'a> {
+    let arena = env.arena;
+    let mut output = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), &arena);
+    let mut field_ptr = ptr;
+
+    for field_layout in field_layouts {
+        let content = todo!();
+        let loc_expr = &*arena.alloc(Located {
+            value: ptr_to_ast(env, field_ptr, field_layout, content),
+            region: Region::zero(),
+        });
+
+        let field_name = Located {
+            value: "field_name_goes_here",
+            region: Region::zero(),
+        };
+        let loc_field = Located {
+            value: AssignedField::RequiredValue(field_name, &[], loc_expr),
+            region: Region::zero(),
+        };
+
+        output.push(loc_field);
+
+        // Advance the field pointer to the next field.
+        field_ptr = unsafe { ptr.offset(field_layout.stack_size(env.ptr_bytes) as isize) };
+    }
+
+    ast::Expr::Record {
+        update: None,
+        fields: output,
+    }
+}
+
+fn i64_to_ast<'a>(env: &Env<'a, '_>, num: i64, content: &Content) -> ast::Expr<'a> {
+    use Content::*;
+
+    let arena = env.arena;
+
+    match content {
+        Structure(flat_type) => {
+            match flat_type {
+                FlatType::Apply(Symbol::NUM_NUM, vars) => {
+                    // TODO verify the vars
+                    ast::Expr::Num(arena.alloc(format!("{}", num)))
+                }
+                FlatType::Record(fields, var) => {
+                    // This was a single-field record that got unwrapped at runtime.
+                    // Even if it was an i64 at runtime, we still need to report
+                    // it as a record with the correct field name!
+                    // Its type signature will tell us that.
+                    debug_assert_eq!(fields.len(), 1);
+
+                    let (label, field) = fields.iter().next().unwrap();
+                    let loc_label = Located {
+                        value: &*arena.alloc_str(label.as_str()),
+                        region: Region::zero(),
+                    };
+                    let loc_expr = Located {
+                        value: ast::Expr::Num(arena.alloc(format!("{}", num))),
+                        region: Region::zero(),
+                    };
+                    let assigned_field =
+                        AssignedField::RequiredValue(loc_label, &[], arena.alloc(loc_expr));
+                    let loc_assigned_field = Located {
+                        value: assigned_field,
+                        region: Region::zero(),
+                    };
+
+                    // TODO recurse on the var
+                    ast::Expr::Record {
+                        update: None,
+                        fields: bumpalo::vec![in arena; loc_assigned_field],
+                    }
+                }
+                FlatType::TagUnion(tags, var) => {
+                    // This was a single-tag union that got unwrapped at runtime.
+                    debug_assert_eq!(tags.len(), 1);
+                    panic!("TODO tags");
+                }
+                other => {
+                    panic!("Unexpected FlatType {:?} in i64_to_ast", other);
+                }
+            }
+        }
+        Alias(symbol, _, _) => {
+            panic!("TODO alias");
+        }
+        other => {
+            panic!("Unexpected FlatType {:?} in i64_to_ast", other);
+        }
+    }
+}

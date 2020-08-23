@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
-use inkwell::execution_engine::{ExecutionEngine, JitFunction};
+use inkwell::execution_engine::ExecutionEngine;
 use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_builtins::unique::uniq_stdlib;
@@ -20,15 +20,15 @@ use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::ir::Procs;
-use roc_mono::layout::{Builtin, Layout, LayoutCache};
-use roc_parse::ast::{self, AssignedField, Attempting};
+use roc_mono::layout::{Layout, LayoutCache};
+use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::parser::{loc, Fail, FailReason, Parser, State};
 use roc_problem::can::Problem;
 use roc_region::all::{Located, Region};
 use roc_solve::solve;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
-use roc_types::subs::{Content, FlatType, Subs, VarStore, Variable};
+use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
 use std::hash::Hash;
 use std::io::{self, Write};
@@ -36,23 +36,13 @@ use std::path::PathBuf;
 use std::str::from_utf8_unchecked;
 use target_lexicon::Triple;
 
-macro_rules! jit_map {
-    ($execution_engine: expr, $main_fn_name: expr, $ty: ty, $transform: expr) => {{
-        let main: JitFunction<unsafe extern "C" fn() -> $ty> = $execution_engine
-            .get_function($main_fn_name)
-            .ok()
-            .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
-            .expect("errored");
-
-        $transform(main.call())
-    }};
-}
-
 pub const WELCOME_MESSAGE: &str = "\n  The rockin’ \u{001b}[36mroc repl\u{001b}[0m\n\u{001b}[35m────────────────────────\u{001b}[0m\n\n";
 pub const INSTRUCTIONS: &str =
     "Enter an expression, or :help for a list of commands, or :exit to exit.\n";
 pub const PROMPT: &str = "\n\u{001b}[36m»\u{001b}[0m ";
 pub const ELLIPSIS: &str = "\u{001b}[36m…\u{001b}[0m ";
+
+mod eval;
 
 pub fn main() -> io::Result<()> {
     use std::io::BufRead;
@@ -372,13 +362,13 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         // env.module.print_to_stderr();
 
         let answer = unsafe {
-            jit_to_ast(
+            eval::jit_to_ast(
                 &arena,
                 execution_engine,
                 main_fn_name,
                 &main_ret_layout,
-                content,
-                subs,
+                &content,
+                &subs,
                 ptr_bytes,
             )
         };
@@ -816,223 +806,5 @@ fn variable_usage_help(con: &Constraint, declared: &mut SeenVariables, used: &mu
                 variable_usage_help(sub, declared, used);
             }
         }
-    }
-}
-
-fn i64_to_ast<'a>(arena: &'a Bump, num: i64, content: Content, subs: Subs) -> ast::Expr<'a> {
-    use Content::*;
-
-    match content {
-        Structure(flat_type) => {
-            match flat_type {
-                FlatType::Apply(Symbol::NUM_NUM, vars) => {
-                    // TODO verify the vars
-                    ast::Expr::Num(arena.alloc(format!("{}", num)))
-                }
-                FlatType::Record(mut fields, var) => {
-                    // This was a single-field record that got unwrapped at runtime.
-                    // Even if it was an i64 at runtime, we still need to report
-                    // it as a record with the correct field name!
-                    // Its type signature will tell us that.
-                    debug_assert_eq!(fields.len(), 1);
-
-                    let (label, field) = fields.drain().next().unwrap();
-                    let loc_label = Located {
-                        value: &*arena.alloc_str(label.as_str()),
-                        region: Region::zero(),
-                    };
-                    let loc_expr = Located {
-                        value: ast::Expr::Num(arena.alloc(format!("{}", num))),
-                        region: Region::zero(),
-                    };
-                    let assigned_field =
-                        AssignedField::RequiredValue(loc_label, &[], arena.alloc(loc_expr));
-                    let loc_assigned_field = Located {
-                        value: assigned_field,
-                        region: Region::zero(),
-                    };
-
-                    // TODO recurse on the var
-                    ast::Expr::Record {
-                        update: None,
-                        fields: bumpalo::vec![in arena; loc_assigned_field],
-                    }
-                }
-                FlatType::TagUnion(tags, var) => {
-                    // This was a single-tag union that got unwrapped at runtime.
-                    debug_assert_eq!(tags.len(), 1);
-                    panic!("TODO tags");
-                }
-                other => {
-                    panic!("Unexpected FlatType {:?} in i64_to_ast", other);
-                }
-            }
-        }
-        Alias(symbol, _, _) => {
-            panic!("TODO alias");
-        }
-        other => {
-            panic!("Unexpected FlatType {:?} in i64_to_ast", other);
-        }
-    }
-}
-
-unsafe fn jit_to_ast<'a>(
-    arena: &'a Bump,
-    execution_engine: ExecutionEngine,
-    main_fn_name: &str,
-    layout: &Layout<'a>,
-    content: Content,
-    subs: Subs,
-    ptr_bytes: u32,
-) -> ast::Expr<'a> {
-    match layout {
-        Layout::Builtin(Builtin::Int64) => {
-            jit_map!(execution_engine, main_fn_name, i64, |num| i64_to_ast(
-                arena, num, content, subs
-            ))
-        }
-        Layout::Builtin(Builtin::Float64) => {
-            jit_map!(execution_engine, main_fn_name, f64, |num| ast::Expr::Num(
-                arena.alloc(format!("{}", num))
-            ))
-        }
-        Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => jit_map!(
-            execution_engine,
-            main_fn_name,
-            &'static str,
-            |string: &'static str| { ast::Expr::Str(arena.alloc(string)) }
-        ),
-        Layout::Builtin(Builtin::EmptyList) => {
-            jit_map!(execution_engine, main_fn_name, &'static str, |_| {
-                ast::Expr::List(bumpalo::collections::Vec::new_in(&arena))
-            })
-        }
-        Layout::Builtin(Builtin::List(_, elem_layout)) => jit_map!(
-            execution_engine,
-            main_fn_name,
-            (*const libc::c_void, usize),
-            |(ptr, len): (*const libc::c_void, usize)| {
-                list_to_ast(arena, ptr, len, elem_layout, ptr_bytes)
-            }
-        ),
-        Layout::Struct(field_layouts) => {
-            jit_map!(
-                execution_engine,
-                main_fn_name,
-                [u8; 16 /* TODO don't hardcode this! do 2 branches based on ptr_bytes*/],
-                |bytes: [u8; 16]| {
-                    let ptr = (&bytes).as_ptr() as *const libc::c_void;
-
-                    struct_to_ast(arena, ptr, field_layouts, ptr_bytes)
-                }
-            )
-        }
-        other => {
-            todo!("TODO add support for rendering {:?} in the REPL", other);
-        }
-    }
-}
-
-fn ptr_to_ast<'a>(
-    arena: &'a Bump,
-    ptr: *const libc::c_void,
-    layout: &Layout<'a>,
-    ptr_bytes: u32,
-) -> ast::Expr<'a> {
-    match layout {
-        Layout::Builtin(Builtin::Int64) => {
-            let num = unsafe { *(ptr as *const i64) };
-
-            ast::Expr::Num(arena.alloc(format!("{}", num)))
-        }
-        Layout::Builtin(Builtin::Float64) => {
-            let num = unsafe { *(ptr as *const f64) };
-
-            ast::Expr::Num(arena.alloc(format!("{}", num)))
-        }
-        Layout::Builtin(Builtin::EmptyList) => {
-            ast::Expr::List(bumpalo::collections::Vec::new_in(&arena))
-        }
-        Layout::Builtin(Builtin::List(_, elem_layout)) => {
-            // Turn the (ptr, len) wrapper struct into actual ptr and len values.
-            let len = unsafe { *(ptr.offset(ptr_bytes as isize) as *const usize) };
-            let ptr = unsafe { *(ptr as *const *const libc::c_void) };
-
-            list_to_ast(arena, ptr, len, elem_layout, ptr_bytes)
-        }
-        Layout::Builtin(Builtin::EmptyStr) => ast::Expr::Str(""),
-        Layout::Builtin(Builtin::Str) => {
-            let arena_str = unsafe { *(ptr as *const &'static str) };
-
-            ast::Expr::Str(arena_str)
-        }
-        Layout::Struct(field_layouts) => struct_to_ast(arena, ptr, field_layouts, ptr_bytes),
-        other => {
-            todo!(
-                "TODO add support for rendering pointer to {:?} in the REPL",
-                other
-            );
-        }
-    }
-}
-
-fn list_to_ast<'a>(
-    arena: &'a Bump,
-    ptr: *const libc::c_void,
-    len: usize,
-    elem_layout: &Layout<'a>,
-    ptr_bytes: u32,
-) -> ast::Expr<'a> {
-    let mut output = bumpalo::collections::Vec::with_capacity_in(len, &arena);
-    let elem_size = elem_layout.stack_size(ptr_bytes);
-
-    for index in 0..(len as isize) {
-        let offset_bytes: isize = index * elem_size as isize;
-        let elem_ptr = unsafe { ptr.offset(offset_bytes) };
-        let loc_expr = &*arena.alloc(Located {
-            value: ptr_to_ast(arena, elem_ptr, elem_layout, ptr_bytes),
-            region: Region::zero(),
-        });
-
-        output.push(loc_expr);
-    }
-
-    ast::Expr::List(output)
-}
-
-fn struct_to_ast<'a>(
-    arena: &'a Bump,
-    ptr: *const libc::c_void,
-    field_layouts: &[Layout<'a>],
-    ptr_bytes: u32,
-) -> ast::Expr<'a> {
-    let mut output = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), &arena);
-    let mut field_ptr = ptr;
-
-    for field_layout in field_layouts {
-        let loc_expr = &*arena.alloc(Located {
-            value: ptr_to_ast(arena, field_ptr, field_layout, ptr_bytes),
-            region: Region::zero(),
-        });
-
-        let field_name = Located {
-            value: "field_name_goes_here",
-            region: Region::zero(),
-        };
-        let loc_field = Located {
-            value: AssignedField::RequiredValue(field_name, &[], loc_expr),
-            region: Region::zero(),
-        };
-
-        output.push(loc_field);
-
-        // Advance the field pointer to the next field.
-        field_ptr = unsafe { ptr.offset(field_layout.stack_size(ptr_bytes) as isize) };
-    }
-
-    ast::Expr::Record {
-        update: None,
-        fields: output,
     }
 }

@@ -5,10 +5,10 @@ mod helpers;
 
 #[cfg(test)]
 mod repl_eval {
-    use crate::helpers::repl_eval;
+    use crate::helpers;
 
     fn expect_success(input: &str, expected: &str) {
-        let out = repl_eval(input);
+        let out = helpers::repl_eval(input);
 
         assert_eq!(&out.stderr, "");
         assert_eq!(&out.stdout, expected);
