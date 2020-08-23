@@ -142,9 +142,8 @@ pub fn repl_eval(input: &str) -> Out {
     );
 
     let (_, answer) = stdout.split_at(expected_instructions.len());
-
     let answer = if answer.is_empty() {
-        panic!("repl exited unexpectedly before finishing evaluation. Exit status was {:?} and stderr was {:?}", output.status, String::from_utf8(output.stderr).unwrap());
+        panic!("repl exited unexpectedly before finishing evaluation, possibly due to a segfault. Exit status was {:?} and stderr was {:?}", output.status, String::from_utf8(output.stderr).unwrap());
     } else {
         let expected_after_answer = format!("\n{}", PROMPT);
 
