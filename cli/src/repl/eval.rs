@@ -243,7 +243,6 @@ fn struct_to_ast<'a>(
     let arena = env.arena;
     let subs = env.subs;
     let mut output = Vec::with_capacity_in(field_layouts.len(), &arena);
-    let mut field_ptr = ptr;
 
     // The fields, sorted alphabetically
     let sorted_fields = {
@@ -257,6 +256,9 @@ fn struct_to_ast<'a>(
     };
 
     debug_assert_eq!(sorted_fields.len(), field_layouts.len());
+
+    // We'll advance this as we iterate through the fields
+    let mut field_ptr = ptr;
 
     for ((label, field), field_layout) in sorted_fields.iter().zip(field_layouts.iter()) {
         let content = subs.get_without_compacting(*field.as_inner()).content;
