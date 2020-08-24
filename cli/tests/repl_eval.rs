@@ -190,21 +190,22 @@ mod repl_eval {
         );
     }
 
-    #[test]
-    fn basic_2_field_f64_record() {
-        expect_success(
-            "{ foo: 4.1, bar: 2.3 }",
-            "{ bar: 2.3, foo: 4.1 } : { bar : Float, foo : Float }",
-        );
-    }
+    // TODO uncomment this once https://github.com/rtfeldman/roc/issues/295 is done
+    // #[test]
+    // fn basic_2_field_f64_record() {
+    //     expect_success(
+    //         "{ foo: 4.1, bar: 2.3 }",
+    //         "{ bar: 2.3, foo: 4.1 } : { bar : Float, foo : Float }",
+    //     );
+    // }
 
-    #[test]
-    fn basic_2_field_mixed_record() {
-        expect_success(
-            "{ foo: 4.1, bar: 2 }",
-            "{ bar: 2, foo: 4.1 } : { bar : Num *, foo : Float }",
-        );
-    }
+    // #[test]
+    // fn basic_2_field_mixed_record() {
+    //     expect_success(
+    //         "{ foo: 4.1, bar: 2 }",
+    //         "{ bar: 2, foo: 4.1 } : { bar : Num *, foo : Float }",
+    //     );
+    // }
 
     // TODO uncomment this once https://github.com/rtfeldman/roc/issues/295 is done
     //
