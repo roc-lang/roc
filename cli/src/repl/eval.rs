@@ -105,26 +105,36 @@ fn jit_to_ast_help<'a>(
             }
         ),
         Layout::Struct(field_layouts) => {
-            jit_map!(
-                execution_engine,
-                main_fn_name,
-                [u8; 16 /* TODO don't hardcode this! do 2 branches based on ptr_bytes*/],
-                |bytes: [u8; 16]| {
-                    match content {
-                        Content::Structure(FlatType::Record(fields, _)) => {
-                            let ptr = (&bytes).as_ptr() as *const libc::c_void;
-
-                            struct_to_ast(env, ptr, field_layouts, fields)
-                        }
-                        other => {
-                            unreachable!(
-                                "Something had a Struct layout, but instead of a Record type, it had: {:?}",
-                                other
-                            );
-                        }
-                    }
+            let ptr_to_ast = |ptr: *const libc::c_void| match content {
+                Content::Structure(FlatType::Record(fields, _)) => {
+                    struct_to_ast(env, ptr, field_layouts, fields)
                 }
-            )
+                other => {
+                    unreachable!(
+                        "Something had a Struct layout, but instead of a Record type, it had: {:?}",
+                        other
+                    );
+                }
+            };
+
+            // Functions can return structs of either 8 or 16 bytes, depending
+            // on whether we're compiling for a 64-bit or 32-bit target.
+            match env.ptr_bytes {
+                // 64-bit target (8-byte pointers, 16-byte structs)
+                8 => jit_map!(
+                    execution_engine,
+                    main_fn_name,
+                    [u8; 16],
+                    |bytes: [u8; 16]| { ptr_to_ast((&bytes).as_ptr() as *const libc::c_void) }
+                ),
+                // 32-bit target (4-byte pointers, 8-byte structs)
+                4 => jit_map!(execution_engine, main_fn_name, [u8; 8], |bytes: [u8; 8]| {
+                    ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
+                }),
+                other => {
+                    panic!("Unsupported target: Roc cannot currently compile to systems where pointers are {} bytes in length.", other);
+                }
+            }
         }
         other => {
             todo!("TODO add support for rendering {:?} in the REPL", other);
