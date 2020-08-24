@@ -54,6 +54,16 @@ impl<T> RecordField<T> {
         }
     }
 
+    pub fn as_inner<'a>(&'a self) -> &'a T {
+        use RecordField::*;
+
+        match self {
+            Optional(t) => t,
+            Required(t) => t,
+            Demanded(t) => t,
+        }
+    }
+
     pub fn map<F, U>(&self, mut f: F) -> RecordField<U>
     where
         F: FnMut(&T) -> U,

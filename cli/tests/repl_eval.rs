@@ -186,7 +186,7 @@ mod repl_eval {
     fn basic_2_field_record() {
         expect_success(
             "{ foo: 4.1, bar: 2 }",
-            "{ foo: 4.1, bar: 2 } : { foo : Float, bar : Num * }",
+            "{ bar: 2, foo: 4.1 } : { bar : Num *, foo : Float }",
         );
     }
 
@@ -211,7 +211,7 @@ mod repl_eval {
     fn list_of_2_field_records() {
         expect_success(
             "[ { foo: 4.1, bar: 2 } ]",
-            "[ { foo: 4.1, bar: 2 } ] : List { foo : Float, bar : Num * }",
+            "[ { bar: 2, foo: 4.1 } ] : List { bar : Num *, foo : Float }",
         );
     }
 

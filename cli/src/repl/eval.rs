@@ -221,18 +221,32 @@ fn struct_to_ast<'a>(
     fields: &MutMap<Lowercase, RecordField<Variable>>,
 ) -> ast::Expr<'a> {
     let arena = env.arena;
+    let subs = env.subs;
     let mut output = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), &arena);
     let mut field_ptr = ptr;
 
-    for field_layout in field_layouts {
-        let content = todo!();
+    // The fields, sorted alphabetically
+    let sorted_fields = {
+        let mut vec = fields
+            .iter()
+            .collect::<Vec<(&Lowercase, &RecordField<Variable>)>>();
+
+        vec.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
+
+        vec
+    };
+
+    debug_assert_eq!(sorted_fields.len(), field_layouts.len());
+
+    for ((label, field), field_layout) in sorted_fields.iter().zip(field_layouts.iter()) {
+        let content = subs.get_without_compacting(*field.as_inner()).content;
         let loc_expr = &*arena.alloc(Located {
-            value: ptr_to_ast(env, field_ptr, field_layout, content),
+            value: ptr_to_ast(env, field_ptr, field_layout, &content),
             region: Region::zero(),
         });
 
         let field_name = Located {
-            value: "field_name_goes_here",
+            value: &*arena.alloc_str(label.as_str()),
             region: Region::zero(),
         };
         let loc_field = Located {
