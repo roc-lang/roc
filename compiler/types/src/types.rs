@@ -54,7 +54,7 @@ impl<T> RecordField<T> {
         }
     }
 
-    pub fn as_inner<'a>(&'a self) -> &'a T {
+    pub fn as_inner(&self) -> &T {
         use RecordField::*;
 
         match self {

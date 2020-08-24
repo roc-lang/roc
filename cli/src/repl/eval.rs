@@ -27,6 +27,7 @@ struct Env<'a, 'env> {
 /// By traversing the type signature while we're traversing the layout, once
 /// we get to a struct or tag, we know what the labels are and can turn them
 /// back into the appropriate user-facing literals.
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn jit_to_ast<'a>(
     arena: &'a Bump,
     execution_engine: ExecutionEngine,
@@ -347,7 +348,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
 
                     let loc_tag_expr = {
                         let tag_name = &tag_name.as_string(env.interns, env.home);
-                        let tag_expr = if tag_name.starts_with("@") {
+                        let tag_expr = if tag_name.starts_with('@') {
                             Expr::PrivateTag(arena.alloc_str(tag_name))
                         } else {
                             Expr::GlobalTag(arena.alloc_str(tag_name))
@@ -395,12 +396,12 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
 
 /// This is centralized in case we want to format it differently later,
 /// e.g. adding underscores for large numbers
-fn i64_to_ast<'a>(arena: &'a Bump, num: i64) -> Expr<'a> {
+fn i64_to_ast(arena: &Bump, num: i64) -> Expr<'_> {
     Expr::Num(arena.alloc(format!("{}", num)))
 }
 
 /// This is centralized in case we want to format it differently later,
 /// e.g. adding underscores for large numbers
-fn f64_to_ast<'a>(arena: &'a Bump, num: f64) -> Expr<'a> {
+fn f64_to_ast(arena: &Bump, num: f64) -> Expr<'_> {
     Expr::Num(arena.alloc(format!("{}", num)))
 }
