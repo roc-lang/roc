@@ -1,11 +1,10 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
-use inkwell::execution_engine::{ExecutionEngine, JitFunction};
+use inkwell::execution_engine::ExecutionEngine;
 use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_builtins::unique::uniq_stdlib;
 use roc_can::constraint::Constraint;
-use roc_can::env::Env;
 use roc_can::expected::Expected;
 use roc_can::expr::{canonicalize_expr, Expr, Output};
 use roc_can::operator;
@@ -20,7 +19,7 @@ use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::ir::Procs;
-use roc_mono::layout::{Builtin, Layout, LayoutCache};
+use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::parser::{loc, Fail, FailReason, Parser, State};
@@ -36,23 +35,13 @@ use std::path::PathBuf;
 use std::str::from_utf8_unchecked;
 use target_lexicon::Triple;
 
-macro_rules! jit_map {
-    ($execution_engine: expr, $main_fn_name: expr, $ty: ty, $transform: expr) => {{
-        let main: JitFunction<unsafe extern "C" fn() -> $ty> = $execution_engine
-            .get_function($main_fn_name)
-            .ok()
-            .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
-            .expect("errored");
-
-        $transform(main.call())
-    }};
-}
-
 pub const WELCOME_MESSAGE: &str = "\n  The rockin’ \u{001b}[36mroc repl\u{001b}[0m\n\u{001b}[35m────────────────────────\u{001b}[0m\n\n";
 pub const INSTRUCTIONS: &str =
     "Enter an expression, or :help for a list of commands, or :exit to exit.\n";
 pub const PROMPT: &str = "\n\u{001b}[36m»\u{001b}[0m ";
 pub const ELLIPSIS: &str = "\u{001b}[36m…\u{001b}[0m ";
+
+mod eval;
 
 pub fn main() -> io::Result<()> {
     use std::io::BufRead;
@@ -219,7 +208,7 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
         // Compute main_fn_type before moving subs to Env
-        let main_ret_layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
+        let main_ret_layout = Layout::new(&arena, content.clone(), &subs).unwrap_or_else(|err| {
             panic!(
                 "Code gen error in test: could not convert Content to main_layout. Err was {:?}",
                 err
@@ -372,11 +361,15 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         // env.module.print_to_stderr();
 
         let answer = unsafe {
-            jit_to_ast(
+            eval::jit_to_ast(
                 &arena,
                 execution_engine,
                 main_fn_name,
                 &main_ret_layout,
+                &content,
+                &env.interns,
+                home,
+                &subs,
                 ptr_bytes,
             )
         };
@@ -576,7 +569,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_bytes: &[u8]) -> Result<
 
     let mut scope = Scope::new(home);
     let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(home, dep_idents, &module_ids, IdentIds::default());
+    let mut env = roc_can::env::Env::new(home, dep_idents, &module_ids, IdentIds::default());
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,
@@ -815,113 +808,4 @@ fn variable_usage_help(con: &Constraint, declared: &mut SeenVariables, used: &mu
             }
         }
     }
-}
-
-unsafe fn jit_to_ast<'a>(
-    arena: &'a Bump,
-    execution_engine: ExecutionEngine,
-    main_fn_name: &str,
-    layout: &Layout<'a>,
-    ptr_bytes: u32,
-) -> ast::Expr<'a> {
-    match layout {
-        Layout::Builtin(Builtin::Int64) => {
-            jit_map!(execution_engine, main_fn_name, i64, |num| ast::Expr::Num(
-                arena.alloc(format!("{}", num))
-            ))
-        }
-        Layout::Builtin(Builtin::Float64) => {
-            jit_map!(execution_engine, main_fn_name, f64, |num| ast::Expr::Num(
-                arena.alloc(format!("{}", num))
-            ))
-        }
-        Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => jit_map!(
-            execution_engine,
-            main_fn_name,
-            &'static str,
-            |string: &'static str| { ast::Expr::Str(arena.alloc(string)) }
-        ),
-        Layout::Builtin(Builtin::EmptyList) => {
-            jit_map!(execution_engine, main_fn_name, &'static str, |_| {
-                ast::Expr::List(bumpalo::collections::Vec::new_in(&arena))
-            })
-        }
-        Layout::Builtin(Builtin::List(_, elem_layout)) => jit_map!(
-            execution_engine,
-            main_fn_name,
-            (*const libc::c_void, usize),
-            |(ptr, len): (*const libc::c_void, usize)| {
-                list_to_ast(arena, ptr, len, elem_layout, ptr_bytes)
-            }
-        ),
-        other => {
-            todo!("TODO add support for rendering {:?} in the REPL", other);
-        }
-    }
-}
-
-fn ptr_to_ast<'a>(
-    arena: &'a Bump,
-    ptr: *const libc::c_void,
-    layout: &Layout<'a>,
-    ptr_bytes: u32,
-) -> ast::Expr<'a> {
-    match layout {
-        Layout::Builtin(Builtin::Int64) => {
-            let num = unsafe { *(ptr as *const i64) };
-
-            ast::Expr::Num(arena.alloc(format!("{}", num)))
-        }
-        Layout::Builtin(Builtin::Float64) => {
-            let num = unsafe { *(ptr as *const f64) };
-
-            ast::Expr::Num(arena.alloc(format!("{}", num)))
-        }
-        Layout::Builtin(Builtin::EmptyList) => {
-            ast::Expr::List(bumpalo::collections::Vec::new_in(&arena))
-        }
-        Layout::Builtin(Builtin::List(_, elem_layout)) => {
-            // Turn the (ptr, len) wrapper struct into actual ptr and len values.
-            let len = unsafe { *(ptr.offset(ptr_bytes as isize) as *const usize) };
-            let ptr = unsafe { *(ptr as *const *const libc::c_void) };
-
-            list_to_ast(arena, ptr, len, elem_layout, ptr_bytes)
-        }
-        Layout::Builtin(Builtin::EmptyStr) => ast::Expr::Str(""),
-        Layout::Builtin(Builtin::Str) => {
-            let arena_str = unsafe { *(ptr as *const &'static str) };
-
-            ast::Expr::Str(arena_str)
-        }
-        other => {
-            todo!(
-                "TODO add support for rendering pointer to {:?} in the REPL",
-                other
-            );
-        }
-    }
-}
-
-fn list_to_ast<'a>(
-    arena: &'a Bump,
-    ptr: *const libc::c_void,
-    len: usize,
-    elem_layout: &Layout<'a>,
-    ptr_bytes: u32,
-) -> ast::Expr<'a> {
-    let mut output = bumpalo::collections::Vec::with_capacity_in(len, &arena);
-    let elem_size = elem_layout.stack_size(ptr_bytes);
-
-    for index in 0..(len as isize) {
-        let offset_bytes: isize = index * elem_size as isize;
-        let elem_ptr = unsafe { ptr.offset(offset_bytes) };
-        let loc_expr = &*arena.alloc(Located {
-            value: ptr_to_ast(arena, elem_ptr, elem_layout, ptr_bytes),
-            region: Region::zero(),
-        });
-
-        output.push(loc_expr);
-    }
-
-    ast::Expr::List(output)
 }

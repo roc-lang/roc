@@ -4,11 +4,11 @@ extern crate pretty_assertions;
 mod helpers;
 
 #[cfg(test)]
-mod repl_run {
-    use crate::helpers::repl_eval;
+mod repl_eval {
+    use crate::helpers;
 
     fn expect_success(input: &str, expected: &str) {
-        let out = repl_eval(input);
+        let out = helpers::repl_eval(input);
 
         assert_eq!(&out.stderr, "");
         assert_eq!(&out.stdout, expected);
@@ -147,4 +147,98 @@ mod repl_run {
             "[ 1.1, 2.2, 3.3, 4.4, 5.5 ] : List Float",
         );
     }
+
+    #[test]
+    fn basic_1_field_i64_record() {
+        // Even though this gets unwrapped at runtime, the repl should still
+        // report it as a record
+        expect_success("{ foo: 42 }", "{ foo: 42 } : { foo : Num * }");
+    }
+
+    #[test]
+    fn basic_1_field_f64_record() {
+        // Even though this gets unwrapped at runtime, the repl should still
+        // report it as a record
+        expect_success("{ foo: 4.2 }", "{ foo: 4.2 } : { foo : Float }");
+    }
+
+    #[test]
+    fn nested_1_field_i64_record() {
+        // Even though this gets unwrapped at runtime, the repl should still
+        // report it as a record
+        expect_success(
+            "{ foo: { bar: { baz: 42 } } }",
+            "{ foo: { bar: { baz: 42 } } } : { foo : { bar : { baz : Num * } } }",
+        );
+    }
+
+    #[test]
+    fn nested_1_field_f64_record() {
+        // Even though this gets unwrapped at runtime, the repl should still
+        // report it as a record
+        expect_success(
+            "{ foo: { bar: { baz: 4.2 } } }",
+            "{ foo: { bar: { baz: 4.2 } } } : { foo : { bar : { baz : Float } } }",
+        );
+    }
+
+    #[test]
+    fn basic_2_field_i64_record() {
+        expect_success(
+            "{ foo: 0x4, bar: 0x2 }",
+            "{ bar: 2, foo: 4 } : { bar : Int, foo : Int }",
+        );
+    }
+
+    // TODO uncomment this once https://github.com/rtfeldman/roc/issues/295 is done
+    // #[test]
+    // fn basic_2_field_f64_record() {
+    //     expect_success(
+    //         "{ foo: 4.1, bar: 2.3 }",
+    //         "{ bar: 2.3, foo: 4.1 } : { bar : Float, foo : Float }",
+    //     );
+    // }
+
+    // #[test]
+    // fn basic_2_field_mixed_record() {
+    //     expect_success(
+    //         "{ foo: 4.1, bar: 2 }",
+    //         "{ bar: 2, foo: 4.1 } : { bar : Num *, foo : Float }",
+    //     );
+    // }
+
+    // TODO uncomment this once https://github.com/rtfeldman/roc/issues/295 is done
+    //
+    // #[test]
+    // fn basic_3_field_record() {
+    //     expect_success(
+    //         "{ foo: 4.1, bar: 2, baz: 0x5 }",
+    //         "{ foo: 4.1, bar: 2, baz: 0x5 } : { foo : Float, bar : Num *, baz : Int }",
+    //     );
+    // }
+
+    #[test]
+    fn list_of_1_field_records() {
+        // Even though these get unwrapped at runtime, the repl should still
+        // report them as records
+        expect_success("[ { foo: 42 } ]", "[ { foo: 42 } ] : List { foo : Num * }");
+    }
+
+    #[test]
+    fn list_of_2_field_records() {
+        expect_success(
+            "[ { foo: 4.1, bar: 2 } ]",
+            "[ { bar: 2, foo: 4.1 } ] : List { bar : Num *, foo : Float }",
+        );
+    }
+
+    // TODO uncomment this once https://github.com/rtfeldman/roc/issues/295 is done
+    //
+    // #[test]
+    // fn list_of_3_field_records() {
+    //     expect_success(
+    //         "[ { foo: 4.1, bar: 2, baz: 0x3 } ]",
+    //         "[ { foo: 4.1, bar: 2, baz: 0x3 } ] : List { foo : Float, bar : Num *, baz : Int }",
+    //     );
+    // }
 }
