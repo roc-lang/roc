@@ -1,10 +1,12 @@
+use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inkwell::execution_engine::{ExecutionEngine, JitFunction};
 use roc_collections::all::MutMap;
-use roc_module::ident::Lowercase;
-use roc_module::symbol::Symbol;
+use roc_module::ident::{Lowercase, TagName};
+use roc_module::operator::CalledVia;
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::layout::{Builtin, Layout};
-use roc_parse::ast::{self, AssignedField};
+use roc_parse::ast::{AssignedField, Expr};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 use roc_types::types::RecordField;
@@ -13,6 +15,8 @@ struct Env<'a, 'env> {
     arena: &'a Bump,
     subs: &'env Subs,
     ptr_bytes: u32,
+    interns: &'env Interns,
+    home: ModuleId,
 }
 
 /// JIT execute the given main function, and then wrap its results in an Expr
@@ -29,13 +33,17 @@ pub unsafe fn jit_to_ast<'a>(
     main_fn_name: &str,
     layout: &Layout<'a>,
     content: &Content,
+    interns: &Interns,
+    home: ModuleId,
     subs: &Subs,
     ptr_bytes: u32,
-) -> ast::Expr<'a> {
+) -> Expr<'a> {
     let env = Env {
         arena,
         subs,
         ptr_bytes,
+        home,
+        interns,
     };
 
     jit_to_ast_help(&env, execution_engine, main_fn_name, layout, content)
@@ -61,7 +69,7 @@ fn jit_to_ast_help<'a>(
     main_fn_name: &str,
     layout: &Layout<'a>,
     content: &Content,
-) -> ast::Expr<'a> {
+) -> Expr<'a> {
     match layout {
         Layout::Builtin(Builtin::Int64) => {
             jit_map!(execution_engine, main_fn_name, i64, |num| i64_to_ast(
@@ -69,7 +77,7 @@ fn jit_to_ast_help<'a>(
             ))
         }
         Layout::Builtin(Builtin::Float64) => {
-            jit_map!(execution_engine, main_fn_name, f64, |num| ast::Expr::Num(
+            jit_map!(execution_engine, main_fn_name, f64, |num| Expr::Num(
                 env.arena.alloc(format!("{}", num))
             ))
         }
@@ -77,11 +85,11 @@ fn jit_to_ast_help<'a>(
             execution_engine,
             main_fn_name,
             &'static str,
-            |string: &'static str| { ast::Expr::Str(env.arena.alloc(string)) }
+            |string: &'static str| { Expr::Str(env.arena.alloc(string)) }
         ),
         Layout::Builtin(Builtin::EmptyList) => {
             jit_map!(execution_engine, main_fn_name, &'static str, |_| {
-                ast::Expr::List(bumpalo::collections::Vec::new_in(env.arena))
+                Expr::List(Vec::new_in(env.arena))
             })
         }
         Layout::Builtin(Builtin::List(_, elem_layout)) => jit_map!(
@@ -125,21 +133,19 @@ fn ptr_to_ast<'a>(
     ptr: *const libc::c_void,
     layout: &Layout<'a>,
     content: &Content,
-) -> ast::Expr<'a> {
+) -> Expr<'a> {
     match layout {
         Layout::Builtin(Builtin::Int64) => {
             let num = unsafe { *(ptr as *const i64) };
 
-            ast::Expr::Num(env.arena.alloc(format!("{}", num)))
+            i64_to_ast(env, num, content)
         }
         Layout::Builtin(Builtin::Float64) => {
             let num = unsafe { *(ptr as *const f64) };
 
-            ast::Expr::Num(env.arena.alloc(format!("{}", num)))
+            Expr::Num(env.arena.alloc(format!("{}", num)))
         }
-        Layout::Builtin(Builtin::EmptyList) => {
-            ast::Expr::List(bumpalo::collections::Vec::new_in(env.arena))
-        }
+        Layout::Builtin(Builtin::EmptyList) => Expr::List(Vec::new_in(env.arena)),
         Layout::Builtin(Builtin::List(_, elem_layout)) => {
             // Turn the (ptr, len) wrapper struct into actual ptr and len values.
             let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
@@ -147,11 +153,11 @@ fn ptr_to_ast<'a>(
 
             list_to_ast(env, ptr, len, elem_layout, content)
         }
-        Layout::Builtin(Builtin::EmptyStr) => ast::Expr::Str(""),
+        Layout::Builtin(Builtin::EmptyStr) => Expr::Str(""),
         Layout::Builtin(Builtin::Str) => {
             let arena_str = unsafe { *(ptr as *const &'static str) };
 
-            ast::Expr::Str(arena_str)
+            Expr::Str(arena_str)
         }
         Layout::Struct(field_layouts) => match content {
             Content::Structure(FlatType::Record(fields, _)) => {
@@ -179,7 +185,7 @@ fn list_to_ast<'a>(
     len: usize,
     elem_layout: &Layout<'a>,
     content: &Content,
-) -> ast::Expr<'a> {
+) -> Expr<'a> {
     let elem_content = match content {
         Content::Structure(FlatType::Apply(Symbol::LIST_LIST, vars)) => {
             debug_assert_eq!(vars.len(), 1);
@@ -197,7 +203,7 @@ fn list_to_ast<'a>(
     };
 
     let arena = env.arena;
-    let mut output = bumpalo::collections::Vec::with_capacity_in(len, &arena);
+    let mut output = Vec::with_capacity_in(len, &arena);
     let elem_size = elem_layout.stack_size(env.ptr_bytes);
 
     for index in 0..(len as isize) {
@@ -211,7 +217,7 @@ fn list_to_ast<'a>(
         output.push(loc_expr);
     }
 
-    ast::Expr::List(output)
+    Expr::List(output)
 }
 
 fn struct_to_ast<'a>(
@@ -219,17 +225,17 @@ fn struct_to_ast<'a>(
     ptr: *const libc::c_void,
     field_layouts: &[Layout<'a>],
     fields: &MutMap<Lowercase, RecordField<Variable>>,
-) -> ast::Expr<'a> {
+) -> Expr<'a> {
     let arena = env.arena;
     let subs = env.subs;
-    let mut output = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), &arena);
+    let mut output = Vec::with_capacity_in(field_layouts.len(), &arena);
     let mut field_ptr = ptr;
 
     // The fields, sorted alphabetically
     let sorted_fields = {
         let mut vec = fields
             .iter()
-            .collect::<Vec<(&Lowercase, &RecordField<Variable>)>>();
+            .collect::<std::vec::Vec<(&Lowercase, &RecordField<Variable>)>>();
 
         vec.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
 
@@ -260,13 +266,13 @@ fn struct_to_ast<'a>(
         field_ptr = unsafe { ptr.offset(field_layout.stack_size(env.ptr_bytes) as isize) };
     }
 
-    ast::Expr::Record {
+    Expr::Record {
         update: None,
         fields: output,
     }
 }
 
-fn i64_to_ast<'a>(env: &Env<'a, '_>, num: i64, content: &Content) -> ast::Expr<'a> {
+fn i64_to_ast<'a>(env: &Env<'a, '_>, num: i64, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -274,11 +280,8 @@ fn i64_to_ast<'a>(env: &Env<'a, '_>, num: i64, content: &Content) -> ast::Expr<'
     match content {
         Structure(flat_type) => {
             match flat_type {
-                FlatType::Apply(Symbol::NUM_NUM, vars) => {
-                    // TODO verify the vars
-                    ast::Expr::Num(arena.alloc(format!("{}", num)))
-                }
-                FlatType::Record(fields, var) => {
+                FlatType::Apply(Symbol::NUM_NUM, vars) => i64_to_num_expr(arena, num),
+                FlatType::Record(fields, _) => {
                     // This was a single-field record that got unwrapped at runtime.
                     // Even if it was an i64 at runtime, we still need to report
                     // it as a record with the correct field name!
@@ -290,38 +293,92 @@ fn i64_to_ast<'a>(env: &Env<'a, '_>, num: i64, content: &Content) -> ast::Expr<'
                         value: &*arena.alloc_str(label.as_str()),
                         region: Region::zero(),
                     };
-                    let loc_expr = Located {
-                        value: ast::Expr::Num(arena.alloc(format!("{}", num))),
-                        region: Region::zero(),
+
+                    let assigned_field = {
+                        // We may be multiple levels deep in nested tag unions
+                        // and/or records (e.g. { a: { b: { c: 5 }  } }),
+                        // so we need to do this recursively on the field type.
+                        let field_var = *field.as_inner();
+                        let field_content = env.subs.get_without_compacting(field_var).content;
+                        let loc_expr = Located {
+                            value: i64_to_ast(env, num, &field_content),
+                            region: Region::zero(),
+                        };
+
+                        AssignedField::RequiredValue(loc_label, &[], arena.alloc(loc_expr))
                     };
-                    let assigned_field =
-                        AssignedField::RequiredValue(loc_label, &[], arena.alloc(loc_expr));
                     let loc_assigned_field = Located {
                         value: assigned_field,
                         region: Region::zero(),
                     };
 
-                    // TODO recurse on the var
-                    ast::Expr::Record {
+                    Expr::Record {
                         update: None,
                         fields: bumpalo::vec![in arena; loc_assigned_field],
                     }
                 }
-                FlatType::TagUnion(tags, var) => {
+                FlatType::TagUnion(tags, _) => {
                     // This was a single-tag union that got unwrapped at runtime.
                     debug_assert_eq!(tags.len(), 1);
-                    panic!("TODO tags");
+
+                    let (tag_name, payload_vars) = tags.iter().next().unwrap();
+
+                    // If this tag union represents a number, skip right to
+                    // returning tis as an Expr::Num
+                    if let TagName::Private(Symbol::NUM_AT_NUM) = &tag_name {
+                        return i64_to_num_expr(arena, num);
+                    }
+
+                    let loc_tag_expr = {
+                        let tag_name = &tag_name.as_string(env.interns, env.home);
+                        let tag_expr = if tag_name.starts_with("@") {
+                            Expr::PrivateTag(arena.alloc_str(tag_name))
+                        } else {
+                            Expr::GlobalTag(arena.alloc_str(tag_name))
+                        };
+
+                        &*arena.alloc(Located {
+                            value: tag_expr,
+                            region: Region::zero(),
+                        })
+                    };
+
+                    let payload = {
+                        // Since this has the layout of a number, there should be
+                        // exactly one payload in this tag.
+                        debug_assert_eq!(payload_vars.len(), 1);
+
+                        let var = *payload_vars.iter().next().unwrap();
+                        let content = env.subs.get_without_compacting(var).content;
+
+                        let loc_payload = &*arena.alloc(Located {
+                            value: i64_to_ast(env, num, &content),
+                            region: Region::zero(),
+                        });
+
+                        bumpalo::vec![in arena; loc_payload]
+                    };
+
+                    Expr::Apply(loc_tag_expr, payload, CalledVia::Space)
                 }
                 other => {
                     panic!("Unexpected FlatType {:?} in i64_to_ast", other);
                 }
             }
         }
-        Alias(symbol, _, _) => {
-            panic!("TODO alias");
+        Alias(_, _, var) => {
+            let content = env.subs.get_without_compacting(*var).content;
+
+            i64_to_ast(env, num, &content)
         }
         other => {
             panic!("Unexpected FlatType {:?} in i64_to_ast", other);
         }
     }
+}
+
+/// This is centralized in case we want to format it differently later,
+/// e.g. adding underscores for large numbers
+fn i64_to_num_expr<'a>(arena: &'a Bump, num: i64) -> Expr<'a> {
+    Expr::Num(arena.alloc(format!("{}", num)))
 }

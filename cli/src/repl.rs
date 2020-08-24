@@ -5,7 +5,6 @@ use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_builtins::unique::uniq_stdlib;
 use roc_can::constraint::Constraint;
-use roc_can::env::Env;
 use roc_can::expected::Expected;
 use roc_can::expr::{canonicalize_expr, Expr, Output};
 use roc_can::operator;
@@ -368,6 +367,8 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
                 main_fn_name,
                 &main_ret_layout,
                 &content,
+                &env.interns,
+                home,
                 &subs,
                 ptr_bytes,
             )
@@ -568,7 +569,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_bytes: &[u8]) -> Result<
 
     let mut scope = Scope::new(home);
     let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(home, dep_idents, &module_ids, IdentIds::default());
+    let mut env = roc_can::env::Env::new(home, dep_idents, &module_ids, IdentIds::default());
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,
