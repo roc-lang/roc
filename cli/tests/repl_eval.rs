@@ -183,7 +183,23 @@ mod repl_eval {
     }
 
     #[test]
-    fn basic_2_field_record() {
+    fn basic_2_field_i64_record() {
+        expect_success(
+            "{ foo: 0x4, bar: 0x2 }",
+            "{ bar: 2, foo: 4 } : { bar : Int, foo : Int }",
+        );
+    }
+
+    #[test]
+    fn basic_2_field_f64_record() {
+        expect_success(
+            "{ foo: 4.1, bar: 2.3 }",
+            "{ bar: 2.3, foo: 4.1 } : { bar : Float, foo : Float }",
+        );
+    }
+
+    #[test]
+    fn basic_2_field_mixed_record() {
         expect_success(
             "{ foo: 4.1, bar: 2 }",
             "{ bar: 2, foo: 4.1 } : { bar : Num *, foo : Float }",
