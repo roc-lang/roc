@@ -179,7 +179,40 @@ mod gen_list {
             &[true, true, false, true, true],
             &'static [bool]
         );
-        // assert_evals_to!("List.map [] (\\a -> a)", &[], &'static [i64]);
+
+        // assert_evals_to!(
+        //     indoc!(
+        //         r#"
+        //             main = \{} ->
+        //                 nonEmpty : List Int
+        //                 nonEmpty =
+        //                     [ 1, 1, -4, 1, 2 ]
+        //
+        //                 greaterThanOne : Int -> Bool
+        //                 greaterThanOne i =
+        //                     i > 0
+        //
+        //                 List.map nonEmpty greaterThanOne
+        //
+        //             main {}
+        //         "#
+        //     ),
+        //     &[true, true, false, true, true],
+        //     &'static [bool]
+        // );
+
+        // assert_evals_to!(
+        //     indoc!(
+        //         r#"
+        //             main = \{} ->
+        //                 List.map [] (\x -> x > 0)
+        //
+        //             main {}
+        //         "#
+        //     ),
+        //     &[],
+        //     &'static [bool]
+        // );
     }
 
     #[test]
