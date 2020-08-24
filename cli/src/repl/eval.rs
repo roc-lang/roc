@@ -72,13 +72,17 @@ fn jit_to_ast_help<'a>(
 ) -> Expr<'a> {
     match layout {
         Layout::Builtin(Builtin::Int64) => {
-            jit_map!(execution_engine, main_fn_name, i64, |num| i64_to_ast(
-                env, num, content
+            jit_map!(execution_engine, main_fn_name, i64, |num| num_to_ast(
+                env,
+                i64_to_ast(env.arena, num),
+                content
             ))
         }
         Layout::Builtin(Builtin::Float64) => {
-            jit_map!(execution_engine, main_fn_name, f64, |num| Expr::Num(
-                env.arena.alloc(format!("{}", num))
+            jit_map!(execution_engine, main_fn_name, f64, |num| num_to_ast(
+                env,
+                f64_to_ast(env.arena, num),
+                content
             ))
         }
         Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => jit_map!(
@@ -138,12 +142,12 @@ fn ptr_to_ast<'a>(
         Layout::Builtin(Builtin::Int64) => {
             let num = unsafe { *(ptr as *const i64) };
 
-            i64_to_ast(env, num, content)
+            num_to_ast(env, i64_to_ast(env.arena, num), content)
         }
         Layout::Builtin(Builtin::Float64) => {
             let num = unsafe { *(ptr as *const f64) };
 
-            Expr::Num(env.arena.alloc(format!("{}", num)))
+            num_to_ast(env, f64_to_ast(env.arena, num), content)
         }
         Layout::Builtin(Builtin::EmptyList) => Expr::List(Vec::new_in(env.arena)),
         Layout::Builtin(Builtin::List(_, elem_layout)) => {
@@ -272,7 +276,7 @@ fn struct_to_ast<'a>(
     }
 }
 
-fn i64_to_ast<'a>(env: &Env<'a, '_>, num: i64, content: &Content) -> Expr<'a> {
+fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -280,7 +284,7 @@ fn i64_to_ast<'a>(env: &Env<'a, '_>, num: i64, content: &Content) -> Expr<'a> {
     match content {
         Structure(flat_type) => {
             match flat_type {
-                FlatType::Apply(Symbol::NUM_NUM, vars) => i64_to_num_expr(arena, num),
+                FlatType::Apply(Symbol::NUM_NUM, _) => num_expr,
                 FlatType::Record(fields, _) => {
                     // This was a single-field record that got unwrapped at runtime.
                     // Even if it was an i64 at runtime, we still need to report
@@ -301,7 +305,7 @@ fn i64_to_ast<'a>(env: &Env<'a, '_>, num: i64, content: &Content) -> Expr<'a> {
                         let field_var = *field.as_inner();
                         let field_content = env.subs.get_without_compacting(field_var).content;
                         let loc_expr = Located {
-                            value: i64_to_ast(env, num, &field_content),
+                            value: num_to_ast(env, num_expr, &field_content),
                             region: Region::zero(),
                         };
 
@@ -326,7 +330,7 @@ fn i64_to_ast<'a>(env: &Env<'a, '_>, num: i64, content: &Content) -> Expr<'a> {
                     // If this tag union represents a number, skip right to
                     // returning tis as an Expr::Num
                     if let TagName::Private(Symbol::NUM_AT_NUM) = &tag_name {
-                        return i64_to_num_expr(arena, num);
+                        return num_expr;
                     }
 
                     let loc_tag_expr = {
@@ -352,7 +356,7 @@ fn i64_to_ast<'a>(env: &Env<'a, '_>, num: i64, content: &Content) -> Expr<'a> {
                         let content = env.subs.get_without_compacting(var).content;
 
                         let loc_payload = &*arena.alloc(Located {
-                            value: i64_to_ast(env, num, &content),
+                            value: num_to_ast(env, num_expr, &content),
                             region: Region::zero(),
                         });
 
@@ -362,23 +366,29 @@ fn i64_to_ast<'a>(env: &Env<'a, '_>, num: i64, content: &Content) -> Expr<'a> {
                     Expr::Apply(loc_tag_expr, payload, CalledVia::Space)
                 }
                 other => {
-                    panic!("Unexpected FlatType {:?} in i64_to_ast", other);
+                    panic!("Unexpected FlatType {:?} in num_to_ast", other);
                 }
             }
         }
         Alias(_, _, var) => {
             let content = env.subs.get_without_compacting(*var).content;
 
-            i64_to_ast(env, num, &content)
+            num_to_ast(env, num_expr, &content)
         }
         other => {
-            panic!("Unexpected FlatType {:?} in i64_to_ast", other);
+            panic!("Unexpected FlatType {:?} in num_to_ast", other);
         }
     }
 }
 
 /// This is centralized in case we want to format it differently later,
 /// e.g. adding underscores for large numbers
-fn i64_to_num_expr<'a>(arena: &'a Bump, num: i64) -> Expr<'a> {
+fn i64_to_ast<'a>(arena: &'a Bump, num: i64) -> Expr<'a> {
+    Expr::Num(arena.alloc(format!("{}", num)))
+}
+
+/// This is centralized in case we want to format it differently later,
+/// e.g. adding underscores for large numbers
+fn f64_to_ast<'a>(arena: &'a Bump, num: f64) -> Expr<'a> {
     Expr::Num(arena.alloc(format!("{}", num)))
 }
