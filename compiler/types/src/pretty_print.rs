@@ -427,7 +427,7 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                         subs.get_without_compacting(var).content,
                         subs,
                         buf,
-                        parens,
+                        Parens::Unnecessary,
                     );
                 }
 
