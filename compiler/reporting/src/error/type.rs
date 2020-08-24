@@ -2302,9 +2302,9 @@ fn type_problem_to_pretty<'b>(
         TagTypo(typo, possibilities_tn) => {
             let possibilities = possibilities_tn
                 .into_iter()
-                .map(|tag_name| tag_name.into_string(alloc.interns, alloc.home))
+                .map(|tag_name| tag_name.as_string(alloc.interns, alloc.home))
                 .collect();
-            let typo_str = format!("{}", typo.into_string(alloc.interns, alloc.home));
+            let typo_str = format!("{}", typo.as_string(alloc.interns, alloc.home));
             let suggestions = suggest::sort(&typo_str, possibilities);
 
             match suggestions.get(0) {
