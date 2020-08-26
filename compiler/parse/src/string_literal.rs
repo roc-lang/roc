@@ -41,43 +41,47 @@ pub fn parse<'a>() -> impl Parser<'a, StringLiteral<'a>> {
             parsed_chars += 1;
 
             // Potentially end the string (unless this is an escaped `"`!)
-            if byte == b'"' && prev_byte != b'\\' {
-                let (string, state) = if parsed_chars == 2 {
-                    match bytes.next() {
-                        Some(byte) if *byte == b'"' => {
-                            // If the first three chars were all `"`, then this
-                            // literal begins with `"""` and is a block string.
-                            return parse_block_string(arena, state, &mut bytes);
+            match byte {
+                b'"' if prev_byte != b'\\' => {
+                    let (string, state) = if parsed_chars == 2 {
+                        match bytes.next() {
+                            Some(b'"') => {
+                                // If the first three chars were all `"`, then this
+                                // literal begins with `"""` and is a block string.
+                                return parse_block_string(arena, state, &mut bytes);
+                            }
+                            _ => ("", state.advance_without_indenting(2)?),
                         }
-                        _ => ("", state.advance_without_indenting(2)?),
-                    }
-                } else {
-                    // Start at 1 so we omit the opening `"`.
-                    // Subtract 1 from parsed_chars so we omit the closing `"`.
-                    let string_bytes = &state.bytes[1..(parsed_chars - 1)];
+                    } else {
+                        // Start at 1 so we omit the opening `"`.
+                        // Subtract 1 from parsed_chars so we omit the closing `"`.
+                        let string_bytes = &state.bytes[1..(parsed_chars - 1)];
 
-                    match parse_utf8(string_bytes) {
-                        Ok(string) => (string, state.advance_without_indenting(parsed_chars)?),
-                        Err(reason) => {
-                            return state.fail(reason);
+                        match parse_utf8(string_bytes) {
+                            Ok(string) => (string, state.advance_without_indenting(parsed_chars)?),
+                            Err(reason) => {
+                                return state.fail(reason);
+                            }
                         }
-                    }
-                };
+                    };
 
-                return Ok((StringLiteral::Line(string), state));
-            } else if byte == b'\n' {
-                // This is a single-line string, which cannot have newlines!
-                // Treat this as an unclosed string literal, and consume
-                // all remaining chars. This will mask all other errors, but
-                // it should make it easiest to debug; the file will be a giant
-                // error starting from where the open quote appeared.
-                return Err(unexpected(
-                    state.bytes.len() - 1,
-                    state,
-                    Attempting::StringLiteral,
-                ));
-            } else {
-                prev_byte = byte;
+                    return Ok((StringLiteral::Line(string), state));
+                }
+                b'\n' => {
+                    // This is a single-line string, which cannot have newlines!
+                    // Treat this as an unclosed string literal, and consume
+                    // all remaining chars. This will mask all other errors, but
+                    // it should make it easiest to debug; the file will be a giant
+                    // error starting from where the open quote appeared.
+                    return Err(unexpected(
+                        state.bytes.len() - 1,
+                        state,
+                        Attempting::StringLiteral,
+                    ));
+                }
+                _ => {
+                    prev_byte = byte;
+                }
             }
         }
 
@@ -112,42 +116,46 @@ where
         parsed_chars += 1;
 
         // Potentially end the string (unless this is an escaped `"`!)
-        if *byte == b'"' && prev_byte != b'\\' {
-            if quotes_seen == 2 {
-                // three consecutive qoutes, end string
+        match byte {
+            b'"' if prev_byte != b'\\' => {
+                if quotes_seen == 2 {
+                    // three consecutive qoutes, end string
 
-                // Subtract 3 from parsed_chars so we omit the closing `"`.
-                let line_bytes = &state.bytes[line_start..(parsed_chars - 3)];
+                    // Subtract 3 from parsed_chars so we omit the closing `"`.
+                    let line_bytes = &state.bytes[line_start..(parsed_chars - 3)];
 
-                return match parse_utf8(line_bytes) {
+                    return match parse_utf8(line_bytes) {
+                        Ok(line) => {
+                            let state = state.advance_without_indenting(parsed_chars)?;
+
+                            lines.push(line);
+
+                            Ok((StringLiteral::Block(arena.alloc(lines)), state))
+                        }
+                        Err(reason) => state.fail(reason),
+                    };
+                }
+                quotes_seen += 1;
+            }
+            b'\n' => {
+                // note this includes the newline
+                let line_bytes = &state.bytes[line_start..parsed_chars];
+
+                match parse_utf8(line_bytes) {
                     Ok(line) => {
-                        let state = state.advance_without_indenting(parsed_chars)?;
-
                         lines.push(line);
 
-                        Ok((StringLiteral::Block(arena.alloc(lines)), state))
+                        quotes_seen = 0;
+                        line_start = parsed_chars;
                     }
-                    Err(reason) => state.fail(reason),
-                };
-            }
-            quotes_seen += 1;
-        } else if *byte == b'\n' {
-            // note this includes the newline
-            let line_bytes = &state.bytes[line_start..parsed_chars];
-
-            match parse_utf8(line_bytes) {
-                Ok(line) => {
-                    lines.push(line);
-
-                    quotes_seen = 0;
-                    line_start = parsed_chars;
-                }
-                Err(reason) => {
-                    return state.fail(reason);
+                    Err(reason) => {
+                        return state.fail(reason);
+                    }
                 }
             }
-        } else {
-            quotes_seen = 0;
+            _ => {
+                quotes_seen = 0;
+            }
         }
 
         prev_byte = *byte;
