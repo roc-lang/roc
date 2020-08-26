@@ -898,6 +898,23 @@ pub fn list_map<'a, 'ctx, 'env>(
                                 builder.build_in_bounds_gep(list_ptr, &[index], "load_index")
                             };
 
+                            let before_elem =
+                                builder.build_load(before_elem_ptr, "get_before_elem");
+
+                            let call_site_value = builder.build_call(
+                                func_ptr,
+                                env.arena.alloc([before_elem]),
+                                "map_func",
+                            );
+
+                            // set the calling convention explicitly for this call
+                            call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
+
+                            let after_elem = call_site_value
+                                .try_as_basic_value()
+                                .left()
+                                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
+
                             // The pointer to the element in the mapped-over list
                             let after_elem_ptr = unsafe {
                                 builder.build_in_bounds_gep(
@@ -906,15 +923,6 @@ pub fn list_map<'a, 'ctx, 'env>(
                                     "load_index_after_list",
                                 )
                             };
-
-                            let before_elem =
-                                builder.build_load(before_elem_ptr, "get_before_elem");
-
-                            let after_elem = builder
-                                .build_call(func_ptr, &[before_elem], "map_func")
-                                .try_as_basic_value()
-                                .left()
-                                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
 
                             // Mutate the new array in-place to change the element.
                             builder.build_store(after_elem_ptr, after_elem);
