@@ -15,6 +15,7 @@ pub enum LowLevel {
     ListAppend,
     ListPrepend,
     ListJoin,
+    ListMap,
     NumAdd,
     NumSub,
     NumMul,

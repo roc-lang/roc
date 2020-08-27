@@ -56,7 +56,7 @@ pub fn infer_borrow<'a>(
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-enum Key {
+pub enum Key {
     Declaration(Symbol),
     JoinPoint(JoinPointId),
 }
@@ -64,6 +64,24 @@ enum Key {
 #[derive(Debug, Clone, Default)]
 pub struct ParamMap<'a> {
     items: MutMap<Key, &'a [Param<'a>]>,
+}
+
+impl<'a> IntoIterator for ParamMap<'a> {
+    type Item = (Key, &'a [Param<'a>]);
+    type IntoIter = <std::collections::HashMap<Key, &'a [Param<'a>]> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a ParamMap<'a> {
+    type Item = (&'a Key, &'a &'a [Param<'a>]);
+    type IntoIter = <&'a std::collections::HashMap<Key, &'a [Param<'a>]> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter()
+    }
 }
 
 impl<'a> ParamMap<'a> {
@@ -486,6 +504,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListAppend => arena.alloc_slice_copy(&[owned, owned]),
         ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
         ListJoin => arena.alloc_slice_copy(&[irrelevant]),
+        ListMap => arena.alloc_slice_copy(&[owned, borrowed]),
 
         Eq | NotEq | And | Or | NumAdd | NumSub | NumMul | NumGt | NumGte | NumLt | NumLte
         | NumDivUnchecked | NumRemUnchecked => arena.alloc_slice_copy(&[irrelevant, irrelevant]),

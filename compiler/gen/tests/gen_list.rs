@@ -92,6 +92,122 @@ mod gen_list {
     }
 
     #[test]
+    fn list_map() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    main = \{} ->
+                        empty : List Int
+                        empty =
+                            []
+
+                        List.map empty (\x -> x)
+                    main {}
+                "#
+            ),
+            &[],
+            &'static [i64]
+        );
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    main = \{} ->
+                        nonEmpty : List Int
+                        nonEmpty =
+                            [ 1 ]
+
+                        List.map nonEmpty (\x -> x)
+                    main {}
+                "#
+            ),
+            &[1],
+            &'static [i64]
+        );
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    main = \{} ->
+                        nonEmpty : List Int
+                        nonEmpty =
+                            [ 1 ]
+
+                        List.map nonEmpty (\x -> x + 1)
+                    main {}
+                "#
+            ),
+            &[2],
+            &'static [i64]
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    main = \{} ->
+                        nonEmpty : List Int
+                        nonEmpty =
+                            [ 1, 2, 3, 4, 5 ]
+                        List.map nonEmpty (\x -> x * 2)
+                    main {}
+                "#
+            ),
+            &[2, 4, 6, 8, 10],
+            &'static [i64]
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    main = \{} ->
+                        nonEmpty : List Int
+                        nonEmpty =
+                            [ 1, 1, -4, 1, 2 ]
+        
+            
+                        List.map nonEmpty (\x -> x > 0)
+                    
+                    main {}
+                "#
+            ),
+            &[true, true, false, true, true],
+            &'static [bool]
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                     main = \{} ->
+                         nonEmpty : List Int
+                         nonEmpty =
+                             [ 1, 1, -4, 1, 2 ]
+        
+                         greaterThanOne : Int -> Bool
+                         greaterThanOne = \i ->
+                             i > 0
+        
+                         List.map nonEmpty greaterThanOne
+        
+                     main {}
+                 "#
+            ),
+            &[true, true, false, true, true],
+            &'static [bool]
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    main = \{} ->
+                        List.map [] (\x -> x > 0)
+        
+                    main {}
+                "#
+            ),
+            &[],
+            &'static [bool]
+        );
+    }
+
+    #[test]
     fn list_join() {
         assert_evals_to!("List.join []", &[], &'static [i64]);
         assert_evals_to!("List.join [ [1, 2, 3 ] ]", &[1, 2, 3], &'static [i64]);

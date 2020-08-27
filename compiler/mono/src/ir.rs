@@ -362,6 +362,89 @@ impl<'a> Procs<'a> {
             None => unreachable!("insert_exposed was called after the pending specializations phase had already completed!"),
         }
     }
+
+    /// TODO
+    pub fn insert_passed_by_name(
+        &mut self,
+        env: &mut Env<'a, '_>,
+        fn_var: Variable,
+        name: Symbol,
+        layout: Layout<'a>,
+        layout_cache: &mut LayoutCache<'a>,
+    ) {
+        let tuple = (name, layout);
+
+        // If we've already specialized this one, no further work is needed.
+        if self.specialized.contains_key(&tuple) {
+            return;
+        }
+
+        // We're done with that tuple, so move layout back out to avoid cloning it.
+        let (name, layout) = tuple;
+
+        // now we have to pull some tricks to extract the return var and pattern vars from Subs
+        match get_args_ret_var(env.subs, fn_var) {
+            Some((pattern_vars, ret_var)) => {
+                let pattern_vars = Vec::from_iter_in(pattern_vars.into_iter(), env.arena);
+                let pending = PendingSpecialization {
+                    pattern_vars,
+                    ret_var,
+                    fn_var,
+                };
+
+                // This should only be called when pending_specializations is Some.
+                // Otherwise, it's being called in the wrong pass!
+                match &mut self.pending_specializations {
+                    Some(pending_specializations) => {
+                        // register the pending specialization, so this gets code genned later
+                        add_pending(pending_specializations, name, layout, pending)
+                    }
+                    None => {
+                        let symbol = name;
+
+                        // TODO should pending_procs hold a Rc<Proc>?
+                        let partial_proc = self.partial_procs.get(&symbol).unwrap().clone();
+
+                        // Mark this proc as in-progress, so if we're dealing with
+                        // mutually recursive functions, we don't loop forever.
+                        // (We had a bug around this before this system existed!)
+                        self.specialized
+                            .insert((symbol, layout.clone()), InProgress);
+
+                        match specialize(env, self, symbol, layout_cache, pending, partial_proc) {
+                            Ok(proc) => {
+                                self.specialized
+                                    .insert((symbol, layout.clone()), Done(proc));
+                            }
+                            Err(error) => {
+                                let error_msg =
+                                    format!("TODO generate a RuntimeError message for {:?}", error);
+                                self.runtime_errors
+                                    .insert(symbol, env.arena.alloc(error_msg));
+                            }
+                        }
+                    }
+                }
+            }
+            other => {
+                unreachable!(
+                    "trying to insert a symbol that is not a function: {:?} {:?}",
+                    name, other
+                );
+            }
+        }
+    }
+}
+
+fn get_args_ret_var(subs: &Subs, var: Variable) -> Option<(std::vec::Vec<Variable>, Variable)> {
+    match subs.get_without_compacting(var).content {
+        Content::Structure(FlatType::Func(pattern_vars, ret_var)) => Some((pattern_vars, ret_var)),
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
+            get_args_ret_var(subs, args[1])
+        }
+        Content::Alias(_, _, actual) => get_args_ret_var(subs, actual),
+        _ => None,
+    }
 }
 
 fn add_pending<'a>(
@@ -621,7 +704,9 @@ impl<'a> Expr<'a> {
         match self {
             Literal(lit) => lit.to_doc(alloc),
 
-            FunctionPointer(symbol, _) => symbol_to_doc(alloc, *symbol),
+            FunctionPointer(symbol, _) => alloc
+                .text("FunctionPointer ")
+                .append(symbol_to_doc(alloc, *symbol)),
 
             FunctionCall {
                 call_type, args, ..
@@ -1364,12 +1449,9 @@ pub fn with_hole<'a>(
                     let mut field_symbols = Vec::with_capacity_in(field_layouts.len(), env.arena);
 
                     for (_, arg) in args.iter() {
-                        if let roc_can::expr::Expr::Var(symbol) = arg.value {
-                            field_symbols.push(symbol);
-                        } else {
-                            field_symbols.push(env.unique_symbol());
-                        }
+                        field_symbols.push(possible_reuse_symbol(env, procs, &arg.value));
                     }
+                    let field_symbols = field_symbols.into_bump_slice();
 
                     // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
                     let layout = layout_cache
@@ -1379,30 +1461,10 @@ pub fn with_hole<'a>(
                         });
 
                     // even though this was originally a Tag, we treat it as a Struct from now on
-                    let mut stmt = Stmt::Let(
-                        assigned,
-                        Expr::Struct(field_symbols.clone().into_bump_slice()),
-                        layout,
-                        hole,
-                    );
+                    let stmt = Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole);
 
-                    for ((_, arg), symbol) in args.into_iter().rev().zip(field_symbols.iter().rev())
-                    {
-                        // if this argument is already a symbol, we don't need to re-define it
-                        if let roc_can::expr::Expr::Var(_) = arg.value {
-                            continue;
-                        }
-                        stmt = with_hole(
-                            env,
-                            arg.value,
-                            procs,
-                            layout_cache,
-                            *symbol,
-                            env.arena.alloc(stmt),
-                        );
-                    }
-
-                    stmt
+                    let iter = args.into_iter().rev().zip(field_symbols.iter().rev());
+                    assign_to_symbols(env, procs, layout_cache, iter, stmt)
                 }
                 Wrapped(sorted_tag_layouts) => {
                     let union_size = sorted_tag_layouts.len() as u8;
@@ -1417,11 +1479,7 @@ pub fn with_hole<'a>(
                     field_symbols.push(tag_id_symbol);
 
                     for (_, arg) in args.iter() {
-                        if let roc_can::expr::Expr::Var(symbol) = arg.value {
-                            field_symbols.push(symbol);
-                        } else {
-                            field_symbols.push(env.unique_symbol());
-                        }
+                        field_symbols.push(possible_reuse_symbol(env, procs, &arg.value));
                     }
 
                     let mut layouts: Vec<&'a [Layout<'a>]> =
@@ -1442,23 +1500,9 @@ pub fn with_hole<'a>(
                     };
 
                     let mut stmt = Stmt::Let(assigned, tag, layout, hole);
+                    let iter = args.into_iter().rev().zip(field_symbols.iter().rev());
 
-                    for ((_, arg), symbol) in args.into_iter().rev().zip(field_symbols.iter().rev())
-                    {
-                        // if this argument is already a symbol, we don't need to re-define it
-                        if let roc_can::expr::Expr::Var(_) = arg.value {
-                            continue;
-                        }
-
-                        stmt = with_hole(
-                            env,
-                            arg.value,
-                            procs,
-                            layout_cache,
-                            *symbol,
-                            env.arena.alloc(stmt),
-                        );
-                    }
+                    stmt = assign_to_symbols(env, procs, layout_cache, iter, stmt);
 
                     // define the tag id
                     stmt = Stmt::Let(
@@ -1487,16 +1531,18 @@ pub fn with_hole<'a>(
             for (label, layout) in sorted_fields.into_iter() {
                 field_layouts.push(layout);
 
+                // TODO how should function pointers be handled here?
                 match fields.remove(&label) {
-                    Some(field) => {
-                        if let roc_can::expr::Expr::Var(symbol) = field.loc_expr.value {
-                            field_symbols.push(symbol);
+                    Some(field) => match can_reuse_symbol(procs, &field.loc_expr.value) {
+                        Some(reusable) => {
+                            field_symbols.push(reusable);
                             can_fields.push(None);
-                        } else {
+                        }
+                        None => {
                             field_symbols.push(env.unique_symbol());
                             can_fields.push(Some(field));
                         }
-                    }
+                    },
                     None => {
                         // this field was optional, but not given
                         continue;
@@ -1667,11 +1713,7 @@ pub fn with_hole<'a>(
             loc_cond,
             branches,
         } => {
-            let cond_symbol = if let roc_can::expr::Expr::Var(symbol) = loc_cond.value {
-                symbol
-            } else {
-                env.unique_symbol()
-            };
+            let cond_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
 
             let id = JoinPointId(env.unique_symbol());
 
@@ -1688,18 +1730,15 @@ pub fn with_hole<'a>(
             );
 
             // define the `when` condition
-            if let roc_can::expr::Expr::Var(_) = loc_cond.value {
-                // do nothing
-            } else {
-                stmt = with_hole(
-                    env,
-                    loc_cond.value,
-                    procs,
-                    layout_cache,
-                    cond_symbol,
-                    env.arena.alloc(stmt),
-                );
-            };
+            stmt = assign_to_symbol(
+                env,
+                procs,
+                layout_cache,
+                cond_var,
+                *loc_cond,
+                cond_symbol,
+                stmt,
+            );
 
             let layout = layout_cache
                 .from_var(env.arena, expr_var, env.subs)
@@ -1732,11 +1771,7 @@ pub fn with_hole<'a>(
         } => {
             let mut arg_symbols = Vec::with_capacity_in(loc_elems.len(), env.arena);
             for arg_expr in loc_elems.iter() {
-                if let roc_can::expr::Expr::Var(symbol) = arg_expr.value {
-                    arg_symbols.push(symbol);
-                } else {
-                    arg_symbols.push(env.unique_symbol());
-                }
+                arg_symbols.push(possible_reuse_symbol(env, procs, &arg_expr.value));
             }
             let arg_symbols = arg_symbols.into_bump_slice();
 
@@ -1751,30 +1786,20 @@ pub fn with_hole<'a>(
 
             let mode = crate::layout::mode_from_var(list_var, env.subs);
 
-            let mut stmt = Stmt::Let(
+            let stmt = Stmt::Let(
                 assigned,
                 expr,
                 Layout::Builtin(Builtin::List(mode, env.arena.alloc(elem_layout))),
                 hole,
             );
 
-            for (arg_expr, symbol) in loc_elems.into_iter().rev().zip(arg_symbols.iter().rev()) {
-                // if this argument is already a symbol, we don't need to re-define it
-                if let roc_can::expr::Expr::Var(_) = arg_expr.value {
-                    continue;
-                }
+            let iter = loc_elems
+                .into_iter()
+                .rev()
+                .map(|e| (elem_var, e))
+                .zip(arg_symbols.iter().rev());
 
-                stmt = with_hole(
-                    env,
-                    arg_expr.value,
-                    procs,
-                    layout_cache,
-                    *symbol,
-                    env.arena.alloc(stmt),
-                );
-            }
-
-            stmt
+            assign_to_symbols(env, procs, layout_cache, iter, stmt)
         }
 
         Access {
@@ -1808,11 +1833,7 @@ pub fn with_hole<'a>(
                 }
             }
 
-            let record_symbol = if let roc_can::expr::Expr::Var(symbol) = loc_expr.value {
-                symbol
-            } else {
-                env.unique_symbol()
-            };
+            let record_symbol = possible_reuse_symbol(env, procs, &loc_expr.value);
 
             let expr = Expr::AccessAtIndex {
                 index: index.expect("field not in its own type") as u64,
@@ -1827,18 +1848,15 @@ pub fn with_hole<'a>(
 
             let mut stmt = Stmt::Let(assigned, expr, layout, hole);
 
-            if let roc_can::expr::Expr::Var(_) = loc_expr.value {
-                // do nothing
-            } else {
-                stmt = with_hole(
-                    env,
-                    loc_expr.value,
-                    procs,
-                    layout_cache,
-                    record_symbol,
-                    env.arena.alloc(stmt),
-                );
-            };
+            stmt = assign_to_symbol(
+                env,
+                procs,
+                layout_cache,
+                record_var,
+                *loc_expr,
+                record_symbol,
+                stmt,
+            );
 
             stmt
         }
@@ -1869,35 +1887,8 @@ pub fn with_hole<'a>(
         Call(boxed, loc_args, _) => {
             let (fn_var, loc_expr, ret_var) = *boxed;
 
-            /*
-            Var(symbol) => {
-                if procs.module_thunks.contains(&symbol) {
-                    let partial_proc = procs.partial_procs.get(&symbol).unwrap();
-                    let fn_var = partial_proc.annotation;
-                    let ret_var = fn_var; // These are the same for a thunk.
-
-                    // This is a top-level declaration, which will code gen to a 0-arity thunk.
-                    call_by_name(
-                        env,
-                        procs,
-                        fn_var,
-                        ret_var,
-                        symbol,
-                        std::vec::Vec::new(),
-                        layout_cache,
-                    )
-                } else {
-                    // NOTE Load will always increment the refcount
-                    Expr::Load(symbol)
-                }
-            }
-                */
-
             // match from_can(env, loc_expr.value, procs, layout_cache) {
             match loc_expr.value {
-                roc_can::expr::Expr::Var(proc_name) if procs.module_thunks.contains(&proc_name) => {
-                    todo!()
-                }
                 roc_can::expr::Expr::Var(proc_name) => call_by_name(
                     env,
                     procs,
@@ -1993,11 +1984,7 @@ pub fn with_hole<'a>(
             let mut arg_symbols = Vec::with_capacity_in(args.len(), env.arena);
 
             for (_, arg_expr) in args.iter() {
-                if let roc_can::expr::Expr::Var(symbol) = arg_expr {
-                    arg_symbols.push(*symbol);
-                } else {
-                    arg_symbols.push(env.unique_symbol());
-                }
+                arg_symbols.push(possible_reuse_symbol(env, procs, &arg_expr));
             }
             let arg_symbols = arg_symbols.into_bump_slice();
 
@@ -2006,27 +1993,14 @@ pub fn with_hole<'a>(
                 .from_var(env.arena, ret_var, env.subs)
                 .unwrap_or_else(|err| todo!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-            let mut result = Stmt::Let(assigned, Expr::RunLowLevel(op, arg_symbols), layout, hole);
+            let result = Stmt::Let(assigned, Expr::RunLowLevel(op, arg_symbols), layout, hole);
 
-            for ((_arg_var, arg_expr), symbol) in
-                args.into_iter().rev().zip(arg_symbols.iter().rev())
-            {
-                // if this argument is already a symbol, we don't need to re-define it
-                if let roc_can::expr::Expr::Var(_) = arg_expr {
-                    continue;
-                }
-
-                result = with_hole(
-                    env,
-                    arg_expr,
-                    procs,
-                    layout_cache,
-                    *symbol,
-                    env.arena.alloc(result),
-                );
-            }
-
-            result
+            let iter = args
+                .into_iter()
+                .rev()
+                .map(|(a, b)| (a, Located::at_zero(b)))
+                .zip(arg_symbols.iter().rev());
+            assign_to_symbols(env, procs, layout_cache, iter, result)
         }
         RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
     }
@@ -2048,13 +2022,9 @@ pub fn from_can<'a>(
             loc_cond,
             branches,
         } => {
-            let cond_symbol = if let roc_can::expr::Expr::Var(symbol) = loc_cond.value {
-                symbol
-            } else {
-                env.unique_symbol()
-            };
+            let cond_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
 
-            let mut stmt = from_can_when(
+            let stmt = from_can_when(
                 env,
                 cond_var,
                 expr_var,
@@ -2067,20 +2037,15 @@ pub fn from_can<'a>(
             );
 
             // define the `when` condition
-            if let roc_can::expr::Expr::Var(_) = loc_cond.value {
-                // do nothing
-            } else {
-                stmt = with_hole(
-                    env,
-                    loc_cond.value,
-                    procs,
-                    layout_cache,
-                    cond_symbol,
-                    env.arena.alloc(stmt),
-                );
-            };
-
-            stmt
+            assign_to_symbol(
+                env,
+                procs,
+                layout_cache,
+                cond_var,
+                *loc_cond,
+                cond_symbol,
+                stmt,
+            )
         }
         If {
             cond_var,
@@ -2978,6 +2943,88 @@ fn store_record_destruct<'a>(
     Ok(stmt)
 }
 
+/// We want to re-use symbols that are not function symbols
+/// for any other expression, we create a new symbol, and will
+/// later make sure it gets assigned the correct value.
+fn can_reuse_symbol<'a>(procs: &Procs<'a>, expr: &roc_can::expr::Expr) -> Option<Symbol> {
+    if let roc_can::expr::Expr::Var(symbol) = expr {
+        if procs.partial_procs.contains_key(&symbol) {
+            None
+        } else {
+            Some(*symbol)
+        }
+    } else {
+        None
+    }
+}
+
+fn possible_reuse_symbol<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &Procs<'a>,
+    expr: &roc_can::expr::Expr,
+) -> Symbol {
+    match can_reuse_symbol(procs, expr) {
+        Some(s) => s,
+        None => env.unique_symbol(),
+    }
+}
+
+fn assign_to_symbol<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    arg_var: Variable,
+    loc_arg: Located<roc_can::expr::Expr>,
+    symbol: Symbol,
+    result: Stmt<'a>,
+) -> Stmt<'a> {
+    // if this argument is already a symbol, we don't need to re-define it
+    if let roc_can::expr::Expr::Var(original) = loc_arg.value {
+        if procs.partial_procs.contains_key(&original) {
+            // this symbol is a function, that is used by-name (e.g. as an argument to another
+            // function). Register it with the current variable, then create a function pointer
+            // to it in the IR.
+            let layout = layout_cache
+                .from_var(env.arena, arg_var, env.subs)
+                .expect("creating layout does not fail");
+            procs.insert_passed_by_name(env, arg_var, original, layout.clone(), layout_cache);
+
+            return Stmt::Let(
+                symbol,
+                Expr::FunctionPointer(original, layout.clone()),
+                layout,
+                env.arena.alloc(result),
+            );
+        }
+        return result;
+    }
+    with_hole(
+        env,
+        loc_arg.value,
+        procs,
+        layout_cache,
+        symbol,
+        env.arena.alloc(result),
+    )
+}
+
+fn assign_to_symbols<'a, I>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    iter: I,
+    mut result: Stmt<'a>,
+) -> Stmt<'a>
+where
+    I: Iterator<Item = ((Variable, Located<roc_can::expr::Expr>), &'a Symbol)>,
+{
+    for ((arg_var, loc_arg), symbol) in iter {
+        result = assign_to_symbol(env, procs, layout_cache, arg_var, loc_arg, *symbol, result);
+    }
+
+    result
+}
+
 #[allow(clippy::too_many_arguments)]
 fn call_by_name<'a>(
     env: &mut Env<'a, '_>,
@@ -2997,16 +3044,13 @@ fn call_by_name<'a>(
             let arena = env.arena;
             let mut pattern_vars = Vec::with_capacity_in(loc_args.len(), arena);
 
-            let mut field_symbols = Vec::with_capacity_in(loc_args.len(), env.arena);
-
-            for (_, arg_expr) in loc_args.iter() {
-                if let roc_can::expr::Expr::Var(symbol) = arg_expr.value {
-                    field_symbols.push(symbol);
-                } else {
-                    field_symbols.push(env.unique_symbol());
-                }
-            }
-            let field_symbols = field_symbols.into_bump_slice();
+            let field_symbols = Vec::from_iter_in(
+                loc_args
+                    .iter()
+                    .map(|(_, arg_expr)| possible_reuse_symbol(env, procs, &arg_expr.value)),
+                arena,
+            )
+            .into_bump_slice();
 
             for (var, _) in &loc_args {
                 match layout_cache.from_var(&env.arena, *var, &env.subs) {
@@ -3044,26 +3088,10 @@ fn call_by_name<'a>(
                     args: field_symbols,
                 };
 
-                let mut result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
+                let result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
 
-                for ((_, loc_arg), symbol) in
-                    loc_args.into_iter().rev().zip(field_symbols.iter().rev())
-                {
-                    // if this argument is already a symbol, we don't need to re-define it
-                    if let roc_can::expr::Expr::Var(_) = loc_arg.value {
-                        continue;
-                    }
-                    result = with_hole(
-                        env,
-                        loc_arg.value,
-                        procs,
-                        layout_cache,
-                        *symbol,
-                        env.arena.alloc(result),
-                    );
-                }
-
-                result
+                let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
+                assign_to_symbols(env, procs, layout_cache, iter, result)
             } else {
                 let pending = PendingSpecialization {
                     pattern_vars,
@@ -3100,26 +3128,10 @@ fn call_by_name<'a>(
                             args: field_symbols,
                         };
 
-                        let mut result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
+                        let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
 
-                        for ((_, loc_arg), symbol) in
-                            loc_args.into_iter().rev().zip(field_symbols.iter().rev())
-                        {
-                            // if this argument is already a symbol, we don't need to re-define it
-                            if let roc_can::expr::Expr::Var(_) = loc_arg.value {
-                                continue;
-                            }
-                            result = with_hole(
-                                env,
-                                loc_arg.value,
-                                procs,
-                                layout_cache,
-                                *symbol,
-                                env.arena.alloc(result),
-                            );
-                        }
-
-                        result
+                        let result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
+                        assign_to_symbols(env, procs, layout_cache, iter, result)
                     }
                     None => {
                         let opt_partial_proc = procs.partial_procs.get(&proc_name);
@@ -3157,29 +3169,15 @@ fn call_by_name<'a>(
                                             args: field_symbols,
                                         };
 
-                                        let mut result =
-                                            Stmt::Let(assigned, call, ret_layout.clone(), hole);
-
-                                        for ((_, loc_arg), symbol) in loc_args
+                                        let iter = loc_args
                                             .into_iter()
                                             .rev()
-                                            .zip(field_symbols.iter().rev())
-                                        {
-                                            // if this argument is already a symbol, we don't need to re-define it
-                                            if let roc_can::expr::Expr::Var(_) = loc_arg.value {
-                                                continue;
-                                            }
-                                            result = with_hole(
-                                                env,
-                                                loc_arg.value,
-                                                procs,
-                                                layout_cache,
-                                                *symbol,
-                                                env.arena.alloc(result),
-                                            );
-                                        }
+                                            .zip(field_symbols.iter().rev());
 
-                                        result
+                                        let result =
+                                            Stmt::Let(assigned, call, ret_layout.clone(), hole);
+
+                                        assign_to_symbols(env, procs, layout_cache, iter, result)
                                     }
                                     Err(error) => {
                                         let error_msg = env.arena.alloc(format!(

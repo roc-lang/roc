@@ -1528,4 +1528,57 @@ mod test_mono {
             ),
         )
     }
+    #[test]
+    fn list_map() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                main = \{} ->
+                    nonEmpty : List Int
+                    nonEmpty =
+                        [ 1, 1, -4, 1, 2 ]
+    
+        
+                    greaterThanOne : Int -> Bool
+                    greaterThanOne = \i ->
+                         i > 0
+    
+                    List.map nonEmpty greaterThanOne
+                
+                main {}
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure Test.0 (Test.6):
+                    let Test.15 = 1i64;
+                    let Test.16 = 1i64;
+                    let Test.17 = -4i64;
+                    let Test.18 = 1i64;
+                    let Test.19 = 2i64;
+                    let Test.2 = Array [Test.15, Test.16, Test.17, Test.18, Test.19];
+                    let Test.10 = FunctionPointer Test.3;
+                    let Test.9 = CallByName List.6 Test.2 Test.10;
+                    ret Test.9;
+
+                procedure List.6 (#Attr.2, #Attr.3):
+                    let Test.11 = lowlevel ListMap #Attr.2 #Attr.3;
+                    ret Test.11;
+
+                procedure Num.19 (#Attr.2, #Attr.3):
+                    let Test.14 = lowlevel NumGt #Attr.2 #Attr.3;
+                    ret Test.14;
+
+                procedure Test.3 (Test.5):
+                    let Test.13 = 0i64;
+                    let Test.12 = CallByName Num.19 Test.5 Test.13;
+                    ret Test.12;
+
+                let Test.8 = Struct {};
+                let Test.7 = CallByName Test.0 Test.8;
+                ret Test.7;
+                "#
+            ),
+        )
+    }
 }

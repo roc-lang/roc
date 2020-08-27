@@ -2,7 +2,7 @@ use crate::layout_id::LayoutIds;
 use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, clone_nonempty_list, empty_list, empty_polymorphic_list,
     incrementing_index_loop, list_append, list_concat, list_get_unsafe, list_is_not_empty,
-    list_join, list_len, list_prepend, list_repeat, list_reverse, list_set, list_single,
+    list_join, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set, list_single,
     load_list_ptr,
 };
 use crate::llvm::compare::{build_eq, build_neq};
@@ -46,7 +46,6 @@ pub enum OptLevel {
     Optimize,
 }
 
-// pub type Scope<'a, 'ctx> = ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>;
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>,
@@ -358,7 +357,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // If this is an external-facing function, use the C calling convention.
                 call.set_call_convention(C_CALL_CONV);
             } else {
-                // If it's an internal-only function, use the fast calling conention.
+                // If it's an internal-only function, use the fast calling convention.
                 call.set_call_convention(FAST_CALL_CONV);
             }
 
@@ -1687,6 +1686,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             let second_list = load_symbol(env, scope, &args[1]);
 
             list_concat(env, parent, first_list, second_list, list_layout)
+        }
+        ListMap => {
+            // List.map : List before, (before -> after) -> List after
+
+            let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            list_map(env, parent, func, func_layout, list, list_layout)
         }
         ListAppend => {
             // List.append : List elem, elem -> List elem
