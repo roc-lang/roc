@@ -225,7 +225,7 @@ not only will this type-check, but at the end we get a combined error type which
 has the union of all the possible errors that could have occurred in this sequence.
 We can then handle those errors using a single `when`, like so:
 
-```elm
+```coffeescript
 when error is
     # Http.Err possibilities
     PageNotFound -> ...
@@ -243,11 +243,8 @@ when error is
     DiskFull -> ...
 ```
 
-
-
-Here is a set
-of slightly different types that would make the above expression compile.
-(`after` is unchanged.)
+Here is the set of slightly different types that will make the original chained
+expression compile. (`after` is unchanged.)
 
 ```elm
 File.read : Filename -> Task File.Data (File.ReadErr *)
@@ -257,28 +254,21 @@ Http.get : Url -> Task Http.Response (Http.Err *)
 after : Task a err, (a -> Task b err) -> Task b err
 ```
 
-The key is that each of the error types expands to a Roc *tag union*. Here's how
-they look:
+The key is that each of the error types is a type alias for a Roc *tag union*.
+Here's how they look:
 
 ```elm
-Http.Err a : [PageNotFound, Timeout, BadPayload]a
-File.ReadErr a : [FileNotFound, Corrupted, BadFormat]a
-File.WriteErr a : [FileNotFound, DiskFull]a
+Http.Err a : [ PageNotFound, Timeout, BadPayload ]a
+File.ReadErr a : [ FileNotFound, Corrupted, BadFormat ]a
+File.WriteErr a : [ FileNotFound, DiskFull ]a
 ```
 
+In Elm, these would be defined as custom types (aka algebraic data types) using
+the `type` keyword. However, instead of traditional algebraic data types, Roc has
+only tags - which work more like OCaml's *polymorphic variants*, and which
+can be used in type aliases without a separate `type` keyword. (Roc has no `type` keyword.)
 
-```elm
-first : List elem -> [Ok elem, ListWasEmpty]*
-```
-
-> It's motivated primarily by error handling in chained effects
-> (e.g. multiple consecutive `Task.andThen`s between tasks with incompatible error types),
-> which doesn't really come up in Elm but often will in Roc. Explaining how
-> this improves that situation is out of scope for this document; even without
-> that explanation, this section is already the longest!
-
-Instead of traditional algebraic data types (like Elm has), Roc uses something more like
-OCaml's *polymorphic variants*. In Roc they're called *tags*. Here are some examples of using tags in a REPL:
+Here are some examples of using tags in a REPL:
 
 ```
 > True
@@ -303,7 +293,8 @@ Foo "hi" 5 : [ Foo Str Int ]*
 Foo 1 2 : [ Foo Int Int ]*
 ```
 
-Tags are different from variants in Elm in several ways.
+Tags have a lot in common with traditional algebraic data types' *variants*,
+but are different in several ways.
 
 One difference is that you can make up any tag you want, on the fly, and use it in any module,
 without declaring it first. (These cannot be used to create opaque types; we'll discuss those
