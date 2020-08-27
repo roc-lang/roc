@@ -590,7 +590,10 @@ pub enum Literal<'a> {
     // Literals
     Int(i64),
     Float(f64),
-    Str(&'a str),
+    Str {
+        interpolations: &'a [(&'a str, Symbol)],
+        suffix: &'a str,
+    },
     /// Closed tag unions containing exactly two (0-arity) tags compile to Expr::Bool,
     /// so they can (at least potentially) be emitted as 1-bit machine bools.
     ///
@@ -669,7 +672,13 @@ impl<'a> Literal<'a> {
             Float(lit) => alloc.text(format!("{}f64", lit)),
             Bool(lit) => alloc.text(format!("{}", lit)),
             Byte(lit) => alloc.text(format!("{}u8", lit)),
-            Str(lit) => alloc.text(format!("{:?}", lit)),
+            Str {
+                interpolations,
+                suffix,
+            } => {
+                // alloc.text(format!("{:?}", lit))
+                todo!("Literal::to_doc for Str");
+            }
         }
     }
 }
@@ -1242,12 +1251,18 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        Str(string) | BlockStr(string) => Stmt::Let(
-            assigned,
-            Expr::Literal(Literal::Str(arena.alloc(string))),
-            Layout::Builtin(Builtin::Str),
-            hole,
-        ),
+        Str {
+            interpolations,
+            suffix: _,
+        } => {
+            todo!("mono IR to turn Str interpolations into Let");
+            // Stmt::Let(
+            // assigned,
+            // Expr::Literal(Literal::Str(arena.alloc(string))),
+            // Layout::Builtin(Builtin::Str),
+            // hole,
+            // )
+        }
 
         Num(var, num) => match num_argument_to_int_or_float(env.subs, var) {
             IntOrFloat::IntType => Stmt::Let(

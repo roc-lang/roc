@@ -28,7 +28,6 @@ impl<'a> Formattable<'a> for Expr<'a> {
             Float(_)
             | Num(_)
             | NonBase10Int { .. }
-            | Str(_)
             | Access(_, _)
             | AccessorFunction(_)
             | Var { .. }
@@ -42,7 +41,13 @@ impl<'a> Formattable<'a> for Expr<'a> {
 
             List(elems) => elems.iter().any(|loc_expr| loc_expr.is_multiline()),
 
-            BlockStr(lines) => lines.len() > 1,
+            Str(literal) => {
+                todo!(
+                    "fmt determine if string literal is multiline: {:?}",
+                    literal
+                );
+                // lines.len() > 1
+            }
             Apply(loc_expr, args, _) => {
                 loc_expr.is_multiline() || args.iter().any(|loc_arg| loc_arg.is_multiline())
             }
@@ -112,10 +117,19 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
                 buf.push(')');
             }
-            Str(string) => {
-                buf.push('"');
-                buf.push_str(string);
-                buf.push('"');
+            Str(literal) => {
+                todo!("fmt string literal {:?}", literal);
+                // buf.push('"');
+                // buf.push_str(string);
+                // buf.push('"');
+                //
+                // BlockStr(lines) => {
+                //     buf.push_str("\"\"\"");
+                //     for line in lines.iter() {
+                //         buf.push_str(line);
+                //     }
+                //     buf.push_str("\"\"\"");
+                // }
             }
             Var { module_name, ident } => {
                 if !module_name.is_empty() {
@@ -151,13 +165,6 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 if apply_needs_parens {
                     buf.push(')');
                 }
-            }
-            BlockStr(lines) => {
-                buf.push_str("\"\"\"");
-                for line in lines.iter() {
-                    buf.push_str(line);
-                }
-                buf.push_str("\"\"\"");
             }
             Num(string) | Float(string) | GlobalTag(string) | PrivateTag(string) => {
                 buf.push_str(string)

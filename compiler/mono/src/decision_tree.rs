@@ -1095,7 +1095,10 @@ fn test_to_equality<'a>(
         }
 
         Test::IsStr(test_str) => {
-            let lhs = Expr::Literal(Literal::Str(env.arena.alloc(test_str)));
+            let lhs = Expr::Literal(Literal::Str {
+                interpolations: &[],
+                suffix: env.arena.alloc(test_str),
+            });
             let lhs_symbol = env.unique_symbol();
             let (mut stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
 

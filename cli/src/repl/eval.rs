@@ -6,7 +6,7 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::layout::{Builtin, Layout};
-use roc_parse::ast::{AssignedField, Expr};
+use roc_parse::ast::{AssignedField, Expr, StrLiteral};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 use roc_types::types::RecordField;
@@ -90,7 +90,7 @@ fn jit_to_ast_help<'a>(
             execution_engine,
             main_fn_name,
             &'static str,
-            |string: &'static str| { Expr::Str(env.arena.alloc(string)) }
+            |string: &'static str| { str_slice_to_ast(env.arena, env.arena.alloc(string)) }
         ),
         Layout::Builtin(Builtin::EmptyList) => {
             jit_map!(execution_engine, main_fn_name, &'static str, |_| {
@@ -168,11 +168,11 @@ fn ptr_to_ast<'a>(
 
             list_to_ast(env, ptr, len, elem_layout, content)
         }
-        Layout::Builtin(Builtin::EmptyStr) => Expr::Str(""),
+        Layout::Builtin(Builtin::EmptyStr) => Expr::Str(StrLiteral::PlainLine("")),
         Layout::Builtin(Builtin::Str) => {
             let arena_str = unsafe { *(ptr as *const &'static str) };
 
-            Expr::Str(arena_str)
+            str_slice_to_ast(env.arena, arena_str)
         }
         Layout::Struct(field_layouts) => match content {
             Content::Structure(FlatType::Record(fields, _)) => {
@@ -404,4 +404,11 @@ fn i64_to_ast(arena: &Bump, num: i64) -> Expr<'_> {
 /// e.g. adding underscores for large numbers
 fn f64_to_ast(arena: &Bump, num: f64) -> Expr<'_> {
     Expr::Num(arena.alloc(format!("{}", num)))
+}
+
+fn str_slice_to_ast<'a>(_arena: &'a Bump, string: &'a str) -> Expr<'a> {
+    todo!(
+        "if this string contains newlines, render it as a multiline string: {:?}",
+        Expr::Str(StrLiteral::PlainLine(string))
+    );
 }

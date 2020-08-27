@@ -1,4 +1,4 @@
-use crate::builtins::{empty_list_type, float_literal, int_literal, list_type, str_type};
+use crate::builtins::{empty_list_type, float_literal, int_literal, list_type};
 use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::Constraint::{self, *};
@@ -199,7 +199,15 @@ pub fn constrain_expr(
 
             exists(vars, And(cons))
         }
-        Str(_) | BlockStr(_) => Eq(str_type(), expected, Category::Str, region),
+        Str { interpolations, .. } => {
+            todo!(
+                "constrain interpolations in a string literal {:?}",
+                interpolations
+            );
+
+            // use crate::builtins::{empty_list_type, float_literal, int_literal, list_type, str_type};
+            // Eq(str_type(), expected, Category::Str, region)
+        }
         List {
             elem_var,
             loc_elems,

@@ -14,7 +14,7 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
-use roc_parse::ast;
+use roc_parse::ast::{self, StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Located, Region};
@@ -55,8 +55,10 @@ pub enum Expr {
     // Int and Float store a variable to generate better error messages
     Int(Variable, i64),
     Float(Variable, f64),
-    Str(Box<str>),
-    BlockStr(Box<str>),
+    Str {
+        interpolations: Vec<(Box<str>, Symbol)>,
+        suffix: Box<str>,
+    },
     List {
         list_var: Variable, // required for uniqueness of the list
         elem_var: Variable,
@@ -247,12 +249,7 @@ pub fn canonicalize_expr<'a>(
                 )
             }
         }
-        ast::Expr::Str(string) => (Str((*string).into()), Output::default()),
-        ast::Expr::BlockStr(lines) => {
-            let joined = lines.iter().copied().collect::<Vec<&str>>().join("\n");
-
-            (BlockStr(joined.into()), Output::default())
-        }
+        ast::Expr::Str(literal) => flatten_str_literal(env, scope, literal),
         ast::Expr::List(loc_elems) => {
             if loc_elems.is_empty() {
                 (
@@ -1045,8 +1042,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         other @ Num(_, _)
         | other @ Int(_, _)
         | other @ Float(_, _)
-        | other @ Str(_)
-        | other @ BlockStr(_)
+        | other @ Str { .. }
         | other @ RuntimeError(_)
         | other @ EmptyRecord
         | other @ Accessor { .. }
@@ -1322,4 +1318,79 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             }
         }
     }
+}
+
+fn flatten_str_literal(
+    env: &mut Env<'_>,
+    scope: &mut Scope,
+    literal: &StrLiteral<'_>,
+) -> (Expr, Output) {
+    use ast::StrLiteral::*;
+
+    match literal {
+        PlainLine(str_slice) => (
+            Expr::Str {
+                interpolations: Vec::new(),
+                suffix: (*str_slice).into(),
+            },
+            Output::default(),
+        ),
+        LineWithEscapes(segments) => flatten_str_lines(env, scope, &[segments]),
+        Block(lines) => flatten_str_lines(env, scope, lines),
+    }
+}
+
+fn flatten_str_lines(
+    env: &mut Env<'_>,
+    scope: &mut Scope,
+    lines: &[&[StrSegment<'_>]],
+) -> (Expr, Output) {
+    use StrSegment::*;
+
+    let mut buf = String::new();
+    let mut interpolations = Vec::new();
+    let mut output = Output::default();
+
+    for line in lines {
+        for segment in line.iter() {
+            match segment {
+                Plaintext(string) => {
+                    buf.push_str(string);
+                }
+                Unicode(loc_digits) => {
+                    todo!("parse unicode digits {:?}", loc_digits);
+                }
+                Interpolated {
+                    module_name,
+                    ident,
+                    region,
+                } => {
+                    let (expr, new_output) =
+                        canonicalize_lookup(env, scope, module_name, ident, region.clone());
+
+                    output.union(new_output);
+
+                    match expr {
+                        Expr::Var(symbol) => {
+                            interpolations.push((buf.into(), symbol));
+                        }
+                        _ => {
+                            todo!("TODO gracefully handle non-ident in string interpolation.");
+                        }
+                    }
+
+                    buf = String::new();
+                }
+                EscapedChar(ch) => buf.push(*ch),
+            }
+        }
+    }
+
+    (
+        Expr::Str {
+            interpolations,
+            suffix: buf.into(),
+        },
+        output,
+    )
 }

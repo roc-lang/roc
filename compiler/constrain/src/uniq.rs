@@ -503,14 +503,15 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        BlockStr(_) | Str(_) => {
-            let uniq_type = var_store.fresh();
-            let inferred = str_type(Bool::variable(uniq_type));
+        Str { interpolations, .. } => {
+            todo!("uniq constrain interpolations {:?}", interpolations);
+            // let uniq_type = var_store.fresh();
+            // let inferred = str_type(Bool::variable(uniq_type));
 
-            exists(
-                vec![uniq_type],
-                Eq(inferred, expected, Category::Str, region),
-            )
+            // exists(
+            //     vec![uniq_type],
+            //     Eq(inferred, expected, Category::Str, region),
+            // )
         }
         EmptyRecord => {
             let uniq_type = var_store.fresh();
