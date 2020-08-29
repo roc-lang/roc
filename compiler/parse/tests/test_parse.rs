@@ -25,8 +25,9 @@ mod test_parse {
     use roc_parse::ast::Expr::{self, *};
     use roc_parse::ast::Pattern::{self, *};
     use roc_parse::ast::StrLiteral::*;
+    use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{
-        Attempting, Def, InterfaceHeader, Spaceable, Tag, TypeAnnotation, WhenBranch,
+        self, Attempting, Def, InterfaceHeader, Spaceable, Tag, TypeAnnotation, WhenBranch,
     };
     use roc_parse::header::ModuleName;
     use roc_parse::module::{interface_header, module_defs};
@@ -47,6 +48,31 @@ mod test_parse {
         let expected_fail = Fail { reason, attempting };
 
         assert_eq!(Err(expected_fail), actual);
+    }
+
+    fn parses_with_escaped_char<
+        I: Fn(&'static str) -> String,
+        E: Fn(char, &Bump) -> Vec<'_, ast::StrSegment<'static>>,
+    >(
+        to_input: I,
+        to_expected: E,
+    ) {
+        let arena = Bump::new();
+
+        // Try parsing with each of the escaped chars Roc supports
+        for (string, ch) in &[
+            ("\\\\", '\\'),
+            ("\\n", '\n'),
+            ("\\r", '\r'),
+            ("\\t", '\t'),
+            ("\\\"", '"'),
+        ] {
+            let actual = parse_with(&arena, arena.alloc(to_input(string)));
+            let expected_slice = to_expected(*ch, &arena).into_bump_slice();
+            let expected_expr = Expr::Str(LineWithEscapes(expected_slice));
+
+            assert_eq!(Ok(expected_expr), actual);
+        }
     }
 
     // STRING LITERALS
@@ -103,12 +129,35 @@ mod test_parse {
     }
 
     #[test]
-    fn string_with_special_escapes() {
-        expect_parsed_str(r#"x\\x"#, r#""x\\x""#);
-        expect_parsed_str(r#"x\"x"#, r#""x\"x""#);
-        expect_parsed_str(r#"x\tx"#, r#""x\tx""#);
-        expect_parsed_str(r#"x\rx"#, r#""x\rx""#);
-        expect_parsed_str(r#"x\nx"#, r#""x\nx""#);
+    fn string_with_escaped_char_at_end() {
+        parses_with_escaped_char(
+            |esc| format!(r#""abcd{}""#, esc),
+            |esc, arena| bumpalo::vec![in arena;  Plaintext("abcd"), EscapedChar(esc)],
+        );
+    }
+
+    #[test]
+    fn string_with_escaped_char_in_front() {
+        parses_with_escaped_char(
+            |esc| format!(r#""{}abcd""#, esc),
+            |esc, arena| bumpalo::vec![in arena; EscapedChar(esc), Plaintext("abcd")],
+        );
+    }
+
+    #[test]
+    fn string_with_escaped_char_in_middle() {
+        parses_with_escaped_char(
+            |esc| format!(r#""ab{}cd""#, esc),
+            |esc, arena| bumpalo::vec![in arena; Plaintext("ab"), EscapedChar(esc), Plaintext("cd")],
+        );
+    }
+
+    #[test]
+    fn string_with_multiple_escaped_chars() {
+        parses_with_escaped_char(
+            |esc| format!(r#""{}abc{}de{}fghi{}""#, esc, esc, esc, esc),
+            |esc, arena| bumpalo::vec![in arena; EscapedChar(esc), Plaintext("abc"), EscapedChar(esc), Plaintext("de"), EscapedChar(esc), Plaintext("fghi"), EscapedChar(esc)],
+        );
     }
 
     #[test]
@@ -1861,12 +1910,12 @@ mod test_parse {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline];
         let pattern1 = Pattern::SpaceBefore(
-            arena.alloc(StrLiteral(PlainLine("blah"))),
+            arena.alloc(StrLiteral(PlainLine(""))),
             newlines.into_bump_slice(),
         );
-        let loc_pattern1 = Located::new(1, 1, 1, 7, pattern1);
+        let loc_pattern1 = Located::new(1, 1, 1, 4, pattern1);
         let expr1 = Num("1");
-        let loc_expr1 = Located::new(1, 1, 11, 12, expr1);
+        let loc_expr1 = Located::new(1, 1, 7, 8, expr1);
         let branch1 = &*arena.alloc(WhenBranch {
             patterns: bumpalo::vec![in &arena;loc_pattern1],
             value: loc_expr1,
@@ -1897,7 +1946,7 @@ mod test_parse {
             indoc!(
                 r#"
                     when x is
-                     "blah" -> 1
+                     "" -> 1
                      "mise" -> 2
                 "#
             ),

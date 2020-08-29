@@ -2,11 +2,12 @@ use crate::ast::{Attempting, StrLiteral, StrSegment};
 use crate::parser::{parse_utf8, unexpected, unexpected_eof, ParseResult, Parser, State};
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
+use roc_region::all::{Located, Region};
 
 pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
     use StrLiteral::*;
 
-    move |arena: &'a Bump, state: State<'a>| {
+    move |arena: &'a Bump, mut state: State<'a>| {
         let mut bytes = state.bytes.iter();
         // String literals must start with a quote.
         // If this doesn't, it must not be a string literal!
@@ -21,14 +22,8 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
             }
         }
 
-        // The current segment begins right after the opening quotation mark.
-        let mut cur_segment = &state.bytes[1..];
-
-        enum EscapeState {
-            None,
-            Unicode,
-            Interpolation,
-        }
+        // Advance past the opening quotation mark.
+        state = state.advance_without_indenting(1)?;
 
         // At the parsing stage we keep the entire raw string, because the formatter
         // needs the raw string. (For example, so it can "remember" whether you
@@ -36,75 +31,105 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
         //
         // Since we're keeping the entire raw string, all we need to track is
         // how many characters we've parsed. So far, that's 1 (the opening `"`).
-        let mut total_parsed_chars = 1;
-        let mut segment_parsed_chars = 0;
+        let mut segment_parsed_bytes = 0;
         let mut segments = Vec::new_in(arena);
-        let mut escape_state = EscapeState::None;
 
-        // pub enum StrSegment<'a> {
-        //     Plaintext(&'a str),    // e.g. "foo"
-        //     Unicode(&'a str),      // e.g. "00A0" in "\u(00A0)"
-        //     Interpolated(&'a str), // e.g. "name" in "Hi, \(name)!"
-        //     EscapedChar(char),     // e.g. '\n' in "Hello!\n"
-        // }
+        macro_rules! escaped_char {
+            ($ch:expr) => {
+                // Record the escaped char.
+                segments.push(StrSegment::EscapedChar($ch));
+
+                // Advance past the segment we just added
+                state = state.advance_without_indenting(segment_parsed_bytes)?;
+
+                // Reset the segment
+                segment_parsed_bytes = 0;
+            };
+        }
+
+        macro_rules! end_segment {
+            ($transform:expr) => {
+                dbg!("ending segment");
+                dbg!(segment_parsed_bytes - 1);
+                dbg!(&state.bytes);
+
+                // Don't push anything if the string would be empty.
+                if segment_parsed_bytes > 1 {
+                    // This function is always called after we just parsed
+                    // something which signalled that we should end the
+                    // current segment - so use segment_parsed_bytes - 1 here,
+                    // to exclude that char we just parsed.
+                    let string_bytes = &state.bytes[0..(segment_parsed_bytes - 1)];
+
+                    match parse_utf8(string_bytes) {
+                        Ok(string) => {
+                            state = state.advance_without_indenting(string.len())?;
+
+                            segments.push($transform(string));
+
+                            dbg!(&segments);
+                        }
+                        Err(reason) => {
+                            return state.fail(reason);
+                        }
+                    }
+                } else {
+                    // If we parsed 0 bytes,
+                }
+
+                // Depending on where this macro is used, in some
+                // places this is unused.
+                #[allow(unused_assignments)]
+                {
+                    // This function is always called after we just parsed
+                    // something which signalled that we should end the
+                    // current segment.
+                    segment_parsed_bytes = 1;
+                }
+            };
+        }
 
         while let Some(&byte) = bytes.next() {
-            segment_parsed_chars += 1;
+            dbg!("Parsing {:?}", (byte as char).to_string());
+            // This is for the byte we just grabbed from the iterator.
+            segment_parsed_bytes += 1;
 
-            // Potentially end the string (unless this is an escaped `"`!)
             match byte {
                 b'"' => {
-                    // If we aren't escaping, then this is the end of the string!
-                    if let EscapeState::None = escape_state {
-                        let (literal, state) = if total_parsed_chars == 1 && segments.is_empty() {
-                            match bytes.next() {
-                                Some(b'"') => {
-                                    // If the very first three chars were all `"`,
-                                    // then this literal begins with `"""`
-                                    // and is a block string.
-                                    return parse_block_string(arena, state, &mut bytes);
+                    // This is the end of the string!
+                    if segment_parsed_bytes == 1 && segments.is_empty() {
+                        match bytes.next() {
+                            Some(b'"') => {
+                                // If the very first three chars were all `"`,
+                                // then this literal begins with `"""`
+                                // and is a block string.
+                                return parse_block_string(arena, state, &mut bytes);
+                            }
+                            _ => {
+                                return Ok((PlainLine(""), state.advance_without_indenting(2)?));
+                            }
+                        }
+                    } else {
+                        end_segment!(StrSegment::Plaintext);
+
+                        let expr = if segments.len() == 1 {
+                            // We had exactly one segment, so this is a candidate
+                            // to be StrLiteral::Plaintext
+                            match segments.pop().unwrap() {
+                                StrSegment::Plaintext(string) => StrLiteral::PlainLine(string),
+                                other => {
+                                    let vec = bumpalo::vec![in arena; other];
+
+                                    StrLiteral::LineWithEscapes(vec.into_bump_slice())
                                 }
-                                _ => (PlainLine(""), state.advance_without_indenting(2)?),
                             }
                         } else {
-                            // Subtract 1 from parsed_chars so we omit the closing `"`.
-                            let string_bytes = &cur_segment[0..(segment_parsed_chars - 1)];
-
-                            match parse_utf8(string_bytes) {
-                                Ok(string) => {
-                                    total_parsed_chars += segment_parsed_chars;
-
-                                    let state =
-                                        state.advance_without_indenting(total_parsed_chars)?;
-
-                                    if segments.is_empty() {
-                                        // We only had one segment.
-                                        (StrLiteral::PlainLine(string), state)
-                                    } else {
-                                        // We had multiple segments! Parse the
-                                        // current one and add it to the list.
-                                        segments.push(StrSegment::Plaintext(string));
-
-                                        (LineWithEscapes(segments.into_bump_slice()), state)
-                                    }
-                                }
-                                Err(reason) => {
-                                    return state.fail(reason);
-                                }
-                            }
+                            LineWithEscapes(segments.into_bump_slice())
                         };
 
-                        return Ok((literal, state));
-                    } else {
-                        // We are escaping, so this is an error. (If it were an
-                        // escaped single character like \" then we would have
-                        // handled that scenario already.)
-                        return Err(unexpected(
-                            state.bytes.len() - 1,
-                            state,
-                            Attempting::StrLiteral,
-                        ));
-                    }
+                        // Advance the state 1 to account for the closing `"`
+                        return Ok((expr, state.advance_without_indenting(1)?));
+                    };
                 }
                 b'\n' => {
                     // This is a single-line string, which cannot have newlines!
@@ -118,75 +143,82 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                         Attempting::StrLiteral,
                     ));
                 }
-                b')' => {
-                    // All escape sequences end in a close paren, so we don't
-                    // need to pay for a conditional here. If it was an escape,
-                    // then we want to set it to None, and if it wasn't an
-                    // escape, then setting it from None to None is harmless!
-                    // (And likely cheaper than a conditional.)
-                    escape_state = EscapeState::None;
-                }
                 b'\\' => {
-                    // This is the start of a new escape
-                    if let EscapeState::None = escape_state {
-                        match bytes.next() {
-                            Some(b'(') => {
-                                // This is an interpolated variable
-                                escape_state = EscapeState::Interpolation;
-                                todo!("Parse interpolated ident");
+                    // We're about to begin an escaped segment of some sort!
+                    //
+                    // Record the current segment so we can begin a new one.
+                    // End it right before the `\` char we just parsed.
+                    end_segment!(StrSegment::Plaintext);
+
+                    // This is for the byte we're about to parse.
+                    segment_parsed_bytes += 1;
+
+                    // This is the start of a new escape. Look at the next byte
+                    // to figure out what type of escape it is.
+                    match bytes.next() {
+                        Some(b'(') => {
+                            // This is an interpolated variable
+                            todo!("Make a new parser state, then use it to parse ident followed by ')'");
+                        }
+                        Some(b'u') => {
+                            // This is an escaped unicode character
+                            if let Some(b'(') = bytes.next() {
+                                segment_parsed_bytes += 1;
+                            } else {
+                                // Whenever we encounter `\u` it must be followed
+                                // by a `(` char!
+                                return Err(unexpected(0, state, Attempting::StrLiteral));
                             }
-                            Some(b'u') => {
-                                escape_state = EscapeState::Unicode;
-                                // This is an escaped unicode character
-                                todo!("Parse '(' and then parse escaped unicode character");
-                            }
-                            Some(ch @ b'\n') | Some(ch @ b'\t') | Some(ch @ b'\r')
-                            | Some(ch @ b'"') | Some(ch @ b'\\') => {
-                                // Record the current segment so we can begin a new one.
-                                match parse_utf8(cur_segment) {
-                                    Ok(string) => {
-                                        segments.push(StrSegment::Plaintext(string));
-                                    }
-                                    Err(reason) => {
-                                        return state.fail(reason);
-                                    }
+
+                            while let Some(&byte) = bytes.next() {
+                                segment_parsed_bytes += 1;
+
+                                if (byte as char).is_ascii_hexdigit() {
+                                    // This is the most common case.
+                                } else if byte == b')' {
+                                    // Add the segment
+                                    end_segment!(|string: &'a str| {
+                                        let value = &string[0..string.len() - 1];
+
+                                        StrSegment::Unicode(Located {
+                                            region: Region::zero(), // TODO calculate the right region
+                                            value,
+                                        })
+                                    });
+
+                                    // We're done parsing digits now.
+                                    break;
+                                } else {
+                                    // Unicode escapes must all be digits!
+                                    return Err(unexpected(0, state, Attempting::StrLiteral));
                                 }
-
-                                // Record the escaped char.
-                                segments.push(StrSegment::EscapedChar(*ch as char));
-
-                                // We're now done escaping.
-                                escape_state = EscapeState::None;
-
-                                // Advance past the segment we just added, and
-                                // also past the escaped char we just added.
-                                //
-                                // +2 because we just parsed a backslash and
-                                // one other char after it.
-                                cur_segment = &cur_segment[(segment_parsed_chars + 2)..];
-
-                                // Reset segment_parsed_chars to 0 because we're now
-                                // parsing the beginning of a new segment.
-                                segment_parsed_chars = 0;
-                            }
-                            _ => {
-                                // Invalid escape! A backslash must be followed
-                                // by either an open paren or else one of the
-                                // escapable characters (\n, \t, \", \\, etc)
-                                return Err(unexpected(
-                                    state.bytes.len() - 1,
-                                    state,
-                                    Attempting::StrLiteral,
-                                ));
                             }
                         }
-                    } else {
-                        // Can't have a \ inside an escape!
-                        return Err(unexpected(
-                            state.bytes.len() - 1,
-                            state,
-                            Attempting::StrLiteral,
-                        ));
+                        Some(b'\\') => {
+                            escaped_char!('\\');
+                        }
+                        Some(b'"') => {
+                            escaped_char!('"');
+                        }
+                        Some(b'r') => {
+                            escaped_char!('\r');
+                        }
+                        Some(b't') => {
+                            escaped_char!('\t');
+                        }
+                        Some(b'n') => {
+                            escaped_char!('\n');
+                        }
+                        _ => {
+                            // Invalid escape! A backslash must be followed
+                            // by either an open paren or else one of the
+                            // escapable characters (\n, \t, \", \\, etc)
+                            return Err(unexpected(
+                                state.bytes.len() - 1,
+                                state,
+                                Attempting::StrLiteral,
+                            ));
+                        }
                     }
                 }
                 _ => {
@@ -197,7 +229,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
 
         // We ran out of characters before finding a closed quote
         Err(unexpected_eof(
-            total_parsed_chars,
+            state.bytes.len(),
             Attempting::StrLiteral,
             state.clone(),
         ))
@@ -236,7 +268,7 @@ where
 
                     return match parse_utf8(line_bytes) {
                         Ok(_line) => {
-                            // let state = state.advance_without_indenting(parsed_chars)?;
+                            // state = state.advance_without_indenting(parsed_chars)?;
 
                             // lines.push(line);
 
