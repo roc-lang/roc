@@ -228,20 +228,35 @@ mod gen_list {
     }
 
     #[test]
-    fn list_join() {
+    fn list_join_empty_list() {
         assert_evals_to!("List.join []", &[], &'static [i64]);
+    }
+
+    #[test]
+    fn list_join_one_list() {
         assert_evals_to!("List.join [ [1, 2, 3 ] ]", &[1, 2, 3], &'static [i64]);
+    }
+
+    #[test]
+    fn list_join_two_non_empty_lists() {
         assert_evals_to!(
             "List.join [ [1, 2, 3 ] , [4 ,5, 6] ]",
             &[1, 2, 3, 4, 5, 6],
             &'static [i64]
         );
+    }
+
+    #[test]
+    fn list_join_two_non_empty_lists_of_float() {
         assert_evals_to!(
             "List.join [ [ 1.2, 1.1 ], [ 2.1, 2.2 ] ]",
             &[1.2, 1.1, 2.1, 2.2],
             &'static [f64]
         );
+    }
 
+    #[test]
+    fn list_join_to_big_list() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -263,7 +278,10 @@ mod gen_list {
             ],
             &'static [f64]
         );
+    }
 
+    #[test]
+    fn list_join_defined_empty_list() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -277,9 +295,15 @@ mod gen_list {
             &[0.2, 11.11],
             &'static [f64]
         );
+    }
 
+    #[test]
+    fn list_join_all_empty_lists() {
         assert_evals_to!("List.join [ [], [], [] ]", &[], &'static [f64]);
+    }
 
+    #[test]
+    fn list_join_one_empty_list() {
         assert_evals_to!(
             "List.join [ [ 1.2, 1.1 ], [] ]",
             &[1.2, 1.1],
@@ -329,6 +353,10 @@ mod gen_list {
         );
         assert_evals_to!("List.reverse [1, 2, 3]", &[3, 2, 1], &'static [i64]);
         assert_evals_to!("List.reverse [4]", &[4], &'static [i64]);
+    }
+
+    #[test]
+    fn list_reverse_empty_list_of_int() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -342,6 +370,10 @@ mod gen_list {
             &[],
             &'static [i64]
         );
+    }
+
+    #[test]
+    fn list_reverse_empty_list() {
         assert_evals_to!("List.reverse []", &[], &'static [i64]);
     }
 
@@ -367,9 +399,12 @@ mod gen_list {
     }
 
     #[test]
-    fn list_concat_vanilla() {
+    fn list_concat_two_empty_lists() {
         assert_evals_to!("List.concat [] []", &[], &'static [i64]);
+    }
 
+    #[test]
+    fn list_concat_two_empty_lists_of_int() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -387,16 +422,25 @@ mod gen_list {
             &[],
             &'static [i64]
         );
+    }
 
+    #[test]
+    fn list_concat_second_list_is_empty() {
         assert_evals_to!("List.concat [ 12, 13 ] []", &[12, 13], &'static [i64]);
         assert_evals_to!(
             "List.concat [ 34, 43 ] [ 64, 55, 66 ]",
             &[34, 43, 64, 55, 66],
             &'static [i64]
         );
+    }
 
+    #[test]
+    fn list_concat_first_list_is_empty() {
         assert_evals_to!("List.concat [] [ 23, 24 ]", &[23, 24], &'static [i64]);
+    }
 
+    #[test]
+    fn list_concat_two_non_empty_lists() {
         assert_evals_to!(
             "List.concat [1, 2 ] [ 3, 4 ]",
             &[1, 2, 3, 4],
