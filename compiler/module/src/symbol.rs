@@ -672,6 +672,7 @@ define_builtins! {
         14 LIST_REVERSE: "reverse"
         15 LIST_PREPEND: "prepend"
         16 LIST_JOIN: "join"
+        17 LIST_KEEP_IF: "keepIf"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

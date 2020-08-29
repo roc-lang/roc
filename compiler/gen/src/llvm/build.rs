@@ -2,8 +2,8 @@ use crate::layout_id::LayoutIds;
 use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, clone_nonempty_list, empty_list, empty_polymorphic_list,
     incrementing_index_loop, list_append, list_concat, list_get_unsafe, list_is_not_empty,
-    list_join, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set, list_single,
-    load_list_ptr,
+    list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set,
+    list_single, load_list_ptr,
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
@@ -1689,12 +1689,23 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         ListMap => {
             // List.map : List before, (before -> after) -> List after
+            debug_assert_eq!(args.len(), 2);
 
             let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
             let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
             list_map(env, parent, func, func_layout, list, list_layout)
+        }
+        ListKeepIf => {
+            // List.keepIf : List elem, (elem -> Bool) -> List elem
+            debug_assert_eq!(args.len(), 2);
+
+            let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            list_keep_if(env, parent, func, func_layout, list, list_layout)
         }
         ListAppend => {
             // List.append : List elem, elem -> List elem

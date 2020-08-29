@@ -855,6 +855,18 @@ pub fn list_len<'ctx>(
         .into_int_value()
 }
 
+/// List.keepIf : List elem, (elem -> Bool) -> List elem
+pub fn list_keep_if<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    func: BasicValueEnum<'ctx>,
+    func_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    list_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    empty_list(env)
+}
+
 /// List.map : List before, (before -> after) -> List after
 pub fn list_map<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

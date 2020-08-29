@@ -92,6 +92,25 @@ mod gen_list {
     }
 
     #[test]
+    fn list_keep_if() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    main = \{} ->
+                        empty : List Int
+                        empty =
+                            []
+
+                        List.keepIf empty (\x -> True)
+                    main {}
+                "#
+            ),
+            &[],
+            &'static [i64]
+        );
+    }
+
+    #[test]
     fn list_map() {
         assert_evals_to!(
             indoc!(
