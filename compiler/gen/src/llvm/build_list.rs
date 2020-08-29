@@ -396,149 +396,86 @@ pub fn list_reverse<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let (_, list_layout) = load_symbol_and_layout(env, scope, list);
 
-    match list_layout {
-        Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-
-        Layout::Builtin(Builtin::List(_, elem_layout)) => {
-            let wrapper_struct = load_symbol(env, scope, list).into_struct_value();
-
+    let non_empty_fn =
+        |elem_layout: &Layout<'a>, len: IntValue<'ctx>, wrapper_struct: StructValue<'ctx>| {
             let builder = env.builder;
             let ctx = env.context;
 
-            let len = list_len(builder, wrapper_struct);
+            // Allocate space for the new array that we'll copy into.
+            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
 
-            // list_len > 0
-            // We do this check to avoid allocating memory. If the input
-            // list is empty, then we can just return an empty list.
-            let comparison = builder.build_int_compare(
-                IntPredicate::UGT,
-                len,
-                ctx.i64_type().const_int(0, false),
-                "greaterthanzero",
-            );
+            let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-            let build_then = || {
-                // Allocate space for the new array that we'll copy into.
-                let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+            let reversed_list_ptr = allocate_list(env, elem_layout, len);
 
-                let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+            // TODO check if malloc returned null; if so, runtime error for OOM!
 
-                let reversed_list_ptr = allocate_list(env, elem_layout, len);
+            let index_name = "#index";
+            let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
 
-                // TODO check if malloc returned null; if so, runtime error for OOM!
+            // Start at the last element in the list.
+            let last_elem_index =
+                builder.build_int_sub(len, ctx.i64_type().const_int(1, false), "lastelemindex");
+            builder.build_store(start_alloca, last_elem_index);
 
-                let index_name = "#index";
-                let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
+            let loop_bb = ctx.append_basic_block(parent, "loop");
+            builder.build_unconditional_branch(loop_bb);
+            builder.position_at_end(loop_bb);
 
-                // Start at the last element in the list.
-                let last_elem_index =
-                    builder.build_int_sub(len, ctx.i64_type().const_int(1, false), "lastelemindex");
-                builder.build_store(start_alloca, last_elem_index);
+            // #index = #index - 1
+            let curr_index = builder
+                .build_load(start_alloca, index_name)
+                .into_int_value();
+            let next_index =
+                builder.build_int_sub(curr_index, ctx.i64_type().const_int(1, false), "nextindex");
 
-                let loop_bb = ctx.append_basic_block(parent, "loop");
-                builder.build_unconditional_branch(loop_bb);
-                builder.position_at_end(loop_bb);
+            builder.build_store(start_alloca, next_index);
 
-                // #index = #index - 1
-                let curr_index = builder
-                    .build_load(start_alloca, index_name)
-                    .into_int_value();
-                let next_index = builder.build_int_sub(
-                    curr_index,
-                    ctx.i64_type().const_int(1, false),
-                    "nextindex",
-                );
+            let list_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
 
-                builder.build_store(start_alloca, next_index);
+            // The pointer to the element in the input list
+            let elem_ptr =
+                unsafe { builder.build_in_bounds_gep(list_ptr, &[curr_index], "load_index") };
 
-                let list_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
-
-                // The pointer to the element in the input list
-                let elem_ptr =
-                    unsafe { builder.build_in_bounds_gep(list_ptr, &[curr_index], "load_index") };
-
-                // The pointer to the element in the reversed list
-                let reverse_elem_ptr = unsafe {
-                    builder.build_in_bounds_gep(
-                        reversed_list_ptr,
-                        &[builder.build_int_sub(
-                            len,
-                            builder.build_int_add(
-                                curr_index,
-                                ctx.i64_type().const_int(1, false),
-                                "curr_index_plus_one",
-                            ),
-                            "next_index",
-                        )],
-                        "load_index_reversed_list",
-                    )
-                };
-
-                let elem = builder.build_load(elem_ptr, "get_elem");
-
-                // Mutate the new array in-place to change the element.
-                builder.build_store(reverse_elem_ptr, elem);
-
-                // #index != 0
-                let end_cond = builder.build_int_compare(
-                    IntPredicate::NE,
-                    ctx.i64_type().const_int(0, false),
-                    curr_index,
-                    "loopcond",
-                );
-
-                let after_bb = ctx.append_basic_block(parent, "afterloop");
-
-                builder.build_conditional_branch(end_cond, loop_bb, after_bb);
-                builder.position_at_end(after_bb);
-
-                let ptr_bytes = env.ptr_bytes;
-                let int_type = ptr_int(ctx, ptr_bytes);
-                let ptr_as_int =
-                    builder.build_ptr_to_int(reversed_list_ptr, int_type, "list_cast_ptr");
-                let struct_type = collection(ctx, ptr_bytes);
-
-                let mut struct_val;
-
-                // Store the pointer
-                struct_val = builder
-                    .build_insert_value(
-                        struct_type.get_undef(),
-                        ptr_as_int,
-                        Builtin::WRAPPER_PTR,
-                        "insert_ptr",
-                    )
-                    .unwrap();
-
-                // Store the length
-                struct_val = builder
-                    .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
-                    .unwrap();
-
-                builder.build_bitcast(
-                    struct_val.into_struct_value(),
-                    collection(ctx, ptr_bytes),
-                    "cast_collection",
+            // The pointer to the element in the reversed list
+            let reverse_elem_ptr = unsafe {
+                builder.build_in_bounds_gep(
+                    reversed_list_ptr,
+                    &[builder.build_int_sub(
+                        len,
+                        builder.build_int_add(
+                            curr_index,
+                            ctx.i64_type().const_int(1, false),
+                            "curr_index_plus_one",
+                        ),
+                        "next_index",
+                    )],
+                    "load_index_reversed_list",
                 )
             };
 
-            let build_else = || empty_list(env);
+            let elem = builder.build_load(elem_ptr, "get_elem");
 
-            let struct_type = collection(ctx, env.ptr_bytes);
+            // Mutate the new array in-place to change the element.
+            builder.build_store(reverse_elem_ptr, elem);
 
-            build_basic_phi2(
-                env,
-                parent,
-                comparison,
-                build_then,
-                build_else,
-                BasicTypeEnum::StructType(struct_type),
-            )
-        }
-        _ => {
-            unreachable!("Invalid List layout for List.reverse {:?}", list_layout);
-        }
-    }
+            // #index != 0
+            let end_cond = builder.build_int_compare(
+                IntPredicate::NE,
+                ctx.i64_type().const_int(0, false),
+                curr_index,
+                "loopcond",
+            );
+
+            let after_bb = ctx.append_basic_block(parent, "afterloop");
+
+            builder.build_conditional_branch(end_cond, loop_bb, after_bb);
+            builder.position_at_end(after_bb);
+
+            store_list(env, reversed_list_ptr, len)
+        };
+
+    if_non_empty(env, parent, scope, non_empty_fn, list, list_layout)
 }
 
 pub fn list_get_unsafe<'a, 'ctx, 'env>(
@@ -1088,6 +1025,57 @@ where
     builder.position_at_end(after_loop_bb);
 
     index_alloca
+}
+
+fn if_non_empty<'a, 'ctx, 'env, 'b, NonEmptyFn>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    scope: &Scope<'a, 'ctx>,
+    mut build_non_empty: NonEmptyFn,
+    list: &Symbol,
+    list_layout: &'b Layout<'a>,
+) -> BasicValueEnum<'ctx>
+where
+    NonEmptyFn: FnMut(&Layout<'a>, IntValue<'ctx>, StructValue<'ctx>) -> BasicValueEnum<'ctx>,
+{
+    match list_layout {
+        Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+
+        Layout::Builtin(Builtin::List(_, elem_layout)) => {
+            let wrapper_struct = load_symbol(env, scope, list).into_struct_value();
+
+            let builder = env.builder;
+            let ctx = env.context;
+
+            let len = list_len(builder, wrapper_struct);
+
+            // list_len > 0
+            // We do this check to avoid allocating memory. If the input
+            // list is empty, then we can just return an empty list.
+            let comparison = builder.build_int_compare(
+                IntPredicate::UGT,
+                len,
+                ctx.i64_type().const_int(0, false),
+                "greaterthanzero",
+            );
+
+            let build_empty = || empty_list(env);
+
+            let struct_type = collection(ctx, env.ptr_bytes);
+
+            build_basic_phi2(
+                env,
+                parent,
+                comparison,
+                || build_non_empty(elem_layout, len, wrapper_struct),
+                build_empty,
+                BasicTypeEnum::StructType(struct_type),
+            )
+        }
+        _ => {
+            unreachable!("Invalid List layout for List.reverse {:?}", list_layout);
+        }
+    }
 }
 
 pub fn build_basic_phi2<'a, 'ctx, 'env, PassFn, FailFn>(
