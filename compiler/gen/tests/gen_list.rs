@@ -94,12 +94,19 @@ mod gen_list {
             &[6, 4],
             &'static [i64]
         );
+    }
 
+    #[test]
+    fn list_prepend_bools() {
         assert_evals_to!(
             "List.prepend [ True, False ] True",
             &[true, true, false],
             &'static [bool]
         );
+    }
+
+    #[test]
+    fn list_prepend_big_list() {
         assert_evals_to!(
             "List.prepend [ 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 100, 100, 100, 100 ] 9",
             &[9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 100, 100, 100, 100],
