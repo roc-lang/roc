@@ -35,35 +35,7 @@ pub fn list_single<'a, 'ctx, 'env>(
 
     builder.build_store(elem_ptr, elem);
 
-    let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
-    let struct_type = collection(ctx, ptr_bytes);
-    let len = BasicValueEnum::IntValue(env.ptr_int().const_int(1, false));
-
-    let mut struct_val;
-
-    // Store the pointer
-    struct_val = builder
-        .build_insert_value(
-            struct_type.get_undef(),
-            ptr_as_int,
-            Builtin::WRAPPER_PTR,
-            "insert_ptr",
-        )
-        .unwrap();
-
-    // Store the length
-    struct_val = builder
-        .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
-        .unwrap();
-
-    //
-    builder.build_bitcast(
-        struct_val.into_struct_value(),
-        collection(ctx, ptr_bytes),
-        "cast_collection",
-    )
+    store_list(env, ptr, env.ptr_int().const_int(1, false))
 }
 
 /// List.repeat : Int, elem -> List elem
@@ -138,33 +110,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
         builder.build_conditional_branch(end_cond, loop_bb, after_bb);
         builder.position_at_end(after_bb);
 
-        let ptr_bytes = env.ptr_bytes;
-        let int_type = ptr_int(ctx, ptr_bytes);
-        let ptr_as_int = builder.build_ptr_to_int(list_ptr, int_type, "list_cast_ptr");
-        let struct_type = collection(ctx, ptr_bytes);
-
-        let mut struct_val;
-
-        // Store the pointer
-        struct_val = builder
-            .build_insert_value(
-                struct_type.get_undef(),
-                ptr_as_int,
-                Builtin::WRAPPER_PTR,
-                "insert_ptr",
-            )
-            .unwrap();
-
-        // Store the length
-        struct_val = builder
-            .build_insert_value(struct_val, list_len, Builtin::WRAPPER_LEN, "insert_len")
-            .unwrap();
-
-        builder.build_bitcast(
-            struct_val.into_struct_value(),
-            collection(ctx, ptr_bytes),
-            "cast_collection",
-        )
+        store_list(env, list_ptr, list_len)
     };
 
     let build_else = || empty_polymorphic_list(env);
@@ -204,12 +150,8 @@ pub fn list_prepend<'a, 'ctx, 'env>(
         "new_list_length",
     );
 
-    let ptr_bytes = env.ptr_bytes;
-
     // Allocate space for the new array that we'll copy into.
     let clone_ptr = allocate_list(env, elem_layout, new_list_len);
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
 
     builder.build_store(clone_ptr, elem);
 
@@ -232,6 +174,8 @@ pub fn list_prepend<'a, 'ctx, 'env>(
         .builder
         .build_int_mul(elem_bytes, len, "mul_old_len_by_elem_bytes");
 
+    let ptr_bytes = env.ptr_bytes;
+
     if elem_layout.safe_to_memcpy() {
         // Copy the bytes from the original array into the new
         // one we just malloc'd.
@@ -242,30 +186,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
 
-    // Create a fresh wrapper struct for the newly populated array
-    let struct_type = collection(ctx, env.ptr_bytes);
-    let mut struct_val;
-
-    // Store the pointer
-    struct_val = builder
-        .build_insert_value(
-            struct_type.get_undef(),
-            ptr_as_int,
-            Builtin::WRAPPER_PTR,
-            "insert_ptr",
-        )
-        .unwrap();
-
-    // Store the length
-    struct_val = builder
-        .build_insert_value(struct_val, new_list_len, Builtin::WRAPPER_LEN, "insert_len")
-        .unwrap();
-
-    builder.build_bitcast(
-        struct_val.into_struct_value(),
-        collection(ctx, ptr_bytes),
-        "cast_collection",
-    )
+    store_list(env, clone_ptr, new_list_len)
 }
 
 /// List.join : List (List elem) -> List elem
@@ -443,39 +364,7 @@ pub fn list_join<'a, 'ctx, 'env>(
                     inner_list_loop,
                 );
 
-                let ptr_bytes = env.ptr_bytes;
-                let int_type = ptr_int(ctx, ptr_bytes);
-                let ptr_as_int =
-                    builder.build_ptr_to_int(final_list_ptr, int_type, "list_cast_ptr");
-                let struct_type = collection(ctx, ptr_bytes);
-
-                let mut struct_val;
-
-                // Store the pointer
-                struct_val = builder
-                    .build_insert_value(
-                        struct_type.get_undef(),
-                        ptr_as_int,
-                        Builtin::WRAPPER_PTR,
-                        "insert_ptr",
-                    )
-                    .unwrap();
-
-                // Store the length
-                struct_val = builder
-                    .build_insert_value(
-                        struct_val,
-                        final_list_sum,
-                        Builtin::WRAPPER_LEN,
-                        "insert_len",
-                    )
-                    .unwrap();
-
-                builder.build_bitcast(
-                    struct_val.into_struct_value(),
-                    collection(ctx, ptr_bytes),
-                    "cast_collection",
-                )
+                store_list(env, final_list_ptr, final_list_sum)
             };
 
             let build_else = || empty_list(env);
@@ -723,8 +612,6 @@ pub fn list_append<'a, 'ctx, 'env>(
 
     // Allocate space for the new array that we'll copy into.
     let clone_ptr = allocate_list(env, elem_layout, new_list_len);
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
 
     // TODO check if malloc returned null; if so, runtime error for OOM!
 
@@ -738,34 +625,11 @@ pub fn list_append<'a, 'ctx, 'env>(
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
 
-    // Create a fresh wrapper struct for the newly populated array
-    let struct_type = collection(ctx, env.ptr_bytes);
-    let mut struct_val;
-
-    // Store the pointer
-    struct_val = builder
-        .build_insert_value(
-            struct_type.get_undef(),
-            ptr_as_int,
-            Builtin::WRAPPER_PTR,
-            "insert_ptr",
-        )
-        .unwrap();
-
-    // Store the length
-    struct_val = builder
-        .build_insert_value(struct_val, new_list_len, Builtin::WRAPPER_LEN, "insert_len")
-        .unwrap();
-
     let elem_ptr = unsafe { builder.build_in_bounds_gep(clone_ptr, &[list_len], "load_index") };
 
     builder.build_store(elem_ptr, elem);
 
-    builder.build_bitcast(
-        struct_val.into_struct_value(),
-        collection(ctx, ptr_bytes),
-        "cast_collection",
-    )
+    store_list(env, clone_ptr, new_list_len)
 }
 
 /// List.set : List elem, Int, elem -> List elem
@@ -932,35 +796,7 @@ pub fn list_map<'a, 'ctx, 'env>(
                             builder, parent, ctx, len, "#index", None, list_loop,
                         );
 
-                        let ptr_bytes = env.ptr_bytes;
-                        let int_type = ptr_int(ctx, ptr_bytes);
-                        let ptr_as_int =
-                            builder.build_ptr_to_int(ret_list_ptr, int_type, "list_cast_ptr");
-
-                        let struct_type = collection(ctx, ptr_bytes);
-
-                        let mut struct_val;
-
-                        // Store the pointer
-                        struct_val = builder
-                            .build_insert_value(
-                                struct_type.get_undef(),
-                                ptr_as_int,
-                                Builtin::WRAPPER_PTR,
-                                "insert_ptr",
-                            )
-                            .unwrap();
-
-                        // Store the length
-                        struct_val = builder
-                            .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
-                            .unwrap();
-
-                        builder.build_bitcast(
-                            struct_val.into_struct_value(),
-                            collection(ctx, ptr_bytes),
-                            "cast_collection",
-                        )
+                        store_list(env, ret_list_ptr, len)
                     };
 
                     build_basic_phi2(
@@ -1171,40 +1007,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
                         second_loop,
                     );
 
-                    let ptr_bytes = env.ptr_bytes;
-                    let int_type = ptr_int(ctx, ptr_bytes);
-                    let ptr_as_int =
-                        builder.build_ptr_to_int(combined_list_ptr, int_type, "list_cast_ptr");
-
-                    let struct_type = collection(ctx, ptr_bytes);
-
-                    let mut struct_val;
-
-                    // Store the pointer
-                    struct_val = builder
-                        .build_insert_value(
-                            struct_type.get_undef(),
-                            ptr_as_int,
-                            Builtin::WRAPPER_PTR,
-                            "insert_ptr",
-                        )
-                        .unwrap();
-
-                    // Store the length
-                    struct_val = builder
-                        .build_insert_value(
-                            struct_val,
-                            combined_list_len,
-                            Builtin::WRAPPER_LEN,
-                            "insert_len",
-                        )
-                        .unwrap();
-
-                    builder.build_bitcast(
-                        struct_val.into_struct_value(),
-                        collection(ctx, ptr_bytes),
-                        "cast_collection",
-                    )
+                    store_list(env, combined_list_ptr, combined_list_len)
                 };
 
                 build_basic_phi2(
@@ -1509,4 +1312,41 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     builder.build_store(refcount_ptr, ref_count_one);
 
     list_element_ptr
+}
+
+fn store_list<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    list_ptr: PointerValue<'ctx>,
+    len: IntValue<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+    let builder = env.builder;
+
+    let ptr_bytes = env.ptr_bytes;
+    let int_type = ptr_int(ctx, ptr_bytes);
+    let ptr_as_int = builder.build_ptr_to_int(list_ptr, int_type, "list_cast_ptr");
+    let struct_type = collection(ctx, ptr_bytes);
+
+    let mut struct_val;
+
+    // Store the pointer
+    struct_val = builder
+        .build_insert_value(
+            struct_type.get_undef(),
+            ptr_as_int,
+            Builtin::WRAPPER_PTR,
+            "insert_ptr",
+        )
+        .unwrap();
+
+    // Store the length
+    struct_val = builder
+        .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
+        .unwrap();
+
+    builder.build_bitcast(
+        struct_val.into_struct_value(),
+        collection(ctx, ptr_bytes),
+        "cast_collection",
+    )
 }
