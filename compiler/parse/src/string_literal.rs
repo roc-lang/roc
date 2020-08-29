@@ -1,5 +1,8 @@
 use crate::ast::{Attempting, StrLiteral, StrSegment};
-use crate::parser::{parse_utf8, unexpected, unexpected_eof, ParseResult, Parser, State};
+use crate::expr;
+use crate::parser::{
+    allocated, ascii_char, loc, parse_utf8, unexpected, unexpected_eof, ParseResult, Parser, State,
+};
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_region::all::{Located, Region};
@@ -49,10 +52,6 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
 
         macro_rules! end_segment {
             ($transform:expr) => {
-                dbg!("ending segment");
-                dbg!(segment_parsed_bytes - 1);
-                dbg!(&state.bytes);
-
                 // Don't push anything if the string would be empty.
                 if segment_parsed_bytes > 1 {
                     // This function is always called after we just parsed
@@ -66,15 +65,11 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                             state = state.advance_without_indenting(string.len())?;
 
                             segments.push($transform(string));
-
-                            dbg!(&segments);
                         }
                         Err(reason) => {
                             return state.fail(reason);
                         }
                     }
-                } else {
-                    // If we parsed 0 bytes,
                 }
 
                 // Depending on where this macro is used, in some
@@ -90,7 +85,6 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
         }
 
         while let Some(&byte) = bytes.next() {
-            dbg!("Parsing {:?}", (byte as char).to_string());
             // This is for the byte we just grabbed from the iterator.
             segment_parsed_bytes += 1;
 
@@ -120,11 +114,11 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                                 other => {
                                     let vec = bumpalo::vec![in arena; other];
 
-                                    StrLiteral::LineWithEscapes(vec.into_bump_slice())
+                                    StrLiteral::Line(vec.into_bump_slice())
                                 }
                             }
                         } else {
-                            LineWithEscapes(segments.into_bump_slice())
+                            Line(segments.into_bump_slice())
                         };
 
                         // Advance the state 1 to account for the closing `"`
@@ -157,8 +151,29 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                     // to figure out what type of escape it is.
                     match bytes.next() {
                         Some(b'(') => {
-                            // This is an interpolated variable
-                            todo!("Make a new parser state, then use it to parse ident followed by ')'");
+                            // Advance past the `\(` before using the expr parser
+                            state = state.advance_without_indenting(2)?;
+
+                            let original_byte_count = state.bytes.len();
+
+                            // This is an interpolated variable.
+                            // Parse an arbitrary expression, then give a
+                            // canonicalization error if that expression variant
+                            // is not allowed inside a string interpolation.
+                            let (loc_expr, new_state) =
+                                skip_second!(loc(allocated(expr::expr(0))), ascii_char(')'))
+                                    .parse(arena, state)?;
+
+                            // Advance the iterator past the expr we just parsed.
+                            for _ in 0..(original_byte_count - new_state.bytes.len()) {
+                                bytes.next();
+                            }
+
+                            segments.push(StrSegment::Interpolated(loc_expr));
+
+                            // Reset the segment
+                            segment_parsed_bytes = 0;
+                            state = new_state;
                         }
                         Some(b'u') => {
                             // This is an escaped unicode character

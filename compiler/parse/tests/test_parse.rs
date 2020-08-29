@@ -51,8 +51,8 @@ mod test_parse {
     }
 
     fn parses_with_escaped_char<
-        I: Fn(&'static str) -> String,
-        E: Fn(char, &Bump) -> Vec<'_, ast::StrSegment<'static>>,
+        I: Fn(&str) -> String,
+        E: Fn(char, &Bump) -> Vec<'_, ast::StrSegment<'_>>,
     >(
         to_input: I,
         to_expected: E,
@@ -69,7 +69,7 @@ mod test_parse {
         ] {
             let actual = parse_with(&arena, arena.alloc(to_input(string)));
             let expected_slice = to_expected(*ch, &arena).into_bump_slice();
-            let expected_expr = Expr::Str(LineWithEscapes(expected_slice));
+            let expected_expr = Expr::Str(Line(expected_slice));
 
             assert_eq!(Ok(expected_expr), actual);
         }
@@ -86,7 +86,7 @@ mod test_parse {
         assert_parses_to(
             indoc!(
                 r#"
-                ""
+                    ""
                 "#
             ),
             Str(PlainLine("")),
@@ -128,6 +128,8 @@ mod test_parse {
         expect_parsed_str("123 abc 456 def", r#""123 abc 456 def""#);
     }
 
+    // BACKSLASH ESCAPES
+
     #[test]
     fn string_with_escaped_char_at_end() {
         parses_with_escaped_char(
@@ -160,10 +162,87 @@ mod test_parse {
         );
     }
 
+    // INTERPOLATION
+
+    fn assert_interpolations<E: Fn(&Bump) -> Vec<'_, ast::StrSegment<'_>>>(
+        input: &str,
+        to_expected: E,
+    ) {
+        let arena = Bump::new();
+        let actual = parse_with(&arena, arena.alloc(input));
+        let expected_slice = to_expected(&arena).into_bump_slice();
+        let expected_expr = Expr::Str(Line(expected_slice));
+
+        assert_eq!(Ok(expected_expr), actual);
+    }
+
     #[test]
-    fn string_with_single_quote() {
-        // This shoud NOT be escaped in a string.
-        expect_parsed_str("x'x", r#""x'x""#);
+    fn string_with_interpolation_in_middle() {
+        assert_interpolations(r#""Hi, \(name)!""#, |arena| {
+            let expr = arena.alloc(Var {
+                module_name: "",
+                ident: "name",
+            });
+
+            bumpalo::vec![in arena;
+                Plaintext("Hi, "),
+                Interpolated(Located::new(0, 0, 7, 11, expr)),
+                Plaintext("!")
+            ]
+        });
+    }
+
+    #[test]
+    fn string_with_interpolation_in_front() {
+        assert_interpolations(r#""\(name), hi!""#, |arena| {
+            let expr = arena.alloc(Var {
+                module_name: "",
+                ident: "name",
+            });
+
+            bumpalo::vec![in arena;
+                Interpolated(Located::new(0, 0, 3, 7, expr)),
+                Plaintext(", hi!")
+            ]
+        });
+    }
+
+    #[test]
+    fn string_with_interpolation_in_back() {
+        assert_interpolations(r#""Hello \(name)""#, |arena| {
+            let expr = arena.alloc(Var {
+                module_name: "",
+                ident: "name",
+            });
+
+            bumpalo::vec![in arena;
+                Plaintext("Hello "),
+                Interpolated(Located::new(0, 0, 9, 13, expr))
+            ]
+        });
+    }
+
+    #[test]
+    fn string_with_multiple_interpolations() {
+        assert_interpolations(r#""Hi, \(name)! How is \(project) going?""#, |arena| {
+            let expr1 = arena.alloc(Var {
+                module_name: "",
+                ident: "name",
+            });
+
+            let expr2 = arena.alloc(Var {
+                module_name: "",
+                ident: "project",
+            });
+
+            bumpalo::vec![in arena;
+                Plaintext("Hi, "),
+                Interpolated(Located::new(0, 0, 7, 11, expr1)),
+                Plaintext("! How is "),
+                Interpolated(Located::new(0, 0, 23, 30, expr2)),
+                Plaintext(" going?")
+            ]
+        });
     }
 
     #[test]
@@ -510,7 +589,7 @@ mod test_parse {
     }
 
     #[test]
-    fn comment_with_unicode() {
+    fn comment_with_non_ascii() {
         let arena = Bump::new();
         let spaced_int = arena
             .alloc(Num("3"))
@@ -2490,8 +2569,6 @@ mod test_parse {
     //     );
     // }
 
-    // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
-    //
     // TODO test for non-ASCII variables
     //
     // TODO verify that when a string literal contains a newline before the

@@ -86,21 +86,17 @@ pub struct WhenPattern<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum StrSegment<'a> {
-    Plaintext(&'a str),    // e.g. "foo"
-    Unicode(Loc<&'a str>), // e.g. "00A0" in "\u(00A0)"
-    EscapedChar(char),     // e.g. '\n' in "Hello!\n"
-    Interpolated {
-        // e.g. "App.version" in "Version: \(App.version)"
-        module_name: &'a str,
-        ident: &'a str,
-        region: Region,
-    },
+    Plaintext(&'a str),              // e.g. "foo"
+    Unicode(Loc<&'a str>),           // e.g. "00A0" in "\u(00A0)"
+    EscapedChar(char),               // e.g. '\n' in "Hello!\n"
+    Interpolated(Loc<&'a Expr<'a>>), // e.g. (name) in "Hi, \(name)!"
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum StrLiteral<'a> {
+    /// The most common case: a plain string with no escapes or interpolations
     PlainLine(&'a str),
-    LineWithEscapes(&'a [StrSegment<'a>]),
+    Line(&'a [StrSegment<'a>]),
     Block(&'a [&'a [StrSegment<'a>]]),
 }
 
