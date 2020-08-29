@@ -34,7 +34,15 @@ mod gen_list {
     fn list_append() {
         assert_evals_to!("List.append [1] 2", &[1, 2], &'static [i64]);
         assert_evals_to!("List.append [1, 1] 2", &[1, 1, 2], &'static [i64]);
+    }
+
+    #[test]
+    fn list_append_to_empty_list() {
         assert_evals_to!("List.append [] 3", &[3], &'static [i64]);
+    }
+
+    #[test]
+    fn list_append_to_empty_list_of_int() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -48,11 +56,19 @@ mod gen_list {
             &[3, 3],
             &'static [i64]
         );
+    }
+
+    #[test]
+    fn list_append_bools() {
         assert_evals_to!(
             "List.append [ True, False ] True",
             &[true, false, true],
             &'static [bool]
         );
+    }
+
+    #[test]
+    fn list_append_longer_list() {
         assert_evals_to!(
             "List.append [ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22 ] 23",
             &[11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
@@ -92,114 +108,118 @@ mod gen_list {
     }
 
     #[test]
-    fn list_map() {
+    fn list_map_on_empty_list_with_int_layout() {
         assert_evals_to!(
             indoc!(
                 r#"
-                    main = \{} ->
-                        empty : List Int
-                        empty =
-                            []
+                empty : List Int
+                empty =
+                    []
 
-                        List.map empty (\x -> x)
-                    main {}
+                List.map empty (\x -> x)
                 "#
             ),
             &[],
             &'static [i64]
         );
+    }
+
+    #[test]
+    fn list_map_on_non_empty_list() {
         assert_evals_to!(
             indoc!(
                 r#"
-                    main = \{} ->
-                        nonEmpty : List Int
-                        nonEmpty =
-                            [ 1 ]
+                nonEmpty : List Int
+                nonEmpty =
+                    [ 1 ]
 
-                        List.map nonEmpty (\x -> x)
-                    main {}
+                List.map nonEmpty (\x -> x)
                 "#
             ),
             &[1],
             &'static [i64]
         );
+    }
+
+    #[test]
+    fn list_map_changes_input() {
         assert_evals_to!(
             indoc!(
                 r#"
-                    main = \{} ->
-                        nonEmpty : List Int
-                        nonEmpty =
-                            [ 1 ]
+                nonEmpty : List Int
+                nonEmpty =
+                    [ 1 ]
 
-                        List.map nonEmpty (\x -> x + 1)
-                    main {}
+                List.map nonEmpty (\x -> x + 1)
                 "#
             ),
             &[2],
             &'static [i64]
         );
+    }
 
+    #[test]
+    fn list_map_on_big_list() {
         assert_evals_to!(
             indoc!(
                 r#"
-                    main = \{} ->
-                        nonEmpty : List Int
-                        nonEmpty =
-                            [ 1, 2, 3, 4, 5 ]
-                        List.map nonEmpty (\x -> x * 2)
-                    main {}
+                nonEmpty : List Int
+                nonEmpty =
+                    [ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 ]
+    
+                List.map nonEmpty (\x -> x * 2)
                 "#
             ),
-            &[2, 4, 6, 8, 10],
+            &[2, 4, 6, 8, 10, 2, 4, 6, 8, 10, 2, 4, 6, 8, 10, 2, 4, 6, 8, 10, 2, 4, 6, 8, 10],
             &'static [i64]
         );
+    }
 
+    #[test]
+    fn list_map_with_type_change() {
         assert_evals_to!(
             indoc!(
                 r#"
-                    main = \{} ->
-                        nonEmpty : List Int
-                        nonEmpty =
-                            [ 1, 1, -4, 1, 2 ]
-        
-            
-                        List.map nonEmpty (\x -> x > 0)
-                    
-                    main {}
+                nonEmpty : List Int
+                nonEmpty =
+                    [ 1, 1, -4, 1, 2 ]
+
+    
+                List.map nonEmpty (\x -> x > 0)
                 "#
             ),
             &[true, true, false, true, true],
             &'static [bool]
         );
+    }
 
+    #[test]
+    fn list_map_using_defined_function() {
         assert_evals_to!(
             indoc!(
                 r#"
-                     main = \{} ->
-                         nonEmpty : List Int
-                         nonEmpty =
-                             [ 1, 1, -4, 1, 2 ]
-        
-                         greaterThanOne : Int -> Bool
-                         greaterThanOne = \i ->
-                             i > 0
-        
-                         List.map nonEmpty greaterThanOne
-        
-                     main {}
+                 nonEmpty : List Int
+                 nonEmpty =
+                     [ 2, 2, -4, 2, 3 ]
+
+                 greaterThanOne : Int -> Bool
+                 greaterThanOne = \i ->
+                     i > 1
+
+                 List.map nonEmpty greaterThanOne
                  "#
             ),
             &[true, true, false, true, true],
             &'static [bool]
         );
+    }
 
+    #[test]
+    fn list_map_all_inline() {
         assert_evals_to!(
             indoc!(
                 r#"
-                    main = \{} ->
-                        List.map [] (\x -> x > 0)
-        
-                    main {}
+                List.map [] (\x -> x > 0)
                 "#
             ),
             &[],
