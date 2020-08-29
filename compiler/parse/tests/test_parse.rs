@@ -50,6 +50,15 @@ mod test_parse {
         assert_eq!(Err(expected_fail), actual);
     }
 
+    fn assert_segments<E: Fn(&Bump) -> Vec<'_, ast::StrSegment<'_>>>(input: &str, to_expected: E) {
+        let arena = Bump::new();
+        let actual = parse_with(&arena, arena.alloc(input));
+        let expected_slice = to_expected(&arena).into_bump_slice();
+        let expected_expr = Expr::Str(Line(expected_slice));
+
+        assert_eq!(Ok(expected_expr), actual);
+    }
+
     fn parses_with_escaped_char<
         I: Fn(&str) -> String,
         E: Fn(char, &Bump) -> Vec<'_, ast::StrSegment<'_>>,
@@ -162,23 +171,57 @@ mod test_parse {
         );
     }
 
-    // INTERPOLATION
+    // UNICODE ESCAPES
 
-    fn assert_interpolations<E: Fn(&Bump) -> Vec<'_, ast::StrSegment<'_>>>(
-        input: &str,
-        to_expected: E,
-    ) {
-        let arena = Bump::new();
-        let actual = parse_with(&arena, arena.alloc(input));
-        let expected_slice = to_expected(&arena).into_bump_slice();
-        let expected_expr = Expr::Str(Line(expected_slice));
-
-        assert_eq!(Ok(expected_expr), actual);
+    #[test]
+    fn unicode_escape_in_middle() {
+        assert_segments(r#""Hi, \u(123)!""#, |arena| {
+            bumpalo::vec![in arena;
+                Plaintext("Hi, "),
+                Unicode(Located::new(0, 0, 8, 11, "123")),
+                Plaintext("!")
+            ]
+        });
     }
 
     #[test]
+    fn unicode_escape_in_front() {
+        assert_segments(r#""\u(1234) is a unicode char""#, |arena| {
+            bumpalo::vec![in arena;
+                Unicode(Located::new(0, 0, 4, 8, "1234")),
+                Plaintext(" is a unicode char")
+            ]
+        });
+    }
+
+    #[test]
+    fn unicode_escape_in_back() {
+        assert_segments(r#""this is unicode: \u(1)""#, |arena| {
+            bumpalo::vec![in arena;
+                Plaintext("this is unicode: "),
+                Unicode(Located::new(0, 0, 21, 22, "1"))
+            ]
+        });
+    }
+
+    #[test]
+    fn unicode_escape_multiple() {
+        assert_segments(r#""\u(a1) this is \u(2Bcd) unicode \u(ef97)""#, |arena| {
+            bumpalo::vec![in arena;
+                Unicode(Located::new(0, 0, 4, 6, "a1")),
+                Plaintext(" this is "),
+                Unicode(Located::new(0, 0, 19, 23, "2Bcd")),
+                Plaintext(" unicode "),
+                Unicode(Located::new(0, 0, 36, 40, "ef97"))
+            ]
+        });
+    }
+
+    // INTERPOLATION
+
+    #[test]
     fn string_with_interpolation_in_middle() {
-        assert_interpolations(r#""Hi, \(name)!""#, |arena| {
+        assert_segments(r#""Hi, \(name)!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -194,7 +237,7 @@ mod test_parse {
 
     #[test]
     fn string_with_interpolation_in_front() {
-        assert_interpolations(r#""\(name), hi!""#, |arena| {
+        assert_segments(r#""\(name), hi!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -209,7 +252,7 @@ mod test_parse {
 
     #[test]
     fn string_with_interpolation_in_back() {
-        assert_interpolations(r#""Hello \(name)""#, |arena| {
+        assert_segments(r#""Hello \(name)""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -224,7 +267,7 @@ mod test_parse {
 
     #[test]
     fn string_with_multiple_interpolations() {
-        assert_interpolations(r#""Hi, \(name)! How is \(project) going?""#, |arena| {
+        assert_segments(r#""Hi, \(name)! How is \(project) going?""#, |arena| {
             let expr1 = arena.alloc(Var {
                 module_name: "",
                 ident: "name",

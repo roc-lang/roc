@@ -609,6 +609,7 @@ pub enum Attempting {
     Module,
     Record,
     Identifier,
+    HexDigit,
     ConcreteType,
     TypeVariable,
     WhenCondition,

@@ -1,11 +1,11 @@
 use crate::ast::{Attempting, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::{
-    allocated, ascii_char, loc, parse_utf8, unexpected, unexpected_eof, ParseResult, Parser, State,
+    allocated, ascii_char, ascii_hex_digits, loc, parse_utf8, unexpected, unexpected_eof,
+    ParseResult, Parser, State,
 };
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::{Located, Region};
 
 pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
     use StrLiteral::*;
@@ -176,38 +176,28 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                             state = new_state;
                         }
                         Some(b'u') => {
-                            // This is an escaped unicode character
-                            if let Some(b'(') = bytes.next() {
-                                segment_parsed_bytes += 1;
-                            } else {
-                                // Whenever we encounter `\u` it must be followed
-                                // by a `(` char!
-                                return Err(unexpected(0, state, Attempting::StrLiteral));
+                            // Advance past the `\u` before using the expr parser
+                            state = state.advance_without_indenting(2)?;
+
+                            let original_byte_count = state.bytes.len();
+
+                            // Parse the hex digits, surrounded by parens, then
+                            // give a canonicalization error if the digits form
+                            // an invalid unicode code point.
+                            let (loc_digits, new_state) =
+                                between!(ascii_char('('), loc(ascii_hex_digits()), ascii_char(')'))
+                                    .parse(arena, state)?;
+
+                            // Advance the iterator past the expr we just parsed.
+                            for _ in 0..(original_byte_count - new_state.bytes.len()) {
+                                bytes.next();
                             }
 
-                            while let Some(&byte) = bytes.next() {
-                                segment_parsed_bytes += 1;
+                            segments.push(StrSegment::Unicode(loc_digits));
 
-                                if (byte as char).is_ascii_hexdigit() {
-                                    // This is the most common case.
-                                } else if byte == b')' {
-                                    // Add the segment
-                                    end_segment!(|string: &'a str| {
-                                        let value = &string[0..string.len() - 1];
-
-                                        StrSegment::Unicode(Located {
-                                            region: Region::zero(), // TODO calculate the right region
-                                            value,
-                                        })
-                                    });
-
-                                    // We're done parsing digits now.
-                                    break;
-                                } else {
-                                    // Unicode escapes must all be digits!
-                                    return Err(unexpected(0, state, Attempting::StrLiteral));
-                                }
-                            }
+                            // Reset the segment
+                            segment_parsed_bytes = 0;
+                            state = new_state;
                         }
                         Some(b'\\') => {
                             escaped_char!('\\');
