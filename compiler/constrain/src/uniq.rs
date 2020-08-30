@@ -504,14 +504,20 @@ pub fn constrain_expr(
             )
         }
         Str(segments) => {
-            todo!("uniq constrain interpolations {:?}", segments);
-            // let uniq_type = var_store.fresh();
-            // let inferred = str_type(Bool::variable(uniq_type));
+            if segments
+                .iter()
+                .any(|seg| matches!(seg, roc_can::expr::StrSegment::Interpolation(_)))
+            {
+                todo!("TODO support unique constraints for interpolated strings.");
+            }
 
-            // exists(
-            //     vec![uniq_type],
-            //     Eq(inferred, expected, Category::Str, region),
-            // )
+            let uniq_type = var_store.fresh();
+            let inferred = str_type(Bool::variable(uniq_type));
+
+            exists(
+                vec![uniq_type],
+                Eq(inferred, expected, Category::Str, region),
+            )
         }
         EmptyRecord => {
             let uniq_type = var_store.fresh();

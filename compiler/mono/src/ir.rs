@@ -585,15 +585,19 @@ pub enum Stmt<'a> {
     Jump(JoinPointId, &'a [Symbol]),
     RuntimeError(&'a str),
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum StrSegment<'a> {
+    Interpolation(Expr<'a>),
+    Plaintext(&'a str),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Literal<'a> {
     // Literals
     Int(i64),
     Float(f64),
-    Str {
-        interpolations: &'a [(&'a str, Symbol)],
-        suffix: &'a str,
-    },
+    Str(&'a str),
     /// Closed tag unions containing exactly two (0-arity) tags compile to Expr::Bool,
     /// so they can (at least potentially) be emitted as 1-bit machine bools.
     ///
@@ -672,13 +676,7 @@ impl<'a> Literal<'a> {
             Float(lit) => alloc.text(format!("{}f64", lit)),
             Bool(lit) => alloc.text(format!("{}", lit)),
             Byte(lit) => alloc.text(format!("{}u8", lit)),
-            Str {
-                interpolations,
-                suffix,
-            } => {
-                // alloc.text(format!("{:?}", lit))
-                todo!("Literal::to_doc for Str");
-            }
+            Str(lit) => alloc.text(format!("{:?}", lit)),
         }
     }
 }
@@ -1251,17 +1249,43 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        Str {
-            interpolations,
-            suffix: _,
-        } => {
-            todo!("mono IR to turn Str interpolations into Let");
-            // Stmt::Let(
-            // assigned,
-            // Expr::Literal(Literal::Str(arena.alloc(string))),
-            // Layout::Builtin(Builtin::Str),
-            // hole,
-            // )
+        Str(segments) => {
+            use roc_can::expr::StrSegment::*;
+
+            let iter = &mut segments.into_iter().rev();
+            let /* mut */ stmt = match iter.next() {
+                Some(Plaintext(string)) => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Str(arena.alloc(string))),
+                    Layout::Builtin(Builtin::Str),
+                    hole,
+                ),
+                Some(Interpolation(loc_expr)) => {
+                    with_hole(env, loc_expr.value, procs, layout_cache, assigned, hole)
+                }
+                None => {
+                    // No segments? Empty string!
+                    return Stmt::Let(
+                        assigned,
+                        Expr::Literal(Literal::Str("")),
+                        Layout::Builtin(Builtin::Str),
+                        hole,
+                    );
+                }
+            };
+
+            while let Some(seg) = iter.next() {
+                match seg {
+                    Plaintext(string) => {
+                        todo!("Str.concat plaintext str with previous: {:?}", string);
+                    }
+                    Interpolation(loc_expr) => {
+                        todo!("Str.concat interplation with previous: {:?}", loc_expr);
+                    }
+                }
+            }
+
+            stmt
         }
 
         Num(var, num) => match num_argument_to_int_or_float(env.subs, var) {

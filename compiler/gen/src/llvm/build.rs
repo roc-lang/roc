@@ -222,22 +222,10 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         Float(num) => env.context.f64_type().const_float(*num).into(),
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
-        Str {
-            interpolations,
-            suffix,
-        } => {
-            if interpolations.is_empty() && suffix.is_empty() {
+        Str(str_literal) => {
+            if str_literal.is_empty() {
                 empty_list(env)
             } else {
-                if !interpolations.is_empty() {
-                    todo!(
-                        "LLVM code gen for string interpolations: {:?}",
-                        interpolations
-                    );
-                }
-
-                let mut str_literal = suffix; // TODO REMOVE THIS
-
                 let ctx = env.context;
                 let builder = env.builder;
 
