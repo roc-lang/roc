@@ -980,13 +980,10 @@ where
     index_alloca
 }
 
-// In many cases we dont want to do anything if the
-// builtin was given an empty list. This is because
-// allocating memory for a list is costly, so its
-// better to skip if it we can. Furthermore, checking
-// if a list is empty requires both seeing if the list
-// is a NonEmpty layout and if its a List(elem_layout)
-// but with a length of 0.
+// This function checks if the list is empty, and
+// if it is, it returns an empty list, and if not
+// it runs whatever code is passed in under `build_non_empty`
+// This is the avoid allocating memory if the list is empty.
 fn if_list_is_not_empty<'a, 'ctx, 'env, 'b, NonEmptyFn>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
