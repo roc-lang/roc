@@ -55,6 +55,7 @@ pub enum Problem {
         alias_name: Symbol,
         region: Region,
     },
+    InvalidInterpolation(Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -124,6 +125,8 @@ pub enum RuntimeError {
     CircularDef(Vec<Symbol>, Vec<(Region /* pattern */, Region /* expr */)>),
 
     NonExhaustivePattern,
+
+    InvalidInterpolation(Region),
 
     /// When the author specifies a type annotation but no implementation
     NoImplementation,

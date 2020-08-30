@@ -781,7 +781,7 @@ fn to_expr_report<'b>(
                 unreachable!("I don't think these can be reached")
             }
 
-            Reason::InterpolatedStringVar => {
+            Reason::StrInterpolation => {
                 unimplemented!("string interpolation is not implemented yet")
             }
 
@@ -875,6 +875,10 @@ fn add_category<'b>(
         Int => alloc.concat(vec![this_is, alloc.text(" an integer of type:")]),
         Float => alloc.concat(vec![this_is, alloc.text(" a float of type:")]),
         Str => alloc.concat(vec![this_is, alloc.text(" a string of type:")]),
+        StrInterpolation => alloc.concat(vec![
+            this_is,
+            alloc.text(" a value in a string interpolation, which was of type:"),
+        ]),
 
         Lambda => alloc.concat(vec![this_is, alloc.text(" an anonymous function of type:")]),
 

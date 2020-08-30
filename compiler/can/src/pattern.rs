@@ -471,7 +471,7 @@ fn flatten_str_literal(literal: &StrLiteral<'_>) -> Pattern {
 
     match literal {
         PlainLine(str_slice) => Pattern::StrLiteral((*str_slice).into()),
-        LineWithEscapes(segments) => flatten_str_lines(&[segments]),
+        Line(segments) => flatten_str_lines(&[segments]),
         Block(lines) => flatten_str_lines(lines),
     }
 }
@@ -490,8 +490,8 @@ fn flatten_str_lines(lines: &[&[StrSegment<'_>]]) -> Pattern {
                 Unicode(loc_digits) => {
                     todo!("parse unicode digits {:?}", loc_digits);
                 }
-                Interpolated { region, .. } => {
-                    return Pattern::UnsupportedPattern(region.clone());
+                Interpolated(loc_expr) => {
+                    return Pattern::UnsupportedPattern(loc_expr.region);
                 }
                 EscapedChar(ch) => buf.push(*ch),
             }

@@ -277,21 +277,53 @@ mod solve_expr {
         );
     }
 
-    // // INTERPOLATED STRING
+    // INTERPOLATED STRING
 
-    // #[test]
-    // fn infer_interpolated_string() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             whatItIs = "great"
+    #[test]
+    fn infer_interpolated_string() {
+        infer_eq(
+            indoc!(
+                r#"
+                whatItIs = "great"
 
-    //             "type inference is \(whatItIs)!"
-    //         "#
-    //         ),
-    //         "Str",
-    //     );
-    // }
+                "type inference is \(whatItIs)!"
+            "#
+            ),
+            "Str",
+        );
+    }
+
+    #[test]
+    fn infer_interpolated_var() {
+        infer_eq(
+            indoc!(
+                r#"
+                whatItIs = "great"
+
+                str = "type inference is \(whatItIs)!"
+
+                whatItIs
+            "#
+            ),
+            "Str",
+        );
+    }
+
+    #[test]
+    fn infer_interpolated_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                rec = { whatItIs: "great" }
+
+                str = "type inference is \(rec.whatItIs)!"
+
+                rec
+            "#
+            ),
+            "{ whatItIs : Str }",
+        );
+    }
 
     // LIST MISMATCH
 

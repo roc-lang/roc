@@ -503,8 +503,8 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        Str { interpolations, .. } => {
-            todo!("uniq constrain interpolations {:?}", interpolations);
+        Str(segments) => {
+            todo!("uniq constrain interpolations {:?}", segments);
             // let uniq_type = var_store.fresh();
             // let inferred = str_type(Bool::variable(uniq_type));
 

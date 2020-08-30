@@ -9,12 +9,13 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
+use inlinable_string::InlinableString;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, StrLiteral, StrSegment};
+use roc_parse::ast::{self, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Located, Region};
@@ -45,6 +46,12 @@ impl Output {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum StrSegment {
+    Interpolation(Located<Expr>),
+    Plaintext(InlinableString),
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
 
@@ -55,10 +62,7 @@ pub enum Expr {
     // Int and Float store a variable to generate better error messages
     Int(Variable, i64),
     Float(Variable, f64),
-    Str {
-        interpolations: Vec<(Box<str>, Symbol)>,
-        suffix: Box<str>,
-    },
+    Str(Vec<StrSegment>),
     List {
         list_var: Variable, // required for uniqueness of the list
         elem_var: Variable,
@@ -249,7 +253,7 @@ pub fn canonicalize_expr<'a>(
                 )
             }
         }
-        ast::Expr::Str(literal) => flatten_str_literal(env, scope, literal),
+        ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
         ast::Expr::List(loc_elems) => {
             if loc_elems.is_empty() {
                 (
@@ -1320,32 +1324,39 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
     }
 }
 
-fn flatten_str_literal(
-    env: &mut Env<'_>,
+fn flatten_str_literal<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
     scope: &mut Scope,
-    literal: &StrLiteral<'_>,
+    literal: &StrLiteral<'a>,
 ) -> (Expr, Output) {
     use ast::StrLiteral::*;
 
     match literal {
         PlainLine(str_slice) => (
-            Expr::Str {
-                interpolations: Vec::new(),
-                suffix: (*str_slice).into(),
-            },
+            Expr::Str(vec![StrSegment::Plaintext((*str_slice).into())]),
             Output::default(),
         ),
-        LineWithEscapes(segments) => flatten_str_lines(env, scope, &[segments]),
-        Block(lines) => flatten_str_lines(env, scope, lines),
+        Line(segments) => flatten_str_lines(env, var_store, scope, &[segments]),
+        Block(lines) => flatten_str_lines(env, var_store, scope, lines),
     }
 }
 
-fn flatten_str_lines(
-    env: &mut Env<'_>,
+fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
+    match expr {
+        ast::Expr::Var { .. } => true,
+        ast::Expr::Access(sub_expr, _) => is_valid_interpolation(sub_expr),
+        _ => false,
+    }
+}
+
+fn flatten_str_lines<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
     scope: &mut Scope,
-    lines: &[&[StrSegment<'_>]],
+    lines: &[&[ast::StrSegment<'a>]],
 ) -> (Expr, Output) {
-    use StrSegment::*;
+    use ast::StrSegment::*;
 
     let mut buf = String::new();
     let mut interpolations = Vec::new();
@@ -1360,37 +1371,32 @@ fn flatten_str_lines(
                 Unicode(loc_digits) => {
                     todo!("parse unicode digits {:?}", loc_digits);
                 }
-                Interpolated {
-                    module_name,
-                    ident,
-                    region,
-                } => {
-                    let (expr, new_output) =
-                        canonicalize_lookup(env, scope, module_name, ident, region.clone());
+                Interpolated(loc_expr) => {
+                    if is_valid_interpolation(loc_expr.value) {
+                        let (loc_expr, new_output) = canonicalize_expr(
+                            env,
+                            var_store,
+                            scope,
+                            loc_expr.region,
+                            loc_expr.value,
+                        );
 
-                    output.union(new_output);
+                        output.union(new_output);
 
-                    match expr {
-                        Expr::Var(symbol) => {
-                            interpolations.push((buf.into(), symbol));
-                        }
-                        _ => {
-                            todo!("TODO gracefully handle non-ident in string interpolation.");
-                        }
+                        interpolations.push(StrSegment::Interpolation(loc_expr));
+                    } else {
+                        env.problem(Problem::InvalidInterpolation(loc_expr.region));
+
+                        return (
+                            Expr::RuntimeError(RuntimeError::InvalidInterpolation(loc_expr.region)),
+                            output,
+                        );
                     }
-
-                    buf = String::new();
                 }
                 EscapedChar(ch) => buf.push(*ch),
             }
         }
     }
 
-    (
-        Expr::Str {
-            interpolations,
-            suffix: buf.into(),
-        },
-        output,
-    )
+    (Expr::Str(interpolations), output)
 }

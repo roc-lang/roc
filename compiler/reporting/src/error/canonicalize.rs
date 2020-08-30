@@ -262,6 +262,12 @@ pub fn can_problem<'b>(
                 alloc.reflow(" can occur in this position."),
             ]),
         ]),
+        Problem::InvalidInterpolation(region) => {
+            todo!(
+                "TODO report an invalid string interpolation at region {:?}",
+                region
+            );
+        }
         Problem::RuntimeError(runtime_error) => pretty_runtime_error(alloc, runtime_error),
     };
 
@@ -524,6 +530,12 @@ fn pretty_runtime_error<'b>(
             alloc.region(region),
             alloc.reflow("Only variables can be updated with record update syntax."),
         ]),
+        RuntimeError::InvalidInterpolation(region) => {
+            todo!(
+                "TODO runtime error for an invalid string interpolation at region {:?}",
+                region
+            );
+        }
         RuntimeError::NoImplementation => todo!("no implementation, unreachable"),
         RuntimeError::NonExhaustivePattern => {
             unreachable!("not currently reported (but can blow up at runtime)")

@@ -199,14 +199,34 @@ pub fn constrain_expr(
 
             exists(vars, And(cons))
         }
-        Str { interpolations, .. } => {
-            todo!(
-                "constrain interpolations in a string literal {:?}",
-                interpolations
-            );
+        Str(segments) => {
+            use crate::builtins::str_type;
+            use roc_can::expr::StrSegment::*;
 
-            // use crate::builtins::{empty_list_type, float_literal, int_literal, list_type, str_type};
-            // Eq(str_type(), expected, Category::Str, region)
+            let mut cons = Vec::with_capacity(segments.len() + 1);
+            let expect_interpolated =
+                |region| Expected::ForReason(Reason::StrInterpolation, str_type(), region);
+
+            for segment in segments {
+                match segment {
+                    Plaintext(_) => {
+                        // Plaintext strings add no constraints
+                    }
+                    Interpolation(loc_expr) => {
+                        cons.push(constrain_expr(
+                            env,
+                            loc_expr.region,
+                            &loc_expr.value,
+                            expect_interpolated(loc_expr.region),
+                        ));
+                    }
+                }
+            }
+
+            // The expression as a whole should have the type Str.
+            cons.push(Eq(str_type(), expected, Category::Str, region));
+
+            And(cons)
         }
         List {
             elem_var,
