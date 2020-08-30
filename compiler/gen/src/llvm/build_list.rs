@@ -1,11 +1,10 @@
-use crate::llvm::build::{load_symbol, load_symbol_and_layout, Env, InPlace, Scope};
+use crate::llvm::build::{Env, InPlace};
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type, ptr_int};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::types::{BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
-use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, MemoryMode};
 
 /// List.single : a -> List a
@@ -193,7 +192,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
 pub fn list_join<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
-    outer_list_wrapper: StructValue<'ctx>,
+    outer_list: BasicValueEnum<'ctx>,
     outer_list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     // List.join is implemented as follows:
@@ -221,6 +220,7 @@ pub fn list_join<'a, 'ctx, 'env>(
             let inner_list_type =
                 basic_type_from_layout(env.arena, ctx, &inner_list_layout, env.ptr_bytes);
 
+            let outer_list_wrapper = outer_list.into_struct_value();
             let outer_list_len = list_len(builder, outer_list_wrapper);
             let outer_list_ptr = {
                 let elem_ptr_type = get_ptr_type(&inner_list_type, AddressSpace::Generic);
@@ -240,12 +240,7 @@ pub fn list_join<'a, 'ctx, 'env>(
                 builder.build_store(list_len_sum_alloca, ctx.i64_type().const_int(0, false));
 
                 // List Sum Loop
-                let sum_loop = |sum_index| {
-                    let inner_list_wrapper_ptr = unsafe {
-                        builder.build_in_bounds_gep(outer_list_ptr, &[sum_index], "load_index")
-                    };
-
-                    let inner_list = builder.build_load(inner_list_wrapper_ptr, "inner_list");
+                let sum_loop = |_, inner_list: BasicValueEnum<'ctx>| {
                     let inner_list_len = list_len(builder, inner_list.into_struct_value());
 
                     let next_list_sum = builder.build_int_add(
@@ -259,10 +254,11 @@ pub fn list_join<'a, 'ctx, 'env>(
                     builder.build_store(list_len_sum_alloca, next_list_sum);
                 };
 
-                incrementing_index_loop(
+                incrementing_elem_loop(
                     builder,
                     parent,
                     ctx,
+                    outer_list_ptr,
                     outer_list_len,
                     "#sum_index",
                     None,
@@ -280,16 +276,8 @@ pub fn list_join<'a, 'ctx, 'env>(
                 builder.build_store(dest_elem_ptr_alloca, final_list_ptr);
 
                 // Inner List Loop
-                let inner_list_loop = |index| {
-                    let inner_list_wrapper = {
-                        let wrapper_ptr = unsafe {
-                            builder.build_in_bounds_gep(outer_list_ptr, &[index], "load_index")
-                        };
-
-                        builder
-                            .build_load(wrapper_ptr, "inner_list_wrapper")
-                            .into_struct_value()
-                    };
+                let inner_list_loop = |_, inner_list: BasicValueEnum<'ctx>| {
+                    let inner_list_wrapper = inner_list.into_struct_value();
 
                     let inner_list_len = list_len(builder, inner_list_wrapper);
 
@@ -307,20 +295,10 @@ pub fn list_join<'a, 'ctx, 'env>(
                     );
                     builder.position_at_end(inner_list_non_empty_block);
 
+                    let inner_list_ptr = load_list_ptr(builder, inner_list_wrapper, elem_ptr_type);
+
                     // Element Inserting Loop
-                    let inner_elem_loop = |inner_index| {
-                        let src_elem_ptr = unsafe {
-                            let inner_list_ptr =
-                                load_list_ptr(builder, inner_list_wrapper, elem_ptr_type);
-
-                            builder.build_in_bounds_gep(
-                                inner_list_ptr,
-                                &[inner_index],
-                                "load_index",
-                            )
-                        };
-
-                        let src_elem = builder.build_load(src_elem_ptr, "get_elem");
+                    let inner_elem_loop = |_, src_elem| {
                         // TODO clone src_elem
 
                         let curr_dest_elem_ptr = builder
@@ -340,10 +318,11 @@ pub fn list_join<'a, 'ctx, 'env>(
                         builder.build_store(dest_elem_ptr_alloca, inc_dest_elem_ptr);
                     };
 
-                    incrementing_index_loop(
+                    incrementing_elem_loop(
                         builder,
                         parent,
                         ctx,
+                        inner_list_ptr,
                         inner_list_len,
                         "#inner_index",
                         None,
@@ -354,10 +333,11 @@ pub fn list_join<'a, 'ctx, 'env>(
                     builder.position_at_end(after_inner_list_non_empty_block);
                 };
 
-                incrementing_index_loop(
+                incrementing_elem_loop(
                     builder,
                     parent,
                     ctx,
+                    outer_list_ptr,
                     outer_list_len,
                     "#inner_list_index",
                     None,
@@ -391,11 +371,9 @@ pub fn list_join<'a, 'ctx, 'env>(
 pub fn list_reverse<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
-    scope: &Scope<'a, 'ctx>,
-    list: &Symbol,
+    list: BasicValueEnum<'ctx>,
+    list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let (_, list_layout) = load_symbol_and_layout(env, scope, list);
-
     let non_empty_fn =
         |elem_layout: &Layout<'a>, len: IntValue<'ctx>, wrapper_struct: StructValue<'ctx>| {
             let builder = env.builder;
@@ -475,7 +453,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
             store_list(env, reversed_list_ptr, len)
         };
 
-    if_non_empty(env, parent, scope, non_empty_fn, list, list_layout)
+    if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout)
 }
 
 pub fn list_get_unsafe<'a, 'ctx, 'env>(
@@ -667,7 +645,9 @@ pub fn list_map<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     match (func, func_layout) {
         (BasicValueEnum::PointerValue(func_ptr), Layout::FunctionPointer(_, ret_elem_layout)) => {
-            let non_empty_fn = || {
+            let non_empty_fn = |elem_layout: &Layout<'a>,
+                                len: IntValue<'ctx>,
+                                list_wrapper: StructValue<'ctx>| {
                 let ctx = env.context;
                 let builder = env.builder;
 
@@ -678,12 +658,8 @@ pub fn list_map<'a, 'ctx, 'env>(
 
                 let list_ptr = load_list_ptr(builder, list_wrapper, ptr_type);
 
-                let list_loop = |index| {
+                let list_loop = |index, before_elem| {
                     // The pointer to the element in the input list
-                    let before_elem_ptr =
-                        unsafe { builder.build_in_bounds_gep(list_ptr, &[index], "load_index") };
-
-                    let before_elem = builder.build_load(before_elem_ptr, "get_before_elem");
 
                     let call_site_value =
                         builder.build_call(func_ptr, env.arena.alloc([before_elem]), "map_func");
@@ -705,12 +681,14 @@ pub fn list_map<'a, 'ctx, 'env>(
                     builder.build_store(after_elem_ptr, after_elem);
                 };
 
-                incrementing_index_loop(builder, parent, ctx, len, "#index", None, list_loop);
+                incrementing_elem_loop(
+                    builder, parent, ctx, list_ptr, len, "#index", None, list_loop,
+                );
 
                 store_list(env, ret_list_ptr, len)
             };
 
-            if_non_empty(env, parent, scope, non_empty_fn, list, list_layout)
+            if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout)
         }
         _ => {
             unreachable!(
@@ -815,16 +793,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
                     let first_list_ptr = load_list_ptr(builder, first_list_wrapper, ptr_type);
 
                     // FIRST LOOP
-                    let first_loop = |first_index| {
-                        // The pointer to the element in the first list
-                        let first_list_elem_ptr = unsafe {
-                            builder.build_in_bounds_gep(
-                                first_list_ptr,
-                                &[first_index],
-                                "load_index",
-                            )
-                        };
-
+                    let first_loop = |first_index, first_list_elem| {
                         // The pointer to the element in the combined list
                         let combined_list_elem_ptr = unsafe {
                             builder.build_in_bounds_gep(
@@ -834,18 +803,17 @@ pub fn list_concat<'a, 'ctx, 'env>(
                             )
                         };
 
-                        let first_list_elem = builder.build_load(first_list_elem_ptr, "get_elem");
-
                         // Mutate the new array in-place to change the element.
                         builder.build_store(combined_list_elem_ptr, first_list_elem);
                     };
 
                     let index_name = "#index";
 
-                    let index_alloca = incrementing_index_loop(
+                    let index_alloca = incrementing_elem_loop(
                         builder,
                         parent,
                         ctx,
+                        first_list_ptr,
                         first_list_len,
                         index_name,
                         None,
@@ -855,19 +823,10 @@ pub fn list_concat<'a, 'ctx, 'env>(
                     // Reset the index variable to 0
                     builder.build_store(index_alloca, ctx.i64_type().const_int(0, false));
 
+                    let second_list_ptr = load_list_ptr(builder, second_list_wrapper, ptr_type);
+
                     // SECOND LOOP
-                    let second_loop = |second_index| {
-                        let second_list_ptr = load_list_ptr(builder, second_list_wrapper, ptr_type);
-
-                        // The pointer to the element in the second list
-                        let second_list_elem_ptr = unsafe {
-                            builder.build_in_bounds_gep(
-                                second_list_ptr,
-                                &[second_index],
-                                "load_index",
-                            )
-                        };
-
+                    let second_loop = |second_index, second_list_elem| {
                         // The pointer to the element in the combined list.
                         // Note that the pointer does not start at the index
                         // 0, it starts at the index of first_list_len. In that
@@ -890,16 +849,15 @@ pub fn list_concat<'a, 'ctx, 'env>(
                             )
                         };
 
-                        let second_list_elem = builder.build_load(second_list_elem_ptr, "get_elem");
-
                         // Mutate the new array in-place to change the element.
                         builder.build_store(combined_list_elem_ptr, second_list_elem);
                     };
 
-                    incrementing_index_loop(
+                    incrementing_elem_loop(
                         builder,
                         parent,
                         ctx,
+                        second_list_ptr,
                         second_list_len,
                         index_name,
                         Some(index_alloca),
@@ -939,7 +897,40 @@ pub fn list_concat<'a, 'ctx, 'env>(
 
 // This helper simulates a basic for loop, where
 // and index increments up from 0 to some end value
-pub fn incrementing_index_loop<'ctx, LoopFn>(
+pub fn incrementing_elem_loop<'ctx, LoopFn>(
+    builder: &Builder<'ctx>,
+    parent: FunctionValue<'ctx>,
+    ctx: &'ctx Context,
+    list_ptr: PointerValue<'ctx>,
+    end: IntValue<'ctx>,
+    index_name: &str,
+    maybe_alloca: Option<PointerValue<'ctx>>,
+    mut loop_fn: LoopFn,
+) -> PointerValue<'ctx>
+where
+    LoopFn: FnMut(IntValue<'ctx>, BasicValueEnum<'ctx>),
+{
+    incrementing_index_loop(
+        builder,
+        parent,
+        ctx,
+        end,
+        index_name,
+        maybe_alloca,
+        |index| {
+            // The pointer to the element in the list
+            let elem_ptr = unsafe { builder.build_in_bounds_gep(list_ptr, &[index], "load_index") };
+
+            let elem = builder.build_load(elem_ptr, "get_elem");
+
+            loop_fn(index, elem);
+        },
+    )
+}
+
+// This helper simulates a basic for loop, where
+// and index increments up from 0 to some end value
+fn incrementing_index_loop<'ctx, LoopFn>(
     builder: &Builder<'ctx>,
     parent: FunctionValue<'ctx>,
     ctx: &'ctx Context,
@@ -989,13 +980,19 @@ where
     index_alloca
 }
 
-fn if_non_empty<'a, 'ctx, 'env, 'b, NonEmptyFn>(
+// In many cases we dont want to do anything if the
+// builtin was given an empty list. This is because
+// allocating memory for a list is costly, so its
+// better to skip if it we can. Furthermore, checking
+// if a list is empty requires both seeing if the list
+// is a NonEmpty layout and if its a List(elem_layout)
+// but with a length of 0.
+fn if_list_is_not_empty<'a, 'ctx, 'env, 'b, NonEmptyFn>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
-    scope: &Scope<'a, 'ctx>,
     mut build_non_empty: NonEmptyFn,
-    list: &Symbol,
-    list_layout: &'b Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx>
 where
     NonEmptyFn: FnMut(&Layout<'a>, IntValue<'ctx>, StructValue<'ctx>) -> BasicValueEnum<'ctx>,
@@ -1004,16 +1001,14 @@ where
         Layout::Builtin(Builtin::EmptyList) => empty_list(env),
 
         Layout::Builtin(Builtin::List(_, elem_layout)) => {
-            let wrapper_struct = load_symbol(env, scope, list).into_struct_value();
-
             let builder = env.builder;
             let ctx = env.context;
+
+            let wrapper_struct = list.into_struct_value();
 
             let len = list_len(builder, wrapper_struct);
 
             // list_len > 0
-            // We do this check to avoid allocating memory. If the input
-            // list is empty, then we can just return an empty list.
             let comparison = builder.build_int_compare(
                 IntPredicate::UGT,
                 len,
@@ -1264,7 +1259,7 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     list_element_ptr
 }
 
-fn store_list<'a, 'ctx, 'env>(
+pub fn store_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     list_ptr: PointerValue<'ctx>,
     len: IntValue<'ctx>,
