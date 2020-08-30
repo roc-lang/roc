@@ -667,88 +667,50 @@ pub fn list_map<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     match (func, func_layout) {
         (BasicValueEnum::PointerValue(func_ptr), Layout::FunctionPointer(_, ret_elem_layout)) => {
-            match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, elem_layout)) => {
-                    let ctx = env.context;
-                    let builder = env.builder;
+            let non_empty_fn = || {
+                let ctx = env.context;
+                let builder = env.builder;
 
-                    let list_wrapper = list.into_struct_value();
+                let ret_list_ptr = allocate_list(env, ret_elem_layout, len);
 
-                    let len = list_len(builder, list_wrapper);
+                let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+                let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-                    // len > 0
-                    // We do this check to avoid allocating memory. If the input
-                    // list is empty, then we can just return an empty list.
-                    let list_length_comparison = list_is_not_empty(builder, ctx, len);
+                let list_ptr = load_list_ptr(builder, list_wrapper, ptr_type);
 
-                    let if_list_is_empty = || empty_list(env);
+                let list_loop = |index| {
+                    // The pointer to the element in the input list
+                    let before_elem_ptr =
+                        unsafe { builder.build_in_bounds_gep(list_ptr, &[index], "load_index") };
 
-                    let if_list_is_not_empty = || {
-                        let ret_list_ptr = allocate_list(env, ret_elem_layout, len);
+                    let before_elem = builder.build_load(before_elem_ptr, "get_before_elem");
 
-                        let elem_type =
-                            basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-                        let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+                    let call_site_value =
+                        builder.build_call(func_ptr, env.arena.alloc([before_elem]), "map_func");
 
-                        let list_ptr = load_list_ptr(builder, list_wrapper, ptr_type);
+                    // set the calling convention explicitly for this call
+                    call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
 
-                        let list_loop = |index| {
-                            // The pointer to the element in the input list
-                            let before_elem_ptr = unsafe {
-                                builder.build_in_bounds_gep(list_ptr, &[index], "load_index")
-                            };
+                    let after_elem = call_site_value
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
 
-                            let before_elem =
-                                builder.build_load(before_elem_ptr, "get_before_elem");
-
-                            let call_site_value = builder.build_call(
-                                func_ptr,
-                                env.arena.alloc([before_elem]),
-                                "map_func",
-                            );
-
-                            // set the calling convention explicitly for this call
-                            call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
-
-                            let after_elem = call_site_value
-                                .try_as_basic_value()
-                                .left()
-                                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
-
-                            // The pointer to the element in the mapped-over list
-                            let after_elem_ptr = unsafe {
-                                builder.build_in_bounds_gep(
-                                    ret_list_ptr,
-                                    &[index],
-                                    "load_index_after_list",
-                                )
-                            };
-
-                            // Mutate the new array in-place to change the element.
-                            builder.build_store(after_elem_ptr, after_elem);
-                        };
-
-                        incrementing_index_loop(
-                            builder, parent, ctx, len, "#index", None, list_loop,
-                        );
-
-                        store_list(env, ret_list_ptr, len)
+                    // The pointer to the element in the mapped-over list
+                    let after_elem_ptr = unsafe {
+                        builder.build_in_bounds_gep(ret_list_ptr, &[index], "load_index_after_list")
                     };
 
-                    build_basic_phi2(
-                        env,
-                        parent,
-                        list_length_comparison,
-                        if_list_is_not_empty,
-                        if_list_is_empty,
-                        BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
-                    )
-                }
-                _ => {
-                    unreachable!("Invalid List layout for List.map : {:?}", list_layout);
-                }
-            }
+                    // Mutate the new array in-place to change the element.
+                    builder.build_store(after_elem_ptr, after_elem);
+                };
+
+                incrementing_index_loop(builder, parent, ctx, len, "#index", None, list_loop);
+
+                store_list(env, ret_list_ptr, len)
+            };
+
+            if_non_empty(env, parent, scope, non_empty_fn, list, list_layout)
         }
         _ => {
             unreachable!(
