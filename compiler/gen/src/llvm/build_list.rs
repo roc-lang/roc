@@ -453,7 +453,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
             store_list(env, reversed_list_ptr, len)
         };
 
-    if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout)
+    if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout, "List.reverse")
 }
 
 pub fn list_get_unsafe<'a, 'ctx, 'env>(
@@ -688,7 +688,7 @@ pub fn list_map<'a, 'ctx, 'env>(
                 store_list(env, ret_list_ptr, len)
             };
 
-            if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout)
+            if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout, "List.map")
         }
         _ => {
             unreachable!(
@@ -993,6 +993,7 @@ fn if_list_is_not_empty<'a, 'ctx, 'env, 'b, NonEmptyFn>(
     mut build_non_empty: NonEmptyFn,
     list: BasicValueEnum<'ctx>,
     list_layout: &Layout<'a>,
+    list_fn_name: &str,
 ) -> BasicValueEnum<'ctx>
 where
     NonEmptyFn: FnMut(&Layout<'a>, IntValue<'ctx>, StructValue<'ctx>) -> BasicValueEnum<'ctx>,
@@ -1030,7 +1031,7 @@ where
             )
         }
         _ => {
-            unreachable!("Invalid List layout for List.reverse {:?}", list_layout);
+            unreachable!("Invalid List layout for {} {:?}", list_fn_name, list_layout);
         }
     }
 }
