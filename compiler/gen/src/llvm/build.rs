@@ -3,7 +3,7 @@ use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, clone_nonempty_list, empty_list, empty_polymorphic_list,
     incrementing_elem_loop, list_append, list_concat, list_get_unsafe, list_is_not_empty,
     list_join, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set, list_single,
-    load_list_ptr, store_list,
+    load_list_ptr, store_list, LoopListArg,
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
@@ -2021,8 +2021,10 @@ fn str_concat<'a, 'ctx, 'env>(
                 builder,
                 parent,
                 ctx,
-                first_str_ptr,
-                first_str_len,
+                LoopListArg {
+                    ptr: first_str_ptr,
+                    len: first_str_len,
+                },
                 index_name,
                 None,
                 first_loop,
@@ -2061,8 +2063,10 @@ fn str_concat<'a, 'ctx, 'env>(
                 builder,
                 parent,
                 ctx,
-                second_str_ptr,
-                second_str_len,
+                LoopListArg {
+                    ptr: second_str_ptr,
+                    len: second_str_len,
+                },
                 index_name,
                 Some(index_alloca),
                 second_loop,

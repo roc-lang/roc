@@ -258,8 +258,10 @@ pub fn list_join<'a, 'ctx, 'env>(
                     builder,
                     parent,
                     ctx,
-                    outer_list_ptr,
-                    outer_list_len,
+                    LoopListArg {
+                        ptr: outer_list_ptr,
+                        len: outer_list_len,
+                    },
                     "#sum_index",
                     None,
                     sum_loop,
@@ -322,8 +324,10 @@ pub fn list_join<'a, 'ctx, 'env>(
                         builder,
                         parent,
                         ctx,
-                        inner_list_ptr,
-                        inner_list_len,
+                        LoopListArg {
+                            ptr: inner_list_ptr,
+                            len: inner_list_len,
+                        },
                         "#inner_index",
                         None,
                         inner_elem_loop,
@@ -337,8 +341,10 @@ pub fn list_join<'a, 'ctx, 'env>(
                     builder,
                     parent,
                     ctx,
-                    outer_list_ptr,
-                    outer_list_len,
+                    LoopListArg {
+                        ptr: outer_list_ptr,
+                        len: outer_list_len,
+                    },
                     "#inner_list_index",
                     None,
                     inner_list_loop,
@@ -682,7 +688,13 @@ pub fn list_map<'a, 'ctx, 'env>(
                 };
 
                 incrementing_elem_loop(
-                    builder, parent, ctx, list_ptr, len, "#index", None, list_loop,
+                    builder,
+                    parent,
+                    ctx,
+                    LoopListArg { ptr: list_ptr, len },
+                    "#index",
+                    None,
+                    list_loop,
                 );
 
                 store_list(env, ret_list_ptr, len)
@@ -813,8 +825,10 @@ pub fn list_concat<'a, 'ctx, 'env>(
                         builder,
                         parent,
                         ctx,
-                        first_list_ptr,
-                        first_list_len,
+                        LoopListArg {
+                            ptr: first_list_ptr,
+                            len: first_list_len,
+                        },
                         index_name,
                         None,
                         first_loop,
@@ -857,8 +871,10 @@ pub fn list_concat<'a, 'ctx, 'env>(
                         builder,
                         parent,
                         ctx,
-                        second_list_ptr,
-                        second_list_len,
+                        LoopListArg {
+                            ptr: second_list_ptr,
+                            len: second_list_len,
+                        },
                         index_name,
                         Some(index_alloca),
                         second_loop,
@@ -895,14 +911,16 @@ pub fn list_concat<'a, 'ctx, 'env>(
     }
 }
 
-// This helper simulates a basic for loop, where
-// and index increments up from 0 to some end value
+pub struct LoopListArg<'ctx> {
+    pub ptr: PointerValue<'ctx>,
+    pub len: IntValue<'ctx>,
+}
+
 pub fn incrementing_elem_loop<'ctx, LoopFn>(
     builder: &Builder<'ctx>,
     parent: FunctionValue<'ctx>,
     ctx: &'ctx Context,
-    list_ptr: PointerValue<'ctx>,
-    end: IntValue<'ctx>,
+    list: LoopListArg<'ctx>,
     index_name: &str,
     maybe_alloca: Option<PointerValue<'ctx>>,
     mut loop_fn: LoopFn,
@@ -914,12 +932,12 @@ where
         builder,
         parent,
         ctx,
-        end,
+        list.len,
         index_name,
         maybe_alloca,
         |index| {
             // The pointer to the element in the list
-            let elem_ptr = unsafe { builder.build_in_bounds_gep(list_ptr, &[index], "load_index") };
+            let elem_ptr = unsafe { builder.build_in_bounds_gep(list.ptr, &[index], "load_index") };
 
             let elem = builder.build_load(elem_ptr, "get_elem");
 
