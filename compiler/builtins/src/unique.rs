@@ -787,14 +787,14 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //     , Attr Shared (a -> Attr * Bool)
     //    -> Attr * (List b)
     add_type(Symbol::LIST_KEEP_IF, {
-        let_tvars! { a, b, star1, star2, star3 };
+        let_tvars! { a, star1, star2, star3 };
 
         unique_function(
             vec![
                 list_type(star1, a),
                 shared(SolvedType::Func(vec![flex(a)], Box::new(bool_type(star2)))),
             ],
-            list_type(star3, b),
+            list_type(star3, a),
         )
     });
 

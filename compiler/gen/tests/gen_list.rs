@@ -136,10 +136,49 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                List.keepIf [] (\x -> True)
+                alwaysTrue : Int -> Bool
+                alwaysTrue = \_ -> 
+                    True
+                    
+
+                List.keepIf [] alwaysTrue
                 "#
             ),
             &[],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_keep_if_always_false_for_non_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                alwaysFalse : Int -> Bool
+                alwaysFalse = \i ->
+                    False
+                    
+                List.keepIf [1,2,3,4,5,6,7,8] alwaysFalse
+                "#
+            ),
+            &[],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_keep_if_one() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                intIsOne : Int -> Bool
+                intIsOne = \i ->
+                    False
+                    
+                List.keepIf [1,2,3,4,5,6,7,8] intIsOne
+                "#
+            ),
+            &[1],
             &'static [i64]
         );
     }
