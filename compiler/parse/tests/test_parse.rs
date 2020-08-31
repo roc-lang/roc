@@ -2035,7 +2035,7 @@ mod test_parse {
             arena.alloc(StrLiteral(PlainLine(""))),
             newlines.into_bump_slice(),
         );
-        let loc_pattern1 = Located::new(1, 1, 1, 4, pattern1);
+        let loc_pattern1 = Located::new(1, 1, 1, 3, pattern1);
         let expr1 = Num("1");
         let loc_expr1 = Located::new(1, 1, 7, 8, expr1);
         let branch1 = &*arena.alloc(WhenBranch {

@@ -100,7 +100,8 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                                 return parse_block_string(arena, state, &mut bytes);
                             }
                             _ => {
-                                return Ok((PlainLine(""), state.advance_without_indenting(2)?));
+                                // Advance 1 for the close quote
+                                return Ok((PlainLine(""), state.advance_without_indenting(1)?));
                             }
                         }
                     } else {
