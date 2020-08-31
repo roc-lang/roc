@@ -37,7 +37,7 @@ mod test_parse {
 
     fn assert_parses_to<'a>(input: &'a str, expected_expr: Expr<'a>) {
         let arena = Bump::new();
-        let actual = parse_with(&arena, input);
+        let actual = parse_with(&arena, input.trim());
 
         assert_eq!(Ok(expected_expr), actual);
     }

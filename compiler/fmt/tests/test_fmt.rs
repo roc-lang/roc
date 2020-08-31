@@ -20,7 +20,7 @@ mod test_fmt {
     use roc_parse::parser::{Fail, Parser, State};
 
     fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, Fail> {
-        let state = State::new(input.as_bytes(), Attempting::Module);
+        let state = State::new(input.trim().as_bytes(), Attempting::Module);
         let parser = space0_before(loc!(roc_parse::expr::expr(0)), 0);
         let answer = parser.parse(&arena, state);
 
