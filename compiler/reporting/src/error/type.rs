@@ -498,6 +498,14 @@ fn to_expr_report<'b>(
             Reason::ElemInList { index } => {
                 let ith = index.ordinal();
 
+                // Don't say "the previous elements all have the type" if
+                // there was only 1 previous element!
+                let prev_elems_msg = if index.to_zero_based() == 1 {
+                    "However, the 1st element has the type:"
+                } else {
+                    "However, the preceding elements in the list all have the type:"
+                };
+
                 report_mismatch(
                     alloc,
                     filename,
@@ -506,13 +514,10 @@ fn to_expr_report<'b>(
                     expected_type,
                     region,
                     Some(expr_region),
-                    alloc.string(format!(
-                        "The {} element of this list does not match all the previous elements:",
-                        ith
-                    )),
-                    alloc.string(format!("The {} element is", ith)),
-                    alloc.reflow("But all the previous elements in the list have type:"),
-                    Some(alloc.reflow("I need all elements of a list to have the same type!")),
+                    alloc.reflow("This list contains elements with different types:"),
+                    alloc.string(format!("Its {} element is", ith)),
+                    alloc.reflow(prev_elems_msg),
+                    Some(alloc.reflow("I need every element in a list to have the same type!")),
                 )
             }
             Reason::RecordUpdateValue(field) => report_mismatch(
@@ -2387,11 +2392,11 @@ fn type_problem_to_pretty<'b>(
             }
         }
         IntFloat => alloc.tip().append(alloc.concat(vec![
-            alloc.reflow("Convert between "),
+            alloc.reflow("You can convert between "),
             alloc.type_str("Int"),
             alloc.reflow(" and "),
             alloc.type_str("Float"),
-            alloc.reflow(" with "),
+            alloc.reflow(" using functions like "),
             alloc.symbol_qualified(Symbol::NUM_TO_FLOAT),
             alloc.reflow(" and "),
             alloc.symbol_qualified(Symbol::NUM_ROUND),

@@ -20,7 +20,12 @@ const CYCLE_LN: &str = ["|     ", "│     "][!IS_WINDOWS as usize];
 const CYCLE_MID: &str = ["|     |", "│     ↓"][!IS_WINDOWS as usize];
 const CYCLE_END: &str = ["+-<---+", "└─────┘"][!IS_WINDOWS as usize];
 
-const GUTTER_BAR: &str = " ┆";
+const GUTTER_BAR: &str = "│";
+const UNDERLINE: &str = "▔";
+
+/// The number of monospace spaces the gutter bar takes up.
+/// (This is not necessarily the same as GUTTER_BAR.len()!)
+const GUTTER_BAR_WIDTH: usize = 1;
 
 pub fn cycle<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -91,12 +96,15 @@ impl<'b> Report<'b> {
             self.doc
         } else {
             let header = format!(
-                "-- {} {}",
+                "── {} {}",
                 self.title,
-                "-".repeat(80 - (self.title.len() + 4))
+                "─".repeat(80 - (self.title.len() + 4))
             );
 
-            alloc.stack(vec![alloc.text(header), self.doc])
+            alloc.stack(vec![
+                alloc.text(header).annotate(Annotation::Header),
+                self.doc,
+            ])
         }
     }
 }
@@ -110,6 +118,7 @@ pub struct Palette<'a> {
     pub alias: &'a str,
     pub error: &'a str,
     pub line_number: &'a str,
+    pub header: &'a str,
     pub gutter_bar: &'a str,
     pub module_name: &'a str,
     pub binop: &'a str,
@@ -126,7 +135,8 @@ pub const DEFAULT_PALETTE: Palette = Palette {
     alias: YELLOW_CODE,
     error: RED_CODE,
     line_number: CYAN_CODE,
-    gutter_bar: MAGENTA_CODE,
+    header: CYAN_CODE,
+    gutter_bar: CYAN_CODE,
     module_name: GREEN_CODE,
     binop: GREEN_CODE,
     typo: YELLOW_CODE,
@@ -390,13 +400,14 @@ impl<'a> RocDocAllocator<'a> {
             let overlapping = sub_region2.start_col < sub_region1.end_col;
 
             let highlight = if overlapping {
-                self.text("^".repeat((sub_region2.end_col - sub_region1.start_col) as usize))
+                self.text(UNDERLINE.repeat((sub_region2.end_col - sub_region1.start_col) as usize))
             } else {
-                let highlight1 = "^".repeat((sub_region1.end_col - sub_region1.start_col) as usize);
+                let highlight1 =
+                    UNDERLINE.repeat((sub_region1.end_col - sub_region1.start_col) as usize);
                 let highlight2 = if sub_region1 == sub_region2 {
                     "".repeat(0)
                 } else {
-                    "^".repeat((sub_region2.end_col - sub_region2.start_col) as usize)
+                    UNDERLINE.repeat((sub_region2.end_col - sub_region2.start_col) as usize)
                 };
                 let inbetween = " "
                     .repeat((sub_region2.start_col.saturating_sub(sub_region1.end_col)) as usize);
@@ -408,8 +419,9 @@ impl<'a> RocDocAllocator<'a> {
 
             let highlight_line = self
                 .line()
-                .append(self.text(" ".repeat(max_line_number_length)))
-                .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
+                // Omit the gutter bar when we know there are no further
+                // line numbers to be printed after this!
+                .append(self.text(" ".repeat(max_line_number_length + GUTTER_BAR_WIDTH)))
                 .append(if sub_region1.is_empty() && sub_region2.is_empty() {
                     self.nil()
                 } else {
@@ -491,11 +503,13 @@ impl<'a> RocDocAllocator<'a> {
         }
 
         if error_highlight_line {
-            let highlight_text = "^".repeat((sub_region.end_col - sub_region.start_col) as usize);
+            let highlight_text =
+                UNDERLINE.repeat((sub_region.end_col - sub_region.start_col) as usize);
             let highlight_line = self
                 .line()
-                .append(self.text(" ".repeat(max_line_number_length)))
-                .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
+                // Omit the gutter bar when we know there are no further
+                // line numbers to be printed after this!
+                .append(self.text(" ".repeat(max_line_number_length + GUTTER_BAR_WIDTH)))
                 .append(if highlight_text.is_empty() {
                     self.nil()
                 } else {
@@ -577,6 +591,7 @@ pub enum Annotation {
     Typo,
     TypoSuggestion,
     Tip,
+    Header,
 }
 
 /// Render with minimal formatting
@@ -746,6 +761,9 @@ where
             Error => {
                 self.write_str(self.palette.error)?;
             }
+            Header => {
+                self.write_str(self.palette.header)?;
+            }
             LineNumber => {
                 self.write_str(self.palette.line_number)?;
             }
@@ -775,7 +793,7 @@ where
             Some(annotation) => match annotation {
                 Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | Error | GutterBar
                 | Typo | TypoSuggestion | Structure | CodeBlock | PlainText | LineNumber | Tip
-                | Module => {
+                | Module | Header => {
                     self.write_str(RESET_CODE)?;
                 }
 
