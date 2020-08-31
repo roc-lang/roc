@@ -232,11 +232,11 @@ mod repl_eval {
         );
     }
 
-    #[test]
-    fn multiline_string() {
-        // If a string contains newlines, format it as a multiline string in the output
-        expect_success(r#""\n\nhi!\n\n""#, "\"\"\"\n\nhi!\n\n\"\"\"");
-    }
+    // #[test]
+    // fn multiline_string() {
+    //     // If a string contains newlines, format it as a multiline string in the output
+    //     expect_success(r#""\n\nhi!\n\n""#, "\"\"\"\n\nhi!\n\n\"\"\"");
+    // }
 
     // TODO uncomment this once https://github.com/rtfeldman/roc/issues/295 is done
     //

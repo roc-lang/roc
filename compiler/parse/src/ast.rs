@@ -88,8 +88,32 @@ pub struct WhenPattern<'a> {
 pub enum StrSegment<'a> {
     Plaintext(&'a str),              // e.g. "foo"
     Unicode(Loc<&'a str>),           // e.g. "00A0" in "\u(00A0)"
-    EscapedChar(char),               // e.g. '\n' in "Hello!\n"
+    EscapedChar(EscapedChar),        // e.g. '\n' in "Hello!\n"
     Interpolated(Loc<&'a Expr<'a>>), // e.g. (name) in "Hi, \(name)!"
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum EscapedChar {
+    Newline,        // \n
+    Tab,            // \t
+    Quote,          // \"
+    Backslash,      // \\
+    CarriageReturn, // \r
+}
+
+impl EscapedChar {
+    /// Returns the char that would have been originally parsed to
+    pub fn to_parsed_char(&self) -> char {
+        use EscapedChar::*;
+
+        match self {
+            Backslash => '\\',
+            Quote => '"',
+            CarriageReturn => 'r',
+            Tab => 't',
+            Newline => 'n',
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

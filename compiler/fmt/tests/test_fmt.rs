@@ -192,7 +192,7 @@ mod test_fmt {
     fn escaped_unicode_string() {
         expr_formats_same(indoc!(
             r#"
-            "unicode: \u{A00A}!"
+            "unicode: \u(A00A)!"
             "#
         ));
     }

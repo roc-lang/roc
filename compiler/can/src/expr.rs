@@ -15,7 +15,7 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, StrLiteral};
+use roc_parse::ast::{self, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Located, Region};
@@ -1393,10 +1393,23 @@ fn flatten_str_lines<'a>(
                         );
                     }
                 }
-                EscapedChar(ch) => buf.push(*ch),
+                EscapedChar(escaped) => buf.push(unescape_char(escaped)),
             }
         }
     }
 
     (Expr::Str(interpolations), output)
+}
+
+/// Returns the char that would have been originally parsed to
+pub fn unescape_char(escaped: &EscapedChar) -> char {
+    use EscapedChar::*;
+
+    match escaped {
+        Backslash => '\\',
+        Quote => '"',
+        CarriageReturn => '\r',
+        Tab => '\t',
+        Newline => '\n',
+    }
 }

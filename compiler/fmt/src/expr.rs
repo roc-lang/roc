@@ -6,6 +6,7 @@ use crate::spaces::{
 };
 use bumpalo::collections::{String, Vec};
 use roc_module::operator::{self, BinOp};
+use roc_parse::ast::StrSegment;
 use roc_parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern, WhenBranch};
 use roc_region::all::Located;
 
@@ -42,11 +43,18 @@ impl<'a> Formattable<'a> for Expr<'a> {
             List(elems) => elems.iter().any(|loc_expr| loc_expr.is_multiline()),
 
             Str(literal) => {
-                todo!(
-                    "fmt determine if string literal is multiline: {:?}",
-                    literal
-                );
-                // lines.len() > 1
+                use roc_parse::ast::StrLiteral::*;
+
+                match literal {
+                    PlainLine(_) | Line(_) => {
+                        // If this had any newlines, it'd have parsed as Block.
+                        false
+                    }
+                    Block(lines) => {
+                        // Block strings don't *have* to be multiline!
+                        lines.len() > 1
+                    }
+                }
             }
             Apply(loc_expr, args, _) => {
                 loc_expr.is_multiline() || args.iter().any(|loc_arg| loc_arg.is_multiline())
@@ -118,18 +126,53 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 buf.push(')');
             }
             Str(literal) => {
-                todo!("fmt string literal {:?}", literal);
-                // buf.push('"');
-                // buf.push_str(string);
-                // buf.push('"');
-                //
-                // BlockStr(lines) => {
-                //     buf.push_str("\"\"\"");
-                //     for line in lines.iter() {
-                //         buf.push_str(line);
-                //     }
-                //     buf.push_str("\"\"\"");
-                // }
+                use roc_parse::ast::StrLiteral::*;
+
+                buf.push('"');
+                match literal {
+                    PlainLine(string) => {
+                        buf.push_str(string);
+                    }
+                    Line(segments) => {
+                        for seg in segments.iter() {
+                            format_str_segment(seg, buf, 0)
+                        }
+                    }
+                    Block(lines) => {
+                        buf.push_str("\"\"");
+
+                        if lines.len() > 1 {
+                            // Since we have multiple lines, format this with
+                            // the `"""` symbols on their own lines, and the
+                            newline(buf, indent);
+
+                            for segments in lines.iter() {
+                                for seg in segments.iter() {
+                                    format_str_segment(seg, buf, indent);
+                                }
+
+                                newline(buf, indent);
+                            }
+                        } else {
+                            // This is a single-line block string, for example:
+                            //
+                            //     """Whee, "quotes" inside quotes!"""
+
+                            // This loop will run either 0 or 1 times.
+                            for segments in lines.iter() {
+                                for seg in segments.iter() {
+                                    format_str_segment(seg, buf, indent);
+                                }
+
+                                // Don't print a newline here, because we either
+                                // just printed 1 or 0 lines.
+                            }
+                        }
+
+                        buf.push_str("\"\"");
+                    }
+                }
+                buf.push('"');
             }
             Var { module_name, ident } => {
                 if !module_name.is_empty() {
@@ -255,6 +298,36 @@ impl<'a> Formattable<'a> for Expr<'a> {
             MalformedIdent(_) => {}
             MalformedClosure => {}
             PrecedenceConflict(_, _, _, _) => {}
+        }
+    }
+}
+
+fn format_str_segment<'a>(seg: &StrSegment<'a>, buf: &mut String<'a>, indent: u16) {
+    use StrSegment::*;
+
+    match seg {
+        Plaintext(string) => {
+            buf.push_str(string);
+        }
+        Unicode(loc_str) => {
+            buf.push_str("\\u(");
+            buf.push_str(loc_str.value); // e.g. "00A0" in "\u(00A0)"
+            buf.push(')');
+        }
+        EscapedChar(escaped) => {
+            buf.push('\\');
+            buf.push(escaped.to_parsed_char());
+        }
+        Interpolated(loc_expr) => {
+            buf.push_str("\\(");
+            // e.g. (name) in "Hi, \(name)!"
+            loc_expr.value.format_with_options(
+                buf,
+                Parens::NotNeeded, // We already printed parens!
+                Newlines::No,      // Interpolations can never have newlines
+                indent,
+            );
+            buf.push(')');
         }
     }
 }

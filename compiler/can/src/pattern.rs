@@ -1,5 +1,5 @@
 use crate::env::Env;
-use crate::expr::{canonicalize_expr, Expr, Output};
+use crate::expr::{canonicalize_expr, unescape_char, Expr, Output};
 use crate::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use crate::scope::Scope;
 use roc_module::ident::{Ident, Lowercase, TagName};
@@ -493,7 +493,7 @@ fn flatten_str_lines(lines: &[&[StrSegment<'_>]]) -> Pattern {
                 Interpolated(loc_expr) => {
                     return Pattern::UnsupportedPattern(loc_expr.region);
                 }
-                EscapedChar(ch) => buf.push(*ch),
+                EscapedChar(escaped) => buf.push(unescape_char(escaped)),
             }
         }
     }

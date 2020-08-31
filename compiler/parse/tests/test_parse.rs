@@ -27,7 +27,8 @@ mod test_parse {
     use roc_parse::ast::StrLiteral::*;
     use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{
-        self, Attempting, Def, InterfaceHeader, Spaceable, Tag, TypeAnnotation, WhenBranch,
+        self, Attempting, Def, EscapedChar, InterfaceHeader, Spaceable, Tag, TypeAnnotation,
+        WhenBranch,
     };
     use roc_parse::header::ModuleName;
     use roc_parse::module::{interface_header, module_defs};
@@ -61,7 +62,7 @@ mod test_parse {
 
     fn parses_with_escaped_char<
         I: Fn(&str) -> String,
-        E: Fn(char, &Bump) -> Vec<'_, ast::StrSegment<'_>>,
+        E: Fn(EscapedChar, &Bump) -> Vec<'_, ast::StrSegment<'_>>,
     >(
         to_input: I,
         to_expected: E,
@@ -69,15 +70,15 @@ mod test_parse {
         let arena = Bump::new();
 
         // Try parsing with each of the escaped chars Roc supports
-        for (string, ch) in &[
-            ("\\\\", '\\'),
-            ("\\n", '\n'),
-            ("\\r", '\r'),
-            ("\\t", '\t'),
-            ("\\\"", '"'),
+        for (string, escaped) in &[
+            ("\\\\", EscapedChar::Backslash),
+            ("\\n", EscapedChar::Newline),
+            ("\\r", EscapedChar::CarriageReturn),
+            ("\\t", EscapedChar::Tab),
+            ("\\\"", EscapedChar::Quote),
         ] {
             let actual = parse_with(&arena, arena.alloc(to_input(string)));
-            let expected_slice = to_expected(*ch, &arena).into_bump_slice();
+            let expected_slice = to_expected(*escaped, &arena).into_bump_slice();
             let expected_expr = Expr::Str(Line(expected_slice));
 
             assert_eq!(Ok(expected_expr), actual);

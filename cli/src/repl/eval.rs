@@ -407,8 +407,12 @@ fn f64_to_ast(arena: &Bump, num: f64) -> Expr<'_> {
 }
 
 fn str_slice_to_ast<'a>(_arena: &'a Bump, string: &'a str) -> Expr<'a> {
-    todo!(
-        "if this string contains newlines, render it as a multiline string: {:?}",
+    if string.contains('\n') {
+        todo!(
+            "this string contains newlines, so render it as a multiline string: {:?}",
+            Expr::Str(StrLiteral::PlainLine(string))
+        );
+    } else {
         Expr::Str(StrLiteral::PlainLine(string))
-    );
+    }
 }

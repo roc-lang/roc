@@ -1,4 +1,4 @@
-use crate::ast::{Attempting, StrLiteral, StrSegment};
+use crate::ast::{Attempting, EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::{
     allocated, ascii_char, ascii_hex_digits, loc, parse_utf8, unexpected, unexpected_eof,
@@ -201,19 +201,19 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>> {
                             state = new_state;
                         }
                         Some(b'\\') => {
-                            escaped_char!('\\');
+                            escaped_char!(EscapedChar::Backslash);
                         }
                         Some(b'"') => {
-                            escaped_char!('"');
+                            escaped_char!(EscapedChar::Quote);
                         }
                         Some(b'r') => {
-                            escaped_char!('\r');
+                            escaped_char!(EscapedChar::CarriageReturn);
                         }
                         Some(b't') => {
-                            escaped_char!('\t');
+                            escaped_char!(EscapedChar::Tab);
                         }
                         Some(b'n') => {
-                            escaped_char!('\n');
+                            escaped_char!(EscapedChar::Newline);
                         }
                         _ => {
                             // Invalid escape! A backslash must be followed
@@ -273,13 +273,13 @@ where
                     let line_bytes = &state.bytes[line_start..(parsed_chars - 3)];
 
                     return match parse_utf8(line_bytes) {
-                        Ok(_line) => {
+                        Ok(line) => {
                             // state = state.advance_without_indenting(parsed_chars)?;
 
                             // lines.push(line);
 
                             // Ok((StrLiteral::Block(lines.into_bump_slice()), state))
-                            todo!("TODO finish making block strings accept escapes");
+                            todo!("finsih this");
                         }
                         Err(reason) => state.fail(reason),
                     };
