@@ -565,42 +565,83 @@ fn unify_shared_tags(
             // and so on until the whole non-recursive tag union can be unified with it.
             let mut problems = Vec::new();
 
+            let attr_wrapped = match (subs.get(expected).content, subs.get(actual).content) {
+                (
+                    Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, expected_args)),
+                    Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, actual_args)),
+                ) => Some((
+                    expected_args[0],
+                    expected_args[1],
+                    actual_args[0],
+                    actual_args[1],
+                )),
+                _ => None,
+            };
+
             if let Some(rvar) = recursion_var {
-                if expected == rvar {
-                    problems.extend(unify_pool(subs, pool, actual, ctx.second));
-                    println!("A");
-                } else if is_structure(actual, subs) {
-                    // the recursion variable is hidden behind some structure (commonly an Attr
-                    // with uniqueness inference). Thus we must expand the recursive tag union to
-                    // unify if with the non-recursive one. Thus:
+                match attr_wrapped {
+                    None => {
+                        if expected == rvar {
+                            if actual == rvar {
+                                problems.extend(unify_pool(subs, pool, expected, actual));
+                            } else {
+                                problems.extend(unify_pool(subs, pool, actual, ctx.second));
 
-                    // replace the rvar with ctx.second (the whole recursive tag union) in expected
-                    subs.explicit_substitute(rvar, ctx.second, expected);
+                                // this unification is required for layout generation,
+                                // but causes worse error messages
+                                problems.extend(unify_pool(subs, pool, expected, actual));
+                            }
+                        } else if is_structure(actual, subs) {
+                            // the recursion variable is hidden behind some structure (commonly an Attr
+                            // with uniqueness inference). Thus we must expand the recursive tag union to
+                            // unify if with the non-recursive one. Thus:
 
-                    // but, by the `is_structure` condition above, only if we're unifying with a structure!
-                    // when `actual` is just a flex/rigid variable, the substitution would expand a
-                    // recursive tag union infinitely!
+                            // replace the rvar with ctx.second (the whole recursive tag union) in expected
+                            subs.explicit_substitute(rvar, ctx.second, expected);
 
-                    problems.extend(unify_pool(subs, pool, actual, expected));
-                    println!("B");
-                } else {
-                    // unification with a non-structure is trivial
-                    problems.extend(unify_pool(subs, pool, actual, expected));
-                    println!("C");
+                            // but, by the `is_structure` condition above, only if we're unifying with a structure!
+                            // when `actual` is just a flex/rigid variable, the substitution would expand a
+                            // recursive tag union infinitely!
+
+                            problems.extend(unify_pool(subs, pool, actual, expected));
+                        } else {
+                            // unification with a non-structure is trivial
+                            problems.extend(unify_pool(subs, pool, actual, expected));
+                        }
+                    }
+                    Some((_expected_uvar, inner_expected, _actual_uvar, inner_actual)) => {
+                        if inner_expected == rvar {
+                            if inner_actual == rvar {
+                                problems.extend(unify_pool(subs, pool, actual, expected));
+                            } else {
+                                problems.extend(unify_pool(subs, pool, inner_actual, ctx.second));
+                                problems.extend(unify_pool(subs, pool, expected, actual));
+                            }
+                        } else if is_structure(inner_actual, subs) {
+                            // the recursion variable is hidden behind some structure (commonly an Attr
+                            // with uniqueness inference). Thus we must expand the recursive tag union to
+                            // unify if with the non-recursive one. Thus:
+
+                            // replace the rvar with ctx.second (the whole recursive tag union) in expected
+                            subs.explicit_substitute(rvar, ctx.second, inner_expected);
+
+                            // but, by the `is_structure` condition above, only if we're unifying with a structure!
+                            // when `actual` is just a flex/rigid variable, the substitution would expand a
+                            // recursive tag union infinitely!
+
+                            problems.extend(unify_pool(subs, pool, actual, expected));
+                        } else {
+                            // unification with a non-structure is trivial
+                            problems.extend(unify_pool(subs, pool, actual, expected));
+                        }
+                    }
                 }
             } else {
                 // we always unify NonRecursive with Recursive, so this should never happen
                 debug_assert_ne!(Some(actual), recursion_var);
 
                 problems.extend(unify_pool(subs, pool, actual, expected));
-                println!("D");
             };
-
-            // TODO this changes some error messages
-            // but is important for the inference of recursive types
-            if problems.is_empty() {
-                problems.extend(unify_pool(subs, pool, expected, actual));
-            }
 
             if problems.is_empty() {
                 // debug_assert_eq!(subs.get_root_key(actual), subs.get_root_key(expected));
@@ -695,8 +736,19 @@ fn unify_flat_type(
             unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
         }
 
-        (RecursiveTagUnion(_, _, _), TagUnion(_, _)) => {
-            unreachable!("unify of recursive with non-recursive tag union should not occur");
+        (RecursiveTagUnion(recursion_var, tags1, ext1), TagUnion(tags2, ext2)) => {
+            // unreachable!("unify of recursive with non-recursive tag union should not occur");
+            let union1 = gather_tags(subs, tags1.clone(), *ext1);
+            let union2 = gather_tags(subs, tags2.clone(), *ext2);
+
+            unify_tag_union(
+                subs,
+                pool,
+                ctx,
+                union1,
+                union2,
+                (None, Some(*recursion_var)),
+            )
         }
 
         (TagUnion(tags1, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {

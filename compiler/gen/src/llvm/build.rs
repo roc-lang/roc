@@ -7,7 +7,7 @@ use crate::llvm::build_list::{
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
-    basic_type_from_layout, collection, get_fn_type, get_ptr_type, ptr_int,
+    basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -478,7 +478,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             debug_assert!(*union_size > 1);
             let ptr_size = env.ptr_bytes;
 
-            dbg!(&tag_layout);
             let mut filler = tag_layout.stack_size(ptr_size);
 
             let ctx = env.context;
@@ -513,7 +512,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                             ptr,
                             ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
                         );
-                        dbg!(&ptr);
                         field_vals.push(ptr);
                     } else {
                         field_vals.push(val);
@@ -638,14 +636,15 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 .expect("desired field did not decode");
 
             if let Some(Layout::RecursivePointer) = field_layouts.get(*index as usize) {
+                let struct_layout = Layout::Struct(field_layouts);
+                let desired_type = block_of_memory(env.context, &struct_layout, env.ptr_bytes);
+
                 // the value is a pointer to the actual value; load that value!
+                use inkwell::types::BasicType;
                 let ptr = cast_basic_basic(
                     builder,
                     result,
-                    struct_value
-                        .get_type()
-                        .ptr_type(AddressSpace::Generic)
-                        .into(),
+                    desired_type.ptr_type(AddressSpace::Generic).into(),
                 );
                 builder.build_load(ptr.into_pointer_value(), "load_recursive_field")
             } else {
@@ -819,7 +818,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     Expr::AccessAtIndex { field_layouts, .. } => {
                         let layout = Layout::Struct(field_layouts);
 
-                        basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes)
+                        block_of_memory(env.context, &layout, env.ptr_bytes)
                     }
                     _ => unreachable!(
                         "a recursive pointer can only be loaded from a recursive tag union"
@@ -1115,7 +1114,9 @@ fn decrement_refcount_layout<'a, 'ctx, 'env>(
                 }
             }
         }
-        RecursiveUnion(_) => todo!("TODO implement decrement layout of recursive tag union"),
+        RecursiveUnion(_) => {
+            println!("TODO implement decrement layout of recursive tag union");
+        }
         RecursivePointer => todo!("TODO implement decrement layout of recursive tag union"),
         Union(tags) => {
             debug_assert!(!tags.is_empty());

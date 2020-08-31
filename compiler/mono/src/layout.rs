@@ -116,7 +116,7 @@ impl<'a> Layout<'a> {
             Ok(Layout::RecursivePointer)
         } else {
             let content = env.subs.get_without_compacting(var).content;
-            println!("{:?} {:?}", var, &content);
+            // println!("{:?} {:?}", var, &content);
             Self::new_help(env, content)
         }
     }
@@ -355,7 +355,7 @@ fn layout_from_flat_type<'a>(
                     // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
                     debug_assert_eq!(args.len(), 1);
 
-                    let var = args.iter().next().unwrap();
+                    let var = args.get(0).unwrap();
                     let content = subs.get_without_compacting(*var).content;
 
                     layout_from_num_content(content)
@@ -483,7 +483,7 @@ fn layout_from_flat_type<'a>(
                 let mut tag_layout = Vec::with_capacity_in(variables.len() + 1, arena);
 
                 // store the discriminant
-                tag_layout.push(Layout::Builtin(Builtin::Int8));
+                tag_layout.push(Layout::Builtin(Builtin::Int64));
 
                 for var in variables {
                     // TODO does this cause problems with mutually recursive unions?
@@ -584,6 +584,9 @@ pub fn union_sorted_tags<'a>(arena: &'a Bump, var: Variable, subs: &Subs) -> Uni
 fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
     match subs.get_without_compacting(var).content {
         Content::Structure(FlatType::RecursiveTagUnion(rec_var, _, _)) => Some(rec_var),
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
+            get_recursion_var(subs, args[1])
+        }
         Content::Alias(_, _, actual) => get_recursion_var(subs, actual),
         _ => None,
     }

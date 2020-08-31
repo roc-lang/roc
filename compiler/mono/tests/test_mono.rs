@@ -1560,6 +1560,47 @@ mod test_mono {
     }
 
     #[test]
+    fn peano1() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                Peano : [ S Peano, Z ]
+
+                three : Peano
+                three = S (S (S Z))
+
+                when three is
+                    Z -> 0
+                    S _ -> 1
+                "#
+            ),
+            indoc!(
+                r#"
+                let Test.9 = 0i64;
+                let Test.11 = 0i64;
+                let Test.13 = 0i64;
+                let Test.15 = 1i64;
+                let Test.14 = Z Test.15;
+                let Test.12 = S Test.13 Test.14;
+                let Test.10 = S Test.11 Test.12;
+                let Test.1 = S Test.9 Test.10;
+                let Test.5 = true;
+                let Test.7 = Index 0 Test.1;
+                let Test.6 = 1i64;
+                let Test.8 = lowlevel Eq Test.6 Test.7;
+                let Test.4 = lowlevel And Test.8 Test.5;
+                if Test.4 then
+                    let Test.2 = 0i64;
+                    ret Test.2;
+                else
+                    let Test.3 = 1i64;
+                    ret Test.3;
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn peano2() {
         compiles_to_ir(
             indoc!(

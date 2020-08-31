@@ -472,7 +472,7 @@ mod gen_primitives {
     }
 
     #[test]
-    fn peano() {
+    fn peano1() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -482,8 +482,8 @@ mod gen_primitives {
                 three = S (S (S Z))
 
                 when three is
+                    Z -> 2
                     S _ -> 1
-                    Z -> 0
                 "#
             ),
             1,
@@ -508,6 +508,112 @@ mod gen_primitives {
                 "#
             ),
             1,
+            i64
+        );
+    }
+
+    #[test]
+    fn linked_list_len_0() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+
+                nil : LinkedList Int
+                nil = Nil 
+
+                length : LinkedList a -> Int
+                length = \list ->
+                    when list is
+                        Nil -> 0
+                        Cons _ rest -> 1 + length rest
+
+
+                length nil
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    fn linked_list_len_3() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+
+                three : LinkedList Int
+                three = Cons 3 (Cons 2 (Cons 1 Nil)) 
+
+                length : LinkedList a -> Int
+                length = \list ->
+                    when list is
+                        Nil -> 0
+                        Cons _ rest -> 1 + length rest
+
+
+                length three
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
+    fn linked_list_sum() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+
+                three : LinkedList Int
+                three = Cons 3 (Cons 2 (Cons 1 Nil)) 
+
+                sum : LinkedList a -> Int
+                sum = \list ->
+                    when list is
+                        Nil -> 0
+                        Cons x rest -> x + sum rest
+
+                sum three
+                "#
+            ),
+            3 + 2 + 1,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn linked_list_map() {
+        // `f` is not actually a function, so the call to it fails currently
+        assert_evals_to!(
+            indoc!(
+                r#"
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+
+                three : LinkedList Int
+                three = Cons 3 (Cons 2 (Cons 1 Nil)) 
+
+                sum : LinkedList a -> Int
+                sum = \list ->
+                    when list is
+                        Nil -> 0
+                        Cons x rest -> x + sum rest
+
+                map : (a -> b), LinkedList a -> LinkedList b
+                map = \f, list ->
+                    when list is
+                        Nil -> Nil
+                        Cons x rest -> Cons (f x) (map f rest)
+
+                sum (map (\_ -> 1) three)
+                "#
+            ),
+            3,
             i64
         );
     }
