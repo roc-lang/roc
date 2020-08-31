@@ -22,7 +22,7 @@ use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;
 use std::fmt::Debug;
-use std::i64;
+use std::{char, i64, u32};
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct Output {
@@ -1359,7 +1359,7 @@ fn flatten_str_lines<'a>(
     use ast::StrSegment::*;
 
     let mut buf = String::new();
-    let mut interpolations = Vec::new();
+    let mut segments = Vec::new();
     let mut output = Output::default();
 
     for line in lines {
@@ -1368,11 +1368,41 @@ fn flatten_str_lines<'a>(
                 Plaintext(string) => {
                     buf.push_str(string);
                 }
-                Unicode(loc_digits) => {
-                    todo!("parse unicode digits {:?}", loc_digits);
-                }
+                Unicode(loc_hex_digits) => match u32::from_str_radix(loc_hex_digits.value, 16) {
+                    Ok(code_pt) => match char::from_u32(code_pt) {
+                        Some(ch) => {
+                            buf.push(ch);
+                        }
+                        None => {
+                            env.problem(Problem::InvalidUnicodeCodePoint(loc_hex_digits.region));
+
+                            return (
+                                Expr::RuntimeError(RuntimeError::InvalidUnicodeCodePoint(
+                                    loc_hex_digits.region,
+                                )),
+                                output,
+                            );
+                        }
+                    },
+                    Err(_) => {
+                        env.problem(Problem::InvalidHexadecimal(loc_hex_digits.region));
+
+                        return (
+                            Expr::RuntimeError(RuntimeError::InvalidHexadecimal(
+                                loc_hex_digits.region,
+                            )),
+                            output,
+                        );
+                    }
+                },
                 Interpolated(loc_expr) => {
                     if is_valid_interpolation(loc_expr.value) {
+                        if !buf.is_empty() {
+                            segments.push(StrSegment::Plaintext(buf.into()));
+
+                            buf = String::new();
+                        }
+
                         let (loc_expr, new_output) = canonicalize_expr(
                             env,
                             var_store,
@@ -1383,7 +1413,7 @@ fn flatten_str_lines<'a>(
 
                         output.union(new_output);
 
-                        interpolations.push(StrSegment::Interpolation(loc_expr));
+                        segments.push(StrSegment::Interpolation(loc_expr));
                     } else {
                         env.problem(Problem::InvalidInterpolation(loc_expr.region));
 
@@ -1398,7 +1428,11 @@ fn flatten_str_lines<'a>(
         }
     }
 
-    (Expr::Str(interpolations), output)
+    if !buf.is_empty() {
+        segments.push(StrSegment::Plaintext(buf.into()));
+    }
+
+    (Expr::Str(segments), output)
 }
 
 /// Returns the char that would have been originally parsed to

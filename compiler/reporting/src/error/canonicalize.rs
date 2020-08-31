@@ -262,6 +262,18 @@ pub fn can_problem<'b>(
                 alloc.reflow(" can occur in this position."),
             ]),
         ]),
+        Problem::InvalidHexadecimal(region) => {
+            todo!(
+                "TODO report an invalid hexadecimal number in a \\u(...) code point at region {:?}",
+                region
+            );
+        }
+        Problem::InvalidUnicodeCodePoint(region) => {
+            todo!(
+                "TODO report an invalid \\u(...) code point at region {:?}",
+                region
+            );
+        }
         Problem::InvalidInterpolation(region) => {
             todo!(
                 "TODO report an invalid string interpolation at region {:?}",
@@ -530,6 +542,18 @@ fn pretty_runtime_error<'b>(
             alloc.region(region),
             alloc.reflow("Only variables can be updated with record update syntax."),
         ]),
+        RuntimeError::InvalidHexadecimal(region) => {
+            todo!(
+                "TODO runtime error for an invalid hexadecimal number in a \\u(...) code point at region {:?}",
+                region
+            );
+        }
+        RuntimeError::InvalidUnicodeCodePoint(region) => {
+            todo!(
+                "TODO runtime error for an invalid \\u(...) code point at region {:?}",
+                region
+            );
+        }
         RuntimeError::InvalidInterpolation(region) => {
             todo!(
                 "TODO runtime error for an invalid string interpolation at region {:?}",

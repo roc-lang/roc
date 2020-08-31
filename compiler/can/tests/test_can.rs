@@ -15,7 +15,7 @@ mod test_can {
     use crate::helpers::{can_expr_with, test_home, CanExprOut};
     use bumpalo::Bump;
     use roc_can::expr::Expr::{self, *};
-    use roc_can::expr::Recursive;
+    use roc_can::expr::{Recursive, StrSegment};
     use roc_problem::can::{FloatErrorKind, IntErrorKind, Problem, RuntimeError};
     use roc_region::all::Region;
     use std::{f64, i64};
@@ -67,6 +67,10 @@ mod test_can {
                 panic!("Expected a Num, but got: {:?}", actual);
             }
         }
+    }
+
+    fn expr_str(contents: &str) -> Expr {
+        Expr::Str(vec![StrSegment::Plaintext(contents.into())])
     }
 
     // NUMBER LITERALS
@@ -1179,62 +1183,61 @@ mod test_can {
     //}
     //
     //
-    //// STRING LITERALS
+    // STRING LITERALS
 
-    //
-    // #[test]
-    // fn string_with_valid_unicode_escapes() {
-    //     expect_parsed_str("x\u{00A0}x", r#""x\u{00A0}x""#);
-    //     expect_parsed_str("x\u{101010}x", r#""x\u{101010}x""#);
-    // }
+    #[test]
+    fn string_with_valid_unicode_escapes() {
+        assert_can(r#""x\u(00A0)x""#, expr_str("x\u{00A0}x"));
+        assert_can(r#""x\u(101010)x""#, expr_str("x\u{101010}x"));
+    }
 
-    // #[test]
-    // fn string_with_too_large_unicode_escape() {
-    //     // Should be too big - max size should be 10FFFF.
-    //     // (Rust has this restriction. I assume it's a good idea.)
-    //     assert_malformed_str(
-    //         r#""abc\u{110000}def""#,
-    //         vec![Located::new(0, 7, 0, 12, Problem::UnicodeCodePointTooLarge)],
-    //     );
-    // }
+    //     #[test]
+    //     fn string_with_too_large_unicode_escape() {
+    //         // Should be too big - max size should be 10FFFF.
+    //         // (Rust has this restriction. I assume it's a good idea.)
+    //         assert_malformed_str(
+    //             r#""abc\u{110000}def""#,
+    //             vec![Located::new(0, 7, 0, 12, Problem::UnicodeCodePointTooLarge)],
+    //         );
+    //     }
 
-    // #[test]
-    // fn string_with_no_unicode_digits() {
-    //     // No digits specified
-    //     assert_malformed_str(
-    //         r#""blah\u{}foo""#,
-    //         vec![Located::new(0, 5, 0, 8, Problem::NoUnicodeDigits)],
-    //     );
-    // }
+    //     #[test]
+    //     fn string_with_no_unicode_digits() {
+    //         // No digits specified
+    //         assert_malformed_str(
+    //             r#""blah\u{}foo""#,
+    //             vec![Located::new(0, 5, 0, 8, Problem::NoUnicodeDigits)],
+    //         );
+    //     }
 
-    // #[test]
-    // fn string_with_no_unicode_opening_brace() {
-    //     // No opening curly brace. It can't be sure if the closing brace
-    //     // was intended to be a closing brace for the unicode escape, so
-    //     // report that there were no digits specified.
-    //     assert_malformed_str(
-    //         r#""abc\u00A0}def""#,
-    //         vec![Located::new(0, 4, 0, 5, Problem::NoUnicodeDigits)],
-    //     );
-    // }
+    //     #[test]
+    //     fn string_with_no_unicode_opening_brace() {
+    //         // No opening curly brace. It can't be sure if the closing brace
+    //         // was intended to be a closing brace for the unicode escape, so
+    //         // report that there were no digits specified.
+    //         assert_malformed_str(
+    //             r#""abc\u00A0}def""#,
+    //             vec![Located::new(0, 4, 0, 5, Problem::NoUnicodeDigits)],
+    //         );
+    //     }
 
-    // #[test]
-    // fn string_with_no_unicode_closing_brace() {
-    //     // No closing curly brace
-    //     assert_malformed_str(
-    //         r#""blah\u{stuff""#,
-    //         vec![Located::new(0, 5, 0, 12, Problem::MalformedEscapedUnicode)],
-    //     );
-    // }
+    //     #[test]
+    //     fn string_with_no_unicode_closing_brace() {
+    //         // No closing curly brace
+    //         assert_malformed_str(
+    //             r#""blah\u{stuff""#,
+    //             vec![Located::new(0, 5, 0, 12, Problem::MalformedEscapedUnicode)],
+    //         );
+    //     }
 
-    // #[test]
-    // fn string_with_no_unicode_braces() {
-    //     // No curly braces
-    //     assert_malformed_str(
-    //         r#""zzzz\uzzzzz""#,
-    //         vec![Located::new(0, 5, 0, 6, Problem::NoUnicodeDigits)],
-    //     );
-    // }
+    //     #[test]
+    //     fn string_with_no_unicode_braces() {
+    //         // No curly braces
+    //         assert_malformed_str(
+    //             r#""zzzz\uzzzzz""#,
+    //             vec![Located::new(0, 5, 0, 6, Problem::NoUnicodeDigits)],
+    //         );
+    //     }
 
     //     #[test]
     //     fn string_with_escaped_interpolation() {
@@ -1242,13 +1245,12 @@ mod test_can {
     //             // This should NOT be string interpolation, because of the \\
     //             indoc!(
     //                 r#"
-    //                 "abcd\\(efg)hij"
-    //                 "#
+    //                      "abcd\\(efg)hij"
+    //                      "#
     //             ),
     //             Str(r#"abcd\(efg)hij"#.into()),
     //         );
     //     }
-    //
 
     //     #[test]
     //     fn string_without_escape() {

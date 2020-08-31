@@ -56,6 +56,8 @@ pub enum Problem {
         region: Region,
     },
     InvalidInterpolation(Region),
+    InvalidHexadecimal(Region),
+    InvalidUnicodeCodePoint(Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -127,6 +129,8 @@ pub enum RuntimeError {
     NonExhaustivePattern,
 
     InvalidInterpolation(Region),
+    InvalidHexadecimal(Region),
+    InvalidUnicodeCodePoint(Region),
 
     /// When the author specifies a type annotation but no implementation
     NoImplementation,
