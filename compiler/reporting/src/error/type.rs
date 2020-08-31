@@ -819,7 +819,7 @@ fn type_comparison<'b>(
         lines.push(alloc.concat(context_hints));
     }
 
-    lines.extend(problems_to_hint(alloc, comparison.problems));
+    lines.extend(problems_to_tip(alloc, comparison.problems));
 
     alloc.stack(lines)
 }
@@ -835,7 +835,7 @@ fn lone_type<'b>(
 
     let mut lines = vec![i_am_seeing, comparison.actual, further_details];
 
-    lines.extend(problems_to_hint(alloc, comparison.problems));
+    lines.extend(problems_to_tip(alloc, comparison.problems));
 
     alloc.stack(lines)
 }
@@ -1081,7 +1081,7 @@ fn pattern_type_comparision<'b>(
         comparison.expected,
     ];
 
-    lines.extend(problems_to_hint(alloc, comparison.problems));
+    lines.extend(problems_to_tip(alloc, comparison.problems));
     lines.extend(reason_hints);
 
     alloc.stack(lines)
@@ -1156,7 +1156,7 @@ pub enum Problem {
     OptionalRequiredMismatch(Lowercase),
 }
 
-fn problems_to_hint<'b>(
+fn problems_to_tip<'b>(
     alloc: &'b RocDocAllocator<'b>,
     mut problems: Vec<Problem>,
 ) -> Option<RocDocBuilder<'b>> {
@@ -2261,27 +2261,24 @@ fn type_problem_to_pretty<'b>(
                     let found = alloc.text(typo_str).annotate(Annotation::Typo);
                     let suggestion = alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);
 
-                    let hint1 = alloc
-                        .hint()
+                    let tip1 = alloc
+                        .tip()
                         .append(alloc.reflow("Seems like a record field typo. Maybe "))
                         .append(found)
                         .append(alloc.reflow(" should be "))
                         .append(suggestion)
                         .append(alloc.text("?"));
 
-                    let hint2 = alloc.hint().append(alloc.reflow(ADD_ANNOTATIONS));
+                    let tip2 = alloc.tip().append(alloc.reflow(ADD_ANNOTATIONS));
 
-                    hint1
-                        .append(alloc.line())
-                        .append(alloc.line())
-                        .append(hint2)
+                    tip1.append(alloc.line()).append(alloc.line()).append(tip2)
                 }
             }
         }
         FieldsMissing(missing) => match missing.split_last() {
             None => alloc.nil(),
             Some((f1, [])) => alloc
-                .hint()
+                .tip()
                 .append(alloc.reflow("Looks like the "))
                 .append(f1.as_str().to_owned())
                 .append(alloc.reflow(" field is missing.")),
@@ -2289,7 +2286,7 @@ fn type_problem_to_pretty<'b>(
                 let separator = alloc.reflow(", ");
 
                 alloc
-                    .hint()
+                    .tip()
                     .append(alloc.reflow("Looks like the "))
                     .append(
                         alloc.intersperse(init.iter().map(|v| v.as_str().to_owned()), separator),
@@ -2315,20 +2312,17 @@ fn type_problem_to_pretty<'b>(
                     let found = alloc.text(typo_str).annotate(Annotation::Typo);
                     let suggestion = alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);
 
-                    let hint1 = alloc
-                        .hint()
+                    let tip1 = alloc
+                        .tip()
                         .append(alloc.reflow("Seems like a tag typo. Maybe "))
                         .append(found)
                         .append(" should be ")
                         .append(suggestion)
                         .append(alloc.text("?"));
 
-                    let hint2 = alloc.hint().append(alloc.reflow(ADD_ANNOTATIONS));
+                    let tip2 = alloc.tip().append(alloc.reflow(ADD_ANNOTATIONS));
 
-                    hint1
-                        .append(alloc.line())
-                        .append(alloc.line())
-                        .append(hint2)
+                    tip1.append(alloc.line()).append(alloc.line()).append(tip2)
                 }
             }
         }
@@ -2345,7 +2339,7 @@ fn type_problem_to_pretty<'b>(
                 )
             };
 
-            alloc.hint().append(line)
+            alloc.tip().append(line)
         }
 
         BadRigidVar(x, tipe) => {
@@ -2353,7 +2347,7 @@ fn type_problem_to_pretty<'b>(
 
             let bad_rigid_var = |name: Lowercase, a_thing| {
                 alloc
-                    .hint()
+                    .tip()
                     .append(alloc.reflow("The type annotation uses the type variable "))
                     .append(alloc.type_variable(name))
                     .append(alloc.reflow(" to say that this definition can produce any type of value. But in the body I see that it will only produce "))
@@ -2365,7 +2359,7 @@ fn type_problem_to_pretty<'b>(
                 let line = r#" as separate type variables. Your code seems to be saying they are the same though. Maybe they should be the same your type annotation? Maybe your code uses them in a weird way?"#;
 
                 alloc
-                    .hint()
+                    .tip()
                     .append(alloc.reflow("Your type annotation uses "))
                     .append(alloc.type_variable(a))
                     .append(alloc.reflow(" and "))
@@ -2392,7 +2386,7 @@ fn type_problem_to_pretty<'b>(
                 Boolean(_) => bad_rigid_var(x, alloc.reflow("a uniqueness attribute value")),
             }
         }
-        IntFloat => alloc.hint().append(alloc.concat(vec![
+        IntFloat => alloc.tip().append(alloc.concat(vec![
             alloc.reflow("Convert between "),
             alloc.type_str("Int"),
             alloc.reflow(" and "),
@@ -2407,26 +2401,26 @@ fn type_problem_to_pretty<'b>(
         TagsMissing(missing) => match missing.split_last() {
             None => alloc.nil(),
             Some((f1, [])) => {
-                let hint1 = alloc
-                    .hint()
+                let tip1 = alloc
+                    .tip()
                     .append(alloc.reflow("Looks like a closed tag union does not have the "))
                     .append(alloc.tag_name(f1.clone()))
                     .append(alloc.reflow(" tag."));
 
-                let hint2 = alloc.hint().append(alloc.reflow(
+                let tip2 = alloc.tip().append(alloc.reflow(
                     "Closed tag unions can't grow, \
                     because that might change the size in memory. \
                     Can you use an open tag union?",
                 ));
 
-                alloc.stack(vec![hint1, hint2])
+                alloc.stack(vec![tip1, tip2])
             }
 
             Some((last, init)) => {
                 let separator = alloc.reflow(", ");
 
-                let hint1 = alloc
-                    .hint()
+                let tip1 = alloc
+                    .tip()
                     .append(alloc.reflow("Looks like a closed tag union does not have the "))
                     .append(
                         alloc
@@ -2436,16 +2430,16 @@ fn type_problem_to_pretty<'b>(
                     .append(alloc.tag_name(last.clone()))
                     .append(alloc.reflow(" tags."));
 
-                let hint2 = alloc.hint().append(alloc.reflow(
+                let tip2 = alloc.tip().append(alloc.reflow(
                     "Closed tag unions can't grow, \
                     because that might change the size in memory. \
                     Can you use an open tag union?",
                 ));
 
-                alloc.stack(vec![hint1, hint2])
+                alloc.stack(vec![tip1, tip2])
             }
         },
-        OptionalRequiredMismatch(field) => alloc.hint().append(alloc.concat(vec![
+        OptionalRequiredMismatch(field) => alloc.tip().append(alloc.concat(vec![
             alloc.reflow("To extract the "),
             alloc.record_field(field),
             alloc.reflow(

@@ -317,10 +317,11 @@ impl<'a> RocDocAllocator<'a> {
         content.annotate(Annotation::TypeBlock).indent(4)
     }
 
-    pub fn hint(&'a self) -> DocBuilder<'a, Self, Annotation> {
-        self.text("Hint:")
+    pub fn tip(&'a self) -> DocBuilder<'a, Self, Annotation> {
+        self.text("Tip")
+            .annotate(Annotation::Tip)
+            .append(":")
             .append(self.softline())
-            .annotate(Annotation::Hint)
     }
 
     pub fn region_all_the_things(
@@ -575,7 +576,7 @@ pub enum Annotation {
     Module,
     Typo,
     TypoSuggestion,
-    Hint,
+    Tip,
 }
 
 /// Render with minimal formatting
@@ -718,7 +719,7 @@ where
             Emphasized => {
                 self.write_str(BOLD_CODE)?;
             }
-            Url | Hint => {
+            Url | Tip => {
                 self.write_str(UNDERLINE_CODE)?;
             }
             PlainText => {
@@ -773,7 +774,7 @@ where
             None => {}
             Some(annotation) => match annotation {
                 Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | Error | GutterBar
-                | Typo | TypoSuggestion | Structure | CodeBlock | PlainText | LineNumber | Hint
+                | Typo | TypoSuggestion | Structure | CodeBlock | PlainText | LineNumber | Tip
                 | Module => {
                     self.write_str(RESET_CODE)?;
                 }
