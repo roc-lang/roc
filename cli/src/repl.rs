@@ -70,7 +70,9 @@ pub fn main() -> io::Result<()> {
             .expect("there was no next line")
             .expect("the line could not be read");
 
-        match line.trim() {
+        let line = line.trim();
+
+        match line.to_lowercase().as_str() {
             ":help" => {
                 println!("Use :exit to exit.");
             }
@@ -100,7 +102,7 @@ pub fn main() -> io::Result<()> {
             ":exit" => {
                 break;
             }
-            line => {
+            _ => {
                 let result = if pending_src.is_empty() {
                     print_output(line)
                 } else {
