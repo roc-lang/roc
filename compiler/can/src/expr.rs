@@ -1436,12 +1436,12 @@ fn flatten_str_lines<'a>(
 
 /// Resolve stirng interpolations by desugaring a sequence of StrSegments
 /// into nested calls to Str.concat
-fn desugar_str_segments<'a>(var_store: &mut VarStore, segments: Vec<StrSegment>) -> Expr {
+fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> Expr {
     use StrSegment::*;
 
     let mut iter = segments.into_iter().rev();
     let mut loc_expr = match iter.next() {
-        Some(Plaintext(string)) => Located::new(0, 0, 0, 0, Expr::Str(string.into())),
+        Some(Plaintext(string)) => Located::new(0, 0, 0, 0, Expr::Str(string)),
         Some(Interpolation(loc_expr)) => loc_expr,
         None => {
             // No segments? Empty string!
@@ -1452,7 +1452,7 @@ fn desugar_str_segments<'a>(var_store: &mut VarStore, segments: Vec<StrSegment>)
 
     for seg in iter {
         let loc_new_expr = match seg {
-            Plaintext(string) => Located::new(0, 0, 0, 0, Expr::Str(string.into())),
+            Plaintext(string) => Located::new(0, 0, 0, 0, Expr::Str(string)),
             Interpolation(loc_interpolated_expr) => loc_interpolated_expr,
         };
 
