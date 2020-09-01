@@ -787,8 +787,7 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
         | Num(_, _)
         | Int(_, _)
         | Float(_, _)
-        | Str(_)
-        | BlockStr(_)
+        | Str { .. }
         | EmptyRecord
         | Accessor { .. }
         | RunLowLevel { .. } => {}

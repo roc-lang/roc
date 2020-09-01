@@ -300,12 +300,8 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
             base: *base,
             is_negative: *is_negative,
         }),
-        Expr::Str(string) => Ok(Pattern::StrLiteral(string)),
-        Expr::MalformedIdent(string) => Ok(Pattern::Malformed(string)),
-
         // These would not have parsed as patterns
-        Expr::BlockStr(_)
-        | Expr::AccessorFunction(_)
+        Expr::AccessorFunction(_)
         | Expr::Access(_, _)
         | Expr::List(_)
         | Expr::Closure(_, _)
@@ -322,6 +318,9 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
             attempting: Attempting::Def,
             reason: FailReason::InvalidPattern,
         }),
+
+        Expr::Str(string) => Ok(Pattern::StrLiteral(string.clone())),
+        Expr::MalformedIdent(string) => Ok(Pattern::Malformed(string)),
     }
 }
 
@@ -580,11 +579,7 @@ fn annotation_or_alias<'a>(
         QualifiedIdentifier { .. } => {
             panic!("TODO gracefully handle trying to annotate a qualified identifier, e.g. `Foo.bar : ...`");
         }
-        NumLiteral(_)
-        | NonBase10Literal { .. }
-        | FloatLiteral(_)
-        | StrLiteral(_)
-        | BlockStrLiteral(_) => {
+        NumLiteral(_) | NonBase10Literal { .. } | FloatLiteral(_) | StrLiteral(_) => {
             panic!("TODO gracefully handle trying to annotate a litera");
         }
         Underscore => {
@@ -916,10 +911,7 @@ fn number_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
 }
 
 fn string_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
-    map!(crate::string_literal::parse(), |result| match result {
-        crate::string_literal::StringLiteral::Line(string) => Pattern::StrLiteral(string),
-        crate::string_literal::StringLiteral::Block(lines) => Pattern::BlockStrLiteral(lines),
-    })
+    map!(crate::string_literal::parse(), Pattern::StrLiteral)
 }
 
 fn underscore_pattern<'a>() -> impl Parser<'a, Pattern<'a>> {
@@ -1789,8 +1781,5 @@ pub fn global_tag<'a>() -> impl Parser<'a, &'a str> {
 }
 
 pub fn string_literal<'a>() -> impl Parser<'a, Expr<'a>> {
-    map!(crate::string_literal::parse(), |result| match result {
-        crate::string_literal::StringLiteral::Line(string) => Expr::Str(string),
-        crate::string_literal::StringLiteral::Block(lines) => Expr::BlockStr(lines),
-    })
+    map!(crate::string_literal::parse(), Expr::Str)
 }

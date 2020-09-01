@@ -585,6 +585,7 @@ pub enum Stmt<'a> {
     Jump(JoinPointId, &'a [Symbol]),
     RuntimeError(&'a str),
 }
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Literal<'a> {
     // Literals
@@ -1242,7 +1243,7 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        Str(string) | BlockStr(string) => Stmt::Let(
+        Str(string) => Stmt::Let(
             assigned,
             Expr::Literal(Literal::Str(arena.alloc(string))),
             Layout::Builtin(Builtin::Str),

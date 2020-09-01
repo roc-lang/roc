@@ -904,7 +904,7 @@ pub enum Reason {
     FloatLiteral,
     IntLiteral,
     NumLiteral,
-    InterpolatedStringVar,
+    StrInterpolation,
     WhenBranch {
         index: Index,
     },
@@ -930,6 +930,7 @@ pub enum Category {
     TagApply(TagName),
     Lambda,
     Uniqueness,
+    StrInterpolation,
 
     // storing variables in the ast
     Storage,
