@@ -1,9 +1,9 @@
 use crate::layout_id::LayoutIds;
 use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, clone_nonempty_list, empty_list, empty_polymorphic_list,
-    incrementing_index_loop, list_append, list_concat, list_get_unsafe, list_is_not_empty,
+    incrementing_elem_loop, list_append, list_concat, list_get_unsafe, list_is_not_empty,
     list_join, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set, list_single,
-    load_list_ptr,
+    load_list_ptr, store_list, LoopListArg,
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
@@ -1674,9 +1674,9 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.reverse : List elem -> List elem
             debug_assert_eq!(args.len(), 1);
 
-            let list = &args[0];
+            let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
-            list_reverse(env, parent, scope, list)
+            list_reverse(env, parent, list, list_layout)
         }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
@@ -1719,9 +1719,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 1);
 
             let (list, outer_list_layout) = load_symbol_and_layout(env, scope, &args[0]);
-            let outer_wrapper_struct = list.into_struct_value();
 
-            list_join(env, parent, outer_wrapper_struct, outer_list_layout)
+            list_join(env, parent, list, outer_list_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumToFloat => {
             debug_assert_eq!(args.len(), 1);
@@ -2000,14 +1999,9 @@ fn str_concat<'a, 'ctx, 'env>(
             let combined_str_ptr = allocate_list(env, &CHAR_LAYOUT, combined_str_len);
 
             // FIRST LOOP
-            let first_loop = |first_index| {
-                let first_str_ptr = load_list_ptr(builder, first_str_wrapper, ptr_type);
+            let first_str_ptr = load_list_ptr(builder, first_str_wrapper, ptr_type);
 
-                // The pointer to the element in the first list
-                let first_str_char_ptr = unsafe {
-                    builder.build_in_bounds_gep(first_str_ptr, &[first_index], "load_index")
-                };
-
+            let first_loop = |first_index, first_str_elem| {
                 // The pointer to the element in the combined list
                 let combined_str_elem_ptr = unsafe {
                     builder.build_in_bounds_gep(
@@ -2017,19 +2011,20 @@ fn str_concat<'a, 'ctx, 'env>(
                     )
                 };
 
-                let first_str_elem = builder.build_load(first_str_char_ptr, "get_elem");
-
                 // Mutate the new array in-place to change the element.
                 builder.build_store(combined_str_elem_ptr, first_str_elem);
             };
 
             let index_name = "#index";
 
-            let index_alloca = incrementing_index_loop(
+            let index_alloca = incrementing_elem_loop(
                 builder,
                 parent,
                 ctx,
-                first_str_len,
+                LoopListArg {
+                    ptr: first_str_ptr,
+                    len: first_str_len,
+                },
                 index_name,
                 None,
                 first_loop,
@@ -2039,14 +2034,9 @@ fn str_concat<'a, 'ctx, 'env>(
             builder.build_store(index_alloca, ctx.i64_type().const_int(0, false));
 
             // SECOND LOOP
-            let second_loop = |second_index| {
-                let second_str_ptr = load_list_ptr(builder, second_str_wrapper, ptr_type);
+            let second_str_ptr = load_list_ptr(builder, second_str_wrapper, ptr_type);
 
-                // The pointer to the element in the second list
-                let second_str_char_ptr = unsafe {
-                    builder.build_in_bounds_gep(second_str_ptr, &[second_index], "load_index")
-                };
-
+            let second_loop = |second_index, second_str_elem| {
                 // The pointer to the element in the combined str.
                 // Note that the pointer does not start at the index
                 // 0, it starts at the index of first_str_len. In that
@@ -2065,55 +2055,24 @@ fn str_concat<'a, 'ctx, 'env>(
                     )
                 };
 
-                let second_str_elem = builder.build_load(second_str_char_ptr, "get_elem");
-
                 // Mutate the new array in-place to change the element.
                 builder.build_store(combined_str_char_ptr, second_str_elem);
             };
 
-            incrementing_index_loop(
+            incrementing_elem_loop(
                 builder,
                 parent,
                 ctx,
-                second_str_len,
+                LoopListArg {
+                    ptr: second_str_ptr,
+                    len: second_str_len,
+                },
                 index_name,
                 Some(index_alloca),
                 second_loop,
             );
 
-            let ptr_bytes = env.ptr_bytes;
-            let int_type = ptr_int(ctx, ptr_bytes);
-            let ptr_as_int = builder.build_ptr_to_int(combined_str_ptr, int_type, "list_cast_ptr");
-
-            let struct_type = collection(ctx, ptr_bytes);
-
-            let mut struct_val;
-
-            // Store the pointer
-            struct_val = builder
-                .build_insert_value(
-                    struct_type.get_undef(),
-                    ptr_as_int,
-                    Builtin::WRAPPER_PTR,
-                    "insert_ptr",
-                )
-                .unwrap();
-
-            // Store the length
-            struct_val = builder
-                .build_insert_value(
-                    struct_val,
-                    combined_str_len,
-                    Builtin::WRAPPER_LEN,
-                    "insert_len",
-                )
-                .unwrap();
-
-            builder.build_bitcast(
-                struct_val.into_struct_value(),
-                collection(ctx, ptr_bytes),
-                "cast_collection",
-            )
+            store_list(env, combined_str_ptr, combined_str_len)
         };
 
         build_basic_phi2(
