@@ -503,14 +503,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        Str(segments) => {
-            if segments
-                .iter()
-                .any(|seg| matches!(seg, roc_can::expr::StrSegment::Interpolation(_)))
-            {
-                todo!("TODO support unique constraints for interpolated strings.");
-            }
-
+        Str(_) => {
             let uniq_type = var_store.fresh();
             let inferred = str_type(Bool::variable(uniq_type));
 

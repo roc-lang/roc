@@ -46,12 +46,6 @@ impl Output {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum StrSegment {
-    Interpolation(Located<Expr>),
-    Plaintext(InlinableString),
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
 
@@ -62,7 +56,7 @@ pub enum Expr {
     // Int and Float store a variable to generate better error messages
     Int(Variable, i64),
     Float(Variable, f64),
-    Str(Vec<StrSegment>),
+    Str(InlinableString),
     List {
         list_var: Variable, // required for uniqueness of the list
         elem_var: Variable,
@@ -1333,10 +1327,7 @@ fn flatten_str_literal<'a>(
     use ast::StrLiteral::*;
 
     match literal {
-        PlainLine(str_slice) => (
-            Expr::Str(vec![StrSegment::Plaintext((*str_slice).into())]),
-            Output::default(),
-        ),
+        PlainLine(str_slice) => (Expr::Str((*str_slice).into()), Output::default()),
         Line(segments) => flatten_str_lines(env, var_store, scope, &[segments]),
         Block(lines) => flatten_str_lines(env, var_store, scope, lines),
     }
@@ -1348,6 +1339,11 @@ fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         ast::Expr::Access(sub_expr, _) => is_valid_interpolation(sub_expr),
         _ => false,
     }
+}
+
+enum StrSegment {
+    Interpolation(Located<Expr>),
+    Plaintext(InlinableString),
 }
 
 fn flatten_str_lines<'a>(
@@ -1397,6 +1393,9 @@ fn flatten_str_lines<'a>(
                 },
                 Interpolated(loc_expr) => {
                     if is_valid_interpolation(loc_expr.value) {
+                        // Interpolations desugar to Str.concat calls
+                        output.references.calls.insert(Symbol::STR_CONCAT);
+
                         if !buf.is_empty() {
                             segments.push(StrSegment::Plaintext(buf.into()));
 
@@ -1432,7 +1431,45 @@ fn flatten_str_lines<'a>(
         segments.push(StrSegment::Plaintext(buf.into()));
     }
 
-    (Expr::Str(segments), output)
+    (desugar_str_segments(var_store, segments), output)
+}
+
+/// Resolve stirng interpolations by desugaring a sequence of StrSegments
+/// into nested calls to Str.concat
+fn desugar_str_segments<'a>(var_store: &mut VarStore, segments: Vec<StrSegment>) -> Expr {
+    use StrSegment::*;
+
+    let mut iter = segments.into_iter().rev();
+    let mut loc_expr = match iter.next() {
+        Some(Plaintext(string)) => Located::new(0, 0, 0, 0, Expr::Str(string.into())),
+        Some(Interpolation(loc_expr)) => loc_expr,
+        None => {
+            // No segments? Empty string!
+
+            Located::new(0, 0, 0, 0, Expr::Str("".into()))
+        }
+    };
+
+    for seg in iter {
+        let loc_new_expr = match seg {
+            Plaintext(string) => Located::new(0, 0, 0, 0, Expr::Str(string.into())),
+            Interpolation(loc_interpolated_expr) => loc_interpolated_expr,
+        };
+
+        let fn_expr = Located::new(0, 0, 0, 0, Expr::Var(Symbol::STR_CONCAT));
+        let expr = Expr::Call(
+            Box::new((var_store.fresh(), fn_expr, var_store.fresh())),
+            vec![
+                (var_store.fresh(), loc_new_expr),
+                (var_store.fresh(), loc_expr),
+            ],
+            CalledVia::Space,
+        );
+
+        loc_expr = Located::new(0, 0, 0, 0, expr);
+    }
+
+    loc_expr.value
 }
 
 /// Returns the char that would have been originally parsed to

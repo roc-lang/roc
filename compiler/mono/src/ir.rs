@@ -587,12 +587,6 @@ pub enum Stmt<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum StrSegment<'a> {
-    Interpolation(Expr<'a>),
-    Plaintext(&'a str),
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub enum Literal<'a> {
     // Literals
     Int(i64),
@@ -1249,44 +1243,12 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        Str(segments) => {
-            use roc_can::expr::StrSegment::*;
-
-            let iter = &mut segments.into_iter().rev();
-            let /* mut */ stmt = match iter.next() {
-                Some(Plaintext(string)) => Stmt::Let(
-                    assigned,
-                    Expr::Literal(Literal::Str(arena.alloc(string))),
-                    Layout::Builtin(Builtin::Str),
-                    hole,
-                ),
-                Some(Interpolation(loc_expr)) => {
-                    with_hole(env, loc_expr.value, procs, layout_cache, assigned, hole)
-                }
-                None => {
-                    // No segments? Empty string!
-                    return Stmt::Let(
-                        assigned,
-                        Expr::Literal(Literal::Str("")),
-                        Layout::Builtin(Builtin::Str),
-                        hole,
-                    );
-                }
-            };
-
-            while let Some(seg) = iter.next() {
-                match seg {
-                    Plaintext(string) => {
-                        todo!("Str.concat plaintext str with previous: {:?}", string);
-                    }
-                    Interpolation(loc_expr) => {
-                        todo!("Str.concat interplation with previous: {:?}", loc_expr);
-                    }
-                }
-            }
-
-            stmt
-        }
+        Str(string) => Stmt::Let(
+            assigned,
+            Expr::Literal(Literal::Str(arena.alloc(string))),
+            Layout::Builtin(Builtin::Str),
+            hole,
+        ),
 
         Num(var, num) => match num_argument_to_int_or_float(env.subs, var) {
             IntOrFloat::IntType => Stmt::Let(

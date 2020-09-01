@@ -15,7 +15,7 @@ mod test_can {
     use crate::helpers::{can_expr_with, test_home, CanExprOut};
     use bumpalo::Bump;
     use roc_can::expr::Expr::{self, *};
-    use roc_can::expr::{Recursive, StrSegment};
+    use roc_can::expr::Recursive;
     use roc_problem::can::{FloatErrorKind, IntErrorKind, Problem, RuntimeError};
     use roc_region::all::Region;
     use std::{f64, i64};
@@ -70,7 +70,7 @@ mod test_can {
     }
 
     fn expr_str(contents: &str) -> Expr {
-        Expr::Str(vec![StrSegment::Plaintext(contents.into())])
+        Expr::Str(contents.into())
     }
 
     // NUMBER LITERALS
