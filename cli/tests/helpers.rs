@@ -19,8 +19,7 @@ pub struct Out {
 // TODO get these from roc_cli::repl instead, after figuring out why
 // `extern crate roc_cli;` doesn't work.
 const WELCOME_MESSAGE: &str = "\n  The rockin’ \u{001b}[36mroc repl\u{001b}[0m\n\u{001b}[35m────────────────────────\u{001b}[0m\n\n";
-const INSTRUCTIONS: &str =
-    "Enter an expression, or :help for a list of commands, or :exit to exit.\n";
+const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit.\n";
 const PROMPT: &str = "\n\u{001b}[36m»\u{001b}[0m ";
 
 pub fn path_to_roc_binary() -> PathBuf {
