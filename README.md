@@ -2,6 +2,16 @@
 
 Roc is a language for building reliable applications on top of fast platforms.
 
+## Getting started
+
+1. [Install rust](https://rustup.rs/)
+2. [Build from source](BUILDING_FROM_SOURCE.md)
+3. In the terminal execute from the root folder:
+    ```
+    cargo run repl
+    ```
+4. Check [these tests](https://github.com/rtfeldman/roc/blob/trunk/cli/tests/repl_eval.rs) for examples
+
 ## Applications and Platforms
 
 Applications are often built on a *framework.* Typically, both application and framework are written in the same language.
