@@ -12,7 +12,7 @@ For Ubuntu, I used the `Automatic installation script` at [apt.llvm.org](https:/
 ## Troubleshooting
 
 Create an issue if you run into problems not listed here.
-We intend to make contributing to Roc as smooth as possible.
+That will help us improve this document for everyone who reads it in the future!
 
 ### LLVM installation on Linux
 
