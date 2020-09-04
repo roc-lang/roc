@@ -1,3 +1,5 @@
+<img width="185" alt="The Roc logo, an origami bird" src="https://user-images.githubusercontent.com/1094080/92188927-e61ebd00-ee2b-11ea-97ef-2fc88e0094b0.png">
+
 # Name and Logo
 
 The Roc programming language is named after [a mythical bird](https://en.wikipedia.org/wiki/Roc_(mythology)).
