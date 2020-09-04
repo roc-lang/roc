@@ -12,7 +12,7 @@ For Ubuntu and Debian, you can use the `Automatic installation script` at [apt.l
 sudo bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
 ```
 
-For macOS, you can run `brew install llvm` (but before you do so, check the version with `brew info llvm`--if it's 10.0.1, you may need to install a slightly older version)
+For macOS, you can run `brew install llvm` (but before you do so, check the version with `brew info llvm`--if it's 10.0.1, you may need to install a slightly older version. See below for details.)
 
 There are also plenty of alternative options at http://releases.llvm.org/download.html
 
