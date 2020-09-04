@@ -7,14 +7,23 @@ To build the compiler, you need a particular version of LLVM installed on your s
 
 To see which version of LLVM you need, take a look at `Cargo.toml`, in particular the `branch` section of the `inkwell` dependency. It should have something like `llvmX-Y` where X and Y are the major and minor revisions of LLVM you need.
 
-For Ubuntu, I used the `Automatic installation script` at [apt.llvm.org](https://apt.llvm.org) - but there are plenty of alternative options at http://releases.llvm.org/download.html
+For Ubuntu and Debian, you can use the `Automatic installation script` at [apt.llvm.org](https://apt.llvm.org):
+```
+sudo bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
+```
+But there are plenty of alternative options at http://releases.llvm.org/download.html
 
-### Troubleshooting LLVM installation on Linux
+## Troubleshooting
+
+Create an issue if you run into problems not listed here.
+That will help us improve this document for everyone who reads it in the future!
+
+### LLVM installation on Linux
 
 On some Linux systems we've seen the error "failed to run custom build command for x11".
 On Ubuntu, running `sudo apt-get install cmake libx11-dev` fixed this.
 
-### Troubleshooting LLVM installation on Windows
+### LLVM installation on Windows
 
 Installing LLVM's prebuilt binaries doesn't seem to be enough for the `llvm-sys` crate that Roc depends on, so I had to build LLVM from source
 on Windows. After lots of help from [**@IanMacKenzie**](https://github.com/IanMacKenzie) (thank you, Ian!), here's what worked for me:

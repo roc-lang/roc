@@ -227,7 +227,7 @@ mod test_reporting {
                 `y` is not used anywhere in your code.
 
                 2│  y = 2
-                    ▔
+                    ^
 
                 If you didn't intend on using `y` then remove it so future readers of
                 your code don't wonder why it is there.
@@ -256,12 +256,12 @@ mod test_reporting {
                 The `i` name is first defined here:
 
                 1│  i = 1
-                    ▔
+                    ^
 
                 But then it's defined a second time here:
 
                 3│  s = \i ->
-                         ▔
+                         ^
 
                 Since these variables have the same name, it's easy to use the wrong
                 one on accident. Give one of them a new name.
@@ -293,12 +293,12 @@ mod test_reporting {
                 The `Booly` name is first defined here:
 
                 1│  Booly : [ Yes, No ]
-                    ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                    ^^^^^^^^^^^^^^^^^^^
 
                 But then it's defined a second time here:
 
                 3│  Booly : [ Yes, No, Maybe ]
-                    ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Since these variables have the same name, it's easy to use the wrong
                 one on accident. Give one of them a new name.
@@ -308,7 +308,7 @@ mod test_reporting {
                 `Booly` is not used anywhere in your code.
 
                 1│  Booly : [ Yes, No ]
-                    ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                    ^^^^^^^^^^^^^^^^^^^
 
                 If you didn't intend on using `Booly` then remove it so future readers
                 of your code don't wonder why it is there.
@@ -404,7 +404,7 @@ mod test_reporting {
                 should be grouped.
 
                 3│      if selectedId != thisId == adminsId then
-                           ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
                 "#
             ),
         )
@@ -488,7 +488,7 @@ mod test_reporting {
     //
     //             6│ imports [
     //             7│     Symbol.{ Interns }
-    //                     ▔▔▔▔▔▔
+    //                     ^^^^^^
     //             8│ ]
     //
     //             Since Symbol isn't used, you don't need to import it."#
@@ -571,7 +571,7 @@ mod test_reporting {
                 I cannot find a `theAdmin` value
 
                 <cyan>3<reset><cyan>│<reset>  <white>theAdmin<reset>
-                    <red>▔▔▔▔▔▔▔▔<reset>
+                    <red>^^^^^^^^<reset>
 
                 these names seem close though:
 
@@ -600,7 +600,7 @@ mod test_reporting {
     //                You cannot mix (!=) and (==) without parentheses
     //
     //                3│     if selectedId != thisId == adminsId then
-    //                           ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+    //                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     //
     //                "#
     //            ),
@@ -623,7 +623,7 @@ mod test_reporting {
     //                You cannot mix (!=) and (==) without parentheses
     //
     //                3│     if selectedId != thisId == adminsId then
-    //                           ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+    //                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     //
     //                "#
     //            ),
@@ -645,7 +645,7 @@ mod test_reporting {
                 This `if` condition needs to be a Bool:
 
                 1│  if "foo" then 2 else 3
-                       ▔▔▔▔▔
+                       ^^^^^
 
                 Right now it’s a string of type:
 
@@ -704,7 +704,7 @@ mod test_reporting {
                 This `if` has an `else` branch with a different type from its `then` branch:
 
                 1│  if True then 2 else "foo"
-                                        ▔▔▔▔▔
+                                        ^^^^^
 
                 The `else` branch is a string of type:
 
@@ -735,7 +735,7 @@ mod test_reporting {
     //             The 2nd branch of this `if` does not match all the previous branches:
 
     //             1│ if True then 2 else "foo"
-    //                                     ▔▔▔▔▔
+    //                                     ^^^^^
 
     //             The 2nd branch is a string of type
 
@@ -769,7 +769,7 @@ mod test_reporting {
                 1│  when 1 is
                 2│      2 -> "foo"
                 3│      3 -> {}
-                             ▔▔
+                             ^^
 
                 The 2nd branch is a record of type:
 
@@ -800,7 +800,7 @@ mod test_reporting {
                 This list contains elements with different types:
 
                 1│  [ 1, 3, "foo" ]
-                            ▔▔▔▔▔
+                            ^^^^^
 
                 Its 3rd element is a string of type:
 
@@ -834,7 +834,7 @@ mod test_reporting {
                 I cannot update the `.foo` field like this:
 
                 4│  { x & foo: "bar" }
-                               ▔▔▔▔▔
+                               ^^^^^
 
                 You are trying to update `.foo` to be a string of type:
 
@@ -868,7 +868,7 @@ mod test_reporting {
                 I'm inferring a weird self-referential type for `g`:
 
                 1│  f = \g -> g g
-                         ▔
+                         ^
 
                 Here is my best effort at writing down the type. You will see ∞ for
                 parts of the type that repeat something already printed out
@@ -897,7 +897,7 @@ mod test_reporting {
                 I'm inferring a weird self-referential type for `f`:
 
                 1│  f = \x -> f [x]
-                    ▔
+                    ^
 
                 Here is my best effort at writing down the type. You will see ∞ for
                 parts of the type that repeat something already printed out
@@ -929,7 +929,7 @@ mod test_reporting {
                 The 1st argument to `f` is not what I expect:
 
                 6│  f bar
-                      ▔▔▔
+                      ^^^
 
                 This `bar` value is a:
 
@@ -967,7 +967,7 @@ mod test_reporting {
                 The 1st argument to `f` is not what I expect:
 
                 4│  f Blue
-                      ▔▔▔▔
+                      ^^^^
 
                 This `Blue` global tag application has the type:
 
@@ -1005,7 +1005,7 @@ mod test_reporting {
                 The 1st argument to `f` is not what I expect:
 
                 4│  f (Blue 3.14)
-                       ▔▔▔▔▔▔▔▔▔
+                       ^^^^^^^^^
 
                 This `Blue` global tag application has the type:
 
@@ -1043,7 +1043,7 @@ mod test_reporting {
                 Something is off with the 1st branch of this `if` expression:
 
                 2│  x = if True then 3.14 else 4
-                                     ▔▔▔▔
+                                     ^^^^
 
                 The 1st branch is a float of type:
 
@@ -1080,7 +1080,7 @@ mod test_reporting {
                 Something is off with the 1st branch of this `when` expression:
 
                 4│          _ -> 3.14
-                                 ▔▔▔▔
+                                 ^^^^
 
                 The 1st branch is a float of type:
 
@@ -1116,7 +1116,7 @@ mod test_reporting {
 
                 1│  x : Int -> Int
                 2│  x = \_ -> 3.14
-                        ▔▔▔▔▔▔▔▔▔▔
+                        ^^^^^^^^^^
 
                 The body is an anonymous function of type:
 
@@ -1151,7 +1151,7 @@ mod test_reporting {
                 The `x` value is not a function, but it was given 1 argument:
 
                 4│  x 3
-                    ▔
+                    ^
 
                 Are there any missing commas? Or missing parentheses?
                 "#
@@ -1177,7 +1177,7 @@ mod test_reporting {
                 The `f` function expects 1 argument, but it got 2 instead:
 
                 4│  f 1 2
-                    ▔
+                    ^
 
                 Are there any missing commas? Or missing parentheses?
                 "#
@@ -1203,7 +1203,7 @@ mod test_reporting {
                 The `f` function expects 2 arguments, but it got only 1:
 
                 4│  f 1
-                    ▔
+                    ^
 
                 Roc does not allow functions to be partially applied. Use a closure to
                 make partial application explicit.
@@ -1228,7 +1228,7 @@ mod test_reporting {
                 The 1st pattern in this `when` is causing a mismatch:
 
                 2│      {} -> 42
-                        ▔▔
+                        ^^
 
                 The first pattern is trying to match record values of type:
 
@@ -1259,7 +1259,7 @@ mod test_reporting {
                 The 2nd pattern in this `when` does not match the previous ones:
 
                 3│      {} -> 42
-                        ▔▔
+                        ^^
 
                 The 2nd pattern is trying to match record values of type:
 
@@ -1289,7 +1289,7 @@ mod test_reporting {
                 The 1st pattern in this `when` is causing a mismatch:
 
                 2│      { foo: True } -> 42
-                        ▔▔▔▔▔▔▔▔▔▔▔▔▔
+                        ^^^^^^^^^^^^^
 
                 The first pattern is trying to match record values of type:
 
@@ -1320,7 +1320,7 @@ mod test_reporting {
                 I cannot find a `foo` value
 
                 2│      { foo: 2 } -> foo
-                                      ▔▔▔
+                                      ^^^
 
                 these names seem close though:
 
@@ -1385,7 +1385,7 @@ mod test_reporting {
                 The 1st pattern in this `when` is causing a mismatch:
 
                 2│      {} | 1 -> 3
-                        ▔▔▔▔▔▔
+                        ^^^^^^
 
                 The first pattern is trying to match numbers:
 
@@ -1417,7 +1417,7 @@ mod test_reporting {
                 This expression is used in an unexpected way:
 
                 1│  (Foo x) = 42
-                              ▔▔
+                              ^^
 
                 It is a number of type:
 
@@ -1450,7 +1450,7 @@ mod test_reporting {
 
                 1│  { x } : { x : Int }
                 2│  { x } = { x: 4.0 }
-                            ▔▔▔▔▔▔▔▔▔▔
+                            ^^^^^^^^^^
 
                 The body is a record of type:
 
@@ -1484,7 +1484,7 @@ mod test_reporting {
                 This integer pattern is malformed:
 
                 2│      100A -> 3
-                        ▔▔▔▔
+                        ^^^^
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -1509,7 +1509,7 @@ mod test_reporting {
                 This float pattern is malformed:
 
                 2│      2.X -> 3
-                        ▔▔▔
+                        ^^^
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -1534,7 +1534,7 @@ mod test_reporting {
                 This hex integer pattern is malformed:
 
                 2│      0xZ -> 3
-                        ▔▔▔
+                        ^^^
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -1559,7 +1559,7 @@ mod test_reporting {
                 This octal integer pattern is malformed:
 
                 2│      0o9 -> 3
-                        ▔▔▔
+                        ^^^
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -1584,7 +1584,7 @@ mod test_reporting {
                 This binary integer pattern is malformed:
 
                 2│      0b4 -> 3
-                        ▔▔▔
+                        ^^^
 
                 Tip: Learn more about number literals at TODO
                 "#
@@ -1611,7 +1611,7 @@ mod test_reporting {
 
                 1│  x : { a : Int, b : Float, c : Bool }
                 2│  x = { b: 4.0 }
-                        ▔▔▔▔▔▔▔▔▔▔
+                        ^^^^^^^^^^
 
                 The body is a record of type:
 
@@ -1635,7 +1635,7 @@ mod test_reporting {
         //
         //                1│ f : a, b -> a
         //                2│ f = \x, y -> if True then x else y
-        //                        ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+        //                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         //
         //                The body is an anonymous function of type:
         //
@@ -1660,7 +1660,7 @@ mod test_reporting {
                 This `if` has an `else` branch with a different type from its `then` branch:
 
                 2│  f = \x, y -> if True then x else y
-                                                     ▔
+                                                     ^
 
                 This `y` value is a:
 
@@ -1700,7 +1700,7 @@ mod test_reporting {
 
                 1│  f : Bool -> msg
                 2│  f = \_ -> Foo
-                        ▔▔▔▔▔▔▔▔▔
+                        ^^^^^^^^^
 
                 The body is an anonymous function of type:
 
@@ -1739,7 +1739,7 @@ mod test_reporting {
 
                 1│  f : msg
                 2│  f = 0x3
-                        ▔▔▔
+                        ^^^
 
                 The body is an integer of type:
 
@@ -1778,7 +1778,7 @@ mod test_reporting {
                 I cannot find a `ok` value
 
                 2│  f = \_ -> ok 4
-                              ▔▔
+                              ^^
 
                 these names seem close though:
 
@@ -1813,7 +1813,7 @@ mod test_reporting {
                 `ok` is not used anywhere in your code.
 
                 3│      ok = 3
-                        ▔▔
+                        ^^
 
                 If you didn't intend on using `ok` then remove it so future readers of
                 your code don't wonder why it is there.
@@ -1882,7 +1882,7 @@ mod test_reporting {
                 The `foo` definition is causing a very tricky infinite loop:
 
                 1│  foo = bar
-                    ▔▔▔
+                    ^^^
 
                 The `foo` value depends on itself through the following chain of
                 definitions:
@@ -1914,7 +1914,7 @@ mod test_reporting {
                 The `x` record does not have a `.foo` field:
 
                 3│  { x & foo: 3 }
-                          ▔▔▔▔▔▔
+                          ^^^^^^
 
                 In fact, `x` is a record with NO fields!
                 "#
@@ -1940,7 +1940,7 @@ mod test_reporting {
                 The `x` record does not have a `.foo` field:
 
                 3│  { x & foo: 3 }
-                          ▔▔▔▔▔▔
+                          ^^^^^^
 
                 This is usually a typo. Here are the `x` fields that are most similar:
 
@@ -1976,7 +1976,7 @@ mod test_reporting {
                 The `r` record does not have a `.foo` field:
 
                 3│      r2 = { r & foo: r.fo }
-                                   ▔▔▔▔▔▔▔▔▔
+                                   ^^^^^^^^^
 
                 This is usually a typo. Here are the `r` fields that are most similar:
 
@@ -2007,7 +2007,7 @@ mod test_reporting {
                 The `x` record does not have a `.foo` field:
 
                 3│  { x & foo: 3 }
-                          ▔▔▔▔▔▔
+                          ^^^^^^
 
                 This is usually a typo. Here are the `x` fields that are most similar:
 
@@ -2040,7 +2040,7 @@ mod test_reporting {
                 The 2nd argument to `add` is not what I expect:
 
                 1│  0x4 + "foo"
-                          ▔▔▔▔▔
+                          ^^^^^
 
                 This argument is a string of type:
 
@@ -2069,7 +2069,7 @@ mod test_reporting {
                 The 2nd argument to `add` is not what I expect:
 
                 1│  0x4 + 3.14
-                          ▔▔▔▔
+                          ^^^^
 
                 This argument is a float of type:
 
@@ -2105,7 +2105,7 @@ mod test_reporting {
 
                 1│  f : [ A ] -> [ A, B ]
                 2│  f = \a -> a
-                        ▔▔▔▔▔▔▔
+                        ^^^^^^^
 
                 The body is an anonymous function of type:
 
@@ -2143,7 +2143,7 @@ mod test_reporting {
 
                 1│  f : [ A ] -> [ A, B, C ]
                 2│  f = \a -> a
-                        ▔▔▔▔▔▔▔
+                        ^^^^^^^
 
                 The body is an anonymous function of type:
 
@@ -2201,7 +2201,7 @@ mod test_reporting {
                 This pattern does not cover all the possibilities:
 
                 7│  f = \Left v -> v
-                         ▔▔▔▔▔▔
+                         ^^^^^^
 
                 Other possibilities include:
 
@@ -2236,7 +2236,7 @@ mod test_reporting {
                 This pattern does not cover all the possibilities:
 
                 5│  (Left y) = x
-                     ▔▔▔▔▔▔
+                     ^^^^^^
 
                 Other possibilities include:
 
@@ -2521,7 +2521,7 @@ mod test_reporting {
                 The 1st argument to `f` is not what I expect:
 
                 6│  f { y: 3.14 }
-                      ▔▔▔▔▔▔▔▔▔▔▔
+                      ^^^^^^^^^^^
 
                 This argument is a record of type:
 
@@ -2562,7 +2562,7 @@ mod test_reporting {
                 The `Foo` alias is recursive in an invalid way:
 
                 1│  Foo : { x : Bar }
-                          ▔▔▔▔▔▔▔▔▔▔▔
+                          ^^^^^^^^^^^
 
                 The `Foo` alias depends on itself through the following chain of
                 definitions:
@@ -2581,7 +2581,7 @@ mod test_reporting {
                 `Bar` is not used anywhere in your code.
 
                 2│  Bar : { y : Foo }
-                    ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                    ^^^^^^^^^^^^^^^^^
 
                 If you didn't intend on using `Bar` then remove it so future readers of
                 your code don't wonder why it is there.
@@ -2611,7 +2611,7 @@ mod test_reporting {
                 The `Foo` alias is self-recursive in an invalid way:
 
                 1│  Foo : { x : Foo }
-                    ▔▔▔
+                    ^^^
 
                 Recursion in aliases is only allowed if recursion happens behind a
                 tag.
@@ -2635,12 +2635,12 @@ mod test_reporting {
                 This record defines the `.x` field twice!
 
                 1│  { x: 4, y: 3, x: 4 }
-                      ▔▔▔▔        ▔▔▔▔
+                      ^^^^        ^^^^
 
                 In the rest of the program, I will only use the latter definition:
 
                 1│  { x: 4, y: 3, x: 4 }
-                                  ▔▔▔▔
+                                  ^^^^
 
                 For clarity, remove the previous `.x` definitions from this record.
                 "#
@@ -2663,12 +2663,12 @@ mod test_reporting {
                 This record defines the `.x` field twice!
 
                 1│  { x: 4, y: 3, x: "foo" }
-                      ▔▔▔▔        ▔▔▔▔▔▔▔▔
+                      ^^^^        ^^^^^^^^
 
                 In the rest of the program, I will only use the latter definition:
 
                 1│  { x: 4, y: 3, x: "foo" }
-                                  ▔▔▔▔▔▔▔▔
+                                  ^^^^^^^^
 
                 For clarity, remove the previous `.x` definitions from this record.
                 "#
@@ -2771,12 +2771,12 @@ mod test_reporting {
                 This record type defines the `.foo` field twice!
 
                 1│  a : { foo : Int, bar : Float, foo : Str }
-                          ▔▔▔▔▔▔▔▔▔               ▔▔▔▔▔▔▔▔▔
+                          ^^^^^^^^^               ^^^^^^^^^
 
                 In the rest of the program, I will only use the latter definition:
 
                 1│  a : { foo : Int, bar : Float, foo : Str }
-                                                  ▔▔▔▔▔▔▔▔▔
+                                                  ^^^^^^^^^
 
                 For clarity, remove the previous `.foo` definitions from this record
                 type.
@@ -2803,12 +2803,12 @@ mod test_reporting {
                 This tag union type defines the `Foo` tag twice!
 
                 1│  a : [ Foo Int, Bar Float, Foo Str ]
-                          ▔▔▔▔▔▔▔             ▔▔▔▔▔▔▔
+                          ^^^^^^^             ^^^^^^^
 
                 In the rest of the program, I will only use the latter definition:
 
                 1│  a : [ Foo Int, Bar Float, Foo Str ]
-                                              ▔▔▔▔▔▔▔
+                                              ^^^^^^^
 
                 For clarity, remove the previous `Foo` definitions from this tag union
                 type.
@@ -2878,7 +2878,7 @@ mod test_reporting {
                 This pattern in the definition of `MyAlias` is not what I expect:
 
                 1│  MyAlias 1 : Int
-                            ▔
+                            ^
 
                 Only type variables like `a` or `value` can occur in this position.
 
@@ -2887,7 +2887,7 @@ mod test_reporting {
                 `MyAlias` is not used anywhere in your code.
 
                 1│  MyAlias 1 : Int
-                    ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                    ^^^^^^^^^^^^^^^
 
                 If you didn't intend on using `MyAlias` then remove it so future readers
                 of your code don't wonder why it is there.
@@ -2914,7 +2914,7 @@ mod test_reporting {
                 The `Num` alias expects 1 type argument, but it got 2 instead:
 
                 1│  a : Num Int Float
-                        ▔▔▔▔▔▔▔▔▔▔▔▔▔
+                        ^^^^^^^^^^^^^
 
                 Are there missing parentheses?
                 "#
@@ -2940,7 +2940,7 @@ mod test_reporting {
                 The `Num` alias expects 1 type argument, but it got 2 instead:
 
                 1│  f : Bool -> Num Int Float
-                                ▔▔▔▔▔▔▔▔▔▔▔▔▔
+                                ^^^^^^^^^^^^^
 
                 Are there missing parentheses?
                 "#
@@ -2968,7 +2968,7 @@ mod test_reporting {
                 The `Pair` alias expects 2 type arguments, but it got 1 instead:
 
                 3│  x : Pair Int
-                        ▔▔▔▔▔▔▔▔
+                        ^^^^^^^^
 
                 Are there missing parentheses?
                 "#
@@ -2996,7 +2996,7 @@ mod test_reporting {
                 The `Pair` alias expects 2 type arguments, but it got 3 instead:
 
                 3│  x : Pair Int Int Int
-                        ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                        ^^^^^^^^^^^^^^^^
 
                 Are there missing parentheses?
                 "#
@@ -3023,7 +3023,7 @@ mod test_reporting {
                 The `a` type variable is not used in the `Foo` alias definition:
 
                 1│  Foo a : [ Foo ]
-                        ▔
+                        ^
 
                 Roc does not allow unused type parameters!
 
@@ -3049,7 +3049,7 @@ mod test_reporting {
                 Unexpected tokens in front of the `=` symbol:
 
                 1│  f x y = x
-                      ▔▔▔
+                      ^^^
                 "#
             ),
         )
@@ -3076,7 +3076,7 @@ mod test_reporting {
 
                 3│  x : ConsList {}
                 4│  x = Cons {} (Cons "foo" Nil)
-                        ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                        ^^^^^^^^^^^^^^^^^^^^^^^^
 
                 This `Cons` global tag application has the type:
 
@@ -3115,7 +3115,7 @@ mod test_reporting {
 
                 4│  x : AList Int Int
                 5│  x = ACons 0 (BCons 1 (ACons "foo" BNil ))
-                        ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 This `ACons` global tag application has the type:
 
@@ -3156,7 +3156,7 @@ mod test_reporting {
                 This integer literal is too big:
 
                 1│  x = 9_223_372_036_854_775_807_000
-                        ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Roc uses signed 64-bit integers, allowing values between
                 −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
@@ -3168,7 +3168,7 @@ mod test_reporting {
                 This integer literal is too small:
 
                 3│  y = -9_223_372_036_854_775_807_000
-                        ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Roc uses signed 64-bit integers, allowing values between
                 −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
@@ -3180,7 +3180,7 @@ mod test_reporting {
                 This integer literal is too big:
 
                 5│  h = 0x8FFF_FFFF_FFFF_FFFF
-                        ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                        ^^^^^^^^^^^^^^^^^^^^^
 
                 Roc uses signed 64-bit integers, allowing values between
                 −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
@@ -3192,7 +3192,7 @@ mod test_reporting {
                 This integer literal is too small:
 
                 6│  l = -0x8FFF_FFFF_FFFF_FFFF
-                        ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                        ^^^^^^^^^^^^^^^^^^^^^^
 
                 Roc uses signed 64-bit integers, allowing values between
                 −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
@@ -3223,7 +3223,7 @@ mod test_reporting {
                 This float literal is too big:
 
                 2│                  overflow = 11.7976931348623157e308
-                                               ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                                               ^^^^^^^^^^^^^^^^^^^^^^^
 
                 Roc uses signed 64-bit floating points, allowing values
                 between-1.7976931348623157e308 and 1.7976931348623157e308
@@ -3235,7 +3235,7 @@ mod test_reporting {
                 This float literal is too small:
 
                 3│                  underflow = -11.7976931348623157e308
-                                                ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                                                ^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Roc uses signed 64-bit floating points, allowing values
                 between-1.7976931348623157e308 and 1.7976931348623157e308
@@ -3272,7 +3272,7 @@ mod test_reporting {
                 This integer literal contains an invalid digit:
 
                 1│  dec = 100A
-                          ▔▔▔▔
+                          ^^^^
 
                 Integer literals can only contain the digits 0-9.
 
@@ -3283,7 +3283,7 @@ mod test_reporting {
                 This hex integer literal contains an invalid digit:
 
                 3│  hex = 0xZZZ
-                          ▔▔▔▔▔
+                          ^^^^^
 
                 Hexadecimal (base-16) integer literals can only contain the digits
                 0-9, a-f and A-F.
@@ -3295,7 +3295,7 @@ mod test_reporting {
                 This octal integer literal contains an invalid digit:
 
                 5│  oct = 0o9
-                          ▔▔▔
+                          ^^^
 
                 Octal (base-8) integer literals can only contain the digits 0-7.
 
@@ -3306,7 +3306,7 @@ mod test_reporting {
                 This binary integer literal contains an invalid digit:
 
                 7│  bin = 0b2
-                          ▔▔▔
+                          ^^^
 
                 Binary (base-2) integer literals can only contain the digits 0 and 1.
 
@@ -3339,7 +3339,7 @@ mod test_reporting {
                 This hex integer literal contains no digits:
 
                 3│  hex = 0x
-                          ▔▔
+                          ^^
 
                 Hexadecimal (base-16) integer literals must contain at least one of
                 the digits 0-9, a-f and A-F.
@@ -3351,7 +3351,7 @@ mod test_reporting {
                 This octal integer literal contains no digits:
 
                 5│  oct = 0o
-                          ▔▔
+                          ^^
 
                 Octal (base-8) integer literals must contain at least one of the
                 digits 0-7.
@@ -3363,7 +3363,7 @@ mod test_reporting {
                 This binary integer literal contains no digits:
 
                 7│  bin = 0b
-                          ▔▔
+                          ^^
 
                 Binary (base-2) integer literals must contain at least one of the
                 digits 0 and 1.
@@ -3391,7 +3391,7 @@ mod test_reporting {
                 This float literal contains an invalid digit:
 
                 1│  x = 3.0A
-                        ▔▔▔▔
+                        ^^^^
 
                 Floating point literals can only contain the digits 0-9, or use
                 scientific notation 10e4
@@ -3426,7 +3426,7 @@ mod test_reporting {
                 This expression cannot be updated:
 
                 2│  updateNestedRecord = { foo.bar & x: 4 }
-                                           ▔▔▔▔▔▔▔
+                                           ^^^^^^^
 
                 Only variables can be updated with record update syntax.
                 "#
@@ -3449,7 +3449,7 @@ mod test_reporting {
                 The `Foo` module is not imported:
 
                 1│  Foo.test
-                    ▔▔▔▔▔▔▔▔
+                    ^^^^^^^^
 
                 Is there an import missing? Perhaps there is a typo, these names seem
                 close:
@@ -3478,7 +3478,7 @@ mod test_reporting {
                 The 2nd argument to `add` is not what I expect:
 
                 1│  \{ x, y ? True } -> x + y
-                                            ▔
+                                            ^
 
                 This `y` value is a:
 
@@ -3510,7 +3510,7 @@ mod test_reporting {
                 The 1st argument to `f` is weird:
 
                 2│  f = \{ x, y ? "foo" } -> (\g, _ -> g) x y
-                         ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                         ^^^^^^^^^^^^^^^^
 
                 The argument is a pattern that matches record values of type:
 
@@ -3578,7 +3578,7 @@ mod test_reporting {
                 The 1st argument to `f` is weird:
 
                 2│  f = \{ x, y } -> x + y
-                         ▔▔▔▔▔▔▔▔
+                         ^^^^^^^^
 
                 The argument is a pattern that matches record values of type:
 
@@ -3615,7 +3615,7 @@ mod test_reporting {
                 The 1st pattern in this `when` is causing a mismatch:
 
                 4│              { x, y } -> x + y
-                                ▔▔▔▔▔▔▔▔
+                                ^^^^^^^^
 
                 The first pattern is trying to match record values of type:
 
@@ -3650,7 +3650,7 @@ mod test_reporting {
                 This expression is used in an unexpected way:
 
                 2│  f = \r -> r.y
-                              ▔▔▔
+                              ^^^
 
                 This `r` value is a:
 
@@ -3685,7 +3685,7 @@ mod test_reporting {
                 The 1st argument to this function is not what I expect:
 
                 2│  f = \r -> .y r
-                                 ▔
+                                 ^
 
                 This `r` value is a:
 
@@ -3723,7 +3723,7 @@ mod test_reporting {
                 The 1st pattern in this `when` is causing a mismatch:
 
                 4│              { x, y : "foo" } -> x + 0
-                                ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                                ^^^^^^^^^^^^^^^^
 
                 The first pattern is trying to match record values of type:
 
@@ -3758,7 +3758,7 @@ mod test_reporting {
                 The 1st pattern in this `when` is causing a mismatch:
 
                 4│              { x, y ? "foo" } -> (\g, _ -> g) x y
-                                ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                                ^^^^^^^^^^^^^^^^
 
                 The first pattern is trying to match record values of type:
 
@@ -3807,7 +3807,7 @@ mod test_reporting {
             2│      Foo _ 1 _ -> 1
             3│      _ -> 2
             4│      _ -> 3
-                    ▔
+                    ^
 
             Any value of this shape will be handled by a previous pattern, so this
             one should be removed.

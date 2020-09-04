@@ -215,6 +215,23 @@ mapOrCancel : List before, (before -> Result after err) -> Result (List after) e
 ## >>> List.mapOks [ "", "a", "bc", "", "d", "ef", "" ]
 mapOks : List before, (before -> Result after *) -> List after
 
+## Returns a list with the element at the given index having been transformed by
+## the given function.
+##
+## For a version of this which gives you more control over when to perform
+## the transformation, see #List.updater
+##
+## ## Performance notes
+##
+## In particular when updating nested collections, this is potentially much more
+## efficient than using #List.get to obtain the element, transforming it,
+## and then putting it back in the same place.
+update : List elem, Len, (elem -> elem) -> List elem
+
+## A more flexible version of #List.update, which returns an "updater" function
+## that lets you delay performing the update until later.
+updater : List elem, Len -> { elem, new : elem -> List elem }
+
 ## If all the elements in the list are #Ok, return a new list containing the
 ## contents of those #Ok tags. If any elements are #Err, return #Err.
 allOks : List (Result ok err) -> Result (List ok) err
