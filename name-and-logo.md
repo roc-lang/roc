@@ -4,12 +4,11 @@
 
 The Roc programming language is named after [a mythical bird](https://en.wikipedia.org/wiki/Roc_(mythology)).
 
-That’s why the logo is a bird. It’s specifically an *origami* bird as a homage
-to [Elm](https://elm-lang.org/)’s [tangram](https://en.wikipedia.org/wiki/Tangram)
-logo.
+That’s why the logo is a bird. It’s specifically an [*origami* bird](https://youtu.be/9gni1t1k1uY) as a homage
+to [Elm](https://elm-lang.org/)’s tangram logo.
 
 Roc is a direct descendant of Elm. The languages are similar, but not the same.
-Origami likewise has similarities to tangrams, but they are not the same. 
+[Origami](https://en.wikipedia.org/wiki/Origami) likewise has similarities to [tangrams](https://en.wikipedia.org/wiki/Tangram), although they are not the same. 
 Both involve making a surprising variety of things 
 from simple primitives. [*Folds*](https://en.wikipedia.org/wiki/Fold_(higher-order_function)) 
 are also common in functional programming.
@@ -23,10 +22,10 @@ something fantastical, and it has incredible potential for puns.
 
 # Different Ways to Spell Roc
 
-* Roc - traditional
-* roc - low-key
-* ROC - [YELLING](https://package.elm-lang.org/packages/elm/core/latest/String#toUpper)
-* Röc - [metal 🤘](https://en.wikipedia.org/wiki/Metal_umlaut)
+* **Roc** - traditional
+* **roc** - low-key
+* **ROC** - [YELLING](https://package.elm-lang.org/packages/elm/core/latest/String#toUpper)
+* **Röc** - [metal 🤘](https://en.wikipedia.org/wiki/Metal_umlaut)
 
 # Fun Facts
 
