@@ -90,7 +90,6 @@ pub fn helper_without_uniqueness<'a>(
         ptr_bytes,
         leak: leak,
         exposed_to_host: MutSet::default(),
-        rc_functions: MutMap::default(),
     };
     let mut procs = roc_mono::ir::Procs::default();
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
@@ -285,7 +284,6 @@ pub fn helper_with_uniqueness<'a>(
         ptr_bytes,
         leak: leak,
         exposed_to_host: MutSet::default(),
-        rc_functions: MutMap::default(),
     };
     let mut procs = roc_mono::ir::Procs::default();
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();

@@ -79,11 +79,6 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
     */
 }
 
-pub struct RcFunctions<'ctx> {
-    inc: FunctionValue<'ctx>,
-    dec: FunctionValue<'ctx>,
-}
-
 pub struct Env<'a, 'ctx, 'env> {
     pub arena: &'a Bump,
     pub context: &'ctx Context,
@@ -93,7 +88,6 @@ pub struct Env<'a, 'ctx, 'env> {
     pub ptr_bytes: u32,
     pub leak: bool,
     pub exposed_to_host: MutSet<Symbol>,
-    pub rc_functions: MutMap<Layout<'a>, RcFunctions<'ctx>>,
 }
 
 impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
