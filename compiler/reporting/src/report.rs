@@ -21,7 +21,7 @@ const CYCLE_MID: &str = ["|     |", "│     ↓"][!IS_WINDOWS as usize];
 const CYCLE_END: &str = ["+-<---+", "└─────┘"][!IS_WINDOWS as usize];
 
 const GUTTER_BAR: &str = "│";
-const UNDERLINE: &str = "▔";
+const ERROR_UNDERLINE: &str = "^";
 
 /// The number of monospace spaces the gutter bar takes up.
 /// (This is not necessarily the same as GUTTER_BAR.len()!)
@@ -400,14 +400,16 @@ impl<'a> RocDocAllocator<'a> {
             let overlapping = sub_region2.start_col < sub_region1.end_col;
 
             let highlight = if overlapping {
-                self.text(UNDERLINE.repeat((sub_region2.end_col - sub_region1.start_col) as usize))
+                self.text(
+                    ERROR_UNDERLINE.repeat((sub_region2.end_col - sub_region1.start_col) as usize),
+                )
             } else {
                 let highlight1 =
-                    UNDERLINE.repeat((sub_region1.end_col - sub_region1.start_col) as usize);
+                    ERROR_UNDERLINE.repeat((sub_region1.end_col - sub_region1.start_col) as usize);
                 let highlight2 = if sub_region1 == sub_region2 {
                     "".repeat(0)
                 } else {
-                    UNDERLINE.repeat((sub_region2.end_col - sub_region2.start_col) as usize)
+                    ERROR_UNDERLINE.repeat((sub_region2.end_col - sub_region2.start_col) as usize)
                 };
                 let inbetween = " "
                     .repeat((sub_region2.start_col.saturating_sub(sub_region1.end_col)) as usize);
@@ -504,7 +506,7 @@ impl<'a> RocDocAllocator<'a> {
 
         if error_highlight_line {
             let highlight_text =
-                UNDERLINE.repeat((sub_region.end_col - sub_region.start_col) as usize);
+                ERROR_UNDERLINE.repeat((sub_region.end_col - sub_region.start_col) as usize);
             let highlight_line = self
                 .line()
                 // Omit the gutter bar when we know there are no further
