@@ -11,7 +11,10 @@ For Ubuntu and Debian, you can use the `Automatic installation script` at [apt.l
 ```
 sudo bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
 ```
-But there are plenty of alternative options at http://releases.llvm.org/download.html
+
+For macOS, you can run `brew install llvm` (but before you do so, check the version with `brew info llvm`--if it's 10.0.1, you may need to install a slightly older version. See below for details.)
+
+There are also plenty of alternative options at http://releases.llvm.org/download.html
 
 ## Troubleshooting
 
@@ -22,6 +25,16 @@ That will help us improve this document for everyone who reads it in the future!
 
 On some Linux systems we've seen the error "failed to run custom build command for x11".
 On Ubuntu, running `sudo apt-get install cmake libx11-dev` fixed this.
+
+### LLVM installation on macOS
+
+It looks like LLVM 10.0.1 [has some issues with libxml2 on macOS](https://discourse.brew.sh/t/llvm-config-10-0-1-advertise-libxml2-tbd-as-system-libs/8593). You can install the older 10.0.0_3 by doing
+
+```
+$ brew install https://raw.githubusercontent.com/Homebrew/homebrew-core/6616d50fb0b24dbe30f5e975210bdad63257f517/Formula/llvm.rb
+# "pinning" ensures that homebrew doesn't update it automatically
+$ brew pin llvm
+```
 
 ### LLVM installation on Windows
 
@@ -35,6 +48,7 @@ on Windows. After lots of help from [**@IanMacKenzie**](https://github.com/IanMa
 5. I ran `cmake -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release ../llvm` to generate a NMake makefile.
 6. Once that completed, I ran `nmake` to build LLVM. (This took about 2 hours on my laptop.)
 7. Finally, I set an environment variable `LLVM_SYS_100_PREFIX` to point to the `build` directory where I ran the `cmake` command.
+
 
 Once all that was done, `cargo` ran successfully for Roc!
 
