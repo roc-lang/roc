@@ -292,6 +292,19 @@ impl<'a> BorrowInfState<'a> {
                 // the function must take it as an owned parameter
                 self.own_args_if_param(xs);
             }
+            Reset(x) => {
+                self.own_var(z);
+                self.own_var(*x);
+            }
+            Reuse {
+                symbol: x,
+                arguments: ys,
+                ..
+            } => {
+                self.own_var(z);
+                self.own_var(*x);
+                self.own_args_if_param(ys);
+            }
             EmptyArray => {
                 self.own_var(z);
             }

@@ -569,6 +569,14 @@ pub enum Expr<'a> {
     },
     EmptyArray,
 
+    Reuse {
+        symbol: Symbol,
+        tag_name: TagName,
+        tag_id: u8,
+        arguments: &'a [Symbol],
+    },
+    Reset(Symbol),
+
     RuntimeErrorFunction(&'a str),
 }
 
@@ -666,6 +674,28 @@ impl<'a> Expr<'a> {
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
+            Reuse {
+                symbol,
+                tag_name,
+                arguments,
+                ..
+            } => {
+                let doc_tag = match tag_name {
+                    TagName::Global(s) => alloc.text(s.as_str()),
+                    TagName::Private(s) => alloc.text(format!("{}", s)),
+                };
+
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+
+                alloc
+                    .text("Reuse ")
+                    .append(symbol_to_doc(alloc, *symbol))
+                    .append(doc_tag)
+                    .append(alloc.space())
+                    .append(alloc.intersperse(it, " "))
+            }
+            Reset(symbol) => alloc.text("Reuse ").append(symbol_to_doc(alloc, *symbol)),
+
             Struct(args) => {
                 let it = args.iter().map(|s| symbol_to_doc(alloc, *s));
 
@@ -2728,6 +2758,9 @@ fn substitute_in_expr<'a>(
                 None
             }
         }
+
+        Reuse { .. } | Reset(_) => unreachable!("reset/reuse have not been introduced yet"),
+
         Struct(args) => {
             let mut did_change = false;
             let new_args = Vec::from_iter_in(

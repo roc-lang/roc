@@ -15,6 +15,8 @@ pub mod borrow;
 pub mod inc_dec;
 pub mod ir;
 pub mod layout;
+pub mod live_vars;
+pub mod reset_reuse;
 pub mod tail_recursion;
 
 // Temporary, while we can build up test cases and optimize the exhaustiveness checking.
