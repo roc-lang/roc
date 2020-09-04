@@ -1,4 +1,4 @@
-use roc_collections::all::MutSet;
+use roc_collections::all::{MutMap, MutSet};
 use roc_types::subs::Subs;
 
 pub fn helper_without_uniqueness<'a>(
@@ -90,6 +90,7 @@ pub fn helper_without_uniqueness<'a>(
         ptr_bytes,
         leak: leak,
         exposed_to_host: MutSet::default(),
+        rc_functions: MutMap::default(),
     };
     let mut procs = roc_mono::ir::Procs::default();
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
@@ -184,7 +185,7 @@ pub fn helper_without_uniqueness<'a>(
     );
 
     // Uncomment this to see the module's un-optimized LLVM instruction output:
-    // env.module.print_to_stderr();
+    env.module.print_to_stderr();
 
     if main_fn.verify(true) {
         function_pass.run_on(&main_fn);
@@ -284,6 +285,7 @@ pub fn helper_with_uniqueness<'a>(
         ptr_bytes,
         leak: leak,
         exposed_to_host: MutSet::default(),
+        rc_functions: MutMap::default(),
     };
     let mut procs = roc_mono::ir::Procs::default();
     let mut ident_ids = env.interns.all_ident_ids.remove(&home).unwrap();
@@ -475,7 +477,7 @@ macro_rules! assert_evals_to {
             assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
         }
         {
-            assert_opt_evals_to!($src, $expected, $ty, (|val| val));
+            // assert_opt_evals_to!($src, $expected, $ty, (|val| val));
         }
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
@@ -493,7 +495,7 @@ macro_rules! assert_evals_to {
             assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak);
         }
         {
-            assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
+            // assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
         }
     };
 }

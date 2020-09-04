@@ -533,7 +533,36 @@ mod gen_primitives {
                 "#
             ),
             0,
-            i64
+            i64,
+            |x| x,
+            false
+        );
+    }
+
+    #[test]
+    fn linked_list_len_1() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+
+                one : LinkedList Int
+                one = Cons 1 Nil 
+
+                length : LinkedList a -> Int
+                length = \list ->
+                    when list is
+                        Nil -> 0
+                        Cons _ rest -> 1 + length rest
+
+
+                length one
+                "#
+            ),
+            1,
+            i64,
+            |x| x,
+            false
         );
     }
 
@@ -558,7 +587,9 @@ mod gen_primitives {
                 "#
             ),
             3,
-            i64
+            i64,
+            |x| x,
+            false
         );
     }
 

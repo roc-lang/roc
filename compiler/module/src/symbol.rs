@@ -598,6 +598,8 @@ define_builtins! {
         7 ARG_6: "#arg6"
         8 ARG_7: "#arg7"
         9 ARG_8: "#arg8"
+        10 INC: "#inc" // internal function that increments the refcount
+        11 DEC: "#dec" // internal function that increments the refcount
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
