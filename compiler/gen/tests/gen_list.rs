@@ -150,6 +150,27 @@ mod gen_list {
     }
 
     #[test]
+    fn list_keep_if_always_true_for_non_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                alwaysTrue : Int -> Bool
+                alwaysTrue = \i ->
+                    True
+                    
+                oneThroughEight : List Int
+                oneThroughEight =
+                    [1,2,3,4,5,6,7,8]
+                    
+                List.keepIf oneThroughEight alwaysTrue
+                "#
+            ),
+            &[1, 2, 3, 4, 5, 6, 7, 8],
+            &'static [i64]
+        );
+    }
+
+    #[test]
     fn list_keep_if_always_false_for_non_empty_list() {
         assert_evals_to!(
             indoc!(
