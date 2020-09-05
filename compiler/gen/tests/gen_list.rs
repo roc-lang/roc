@@ -192,17 +192,37 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                intIsOne : Int -> Bool
-                intIsOne = \i ->
-                    False
+                intIsLessThanThree : Int -> Bool
+                intIsLessThanThree = \i ->
+                    i < 3
                     
-                List.keepIf [1,2,3,4,5,6,7,8] intIsOne
+                List.keepIf [1,2,3,4,5,6,7,8] intIsLessThanThree 
                 "#
             ),
-            &[1],
+            &[1, 2],
             &'static [i64]
         );
     }
+
+    //
+    // "panicked at 'not yet implemented: Handle equals for builtin layouts Str == Str'"
+    //
+    // #[test]
+    // fn list_keep_if_str_is_hello() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //             strIsHello : Str -> Bool
+    //             strIsHello = \str ->
+    //                 str == "Hello"
+    //
+    //             List.keepIf ["Hello", "Hello", "Goodbye"] strIsHello
+    //             "#
+    //         ),
+    //         &["Hello", "Hello"],
+    //         &'static [&'static str]
+    //     );
+    // }
 
     #[test]
     fn list_map_on_empty_list_with_int_layout() {
