@@ -199,7 +199,7 @@ pub fn constrain_expr(
 
             exists(vars, And(cons))
         }
-        Str(_) | BlockStr(_) => Eq(str_type(), expected, Category::Str, region),
+        Str(_) => Eq(str_type(), expected, Category::Str, region),
         List {
             elem_var,
             loc_elems,

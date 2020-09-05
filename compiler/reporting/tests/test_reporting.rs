@@ -222,12 +222,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 `y` is not used anywhere in your code.
 
-                2 ┆  y = 2
-                  ┆  ^
+                2│  y = 2
+                    ^
 
                 If you didn't intend on using `y` then remove it so future readers of
                 your code don't wonder why it is there.
@@ -251,17 +251,17 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 The `i` name is first defined here:
 
-                1 ┆  i = 1
-                  ┆  ^
+                1│  i = 1
+                    ^
 
                 But then it's defined a second time here:
 
-                3 ┆  s = \i ->
-                  ┆       ^
+                3│  s = \i ->
+                         ^
 
                 Since these variables have the same name, it's easy to use the wrong
                 one on accident. Give one of them a new name.
@@ -288,27 +288,27 @@ mod test_reporting {
             // Booly is called a "variable"
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 The `Booly` name is first defined here:
 
-                1 ┆  Booly : [ Yes, No ]
-                  ┆  ^^^^^^^^^^^^^^^^^^^
+                1│  Booly : [ Yes, No ]
+                    ^^^^^^^^^^^^^^^^^^^
 
                 But then it's defined a second time here:
 
-                3 ┆  Booly : [ Yes, No, Maybe ]
-                  ┆  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+                3│  Booly : [ Yes, No, Maybe ]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Since these variables have the same name, it's easy to use the wrong
                 one on accident. Give one of them a new name.
 
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 `Booly` is not used anywhere in your code.
 
-                1 ┆  Booly : [ Yes, No ]
-                  ┆  ^^^^^^^^^^^^^^^^^^^
+                1│  Booly : [ Yes, No ]
+                    ^^^^^^^^^^^^^^^^^^^
 
                 If you didn't intend on using `Booly` then remove it so future readers
                 of your code don't wonder why it is there.
@@ -345,20 +345,20 @@ mod test_reporting {
     //             r#"
     //             Booly is first defined here:
     //
-    //             1 ┆> Booly :
-    //             2 ┆>    [
-    //             3 ┆>        Yes,
-    //             4 ┆>        No
-    //             5 ┆>    ]
+    //             1│> Booly :
+    //             2│>    [
+    //             3│>        Yes,
+    //             4│>        No
+    //             5│>    ]
     //
     //             But then it's defined a second time here:
     //
-    //             7  ┆> Booly :
-    //             8  ┆>    [
-    //             9  ┆>        Yes,
-    //             10 ┆>        No,
-    //             11 ┆>        Maybe
-    //             12 ┆>    ]
+    //             7 │> Booly :
+    //             8 │>    [
+    //             9 │>        Yes,
+    //             10│>        No,
+    //             11│>        Maybe
+    //             12│>    ]
     //
     //             Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#
     //         ),
@@ -398,13 +398,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 Using != and == together requires parentheses, to clarify how they
                 should be grouped.
 
-                3 ┆      if selectedId != thisId == adminsId then
-                  ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                3│      if selectedId != thisId == adminsId then
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
                 "#
             ),
         )
@@ -428,14 +428,14 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 Using more than one == like this requires parentheses, to clarify how
                 things should be grouped.
 
-                2 ┆>      1
-                3 ┆>          == 2
-                4 ┆>          == 3
+                2│>      1
+                3│>          == 2
+                4│>          == 3
                 "#
             ),
         )
@@ -458,7 +458,7 @@ mod test_reporting {
     //             r#"
     //             box doesn't use htmlChildren.
     //
-    //             3 ┆  box = \class, htmlChildren ->
+    //             3│ box = \class, htmlChildren ->
     //
     //             If you don't need htmlChildren, then you can just remove it. However, if you really do need htmlChildren as an argument of box, prefix it with an underscore, like this: "_htmlChildren". Adding an underscore at the start of a variable name is a way of saying that the variable is not used."#
     //         ),
@@ -486,10 +486,10 @@ mod test_reporting {
     //             r#"
     //             Nothing from Symbol is used in this module.
     //
-    //             6 ┆  imports [
-    //             7 ┆      Symbol.{ Interns }
-    //               ┆      ^^^^^^
-    //             8 ┆  ]
+    //             6│ imports [
+    //             7│     Symbol.{ Interns }
+    //                     ^^^^^^
+    //             8│ ]
     //
     //             Since Symbol isn't used, you don't need to import it."#
     //         ),
@@ -566,12 +566,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                <cyan>── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────<reset>
 
                 I cannot find a `theAdmin` value
 
-                <cyan>3<reset><magenta> ┆<reset>  <white>theAdmin<reset>
-                 <magenta> ┆<reset>  <red>^^^^^^^^<reset>
+                <cyan>3<reset><cyan>│<reset>  <white>theAdmin<reset>
+                    <red>^^^^^^^^<reset>
 
                 these names seem close though:
 
@@ -599,8 +599,8 @@ mod test_reporting {
     //                r#"
     //                You cannot mix (!=) and (==) without parentheses
     //
-    //                3 ┆      if selectedId != thisId == adminsId then
-    //                  ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    //                3│     if selectedId != thisId == adminsId then
+    //                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     //
     //                "#
     //            ),
@@ -622,8 +622,8 @@ mod test_reporting {
     //                r#"
     //                You cannot mix (!=) and (==) without parentheses
     //
-    //                3 ┆      if selectedId != thisId == adminsId then
-    //                  ┆         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    //                3│     if selectedId != thisId == adminsId then
+    //                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     //
     //                "#
     //            ),
@@ -640,12 +640,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 This `if` condition needs to be a Bool:
 
-                1 ┆  if "foo" then 2 else 3
-                  ┆     ^^^^^
+                1│  if "foo" then 2 else 3
+                       ^^^^^
 
                 Right now it’s a string of type:
 
@@ -670,13 +670,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 This `if` guard condition needs to be a Bool:
 
-                1 ┆   when 1 is
-                2 ┆>      2 if 1 -> 0x0
-                3 ┆       _ -> 0x1
+                1│   when 1 is
+                2│>      2 if 1 -> 0x0
+                3│       _ -> 0x1
 
                 Right now it’s a number of type:
 
@@ -699,12 +699,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 This `if` has an `else` branch with a different type from its `then` branch:
 
-                1 ┆  if True then 2 else "foo"
-                  ┆                      ^^^^^
+                1│  if True then 2 else "foo"
+                                        ^^^^^
 
                 The `else` branch is a string of type:
 
@@ -730,12 +730,12 @@ mod test_reporting {
     //         ),
     //         indoc!(
     //             r#"
-    //  -- TYPE MISMATCH ---------------------------------------------------------------
+    //  ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
     //             The 2nd branch of this `if` does not match all the previous branches:
 
-    //             1 ┆  if True then 2 else "foo"
-    //               ┆                      ^^^^^
+    //             1│ if True then 2 else "foo"
+    //                                     ^^^^^
 
     //             The 2nd branch is a string of type
 
@@ -762,14 +762,14 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 2nd branch of this `when` does not match all the previous branches:
 
-                1 ┆  when 1 is
-                2 ┆      2 -> "foo"
-                3 ┆      3 -> {}
-                  ┆           ^^
+                1│  when 1 is
+                2│      2 -> "foo"
+                3│      3 -> {}
+                             ^^
 
                 The 2nd branch is a record of type:
 
@@ -795,22 +795,22 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                The 3rd element of this list does not match all the previous elements:
+                This list contains elements with different types:
 
-                1 ┆  [ 1, 3, "foo" ]
-                  ┆          ^^^^^
+                1│  [ 1, 3, "foo" ]
+                            ^^^^^
 
-                The 3rd element is a string of type:
+                Its 3rd element is a string of type:
 
                     Str
 
-                But all the previous elements in the list have type:
+                However, the preceding elements in the list all have the type:
 
                     Num a
 
-                I need all elements of a list to have the same type!
+                I need every element in a list to have the same type!
                 "#
             ),
         )
@@ -829,12 +829,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 I cannot update the `.foo` field like this:
 
-                4 ┆  { x & foo: "bar" }
-                  ┆             ^^^^^
+                4│  { x & foo: "bar" }
+                               ^^^^^
 
                 You are trying to update `.foo` to be a string of type:
 
@@ -863,12 +863,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- CIRCULAR TYPE ---------------------------------------------------------------
+                ── CIRCULAR TYPE ───────────────────────────────────────────────────────────────
 
                 I'm inferring a weird self-referential type for `g`:
 
-                1 ┆  f = \g -> g g
-                  ┆       ^
+                1│  f = \g -> g g
+                         ^
 
                 Here is my best effort at writing down the type. You will see ∞ for
                 parts of the type that repeat something already printed out
@@ -892,12 +892,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- CIRCULAR TYPE ---------------------------------------------------------------
+                ── CIRCULAR TYPE ───────────────────────────────────────────────────────────────
 
                 I'm inferring a weird self-referential type for `f`:
 
-                1 ┆  f = \x -> f [x]
-                  ┆  ^
+                1│  f = \x -> f [x]
+                    ^
 
                 Here is my best effort at writing down the type. You will see ∞ for
                 parts of the type that repeat something already printed out
@@ -924,12 +924,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 1st argument to `f` is not what I expect:
 
-                6 ┆  f bar
-                  ┆    ^^^
+                6│  f bar
+                      ^^^
 
                 This `bar` value is a:
 
@@ -939,9 +939,9 @@ mod test_reporting {
 
                     { foo : Int }
 
-                Hint: Seems like a record field typo. Maybe `bar` should be `foo`?
+                Tip: Seems like a record field typo. Maybe `bar` should be `foo`?
 
-                Hint: Can more type annotations be added? Type annotations always help
+                Tip: Can more type annotations be added? Type annotations always help
                 me give more specific messages, and I think they could help a lot in
                 this case
                 "#
@@ -962,12 +962,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 1st argument to `f` is not what I expect:
 
-                4 ┆  f Blue
-                  ┆    ^^^^
+                4│  f Blue
+                      ^^^^
 
                 This `Blue` global tag application has the type:
 
@@ -977,9 +977,9 @@ mod test_reporting {
 
                     [ Green, Red ]
 
-                Hint: Seems like a tag typo. Maybe `Blue` should be `Red`?
+                Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
-                Hint: Can more type annotations be added? Type annotations always help
+                Tip: Can more type annotations be added? Type annotations always help
                 me give more specific messages, and I think they could help a lot in
                 this case
                 "#
@@ -1000,12 +1000,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 1st argument to `f` is not what I expect:
 
-                4 ┆  f (Blue 3.14)
-                  ┆     ^^^^^^^^^
+                4│  f (Blue 3.14)
+                       ^^^^^^^^^
 
                 This `Blue` global tag application has the type:
 
@@ -1015,9 +1015,9 @@ mod test_reporting {
 
                     [ Green Bool, Red Int ]
 
-                Hint: Seems like a tag typo. Maybe `Blue` should be `Red`?
+                Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
-                Hint: Can more type annotations be added? Type annotations always help
+                Tip: Can more type annotations be added? Type annotations always help
                 me give more specific messages, and I think they could help a lot in
                 this case
                 "#
@@ -1038,12 +1038,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 Something is off with the 1st branch of this `if` expression:
 
-                2 ┆  x = if True then 3.14 else 4
-                  ┆                   ^^^^
+                2│  x = if True then 3.14 else 4
+                                     ^^^^
 
                 The 1st branch is a float of type:
 
@@ -1053,7 +1053,8 @@ mod test_reporting {
 
                     Int
 
-                Hint: Convert between Int and Float with `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Float using functions like
+                `Num.toFloat` and `Num.round`.
                 "#
             ),
         )
@@ -1074,12 +1075,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 Something is off with the 1st branch of this `when` expression:
 
-                4 ┆          _ -> 3.14
-                  ┆               ^^^^
+                4│          _ -> 3.14
+                                 ^^^^
 
                 The 1st branch is a float of type:
 
@@ -1089,7 +1090,8 @@ mod test_reporting {
 
                     Int
 
-                Hint: Convert between Int and Float with `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Float using functions like
+                `Num.toFloat` and `Num.round`.
                 "#
             ),
         )
@@ -1108,13 +1110,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 Something is off with the body of the `x` definition:
 
-                1 ┆  x : Int -> Int
-                2 ┆  x = \_ -> 3.14
-                  ┆      ^^^^^^^^^^
+                1│  x : Int -> Int
+                2│  x = \_ -> 3.14
+                        ^^^^^^^^^^
 
                 The body is an anonymous function of type:
 
@@ -1124,7 +1126,8 @@ mod test_reporting {
 
                     Int -> Int
 
-                Hint: Convert between Int and Float with `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Float using functions like
+                `Num.toFloat` and `Num.round`.
                 "#
             ),
         )
@@ -1143,12 +1146,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TOO MANY ARGS ---------------------------------------------------------------
+                ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
 
                 The `x` value is not a function, but it was given 1 argument:
 
-                4 ┆  x 3
-                  ┆  ^
+                4│  x 3
+                    ^
 
                 Are there any missing commas? Or missing parentheses?
                 "#
@@ -1169,12 +1172,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TOO MANY ARGS ---------------------------------------------------------------
+                ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
 
                 The `f` function expects 1 argument, but it got 2 instead:
 
-                4 ┆  f 1 2
-                  ┆  ^
+                4│  f 1 2
+                    ^
 
                 Are there any missing commas? Or missing parentheses?
                 "#
@@ -1195,12 +1198,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TOO FEW ARGS ----------------------------------------------------------------
+                ── TOO FEW ARGS ────────────────────────────────────────────────────────────────
 
                 The `f` function expects 2 arguments, but it got only 1:
 
-                4 ┆  f 1
-                  ┆  ^
+                4│  f 1
+                    ^
 
                 Roc does not allow functions to be partially applied. Use a closure to
                 make partial application explicit.
@@ -1220,12 +1223,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 1st pattern in this `when` is causing a mismatch:
 
-                2 ┆      {} -> 42
-                  ┆      ^^
+                2│      {} -> 42
+                        ^^
 
                 The first pattern is trying to match record values of type:
 
@@ -1251,12 +1254,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 2nd pattern in this `when` does not match the previous ones:
 
-                3 ┆      {} -> 42
-                  ┆      ^^
+                3│      {} -> 42
+                        ^^
 
                 The 2nd pattern is trying to match record values of type:
 
@@ -1281,12 +1284,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 1st pattern in this `when` is causing a mismatch:
 
-                2 ┆      { foo: True } -> 42
-                  ┆      ^^^^^^^^^^^^^
+                2│      { foo: True } -> 42
+                        ^^^^^^^^^^^^^
 
                 The first pattern is trying to match record values of type:
 
@@ -1312,12 +1315,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 I cannot find a `foo` value
 
-                2 ┆      { foo: 2 } -> foo
-                  ┆                    ^^^
+                2│      { foo: 2 } -> foo
+                                      ^^^
 
                 these names seem close though:
 
@@ -1377,12 +1380,12 @@ mod test_reporting {
             // Just putting this here. We should probably handle or-patterns better
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 1st pattern in this `when` is causing a mismatch:
 
-                2 ┆      {} | 1 -> 3
-                  ┆      ^^^^^^
+                2│      {} | 1 -> 3
+                        ^^^^^^
 
                 The first pattern is trying to match numbers:
 
@@ -1409,12 +1412,12 @@ mod test_reporting {
             // Maybe this should specifically say the pattern doesn't work?
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 This expression is used in an unexpected way:
 
-                1 ┆  (Foo x) = 42
-                  ┆            ^^
+                1│  (Foo x) = 42
+                              ^^
 
                 It is a number of type:
 
@@ -1441,13 +1444,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 Something is off with the body of this definition:
 
-                1 ┆  { x } : { x : Int }
-                2 ┆  { x } = { x: 4.0 }
-                  ┆          ^^^^^^^^^^
+                1│  { x } : { x : Int }
+                2│  { x } = { x: 4.0 }
+                            ^^^^^^^^^^
 
                 The body is a record of type:
 
@@ -1457,7 +1460,8 @@ mod test_reporting {
 
                     { x : Int }
 
-                Hint: Convert between Int and Float with `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Float using functions like
+                `Num.toFloat` and `Num.round`.
                 "#
             ),
         )
@@ -1475,14 +1479,14 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This integer pattern is malformed:
 
-                2 ┆      100A -> 3
-                  ┆      ^^^^
+                2│      100A -> 3
+                        ^^^^
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -1500,14 +1504,14 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This float pattern is malformed:
 
-                2 ┆      2.X -> 3
-                  ┆      ^^^
+                2│      2.X -> 3
+                        ^^^
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -1525,14 +1529,14 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This hex integer pattern is malformed:
 
-                2 ┆      0xZ -> 3
-                  ┆      ^^^
+                2│      0xZ -> 3
+                        ^^^
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -1550,14 +1554,14 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This octal integer pattern is malformed:
 
-                2 ┆      0o9 -> 3
-                  ┆      ^^^
+                2│      0o9 -> 3
+                        ^^^
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -1575,14 +1579,14 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This binary integer pattern is malformed:
 
-                2 ┆      0b4 -> 3
-                  ┆      ^^^
+                2│      0b4 -> 3
+                        ^^^
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -1601,13 +1605,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 Something is off with the body of the `x` definition:
 
-                1 ┆  x : { a : Int, b : Float, c : Bool }
-                2 ┆  x = { b: 4.0 }
-                  ┆      ^^^^^^^^^^
+                1│  x : { a : Int, b : Float, c : Bool }
+                2│  x = { b: 4.0 }
+                        ^^^^^^^^^^
 
                 The body is a record of type:
 
@@ -1617,7 +1621,7 @@ mod test_reporting {
 
                     { a : Int, b : Float, c : Bool }
 
-                Hint: Looks like the c and a fields are missing.
+                Tip: Looks like the c and a fields are missing.
                 "#
             ),
         )
@@ -1629,9 +1633,9 @@ mod test_reporting {
         //
         //                Something is off with the body of the `f` definition:
         //
-        //                1 ┆  f : a, b -> a
-        //                2 ┆  f = \x, y -> if True then x else y
-        //                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        //                1│ f : a, b -> a
+        //                2│ f = \x, y -> if True then x else y
+        //                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         //
         //                The body is an anonymous function of type:
         //
@@ -1651,12 +1655,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 This `if` has an `else` branch with a different type from its `then` branch:
 
-                2 ┆  f = \x, y -> if True then x else y
-                  ┆                                   ^
+                2│  f = \x, y -> if True then x else y
+                                                     ^
 
                 This `y` value is a:
 
@@ -1668,7 +1672,7 @@ mod test_reporting {
 
                 I need all branches in an `if` to have the same type!
 
-                Hint: Your type annotation uses `b` and `a` as separate type variables.
+                Tip: Your type annotation uses `b` and `a` as separate type variables.
                 Your code seems to be saying they are the same though. Maybe they
                 should be the same your type annotation? Maybe your code uses them in
                 a weird way?
@@ -1690,13 +1694,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 Something is off with the body of the `f` definition:
 
-                1 ┆  f : Bool -> msg
-                2 ┆  f = \_ -> Foo
-                  ┆      ^^^^^^^^^
+                1│  f : Bool -> msg
+                2│  f = \_ -> Foo
+                        ^^^^^^^^^
 
                 The body is an anonymous function of type:
 
@@ -1706,7 +1710,7 @@ mod test_reporting {
 
                     Bool -> msg
 
-                Hint: The type annotation uses the type variable `msg` to say that this
+                Tip: The type annotation uses the type variable `msg` to say that this
                 definition can produce any type of value. But in the body I see that
                 it will only produce a tag value of a single specific type. Maybe
                 change the type annotation to be more specific? Maybe change the code
@@ -1729,13 +1733,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 Something is off with the body of the `f` definition:
 
-                1 ┆  f : msg
-                2 ┆  f = 0x3
-                  ┆      ^^^
+                1│  f : msg
+                2│  f = 0x3
+                        ^^^
 
                 The body is an integer of type:
 
@@ -1745,7 +1749,7 @@ mod test_reporting {
 
                     msg
 
-                Hint: The type annotation uses the type variable `msg` to say that this
+                Tip: The type annotation uses the type variable `msg` to say that this
                 definition can produce any type of value. But in the body I see that
                 it will only produce a `Int` value of a single specific type. Maybe
                 change the type annotation to be more specific? Maybe change the code
@@ -1769,12 +1773,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 I cannot find a `ok` value
 
-                2 ┆  f = \_ -> ok 4
-                  ┆            ^^
+                2│  f = \_ -> ok 4
+                              ^^
 
                 these names seem close though:
 
@@ -1804,25 +1808,25 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 `ok` is not used anywhere in your code.
 
-                3 ┆      ok = 3
-                  ┆      ^^
+                3│      ok = 3
+                        ^^
 
                 If you didn't intend on using `ok` then remove it so future readers of
                 your code don't wonder why it is there.
 
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 Something is off with the body of the `f` definition:
 
-                1 ┆   f : Bool -> Int
-                2 ┆>  f = \_ ->
-                3 ┆>      ok = 3
-                4 ┆>
-                5 ┆>      Ok
+                1│   f : Bool -> Int
+                2│>  f = \_ ->
+                3│>      ok = 3
+                4│>
+                5│>      Ok
 
                 The body is an anonymous function of type:
 
@@ -1849,7 +1853,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 The `f` value is defined directly in terms of itself, causing an
                 infinite loop.
@@ -1873,12 +1877,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 The `foo` definition is causing a very tricky infinite loop:
 
-                1 ┆  foo = bar
-                  ┆  ^^^
+                1│  foo = bar
+                    ^^^
 
                 The `foo` value depends on itself through the following chain of
                 definitions:
@@ -1905,12 +1909,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The `x` record does not have a `.foo` field:
 
-                3 ┆  { x & foo: 3 }
-                  ┆        ^^^^^^
+                3│  { x & foo: 3 }
+                          ^^^^^^
 
                 In fact, `x` is a record with NO fields!
                 "#
@@ -1931,12 +1935,12 @@ mod test_reporting {
             // TODO also suggest fields with the correct type
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The `x` record does not have a `.foo` field:
 
-                3 ┆  { x & foo: 3 }
-                  ┆        ^^^^^^
+                3│  { x & foo: 3 }
+                          ^^^^^^
 
                 This is usually a typo. Here are the `x` fields that are most similar:
 
@@ -1967,12 +1971,12 @@ mod test_reporting {
             // TODO also suggest fields with the correct type
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The `r` record does not have a `.foo` field:
 
-                3 ┆      r2 = { r & foo: r.fo }
-                  ┆                 ^^^^^^^^^
+                3│      r2 = { r & foo: r.fo }
+                                   ^^^^^^^^^
 
                 This is usually a typo. Here are the `r` fields that are most similar:
 
@@ -1998,12 +2002,12 @@ mod test_reporting {
             // TODO also suggest fields with the correct type
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The `x` record does not have a `.foo` field:
 
-                3 ┆  { x & foo: 3 }
-                  ┆        ^^^^^^
+                3│  { x & foo: 3 }
+                          ^^^^^^
 
                 This is usually a typo. Here are the `x` fields that are most similar:
 
@@ -2031,12 +2035,12 @@ mod test_reporting {
             // TODO also suggest fields with the correct type
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 2nd argument to `add` is not what I expect:
 
-                1 ┆  0x4 + "foo"
-                  ┆        ^^^^^
+                1│  0x4 + "foo"
+                          ^^^^^
 
                 This argument is a string of type:
 
@@ -2060,12 +2064,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 2nd argument to `add` is not what I expect:
 
-                1 ┆  0x4 + 3.14
-                  ┆        ^^^^
+                1│  0x4 + 3.14
+                          ^^^^
 
                 This argument is a float of type:
 
@@ -2075,7 +2079,8 @@ mod test_reporting {
 
                     Num Integer
 
-                Hint: Convert between Int and Float with `Num.toFloat` and `Num.round`.
+                Tip: You can convert between Int and Float using functions like
+                `Num.toFloat` and `Num.round`.
                 "#
             ),
         )
@@ -2094,13 +2099,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 Something is off with the body of the `f` definition:
 
-                1 ┆  f : [ A ] -> [ A, B ]
-                2 ┆  f = \a -> a
-                  ┆      ^^^^^^^
+                1│  f : [ A ] -> [ A, B ]
+                2│  f = \a -> a
+                        ^^^^^^^
 
                 The body is an anonymous function of type:
 
@@ -2110,9 +2115,9 @@ mod test_reporting {
 
                     [ A ] -> [ A, B ]
 
-                Hint: Looks like a closed tag union does not have the `B` tag.
+                Tip: Looks like a closed tag union does not have the `B` tag.
 
-                Hint: Closed tag unions can't grow, because that might change the size
+                Tip: Closed tag unions can't grow, because that might change the size
                 in memory. Can you use an open tag union?
                 "#
             ),
@@ -2132,13 +2137,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 Something is off with the body of the `f` definition:
 
-                1 ┆  f : [ A ] -> [ A, B, C ]
-                2 ┆  f = \a -> a
-                  ┆      ^^^^^^^
+                1│  f : [ A ] -> [ A, B, C ]
+                2│  f = \a -> a
+                        ^^^^^^^
 
                 The body is an anonymous function of type:
 
@@ -2148,9 +2153,9 @@ mod test_reporting {
 
                     [ A ] -> [ A, B, C ]
 
-                Hint: Looks like a closed tag union does not have the `C` and `B` tags.
+                Tip: Looks like a closed tag union does not have the `C` and `B` tags.
 
-                Hint: Closed tag unions can't grow, because that might change the size
+                Tip: Closed tag unions can't grow, because that might change the size
                 in memory. Can you use an open tag union?
                 "#
             ),
@@ -2191,12 +2196,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- UNSAFE PATTERN --------------------------------------------------------------
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
 
                 This pattern does not cover all the possibilities:
 
-                7 ┆  f = \Left v -> v
-                  ┆       ^^^^^^
+                7│  f = \Left v -> v
+                         ^^^^^^
 
                 Other possibilities include:
 
@@ -2226,12 +2231,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- UNSAFE PATTERN --------------------------------------------------------------
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
 
                 This pattern does not cover all the possibilities:
 
-                5 ┆  (Left y) = x
-                  ┆   ^^^^^^
+                5│  (Left y) = x
+                     ^^^^^^
 
                 Other possibilities include:
 
@@ -2256,12 +2261,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- UNSAFE PATTERN --------------------------------------------------------------
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
 
                 This `when` does not cover all the possibilities:
 
-                1 ┆>  when 0x1 is
-                2 ┆>      2 -> 0x3
+                1│>  when 0x1 is
+                2│>      2 -> 0x3
 
                 Other possibilities include:
 
@@ -2287,12 +2292,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- UNSAFE PATTERN --------------------------------------------------------------
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
 
                 This `when` does not cover all the possibilities:
 
-                4 ┆>  when x is
-                5 ┆>      False -> 3
+                4│>  when x is
+                5│>      False -> 3
 
                 Other possibilities include:
 
@@ -2319,13 +2324,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- UNSAFE PATTERN --------------------------------------------------------------
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
 
                 This `when` does not cover all the possibilities:
 
-                4 ┆>  when x is
-                5 ┆>      Red -> 0
-                6 ┆>      Green -> 1
+                4│>  when x is
+                5│>      Red -> 0
+                6│>      Green -> 1
 
                 Other possibilities include:
 
@@ -2352,12 +2357,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- UNSAFE PATTERN --------------------------------------------------------------
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
 
                 This `when` does not cover all the possibilities:
 
-                5 ┆>  when x is
-                6 ┆>      NotAsked -> 3
+                5│>  when x is
+                6│>      NotAsked -> 3
 
                 Other possibilities include:
 
@@ -2382,15 +2387,15 @@ mod test_reporting {
                     { a: 4 } -> 4
                 "#
             ),
-            // Hint: Looks like a record field guard is not exhaustive. Learn more about record pattern matches at TODO.
+            // Tip: Looks like a record field guard is not exhaustive. Learn more about record pattern matches at TODO.
             indoc!(
                 r#"
-                -- UNSAFE PATTERN --------------------------------------------------------------
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
 
                 This `when` does not cover all the possibilities:
 
-                3 ┆>  when x is
-                4 ┆>      { a: 4 } -> 4
+                3│>  when x is
+                4│>      { a: 4 } -> 4
 
                 Other possibilities include:
 
@@ -2418,13 +2423,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- UNSAFE PATTERN --------------------------------------------------------------
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
 
                 This `when` does not cover all the possibilities:
 
-                5 ┆>  when x is
-                6 ┆>      { a: Nothing } -> 4
-                7 ┆>      { a: Just 3 } -> 4
+                5│>  when x is
+                6│>      { a: Nothing } -> 4
+                7│>      { a: Just 3 } -> 4
 
                 Other possibilities include:
 
@@ -2448,13 +2453,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- UNSAFE PATTERN --------------------------------------------------------------
+                ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
 
                 This `when` does not cover all the possibilities:
 
-                1 ┆>  when Record Nothing 1 is
-                2 ┆>      Record (Nothing) b -> b
-                3 ┆>      Record (Just 3) b -> b
+                1│>  when Record Nothing 1 is
+                2│>      Record (Nothing) b -> b
+                3│>      Record (Just 3) b -> b
 
                 Other possibilities include:
 
@@ -2479,14 +2484,14 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- REDUNDANT PATTERN -----------------------------------------------------------
+                ── REDUNDANT PATTERN ───────────────────────────────────────────────────────────
 
                 The 2nd pattern is redundant:
 
-                1 ┆   when 0x1 is
-                2 ┆       2 -> 3
-                3 ┆>      2 -> 4
-                4 ┆       _ -> 5
+                1│   when 0x1 is
+                2│       2 -> 3
+                3│>      2 -> 4
+                4│       _ -> 5
 
                 Any value of this shape will be handled by a previous pattern, so this
                 one should be removed.
@@ -2511,12 +2516,12 @@ mod test_reporting {
             // de-aliases the alias to give a better error message
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 1st argument to `f` is not what I expect:
 
-                6 ┆  f { y: 3.14 }
-                  ┆    ^^^^^^^^^^^
+                6│  f { y: 3.14 }
+                      ^^^^^^^^^^^
 
                 This argument is a record of type:
 
@@ -2526,9 +2531,9 @@ mod test_reporting {
 
                     { x : Int }
 
-                Hint: Seems like a record field typo. Maybe `y` should be `x`?
+                Tip: Seems like a record field typo. Maybe `y` should be `x`?
 
-                Hint: Can more type annotations be added? Type annotations always help
+                Tip: Can more type annotations be added? Type annotations always help
                 me give more specific messages, and I think they could help a lot in
                 this case
                 "#
@@ -2552,12 +2557,12 @@ mod test_reporting {
             // should not report Bar as unused!
             indoc!(
                 r#"
-                -- CYCLIC ALIAS ----------------------------------------------------------------
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
 
                 The `Foo` alias is recursive in an invalid way:
 
-                1 ┆  Foo : { x : Bar }
-                  ┆        ^^^^^^^^^^^
+                1│  Foo : { x : Bar }
+                          ^^^^^^^^^^^
 
                 The `Foo` alias depends on itself through the following chain of
                 definitions:
@@ -2571,12 +2576,12 @@ mod test_reporting {
                 Recursion in aliases is only allowed if recursion happens behind a
                 tag.
 
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 `Bar` is not used anywhere in your code.
 
-                2 ┆  Bar : { y : Foo }
-                  ┆  ^^^^^^^^^^^^^^^^^
+                2│  Bar : { y : Foo }
+                    ^^^^^^^^^^^^^^^^^
 
                 If you didn't intend on using `Bar` then remove it so future readers of
                 your code don't wonder why it is there.
@@ -2601,12 +2606,12 @@ mod test_reporting {
             // should not report Bar as unused!
             indoc!(
                 r#"
-                -- CYCLIC ALIAS ----------------------------------------------------------------
+                ── CYCLIC ALIAS ────────────────────────────────────────────────────────────────
 
                 The `Foo` alias is self-recursive in an invalid way:
 
-                1 ┆  Foo : { x : Foo }
-                  ┆  ^^^
+                1│  Foo : { x : Foo }
+                    ^^^
 
                 Recursion in aliases is only allowed if recursion happens behind a
                 tag.
@@ -2625,17 +2630,17 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This record defines the `.x` field twice!
 
-                1 ┆  { x: 4, y: 3, x: 4 }
-                  ┆    ^^^^        ^^^^
+                1│  { x: 4, y: 3, x: 4 }
+                      ^^^^        ^^^^
 
                 In the rest of the program, I will only use the latter definition:
 
-                1 ┆  { x: 4, y: 3, x: 4 }
-                  ┆                ^^^^
+                1│  { x: 4, y: 3, x: 4 }
+                                  ^^^^
 
                 For clarity, remove the previous `.x` definitions from this record.
                 "#
@@ -2653,17 +2658,17 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This record defines the `.x` field twice!
 
-                1 ┆  { x: 4, y: 3, x: "foo" }
-                  ┆    ^^^^        ^^^^^^^^
+                1│  { x: 4, y: 3, x: "foo" }
+                      ^^^^        ^^^^^^^^
 
                 In the rest of the program, I will only use the latter definition:
 
-                1 ┆  { x: 4, y: 3, x: "foo" }
-                  ┆                ^^^^^^^^
+                1│  { x: 4, y: 3, x: "foo" }
+                                  ^^^^^^^^
 
                 For clarity, remove the previous `.x` definitions from this record.
                 "#
@@ -2685,23 +2690,23 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This record defines the `.x` field twice!
 
-                1 ┆   {
-                2 ┆>      x: 4,
-                3 ┆       y: 3,
-                4 ┆>      x: "foo"
-                5 ┆   }
+                1│   {
+                2│>      x: 4,
+                3│       y: 3,
+                4│>      x: "foo"
+                5│   }
 
                 In the rest of the program, I will only use the latter definition:
 
-                1 ┆   {
-                2 ┆       x: 4,
-                3 ┆       y: 3,
-                4 ┆>      x: "foo"
-                5 ┆   }
+                1│   {
+                2│       x: 4,
+                3│       y: 3,
+                4│>      x: "foo"
+                5│   }
 
                 For clarity, remove the previous `.x` definitions from this record.
                 "#
@@ -2724,23 +2729,23 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This record defines the `.x` field twice!
 
-                2 ┆       { r &
-                3 ┆>          x: 4,
-                4 ┆           y: 3,
-                5 ┆>          x: "foo"
-                6 ┆       }
+                2│       { r &
+                3│>          x: 4,
+                4│           y: 3,
+                5│>          x: "foo"
+                6│       }
 
                 In the rest of the program, I will only use the latter definition:
 
-                2 ┆       { r &
-                3 ┆           x: 4,
-                4 ┆           y: 3,
-                5 ┆>          x: "foo"
-                6 ┆       }
+                2│       { r &
+                3│           x: 4,
+                4│           y: 3,
+                5│>          x: "foo"
+                6│       }
 
                 For clarity, remove the previous `.x` definitions from this record.
                 "#
@@ -2761,17 +2766,17 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This record type defines the `.foo` field twice!
 
-                1 ┆  a : { foo : Int, bar : Float, foo : Str }
-                  ┆        ^^^^^^^^^               ^^^^^^^^^
+                1│  a : { foo : Int, bar : Float, foo : Str }
+                          ^^^^^^^^^               ^^^^^^^^^
 
                 In the rest of the program, I will only use the latter definition:
 
-                1 ┆  a : { foo : Int, bar : Float, foo : Str }
-                  ┆                                ^^^^^^^^^
+                1│  a : { foo : Int, bar : Float, foo : Str }
+                                                  ^^^^^^^^^
 
                 For clarity, remove the previous `.foo` definitions from this record
                 type.
@@ -2793,17 +2798,17 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This tag union type defines the `Foo` tag twice!
 
-                1 ┆  a : [ Foo Int, Bar Float, Foo Str ]
-                  ┆        ^^^^^^^             ^^^^^^^
+                1│  a : [ Foo Int, Bar Float, Foo Str ]
+                          ^^^^^^^             ^^^^^^^
 
                 In the rest of the program, I will only use the latter definition:
 
-                1 ┆  a : [ Foo Int, Bar Float, Foo Str ]
-                  ┆                            ^^^^^^^
+                1│  a : [ Foo Int, Bar Float, Foo Str ]
+                                              ^^^^^^^
 
                 For clarity, remove the previous `Foo` definitions from this tag union
                 type.
@@ -2826,13 +2831,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This annotation does not match the definition immediately following
                 it:
 
-                1 ┆>  bar : Int
-                2 ┆>  foo = \x -> x
+                1│>  bar : Int
+                2│>  foo = \x -> x
 
                 Is it a typo? If not, put either a newline or comment between them.
                 "#
@@ -2868,21 +2873,21 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This pattern in the definition of `MyAlias` is not what I expect:
 
-                1 ┆  MyAlias 1 : Int
-                  ┆          ^
+                1│  MyAlias 1 : Int
+                            ^
 
                 Only type variables like `a` or `value` can occur in this position.
 
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 `MyAlias` is not used anywhere in your code.
 
-                1 ┆  MyAlias 1 : Int
-                  ┆  ^^^^^^^^^^^^^^^
+                1│  MyAlias 1 : Int
+                    ^^^^^^^^^^^^^^^
 
                 If you didn't intend on using `MyAlias` then remove it so future readers
                 of your code don't wonder why it is there.
@@ -2904,12 +2909,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TOO MANY TYPE ARGUMENTS -----------------------------------------------------
+                ── TOO MANY TYPE ARGUMENTS ─────────────────────────────────────────────────────
 
                 The `Num` alias expects 1 type argument, but it got 2 instead:
 
-                1 ┆  a : Num Int Float
-                  ┆      ^^^^^^^^^^^^^
+                1│  a : Num Int Float
+                        ^^^^^^^^^^^^^
 
                 Are there missing parentheses?
                 "#
@@ -2930,12 +2935,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TOO MANY TYPE ARGUMENTS -----------------------------------------------------
+                ── TOO MANY TYPE ARGUMENTS ─────────────────────────────────────────────────────
 
                 The `Num` alias expects 1 type argument, but it got 2 instead:
 
-                1 ┆  f : Bool -> Num Int Float
-                  ┆              ^^^^^^^^^^^^^
+                1│  f : Bool -> Num Int Float
+                                ^^^^^^^^^^^^^
 
                 Are there missing parentheses?
                 "#
@@ -2958,12 +2963,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TOO FEW TYPE ARGUMENTS ------------------------------------------------------
+                ── TOO FEW TYPE ARGUMENTS ──────────────────────────────────────────────────────
 
                 The `Pair` alias expects 2 type arguments, but it got 1 instead:
 
-                3 ┆  x : Pair Int
-                  ┆      ^^^^^^^^
+                3│  x : Pair Int
+                        ^^^^^^^^
 
                 Are there missing parentheses?
                 "#
@@ -2986,12 +2991,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TOO MANY TYPE ARGUMENTS -----------------------------------------------------
+                ── TOO MANY TYPE ARGUMENTS ─────────────────────────────────────────────────────
 
                 The `Pair` alias expects 2 type arguments, but it got 3 instead:
 
-                3 ┆  x : Pair Int Int Int
-                  ┆      ^^^^^^^^^^^^^^^^
+                3│  x : Pair Int Int Int
+                        ^^^^^^^^^^^^^^^^
 
                 Are there missing parentheses?
                 "#
@@ -3013,16 +3018,16 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 The `a` type variable is not used in the `Foo` alias definition:
 
-                1 ┆  Foo a : [ Foo ]
-                  ┆      ^
+                1│  Foo a : [ Foo ]
+                        ^
 
                 Roc does not allow unused type parameters!
 
-                Hint: If you want an unused type parameter (a so-called "phantom
+                Tip: If you want an unused type parameter (a so-called "phantom
                 type"), read the guide section on phantom data.
                 "#
             ),
@@ -3039,12 +3044,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- PARSE PROBLEM ---------------------------------------------------------------
+                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
 
                 Unexpected tokens in front of the `=` symbol:
 
-                1 ┆  f x y = x
-                  ┆    ^^^
+                1│  f x y = x
+                      ^^^
                 "#
             ),
         )
@@ -3065,13 +3070,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 Something is off with the body of the `x` definition:
 
-                3 ┆  x : ConsList {}
-                4 ┆  x = Cons {} (Cons "foo" Nil)
-                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^
+                3│  x : ConsList {}
+                4│  x = Cons {} (Cons "foo" Nil)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^
 
                 This `Cons` global tag application has the type:
 
@@ -3104,13 +3109,13 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 Something is off with the body of the `x` definition:
 
-                4 ┆  x : AList Int Int
-                5 ┆  x = ACons 0 (BCons 1 (ACons "foo" BNil ))
-                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                4│  x : AList Int Int
+                5│  x = ACons 0 (BCons 1 (ACons "foo" BNil ))
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 This `ACons` global tag application has the type:
 
@@ -3146,53 +3151,53 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This integer literal is too big:
 
-                1 ┆  x = 9_223_372_036_854_775_807_000
-                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                1│  x = 9_223_372_036_854_775_807_000
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Roc uses signed 64-bit integers, allowing values between
                 −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
 
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This integer literal is too small:
 
-                3 ┆  y = -9_223_372_036_854_775_807_000
-                  ┆      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                3│  y = -9_223_372_036_854_775_807_000
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Roc uses signed 64-bit integers, allowing values between
                 −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
 
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This integer literal is too big:
 
-                5 ┆  h = 0x8FFF_FFFF_FFFF_FFFF
-                  ┆      ^^^^^^^^^^^^^^^^^^^^^
+                5│  h = 0x8FFF_FFFF_FFFF_FFFF
+                        ^^^^^^^^^^^^^^^^^^^^^
 
                 Roc uses signed 64-bit integers, allowing values between
                 −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
 
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This integer literal is too small:
 
-                6 ┆  l = -0x8FFF_FFFF_FFFF_FFFF
-                  ┆      ^^^^^^^^^^^^^^^^^^^^^^
+                6│  l = -0x8FFF_FFFF_FFFF_FFFF
+                        ^^^^^^^^^^^^^^^^^^^^^^
 
                 Roc uses signed 64-bit integers, allowing values between
                 −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807.
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -3213,29 +3218,29 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This float literal is too big:
 
-                2 ┆                  overflow = 11.7976931348623157e308
-                  ┆                             ^^^^^^^^^^^^^^^^^^^^^^^
+                2│                  overflow = 11.7976931348623157e308
+                                               ^^^^^^^^^^^^^^^^^^^^^^^
 
                 Roc uses signed 64-bit floating points, allowing values
                 between-1.7976931348623157e308 and 1.7976931348623157e308
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
 
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This float literal is too small:
 
-                3 ┆                  underflow = -11.7976931348623157e308
-                  ┆                              ^^^^^^^^^^^^^^^^^^^^^^^^
+                3│                  underflow = -11.7976931348623157e308
+                                                ^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Roc uses signed 64-bit floating points, allowing values
                 between-1.7976931348623157e308 and 1.7976931348623157e308
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -3262,50 +3267,50 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This integer literal contains an invalid digit:
 
-                1 ┆  dec = 100A
-                  ┆        ^^^^
+                1│  dec = 100A
+                          ^^^^
 
                 Integer literals can only contain the digits 0-9.
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
 
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This hex integer literal contains an invalid digit:
 
-                3 ┆  hex = 0xZZZ
-                  ┆        ^^^^^
+                3│  hex = 0xZZZ
+                          ^^^^^
 
                 Hexadecimal (base-16) integer literals can only contain the digits
                 0-9, a-f and A-F.
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
 
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This octal integer literal contains an invalid digit:
 
-                5 ┆  oct = 0o9
-                  ┆        ^^^
+                5│  oct = 0o9
+                          ^^^
 
                 Octal (base-8) integer literals can only contain the digits 0-7.
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
 
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This binary integer literal contains an invalid digit:
 
-                7 ┆  bin = 0b2
-                  ┆        ^^^
+                7│  bin = 0b2
+                          ^^^
 
                 Binary (base-2) integer literals can only contain the digits 0 and 1.
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -3329,41 +3334,41 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This hex integer literal contains no digits:
 
-                3 ┆  hex = 0x
-                  ┆        ^^
+                3│  hex = 0x
+                          ^^
 
                 Hexadecimal (base-16) integer literals must contain at least one of
                 the digits 0-9, a-f and A-F.
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
 
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This octal integer literal contains no digits:
 
-                5 ┆  oct = 0o
-                  ┆        ^^
+                5│  oct = 0o
+                          ^^
 
                 Octal (base-8) integer literals must contain at least one of the
                 digits 0-7.
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
 
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This binary integer literal contains no digits:
 
-                7 ┆  bin = 0b
-                  ┆        ^^
+                7│  bin = 0b
+                          ^^
 
                 Binary (base-2) integer literals must contain at least one of the
                 digits 0 and 1.
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -3381,17 +3386,17 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This float literal contains an invalid digit:
 
-                1 ┆  x = 3.0A
-                  ┆      ^^^^
+                1│  x = 3.0A
+                        ^^^^
 
                 Floating point literals can only contain the digits 0-9, or use
                 scientific notation 10e4
 
-                Hint: Learn more about number literals at TODO
+                Tip: Learn more about number literals at TODO
                 "#
             ),
         )
@@ -3416,12 +3421,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 This expression cannot be updated:
 
-                2 ┆  updateNestedRecord = { foo.bar & x: 4 }
-                  ┆                         ^^^^^^^
+                2│  updateNestedRecord = { foo.bar & x: 4 }
+                                           ^^^^^^^
 
                 Only variables can be updated with record update syntax.
                 "#
@@ -3439,12 +3444,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- SYNTAX PROBLEM --------------------------------------------------------------
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
                 The `Foo` module is not imported:
 
-                1 ┆  Foo.test
-                  ┆  ^^^^^^^^
+                1│  Foo.test
+                    ^^^^^^^^
 
                 Is there an import missing? Perhaps there is a typo, these names seem
                 close:
@@ -3468,12 +3473,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 2nd argument to `add` is not what I expect:
 
-                1 ┆  \{ x, y ? True } -> x + y
-                  ┆                          ^
+                1│  \{ x, y ? True } -> x + y
+                                            ^
 
                 This `y` value is a:
 
@@ -3500,12 +3505,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 1st argument to `f` is weird:
 
-                2 ┆  f = \{ x, y ? "foo" } -> (\g, _ -> g) x y
-                  ┆       ^^^^^^^^^^^^^^^^
+                2│  f = \{ x, y ? "foo" } -> (\g, _ -> g) x y
+                         ^^^^^^^^^^^^^^^^
 
                 The argument is a pattern that matches record values of type:
 
@@ -3533,12 +3538,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 Something is off with the body of this definition:
 
-                2 ┆>      { x, y } : { x : Int, y ? Bool }
-                3 ┆>      { x, y } = rec
+                2│>      { x, y } : { x : Int, y ? Bool }
+                3│>      { x, y } = rec
 
                 The body is a value of type:
 
@@ -3548,7 +3553,7 @@ mod test_reporting {
 
                     { x : Int, y ? Bool }
 
-                Hint: To extract the `.y` field it must be non-optional, but the type
+                Tip: To extract the `.y` field it must be non-optional, but the type
                 says this field is optional. Learn more about optional fields at TODO.
                 "#
             ),
@@ -3568,12 +3573,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 1st argument to `f` is weird:
 
-                2 ┆  f = \{ x, y } -> x + y
-                  ┆       ^^^^^^^^
+                2│  f = \{ x, y } -> x + y
+                         ^^^^^^^^
 
                 The argument is a pattern that matches record values of type:
 
@@ -3583,7 +3588,7 @@ mod test_reporting {
 
                     { x : Int, y ? Int }
 
-                Hint: To extract the `.y` field it must be non-optional, but the type
+                Tip: To extract the `.y` field it must be non-optional, but the type
                 says this field is optional. Learn more about optional fields at TODO.
                 "#
             ),
@@ -3605,12 +3610,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 1st pattern in this `when` is causing a mismatch:
 
-                4 ┆              { x, y } -> x + y
-                  ┆              ^^^^^^^^
+                4│              { x, y } -> x + y
+                                ^^^^^^^^
 
                 The first pattern is trying to match record values of type:
 
@@ -3620,7 +3625,7 @@ mod test_reporting {
 
                     { x : Int, y ? Int }
 
-                Hint: To extract the `.y` field it must be non-optional, but the type
+                Tip: To extract the `.y` field it must be non-optional, but the type
                 says this field is optional. Learn more about optional fields at TODO.
                 "#
             ),
@@ -3640,12 +3645,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 This expression is used in an unexpected way:
 
-                2 ┆  f = \r -> r.y
-                  ┆            ^^^
+                2│  f = \r -> r.y
+                              ^^^
 
                 This `r` value is a:
 
@@ -3655,7 +3660,7 @@ mod test_reporting {
 
                     { x : Int, y : Int }
 
-                Hint: To extract the `.y` field it must be non-optional, but the type
+                Tip: To extract the `.y` field it must be non-optional, but the type
                 says this field is optional. Learn more about optional fields at TODO.
                 "#
             ),
@@ -3675,12 +3680,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 1st argument to this function is not what I expect:
 
-                2 ┆  f = \r -> .y r
-                  ┆               ^
+                2│  f = \r -> .y r
+                                 ^
 
                 This `r` value is a:
 
@@ -3690,7 +3695,7 @@ mod test_reporting {
 
                     { x : Int, y : Int }
 
-                Hint: To extract the `.y` field it must be non-optional, but the type
+                Tip: To extract the `.y` field it must be non-optional, but the type
                 says this field is optional. Learn more about optional fields at TODO.
                 "#
             ),
@@ -3713,12 +3718,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 1st pattern in this `when` is causing a mismatch:
 
-                4 ┆              { x, y : "foo" } -> x + 0
-                  ┆              ^^^^^^^^^^^^^^^^
+                4│              { x, y : "foo" } -> x + 0
+                                ^^^^^^^^^^^^^^^^
 
                 The first pattern is trying to match record values of type:
 
@@ -3748,12 +3753,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                -- TYPE MISMATCH ---------------------------------------------------------------
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 The 1st pattern in this `when` is causing a mismatch:
 
-                4 ┆              { x, y ? "foo" } -> (\g, _ -> g) x y
-                  ┆              ^^^^^^^^^^^^^^^^
+                4│              { x, y ? "foo" } -> (\g, _ -> g) x y
+                                ^^^^^^^^^^^^^^^^
 
                 The first pattern is trying to match record values of type:
 
@@ -3794,15 +3799,15 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-            -- REDUNDANT PATTERN -----------------------------------------------------------
+            ── REDUNDANT PATTERN ───────────────────────────────────────────────────────────
 
             The 3rd pattern is redundant:
 
-            1 ┆  when Foo 1 2 3 is
-            2 ┆      Foo _ 1 _ -> 1
-            3 ┆      _ -> 2
-            4 ┆      _ -> 3
-              ┆      ^
+            1│  when Foo 1 2 3 is
+            2│      Foo _ 1 _ -> 1
+            3│      _ -> 2
+            4│      _ -> 3
+                    ^
 
             Any value of this shape will be handled by a previous pattern, so this
             one should be removed.

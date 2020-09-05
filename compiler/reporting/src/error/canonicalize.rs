@@ -144,7 +144,7 @@ pub fn can_problem<'b>(
             alloc.region(variable_region),
             alloc.reflow("Roc does not allow unused type parameters!"),
             // TODO add link to this guide section
-            alloc.hint().append(alloc.reflow(
+            alloc.tip().append(alloc.reflow(
                 "If you want an unused type parameter (a so-called \"phantom type\"), \
                 read the guide section on phantom data.",
             )),
@@ -262,6 +262,24 @@ pub fn can_problem<'b>(
                 alloc.reflow(" can occur in this position."),
             ]),
         ]),
+        Problem::InvalidHexadecimal(region) => {
+            todo!(
+                "TODO report an invalid hexadecimal number in a \\u(...) code point at region {:?}",
+                region
+            );
+        }
+        Problem::InvalidUnicodeCodePoint(region) => {
+            todo!(
+                "TODO report an invalid \\u(...) code point at region {:?}",
+                region
+            );
+        }
+        Problem::InvalidInterpolation(region) => {
+            todo!(
+                "TODO report an invalid string interpolation at region {:?}",
+                region
+            );
+        }
         Problem::RuntimeError(runtime_error) => pretty_runtime_error(alloc, runtime_error),
     };
 
@@ -309,7 +327,7 @@ fn pretty_runtime_error<'b>(
                         " value is defined directly in terms of itself, causing an infinite loop.",
                     ))
             // TODO "are you trying to mutate a variable?
-            // TODO hint?
+            // TODO tip?
             } else {
                 alloc.stack(vec![
                     alloc
@@ -334,7 +352,7 @@ fn pretty_runtime_error<'b>(
                             .map(|s| alloc.symbol_unqualified(s))
                             .collect::<Vec<_>>(),
                     ),
-                    // TODO hint?
+                    // TODO tip?
                 ])
             }
         }
@@ -353,12 +371,12 @@ fn pretty_runtime_error<'b>(
                 QualifiedIdentifier => " qualified ",
             };
 
-            let hint = match problem {
+            let tip = match problem {
                 MalformedInt | MalformedFloat | MalformedBase(_) => alloc
-                    .hint()
+                    .tip()
                     .append(alloc.reflow("Learn more about number literals at TODO")),
                 Unknown => alloc.nil(),
-                QualifiedIdentifier => alloc.hint().append(
+                QualifiedIdentifier => alloc.tip().append(
                     alloc.reflow("In patterns, only private and global tags can be qualified"),
                 ),
             };
@@ -370,7 +388,7 @@ fn pretty_runtime_error<'b>(
                     alloc.reflow("pattern is malformed:"),
                 ]),
                 alloc.region(region),
-                hint,
+                tip,
             ])
         }
         RuntimeError::UnsupportedPattern(_) => {
@@ -392,8 +410,8 @@ fn pretty_runtime_error<'b>(
         RuntimeError::MalformedClosure(_) => todo!(""),
         RuntimeError::InvalidFloat(sign @ FloatErrorKind::PositiveInfinity, region, _raw_str)
         | RuntimeError::InvalidFloat(sign @ FloatErrorKind::NegativeInfinity, region, _raw_str) => {
-            let hint = alloc
-                .hint()
+            let tip = alloc
+                .tip()
                 .append(alloc.reflow("Learn more about number literals at TODO"));
 
             let big_or_small = if let FloatErrorKind::PositiveInfinity = sign {
@@ -415,12 +433,12 @@ fn pretty_runtime_error<'b>(
                     alloc.reflow(" and "),
                     alloc.text(format!("{:e}", f64::MAX)),
                 ]),
-                hint,
+                tip,
             ])
         }
         RuntimeError::InvalidFloat(FloatErrorKind::Error, region, _raw_str) => {
-            let hint = alloc
-                .hint()
+            let tip = alloc
+                .tip()
                 .append(alloc.reflow("Learn more about number literals at TODO"));
 
             alloc.stack(vec![
@@ -431,7 +449,7 @@ fn pretty_runtime_error<'b>(
                 alloc.concat(vec![
                     alloc.reflow("Floating point literals can only contain the digits 0-9, or use scientific notation 10e4"),
                 ]),
-                hint,
+                tip,
             ])
         }
         RuntimeError::InvalidInt(error @ IntErrorKind::InvalidDigit, base, region, _raw_str)
@@ -471,8 +489,8 @@ fn pretty_runtime_error<'b>(
                 Binary => "0 and 1",
             };
 
-            let hint = alloc
-                .hint()
+            let tip = alloc
+                .tip()
                 .append(alloc.reflow("Learn more about number literals at TODO"));
 
             alloc.stack(vec![
@@ -490,7 +508,7 @@ fn pretty_runtime_error<'b>(
                     alloc.text(charset),
                     alloc.text("."),
                 ]),
-                hint,
+                tip,
             ])
         }
         RuntimeError::InvalidInt(error_kind @ IntErrorKind::Underflow, _base, region, _raw_str)
@@ -501,8 +519,8 @@ fn pretty_runtime_error<'b>(
                 "big"
             };
 
-            let hint = alloc
-                .hint()
+            let tip = alloc
+                .tip()
                 .append(alloc.reflow("Learn more about number literals at TODO"));
 
             alloc.stack(vec![
@@ -513,7 +531,7 @@ fn pretty_runtime_error<'b>(
                 ]),
                 alloc.region(region),
                 alloc.reflow("Roc uses signed 64-bit integers, allowing values between −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807."),
-                hint,
+                tip,
             ])
         }
         RuntimeError::InvalidRecordUpdate { region } => alloc.stack(vec![
@@ -524,6 +542,24 @@ fn pretty_runtime_error<'b>(
             alloc.region(region),
             alloc.reflow("Only variables can be updated with record update syntax."),
         ]),
+        RuntimeError::InvalidHexadecimal(region) => {
+            todo!(
+                "TODO runtime error for an invalid hexadecimal number in a \\u(...) code point at region {:?}",
+                region
+            );
+        }
+        RuntimeError::InvalidUnicodeCodePoint(region) => {
+            todo!(
+                "TODO runtime error for an invalid \\u(...) code point at region {:?}",
+                region
+            );
+        }
+        RuntimeError::InvalidInterpolation(region) => {
+            todo!(
+                "TODO runtime error for an invalid string interpolation at region {:?}",
+                region
+            );
+        }
         RuntimeError::NoImplementation => todo!("no implementation, unreachable"),
         RuntimeError::NonExhaustivePattern => {
             unreachable!("not currently reported (but can blow up at runtime)")

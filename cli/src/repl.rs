@@ -36,8 +36,7 @@ use std::str::from_utf8_unchecked;
 use target_lexicon::Triple;
 
 pub const WELCOME_MESSAGE: &str = "\n  The rockin’ \u{001b}[36mroc repl\u{001b}[0m\n\u{001b}[35m────────────────────────\u{001b}[0m\n\n";
-pub const INSTRUCTIONS: &str =
-    "Enter an expression, or :help for a list of commands, or :exit to exit.\n";
+pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit.\n";
 pub const PROMPT: &str = "\n\u{001b}[36m»\u{001b}[0m ";
 pub const ELLIPSIS: &str = "\u{001b}[36m…\u{001b}[0m ";
 
@@ -70,7 +69,9 @@ pub fn main() -> io::Result<()> {
             .expect("there was no next line")
             .expect("the line could not be read");
 
-        match line.trim() {
+        let line = line.trim();
+
+        match line.to_lowercase().as_str() {
             ":help" => {
                 println!("Use :exit to exit.");
             }
@@ -100,7 +101,7 @@ pub fn main() -> io::Result<()> {
             ":exit" => {
                 break;
             }
-            line => {
+            _ => {
                 let result = if pending_src.is_empty() {
                     print_output(line)
                 } else {

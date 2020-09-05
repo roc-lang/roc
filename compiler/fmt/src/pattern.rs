@@ -37,7 +37,6 @@ impl<'a> Formattable<'a> for Pattern<'a> {
             | Pattern::NonBase10Literal { .. }
             | Pattern::FloatLiteral(_)
             | Pattern::StrLiteral(_)
-            | Pattern::BlockStrLiteral(_)
             | Pattern::Underscore
             | Pattern::Malformed(_)
             | Pattern::QualifiedIdentifier { .. } => false,
@@ -126,11 +125,8 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                 buf.push_str(string);
             }
             FloatLiteral(string) => buf.push_str(string),
-            StrLiteral(string) => buf.push_str(string),
-            BlockStrLiteral(lines) => {
-                for line in *lines {
-                    buf.push_str(line)
-                }
+            StrLiteral(literal) => {
+                todo!("Format string literal: {:?}", literal);
             }
             Underscore => buf.push('_'),
 
