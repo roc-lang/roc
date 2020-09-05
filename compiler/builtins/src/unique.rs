@@ -783,9 +783,9 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // map : Attr * (List a)
+    // keepIf : Attr * (List a)
     //     , Attr Shared (a -> Attr * Bool)
-    //    -> Attr * (List b)
+    //    -> Attr * (List a)
     add_type(Symbol::LIST_KEEP_IF, {
         let_tvars! { a, star1, star2, star3 };
 

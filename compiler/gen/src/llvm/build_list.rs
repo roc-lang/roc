@@ -495,7 +495,7 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
     }
 }
 
-/// List.push List elem, elem -> List elem
+/// List.append : List elem, elem -> List elem
 pub fn list_append<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     original_wrapper: StructValue<'ctx>,
