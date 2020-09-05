@@ -25,7 +25,7 @@ use inkwell::{IntPredicate, OptimizationLevel};
 use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::ir::JoinPointId;
+use roc_mono::ir::{JoinPointId, Wrapped};
 use roc_mono::layout::{Builtin, Layout, MemoryMode};
 use target_lexicon::CallingConvention;
 
@@ -578,29 +578,46 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         AccessAtIndex {
             index,
             structure,
-            is_unwrapped,
+            wrapped: Wrapped::SingleElementRecord,
             ..
-        } if *is_unwrapped => {
-            use inkwell::values::BasicValueEnum::*;
+        } => {
+            // debug_assert!(*index == 0);
+            // load_symbol(env, scope, structure)
 
-            let builder = env.builder;
-
-            // Get Struct val
-            // Since this is a one-element tag union, we get the underlying value
-            // right away. However, that struct might have only one field which
-            // is not zero-sized, which would make it unwrapped. If that happens,
-            // we must be
-            match load_symbol(env, scope, structure) {
-                StructValue(argument) => builder
+            match load_symbol_and_layout(env, scope, structure) {
+                (StructValue(argument), Layout::Struct(fields)) if fields.len() > 1 => env
+                    .builder
                     .build_extract_value(
                         argument,
                         *index as u32,
-                        env.arena.alloc(format!("tag_field_access_{}_", index)),
+                        env.arena.alloc(format!("struct_field_access_{}_", index)),
                     )
                     .unwrap(),
-                other => {
-                    // If it's not a Struct, that means it was unwrapped,
-                    // so we should return it directly.
+                (other, _) => {
+                    // unreachable!("somehow this is not actually a record/struct? {:?}", other)
+                    other
+                }
+            }
+        }
+
+        AccessAtIndex {
+            index,
+            structure,
+            wrapped: Wrapped::RecordOrSingleTagUnion,
+            ..
+        } => {
+            // extract field from a record
+            match load_symbol_and_layout(env, scope, structure) {
+                (StructValue(argument), Layout::Struct(fields)) if fields.len() > 1 => env
+                    .builder
+                    .build_extract_value(
+                        argument,
+                        *index as u32,
+                        env.arena.alloc(format!("struct_field_access_{}_", index)),
+                    )
+                    .unwrap(),
+                (other, _) => {
+                    // unreachable!("somehow this is not actually a record/struct? {:?}", other)
                     other
                 }
             }
@@ -631,6 +648,11 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 .struct_type(field_types.into_bump_slice(), false);
 
             // cast the argument bytes into the desired shape for this tag
+            println!(
+                "{} {:?}",
+                structure,
+                load_symbol_and_layout(env, scope, structure)
+            );
             let argument = load_symbol(env, scope, structure).into_struct_value();
 
             let struct_value = cast_struct_struct(builder, argument, struct_type);
@@ -1107,7 +1129,7 @@ fn get_refcount_ptr_help<'a, 'ctx, 'env>(
     let ctx = env.context;
 
     let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
-    let offset = match dbg!(layout) {
+    let offset = match layout {
         Layout::Builtin(Builtin::List(_, _)) => env.ptr_bytes as u64,
         _ => (env.ptr_bytes as u64).max(value_bytes),
     };
@@ -1425,6 +1447,33 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
 
     // emit merge block
     builder.position_at_end(cont_block);
+}
+
+fn increment_refcount_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    layout: &Layout<'a>,
+    field_ptr: PointerValue<'ctx>,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let refcount_ptr = get_refcount_ptr(env, layout, field_ptr);
+
+    let refcount = env
+        .builder
+        .build_load(refcount_ptr, "get_refcount")
+        .into_int_value();
+
+    // our refcount 0 is actually usize::MAX, so incrementing the refcount means decrementing this value.
+    let incremented = env.builder.build_int_sub(
+        refcount,
+        ctx.i64_type().const_int(1 as u64, false),
+        "increment_refcount",
+    );
+
+    // Mutate the new array in-place to change the element.
+    builder.build_store(refcount_ptr, incremented);
 }
 
 fn decrement_refcount_ptr<'a, 'ctx, 'env>(
@@ -2717,8 +2766,8 @@ pub fn build_dec_union_help<'a, 'ctx, 'env>(
                 // Because it's an internal-only function, use the fast calling convention.
                 call.set_call_convention(FAST_CALL_CONV);
 
-                // first decrement the pointer itself
-                // This is so the recursive decrement may optimize into a tail call
+                // TODO do this decrement before the recursive call?
+                // Then the recursive call is potentially TCE'd
                 decrement_refcount_ptr(env, parent, &layout, field_ptr.into_pointer_value());
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env
@@ -2886,20 +2935,18 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let Layout::RecursivePointer = field_layout {
+                // a *i64 pointer to the recursive data
+                // we need to cast this pointer to the appropriate type
                 let field_ptr = env
                     .builder
                     .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
-                    .unwrap()
-                    .into_pointer_value();
+                    .unwrap();
 
-                // recursively decrement
-                let recursive_field_ptr_as_int =
-                    env.builder.build_load(field_ptr, "recursive_decrement");
-
+                // recursively increment
                 let union_type = block_of_memory(env.context, &layout, env.ptr_bytes);
                 let recursive_field_ptr = cast_basic_basic(
                     env.builder,
-                    recursive_field_ptr_as_int,
+                    field_ptr,
                     union_type.ptr_type(AddressSpace::Generic).into(),
                 )
                 .into_pointer_value();
@@ -2908,24 +2955,24 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
                     .builder
                     .build_load(recursive_field_ptr, "load_recursive_field");
 
-                // first decrement the pointer itself
-                // This is so the recursive decrement may optimize into a tail call
-                //decrement_refcount_ptr(env, parent, wrapper_struct, field_ptr);
-
-                // recursively decrement the field
+                // recursively increment the field
                 let call =
                     env.builder
                         .build_call(fn_val, &[recursive_field], "recursive_tag_increment");
 
                 // Because it's an internal-only function, use the fast calling convention.
                 call.set_call_convention(FAST_CALL_CONV);
+
+                // TODO do this increment before the recursive call?
+                // Then the recursive call is potentially TCE'd
+                increment_refcount_ptr(env, parent, &layout, field_ptr.into_pointer_value());
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env
                     .builder
                     .build_extract_value(wrapper_struct, i as u32, "increment_struct_field")
                     .unwrap();
 
-                decrement_refcount_layout(env, parent, layout_ids, field_ptr, field_layout);
+                increment_refcount_layout(env, parent, layout_ids, field_ptr, field_layout);
             }
         }
 

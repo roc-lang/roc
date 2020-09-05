@@ -478,8 +478,11 @@ fn layout_from_flat_type<'a>(
             env.insert_seen(rec_var);
             let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
 
-            // tags: MutMap<TagName, std::vec::Vec<Variable>>,
-            for (_name, variables) in tags {
+            // VERY IMPORTANT: sort the tags
+            let mut tags_vec: std::vec::Vec<_> = tags.into_iter().collect();
+            tags_vec.sort();
+
+            for (_name, variables) in tags_vec {
                 let mut tag_layout = Vec::with_capacity_in(variables.len() + 1, arena);
 
                 // store the discriminant

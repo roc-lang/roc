@@ -1129,6 +1129,30 @@ mod test_mono {
         })
     }
 
+    #[test]
+    fn quicksort_swap() {
+        crate::helpers::with_larger_debug_stack(|| {
+            compiles_to_ir(
+                indoc!(
+                    r#"
+                    swap = \list ->
+                        when Pair (List.get list 0) (List.get list 0) is
+                            Pair (Ok atI) (Ok atJ) ->
+                                list
+
+                            _ ->
+                                []
+                    swap [ 1, 2 ]
+                "#
+                ),
+                indoc!(
+                    r#"
+                "#
+                ),
+            )
+        })
+    }
+
     #[ignore]
     #[test]
     fn quicksort_partition_help() {
@@ -1647,6 +1671,87 @@ mod test_mono {
                 else
                     let Test.5 = 0i64;
                     ret Test.5;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn optional_when() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                f = \r ->
+                    when r is
+                        { x: Blue, y ? 3 } -> y
+                        { x: Red, y ? 5 } -> y
+
+                a = f { x: Blue, y: 7 } 
+                b = f { x: Blue }
+                c = f { x: Red, y: 11 } 
+                d = f { x: Red }
+
+                a * b * c * d
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure Num.16 (#Attr.2, #Attr.3):
+                    let Test.15 = lowlevel NumMul #Attr.2 #Attr.3;
+                    ret Test.15;
+
+                procedure Test.0 (Test.4):
+                    ret Test.6;
+
+                procedure Test.0 (Test.4):
+                    ret Test.6;
+
+                let Test.10 = 7i64;
+                let Test.9 = Struct {Test.10};
+                let Test.1 = CallByName Test.0 Test.9;
+                let Test.8 = Struct {};
+                let Test.2 = CallByName Test.0 Test.8;
+                let Test.7 = CallByName Num.16 Test.1 Test.2;
+                ret Test.7;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn nested_pattern_match() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                Maybe a : [ Nothing, Just a ]
+
+                x : Maybe (Maybe Int)
+                x = Just (Just 41)
+
+                when x is
+                    Just (Just v) -> v + 0x1
+                    _ -> 0x1
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure Num.16 (#Attr.2, #Attr.3):
+                    let Test.15 = lowlevel NumMul #Attr.2 #Attr.3;
+                    ret Test.15;
+
+                procedure Test.0 (Test.4):
+                    ret Test.6;
+
+                procedure Test.0 (Test.4):
+                    ret Test.6;
+
+                let Test.10 = 7i64;
+                let Test.9 = Struct {Test.10};
+                let Test.1 = CallByName Test.0 Test.9;
+                let Test.8 = Struct {};
+                let Test.2 = CallByName Test.0 Test.8;
+                let Test.7 = CallByName Num.16 Test.1 Test.2;
+                ret Test.7;
                 "#
             ),
         )

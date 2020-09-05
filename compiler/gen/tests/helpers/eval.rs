@@ -184,7 +184,7 @@ pub fn helper_without_uniqueness<'a>(
     );
 
     // Uncomment this to see the module's un-optimized LLVM instruction output:
-    env.module.print_to_stderr();
+    // env.module.print_to_stderr();
 
     if main_fn.verify(true) {
         function_pass.run_on(&main_fn);
@@ -484,7 +484,7 @@ macro_rules! assert_evals_to {
             assert_llvm_evals_to!($src, $expected, $ty, $transform);
         }
         {
-            assert_opt_evals_to!($src, $expected, $ty, $transform);
+            // assert_opt_evals_to!($src, $expected, $ty, $transform);
         }
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {

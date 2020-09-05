@@ -533,6 +533,45 @@ impl CallType {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Wrapped {
+    SingleElementRecord,
+    RecordOrSingleTagUnion,
+    MultiTagUnion,
+}
+
+impl Wrapped {
+    pub fn from_layout(layout: &Layout<'_>) -> Self {
+        match Self::opt_from_layout(layout) {
+            Some(result) => result,
+            None => unreachable!("not an indexable type {:?}", layout),
+        }
+    }
+
+    pub fn opt_from_layout(layout: &Layout<'_>) -> Option<Self> {
+        let result = match layout {
+            Layout::Struct(fields) => match fields.len() {
+                0 => todo!("how to handle empty records?"),
+                1 => Some(Wrapped::SingleElementRecord),
+                _ => Some(Wrapped::RecordOrSingleTagUnion),
+            },
+
+            Layout::Union(tags) | Layout::RecursiveUnion(tags) => match tags {
+                [] => todo!("how to handle empty tag unions?"),
+                [single] => match single.len() {
+                    0 => todo!("how to handle empty records?"),
+                    1 => Some(Wrapped::SingleElementRecord),
+                    _ => Some(Wrapped::RecordOrSingleTagUnion),
+                },
+                _ => Some(Wrapped::MultiTagUnion),
+            },
+            _ => None,
+        };
+
+        result
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr<'a> {
     Literal(Literal<'a>),
@@ -560,7 +599,7 @@ pub enum Expr<'a> {
         index: u64,
         field_layouts: &'a [Layout<'a>],
         structure: Symbol,
-        is_unwrapped: bool,
+        wrapped: Wrapped,
     },
 
     Array {
@@ -1844,11 +1883,23 @@ pub fn with_hole<'a>(
                 env.unique_symbol()
             };
 
+            let wrapped = {
+                let record_layout = layout_cache
+                    .from_var(env.arena, record_var, env.subs)
+                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+                match Wrapped::opt_from_layout(&record_layout) {
+                    Some(result) => result,
+                    None => Wrapped::SingleElementRecord,
+                }
+            };
+
+            println!("loc 3 {}", record_symbol);
             let expr = Expr::AccessAtIndex {
                 index: index.expect("field not in its own type") as u64,
                 field_layouts: field_layouts.into_bump_slice(),
                 structure: record_symbol,
-                is_unwrapped: true,
+                wrapped,
             };
 
             let layout = layout_cache
@@ -2815,12 +2866,12 @@ fn substitute_in_expr<'a>(
             index,
             structure,
             field_layouts,
-            is_unwrapped,
+            wrapped,
         } => match substitute(subs, *structure) {
             Some(structure) => Some(AccessAtIndex {
                 index: *index,
                 field_layouts: *field_layouts,
-                is_unwrapped: *is_unwrapped,
+                wrapped: *wrapped,
                 structure,
             }),
             None => None,
@@ -2852,13 +2903,14 @@ fn store_pattern<'a>(
         | BitLiteral { .. }
         | StrLiteral(_) => {}
         AppliedTag {
-            union, arguments, ..
+            arguments, layout, ..
         } => {
-            let is_unwrapped = union.alternatives.len() == 1;
+            let wrapped = Wrapped::from_layout(layout);
+            let write_tag = wrapped == Wrapped::MultiTagUnion;
 
             let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
 
-            if !is_unwrapped {
+            if write_tag {
                 // add an element for the tag discriminant
                 arg_layouts.push(Layout::Builtin(Builtin::Int64));
             }
@@ -2868,9 +2920,12 @@ fn store_pattern<'a>(
             }
 
             for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
+                let index = if write_tag { index + 1 } else { index };
+
+                println!("loc 1 {}", outer_symbol);
                 let load = Expr::AccessAtIndex {
-                    is_unwrapped,
-                    index: (!is_unwrapped as usize + index) as u64,
+                    wrapped,
+                    index: index as u64,
                     field_layouts: arg_layouts.clone().into_bump_slice(),
                     structure: outer_symbol,
                 };
@@ -2944,11 +2999,15 @@ fn store_record_destruct<'a>(
 ) -> Result<Stmt<'a>, &'a str> {
     use Pattern::*;
 
+    let wrapped = Wrapped::from_layout(&Layout::Struct(sorted_fields));
+
+    // TODO wrapped could be SingleElementRecord
+    println!("loc 2 {}", outer_symbol);
     let load = Expr::AccessAtIndex {
         index,
         field_layouts: sorted_fields,
         structure: outer_symbol,
-        is_unwrapped: true,
+        wrapped,
     };
 
     match &destruct.typ {
