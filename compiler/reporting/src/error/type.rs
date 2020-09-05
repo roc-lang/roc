@@ -498,6 +498,14 @@ fn to_expr_report<'b>(
             Reason::ElemInList { index } => {
                 let ith = index.ordinal();
 
+                // Don't say "the previous elements all have the type" if
+                // there was only 1 previous element!
+                let prev_elems_msg = if index.to_zero_based() == 1 {
+                    "However, the 1st element has the type:"
+                } else {
+                    "However, the preceding elements in the list all have the type:"
+                };
+
                 report_mismatch(
                     alloc,
                     filename,
@@ -506,13 +514,10 @@ fn to_expr_report<'b>(
                     expected_type,
                     region,
                     Some(expr_region),
-                    alloc.string(format!(
-                        "The {} element of this list does not match all the previous elements:",
-                        ith
-                    )),
-                    alloc.string(format!("The {} element is", ith)),
-                    alloc.reflow("But all the previous elements in the list have type:"),
-                    Some(alloc.reflow("I need all elements of a list to have the same type!")),
+                    alloc.reflow("This list contains elements with different types:"),
+                    alloc.string(format!("Its {} element is", ith)),
+                    alloc.reflow(prev_elems_msg),
+                    Some(alloc.reflow("I need every element in a list to have the same type!")),
                 )
             }
             Reason::RecordUpdateValue(field) => report_mismatch(
@@ -776,7 +781,7 @@ fn to_expr_report<'b>(
                 unreachable!("I don't think these can be reached")
             }
 
-            Reason::InterpolatedStringVar => {
+            Reason::StrInterpolation => {
                 unimplemented!("string interpolation is not implemented yet")
             }
 
@@ -819,7 +824,7 @@ fn type_comparison<'b>(
         lines.push(alloc.concat(context_hints));
     }
 
-    lines.extend(problems_to_hint(alloc, comparison.problems));
+    lines.extend(problems_to_tip(alloc, comparison.problems));
 
     alloc.stack(lines)
 }
@@ -835,7 +840,7 @@ fn lone_type<'b>(
 
     let mut lines = vec![i_am_seeing, comparison.actual, further_details];
 
-    lines.extend(problems_to_hint(alloc, comparison.problems));
+    lines.extend(problems_to_tip(alloc, comparison.problems));
 
     alloc.stack(lines)
 }
@@ -870,6 +875,10 @@ fn add_category<'b>(
         Int => alloc.concat(vec![this_is, alloc.text(" an integer of type:")]),
         Float => alloc.concat(vec![this_is, alloc.text(" a float of type:")]),
         Str => alloc.concat(vec![this_is, alloc.text(" a string of type:")]),
+        StrInterpolation => alloc.concat(vec![
+            this_is,
+            alloc.text(" a value in a string interpolation, which was of type:"),
+        ]),
 
         Lambda => alloc.concat(vec![this_is, alloc.text(" an anonymous function of type:")]),
 
@@ -1081,7 +1090,7 @@ fn pattern_type_comparision<'b>(
         comparison.expected,
     ];
 
-    lines.extend(problems_to_hint(alloc, comparison.problems));
+    lines.extend(problems_to_tip(alloc, comparison.problems));
     lines.extend(reason_hints);
 
     alloc.stack(lines)
@@ -1156,7 +1165,7 @@ pub enum Problem {
     OptionalRequiredMismatch(Lowercase),
 }
 
-fn problems_to_hint<'b>(
+fn problems_to_tip<'b>(
     alloc: &'b RocDocAllocator<'b>,
     mut problems: Vec<Problem>,
 ) -> Option<RocDocBuilder<'b>> {
@@ -2261,27 +2270,24 @@ fn type_problem_to_pretty<'b>(
                     let found = alloc.text(typo_str).annotate(Annotation::Typo);
                     let suggestion = alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);
 
-                    let hint1 = alloc
-                        .hint()
+                    let tip1 = alloc
+                        .tip()
                         .append(alloc.reflow("Seems like a record field typo. Maybe "))
                         .append(found)
                         .append(alloc.reflow(" should be "))
                         .append(suggestion)
                         .append(alloc.text("?"));
 
-                    let hint2 = alloc.hint().append(alloc.reflow(ADD_ANNOTATIONS));
+                    let tip2 = alloc.tip().append(alloc.reflow(ADD_ANNOTATIONS));
 
-                    hint1
-                        .append(alloc.line())
-                        .append(alloc.line())
-                        .append(hint2)
+                    tip1.append(alloc.line()).append(alloc.line()).append(tip2)
                 }
             }
         }
         FieldsMissing(missing) => match missing.split_last() {
             None => alloc.nil(),
             Some((f1, [])) => alloc
-                .hint()
+                .tip()
                 .append(alloc.reflow("Looks like the "))
                 .append(f1.as_str().to_owned())
                 .append(alloc.reflow(" field is missing.")),
@@ -2289,7 +2295,7 @@ fn type_problem_to_pretty<'b>(
                 let separator = alloc.reflow(", ");
 
                 alloc
-                    .hint()
+                    .tip()
                     .append(alloc.reflow("Looks like the "))
                     .append(
                         alloc.intersperse(init.iter().map(|v| v.as_str().to_owned()), separator),
@@ -2315,20 +2321,17 @@ fn type_problem_to_pretty<'b>(
                     let found = alloc.text(typo_str).annotate(Annotation::Typo);
                     let suggestion = alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);
 
-                    let hint1 = alloc
-                        .hint()
+                    let tip1 = alloc
+                        .tip()
                         .append(alloc.reflow("Seems like a tag typo. Maybe "))
                         .append(found)
                         .append(" should be ")
                         .append(suggestion)
                         .append(alloc.text("?"));
 
-                    let hint2 = alloc.hint().append(alloc.reflow(ADD_ANNOTATIONS));
+                    let tip2 = alloc.tip().append(alloc.reflow(ADD_ANNOTATIONS));
 
-                    hint1
-                        .append(alloc.line())
-                        .append(alloc.line())
-                        .append(hint2)
+                    tip1.append(alloc.line()).append(alloc.line()).append(tip2)
                 }
             }
         }
@@ -2345,7 +2348,7 @@ fn type_problem_to_pretty<'b>(
                 )
             };
 
-            alloc.hint().append(line)
+            alloc.tip().append(line)
         }
 
         BadRigidVar(x, tipe) => {
@@ -2353,7 +2356,7 @@ fn type_problem_to_pretty<'b>(
 
             let bad_rigid_var = |name: Lowercase, a_thing| {
                 alloc
-                    .hint()
+                    .tip()
                     .append(alloc.reflow("The type annotation uses the type variable "))
                     .append(alloc.type_variable(name))
                     .append(alloc.reflow(" to say that this definition can produce any type of value. But in the body I see that it will only produce "))
@@ -2365,7 +2368,7 @@ fn type_problem_to_pretty<'b>(
                 let line = r#" as separate type variables. Your code seems to be saying they are the same though. Maybe they should be the same your type annotation? Maybe your code uses them in a weird way?"#;
 
                 alloc
-                    .hint()
+                    .tip()
                     .append(alloc.reflow("Your type annotation uses "))
                     .append(alloc.type_variable(a))
                     .append(alloc.reflow(" and "))
@@ -2392,12 +2395,12 @@ fn type_problem_to_pretty<'b>(
                 Boolean(_) => bad_rigid_var(x, alloc.reflow("a uniqueness attribute value")),
             }
         }
-        IntFloat => alloc.hint().append(alloc.concat(vec![
-            alloc.reflow("Convert between "),
+        IntFloat => alloc.tip().append(alloc.concat(vec![
+            alloc.reflow("You can convert between "),
             alloc.type_str("Int"),
             alloc.reflow(" and "),
             alloc.type_str("Float"),
-            alloc.reflow(" with "),
+            alloc.reflow(" using functions like "),
             alloc.symbol_qualified(Symbol::NUM_TO_FLOAT),
             alloc.reflow(" and "),
             alloc.symbol_qualified(Symbol::NUM_ROUND),
@@ -2407,26 +2410,26 @@ fn type_problem_to_pretty<'b>(
         TagsMissing(missing) => match missing.split_last() {
             None => alloc.nil(),
             Some((f1, [])) => {
-                let hint1 = alloc
-                    .hint()
+                let tip1 = alloc
+                    .tip()
                     .append(alloc.reflow("Looks like a closed tag union does not have the "))
                     .append(alloc.tag_name(f1.clone()))
                     .append(alloc.reflow(" tag."));
 
-                let hint2 = alloc.hint().append(alloc.reflow(
+                let tip2 = alloc.tip().append(alloc.reflow(
                     "Closed tag unions can't grow, \
                     because that might change the size in memory. \
                     Can you use an open tag union?",
                 ));
 
-                alloc.stack(vec![hint1, hint2])
+                alloc.stack(vec![tip1, tip2])
             }
 
             Some((last, init)) => {
                 let separator = alloc.reflow(", ");
 
-                let hint1 = alloc
-                    .hint()
+                let tip1 = alloc
+                    .tip()
                     .append(alloc.reflow("Looks like a closed tag union does not have the "))
                     .append(
                         alloc
@@ -2436,16 +2439,16 @@ fn type_problem_to_pretty<'b>(
                     .append(alloc.tag_name(last.clone()))
                     .append(alloc.reflow(" tags."));
 
-                let hint2 = alloc.hint().append(alloc.reflow(
+                let tip2 = alloc.tip().append(alloc.reflow(
                     "Closed tag unions can't grow, \
                     because that might change the size in memory. \
                     Can you use an open tag union?",
                 ));
 
-                alloc.stack(vec![hint1, hint2])
+                alloc.stack(vec![tip1, tip2])
             }
         },
-        OptionalRequiredMismatch(field) => alloc.hint().append(alloc.concat(vec![
+        OptionalRequiredMismatch(field) => alloc.tip().append(alloc.concat(vec![
             alloc.reflow("To extract the "),
             alloc.record_field(field),
             alloc.reflow(

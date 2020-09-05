@@ -20,7 +20,7 @@ mod test_fmt {
     use roc_parse::parser::{Fail, Parser, State};
 
     fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, Fail> {
-        let state = State::new(input.as_bytes(), Attempting::Module);
+        let state = State::new(input.trim().as_bytes(), Attempting::Module);
         let parser = space0_before(loc!(roc_parse::expr::expr(0)), 0);
         let answer = parser.parse(&arena, state);
 
@@ -192,7 +192,7 @@ mod test_fmt {
     fn escaped_unicode_string() {
         expr_formats_same(indoc!(
             r#"
-            "unicode: \u{A00A}!"
+            "unicode: \u(A00A)!"
             "#
         ));
     }
@@ -206,47 +206,47 @@ mod test_fmt {
         ));
     }
 
-    #[test]
-    fn empty_block_string() {
-        expr_formats_same(indoc!(
-            r#"
-            """"""
-            "#
-        ));
-    }
+    // #[test]
+    // fn empty_block_string() {
+    //     expr_formats_same(indoc!(
+    //         r#"
+    //         """"""
+    //         "#
+    //     ));
+    // }
 
-    #[test]
-    fn basic_block_string() {
-        expr_formats_same(indoc!(
-            r#"
-            """blah"""
-            "#
-        ));
-    }
+    // #[test]
+    // fn basic_block_string() {
+    //     expr_formats_same(indoc!(
+    //         r#"
+    //         """blah"""
+    //         "#
+    //     ));
+    // }
 
-    #[test]
-    fn newlines_block_string() {
-        expr_formats_same(indoc!(
-            r#"
-            """blah
-                    spam
-            foo"""
-            "#
-        ));
-    }
+    // #[test]
+    // fn newlines_block_string() {
+    //     expr_formats_same(indoc!(
+    //         r#"
+    //         """blah
+    //                 spam
+    //         foo"""
+    //         "#
+    //     ));
+    // }
 
-    #[test]
-    fn quotes_block_string() {
-        expr_formats_same(indoc!(
-            r#"
-            """
+    // #[test]
+    // fn quotes_block_string() {
+    //     expr_formats_same(indoc!(
+    //         r#"
+    //         """
 
-            "" \""" ""\"
+    //         "" \""" ""\"
 
-            """
-            "#
-        ));
-    }
+    //         """
+    //         "#
+    //     ));
+    // }
 
     #[test]
     fn zero() {

@@ -775,9 +775,35 @@ div = \numerator, denominator ->
 ##
 ## >>> Float.pi
 ## >>>     |> Float.mod 2.0
-mod : Float a, Float a -> Result Float DivByZero
+mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
 
-tryMod : Float a, Float a -> Result (Float a) [ DivByZero ]*
+## Raises a #Float to the power of another #Float.
+##
+## `
+## For an #Int alternative to this function, see #Num.raise.
+pow : Float a, Float a -> Float a
+
+## Raises an integer to the power of another, by multiplying the integer by
+## itself the given number of times.
+##
+## This process is known as [exponentiation by squaring](https://en.wikipedia.org/wiki/Exponentiation_by_squaring).
+##
+## For a #Float alternative to this function, which supports negative exponents,
+## see #Num.exp.
+##
+## >>> Num.exp 5 0
+##
+## >>> Num.exp 5 1
+##
+## >>> Num.exp 5 2
+##
+## >>> Num.exp 5 6
+##
+## ## Performance Notes
+##
+## Be careful! Even though this function takes only a #U8, it is very easy to
+## overflow
+expBySquaring : Int a, U8 -> Int a
 
 ## Return the reciprocal of a #Float - that is, divides `1.0` by the given number.
 ##
@@ -786,7 +812,9 @@ tryMod : Float a, Float a -> Result (Float a) [ DivByZero ]*
 ## For a version that does not crash, use #tryRecip
 recip : Float a -> Result (Float a) [ DivByZero ]*
 
-
+## NOTE: Need to come up a suffix alternative to the "try" prefix.
+## This should be like (for example) recipTry so that it's more discoverable
+## in documentation and editor autocomplete when you type "recip"
 tryRecip : Float a -> Result (Float a) [ DivByZero ]*
 
 ## Return an approximation of the absolute value of the square root of the #Float.

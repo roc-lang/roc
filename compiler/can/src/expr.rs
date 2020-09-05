@@ -9,19 +9,20 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
+use inlinable_string::InlinableString;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
-use roc_parse::ast;
+use roc_parse::ast::{self, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;
 use std::fmt::Debug;
-use std::i64;
+use std::{char, i64, u32};
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct Output {
@@ -55,8 +56,7 @@ pub enum Expr {
     // Int and Float store a variable to generate better error messages
     Int(Variable, i64),
     Float(Variable, f64),
-    Str(Box<str>),
-    BlockStr(Box<str>),
+    Str(InlinableString),
     List {
         list_var: Variable, // required for uniqueness of the list
         elem_var: Variable,
@@ -247,12 +247,7 @@ pub fn canonicalize_expr<'a>(
                 )
             }
         }
-        ast::Expr::Str(string) => (Str((*string).into()), Output::default()),
-        ast::Expr::BlockStr(lines) => {
-            let joined = lines.iter().copied().collect::<Vec<&str>>().join("\n");
-
-            (BlockStr(joined.into()), Output::default())
-        }
+        ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
         ast::Expr::List(loc_elems) => {
             if loc_elems.is_empty() {
                 (
@@ -1045,8 +1040,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         other @ Num(_, _)
         | other @ Int(_, _)
         | other @ Float(_, _)
-        | other @ Str(_)
-        | other @ BlockStr(_)
+        | other @ Str { .. }
         | other @ RuntimeError(_)
         | other @ EmptyRecord
         | other @ Accessor { .. }
@@ -1321,5 +1315,172 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 }
             }
         }
+    }
+}
+
+fn flatten_str_literal<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    literal: &StrLiteral<'a>,
+) -> (Expr, Output) {
+    use ast::StrLiteral::*;
+
+    match literal {
+        PlainLine(str_slice) => (Expr::Str((*str_slice).into()), Output::default()),
+        Line(segments) => flatten_str_lines(env, var_store, scope, &[segments]),
+        Block(lines) => flatten_str_lines(env, var_store, scope, lines),
+    }
+}
+
+fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
+    match expr {
+        ast::Expr::Var { .. } => true,
+        ast::Expr::Access(sub_expr, _) => is_valid_interpolation(sub_expr),
+        _ => false,
+    }
+}
+
+enum StrSegment {
+    Interpolation(Located<Expr>),
+    Plaintext(InlinableString),
+}
+
+fn flatten_str_lines<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    lines: &[&[ast::StrSegment<'a>]],
+) -> (Expr, Output) {
+    use ast::StrSegment::*;
+
+    let mut buf = String::new();
+    let mut segments = Vec::new();
+    let mut output = Output::default();
+
+    for line in lines {
+        for segment in line.iter() {
+            match segment {
+                Plaintext(string) => {
+                    buf.push_str(string);
+                }
+                Unicode(loc_hex_digits) => match u32::from_str_radix(loc_hex_digits.value, 16) {
+                    Ok(code_pt) => match char::from_u32(code_pt) {
+                        Some(ch) => {
+                            buf.push(ch);
+                        }
+                        None => {
+                            env.problem(Problem::InvalidUnicodeCodePoint(loc_hex_digits.region));
+
+                            return (
+                                Expr::RuntimeError(RuntimeError::InvalidUnicodeCodePoint(
+                                    loc_hex_digits.region,
+                                )),
+                                output,
+                            );
+                        }
+                    },
+                    Err(_) => {
+                        env.problem(Problem::InvalidHexadecimal(loc_hex_digits.region));
+
+                        return (
+                            Expr::RuntimeError(RuntimeError::InvalidHexadecimal(
+                                loc_hex_digits.region,
+                            )),
+                            output,
+                        );
+                    }
+                },
+                Interpolated(loc_expr) => {
+                    if is_valid_interpolation(loc_expr.value) {
+                        // Interpolations desugar to Str.concat calls
+                        output.references.calls.insert(Symbol::STR_CONCAT);
+
+                        if !buf.is_empty() {
+                            segments.push(StrSegment::Plaintext(buf.into()));
+
+                            buf = String::new();
+                        }
+
+                        let (loc_expr, new_output) = canonicalize_expr(
+                            env,
+                            var_store,
+                            scope,
+                            loc_expr.region,
+                            loc_expr.value,
+                        );
+
+                        output.union(new_output);
+
+                        segments.push(StrSegment::Interpolation(loc_expr));
+                    } else {
+                        env.problem(Problem::InvalidInterpolation(loc_expr.region));
+
+                        return (
+                            Expr::RuntimeError(RuntimeError::InvalidInterpolation(loc_expr.region)),
+                            output,
+                        );
+                    }
+                }
+                EscapedChar(escaped) => buf.push(unescape_char(escaped)),
+            }
+        }
+    }
+
+    if !buf.is_empty() {
+        segments.push(StrSegment::Plaintext(buf.into()));
+    }
+
+    (desugar_str_segments(var_store, segments), output)
+}
+
+/// Resolve stirng interpolations by desugaring a sequence of StrSegments
+/// into nested calls to Str.concat
+fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> Expr {
+    use StrSegment::*;
+
+    let mut iter = segments.into_iter().rev();
+    let mut loc_expr = match iter.next() {
+        Some(Plaintext(string)) => Located::new(0, 0, 0, 0, Expr::Str(string)),
+        Some(Interpolation(loc_expr)) => loc_expr,
+        None => {
+            // No segments? Empty string!
+
+            Located::new(0, 0, 0, 0, Expr::Str("".into()))
+        }
+    };
+
+    for seg in iter {
+        let loc_new_expr = match seg {
+            Plaintext(string) => Located::new(0, 0, 0, 0, Expr::Str(string)),
+            Interpolation(loc_interpolated_expr) => loc_interpolated_expr,
+        };
+
+        let fn_expr = Located::new(0, 0, 0, 0, Expr::Var(Symbol::STR_CONCAT));
+        let expr = Expr::Call(
+            Box::new((var_store.fresh(), fn_expr, var_store.fresh())),
+            vec![
+                (var_store.fresh(), loc_new_expr),
+                (var_store.fresh(), loc_expr),
+            ],
+            CalledVia::Space,
+        );
+
+        loc_expr = Located::new(0, 0, 0, 0, expr);
+    }
+
+    loc_expr.value
+}
+
+/// Returns the char that would have been originally parsed to
+pub fn unescape_char(escaped: &EscapedChar) -> char {
+    use EscapedChar::*;
+
+    match escaped {
+        Backslash => '\\',
+        Quote => '"',
+        CarriageReturn => '\r',
+        Tab => '\t',
+        Newline => '\n',
     }
 }
