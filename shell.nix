@@ -17,9 +17,13 @@ let
   isOsX = builtins.currentSystem == "x86_64-darwin";
   darwin-frameworks = if isOsX then
     with pkgs.darwin.apple_sdk.frameworks; [
-      Security
+      AppKit
       CoreFoundation
       CoreServices
+      CoreVideo
+      Foundation
+      Metal
+      Security
     ]
   else
     [ ];
