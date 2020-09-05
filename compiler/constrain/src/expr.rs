@@ -758,7 +758,10 @@ pub fn constrain_expr(
                     Box::new(Type::Variable(*ext_var)),
                 ),
                 expected.clone(),
-                Category::TagApply(name.clone()),
+                Category::TagApply {
+                    tag_name: name.clone(),
+                    args_count: arguments.len(),
+                },
                 region,
             );
             let ast_con = Eq(

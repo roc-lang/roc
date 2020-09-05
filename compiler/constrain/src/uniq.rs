@@ -620,13 +620,19 @@ pub fn constrain_expr(
             let union_con = Eq(
                 union_type,
                 expected.clone(),
-                Category::TagApply(name.clone()),
+                Category::TagApply {
+                    tag_name: name.clone(),
+                    args_count: arguments.len(),
+                },
                 region,
             );
             let ast_con = Eq(
                 Type::Variable(*variant_var),
                 expected,
-                Category::TagApply(name.clone()),
+                Category::TagApply {
+                    tag_name: name.clone(),
+                    args_count: arguments.len(),
+                },
                 region,
             );
 
