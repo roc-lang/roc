@@ -882,12 +882,39 @@ fn add_category<'b>(
 
         Lambda => alloc.concat(vec![this_is, alloc.text(" an anonymous function of type:")]),
 
-        TagApply(TagName::Global(name)) => alloc.concat(vec![
+        TagApply {
+            tag_name: TagName::Global(name),
+            args_count: 0,
+        } => alloc.concat(vec![
+            alloc.text("This "),
+            alloc.global_tag_name(name.to_owned()),
+            if name.as_str() == "True" || name.as_str() == "False" {
+                alloc.text(" boolean has the type:")
+            } else {
+                alloc.text(" global tag has the type:")
+            },
+        ]),
+        TagApply {
+            tag_name: TagName::Private(name),
+            args_count: 0,
+        } => alloc.concat(vec![
+            alloc.text("This "),
+            alloc.private_tag_name(*name),
+            alloc.text(" private tag has the type:"),
+        ]),
+
+        TagApply {
+            tag_name: TagName::Global(name),
+            args_count: _,
+        } => alloc.concat(vec![
             alloc.text("This "),
             alloc.global_tag_name(name.to_owned()),
             alloc.text(" global tag application has the type:"),
         ]),
-        TagApply(TagName::Private(name)) => alloc.concat(vec![
+        TagApply {
+            tag_name: TagName::Private(name),
+            args_count: _,
+        } => alloc.concat(vec![
             alloc.text("This "),
             alloc.private_tag_name(*name),
             alloc.text(" private tag application has the type:"),

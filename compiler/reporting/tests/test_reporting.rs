@@ -969,7 +969,7 @@ mod test_reporting {
                 4│  f Blue
                       ^^^^
 
-                This `Blue` global tag application has the type:
+                This `Blue` global tag has the type:
 
                     [ Blue ]a
 
@@ -2081,6 +2081,35 @@ mod test_reporting {
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn boolean_tag() {
+        report_problem_as(
+            indoc!(
+                r#"
+                42 + True
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `add` is not what I expect:
+
+                1│  42 + True
+                         ^^^^
+
+                This `True` boolean has the type:
+
+                    [ True ]a
+
+                But `add` needs the 2nd argument to be:
+
+                    Num a
                 "#
             ),
         )

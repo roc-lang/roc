@@ -927,7 +927,10 @@ pub enum Category {
     Lookup(Symbol),
     CallResult(Option<Symbol>),
     LowLevelOpResult(LowLevel),
-    TagApply(TagName),
+    TagApply {
+        tag_name: TagName,
+        args_count: usize,
+    },
     Lambda,
     Uniqueness,
     StrInterpolation,
