@@ -668,9 +668,14 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
 
                 let ret_list_len_name = "#ret_list_alloca";
                 let ret_list_len_alloca = builder.build_alloca(ctx.i64_type(), ret_list_len_name);
-                builder.build_store(ret_list_len_alloca, ctx.i64_type().const_int(0, false));
+                builder.build_store(
+                    ret_list_len_alloca,
+                    ctx.i64_type().const_int(0 as u64, false),
+                );
 
                 // Return List Length Loop
+                // This loop goes through the list and counts how many
+                // elements pass the filter function `elem -> Bool`
                 let ret_list_len_loop = |_, elem: BasicValueEnum<'ctx>| {
                     let call_site_value = builder.build_call(
                         func_ptr,
@@ -693,17 +698,18 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
                     builder.build_conditional_branch(should_keep, loop_bb, after_bb);
                     builder.position_at_end(loop_bb);
 
-                    {
-                        let next_ret_list_len = builder.build_int_add(
-                            builder
-                                .build_load(ret_list_len_alloca, ret_list_len_name)
-                                .into_int_value(),
-                            ctx.i64_type().const_int(1, false),
-                            "next_ret_list_len",
-                        );
+                    // If the `elem` passes the `elem -> Bool` function
+                    // then increment the return list length variable by 1
+                    let next_ret_list_len = builder.build_int_add(
+                        builder
+                            .build_load(ret_list_len_alloca, ret_list_len_name)
+                            .into_int_value(),
+                        ctx.i64_type().const_int(1, false),
+                        "next_ret_list_len",
+                    );
 
-                        builder.build_store(ret_list_len_alloca, next_ret_list_len);
-                    }
+                    // ..and store that incremented length in memory
+                    builder.build_store(ret_list_len_alloca, next_ret_list_len);
 
                     builder.build_unconditional_branch(after_bb);
                     builder.position_at_end(after_bb);
@@ -718,17 +724,32 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
                     None,
                     ret_list_len_loop,
                 );
-                builder.build_store(index_alloca, ctx.i64_type().const_int(0, false));
+
+                // Reset the index variable to 0.
+                builder.build_store(index_alloca, ctx.i64_type().const_int(0 as u64, false));
 
                 let final_ret_list_len = builder
                     .build_load(ret_list_len_alloca, ret_list_len_name)
                     .into_int_value();
+
+                // Make a new list, with a length equal to the number
+                // of `elem` that passed the `elem -> Bool` function.
                 let ret_list_ptr = allocate_list(env, elem_layout, final_ret_list_len);
 
+                // Make a pointer into the return list. This pointer is used
+                // below to store elements into return list.
                 let dest_elem_ptr_alloca = builder.build_alloca(elem_ptr_type, "dest_elem");
+                // Store this new return list element pointer in memory as the
+                // pointer to the return list as a whole (`ret_list_ptr`). This
+                // is kind of a trick to point to the first elem in the list,
+                // because the pointer to the list is also the pointer to the first
+                // element.
                 builder.build_store(dest_elem_ptr_alloca, ret_list_ptr);
 
-                let list_loop = |_, elem| {
+                // Return List Loop
+                // This loop goes through the list and adds each
+                // `elem` only if it passes the `elem -> Bool` function
+                let ret_list_loop = |_, elem| {
                     let call_site_value = builder.build_call(
                         func_ptr,
                         env.arena.alloc([elem]),
@@ -750,23 +771,27 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
                     builder.build_conditional_branch(should_keep, loop_bb, after_bb);
                     builder.position_at_end(loop_bb);
 
-                    {
-                        let dest_elem_ptr = builder
-                            .build_load(dest_elem_ptr_alloca, "load_dest_elem_ptr")
-                            .into_pointer_value();
+                    // If the `elem` passes the `elem -> Bool` function
+                    // then load the destination pointer..
+                    let dest_elem_ptr = builder
+                        .build_load(dest_elem_ptr_alloca, "load_dest_elem_ptr")
+                        .into_pointer_value();
 
-                        builder.build_store(dest_elem_ptr, elem);
+                    // .. save the element into the return list at the
+                    // destination pointer ..
+                    builder.build_store(dest_elem_ptr, elem);
 
-                        let inc_dest_elem_ptr = BasicValueEnum::PointerValue(unsafe {
-                            builder.build_in_bounds_gep(
-                                dest_elem_ptr,
-                                &[env.ptr_int().const_int(1 as u64, false)],
-                                "increment_dest_elem",
-                            )
-                        });
+                    // .. and then increment the destination pointer by one ..
+                    let inc_dest_elem_ptr = BasicValueEnum::PointerValue(unsafe {
+                        builder.build_in_bounds_gep(
+                            dest_elem_ptr,
+                            &[env.ptr_int().const_int(1 as u64, false)],
+                            "increment_dest_elem",
+                        )
+                    });
 
-                        builder.build_store(dest_elem_ptr_alloca, inc_dest_elem_ptr);
-                    }
+                    // .. and then finally, save the incremented value in memory.
+                    builder.build_store(dest_elem_ptr_alloca, inc_dest_elem_ptr);
 
                     builder.build_unconditional_branch(after_bb);
                     builder.position_at_end(after_bb);
@@ -779,7 +804,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
                     LoopListArg { ptr: list_ptr, len },
                     "#index",
                     Some(index_alloca),
-                    list_loop,
+                    ret_list_loop,
                 );
 
                 store_list(env, ret_list_ptr, final_ret_list_len)
