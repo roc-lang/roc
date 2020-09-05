@@ -952,7 +952,7 @@ fn list_keep_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let func_var = var_store.fresh();
 
     let body = RunLowLevel {
-        op: LowLevel::ListMap,
+        op: LowLevel::ListKeepIf,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
             (func_var, Var(Symbol::ARG_2)),
