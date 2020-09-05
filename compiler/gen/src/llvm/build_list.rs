@@ -672,8 +672,11 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
 
                 // Return List Length Loop
                 let ret_list_len_loop = |_, elem: BasicValueEnum<'ctx>| {
-                    let call_site_value =
-                        builder.build_call(func_ptr, env.arena.alloc([elem]), "map_func");
+                    let call_site_value = builder.build_call(
+                        func_ptr,
+                        env.arena.alloc([elem]),
+                        "#keep_if_count_func",
+                    );
 
                     // set the calling convention explicitly for this call
                     call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
@@ -726,8 +729,11 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
                 builder.build_store(dest_elem_ptr_alloca, ret_list_ptr);
 
                 let list_loop = |_, elem| {
-                    let call_site_value =
-                        builder.build_call(func_ptr, env.arena.alloc([elem]), "map_func");
+                    let call_site_value = builder.build_call(
+                        func_ptr,
+                        env.arena.alloc([elem]),
+                        "#keep_if_insert_func",
+                    );
 
                     // set the calling convention explicitly for this call
                     call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
