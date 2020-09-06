@@ -604,7 +604,7 @@ Here, the open record's type variable appears attached to the `}`.
 
 > In the Elm example, the `a` is unbound, which in Roc means it appears as `*`.
 
-Here's how that looks with a bound type varaible. In Elm:
+Here's how that looks with a bound type variable. In Elm:
 
 ```elm
 { a | x : Int, y : Int } -> { a | x : Int, y : Int }
@@ -761,7 +761,7 @@ Roc has `List`, `Set`, and `Map` in the standard library.
 
 Here are the differences:
 
-* `List` in Roc uses the term "list" the way Python does: to mean an unordered sequence of elements. Roc's `List` is more like an array, in that all the elements are sequential in memory and can be accessed in constant time. It still uses the `[` `]` syntax for list literals. Also there is no `::` operator because "cons" is not an efficient operation on an array like it is in a linked list.
+* `List` in Roc uses the term "list" the way Python does: to mean an ordered sequence of elements. Roc's `List` is more like an array, in that all the elements are sequential in memory and can be accessed in constant time. It still uses the `[` `]` syntax for list literals. Also there is no `::` operator because "cons" is not an efficient operation on an array like it is in a linked list.
 * `Map` in Roc is like `Dict` in Elm, except it's backed by hashing rather than ordering. Roc silently computes hash values for any value that can be used with `==`, so instead of a `comparable` constraint on `Set` elements and `Map` keys, in Roc they instead have the *functionless* constraint indicated with a `'`. So to add to a `Set` you use `Set.add : Set 'elem, 'elem -> Set 'elem`, and putting a value into a Map is `Map.put : Map 'key val, 'key, val -> Map 'key val`.
 * `Set` in Roc is like `Set` in Elm: it's shorthand for a `Map` with keys but no value, and it has a slightly different API.
 
