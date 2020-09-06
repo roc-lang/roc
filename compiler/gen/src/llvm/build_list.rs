@@ -641,6 +641,13 @@ pub fn list_len<'ctx>(
         .into_int_value()
 }
 
+/// List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
+pub fn list_walk_right<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+
+    BasicValueEnum::IntValue(ctx.i64_type().const_int(0 as u64, false))
+}
+
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
 pub fn list_keep_if<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

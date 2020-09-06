@@ -3,7 +3,7 @@ use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, clone_nonempty_list, empty_list, empty_polymorphic_list,
     incrementing_elem_loop, list_append, list_concat, list_get_unsafe, list_is_not_empty,
     list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set,
-    list_single, load_list_ptr, store_list, LoopListArg,
+    list_single, list_walk_right, load_list_ptr, store_list, LoopListArg,
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
@@ -1706,6 +1706,12 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
             list_keep_if(env, parent, func, func_layout, list, list_layout)
+        }
+        ListWalkRight => {
+            // List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
+            debug_assert_eq!(args.len(), 3);
+
+            list_walk_right(env)
         }
         ListAppend => {
             // List.append : List elem, elem -> List elem
