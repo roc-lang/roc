@@ -617,6 +617,7 @@ fn to_relevant_branch_help<'a>(
                                     start.extend(sub_positions);
                                     start.extend(end);
                                 }
+                                Wrapped::EmptyRecord => todo!(),
                             }
 
                             Some(Branch {
@@ -1183,7 +1184,7 @@ fn decide_to_branching<'a>(
                 .expect("jump not in list of jumps");
             expr.clone()
         }
-        Leaf(Inline(expr)) => expr,
+        Leaf(Inline(expr)) => dbg!(expr),
         Chain {
             test_chain,
             success,

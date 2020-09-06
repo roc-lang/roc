@@ -705,11 +705,17 @@ fn unify_flat_type(
         (EmptyRecord, EmptyRecord) => merge(subs, ctx, Structure(left.clone())),
 
         (Record(fields, ext), EmptyRecord) if has_only_optional_fields(&mut fields.values()) => {
-            unify_pool(subs, pool, *ext, ctx.second)
+            let mut outcome = unify_pool(subs, pool, *ext, ctx.second);
+            outcome.extend(merge(subs, ctx, Structure(FlatType::EmptyRecord)));
+
+            outcome
         }
 
         (EmptyRecord, Record(fields, ext)) if has_only_optional_fields(&mut fields.values()) => {
-            unify_pool(subs, pool, ctx.first, *ext)
+            let mut outcome = unify_pool(subs, pool, ctx.first, *ext);
+            outcome.extend(merge(subs, ctx, Structure(FlatType::EmptyRecord)));
+
+            outcome
         }
 
         (Record(fields1, ext1), Record(fields2, ext2)) => {

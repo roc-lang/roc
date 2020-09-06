@@ -505,4 +505,32 @@ mod gen_records {
             i64
         );
     }
+
+    #[test]
+    fn optional_field_singleton_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when { x : 4 } is
+                    { x ? 3 } -> x
+                "#
+            ),
+            4,
+            i64
+        );
+    }
+
+    #[test]
+    fn optional_field_empty_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when { } is
+                    { x ? 3 } -> x
+                "#
+            ),
+            3,
+            i64
+        );
+    }
 }

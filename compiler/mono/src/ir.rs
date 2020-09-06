@@ -535,6 +535,7 @@ impl CallType {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Wrapped {
+    EmptyRecord,
     SingleElementRecord,
     RecordOrSingleTagUnion,
     MultiTagUnion,
@@ -551,7 +552,7 @@ impl Wrapped {
     pub fn opt_from_layout(layout: &Layout<'_>) -> Option<Self> {
         let result = match layout {
             Layout::Struct(fields) => match fields.len() {
-                0 => todo!("how to handle empty records?"),
+                0 => Some(Wrapped::EmptyRecord),
                 1 => Some(Wrapped::SingleElementRecord),
                 _ => Some(Wrapped::RecordOrSingleTagUnion),
             },
@@ -559,7 +560,7 @@ impl Wrapped {
             Layout::Union(tags) | Layout::RecursiveUnion(tags) => match tags {
                 [] => todo!("how to handle empty tag unions?"),
                 [single] => match single.len() {
-                    0 => todo!("how to handle empty records?"),
+                    0 => Some(Wrapped::EmptyRecord),
                     1 => Some(Wrapped::SingleElementRecord),
                     _ => Some(Wrapped::RecordOrSingleTagUnion),
                 },
@@ -3547,11 +3548,14 @@ pub fn from_can_pattern<'a>(
             let mut destructs = destructs.clone();
             destructs.sort_by(|a, b| a.value.label.cmp(&b.value.label));
 
+            dbg!(&destructs);
+
             let mut it = destructs.iter();
             let mut opt_destruct = it.next();
 
             // sorted fields based on the type
             let sorted_fields = crate::layout::sort_record_fields(env.arena, *whole_var, env.subs);
+            dbg!(&sorted_fields);
 
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 

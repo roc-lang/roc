@@ -124,6 +124,7 @@ pub fn helper_without_uniqueness<'a>(
     );
 
     let (mut procs, param_map) = procs.get_specialized_procs_help(mono_env.arena);
+    dbg!(&main_body);
     let main_body = roc_mono::inc_dec::visit_declaration(
         mono_env.arena,
         param_map,
@@ -317,6 +318,7 @@ pub fn helper_with_uniqueness<'a>(
     );
 
     let (mut procs, param_map) = procs.get_specialized_procs_help(mono_env.arena);
+    dbg!(&main_body);
     let main_body = roc_mono::inc_dec::visit_declaration(
         mono_env.arena,
         param_map,
@@ -475,7 +477,7 @@ macro_rules! assert_evals_to {
             assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
         }
         {
-            // assert_opt_evals_to!($src, $expected, $ty, (|val| val));
+            assert_opt_evals_to!($src, $expected, $ty, (|val| val));
         }
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
@@ -484,7 +486,7 @@ macro_rules! assert_evals_to {
             assert_llvm_evals_to!($src, $expected, $ty, $transform);
         }
         {
-            // assert_opt_evals_to!($src, $expected, $ty, $transform);
+            assert_opt_evals_to!($src, $expected, $ty, $transform);
         }
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
@@ -493,7 +495,7 @@ macro_rules! assert_evals_to {
             assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak);
         }
         {
-            // assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
+            assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
         }
     };
 }

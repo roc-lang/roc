@@ -611,7 +611,7 @@ pub fn chase_ext_record(
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    match subs.get_without_compacting(var).content {
+    match dbg!(subs.get_without_compacting(var).content) {
         Structure(Record(sub_fields, sub_ext)) => {
             fields.extend(sub_fields.into_iter());
 
