@@ -65,6 +65,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_JOIN => list_join,
         Symbol::LIST_MAP => list_map,
         Symbol::LIST_KEEP_IF => list_keep_if,
+        Symbol::LIST_WALK_RIGHT => list_walk_right,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_SUB => num_sub,
         Symbol::NUM_MUL => num_mul,
@@ -943,6 +944,35 @@ fn list_join(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         list_var,
+    )
+}
+
+/// List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
+fn list_walk_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let func_var = var_store.fresh();
+    let accum_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListWalkRight,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (func_var, Var(Symbol::ARG_2)),
+            (accum_var, Var(Symbol::ARG_3)),
+        ],
+        ret_var: accum_var,
+    };
+
+    defn(
+        symbol,
+        vec![
+            (list_var, Symbol::ARG_1),
+            (func_var, Symbol::ARG_2),
+            (accum_var, Symbol::ARG_3),
+        ],
+        var_store,
+        body,
+        accum_var,
     )
 }
 

@@ -3196,7 +3196,9 @@ fn call_by_name<'a>(
                             None => {
                                 // This must have been a runtime error.
                                 match procs.runtime_errors.get(&proc_name) {
-                                    Some(error) => Stmt::RuntimeError(error),
+                                    Some(error) => {
+                                        Stmt::RuntimeError(env.arena.alloc(format!("{:?}", error)))
+                                    }
                                     None => unreachable!("Proc name {:?} is invalid", proc_name),
                                 }
                             }
@@ -3205,10 +3207,10 @@ fn call_by_name<'a>(
                 }
             }
         }
-        Err(_) => {
+        Err(e) => {
             // This function code gens to a runtime error,
             // so attempting to call it will immediately crash.
-            Stmt::RuntimeError("")
+            Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e)))
         }
     }
 }

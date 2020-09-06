@@ -17,6 +17,7 @@ pub enum LowLevel {
     ListJoin,
     ListMap,
     ListKeepIf,
+    ListWalkRight,
     NumAdd,
     NumSub,
     NumMul,

@@ -2220,11 +2220,11 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_foldr_sum() {
+    fn list_walkRight_sum() {
         infer_eq(
             indoc!(
                 r#"
-                    sum = \list -> List.foldr list Num.add 0
+                    sum = \list -> List.walkRight list Num.add 0
 
                     sum
                 "#
@@ -2291,9 +2291,9 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_foldr() {
+    fn list_walkRight() {
         infer_eq(
-            "List.foldr",
+            "List.walkRight",
             "Attr * (Attr (* | b) (List (Attr b a)), Attr Shared (Attr b a, c -> c), c -> c)",
         );
     }
@@ -2313,11 +2313,11 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_foldr_reverse() {
+    fn list_walkRight_reverse() {
         infer_eq(
             indoc!(
                 r#"
-                    reverse = \list -> List.foldr list (\e, l -> List.append l e) []
+                    reverse = \list -> List.walkRight list (\e, l -> List.append l e) []
 
                     reverse
                 "#
@@ -3113,6 +3113,34 @@ mod solve_uniq_expr {
                 "#
             ),
             "Attr * (Attr (* | b | c) { x : Attr b (Num (Attr b a)), y ? Attr c (Num (Attr c a)) }* -> Attr d (Num (Attr d a)))"
+        );
+    }
+
+    #[test]
+    fn list_walk_right() {
+        infer_eq(
+            indoc!(
+                r#"
+                List.walkRight 
+                "#
+            ),
+            "Attr * (Attr (* | b) (List (Attr b a)), Attr Shared (Attr b a, c -> c), c -> c)",
+        );
+    }
+
+    #[test]
+    fn list_walk_right_example() {
+        infer_eq(
+            indoc!(
+                r#"
+                empty : List Int
+                empty = 
+                    []
+
+                List.walkRight empty (\a, b -> a + b) 0
+                "#
+            ),
+            "Attr a Int",
         );
     }
 }

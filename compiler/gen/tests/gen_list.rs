@@ -115,6 +115,33 @@ mod gen_list {
     }
 
     #[test]
+    fn list_walk_right_empty_all_inline() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                List.walkRight [0x1] (\a, b -> a + b) 0
+                "#
+            ),
+            1,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                empty : List Int
+                empty =
+                    []
+
+                List.walkRight empty (\a, b -> a + b) 0
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
     fn list_keep_if_empty_list_of_int() {
         assert_evals_to!(
             indoc!(
