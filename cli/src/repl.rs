@@ -22,13 +22,17 @@ use roc_mono::ir::Procs;
 use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
-use roc_parse::parser::{loc, Fail, FailReason, Parser, State};
+use roc_parse::parser::{loc, Fail, Parser, State};
 use roc_problem::can::Problem;
 use roc_region::all::{Located, Region};
 use roc_solve::solve;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
+use rustyline::Editor;
+use rustyline::validate::{ValidationContext, ValidationResult, Validator};
+use rustyline::error::ReadlineError;
+use rustyline_derive::{Completer, Helper, Highlighter, Hinter};
 use std::hash::Hash;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -43,8 +47,6 @@ pub const ELLIPSIS: &str = "\u{001b}[36m…\u{001b}[0m ";
 mod eval;
 
 pub fn main() -> io::Result<()> {
-    use std::io::BufRead;
-
     print!("{}{}", WELCOME_MESSAGE, INSTRUCTIONS);
 
     // Loop
@@ -52,88 +54,84 @@ pub fn main() -> io::Result<()> {
     let mut pending_src = String::new();
     let mut prev_line_blank = false;
 
-    loop {
-        if pending_src.is_empty() {
-            print!("{}", PROMPT);
-        } else {
-            print!("{}", ELLIPSIS);
-        }
+    let mut rl = Editor::new();
+    let h = InputValidator { pending_src };
+    rl.set_helper(Some(h));
 
+    loop {
         io::stdout().flush().unwrap();
 
-        let stdin = io::stdin();
-        let line = stdin
-            .lock()
-            .lines()
-            .next()
-            .expect("there was no next line")
-            .expect("the line could not be read");
+        let readline = rl.readline(PROMPT);
 
-        let line = line.trim();
-
-        match line.to_lowercase().as_str() {
-            ":help" => {
-                println!("Use :exit to exit.");
-            }
-            "" => {
-                if pending_src.is_empty() {
-                    print!("\n{}", INSTRUCTIONS);
-                } else if prev_line_blank {
-                    // After two blank lines in a row, give up and try parsing it
-                    // even though it's going to fail. This way you don't get stuck.
-                    match print_output(pending_src.as_str()) {
-                        Ok(output) => {
-                            println!("{}", output);
-                        }
-                        Err(fail) => {
-                            report_parse_error(fail);
-                        }
+        match readline {
+            Ok(line) => {
+                let line = line.trim();
+                match line.to_lowercase().as_str() {
+                    ":help" => {
+                        println!("Use :exit to exit.");
                     }
-
-                    pending_src.clear();
-                } else {
-                    pending_src.push('\n');
-
-                    prev_line_blank = true;
-                    continue; // Skip the part where we reset prev_line_blank to false
-                }
-            }
-            ":exit" => {
-                break;
-            }
-            _ => {
-                let result = if pending_src.is_empty() {
-                    print_output(line)
-                } else {
-                    pending_src.push('\n');
-                    pending_src.push_str(line);
-
-                    print_output(pending_src.as_str())
-                };
-
-                match result {
-                    Ok(output) => {
-                        println!("{}", output);
-                        pending_src.clear();
-                    }
-                    Err(Fail {
-                        reason: FailReason::Eof(_),
-                        ..
-                    }) => {
-                        // If we hit an eof, and we're allowed to keep going,
-                        // append the str to the src we're building up and continue.
-                        // (We only need to append it here if it was empty before;
-                        // otherwise, we already appended it before calling print_output.)
-
+                    "" => {
                         if pending_src.is_empty() {
-                            pending_src.push_str(line);
+                            print!("\n{}", INSTRUCTIONS);
+                        } else if prev_line_blank {
+                            // After two blank lines in a row, give up and try parsing it
+                            // even though it's going to fail. This way you don't get stuck.
+                            match print_output(pending_src.as_str()) {
+                                Ok(output) => {
+                                    println!("{}", output);
+                                }
+                                Err(fail) => {
+                                    report_parse_error(fail);
+                                }
+                            }
+
+                            pending_src.clear();
+                        } else {
+                            pending_src.push('\n');
+
+                            prev_line_blank = true;
+                            continue; // Skip the part where we reset prev_line_blank to false
                         }
                     }
-                    Err(fail) => {
-                        report_parse_error(fail);
-                        pending_src.clear();
+                    ":exit" => {
+                        break;
+                    }
+                    _ => {
+                        let result = if pending_src.is_empty() {
+                            print_output(line)
+                        } else {
+                            pending_src.push('\n');
+                            pending_src.push_str(line);
+
+                            print_output(pending_src.as_str())
+                        };
+
+                        match result {
+                            Ok(output) => {
+                                println!("{}", output);
+                                pending_src.clear();
+                            }
+                            Err(fail) => {
+                                report_parse_error(fail);
+                                pending_src.clear();
+                            }
+                        }
                     }
                 }
+            }
+            Err(ReadlineError::Eof) => {
+                // If we hit an eof, and we're allowed to keep going,
+                // append the str to the src we're building up and continue.
+                // (We only need to append it here if it was empty before;
+                // otherwise, we already appended it before calling print_output.)
+
+                if pending_src.is_empty() {
+                    pending_src.push_str("");
+                }
+            }
+            Err(rl_err) => {
+                println!("Unexpected repl error: {}", rl_err);
+                panic!();
             }
         }
 
@@ -141,6 +139,18 @@ pub fn main() -> io::Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Completer, Helper, Highlighter, Hinter)]
+struct InputValidator { pending_src: String }
+
+impl Validator for InputValidator {
+    fn validate(&self, _ctx: &mut ValidationContext) -> Result<ValidationResult, ReadlineError> {
+        if self.pending_src.is_empty() {
+            return Ok(ValidationResult::Incomplete);
+        }
+        Ok(ValidationResult::Valid(None))
+    }
 }
 
 fn report_parse_error(fail: Fail) {

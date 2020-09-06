@@ -58,6 +58,8 @@ bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1"
 tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded", "process", "io-driver"] }
 libc = "0.2"
+rustyline = "6.2.0"
+rustyline-derive = "0.3.1"
 
 # NOTE: rtfeldman/inkwell is a fork of TheDan64/inkwell which does not change anything.
 #
