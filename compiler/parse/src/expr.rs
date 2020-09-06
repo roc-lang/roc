@@ -1326,12 +1326,7 @@ fn unary_negate_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
 
                     // Continue parsing the function arg as normal.
                     let (loc_expr, state) = loc_function_arg(min_indent).parse(arena, state)?;
-                    let region = Region {
-                        start_col: loc_op.region.start_col,
-                        start_line: loc_op.region.start_line,
-                        end_col: loc_expr.region.end_col,
-                        end_line: loc_expr.region.end_line,
-                    };
+                    let region = Region::span_across(&loc_op.region, &loc_expr.region);
                     let value = Expr::UnaryOp(arena.alloc(loc_expr), loc_op);
                     let loc_expr = Located {
                         // Start from where the unary op started,

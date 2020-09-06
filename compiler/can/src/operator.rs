@@ -16,13 +16,7 @@ fn new_op_expr<'a>(
     op: Located<BinOp>,
     right: Located<Expr<'a>>,
 ) -> Located<Expr<'a>> {
-    let new_region = Region {
-        start_line: left.region.start_line,
-        start_col: left.region.start_col,
-
-        end_line: right.region.end_line,
-        end_col: right.region.end_col,
-    };
+    let new_region = Region::span_across(&left.region, &right.region);
     let new_expr = Expr::BinOp(arena.alloc((left, op, right)));
 
     Located {
