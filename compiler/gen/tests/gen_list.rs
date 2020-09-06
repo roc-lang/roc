@@ -115,6 +115,116 @@ mod gen_list {
     }
 
     #[test]
+    fn list_keep_if_empty_list_of_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                empty : List Int
+                empty =
+                    []
+
+                List.keepIf empty (\x -> True)
+                "#
+            ),
+            &[],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_keep_if_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                alwaysTrue : Int -> Bool
+                alwaysTrue = \_ -> 
+                    True
+                    
+
+                List.keepIf [] alwaysTrue
+                "#
+            ),
+            &[],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_keep_if_always_true_for_non_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                alwaysTrue : Int -> Bool
+                alwaysTrue = \i ->
+                    True
+                    
+                oneThroughEight : List Int
+                oneThroughEight =
+                    [1,2,3,4,5,6,7,8]
+                    
+                List.keepIf oneThroughEight alwaysTrue
+                "#
+            ),
+            &[1, 2, 3, 4, 5, 6, 7, 8],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_keep_if_always_false_for_non_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                alwaysFalse : Int -> Bool
+                alwaysFalse = \i ->
+                    False
+                    
+                List.keepIf [1,2,3,4,5,6,7,8] alwaysFalse
+                "#
+            ),
+            &[],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_keep_if_one() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                intIsLessThanThree : Int -> Bool
+                intIsLessThanThree = \i ->
+                    i < 3
+                    
+                List.keepIf [1,2,3,4,5,6,7,8] intIsLessThanThree 
+                "#
+            ),
+            &[1, 2],
+            &'static [i64]
+        );
+    }
+
+    //
+    // "panicked at 'not yet implemented: Handle equals for builtin layouts Str == Str'"
+    //
+    // #[test]
+    // fn list_keep_if_str_is_hello() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //             strIsHello : Str -> Bool
+    //             strIsHello = \str ->
+    //                 str == "Hello"
+    //
+    //             List.keepIf ["Hello", "Hello", "Goodbye"] strIsHello
+    //             "#
+    //         ),
+    //         &["Hello", "Hello"],
+    //         &'static [&'static str]
+    //     );
+    // }
+
+    #[test]
     fn list_map_on_empty_list_with_int_layout() {
         assert_evals_to!(
             indoc!(
