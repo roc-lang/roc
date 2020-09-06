@@ -1711,7 +1711,22 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
             debug_assert_eq!(args.len(), 3);
 
-            list_walk_right(env)
+            let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            let (default, default_layout) = load_symbol_and_layout(env, scope, &args[2]);
+
+            list_walk_right(
+                env,
+                parent,
+                list,
+                list_layout,
+                func,
+                func_layout,
+                default,
+                default_layout,
+            )
         }
         ListAppend => {
             // List.append : List elem, elem -> List elem

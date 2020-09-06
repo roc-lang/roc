@@ -960,7 +960,7 @@ fn list_walk_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
             (func_var, Var(Symbol::ARG_2)),
             (accum_var, Var(Symbol::ARG_3)),
         ],
-        ret_var: list_var,
+        ret_var: accum_var,
     };
 
     defn(
@@ -972,7 +972,7 @@ fn list_walk_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ],
         var_store,
         body,
-        list_var,
+        accum_var,
     )
 }
 

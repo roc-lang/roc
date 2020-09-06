@@ -2717,4 +2717,32 @@ mod solve_expr {
             "{ x : Int, y ? Bool }* -> { x : Int, y : Bool }",
         );
     }
+
+    #[test]
+    fn list_walk_right() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.walkRight 
+                "#
+            ),
+            "List a, (a, b -> b), b -> b",
+        );
+    }
+
+    #[test]
+    fn list_walk_right_example() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                empty : List Int
+                empty = 
+                    []
+
+                List.walkRight empty (\a, b -> a + b) 0
+                "#
+            ),
+            "Int",
+        );
+    }
 }

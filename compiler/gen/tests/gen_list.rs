@@ -119,7 +119,21 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                List.walkRight [] (\a, b -> b) 0
+                List.walkRight [0x1] (\a, b -> a + b) 0
+                "#
+            ),
+            1,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                empty : List Int
+                empty =
+                    []
+
+                List.walkRight empty (\a, b -> a + b) 0
                 "#
             ),
             0,
