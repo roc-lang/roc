@@ -580,22 +580,20 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             wrapped: Wrapped::SingleElementRecord,
             ..
         } => {
-            // debug_assert!(*index == 0);
-            // load_symbol(env, scope, structure)
-
             match load_symbol_and_layout(env, scope, structure) {
-                (StructValue(argument), Layout::Struct(fields)) if fields.len() > 1 => env
-                    .builder
-                    .build_extract_value(
-                        argument,
-                        *index as u32,
-                        env.arena.alloc(format!("struct_field_access_{}_", index)),
-                    )
-                    .unwrap(),
-                (other, _) => {
-                    // unreachable!("somehow this is not actually a record/struct? {:?}", other)
-                    other
+                (StructValue(argument), Layout::Struct(fields)) if fields.len() > 1 =>
+                // TODO so sometimes a value gets Wrapped::SingleElementRecord
+                // but still has multiple fields...
+                {
+                    env.builder
+                        .build_extract_value(
+                            argument,
+                            *index as u32,
+                            env.arena.alloc(format!("struct_field_access_{}_", index)),
+                        )
+                        .unwrap()
                 }
+                (other, _) => other,
             }
         }
 
@@ -615,10 +613,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         env.arena.alloc(format!("struct_field_access_{}_", index)),
                     )
                     .unwrap(),
-                (other, _) => {
-                    // unreachable!("somehow this is not actually a record/struct? {:?}", other)
-                    other
-                }
+                (other, _) => unreachable!("can only index into struct layout", other),
             }
         }
 
