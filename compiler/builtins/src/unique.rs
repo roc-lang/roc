@@ -783,11 +783,26 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // foldr : Attr (* | u) (List (Attr u a))
-    //       , Attr Shared (Attr u a -> b -> b)
-    //       , b
-    //      -> b
-    add_type(Symbol::LIST_FOLDR, {
+    // keepIf : Attr * (List a)
+    //        , Attr Shared (a -> Attr * Bool)
+    //       -> Attr * (List a)
+    add_type(Symbol::LIST_KEEP_IF, {
+        let_tvars! { a, star1, star2, star3 };
+
+        unique_function(
+            vec![
+                list_type(star1, a),
+                shared(SolvedType::Func(vec![flex(a)], Box::new(bool_type(star2)))),
+            ],
+            list_type(star3, a),
+        )
+    });
+
+    // walkRight : Attr (* | u) (List (Attr u a))
+    //           , Attr Shared (Attr u a -> b -> b)
+    //           , b
+    //          -> b
+    add_type(Symbol::LIST_WALK_RIGHT, {
         let_tvars! { u, a, b, star1 };
 
         unique_function(

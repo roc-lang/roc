@@ -1,10 +1,10 @@
 use crate::env::Env;
-use crate::expr::{canonicalize_expr, Expr, Output};
+use crate::expr::{canonicalize_expr, unescape_char, Expr, Output};
 use crate::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use crate::scope::Scope;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_parse::ast;
+use roc_parse::ast::{self, StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
 use roc_region::all::{Located, Region};
@@ -230,16 +230,8 @@ pub fn canonicalize_pattern<'a>(
             ptype => unsupported_pattern(env, ptype, region),
         },
 
-        StrLiteral(string) => match pattern_type {
-            WhenBranch => {
-                // TODO report whether string was malformed
-                Pattern::StrLiteral((*string).into())
-            }
-            ptype => unsupported_pattern(env, ptype, region),
-        },
-
-        BlockStrLiteral(_lines) => match pattern_type {
-            WhenBranch => todo!("TODO block string literal pattern"),
+        StrLiteral(literal) => match pattern_type {
+            WhenBranch => flatten_str_literal(literal),
             ptype => unsupported_pattern(env, ptype, region),
         },
 
@@ -472,4 +464,39 @@ fn add_bindings_from_patterns(
         | MalformedPattern(_, _)
         | UnsupportedPattern(_) => (),
     }
+}
+
+fn flatten_str_literal(literal: &StrLiteral<'_>) -> Pattern {
+    use ast::StrLiteral::*;
+
+    match literal {
+        PlainLine(str_slice) => Pattern::StrLiteral((*str_slice).into()),
+        Line(segments) => flatten_str_lines(&[segments]),
+        Block(lines) => flatten_str_lines(lines),
+    }
+}
+
+fn flatten_str_lines(lines: &[&[StrSegment<'_>]]) -> Pattern {
+    use StrSegment::*;
+
+    let mut buf = String::new();
+
+    for line in lines {
+        for segment in line.iter() {
+            match segment {
+                Plaintext(string) => {
+                    buf.push_str(string);
+                }
+                Unicode(loc_digits) => {
+                    todo!("parse unicode digits {:?}", loc_digits);
+                }
+                Interpolated(loc_expr) => {
+                    return Pattern::UnsupportedPattern(loc_expr.region);
+                }
+                EscapedChar(escaped) => buf.push(unescape_char(escaped)),
+            }
+        }
+    }
+
+    Pattern::StrLiteral(buf.into())
 }

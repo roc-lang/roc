@@ -1742,6 +1742,24 @@ mod test_mono {
                 d = f { x: Red }
 
                 a * b * c * d
+    #[test]
+    fn list_map() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                main = \{} ->
+                    nonEmpty : List Int
+                    nonEmpty =
+                        [ 1, 1, -4, 1, 2 ]
+    
+        
+                    greaterThanOne : Int -> Bool
+                    greaterThanOne = \i ->
+                         i > 0
+    
+                    List.map nonEmpty greaterThanOne
+                
+                main {}
                 "#
             ),
             indoc!(

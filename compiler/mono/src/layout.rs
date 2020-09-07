@@ -354,7 +354,7 @@ fn layout_from_flat_type<'a>(
                     // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
                     debug_assert_eq!(args.len(), 1);
 
-                    let var = args.get(0).unwrap();
+                    let var = args.first().unwrap();
                     let content = subs.get_without_compacting(*var).content;
 
                     layout_from_num_content(content)

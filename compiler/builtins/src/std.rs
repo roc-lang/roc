@@ -491,6 +491,31 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // walkRight : List elem, (elem -> accum -> accum), accum -> accum
+    add_type(
+        Symbol::LIST_WALK_RIGHT,
+        SolvedType::Func(
+            vec![
+                list_type(flex(TVAR1)),
+                SolvedType::Func(vec![flex(TVAR1), flex(TVAR2)], Box::new(flex(TVAR2))),
+                flex(TVAR2),
+            ],
+            Box::new(flex(TVAR2)),
+        ),
+    );
+
+    // keepIf : List elem, (elem -> Bool) -> List elem
+    add_type(
+        Symbol::LIST_KEEP_IF,
+        SolvedType::Func(
+            vec![
+                list_type(flex(TVAR1)),
+                SolvedType::Func(vec![flex(TVAR1)], Box::new(bool_type())),
+            ],
+            Box::new(list_type(flex(TVAR1))),
+        ),
+    );
+
     // map : List before, (before -> after) -> List after
     add_type(
         Symbol::LIST_MAP,
@@ -500,19 +525,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 SolvedType::Func(vec![flex(TVAR1)], Box::new(flex(TVAR2))),
             ],
             Box::new(list_type(flex(TVAR2))),
-        ),
-    );
-
-    // foldr : List a, (a -> b -> b), b -> b
-    add_type(
-        Symbol::LIST_FOLDR,
-        SolvedType::Func(
-            vec![
-                list_type(flex(TVAR1)),
-                SolvedType::Func(vec![flex(TVAR1), flex(TVAR2)], Box::new(flex(TVAR2))),
-                flex(TVAR2),
-            ],
-            Box::new(flex(TVAR2)),
         ),
     );
 

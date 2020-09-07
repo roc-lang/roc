@@ -1,11 +1,10 @@
-use crate::llvm::build::{load_symbol, load_symbol_and_layout, Env, InPlace, Scope};
+use crate::llvm::build::{Env, InPlace};
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type, ptr_int};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::types::{BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
-use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, MemoryMode};
 
 /// List.single : a -> List a
@@ -35,35 +34,7 @@ pub fn list_single<'a, 'ctx, 'env>(
 
     builder.build_store(elem_ptr, elem);
 
-    let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
-    let struct_type = collection(ctx, ptr_bytes);
-    let len = BasicValueEnum::IntValue(env.ptr_int().const_int(1, false));
-
-    let mut struct_val;
-
-    // Store the pointer
-    struct_val = builder
-        .build_insert_value(
-            struct_type.get_undef(),
-            ptr_as_int,
-            Builtin::WRAPPER_PTR,
-            "insert_ptr",
-        )
-        .unwrap();
-
-    // Store the length
-    struct_val = builder
-        .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
-        .unwrap();
-
-    //
-    builder.build_bitcast(
-        struct_val.into_struct_value(),
-        collection(ctx, ptr_bytes),
-        "cast_collection",
-    )
+    store_list(env, ptr, env.ptr_int().const_int(1, false))
 }
 
 /// List.repeat : Int, elem -> List elem
@@ -138,33 +109,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
         builder.build_conditional_branch(end_cond, loop_bb, after_bb);
         builder.position_at_end(after_bb);
 
-        let ptr_bytes = env.ptr_bytes;
-        let int_type = ptr_int(ctx, ptr_bytes);
-        let ptr_as_int = builder.build_ptr_to_int(list_ptr, int_type, "list_cast_ptr");
-        let struct_type = collection(ctx, ptr_bytes);
-
-        let mut struct_val;
-
-        // Store the pointer
-        struct_val = builder
-            .build_insert_value(
-                struct_type.get_undef(),
-                ptr_as_int,
-                Builtin::WRAPPER_PTR,
-                "insert_ptr",
-            )
-            .unwrap();
-
-        // Store the length
-        struct_val = builder
-            .build_insert_value(struct_val, list_len, Builtin::WRAPPER_LEN, "insert_len")
-            .unwrap();
-
-        builder.build_bitcast(
-            struct_val.into_struct_value(),
-            collection(ctx, ptr_bytes),
-            "cast_collection",
-        )
+        store_list(env, list_ptr, list_len)
     };
 
     let build_else = || empty_polymorphic_list(env);
@@ -204,12 +149,8 @@ pub fn list_prepend<'a, 'ctx, 'env>(
         "new_list_length",
     );
 
-    let ptr_bytes = env.ptr_bytes;
-
     // Allocate space for the new array that we'll copy into.
     let clone_ptr = allocate_list(env, elem_layout, new_list_len);
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
 
     builder.build_store(clone_ptr, elem);
 
@@ -232,6 +173,8 @@ pub fn list_prepend<'a, 'ctx, 'env>(
         .builder
         .build_int_mul(elem_bytes, len, "mul_old_len_by_elem_bytes");
 
+    let ptr_bytes = env.ptr_bytes;
+
     if elem_layout.safe_to_memcpy() {
         // Copy the bytes from the original array into the new
         // one we just malloc'd.
@@ -242,37 +185,14 @@ pub fn list_prepend<'a, 'ctx, 'env>(
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
 
-    // Create a fresh wrapper struct for the newly populated array
-    let struct_type = collection(ctx, env.ptr_bytes);
-    let mut struct_val;
-
-    // Store the pointer
-    struct_val = builder
-        .build_insert_value(
-            struct_type.get_undef(),
-            ptr_as_int,
-            Builtin::WRAPPER_PTR,
-            "insert_ptr",
-        )
-        .unwrap();
-
-    // Store the length
-    struct_val = builder
-        .build_insert_value(struct_val, new_list_len, Builtin::WRAPPER_LEN, "insert_len")
-        .unwrap();
-
-    builder.build_bitcast(
-        struct_val.into_struct_value(),
-        collection(ctx, ptr_bytes),
-        "cast_collection",
-    )
+    store_list(env, clone_ptr, new_list_len)
 }
 
 /// List.join : List (List elem) -> List elem
 pub fn list_join<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
-    outer_list_wrapper: StructValue<'ctx>,
+    outer_list: BasicValueEnum<'ctx>,
     outer_list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     // List.join is implemented as follows:
@@ -300,6 +220,7 @@ pub fn list_join<'a, 'ctx, 'env>(
             let inner_list_type =
                 basic_type_from_layout(env.arena, ctx, &inner_list_layout, env.ptr_bytes);
 
+            let outer_list_wrapper = outer_list.into_struct_value();
             let outer_list_len = list_len(builder, outer_list_wrapper);
             let outer_list_ptr = {
                 let elem_ptr_type = get_ptr_type(&inner_list_type, AddressSpace::Generic);
@@ -319,12 +240,7 @@ pub fn list_join<'a, 'ctx, 'env>(
                 builder.build_store(list_len_sum_alloca, ctx.i64_type().const_int(0, false));
 
                 // List Sum Loop
-                let sum_loop = |sum_index| {
-                    let inner_list_wrapper_ptr = unsafe {
-                        builder.build_in_bounds_gep(outer_list_ptr, &[sum_index], "load_index")
-                    };
-
-                    let inner_list = builder.build_load(inner_list_wrapper_ptr, "inner_list");
+                let sum_loop = |_, inner_list: BasicValueEnum<'ctx>| {
                     let inner_list_len = list_len(builder, inner_list.into_struct_value());
 
                     let next_list_sum = builder.build_int_add(
@@ -338,11 +254,14 @@ pub fn list_join<'a, 'ctx, 'env>(
                     builder.build_store(list_len_sum_alloca, next_list_sum);
                 };
 
-                incrementing_index_loop(
+                incrementing_elem_loop(
                     builder,
                     parent,
                     ctx,
-                    outer_list_len,
+                    LoopListArg {
+                        ptr: outer_list_ptr,
+                        len: outer_list_len,
+                    },
                     "#sum_index",
                     None,
                     sum_loop,
@@ -359,21 +278,14 @@ pub fn list_join<'a, 'ctx, 'env>(
                 builder.build_store(dest_elem_ptr_alloca, final_list_ptr);
 
                 // Inner List Loop
-                let inner_list_loop = |index| {
-                    let inner_list_wrapper = {
-                        let wrapper_ptr = unsafe {
-                            builder.build_in_bounds_gep(outer_list_ptr, &[index], "load_index")
-                        };
-
-                        builder
-                            .build_load(wrapper_ptr, "inner_list_wrapper")
-                            .into_struct_value()
-                    };
+                let inner_list_loop = |_, inner_list: BasicValueEnum<'ctx>| {
+                    let inner_list_wrapper = inner_list.into_struct_value();
 
                     let inner_list_len = list_len(builder, inner_list_wrapper);
 
                     // inner_list_len > 0
                     let inner_list_comparison = list_is_not_empty(builder, ctx, inner_list_len);
+
                     let inner_list_non_empty_block =
                         ctx.append_basic_block(parent, "inner_list_non_empty");
                     let after_inner_list_non_empty_block =
@@ -386,20 +298,10 @@ pub fn list_join<'a, 'ctx, 'env>(
                     );
                     builder.position_at_end(inner_list_non_empty_block);
 
+                    let inner_list_ptr = load_list_ptr(builder, inner_list_wrapper, elem_ptr_type);
+
                     // Element Inserting Loop
-                    let inner_elem_loop = |inner_index| {
-                        let src_elem_ptr = unsafe {
-                            let inner_list_ptr =
-                                load_list_ptr(builder, inner_list_wrapper, elem_ptr_type);
-
-                            builder.build_in_bounds_gep(
-                                inner_list_ptr,
-                                &[inner_index],
-                                "load_index",
-                            )
-                        };
-
-                        let src_elem = builder.build_load(src_elem_ptr, "get_elem");
+                    let inner_elem_loop = |_, src_elem| {
                         // TODO clone src_elem
 
                         let curr_dest_elem_ptr = builder
@@ -419,11 +321,14 @@ pub fn list_join<'a, 'ctx, 'env>(
                         builder.build_store(dest_elem_ptr_alloca, inc_dest_elem_ptr);
                     };
 
-                    incrementing_index_loop(
+                    incrementing_elem_loop(
                         builder,
                         parent,
                         ctx,
-                        inner_list_len,
+                        LoopListArg {
+                            ptr: inner_list_ptr,
+                            len: inner_list_len,
+                        },
                         "#inner_index",
                         None,
                         inner_elem_loop,
@@ -433,49 +338,20 @@ pub fn list_join<'a, 'ctx, 'env>(
                     builder.position_at_end(after_inner_list_non_empty_block);
                 };
 
-                incrementing_index_loop(
+                incrementing_elem_loop(
                     builder,
                     parent,
                     ctx,
-                    outer_list_len,
+                    LoopListArg {
+                        ptr: outer_list_ptr,
+                        len: outer_list_len,
+                    },
                     "#inner_list_index",
                     None,
                     inner_list_loop,
                 );
 
-                let ptr_bytes = env.ptr_bytes;
-                let int_type = ptr_int(ctx, ptr_bytes);
-                let ptr_as_int =
-                    builder.build_ptr_to_int(final_list_ptr, int_type, "list_cast_ptr");
-                let struct_type = collection(ctx, ptr_bytes);
-
-                let mut struct_val;
-
-                // Store the pointer
-                struct_val = builder
-                    .build_insert_value(
-                        struct_type.get_undef(),
-                        ptr_as_int,
-                        Builtin::WRAPPER_PTR,
-                        "insert_ptr",
-                    )
-                    .unwrap();
-
-                // Store the length
-                struct_val = builder
-                    .build_insert_value(
-                        struct_val,
-                        final_list_sum,
-                        Builtin::WRAPPER_LEN,
-                        "insert_len",
-                    )
-                    .unwrap();
-
-                builder.build_bitcast(
-                    struct_val.into_struct_value(),
-                    collection(ctx, ptr_bytes),
-                    "cast_collection",
-                )
+                store_list(env, final_list_ptr, final_list_sum)
             };
 
             let build_else = || empty_list(env);
@@ -502,154 +378,89 @@ pub fn list_join<'a, 'ctx, 'env>(
 pub fn list_reverse<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
-    scope: &Scope<'a, 'ctx>,
-    list: &Symbol,
+    list: BasicValueEnum<'ctx>,
+    list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let (_, list_layout) = load_symbol_and_layout(env, scope, list);
-
-    match list_layout {
-        Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-
-        Layout::Builtin(Builtin::List(_, elem_layout)) => {
-            let wrapper_struct = load_symbol(env, scope, list).into_struct_value();
-
+    let non_empty_fn =
+        |elem_layout: &Layout<'a>, len: IntValue<'ctx>, wrapper_struct: StructValue<'ctx>| {
             let builder = env.builder;
             let ctx = env.context;
 
-            let len = list_len(builder, wrapper_struct);
+            // Allocate space for the new array that we'll copy into.
+            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
 
-            // list_len > 0
-            // We do this check to avoid allocating memory. If the input
-            // list is empty, then we can just return an empty list.
-            let comparison = builder.build_int_compare(
-                IntPredicate::UGT,
-                len,
-                ctx.i64_type().const_int(0, false),
-                "greaterthanzero",
-            );
+            let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-            let build_then = || {
-                // Allocate space for the new array that we'll copy into.
-                let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+            let reversed_list_ptr = allocate_list(env, elem_layout, len);
 
-                let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+            // TODO check if malloc returned null; if so, runtime error for OOM!
 
-                let reversed_list_ptr = allocate_list(env, elem_layout, len);
+            let index_name = "#index";
+            let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
 
-                // TODO check if malloc returned null; if so, runtime error for OOM!
+            // Start at the last element in the list.
+            let last_elem_index =
+                builder.build_int_sub(len, ctx.i64_type().const_int(1, false), "lastelemindex");
+            builder.build_store(start_alloca, last_elem_index);
 
-                let index_name = "#index";
-                let start_alloca = builder.build_alloca(ctx.i64_type(), index_name);
+            let loop_bb = ctx.append_basic_block(parent, "loop");
+            builder.build_unconditional_branch(loop_bb);
+            builder.position_at_end(loop_bb);
 
-                // Start at the last element in the list.
-                let last_elem_index =
-                    builder.build_int_sub(len, ctx.i64_type().const_int(1, false), "lastelemindex");
-                builder.build_store(start_alloca, last_elem_index);
+            // #index = #index - 1
+            let curr_index = builder
+                .build_load(start_alloca, index_name)
+                .into_int_value();
+            let next_index =
+                builder.build_int_sub(curr_index, ctx.i64_type().const_int(1, false), "nextindex");
 
-                let loop_bb = ctx.append_basic_block(parent, "loop");
-                builder.build_unconditional_branch(loop_bb);
-                builder.position_at_end(loop_bb);
+            builder.build_store(start_alloca, next_index);
 
-                // #index = #index - 1
-                let curr_index = builder
-                    .build_load(start_alloca, index_name)
-                    .into_int_value();
-                let next_index = builder.build_int_sub(
-                    curr_index,
-                    ctx.i64_type().const_int(1, false),
-                    "nextindex",
-                );
+            let list_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
 
-                builder.build_store(start_alloca, next_index);
+            // The pointer to the element in the input list
+            let elem_ptr =
+                unsafe { builder.build_in_bounds_gep(list_ptr, &[curr_index], "load_index") };
 
-                let list_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
-
-                // The pointer to the element in the input list
-                let elem_ptr =
-                    unsafe { builder.build_in_bounds_gep(list_ptr, &[curr_index], "load_index") };
-
-                // The pointer to the element in the reversed list
-                let reverse_elem_ptr = unsafe {
-                    builder.build_in_bounds_gep(
-                        reversed_list_ptr,
-                        &[builder.build_int_sub(
-                            len,
-                            builder.build_int_add(
-                                curr_index,
-                                ctx.i64_type().const_int(1, false),
-                                "curr_index_plus_one",
-                            ),
-                            "next_index",
-                        )],
-                        "load_index_reversed_list",
-                    )
-                };
-
-                let elem = builder.build_load(elem_ptr, "get_elem");
-
-                // Mutate the new array in-place to change the element.
-                builder.build_store(reverse_elem_ptr, elem);
-
-                // #index != 0
-                let end_cond = builder.build_int_compare(
-                    IntPredicate::NE,
-                    ctx.i64_type().const_int(0, false),
-                    curr_index,
-                    "loopcond",
-                );
-
-                let after_bb = ctx.append_basic_block(parent, "afterloop");
-
-                builder.build_conditional_branch(end_cond, loop_bb, after_bb);
-                builder.position_at_end(after_bb);
-
-                let ptr_bytes = env.ptr_bytes;
-                let int_type = ptr_int(ctx, ptr_bytes);
-                let ptr_as_int =
-                    builder.build_ptr_to_int(reversed_list_ptr, int_type, "list_cast_ptr");
-                let struct_type = collection(ctx, ptr_bytes);
-
-                let mut struct_val;
-
-                // Store the pointer
-                struct_val = builder
-                    .build_insert_value(
-                        struct_type.get_undef(),
-                        ptr_as_int,
-                        Builtin::WRAPPER_PTR,
-                        "insert_ptr",
-                    )
-                    .unwrap();
-
-                // Store the length
-                struct_val = builder
-                    .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
-                    .unwrap();
-
-                builder.build_bitcast(
-                    struct_val.into_struct_value(),
-                    collection(ctx, ptr_bytes),
-                    "cast_collection",
+            // The pointer to the element in the reversed list
+            let reverse_elem_ptr = unsafe {
+                builder.build_in_bounds_gep(
+                    reversed_list_ptr,
+                    &[builder.build_int_sub(
+                        len,
+                        builder.build_int_add(
+                            curr_index,
+                            ctx.i64_type().const_int(1, false),
+                            "curr_index_plus_one",
+                        ),
+                        "next_index",
+                    )],
+                    "load_index_reversed_list",
                 )
             };
 
-            let build_else = || empty_list(env);
+            let elem = builder.build_load(elem_ptr, "get_elem");
 
-            let struct_type = collection(ctx, env.ptr_bytes);
+            // Mutate the new array in-place to change the element.
+            builder.build_store(reverse_elem_ptr, elem);
 
-            build_basic_phi2(
-                env,
-                parent,
-                comparison,
-                build_then,
-                build_else,
-                BasicTypeEnum::StructType(struct_type),
-            )
-        }
-        _ => {
-            unreachable!("Invalid List layout for List.reverse {:?}", list_layout);
-        }
-    }
+            // #index != 0
+            let end_cond = builder.build_int_compare(
+                IntPredicate::NE,
+                ctx.i64_type().const_int(0, false),
+                curr_index,
+                "loopcond",
+            );
+
+            let after_bb = ctx.append_basic_block(parent, "afterloop");
+
+            builder.build_conditional_branch(end_cond, loop_bb, after_bb);
+            builder.position_at_end(after_bb);
+
+            store_list(env, reversed_list_ptr, len)
+        };
+
+    if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout, "List.reverse")
 }
 
 pub fn list_get_unsafe<'a, 'ctx, 'env>(
@@ -684,7 +495,7 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
     }
 }
 
-/// List.push List elem, elem -> List elem
+/// List.append : List elem, elem -> List elem
 pub fn list_append<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     original_wrapper: StructValue<'ctx>,
@@ -723,8 +534,6 @@ pub fn list_append<'a, 'ctx, 'env>(
 
     // Allocate space for the new array that we'll copy into.
     let clone_ptr = allocate_list(env, elem_layout, new_list_len);
-    let int_type = ptr_int(ctx, ptr_bytes);
-    let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
 
     // TODO check if malloc returned null; if so, runtime error for OOM!
 
@@ -738,34 +547,11 @@ pub fn list_append<'a, 'ctx, 'env>(
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
 
-    // Create a fresh wrapper struct for the newly populated array
-    let struct_type = collection(ctx, env.ptr_bytes);
-    let mut struct_val;
-
-    // Store the pointer
-    struct_val = builder
-        .build_insert_value(
-            struct_type.get_undef(),
-            ptr_as_int,
-            Builtin::WRAPPER_PTR,
-            "insert_ptr",
-        )
-        .unwrap();
-
-    // Store the length
-    struct_val = builder
-        .build_insert_value(struct_val, new_list_len, Builtin::WRAPPER_LEN, "insert_len")
-        .unwrap();
-
     let elem_ptr = unsafe { builder.build_in_bounds_gep(clone_ptr, &[list_len], "load_index") };
 
     builder.build_store(elem_ptr, elem);
 
-    builder.build_bitcast(
-        struct_val.into_struct_value(),
-        collection(ctx, ptr_bytes),
-        "cast_collection",
-    )
+    store_list(env, clone_ptr, new_list_len)
 }
 
 /// List.set : List elem, Int, elem -> List elem
@@ -853,6 +639,348 @@ pub fn list_len<'ctx>(
         .build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "list_len")
         .unwrap()
         .into_int_value()
+}
+
+/// List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
+#[allow(clippy::too_many_arguments)]
+pub fn list_walk_right<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    list: BasicValueEnum<'ctx>,
+    list_layout: &Layout<'a>,
+    func: BasicValueEnum<'ctx>,
+    func_layout: &Layout<'a>,
+    default: BasicValueEnum<'ctx>,
+    default_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+    let builder = env.builder;
+
+    let list_wrapper = list.into_struct_value();
+    let len = list_len(env.builder, list_wrapper);
+
+    let accum_type = basic_type_from_layout(env.arena, ctx, default_layout, env.ptr_bytes);
+    let accum_alloca = builder.build_alloca(accum_type, "alloca_walk_right_accum");
+    builder.build_store(accum_alloca, default);
+
+    let then_block = ctx.append_basic_block(parent, "then");
+    let cont_block = ctx.append_basic_block(parent, "branchcont");
+
+    let condition = builder.build_int_compare(
+        IntPredicate::UGT,
+        len,
+        ctx.i64_type().const_zero(),
+        "list_non_empty",
+    );
+
+    builder.build_conditional_branch(condition, then_block, cont_block);
+
+    builder.position_at_end(then_block);
+
+    match (func, func_layout) {
+        (BasicValueEnum::PointerValue(func_ptr), Layout::FunctionPointer(_, _)) => {
+            let elem_layout = match list_layout {
+                Layout::Builtin(Builtin::List(_, layout)) => layout,
+                _ => unreachable!("can only fold over a list"),
+            };
+
+            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+            let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+            let list_ptr = load_list_ptr(builder, list_wrapper, elem_ptr_type);
+
+            let walk_right_loop = |_, elem: BasicValueEnum<'ctx>| {
+                // load current accumulator
+                let current = builder.build_load(accum_alloca, "retrieve_accum");
+
+                let call_site_value =
+                    builder.build_call(func_ptr, &[elem, current], "#walk_right_func");
+
+                // set the calling convention explicitly for this call
+                call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
+
+                let new_current = call_site_value
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
+                    .into_int_value();
+
+                builder.build_store(accum_alloca, new_current);
+            };
+
+            incrementing_elem_loop(
+                builder,
+                parent,
+                ctx,
+                LoopListArg { ptr: list_ptr, len },
+                "#index",
+                None,
+                walk_right_loop,
+            );
+        }
+
+        _ => {
+            unreachable!(
+                "Invalid function basic value enum or layout for List.keepIf : {:?}",
+                (func, func_layout)
+            );
+        }
+    }
+
+    builder.build_unconditional_branch(cont_block);
+
+    builder.position_at_end(cont_block);
+
+    builder.build_load(accum_alloca, "load_final_acum")
+}
+
+/// List.keepIf : List elem, (elem -> Bool) -> List elem
+pub fn list_keep_if<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    func: BasicValueEnum<'ctx>,
+    func_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    list_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    match (func, func_layout) {
+        (
+            BasicValueEnum::PointerValue(func_ptr),
+            Layout::FunctionPointer(_, Layout::Builtin(Builtin::Int1)),
+        ) => {
+            let non_empty_fn = |elem_layout: &Layout<'a>,
+                                len: IntValue<'ctx>,
+                                list_wrapper: StructValue<'ctx>| {
+                let ctx = env.context;
+                let builder = env.builder;
+
+                let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+                let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                let list_ptr = load_list_ptr(builder, list_wrapper, elem_ptr_type);
+
+                let ret_list_len_name = "#ret_list_alloca";
+                let ret_list_len_alloca = builder.build_alloca(ctx.i64_type(), ret_list_len_name);
+                builder.build_store(
+                    ret_list_len_alloca,
+                    ctx.i64_type().const_int(0 as u64, false),
+                );
+
+                // Return List Length Loop
+                // This loop goes through the list and counts how many
+                // elements pass the filter function `elem -> Bool`
+                let ret_list_len_loop = |_, elem: BasicValueEnum<'ctx>| {
+                    let call_site_value = builder.build_call(
+                        func_ptr,
+                        env.arena.alloc([elem]),
+                        "#keep_if_count_func",
+                    );
+
+                    // set the calling convention explicitly for this call
+                    call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
+
+                    let should_keep = call_site_value
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
+                        .into_int_value();
+
+                    let loop_bb = ctx.append_basic_block(parent, "loop");
+                    let after_bb = ctx.append_basic_block(parent, "after_loop");
+
+                    builder.build_conditional_branch(should_keep, loop_bb, after_bb);
+                    builder.position_at_end(loop_bb);
+
+                    // If the `elem` passes the `elem -> Bool` function
+                    // then increment the return list length variable by 1
+                    let next_ret_list_len = builder.build_int_add(
+                        builder
+                            .build_load(ret_list_len_alloca, ret_list_len_name)
+                            .into_int_value(),
+                        ctx.i64_type().const_int(1, false),
+                        "next_ret_list_len",
+                    );
+
+                    // ..and store that incremented length in memory
+                    builder.build_store(ret_list_len_alloca, next_ret_list_len);
+
+                    builder.build_unconditional_branch(after_bb);
+                    builder.position_at_end(after_bb);
+                };
+
+                let index_alloca = incrementing_elem_loop(
+                    builder,
+                    parent,
+                    ctx,
+                    LoopListArg { ptr: list_ptr, len },
+                    "#index",
+                    None,
+                    ret_list_len_loop,
+                );
+
+                // Reset the index variable to 0.
+                builder.build_store(index_alloca, ctx.i64_type().const_int(0 as u64, false));
+
+                let final_ret_list_len = builder
+                    .build_load(ret_list_len_alloca, ret_list_len_name)
+                    .into_int_value();
+
+                // Make a new list, with a length equal to the number
+                // of `elem` that passed the `elem -> Bool` function.
+                let ret_list_ptr = allocate_list(env, elem_layout, final_ret_list_len);
+
+                // Make a pointer into the return list. This pointer is used
+                // below to store elements into return list.
+                let dest_elem_ptr_alloca = builder.build_alloca(elem_ptr_type, "dest_elem");
+                // Store this new return list element pointer in memory as the
+                // pointer to the return list as a whole (`ret_list_ptr`). This
+                // is kind of a trick to point to the first elem in the list,
+                // because the pointer to the list is also the pointer to the first
+                // element.
+                builder.build_store(dest_elem_ptr_alloca, ret_list_ptr);
+
+                // Return List Loop
+                // This loop goes through the list and adds each
+                // `elem` only if it passes the `elem -> Bool` function
+                let ret_list_loop = |_, elem| {
+                    let call_site_value = builder.build_call(
+                        func_ptr,
+                        env.arena.alloc([elem]),
+                        "#keep_if_insert_func",
+                    );
+
+                    // set the calling convention explicitly for this call
+                    call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
+
+                    let should_keep = call_site_value
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
+                        .into_int_value();
+
+                    let loop_bb = ctx.append_basic_block(parent, "loop");
+                    let after_bb = ctx.append_basic_block(parent, "after_loop");
+
+                    builder.build_conditional_branch(should_keep, loop_bb, after_bb);
+                    builder.position_at_end(loop_bb);
+
+                    // If the `elem` passes the `elem -> Bool` function
+                    // then load the destination pointer..
+                    let dest_elem_ptr = builder
+                        .build_load(dest_elem_ptr_alloca, "load_dest_elem_ptr")
+                        .into_pointer_value();
+
+                    // .. save the element into the return list at the
+                    // destination pointer ..
+                    builder.build_store(dest_elem_ptr, elem);
+
+                    // .. and then increment the destination pointer by one ..
+                    let inc_dest_elem_ptr = BasicValueEnum::PointerValue(unsafe {
+                        builder.build_in_bounds_gep(
+                            dest_elem_ptr,
+                            &[env.ptr_int().const_int(1 as u64, false)],
+                            "increment_dest_elem",
+                        )
+                    });
+
+                    // .. and then finally, save the incremented value in memory.
+                    builder.build_store(dest_elem_ptr_alloca, inc_dest_elem_ptr);
+
+                    builder.build_unconditional_branch(after_bb);
+                    builder.position_at_end(after_bb);
+                };
+
+                incrementing_elem_loop(
+                    builder,
+                    parent,
+                    ctx,
+                    LoopListArg { ptr: list_ptr, len },
+                    "#index",
+                    Some(index_alloca),
+                    ret_list_loop,
+                );
+
+                store_list(env, ret_list_ptr, final_ret_list_len)
+            };
+
+            if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout, "List.keepIf")
+        }
+        _ => {
+            unreachable!(
+                "Invalid function basic value enum or layout for List.keepIf : {:?}",
+                (func, func_layout)
+            );
+        }
+    }
+}
+
+/// List.map : List before, (before -> after) -> List after
+pub fn list_map<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    func: BasicValueEnum<'ctx>,
+    func_layout: &Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    list_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    match (func, func_layout) {
+        (BasicValueEnum::PointerValue(func_ptr), Layout::FunctionPointer(_, ret_elem_layout)) => {
+            let non_empty_fn = |elem_layout: &Layout<'a>,
+                                len: IntValue<'ctx>,
+                                list_wrapper: StructValue<'ctx>| {
+                let ctx = env.context;
+                let builder = env.builder;
+
+                let ret_list_ptr = allocate_list(env, ret_elem_layout, len);
+
+                let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+                let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+
+                let list_ptr = load_list_ptr(builder, list_wrapper, ptr_type);
+
+                let list_loop = |index, before_elem| {
+                    let call_site_value =
+                        builder.build_call(func_ptr, env.arena.alloc([before_elem]), "map_func");
+
+                    // set the calling convention explicitly for this call
+                    call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
+
+                    let after_elem = call_site_value
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
+
+                    // The pointer to the element in the mapped-over list
+                    let after_elem_ptr = unsafe {
+                        builder.build_in_bounds_gep(ret_list_ptr, &[index], "load_index_after_list")
+                    };
+
+                    // Mutate the new array in-place to change the element.
+                    builder.build_store(after_elem_ptr, after_elem);
+                };
+
+                incrementing_elem_loop(
+                    builder,
+                    parent,
+                    ctx,
+                    LoopListArg { ptr: list_ptr, len },
+                    "#index",
+                    None,
+                    list_loop,
+                );
+
+                store_list(env, ret_list_ptr, len)
+            };
+
+            if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout, "List.map")
+        }
+        _ => {
+            unreachable!(
+                "Invalid function basic value enum or layout for List.map : {:?}",
+                (func, func_layout)
+            );
+        }
+    }
 }
 
 /// List.concat : List elem, List elem -> List elem
@@ -946,19 +1074,10 @@ pub fn list_concat<'a, 'ctx, 'env>(
 
                     let combined_list_ptr = allocate_list(env, elem_layout, combined_list_len);
 
+                    let first_list_ptr = load_list_ptr(builder, first_list_wrapper, ptr_type);
+
                     // FIRST LOOP
-                    let first_loop = |first_index| {
-                        let first_list_ptr = load_list_ptr(builder, first_list_wrapper, ptr_type);
-
-                        // The pointer to the element in the first list
-                        let first_list_elem_ptr = unsafe {
-                            builder.build_in_bounds_gep(
-                                first_list_ptr,
-                                &[first_index],
-                                "load_index",
-                            )
-                        };
-
+                    let first_loop = |first_index, first_list_elem| {
                         // The pointer to the element in the combined list
                         let combined_list_elem_ptr = unsafe {
                             builder.build_in_bounds_gep(
@@ -968,19 +1087,20 @@ pub fn list_concat<'a, 'ctx, 'env>(
                             )
                         };
 
-                        let first_list_elem = builder.build_load(first_list_elem_ptr, "get_elem");
-
                         // Mutate the new array in-place to change the element.
                         builder.build_store(combined_list_elem_ptr, first_list_elem);
                     };
 
                     let index_name = "#index";
 
-                    let index_alloca = incrementing_index_loop(
+                    let index_alloca = incrementing_elem_loop(
                         builder,
                         parent,
                         ctx,
-                        first_list_len,
+                        LoopListArg {
+                            ptr: first_list_ptr,
+                            len: first_list_len,
+                        },
                         index_name,
                         None,
                         first_loop,
@@ -989,19 +1109,10 @@ pub fn list_concat<'a, 'ctx, 'env>(
                     // Reset the index variable to 0
                     builder.build_store(index_alloca, ctx.i64_type().const_int(0, false));
 
+                    let second_list_ptr = load_list_ptr(builder, second_list_wrapper, ptr_type);
+
                     // SECOND LOOP
-                    let second_loop = |second_index| {
-                        let second_list_ptr = load_list_ptr(builder, second_list_wrapper, ptr_type);
-
-                        // The pointer to the element in the second list
-                        let second_list_elem_ptr = unsafe {
-                            builder.build_in_bounds_gep(
-                                second_list_ptr,
-                                &[second_index],
-                                "load_index",
-                            )
-                        };
-
+                    let second_loop = |second_index, second_list_elem| {
                         // The pointer to the element in the combined list.
                         // Note that the pointer does not start at the index
                         // 0, it starts at the index of first_list_len. In that
@@ -1024,56 +1135,24 @@ pub fn list_concat<'a, 'ctx, 'env>(
                             )
                         };
 
-                        let second_list_elem = builder.build_load(second_list_elem_ptr, "get_elem");
-
                         // Mutate the new array in-place to change the element.
                         builder.build_store(combined_list_elem_ptr, second_list_elem);
                     };
 
-                    incrementing_index_loop(
+                    incrementing_elem_loop(
                         builder,
                         parent,
                         ctx,
-                        second_list_len,
+                        LoopListArg {
+                            ptr: second_list_ptr,
+                            len: second_list_len,
+                        },
                         index_name,
                         Some(index_alloca),
                         second_loop,
                     );
 
-                    let ptr_bytes = env.ptr_bytes;
-                    let int_type = ptr_int(ctx, ptr_bytes);
-                    let ptr_as_int =
-                        builder.build_ptr_to_int(combined_list_ptr, int_type, "list_cast_ptr");
-
-                    let struct_type = collection(ctx, ptr_bytes);
-
-                    let mut struct_val;
-
-                    // Store the pointer
-                    struct_val = builder
-                        .build_insert_value(
-                            struct_type.get_undef(),
-                            ptr_as_int,
-                            Builtin::WRAPPER_PTR,
-                            "insert_ptr",
-                        )
-                        .unwrap();
-
-                    // Store the length
-                    struct_val = builder
-                        .build_insert_value(
-                            struct_val,
-                            combined_list_len,
-                            Builtin::WRAPPER_LEN,
-                            "insert_len",
-                        )
-                        .unwrap();
-
-                    builder.build_bitcast(
-                        struct_val.into_struct_value(),
-                        collection(ctx, ptr_bytes),
-                        "cast_collection",
-                    )
+                    store_list(env, combined_list_ptr, combined_list_len)
                 };
 
                 build_basic_phi2(
@@ -1104,9 +1183,44 @@ pub fn list_concat<'a, 'ctx, 'env>(
     }
 }
 
+pub struct LoopListArg<'ctx> {
+    pub ptr: PointerValue<'ctx>,
+    pub len: IntValue<'ctx>,
+}
+
+pub fn incrementing_elem_loop<'ctx, LoopFn>(
+    builder: &Builder<'ctx>,
+    parent: FunctionValue<'ctx>,
+    ctx: &'ctx Context,
+    list: LoopListArg<'ctx>,
+    index_name: &str,
+    maybe_alloca: Option<PointerValue<'ctx>>,
+    mut loop_fn: LoopFn,
+) -> PointerValue<'ctx>
+where
+    LoopFn: FnMut(IntValue<'ctx>, BasicValueEnum<'ctx>),
+{
+    incrementing_index_loop(
+        builder,
+        parent,
+        ctx,
+        list.len,
+        index_name,
+        maybe_alloca,
+        |index| {
+            // The pointer to the element in the list
+            let elem_ptr = unsafe { builder.build_in_bounds_gep(list.ptr, &[index], "load_index") };
+
+            let elem = builder.build_load(elem_ptr, "get_elem");
+
+            loop_fn(index, elem);
+        },
+    )
+}
+
 // This helper simulates a basic for loop, where
 // and index increments up from 0 to some end value
-pub fn incrementing_index_loop<'ctx, LoopFn>(
+fn incrementing_index_loop<'ctx, LoopFn>(
     builder: &Builder<'ctx>,
     parent: FunctionValue<'ctx>,
     ctx: &'ctx Context,
@@ -1154,6 +1268,59 @@ where
     builder.position_at_end(after_loop_bb);
 
     index_alloca
+}
+
+// This function checks if the list is empty, and
+// if it is, it returns an empty list, and if not
+// it runs whatever code is passed in under `build_non_empty`
+// This is the avoid allocating memory if the list is empty.
+fn if_list_is_not_empty<'a, 'ctx, 'env, 'b, NonEmptyFn>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    mut build_non_empty: NonEmptyFn,
+    list: BasicValueEnum<'ctx>,
+    list_layout: &Layout<'a>,
+    list_fn_name: &str,
+) -> BasicValueEnum<'ctx>
+where
+    NonEmptyFn: FnMut(&Layout<'a>, IntValue<'ctx>, StructValue<'ctx>) -> BasicValueEnum<'ctx>,
+{
+    match list_layout {
+        Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+
+        Layout::Builtin(Builtin::List(_, elem_layout)) => {
+            let builder = env.builder;
+            let ctx = env.context;
+
+            let wrapper_struct = list.into_struct_value();
+
+            let len = list_len(builder, wrapper_struct);
+
+            // list_len > 0
+            let comparison = builder.build_int_compare(
+                IntPredicate::UGT,
+                len,
+                ctx.i64_type().const_int(0, false),
+                "greaterthanzero",
+            );
+
+            let build_empty = || empty_list(env);
+
+            let struct_type = collection(ctx, env.ptr_bytes);
+
+            build_basic_phi2(
+                env,
+                parent,
+                comparison,
+                || build_non_empty(elem_layout, len, wrapper_struct),
+                build_empty,
+                BasicTypeEnum::StructType(struct_type),
+            )
+        }
+        _ => {
+            unreachable!("Invalid List layout for {} {:?}", list_fn_name, list_layout);
+        }
+    }
 }
 
 pub fn build_basic_phi2<'a, 'ctx, 'env, PassFn, FailFn>(
@@ -1378,4 +1545,41 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     builder.build_store(refcount_ptr, ref_count_one);
 
     list_element_ptr
+}
+
+pub fn store_list<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    list_ptr: PointerValue<'ctx>,
+    len: IntValue<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+    let builder = env.builder;
+
+    let ptr_bytes = env.ptr_bytes;
+    let int_type = ptr_int(ctx, ptr_bytes);
+    let ptr_as_int = builder.build_ptr_to_int(list_ptr, int_type, "list_cast_ptr");
+    let struct_type = collection(ctx, ptr_bytes);
+
+    let mut struct_val;
+
+    // Store the pointer
+    struct_val = builder
+        .build_insert_value(
+            struct_type.get_undef(),
+            ptr_as_int,
+            Builtin::WRAPPER_PTR,
+            "insert_ptr",
+        )
+        .unwrap();
+
+    // Store the length
+    struct_val = builder
+        .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
+        .unwrap();
+
+    builder.build_bitcast(
+        struct_val.into_struct_value(),
+        collection(ctx, ptr_bytes),
+        "cast_collection",
+    )
 }

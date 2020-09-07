@@ -84,6 +84,46 @@ pub struct WhenPattern<'a> {
     pub guard: Option<Loc<Expr<'a>>>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum StrSegment<'a> {
+    Plaintext(&'a str),              // e.g. "foo"
+    Unicode(Loc<&'a str>),           // e.g. "00A0" in "\u(00A0)"
+    EscapedChar(EscapedChar),        // e.g. '\n' in "Hello!\n"
+    Interpolated(Loc<&'a Expr<'a>>), // e.g. (name) in "Hi, \(name)!"
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum EscapedChar {
+    Newline,        // \n
+    Tab,            // \t
+    Quote,          // \"
+    Backslash,      // \\
+    CarriageReturn, // \r
+}
+
+impl EscapedChar {
+    /// Returns the char that would have been originally parsed to
+    pub fn to_parsed_char(&self) -> char {
+        use EscapedChar::*;
+
+        match self {
+            Backslash => '\\',
+            Quote => '"',
+            CarriageReturn => 'r',
+            Tab => 't',
+            Newline => 'n',
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum StrLiteral<'a> {
+    /// The most common case: a plain string with no escapes or interpolations
+    PlainLine(&'a str),
+    Line(&'a [StrSegment<'a>]),
+    Block(&'a [&'a [StrSegment<'a>]]),
+}
+
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
 /// 1. It uses Bump::alloc for all allocations, which returns a reference.
@@ -105,8 +145,7 @@ pub enum Expr<'a> {
     },
 
     // String Literals
-    Str(&'a str),
-    BlockStr(&'a [&'a str]),
+    Str(StrLiteral<'a>), // string without escapes in it
     /// Look up exactly one field on a record, e.g. (expr).foo.
     Access(&'a Expr<'a>, &'a str),
     /// e.g. `.foo`
@@ -336,8 +375,7 @@ pub enum Pattern<'a> {
         is_negative: bool,
     },
     FloatLiteral(&'a str),
-    StrLiteral(&'a str),
-    BlockStrLiteral(&'a [&'a str]),
+    StrLiteral(StrLiteral<'a>),
     Underscore,
 
     // Space
@@ -455,7 +493,6 @@ impl<'a> Pattern<'a> {
             ) => string_x == string_y && base_x == base_y && is_negative_x == is_negative_y,
             (FloatLiteral(x), FloatLiteral(y)) => x == y,
             (StrLiteral(x), StrLiteral(y)) => x == y,
-            (BlockStrLiteral(x), BlockStrLiteral(y)) => x == y,
             (Underscore, Underscore) => true,
 
             // Space
@@ -584,7 +621,7 @@ impl<'a> Spaceable<'a> for Def<'a> {
 pub enum Attempting {
     List,
     Keyword,
-    StringLiteral,
+    StrLiteral,
     RecordLiteral,
     RecordFieldLabel,
     InterpolatedString,
@@ -596,6 +633,7 @@ pub enum Attempting {
     Module,
     Record,
     Identifier,
+    HexDigit,
     ConcreteType,
     TypeVariable,
     WhenCondition,

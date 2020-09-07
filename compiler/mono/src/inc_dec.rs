@@ -221,9 +221,24 @@ fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
 
 impl<'a> Context<'a> {
     pub fn new(arena: &'a Bump, param_map: &'a ParamMap<'a>) -> Self {
+        let mut vars = MutMap::default();
+
+        for (key, _) in param_map.into_iter() {
+            if let crate::borrow::Key::Declaration(symbol) = key {
+                vars.insert(
+                    *symbol,
+                    VarInfo {
+                        reference: false, // assume function symbols are global constants
+                        persistent: true, // assume function symbols are global constants
+                        consume: false,   // no need to consume this variable
+                    },
+                );
+            }
+        }
+
         Self {
             arena,
-            vars: MutMap::default(),
+            vars,
             jp_live_vars: MutMap::default(),
             local_context: LocalContext::default(),
             param_map,

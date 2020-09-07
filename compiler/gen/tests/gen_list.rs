@@ -34,7 +34,15 @@ mod gen_list {
     fn list_append() {
         assert_evals_to!("List.append [1] 2", &[1, 2], &'static [i64]);
         assert_evals_to!("List.append [1, 1] 2", &[1, 1, 2], &'static [i64]);
+    }
+
+    #[test]
+    fn list_append_to_empty_list() {
         assert_evals_to!("List.append [] 3", &[3], &'static [i64]);
+    }
+
+    #[test]
+    fn list_append_to_empty_list_of_int() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -48,11 +56,19 @@ mod gen_list {
             &[3, 3],
             &'static [i64]
         );
+    }
+
+    #[test]
+    fn list_append_bools() {
         assert_evals_to!(
             "List.append [ True, False ] True",
             &[true, false, true],
             &'static [bool]
         );
+    }
+
+    #[test]
+    fn list_append_longer_list() {
         assert_evals_to!(
             "List.append [ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22 ] 23",
             &[11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
@@ -78,12 +94,19 @@ mod gen_list {
             &[6, 4],
             &'static [i64]
         );
+    }
 
+    #[test]
+    fn list_prepend_bools() {
         assert_evals_to!(
             "List.prepend [ True, False ] True",
             &[true, true, false],
             &'static [bool]
         );
+    }
+
+    #[test]
+    fn list_prepend_big_list() {
         assert_evals_to!(
             "List.prepend [ 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 100, 100, 100, 100 ] 9",
             &[9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 100, 100, 100, 100],
@@ -92,20 +115,292 @@ mod gen_list {
     }
 
     #[test]
-    fn list_join() {
+    fn list_walk_right_empty_all_inline() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                List.walkRight [0x1] (\a, b -> a + b) 0
+                "#
+            ),
+            1,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                empty : List Int
+                empty =
+                    []
+
+                List.walkRight empty (\a, b -> a + b) 0
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    fn list_keep_if_empty_list_of_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                empty : List Int
+                empty =
+                    []
+
+                List.keepIf empty (\x -> True)
+                "#
+            ),
+            &[],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_keep_if_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                alwaysTrue : Int -> Bool
+                alwaysTrue = \_ -> 
+                    True
+                    
+
+                List.keepIf [] alwaysTrue
+                "#
+            ),
+            &[],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_keep_if_always_true_for_non_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                alwaysTrue : Int -> Bool
+                alwaysTrue = \i ->
+                    True
+                    
+                oneThroughEight : List Int
+                oneThroughEight =
+                    [1,2,3,4,5,6,7,8]
+                    
+                List.keepIf oneThroughEight alwaysTrue
+                "#
+            ),
+            &[1, 2, 3, 4, 5, 6, 7, 8],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_keep_if_always_false_for_non_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                alwaysFalse : Int -> Bool
+                alwaysFalse = \i ->
+                    False
+                    
+                List.keepIf [1,2,3,4,5,6,7,8] alwaysFalse
+                "#
+            ),
+            &[],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_keep_if_one() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                intIsLessThanThree : Int -> Bool
+                intIsLessThanThree = \i ->
+                    i < 3
+                    
+                List.keepIf [1,2,3,4,5,6,7,8] intIsLessThanThree 
+                "#
+            ),
+            &[1, 2],
+            &'static [i64]
+        );
+    }
+
+    //
+    // "panicked at 'not yet implemented: Handle equals for builtin layouts Str == Str'"
+    //
+    // #[test]
+    // fn list_keep_if_str_is_hello() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //             strIsHello : Str -> Bool
+    //             strIsHello = \str ->
+    //                 str == "Hello"
+    //
+    //             List.keepIf ["Hello", "Hello", "Goodbye"] strIsHello
+    //             "#
+    //         ),
+    //         &["Hello", "Hello"],
+    //         &'static [&'static str]
+    //     );
+    // }
+
+    #[test]
+    fn list_map_on_empty_list_with_int_layout() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                empty : List Int
+                empty =
+                    []
+
+                List.map empty (\x -> x)
+                "#
+            ),
+            &[],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_map_on_non_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                nonEmpty : List Int
+                nonEmpty =
+                    [ 1 ]
+
+                List.map nonEmpty (\x -> x)
+                "#
+            ),
+            &[1],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_map_changes_input() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                nonEmpty : List Int
+                nonEmpty =
+                    [ 1 ]
+
+                List.map nonEmpty (\x -> x + 1)
+                "#
+            ),
+            &[2],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_map_on_big_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                nonEmpty : List Int
+                nonEmpty =
+                    [ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 ]
+    
+                List.map nonEmpty (\x -> x * 2)
+                "#
+            ),
+            &[2, 4, 6, 8, 10, 2, 4, 6, 8, 10, 2, 4, 6, 8, 10, 2, 4, 6, 8, 10, 2, 4, 6, 8, 10],
+            &'static [i64]
+        );
+    }
+
+    #[test]
+    fn list_map_with_type_change() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                nonEmpty : List Int
+                nonEmpty =
+                    [ 1, 1, -4, 1, 2 ]
+
+    
+                List.map nonEmpty (\x -> x > 0)
+                "#
+            ),
+            &[true, true, false, true, true],
+            &'static [bool]
+        );
+    }
+
+    #[test]
+    fn list_map_using_defined_function() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                 nonEmpty : List Int
+                 nonEmpty =
+                     [ 2, 2, -4, 2, 3 ]
+
+                 greaterThanOne : Int -> Bool
+                 greaterThanOne = \i ->
+                     i > 1
+
+                 List.map nonEmpty greaterThanOne
+                 "#
+            ),
+            &[true, true, false, true, true],
+            &'static [bool]
+        );
+    }
+
+    #[test]
+    fn list_map_all_inline() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                List.map [] (\x -> x > 0)
+                "#
+            ),
+            &[],
+            &'static [bool]
+        );
+    }
+
+    #[test]
+    fn list_join_empty_list() {
         assert_evals_to!("List.join []", &[], &'static [i64]);
+    }
+
+    #[test]
+    fn list_join_one_list() {
         assert_evals_to!("List.join [ [1, 2, 3 ] ]", &[1, 2, 3], &'static [i64]);
+    }
+
+    #[test]
+    fn list_join_two_non_empty_lists() {
         assert_evals_to!(
             "List.join [ [1, 2, 3 ] , [4 ,5, 6] ]",
             &[1, 2, 3, 4, 5, 6],
             &'static [i64]
         );
+    }
+
+    #[test]
+    fn list_join_two_non_empty_lists_of_float() {
         assert_evals_to!(
             "List.join [ [ 1.2, 1.1 ], [ 2.1, 2.2 ] ]",
             &[1.2, 1.1, 2.1, 2.2],
             &'static [f64]
         );
+    }
 
+    #[test]
+    fn list_join_to_big_list() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -127,7 +422,10 @@ mod gen_list {
             ],
             &'static [f64]
         );
+    }
 
+    #[test]
+    fn list_join_defined_empty_list() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -141,9 +439,15 @@ mod gen_list {
             &[0.2, 11.11],
             &'static [f64]
         );
+    }
 
+    #[test]
+    fn list_join_all_empty_lists() {
         assert_evals_to!("List.join [ [], [], [] ]", &[], &'static [f64]);
+    }
 
+    #[test]
+    fn list_join_one_empty_list() {
         assert_evals_to!(
             "List.join [ [ 1.2, 1.1 ], [] ]",
             &[1.2, 1.1],
@@ -193,6 +497,10 @@ mod gen_list {
         );
         assert_evals_to!("List.reverse [1, 2, 3]", &[3, 2, 1], &'static [i64]);
         assert_evals_to!("List.reverse [4]", &[4], &'static [i64]);
+    }
+
+    #[test]
+    fn list_reverse_empty_list_of_int() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -206,6 +514,10 @@ mod gen_list {
             &[],
             &'static [i64]
         );
+    }
+
+    #[test]
+    fn list_reverse_empty_list() {
         assert_evals_to!("List.reverse []", &[], &'static [i64]);
     }
 
@@ -231,9 +543,12 @@ mod gen_list {
     }
 
     #[test]
-    fn list_concat_vanilla() {
+    fn list_concat_two_empty_lists() {
         assert_evals_to!("List.concat [] []", &[], &'static [i64]);
+    }
 
+    #[test]
+    fn list_concat_two_empty_lists_of_int() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -251,16 +566,25 @@ mod gen_list {
             &[],
             &'static [i64]
         );
+    }
 
+    #[test]
+    fn list_concat_second_list_is_empty() {
         assert_evals_to!("List.concat [ 12, 13 ] []", &[12, 13], &'static [i64]);
         assert_evals_to!(
             "List.concat [ 34, 43 ] [ 64, 55, 66 ]",
             &[34, 43, 64, 55, 66],
             &'static [i64]
         );
+    }
 
+    #[test]
+    fn list_concat_first_list_is_empty() {
         assert_evals_to!("List.concat [] [ 23, 24 ]", &[23, 24], &'static [i64]);
+    }
 
+    #[test]
+    fn list_concat_two_non_empty_lists() {
         assert_evals_to!(
             "List.concat [1, 2 ] [ 3, 4 ]",
             &[1, 2, 3, 4],
@@ -420,24 +744,20 @@ mod gen_list {
         );
     }
 
-    // TODO getting this to work requires generating a runtime error for the Ok
-    // branch here, which is not yet something we support as of when this
-    // test was originally written.
-    //
-    // #[test]
-    // fn first_empty_list() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 when List.first [] is
-    //                     Ok val -> val
-    //                     Err _ -> -1
-    //             "#
-    //         ),
-    //         -1,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn first_empty_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when List.first [] is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
 
     #[test]
     fn get_empty_list() {
@@ -845,151 +1165,151 @@ mod gen_list {
         })
     }
 
-    //    #[test]
-    //    fn foobar2() {
-    //        with_larger_debug_stack(|| {
-    //            assert_evals_to!(
-    //                indoc!(
-    //                    r#"
-    //                    quicksort : List (Num a) -> List (Num a)
-    //                    quicksort = \list ->
-    //                        quicksortHelp list 0 (List.len list - 1)
-    //
-    //
-    //                    quicksortHelp : List (Num a), Int, Int -> List (Num a)
-    //                    quicksortHelp = \list, low, high ->
-    //                        if low < high then
-    //                            when partition low high list is
-    //                                Pair partitionIndex partitioned ->
-    //                                    partitioned
-    //                                        |> quicksortHelp low (partitionIndex - 1)
-    //                                        |> quicksortHelp (partitionIndex + 1) high
-    //                        else
-    //                            list
-    //
-    //
-    //                    swap : Int, Int, List a -> List a
-    //                    swap = \i, j, list ->
-    //                        when Pair (List.get list i) (List.get list j) is
-    //                            Pair (Ok atI) (Ok atJ) ->
-    //                                list
-    //                                    |> List.set i atJ
-    //                                    |> List.set j atI
-    //
-    //                            _ ->
-    //                                []
-    //
-    //                    partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
-    //                    partition = \low, high, initialList ->
-    //                        when List.get initialList high is
-    //                            Ok pivot ->
-    //                                when partitionHelp (low - 1) low initialList high pivot is
-    //                                    Pair newI newList ->
-    //                                        Pair (newI + 1) (swap (newI + 1) high newList)
-    //
-    //                            Err _ ->
-    //                                Pair (low - 1) initialList
-    //
-    //
-    //                    partitionHelp : Int, Int, List (Num a), Int, Int -> [ Pair Int (List (Num a)) ]
-    //                    partitionHelp = \i, j, list, high, pivot ->
-    //                        # if j < high then
-    //                        if False then
-    //                            when List.get list j is
-    //                                Ok value ->
-    //                                    if value <= pivot then
-    //                                        partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
-    //                                    else
-    //                                        partitionHelp i (j + 1) list high pivot
-    //
-    //                                Err _ ->
-    //                                    Pair i list
-    //                        else
-    //                            Pair i list
-    //
-    //
-    //
-    //                    quicksort [ 7, 4, 21, 19 ]
-    //                "#
-    //                ),
-    //                &[19, 7, 4, 21],
-    //                &'static [i64],
-    //            );
-    //        })
-    //    }
+    #[test]
+    fn foobar2() {
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
+                       quicksort : List (Num a) -> List (Num a)
+                       quicksort = \list ->
+                           quicksortHelp list 0 (List.len list - 1)
+    
+    
+                       quicksortHelp : List (Num a), Int, Int -> List (Num a)
+                       quicksortHelp = \list, low, high ->
+                           if low < high then
+                               when partition low high list is
+                                   Pair partitionIndex partitioned ->
+                                       partitioned
+                                           |> quicksortHelp low (partitionIndex - 1)
+                                           |> quicksortHelp (partitionIndex + 1) high
+                           else
+                               list
+    
+    
+                       swap : Int, Int, List a -> List a
+                       swap = \i, j, list ->
+                           when Pair (List.get list i) (List.get list j) is
+                               Pair (Ok atI) (Ok atJ) ->
+                                   list
+                                       |> List.set i atJ
+                                       |> List.set j atI
+    
+                               _ ->
+                                   []
+    
+                       partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
+                       partition = \low, high, initialList ->
+                           when List.get initialList high is
+                               Ok pivot ->
+                                   when partitionHelp (low - 1) low initialList high pivot is
+                                       Pair newI newList ->
+                                           Pair (newI + 1) (swap (newI + 1) high newList)
+    
+                               Err _ ->
+                                   Pair (low - 1) initialList
+    
+    
+                       partitionHelp : Int, Int, List (Num a), Int, Int -> [ Pair Int (List (Num a)) ]
+                       partitionHelp = \i, j, list, high, pivot ->
+                           # if j < high then
+                           if False then
+                               when List.get list j is
+                                   Ok value ->
+                                       if value <= pivot then
+                                           partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+                                       else
+                                           partitionHelp i (j + 1) list high pivot
+    
+                                   Err _ ->
+                                       Pair i list
+                           else
+                               Pair i list
+    
+    
+    
+                       quicksort [ 7, 4, 21, 19 ]
+                   "#
+                ),
+                &[19, 7, 4, 21],
+                &'static [i64]
+            );
+        })
+    }
 
-    //    #[test]
-    //    fn foobar() {
-    //        with_larger_debug_stack(|| {
-    //            assert_evals_to!(
-    //                indoc!(
-    //                    r#"
-    //                    quicksort : List (Num a) -> List (Num a)
-    //                    quicksort = \list ->
-    //                        quicksortHelp list 0 (List.len list - 1)
-    //
-    //
-    //                    quicksortHelp : List (Num a), Int, Int -> List (Num a)
-    //                    quicksortHelp = \list, low, high ->
-    //                        if low < high then
-    //                            when partition low high list is
-    //                                Pair partitionIndex partitioned ->
-    //                                    partitioned
-    //                                        |> quicksortHelp low (partitionIndex - 1)
-    //                                        |> quicksortHelp (partitionIndex + 1) high
-    //                        else
-    //                            list
-    //
-    //
-    //                    swap : Int, Int, List a -> List a
-    //                    swap = \i, j, list ->
-    //                        when Pair (List.get list i) (List.get list j) is
-    //                            Pair (Ok atI) (Ok atJ) ->
-    //                                list
-    //                                    |> List.set i atJ
-    //                                    |> List.set j atI
-    //
-    //                            _ ->
-    //                                []
-    //
-    //                    partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
-    //                    partition = \low, high, initialList ->
-    //                        when List.get initialList high is
-    //                            Ok pivot ->
-    //                                when partitionHelp (low - 1) low initialList high pivot is
-    //                                    Pair newI newList ->
-    //                                        Pair (newI + 1) (swap (newI + 1) high newList)
-    //
-    //                            Err _ ->
-    //                                Pair (low - 1) initialList
-    //
-    //
-    //                    partitionHelp : Int, Int, List (Num a), Int, Int -> [ Pair Int (List (Num a)) ]
-    //                    partitionHelp = \i, j, list, high, pivot ->
-    //                        if j < high then
-    //                            when List.get list j is
-    //                                Ok value ->
-    //                                    if value <= pivot then
-    //                                        partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
-    //                                    else
-    //                                        partitionHelp i (j + 1) list high pivot
-    //
-    //                                Err _ ->
-    //                                    Pair i list
-    //                        else
-    //                            Pair i list
-    //
-    //
-    //
-    //                    when List.first (quicksort [0x1]) is
-    //                        _ -> 4
-    //                "#
-    //                ),
-    //                4,
-    //                i64,
-    //            );
-    //        })
-    //    }
+    #[test]
+    fn foobar() {
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
+                       quicksort : List (Num a) -> List (Num a)
+                       quicksort = \list ->
+                           quicksortHelp list 0 (List.len list - 1)
+    
+    
+                       quicksortHelp : List (Num a), Int, Int -> List (Num a)
+                       quicksortHelp = \list, low, high ->
+                           if low < high then
+                               when partition low high list is
+                                   Pair partitionIndex partitioned ->
+                                       partitioned
+                                           |> quicksortHelp low (partitionIndex - 1)
+                                           |> quicksortHelp (partitionIndex + 1) high
+                           else
+                               list
+    
+    
+                       swap : Int, Int, List a -> List a
+                       swap = \i, j, list ->
+                           when Pair (List.get list i) (List.get list j) is
+                               Pair (Ok atI) (Ok atJ) ->
+                                   list
+                                       |> List.set i atJ
+                                       |> List.set j atI
+    
+                               _ ->
+                                   []
+    
+                       partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
+                       partition = \low, high, initialList ->
+                           when List.get initialList high is
+                               Ok pivot ->
+                                   when partitionHelp (low - 1) low initialList high pivot is
+                                       Pair newI newList ->
+                                           Pair (newI + 1) (swap (newI + 1) high newList)
+    
+                               Err _ ->
+                                   Pair (low - 1) initialList
+    
+    
+                       partitionHelp : Int, Int, List (Num a), Int, Int -> [ Pair Int (List (Num a)) ]
+                       partitionHelp = \i, j, list, high, pivot ->
+                           if j < high then
+                               when List.get list j is
+                                   Ok value ->
+                                       if value <= pivot then
+                                           partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+                                       else
+                                           partitionHelp i (j + 1) list high pivot
+    
+                                   Err _ ->
+                                       Pair i list
+                           else
+                               Pair i list
+    
+    
+    
+                       when List.first (quicksort [0x1]) is
+                           _ -> 4
+                   "#
+                ),
+                4,
+                i64
+            );
+        })
+    }
 
     #[test]
     fn empty_list_increment_decrement() {

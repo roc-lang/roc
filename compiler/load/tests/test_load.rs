@@ -257,7 +257,7 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "findPath" => "{ costFunction : (position, position -> Float), end : position, moveFunction : (position -> Set position), start : position } -> Result (List position) [ KeyNotFound ]*",
+                "findPath" => "{ costFunction : position, position -> Float, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [ KeyNotFound ]*",
                 "initialModel" => "position -> Model position",
                 "reconstructPath" => "Map position position, position -> List position",
                 "updateCost" => "position, position, Model position -> Model position",
