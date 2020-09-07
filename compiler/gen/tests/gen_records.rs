@@ -190,7 +190,7 @@ mod gen_records {
     }
 
     #[test]
-    fn when_on_record_with_guard_pattern() {
+    fn when_record_with_guard_pattern() {
         assert_evals_to!(
             indoc!(
                 r#"

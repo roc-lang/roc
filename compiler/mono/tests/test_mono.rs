@@ -457,23 +457,24 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Num.14 (#Attr.2, #Attr.3):
-                    let Test.20 = lowlevel NumAdd #Attr.2 #Attr.3;
-                    ret Test.20;
+                    let Test.21 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.21;
 
-                let Test.16 = 0i64;
-                let Test.18 = 0i64;
-                let Test.19 = 41i64;
-                let Test.17 = Just Test.18 Test.19;
-                let Test.1 = Just Test.16 Test.17;
+                let Test.17 = 0i64;
+                let Test.19 = 0i64;
+                let Test.20 = 41i64;
+                let Test.18 = Just Test.19 Test.20;
+                let Test.1 = Just Test.17 Test.18;
                 let Test.8 = true;
-                let Test.10 = Index 0 Test.1;
-                let Test.9 = 0i64;
-                let Test.15 = lowlevel Eq Test.9 Test.10;
-                let Test.13 = lowlevel And Test.15 Test.8;
-                let Test.12 = Index 0 Test.1;
-                let Test.11 = 0i64;
-                let Test.14 = lowlevel Eq Test.11 Test.12;
-                let Test.7 = lowlevel And Test.14 Test.13;
+                let Test.10 = 0i64;
+                let Test.9 = Index 1 Test.1;
+                let Test.11 = Index 0 Test.9;
+                let Test.16 = lowlevel Eq Test.10 Test.11;
+                let Test.14 = lowlevel And Test.16 Test.8;
+                let Test.12 = 0i64;
+                let Test.13 = Index 0 Test.1;
+                let Test.15 = lowlevel Eq Test.12 Test.13;
+                let Test.7 = lowlevel And Test.15 Test.14;
                 if Test.7 then
                     let Test.5 = Index 1 Test.1;
                     let Test.2 = Index 1 Test.5;
@@ -1642,25 +1643,26 @@ mod test_mono {
             ),
             indoc!(
                 r#"
-                let Test.16 = 0i64;
-                let Test.18 = 0i64;
-                let Test.20 = 0i64;
-                let Test.22 = 1i64;
-                let Test.21 = Z Test.22;
-                let Test.19 = S Test.20 Test.21;
-                let Test.17 = S Test.18 Test.19;
-                let Test.1 = S Test.16 Test.17;
-                let Test.12 = true;
-                let Test.14 = Index 0 Test.1;
-                let Test.13 = 0i64;
-                let Test.15 = lowlevel Eq Test.13 Test.14;
-                let Test.11 = lowlevel And Test.15 Test.12;
-                if Test.11 then
+                let Test.17 = 0i64;
+                let Test.19 = 0i64;
+                let Test.21 = 0i64;
+                let Test.23 = 1i64;
+                let Test.22 = Z Test.23;
+                let Test.20 = S Test.21 Test.22;
+                let Test.18 = S Test.19 Test.20;
+                let Test.1 = S Test.17 Test.18;
+                let Test.13 = true;
+                let Test.14 = 0i64;
+                let Test.15 = Index 0 Test.1;
+                let Test.16 = lowlevel Eq Test.14 Test.15;
+                let Test.12 = lowlevel And Test.16 Test.13;
+                if Test.12 then
                     let Test.7 = true;
-                    let Test.9 = Index 0 Test.1;
-                    let Test.8 = 0i64;
-                    let Test.10 = lowlevel Eq Test.8 Test.9;
-                    let Test.6 = lowlevel And Test.10 Test.7;
+                    let Test.9 = 0i64;
+                    let Test.8 = Index 1 Test.1;
+                    let Test.10 = Index 0 Test.8;
+                    let Test.11 = lowlevel Eq Test.9 Test.10;
+                    let Test.6 = lowlevel And Test.11 Test.7;
                     if Test.6 then
                         let Test.3 = Index 1 Test.1;
                         let Test.2 = 1i64;
@@ -1697,22 +1699,53 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Num.16 (#Attr.2, #Attr.3):
-                    let Test.15 = lowlevel NumMul #Attr.2 #Attr.3;
-                    ret Test.15;
+                    let Test.38 = lowlevel NumMul #Attr.2 #Attr.3;
+                    ret Test.38;
 
-                procedure Test.0 (Test.4):
-                    ret Test.6;
+                procedure Test.0 (Test.6):
+                    let Test.27 = true;
+                    let Test.29 = false;
+                    let Test.28 = Index 0 Test.6;
+                    let Test.30 = lowlevel Eq Test.29 Test.28;
+                    let Test.26 = lowlevel And Test.30 Test.27;
+                    if Test.26 then
+                        let Test.8 = 3i64;
+                        ret Test.8;
+                    else
+                        let Test.10 = 5i64;
+                        ret Test.10;
 
-                procedure Test.0 (Test.4):
-                    ret Test.6;
+                procedure Test.0 (Test.6):
+                    let Test.34 = true;
+                    let Test.36 = false;
+                    let Test.35 = Index 0 Test.6;
+                    let Test.37 = lowlevel Eq Test.36 Test.35;
+                    let Test.33 = lowlevel And Test.37 Test.34;
+                    if Test.33 then
+                        let Test.8 = Index 1 Test.6;
+                        ret Test.8;
+                    else
+                        let Test.10 = Index 1 Test.6;
+                        ret Test.10;
 
-                let Test.10 = 7i64;
-                let Test.9 = Struct {Test.10};
-                let Test.1 = CallByName Test.0 Test.9;
-                let Test.8 = Struct {};
-                let Test.2 = CallByName Test.0 Test.8;
-                let Test.7 = CallByName Num.16 Test.1 Test.2;
-                ret Test.7;
+                let Test.22 = true;
+                let Test.23 = 11i64;
+                let Test.21 = Struct {Test.22, Test.23};
+                let Test.3 = CallByName Test.0 Test.21;
+                let Test.20 = true;
+                let Test.19 = Struct {Test.20};
+                let Test.4 = CallByName Test.0 Test.19;
+                let Test.17 = false;
+                let Test.18 = 7i64;
+                let Test.16 = Struct {Test.17, Test.18};
+                let Test.1 = CallByName Test.0 Test.16;
+                let Test.15 = false;
+                let Test.14 = Struct {Test.15};
+                let Test.2 = CallByName Test.0 Test.14;
+                let Test.13 = CallByName Num.16 Test.1 Test.2;
+                let Test.12 = CallByName Num.16 Test.13 Test.3;
+                let Test.11 = CallByName Num.16 Test.12 Test.4;
+                ret Test.11;
                 "#
             ),
         )

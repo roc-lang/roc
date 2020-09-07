@@ -116,7 +116,6 @@ impl<'a> Layout<'a> {
             Ok(Layout::RecursivePointer)
         } else {
             let content = env.subs.get_without_compacting(var).content;
-            // println!("{:?} {:?}", var, &content);
             Self::new_help(env, content)
         }
     }
@@ -527,7 +526,6 @@ pub fn sort_record_fields<'a>(
         seen: MutSet::default(),
     };
 
-    dbg!(var);
     match roc_types::pretty_print::chase_ext_record(subs, var, &mut fields_map) {
         Ok(()) | Err((_, Content::FlexVar(_))) => {
             // Sort the fields by label

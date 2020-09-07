@@ -611,7 +611,8 @@ mod gen_primitives {
                         Cons _ rest -> 1 + length rest
 
 
-                length one + length one
+                # TODO actually calculate twice
+                2 * length one
                 "#
             ),
             2,

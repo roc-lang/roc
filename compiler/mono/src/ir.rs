@@ -550,7 +550,7 @@ impl Wrapped {
     }
 
     pub fn opt_from_layout(layout: &Layout<'_>) -> Option<Self> {
-        let result = match layout {
+        match layout {
             Layout::Struct(fields) => match fields.len() {
                 0 => Some(Wrapped::EmptyRecord),
                 1 => Some(Wrapped::SingleElementRecord),
@@ -567,9 +567,7 @@ impl Wrapped {
                 _ => Some(Wrapped::MultiTagUnion),
             },
             _ => None,
-        };
-
-        result
+        }
     }
 }
 
@@ -1895,7 +1893,6 @@ pub fn with_hole<'a>(
                 }
             };
 
-            println!("loc 3 {}", record_symbol);
             let expr = Expr::AccessAtIndex {
                 index: index.expect("field not in its own type") as u64,
                 field_layouts: field_layouts.into_bump_slice(),
@@ -2923,7 +2920,6 @@ fn store_pattern<'a>(
             for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
                 let index = if write_tag { index + 1 } else { index };
 
-                println!("loc 1 {}", outer_symbol);
                 let load = Expr::AccessAtIndex {
                     wrapped,
                     index: index as u64,
@@ -3003,7 +2999,6 @@ fn store_record_destruct<'a>(
     let wrapped = Wrapped::from_layout(&Layout::Struct(sorted_fields));
 
     // TODO wrapped could be SingleElementRecord
-    println!("loc 2 {}", outer_symbol);
     let load = Expr::AccessAtIndex {
         index,
         field_layouts: sorted_fields,
@@ -3543,19 +3538,23 @@ pub fn from_can_pattern<'a>(
             destructs,
             ..
         } => {
+            // sorted fields based on the type
+            let sorted_fields = crate::layout::sort_record_fields(env.arena, *whole_var, env.subs);
+
+            let type_identifiers_by_key = sorted_fields
+                .iter()
+                .map(|(label, _)| label)
+                .collect::<MutSet<_>>();
+
+            let destructs_by_key = destructs
+                .iter()
+                .map(|destruct| destruct.value.label.clone())
+                .collect::<MutSet<_>>();
+
             // sorted fields based on the destruct
             let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
             let mut destructs = destructs.clone();
             destructs.sort_by(|a, b| a.value.label.cmp(&b.value.label));
-
-            dbg!(&destructs);
-
-            let mut it = destructs.iter();
-            let mut opt_destruct = it.next();
-
-            // sorted fields based on the type
-            let sorted_fields = crate::layout::sort_record_fields(env.arena, *whole_var, env.subs);
-            dbg!(&sorted_fields);
 
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 
@@ -3567,85 +3566,113 @@ pub fn from_can_pattern<'a>(
             // in the source the field is not matche in the source language.
             //
             // Optional fields somewhat complicate the matter here
-            for (label, opt_field_layout) in sorted_fields.into_iter() {
-                match opt_field_layout {
-                    Ok(field_layout) => {
-                        match opt_destruct {
-                            Some(destruct) => {
-                                if destruct.value.label == label {
-                                    opt_destruct = it.next();
+            let mut it1 = sorted_fields.into_iter();
+            let mut opt_sorted = it1.next();
 
-                                    mono_destructs.push(from_can_record_destruct(
-                                        env,
-                                        layout_cache,
-                                        &destruct.value,
-                                        field_layout.clone(),
-                                    ));
-                                } else {
-                                    // insert underscore pattern
-                                    mono_destructs.push(RecordDestruct {
-                                        label: label.clone(),
-                                        symbol: env.unique_symbol(),
-                                        layout: field_layout.clone(),
-                                        typ: DestructType::Guard(Pattern::Underscore),
-                                    });
-                                }
-                            }
-                            None => {
-                                // the remainder of the fields (from the type) is not matched on in
-                                // this pattern; to fill it out, we put underscores
-                                mono_destructs.push(RecordDestruct {
-                                    label: label.clone(),
-                                    symbol: env.unique_symbol(),
-                                    layout: field_layout.clone(),
-                                    typ: DestructType::Guard(Pattern::Underscore),
-                                });
-                            }
+            let mut it2 = destructs.iter();
+            let mut opt_destruct = it2.next();
+
+            loop {
+                match (opt_sorted, opt_destruct) {
+                    (Some((label, Ok(field_layout))), Some(destruct)) => {
+                        if destruct.value.label == label {
+                            mono_destructs.push(from_can_record_destruct(
+                                env,
+                                layout_cache,
+                                &destruct.value,
+                                field_layout.clone(),
+                            ));
+
+                            opt_sorted = it1.next();
+                            opt_destruct = it2.next();
+                        } else {
+                            // insert underscore pattern
+                            mono_destructs.push(RecordDestruct {
+                                label: label.clone(),
+                                symbol: env.unique_symbol(),
+                                layout: field_layout.clone(),
+                                typ: DestructType::Guard(Pattern::Underscore),
+                            });
+
+                            opt_sorted = it1.next();
                         }
-
                         field_layouts.push(field_layout);
                     }
-                    Err(field_layout) => {
-                        // this field was optional, and now does not exist
-                        // if it was actually matched on, we need to evaluate the default
-                        match opt_destruct {
-                            Some(destruct) => {
-                                if destruct.value.label == label {
-                                    opt_destruct = it.next();
+                    (Some((label, Err(field_layout))), Some(destruct)) => {
+                        if destruct.value.label == label {
+                            opt_destruct = it2.next();
 
-                                    mono_destructs.push(RecordDestruct {
-                                        label: destruct.value.label.clone(),
-                                        symbol: destruct.value.symbol,
-                                        layout: field_layout,
-                                        typ: match &destruct.value.typ {
-                                            roc_can::pattern::DestructType::Optional(
-                                                _,
-                                                loc_expr,
-                                            ) => {
-                                                // if we reach this stage, the optional field is not present
-                                                // so use the default
-                                                DestructType::Optional(loc_expr.value.clone())
-                                            }
-                                            _ => unreachable!(
-                                                "only optional destructs can be optional fields"
-                                            ),
-                                        },
-                                    });
-                                } else {
-                                    // insert underscore pattern
-                                    mono_destructs.push(RecordDestruct {
-                                        label: label.clone(),
-                                        symbol: env.unique_symbol(),
-                                        layout: field_layout.clone(),
-                                        typ: DestructType::Guard(Pattern::Underscore),
-                                    });
-                                }
-                            }
-                            None => {
-                                // this field does not exist, and was not request in the pattern match
-                                continue;
-                            }
+                            mono_destructs.push(RecordDestruct {
+                                label: destruct.value.label.clone(),
+                                symbol: destruct.value.symbol,
+                                layout: field_layout,
+                                typ: match &destruct.value.typ {
+                                    roc_can::pattern::DestructType::Optional(_, loc_expr) => {
+                                        // if we reach this stage, the optional field is not present
+                                        // so use the default
+                                        DestructType::Optional(loc_expr.value.clone())
+                                    }
+                                    _ => unreachable!(
+                                        "only optional destructs can be optional fields"
+                                    ),
+                                },
+                            });
                         }
+                        opt_sorted = it1.next();
+                    }
+
+                    (Some((label, Err(field_layout))), None) => {
+                        // the remainder of the fields (from the type) is not matched on in
+                        // this pattern; to fill it out, we put underscores
+                        mono_destructs.push(RecordDestruct {
+                            label: label.clone(),
+                            symbol: env.unique_symbol(),
+                            layout: field_layout.clone(),
+                            typ: DestructType::Guard(Pattern::Underscore),
+                        });
+
+                        opt_sorted = it1.next();
+                    }
+
+                    (Some((label, Ok(field_layout))), None) => {
+                        // the remainder of the fields (from the type) is not matched on in
+                        // this pattern; to fill it out, we put underscores
+                        mono_destructs.push(RecordDestruct {
+                            label: label.clone(),
+                            symbol: env.unique_symbol(),
+                            layout: field_layout.clone(),
+                            typ: DestructType::Guard(Pattern::Underscore),
+                        });
+
+                        field_layouts.push(field_layout);
+                        opt_sorted = it1.next();
+                    }
+                    (None, Some(destruct)) => {
+                        // destruct is not in the type, but is in the pattern
+                        // it must be an optional field, and we will use the default
+                        match &destruct.value.typ {
+                            roc_can::pattern::DestructType::Optional(field_var, loc_expr) => {
+                                let field_layout = layout_cache
+                                    .from_var(env.arena, *field_var, env.subs)
+                                    .unwrap_or_else(|err| {
+                                        panic!("TODO turn fn_var into a RuntimeError {:?}", err)
+                                    });
+
+                                mono_destructs.push(RecordDestruct {
+                                    label: destruct.value.label.clone(),
+                                    symbol: destruct.value.symbol,
+                                    layout: field_layout,
+                                    typ: DestructType::Optional(loc_expr.value.clone()),
+                                })
+                            }
+                            _ => unreachable!("only optional destructs can be optional fields"),
+                        }
+
+                        opt_sorted = None;
+                        opt_destruct = it2.next();
+                    }
+                    (None, None) => {
+                        break;
                     }
                 }
             }

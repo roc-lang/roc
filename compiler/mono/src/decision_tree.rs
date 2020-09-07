@@ -602,7 +602,6 @@ fn to_relevant_branch_help<'a>(
                                 Wrapped::MultiTagUnion => {
                                     let sub_positions = arguments.into_iter().enumerate().map(
                                         |(index, (pattern, _))| {
-                                            dbg!(index, &pattern, &tag_name, tag_id);
                                             (
                                                 Path::Index {
                                                     index: 1 + index as u64,
@@ -956,7 +955,6 @@ fn path_to_expr_help2<'a>(
     let mut stores = bumpalo::collections::Vec::new_in(env.arena);
 
     loop {
-        dbg!(&layout);
         match path {
             Path::Unbox(unboxed) => {
                 path = unboxed;
@@ -980,7 +978,6 @@ fn path_to_expr_help2<'a>(
                     debug_assert!(*index < field_layouts.len() as u64);
 
                     let inner_layout = field_layouts[*index as usize].clone();
-                    println!("loc 5 {}", symbol);
                     let inner_expr = Expr::AccessAtIndex {
                         index: *index,
                         field_layouts: env.arena.alloc(field_layouts),
@@ -1002,12 +999,10 @@ fn path_to_expr_help2<'a>(
                         other => vec![other.clone()],
                     };
 
-                    dbg!(&field_layouts, tag_id, index);
                     debug_assert!(*index < field_layouts.len() as u64);
 
                     let inner_layout = field_layouts[*index as usize].clone();
 
-                    println!("loc 6 {}", symbol);
                     let inner_expr = Expr::AccessAtIndex {
                         index: *index,
                         field_layouts: env.arena.alloc(field_layouts),
@@ -1063,7 +1058,6 @@ fn test_to_equality<'a>(
             }
             let field_layouts = field_layouts.into_bump_slice();
 
-            println!("loc 7 {}", path_symbol);
             let rhs = Expr::AccessAtIndex {
                 index: 0,
                 field_layouts,
@@ -1184,7 +1178,7 @@ fn decide_to_branching<'a>(
                 .expect("jump not in list of jumps");
             expr.clone()
         }
-        Leaf(Inline(expr)) => dbg!(expr),
+        Leaf(Inline(expr)) => expr,
         Chain {
             test_chain,
             success,

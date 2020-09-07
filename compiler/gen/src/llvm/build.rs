@@ -648,11 +648,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 .struct_type(field_types.into_bump_slice(), false);
 
             // cast the argument bytes into the desired shape for this tag
-            println!(
-                "{} {:?}",
-                structure,
-                load_symbol_and_layout(env, scope, structure)
-            );
             let argument = load_symbol(env, scope, structure).into_struct_value();
 
             let struct_value = cast_struct_struct(builder, argument, struct_type);
