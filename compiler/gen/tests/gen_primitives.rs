@@ -555,9 +555,7 @@ mod gen_primitives {
                         Nil -> 0
                         Cons _ rest -> 1 + length rest
 
-                wrapper = { list: nil }
-
-                length wrapper.list
+                length nil + length nil
                 "#
             ),
             0,
@@ -611,8 +609,7 @@ mod gen_primitives {
                         Cons _ rest -> 1 + length rest
 
 
-                # TODO actually calculate twice
-                2 * length one
+                length one + length one
                 "#
             ),
             2,

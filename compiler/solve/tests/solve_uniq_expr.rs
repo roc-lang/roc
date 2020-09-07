@@ -2005,7 +2005,7 @@ mod solve_uniq_expr {
                             toAs
                              "#
                     ),
-                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr (* | a | b) (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
+                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr (c | a | b) (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
                 );
     }
 
@@ -2039,7 +2039,7 @@ mod solve_uniq_expr {
                         toAs
                         "#
                     ),
-                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr (* | a | b) (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
+                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr (c | a | b) (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
                 );
     }
 
@@ -2789,7 +2789,7 @@ mod solve_uniq_expr {
                 cheapestOpen
                 "#
             ),
-            "Attr * (Attr * (Attr Shared position -> Attr * Float), Attr (* | * | * | *) (Model (Attr Shared position)) -> Attr * (Result (Attr Shared position) (Attr * [ KeyNotFound ]*)))"
+            "Attr * (Attr * (Attr Shared position -> Attr * Float), Attr (* | * | a | b) (Model (Attr Shared position)) -> Attr * (Result (Attr Shared position) (Attr * [ KeyNotFound ]*)))"
         )
         });
     }

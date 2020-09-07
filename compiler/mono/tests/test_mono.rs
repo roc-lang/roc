@@ -625,7 +625,7 @@ mod test_mono {
     fn when_joinpoint() {
         compiles_to_ir(
             r#"
-            main = \{} -> 
+            main = \{} ->
                 x : [ Red, White, Blue ]
                 x = Blue
 
@@ -647,15 +647,15 @@ mod test_mono {
                         case 1:
                             let Test.9 = 1i64;
                             jump Test.8 Test.9;
-                    
+
                         case 2:
                             let Test.10 = 2i64;
                             jump Test.8 Test.10;
-                    
+
                         default:
                             let Test.11 = 3i64;
                             jump Test.8 Test.11;
-                    
+
                     joinpoint Test.8 Test.3:
                         ret Test.3;
 
@@ -724,7 +724,7 @@ mod test_mono {
     fn when_on_result() {
         compiles_to_ir(
             r#"
-            main = \{} -> 
+            main = \{} ->
                 x : Result Int Int
                 x = Ok 2
 
@@ -824,7 +824,7 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                main = \{} -> 
+                main = \{} ->
                     when 10 is
                         x if x == 5 -> 0
                         _ -> 42
@@ -1317,10 +1317,10 @@ mod test_mono {
             r#"
             factorial = \n, accum ->
                 when n is
-                    0 -> 
+                    0 ->
                         accum
 
-                    _ -> 
+                    _ ->
                         factorial (n - 1) (n * accum)
 
             factorial 10 1
@@ -1368,11 +1368,11 @@ mod test_mono {
 
             isNil : ConsList a -> Bool
             isNil = \list ->
-                when list is 
+                when list is
                     Nil -> True
                     Cons _ _ -> False
 
-            isNil (Cons 0x2 Nil) 
+            isNil (Cons 0x2 Nil)
             "#,
             indoc!(
                 r#"
@@ -1411,12 +1411,12 @@ mod test_mono {
 
             hasNone : ConsList (Maybe a) -> Bool
             hasNone = \list ->
-                when list is 
+                when list is
                     Nil -> False
                     Cons Nothing _ -> True
                     Cons (Just _) xs -> hasNone xs
 
-            hasNone (Cons (Just 3) Nil) 
+            hasNone (Cons (Just 3) Nil)
             "#,
             indoc!(
                 r#"
@@ -1475,7 +1475,7 @@ mod test_mono {
     fn fst() {
         compiles_to_ir(
             r#"
-            fst = \x, y -> x 
+            fst = \x, y -> x
 
             fst [1,2,3] [3,2,1]
             "#,
@@ -1512,7 +1512,7 @@ mod test_mono {
 
                 add : List Int -> List Int
                 add = \y -> List.set y 0 0
-                
+
                 List.len (add x) + List.len x
                 "#
             ),
@@ -1563,7 +1563,7 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                main = \{} -> 
+                main = \{} ->
                     List.get [1,2,3] 0
 
                 main {}
@@ -1736,9 +1736,9 @@ mod test_mono {
                         { x: Blue, y ? 3 } -> y
                         { x: Red, y ? 5 } -> y
 
-                a = f { x: Blue, y: 7 } 
+                a = f { x: Blue, y: 7 }
                 b = f { x: Blue }
-                c = f { x: Red, y: 11 } 
+                c = f { x: Red, y: 11 }
                 d = f { x: Red }
 
                 a * b * c * d
@@ -1844,6 +1844,60 @@ mod test_mono {
                 else
                     let Test.6 = 1i64;
                     ret Test.6;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn linked_list_length_twice() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+
+                nil : LinkedList Int
+                nil = Nil
+
+                length : LinkedList a -> Int
+                length = \list ->
+                    when list is
+                        Nil -> 0
+                        Cons _ rest -> 1 + length rest
+
+                length nil + length nil
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure Num.14 (#Attr.2, #Attr.3):
+                    let Test.14 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.14;
+
+                procedure Test.2 (Test.4):
+                    let Test.16 = true;
+                    let Test.17 = 1i64;
+                    let Test.18 = Index 0 Test.4;
+                    let Test.19 = lowlevel Eq Test.17 Test.18;
+                    let Test.15 = lowlevel And Test.19 Test.16;
+                    if Test.15 then
+                        dec Test.4;
+                        let Test.10 = 0i64;
+                        ret Test.10;
+                    else
+                        let Test.5 = Index 2 Test.4;
+                        dec Test.4;
+                        let Test.12 = 1i64;
+                        let Test.13 = CallByName Test.2 Test.5;
+                        let Test.11 = CallByName Num.14 Test.12 Test.13;
+                        ret Test.11;
+
+                let Test.9 = 1i64;
+                let Test.1 = Nil Test.9;
+                let Test.7 = CallByName Test.2 Test.1;
+                let Test.8 = CallByName Test.2 Test.1;
+                let Test.6 = CallByName Num.14 Test.7 Test.8;
+                ret Test.6;
                 "#
             ),
         )

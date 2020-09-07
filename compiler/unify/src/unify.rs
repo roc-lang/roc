@@ -581,8 +581,8 @@ fn unify_shared_tags(
             if let Some(rvar) = recursion_var {
                 match attr_wrapped {
                     None => {
-                        if expected == rvar {
-                            if actual == rvar {
+                        if subs.equivalent(expected, rvar) {
+                            if subs.equivalent(actual, rvar) {
                                 problems.extend(unify_pool(subs, pool, expected, actual));
                             } else {
                                 problems.extend(unify_pool(subs, pool, actual, ctx.second));
@@ -610,8 +610,8 @@ fn unify_shared_tags(
                         }
                     }
                     Some((_expected_uvar, inner_expected, _actual_uvar, inner_actual)) => {
-                        if inner_expected == rvar {
-                            if inner_actual == rvar {
+                        if subs.equivalent(inner_expected, rvar) {
+                            if subs.equivalent(inner_actual, rvar) {
                                 problems.extend(unify_pool(subs, pool, actual, expected));
                             } else {
                                 problems.extend(unify_pool(subs, pool, inner_actual, ctx.second));
@@ -747,7 +747,7 @@ fn unify_flat_type(
                 ctx,
                 union1,
                 union2,
-                (None, Some(*recursion_var)),
+                (Some(*recursion_var), None),
             )
         }
 
@@ -774,7 +774,11 @@ fn unify_flat_type(
 
         (Boolean(b1), Boolean(b2)) => {
             use Bool::*;
-            match (b1, b2) {
+
+            let b1 = b1.simplify(subs);
+            let b2 = b2.simplify(subs);
+
+            match (&b1, &b2) {
                 (Shared, Shared) => merge(subs, ctx, Structure(left.clone())),
                 (Shared, Container(cvar, mvars)) => {
                     let mut outcome = vec![];
