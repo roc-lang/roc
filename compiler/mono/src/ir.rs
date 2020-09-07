@@ -3541,16 +3541,6 @@ pub fn from_can_pattern<'a>(
             // sorted fields based on the type
             let sorted_fields = crate::layout::sort_record_fields(env.arena, *whole_var, env.subs);
 
-            let type_identifiers_by_key = sorted_fields
-                .iter()
-                .map(|(label, _)| label)
-                .collect::<MutSet<_>>();
-
-            let destructs_by_key = destructs
-                .iter()
-                .map(|destruct| destruct.value.label.clone())
-                .collect::<MutSet<_>>();
-
             // sorted fields based on the destruct
             let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
             let mut destructs = destructs.clone();

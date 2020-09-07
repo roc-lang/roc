@@ -647,15 +647,15 @@ mod test_mono {
                         case 1:
                             let Test.9 = 1i64;
                             jump Test.8 Test.9;
-
+                    
                         case 2:
                             let Test.10 = 2i64;
                             jump Test.8 Test.10;
-
+                    
                         default:
                             let Test.11 = 3i64;
                             jump Test.8 Test.11;
-
+                    
                     joinpoint Test.8 Test.3:
                         ret Test.3;
 

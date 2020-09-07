@@ -570,7 +570,6 @@ fn to_relevant_branch_help<'a>(
         AppliedTag {
             tag_name,
             arguments,
-            union,
             layout,
             ..
         } => {
@@ -935,18 +934,7 @@ pub fn optimize_when<'a>(
     )
 }
 
-fn path_to_expr<'a>(
-    env: &mut Env<'a, '_>,
-    symbol: Symbol,
-    path: &Path,
-    layout: &Layout<'a>,
-) -> (StoresVec<'a>, Symbol) {
-    let (symbol, stores, _) = path_to_expr_help2(env, symbol, path, layout.clone());
-
-    (stores, symbol)
-}
-
-fn path_to_expr_help2<'a>(
+fn path_to_expr_help<'a>(
     env: &mut Env<'a, '_>,
     mut symbol: Symbol,
     mut path: &Path,
@@ -1031,7 +1019,7 @@ fn test_to_equality<'a>(
     test: Test<'a>,
 ) -> (StoresVec<'a>, Symbol, Symbol, Layout<'a>) {
     let (rhs_symbol, mut stores, _layout) =
-        path_to_expr_help2(env, cond_symbol, &path, cond_layout.clone());
+        path_to_expr_help(env, cond_symbol, &path, cond_layout.clone());
 
     match test {
         Test::IsCtor {
@@ -1360,7 +1348,7 @@ fn decide_to_branching<'a>(
             // switch on the tag discriminant (currently an i64 value)
             // NOTE the tag discriminant is not actually loaded, `cond` can point to a tag
             let (cond, cond_stores_vec, cond_layout) =
-                path_to_expr_help2(env, cond_symbol, &path, cond_layout);
+                path_to_expr_help(env, cond_symbol, &path, cond_layout);
 
             let default_branch = decide_to_branching(
                 env,

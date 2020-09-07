@@ -22,7 +22,7 @@ use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{BasicValue, FloatValue, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
 use inkwell::{IntPredicate, OptimizationLevel};
-use roc_collections::all::{ImMap, MutMap, MutSet};
+use roc_collections::all::{ImMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{JoinPointId, Wrapped};
@@ -1446,7 +1446,7 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
 
 fn increment_refcount_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
+    _parent: FunctionValue<'ctx>,
     layout: &Layout<'a>,
     field_ptr: PointerValue<'ctx>,
 ) {
