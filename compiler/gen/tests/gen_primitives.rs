@@ -704,4 +704,117 @@ mod gen_primitives {
             i64
         );
     }
+
+    #[test]
+    fn when_nested_maybe() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+            Maybe a : [ Nothing, Just a ]
+
+            x : Maybe (Maybe Int)
+            x = Just (Just 41)
+
+            when x is
+                Just (Just v) -> v + 0x1
+                _ -> 0x1
+                "#
+            ),
+            42,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+            Maybe a : [ Nothing, Just a ]
+
+            x : Maybe (Maybe Int)
+            x = Just Nothing 
+
+            when x is
+                Just (Just v) -> v + 0x1
+                Just Nothing -> 0x2
+                Nothing -> 0x1
+                "#
+            ),
+            2,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+            Maybe a : [ Nothing, Just a ]
+
+            x : Maybe (Maybe Int)
+            x = Nothing 
+
+            when x is
+                Just (Just v) -> v + 0x1
+                Just Nothing -> 0x2
+                Nothing -> 0x1
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
+    fn when_peano() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Peano : [ S Peano, Z ]
+
+                three : Peano
+                three = S (S (S Z))
+
+                when three is
+                    S (S _) -> 1
+                    S (_) -> 2
+                    Z -> 3
+                "#
+            ),
+            1,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Peano : [ S Peano, Z ]
+
+                three : Peano
+                three = S Z
+
+                when three is
+                    S (S _) -> 1
+                    S (_) -> 2
+                    Z -> 3
+                "#
+            ),
+            2,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Peano : [ S Peano, Z ]
+
+                three : Peano
+                three = Z
+
+                when three is
+                    S (S _) -> 1
+                    S (_) -> 2
+                    Z -> 3
+                "#
+            ),
+            3,
+            i64
+        );
+    }
 }

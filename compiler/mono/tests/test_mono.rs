@@ -147,8 +147,8 @@ mod test_mono {
                 let Test.10 = 3i64;
                 let Test.1 = Just Test.9 Test.10;
                 let Test.5 = true;
-                let Test.7 = Index 0 Test.1;
                 let Test.6 = 0i64;
+                let Test.7 = Index 0 Test.1;
                 let Test.8 = lowlevel Eq Test.6 Test.7;
                 let Test.4 = lowlevel And Test.8 Test.5;
                 if Test.4 then
@@ -283,8 +283,8 @@ mod test_mono {
                 let Test.10 = 10i64;
                 let Test.1 = CallByName Num.32 Test.9 Test.10;
                 let Test.5 = true;
-                let Test.7 = Index 0 Test.1;
                 let Test.6 = 1i64;
+                let Test.7 = Index 0 Test.1;
                 let Test.8 = lowlevel Eq Test.6 Test.7;
                 let Test.4 = lowlevel And Test.8 Test.5;
                 if Test.4 then
@@ -343,8 +343,8 @@ mod test_mono {
                 let Test.11 = 41i64;
                 let Test.0 = Just Test.10 Test.11;
                 let Test.6 = true;
-                let Test.8 = Index 0 Test.0;
                 let Test.7 = 0i64;
+                let Test.8 = Index 0 Test.0;
                 let Test.9 = lowlevel Eq Test.7 Test.8;
                 let Test.5 = lowlevel And Test.9 Test.6;
                 if Test.5 then
@@ -507,13 +507,13 @@ mod test_mono {
                 let Test.15 = 3i64;
                 let Test.2 = Struct {Test.14, Test.15};
                 let Test.6 = true;
-                let Test.7 = 4i64;
-                let Test.8 = Index 0 Test.2;
-                let Test.13 = lowlevel Eq Test.7 Test.8;
+                let Test.8 = 4i64;
+                let Test.7 = Index 0 Test.2;
+                let Test.13 = lowlevel Eq Test.8 Test.7;
                 let Test.11 = lowlevel And Test.13 Test.6;
-                let Test.9 = 3i64;
-                let Test.10 = Index 1 Test.2;
-                let Test.12 = lowlevel Eq Test.9 Test.10;
+                let Test.10 = 3i64;
+                let Test.9 = Index 1 Test.2;
+                let Test.12 = lowlevel Eq Test.10 Test.9;
                 let Test.5 = lowlevel And Test.12 Test.11;
                 if Test.5 then
                     let Test.3 = 9i64;
@@ -744,15 +744,15 @@ mod test_mono {
                     let Test.23 = 2i64;
                     let Test.2 = Ok Test.22 Test.23;
                     let Test.18 = true;
-                    let Test.20 = Index 0 Test.2;
                     let Test.19 = 1i64;
+                    let Test.20 = Index 0 Test.2;
                     let Test.21 = lowlevel Eq Test.19 Test.20;
                     let Test.17 = lowlevel And Test.21 Test.18;
                     if Test.17 then
                         let Test.13 = true;
-                        let Test.14 = 3i64;
-                        let Test.15 = Index 0 Test.2;
-                        let Test.16 = lowlevel Eq Test.14 Test.15;
+                        let Test.15 = 3i64;
+                        let Test.14 = Index 1 Test.2;
+                        let Test.16 = lowlevel Eq Test.15 Test.14;
                         let Test.12 = lowlevel And Test.16 Test.13;
                         if Test.12 then
                             let Test.9 = 1i64;
@@ -1148,6 +1148,54 @@ mod test_mono {
                 ),
                 indoc!(
                     r#"
+                    procedure List.3 (#Attr.2, #Attr.3):
+                        let Test.35 = lowlevel ListLen #Attr.2;
+                        let Test.31 = lowlevel NumLt #Attr.3 Test.35;
+                        if Test.31 then
+                            let Test.33 = 1i64;
+                            let Test.34 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+                            let Test.32 = Ok Test.33 Test.34;
+                            ret Test.32;
+                        else
+                            let Test.29 = 0i64;
+                            let Test.30 = Struct {};
+                            let Test.28 = Err Test.29 Test.30;
+                            ret Test.28;
+
+                    procedure Test.0 (Test.2):
+                        let Test.36 = 0i64;
+                        let Test.25 = CallByName List.3 Test.2 Test.36;
+                        let Test.27 = 0i64;
+                        let Test.26 = CallByName List.3 Test.2 Test.27;
+                        let Test.9 = Struct {Test.25, Test.26};
+                        let Test.15 = true;
+                        let Test.17 = 1i64;
+                        let Test.16 = Index 0 Test.9;
+                        let Test.18 = Index 0 Test.16;
+                        let Test.24 = lowlevel Eq Test.17 Test.18;
+                        let Test.22 = lowlevel And Test.24 Test.15;
+                        let Test.20 = 1i64;
+                        let Test.19 = Index 1 Test.9;
+                        let Test.21 = Index 0 Test.19;
+                        let Test.23 = lowlevel Eq Test.20 Test.21;
+                        let Test.14 = lowlevel And Test.23 Test.22;
+                        if Test.14 then
+                            let Test.12 = Index 0 Test.9;
+                            let Test.3 = Index 1 Test.12;
+                            let Test.11 = Index 1 Test.9;
+                            let Test.4 = Index 1 Test.11;
+                            inc Test.2;
+                            ret Test.2;
+                        else
+                            let Test.13 = Array [];
+                            ret Test.13;
+
+                    let Test.7 = 1i64;
+                    let Test.8 = 2i64;
+                    let Test.6 = Array [Test.7, Test.8];
+                    let Test.5 = CallByName Test.0 Test.6;
+                    dec Test.6;
+                    ret Test.5;
                 "#
                 ),
             )
@@ -1610,8 +1658,8 @@ mod test_mono {
                 let Test.10 = S Test.11 Test.12;
                 let Test.1 = S Test.9 Test.10;
                 let Test.5 = true;
-                let Test.7 = Index 0 Test.1;
                 let Test.6 = 1i64;
+                let Test.7 = Index 0 Test.1;
                 let Test.8 = lowlevel Eq Test.6 Test.7;
                 let Test.4 = lowlevel And Test.8 Test.5;
                 if Test.4 then
@@ -1768,23 +1816,34 @@ mod test_mono {
             ),
             indoc!(
                 r#"
-                procedure Num.16 (#Attr.2, #Attr.3):
-                    let Test.15 = lowlevel NumMul #Attr.2 #Attr.3;
-                    ret Test.15;
+                procedure Num.14 (#Attr.2, #Attr.3):
+                    let Test.21 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.21;
 
-                procedure Test.0 (Test.4):
+                let Test.17 = 0i64;
+                let Test.19 = 0i64;
+                let Test.20 = 41i64;
+                let Test.18 = Just Test.19 Test.20;
+                let Test.1 = Just Test.17 Test.18;
+                let Test.8 = true;
+                let Test.10 = 0i64;
+                let Test.9 = Index 1 Test.1;
+                let Test.11 = Index 0 Test.9;
+                let Test.16 = lowlevel Eq Test.10 Test.11;
+                let Test.14 = lowlevel And Test.16 Test.8;
+                let Test.12 = 0i64;
+                let Test.13 = Index 0 Test.1;
+                let Test.15 = lowlevel Eq Test.12 Test.13;
+                let Test.7 = lowlevel And Test.15 Test.14;
+                if Test.7 then
+                    let Test.5 = Index 1 Test.1;
+                    let Test.2 = Index 1 Test.5;
+                    let Test.4 = 1i64;
+                    let Test.3 = CallByName Num.14 Test.2 Test.4;
+                    ret Test.3;
+                else
+                    let Test.6 = 1i64;
                     ret Test.6;
-
-                procedure Test.0 (Test.4):
-                    ret Test.6;
-
-                let Test.10 = 7i64;
-                let Test.9 = Struct {Test.10};
-                let Test.1 = CallByName Test.0 Test.9;
-                let Test.8 = Struct {};
-                let Test.2 = CallByName Test.0 Test.8;
-                let Test.7 = CallByName Num.16 Test.1 Test.2;
-                ret Test.7;
                 "#
             ),
         )
