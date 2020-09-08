@@ -581,4 +581,88 @@ mod gen_num {
     fn float_to_float() {
         assert_evals_to!("Num.toFloat 0.5", 0.5, f64);
     }
+
+    #[test]
+    fn int_compare() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.compare 0 1 is
+                    LT -> 0
+                    EQ -> 1
+                    GT -> 2
+                "#
+            ),
+            0,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.compare 1 1 is
+                    LT -> 0
+                    EQ -> 1
+                    GT -> 2
+                "#
+            ),
+            1,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.compare 1 0 is
+                    LT -> 0
+                    EQ -> 1
+                    GT -> 2
+                "#
+            ),
+            2,
+            i64
+        );
+    }
+
+    #[test]
+    fn float_compare() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.compare 0 3.14 is
+                    LT -> 0
+                    EQ -> 1
+                    GT -> 2
+                "#
+            ),
+            0,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.compare 3.14 3.14 is
+                    LT -> 0
+                    EQ -> 1
+                    GT -> 2
+                "#
+            ),
+            1,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.compare 3.14 0 is
+                    LT -> 0
+                    EQ -> 1
+                    GT -> 2
+                "#
+            ),
+            2,
+            i64
+        );
+    }
 }

@@ -25,6 +25,7 @@ pub enum LowLevel {
     NumGte,
     NumLt,
     NumLte,
+    NumCompare,
     NumDivUnchecked,
     NumRemUnchecked,
     NumAbs,

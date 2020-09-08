@@ -185,7 +185,7 @@ pub fn construct_optimization_passes<'a>(
         }
         OptLevel::Optimize => {
             // this threshold seems to do what we want
-            pmb.set_inliner_with_threshold(2);
+            pmb.set_inliner_with_threshold(275);
 
             // TODO figure out which of these actually help
 
@@ -1650,6 +1650,88 @@ fn run_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
+        NumCompare => {
+            use inkwell::FloatPredicate;
+            use inkwell::IntPredicate;
+
+            debug_assert_eq!(args.len(), 2);
+
+            let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
+            let (rhs_arg, rhs_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            match (lhs_layout, rhs_layout) {
+                (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
+                    if lhs_builtin == rhs_builtin =>
+                {
+                    use roc_mono::layout::Builtin::*;
+
+                    let tag_eq = env.context.i8_type().const_int(0 as u64, false);
+                    let tag_gt = env.context.i8_type().const_int(1 as u64, false);
+                    let tag_lt = env.context.i8_type().const_int(2 as u64, false);
+
+                    match lhs_builtin {
+                        Int128 | Int64 | Int32 | Int16 | Int8 => {
+                            let are_equal = env.builder.build_int_compare(
+                                IntPredicate::EQ,
+                                lhs_arg.into_int_value(),
+                                rhs_arg.into_int_value(),
+                                "int_eq",
+                            );
+                            let is_less_than = env.builder.build_int_compare(
+                                IntPredicate::SLT,
+                                lhs_arg.into_int_value(),
+                                rhs_arg.into_int_value(),
+                                "int_compare",
+                            );
+
+                            let step1 =
+                                env.builder
+                                    .build_select(is_less_than, tag_lt, tag_gt, "lt_or_gt");
+
+                            env.builder.build_select(
+                                are_equal,
+                                tag_eq,
+                                step1.into_int_value(),
+                                "lt_or_gt",
+                            )
+                        }
+                        Float128 | Float64 | Float32 | Float16 => {
+                            let are_equal = env.builder.build_float_compare(
+                                FloatPredicate::OEQ,
+                                lhs_arg.into_float_value(),
+                                rhs_arg.into_float_value(),
+                                "float_eq",
+                            );
+                            let is_less_than = env.builder.build_float_compare(
+                                FloatPredicate::OLT,
+                                lhs_arg.into_float_value(),
+                                rhs_arg.into_float_value(),
+                                "float_compare",
+                            );
+
+                            let step1 =
+                                env.builder
+                                    .build_select(is_less_than, tag_lt, tag_gt, "lt_or_gt");
+
+                            env.builder.build_select(
+                                are_equal,
+                                tag_eq,
+                                step1.into_int_value(),
+                                "lt_or_gt",
+                            )
+                        }
+
+                        _ => {
+                            unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, lhs_layout);
+                        }
+                    }
+                }
+                _ => {
+                    unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid layouts. The 2 layouts were: ({:?}) and ({:?})", op, lhs_layout, rhs_layout);
+                }
+            }
+        }
+
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
         | NumDivUnchecked => {
             debug_assert_eq!(args.len(), 2);

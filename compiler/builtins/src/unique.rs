@@ -317,6 +317,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // isGte or (>=) : Num a, Num a -> Bool
     add_num_comparison(Symbol::NUM_GTE);
 
+    // compare : Num a, Num a -> [ LT, EQ, GT ]
+    add_type(Symbol::NUM_COMPARE, {
+        let_tvars! { u, v, w, num };
+        unique_function(vec![num_type(u, num), num_type(v, num)], ordering_type(w))
+    });
+
     // toFloat : Num a -> Float
     add_type(Symbol::NUM_TO_FLOAT, {
         let_tvars! { star1, star2, a };
@@ -1202,6 +1208,25 @@ fn map_type(u: VarId, key: VarId, value: VarId) -> SolvedType {
         vec![
             flex(u),
             SolvedType::Apply(Symbol::MAP_MAP, vec![flex(key), flex(value)]),
+        ],
+    )
+}
+
+#[inline(always)]
+fn ordering_type(u: VarId) -> SolvedType {
+    // [ LT, EQ, GT ]
+    SolvedType::Apply(
+        Symbol::ATTR_ATTR,
+        vec![
+            flex(u),
+            SolvedType::TagUnion(
+                vec![
+                    (TagName::Global("GT".into()), vec![]),
+                    (TagName::Global("EQ".into()), vec![]),
+                    (TagName::Global("LT".into()), vec![]),
+                ],
+                Box::new(SolvedType::EmptyTagUnion),
+            ),
         ],
     )
 }
