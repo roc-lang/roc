@@ -3086,6 +3086,9 @@ mod test_reporting {
 
     #[test]
     fn two_different_cons() {
+        // TODO investigate what is happening here;
+        // while it makes some kind of sense to print the recursion var as infinite,
+        // it's not very helpful in practice.
         report_problem_as(
             indoc!(
                 r#"
@@ -3109,11 +3112,11 @@ mod test_reporting {
 
                 This `Cons` global tag application has the type:
 
-                    [ Cons {} [ Cons Str [ Cons {} a, Nil ] as a, Nil ], Nil ]
+                    [ Cons {} [ Cons Str [ Cons {} ∞, Nil ] as ∞, Nil ], Nil ]
 
                 But the type annotation on `x` says it should be:
 
-                    [ Cons {} a, Nil ] as a
+                    [ Cons {} ∞, Nil ] as ∞
                 "#
             ),
         )

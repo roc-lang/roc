@@ -113,7 +113,15 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
         } => {
             result.extend(arguments.iter().copied());
         }
-
+        Reuse {
+            symbol, arguments, ..
+        } => {
+            result.extend(arguments.iter().copied());
+            result.insert(*symbol);
+        }
+        Reset(x) => {
+            result.insert(*x);
+        }
         RunLowLevel(_, args) => {
             result.extend(args.iter());
         }
@@ -428,12 +436,14 @@ impl<'a> Context<'a> {
         live_vars.remove(&z);
 
         let new_b = match v {
-            Tag { arguments: ys, .. } | Struct(ys) | Array { elems: ys, .. } => self
-                .add_inc_before_consume_all(
-                    ys,
-                    self.arena.alloc(Stmt::Let(z, v, l, b)),
-                    &b_live_vars,
-                ),
+            Reuse { arguments: ys, .. }
+            | Tag { arguments: ys, .. }
+            | Struct(ys)
+            | Array { elems: ys, .. } => self.add_inc_before_consume_all(
+                ys,
+                self.arena.alloc(Stmt::Let(z, v, l, b)),
+                &b_live_vars,
+            ),
             AccessAtIndex { structure: x, .. } => {
                 let b = self.add_dec_if_needed(x, b, b_live_vars);
                 let info_x = self.get_var_info(x);
@@ -479,7 +489,11 @@ impl<'a> Context<'a> {
                 self.add_inc_before(ys, ps, b, b_live_vars)
             }
 
-            EmptyArray | FunctionPointer(_, _) | Literal(_) | RuntimeErrorFunction(_) => {
+            EmptyArray
+            | FunctionPointer(_, _)
+            | Literal(_)
+            | Reset(_)
+            | RuntimeErrorFunction(_) => {
                 // EmptyArray is always stack-allocated
                 // function pointers are persistent
                 self.arena.alloc(Stmt::Let(z, v, l, b))
@@ -764,7 +778,7 @@ impl<'a> Context<'a> {
 }
 
 #[derive(Clone, Debug, Default)]
-struct LocalContext<'a> {
+pub struct LocalContext<'a> {
     join_points: MutMap<JoinPointId, (&'a [Param<'a>], &'a Stmt<'a>)>,
 }
 

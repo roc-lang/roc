@@ -190,7 +190,7 @@ mod gen_records {
     }
 
     #[test]
-    fn when_on_record_with_guard_pattern() {
+    fn when_record_with_guard_pattern() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -502,6 +502,34 @@ mod gen_records {
                 "#
             ),
             13,
+            i64
+        );
+    }
+
+    #[test]
+    fn optional_field_singleton_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when { x : 4 } is
+                    { x ? 3 } -> x
+                "#
+            ),
+            4,
+            i64
+        );
+    }
+
+    #[test]
+    fn optional_field_empty_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when { } is
+                    { x ? 3 } -> x
+                "#
+            ),
+            3,
             i64
         );
     }
