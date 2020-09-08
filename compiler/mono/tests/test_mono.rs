@@ -1920,4 +1920,36 @@ mod test_mono {
             ),
         )
     }
+
+    #[test]
+    fn linked_list_map() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+
+                three : LinkedList Int
+                three = Cons 3 (Cons 2 (Cons 1 Nil)) 
+
+                sum : LinkedList a -> Int
+                sum = \list ->
+                    when list is
+                        Nil -> 0
+                        Cons x rest -> x + sum rest
+
+                map : (a -> b), LinkedList a -> LinkedList b
+                map = \f, list ->
+                    when list is
+                        Nil -> Nil
+                        Cons x rest -> Cons (f x) (map f rest)
+
+                sum (map (\_ -> 1) three)
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
 }
