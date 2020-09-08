@@ -592,6 +592,15 @@ mod gen_list {
         );
     }
 
+    #[test]
+    fn list_concat_two_bigger_non_empty_lists() {
+        assert_evals_to!(
+            "List.concat [ 1.1, 2.2 ] [ 3.3, 4.4, 5.5 ]",
+            &[1.1, 2.2, 3.3, 4.4, 5.5],
+            &'static [f64]
+        );
+    }
+
     fn assert_concat_worked(num_elems1: i64, num_elems2: i64) {
         let vec1: Vec<i64> = (0..num_elems1)
             .map(|i| 12345 % (i + num_elems1 + num_elems2 + 1))

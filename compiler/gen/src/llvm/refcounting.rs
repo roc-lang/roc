@@ -331,7 +331,6 @@ pub fn build_dec_list<'a, 'ctx, 'env>(
     let call = env
         .builder
         .build_call(function, &[original_wrapper.into()], "decrement_union");
-
     call.set_call_convention(FAST_CALL_CONV);
 }
 
@@ -414,8 +413,7 @@ fn build_dec_list_help<'a, 'ctx, 'env>(
     {
         builder.position_at_end(then_block);
         if !env.leak {
-            let free = builder.build_free(refcount_ptr);
-            builder.insert_instruction(&free, None);
+            builder.build_free(refcount_ptr);
         }
         builder.build_unconditional_branch(cont_block);
     }
