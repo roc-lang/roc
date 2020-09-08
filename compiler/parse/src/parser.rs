@@ -445,6 +445,29 @@ pub fn ascii_char<'a>(expected: char) -> impl Parser<'a, ()> {
     }
 }
 
+/// One or more ASCII hex digits. (Useful when parsing unicode escape codes,
+/// which must consist entirely of ASCII hex digits.)
+pub fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str> {
+    move |arena, state: State<'a>| {
+        let mut buf = bumpalo::collections::String::new_in(arena);
+
+        for &byte in state.bytes.iter() {
+            if (byte as char).is_ascii_hexdigit() {
+                buf.push(byte as char);
+            } else if buf.is_empty() {
+                // We didn't find any hex digits!
+                return Err(unexpected(0, state, Attempting::Keyword));
+            } else {
+                let state = state.advance_without_indenting(buf.len())?;
+
+                return Ok((buf.into_bump_str(), state));
+            }
+        }
+
+        Err(unexpected_eof(0, Attempting::HexDigit, state))
+    }
+}
+
 /// A single UTF-8-encoded char. This will both parse *and* validate that the
 /// char is valid UTF-8, but it will *not* advance the state.
 pub fn peek_utf8_char<'a>(state: &State<'a>) -> Result<(char, usize), FailReason> {

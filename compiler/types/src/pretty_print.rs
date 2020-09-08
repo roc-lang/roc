@@ -427,7 +427,7 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                         subs.get_without_compacting(var).content,
                         subs,
                         buf,
-                        parens,
+                        Parens::Unnecessary,
                     );
                 }
 
@@ -467,8 +467,8 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
 
             sorted_fields.sort_by(|(a, _), (b, _)| {
                 a.clone()
-                    .into_string(interns, home)
-                    .cmp(&b.clone().into_string(&interns, home))
+                    .as_string(interns, home)
+                    .cmp(&b.as_string(&interns, home))
             });
 
             let mut any_written_yet = false;
@@ -480,7 +480,7 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                     any_written_yet = true;
                 }
 
-                buf.push_str(&label.into_string(&interns, home));
+                buf.push_str(&label.as_string(&interns, home));
 
                 for var in vars {
                     buf.push(' ');
@@ -533,7 +533,7 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                 } else {
                     any_written_yet = true;
                 }
-                buf.push_str(&label.into_string(&interns, home));
+                buf.push_str(&label.as_string(&interns, home));
 
                 for var in vars {
                     buf.push(' ');

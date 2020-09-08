@@ -151,10 +151,9 @@ impl Variable {
     pub const EMPTY_TAG_UNION: Variable = Variable(2);
     // Builtins
     const BOOL_ENUM: Variable = Variable(3);
-    pub const BOOL: Variable = Variable(4);
-    pub const LIST_GET: Variable = Variable(5);
+    pub const BOOL: Variable = Variable(4); // Used in `if` conditions
 
-    pub const NUM_RESERVED_VARS: usize = 6;
+    pub const NUM_RESERVED_VARS: usize = 5;
 
     const FIRST_USER_SPACE_VAR: Variable = Variable(Self::NUM_RESERVED_VARS as u32);
 

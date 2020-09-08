@@ -1,10 +1,14 @@
 use crate::layout_id::LayoutIds;
 use crate::llvm::build_list::{
-    allocate_list, empty_polymorphic_list, list_append, list_concat, list_get_unsafe, list_join,
-    list_len, list_prepend, list_repeat, list_reverse, list_set, list_single,
+    allocate_list, build_basic_phi2, clone_nonempty_list, empty_list, empty_polymorphic_list,
+    incrementing_elem_loop, list_append, list_concat, list_get_unsafe, list_is_not_empty,
+    list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set,
+    list_single, list_walk_right, load_list_ptr, store_list, LoopListArg,
 };
 use crate::llvm::compare::{build_eq, build_neq};
-use crate::llvm::convert::{basic_type_from_layout, collection, get_fn_type, ptr_int};
+use crate::llvm::convert::{
+    basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
+};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inkwell::basic_block::BasicBlock;
@@ -15,13 +19,13 @@ use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, PointerType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
-use inkwell::values::{FloatValue, FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{BasicValue, FloatValue, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
 use inkwell::{IntPredicate, OptimizationLevel};
 use roc_collections::all::{ImMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::ir::{JoinPointId, Proc};
+use roc_mono::ir::{JoinPointId, Proc, Wrapped};
 use roc_mono::layout::{Builtin, Layout, MemoryMode};
 use target_lexicon::CallingConvention;
 
@@ -33,13 +37,15 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = true;
 #[cfg(not(debug_assertions))]
 const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 
+pub const REFCOUNT_0: usize = std::usize::MAX;
+pub const REFCOUNT_1: usize = REFCOUNT_0 - 1;
+
 #[derive(Debug, Clone, Copy)]
 pub enum OptLevel {
     Normal,
     Optimize,
 }
 
-// pub type Scope<'a, 'ctx> = ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>;
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>,
@@ -222,45 +228,73 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
             if str_literal.is_empty() {
-                panic!("TODO build an empty string in LLVM");
+                empty_list(env)
             } else {
                 let ctx = env.context;
                 let builder = env.builder;
-                let str_len = str_literal.len() + 1/* TODO drop the +1 when we have structs and this is no longer a NUL-terminated CString.*/;
 
-                let byte_type = ctx.i8_type();
-                let nul_terminator = byte_type.const_zero();
-                let len_val = ctx.i64_type().const_int(str_len as u64, false);
-                let ptr = env
-                    .builder
-                    .build_array_malloc(ctx.i8_type(), len_val, "str_ptr")
-                    .unwrap();
+                let len_u64 = str_literal.len() as u64;
 
-                // TODO check if malloc returned null; if so, runtime error for OOM!
+                let elem_bytes = CHAR_LAYOUT.stack_size(env.ptr_bytes) as u64;
 
-                // Copy the bytes from the string literal into the array
-                for (index, byte) in str_literal.bytes().enumerate() {
+                let ptr = {
+                    let bytes_len = elem_bytes * len_u64;
+                    let len_type = env.ptr_int();
+                    let len = len_type.const_int(bytes_len, false);
+
+                    allocate_list(env, &CHAR_LAYOUT, len)
+
+                    // TODO check if malloc returned null; if so, runtime error for OOM!
+                };
+
+                // Copy the elements from the list literal into the array
+                for (index, char) in str_literal.as_bytes().iter().enumerate() {
+                    let val = env
+                        .context
+                        .i8_type()
+                        .const_int(*char as u64, false)
+                        .as_basic_value_enum();
                     let index_val = ctx.i64_type().const_int(index as u64, false);
                     let elem_ptr =
-                        unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "byte") };
+                        unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
 
-                    builder.build_store(elem_ptr, byte_type.const_int(byte as u64, false));
+                    builder.build_store(elem_ptr, val);
                 }
 
-                // Add a NUL terminator at the end.
-                // TODO: Instead of NUL-terminating, return a struct
-                // with the pointer and also the length and capacity.
-                let index_val = ctx.i64_type().const_int(str_len as u64 - 1, false);
-                let elem_ptr =
-                    unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "nul_terminator") };
+                let ptr_bytes = env.ptr_bytes;
+                let int_type = ptr_int(ctx, ptr_bytes);
+                let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+                let struct_type = collection(ctx, ptr_bytes);
+                let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
+                let mut struct_val;
 
-                builder.build_store(elem_ptr, nul_terminator);
+                // Store the pointer
+                struct_val = builder
+                    .build_insert_value(
+                        struct_type.get_undef(),
+                        ptr_as_int,
+                        Builtin::WRAPPER_PTR,
+                        "insert_ptr",
+                    )
+                    .unwrap();
 
-                BasicValueEnum::PointerValue(ptr)
+                // Store the length
+                struct_val = builder
+                    .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
+                    .unwrap();
+
+                // Bitcast to an array of raw bytes
+                builder.build_bitcast(
+                    struct_val.into_struct_value(),
+                    collection(ctx, ptr_bytes),
+                    "cast_collection",
+                )
             }
         }
     }
 }
+
+static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
 
 pub fn build_exp_expr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -343,7 +377,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // If this is an external-facing function, use the C calling convention.
                 call.set_call_convention(C_CALL_CONV);
             } else {
-                // If it's an internal-only function, use the fast calling conention.
+                // If it's an internal-only function, use the fast calling convention.
                 call.set_call_convention(FAST_CALL_CONV);
             }
 
@@ -453,10 +487,13 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
         Tag {
             arguments,
-            tag_layout,
+            tag_layout: Layout::Union(fields),
             union_size,
+            tag_id,
             ..
         } => {
+            let tag_layout = Layout::Union(fields);
+
             debug_assert!(*union_size > 1);
             let ptr_size = env.ptr_bytes;
 
@@ -470,18 +507,34 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            for field_symbol in arguments.iter() {
+            for (field_symbol, tag_field_layout) in
+                arguments.iter().zip(fields[*tag_id as usize].iter())
+            {
+                // note field_layout is the layout of the argument.
+                // tag_field_layout is the layout that the tag will store
+                // these are different for recursive tag unions
                 let (val, field_layout) = load_symbol_and_layout(env, scope, field_symbol);
-                let field_size = field_layout.stack_size(ptr_size);
+                let field_size = tag_field_layout.stack_size(ptr_size);
 
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
                 if field_size != 0 {
                     let field_type =
-                        basic_type_from_layout(env.arena, env.context, field_layout, ptr_size);
+                        basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
 
                     field_types.push(field_type);
-                    field_vals.push(val);
+
+                    if let Layout::RecursivePointer = tag_field_layout {
+                        let ptr = allocate_with_refcount(env, field_layout, val).into();
+                        let ptr = cast_basic_basic(
+                            builder,
+                            ptr,
+                            ctx.i64_type().ptr_type(AddressSpace::Generic).into(),
+                        );
+                        field_vals.push(ptr);
+                    } else {
+                        field_vals.push(val);
+                    }
 
                     filler -= field_size;
                 }
@@ -528,7 +581,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
 
             let internal_type =
-                basic_type_from_layout(env.arena, env.context, tag_layout, env.ptr_bytes);
+                basic_type_from_layout(env.arena, env.context, &tag_layout, env.ptr_bytes);
 
             cast_basic_basic(
                 builder,
@@ -536,33 +589,52 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 internal_type,
             )
         }
+        Tag { .. } => unreachable!("tags should have a union layout"),
+
+        Reset(_) => todo!(),
+        Reuse { .. } => todo!(),
+
         AccessAtIndex {
             index,
             structure,
-            is_unwrapped,
+            wrapped: Wrapped::SingleElementRecord,
             ..
-        } if *is_unwrapped => {
-            use inkwell::values::BasicValueEnum::*;
+        } => {
+            match load_symbol_and_layout(env, scope, structure) {
+                (StructValue(argument), Layout::Struct(fields)) if fields.len() > 1 =>
+                // TODO so sometimes a value gets Wrapped::SingleElementRecord
+                // but still has multiple fields...
+                {
+                    env.builder
+                        .build_extract_value(
+                            argument,
+                            *index as u32,
+                            env.arena.alloc(format!("struct_field_access_{}_", index)),
+                        )
+                        .unwrap()
+                }
+                (other, _) => other,
+            }
+        }
 
-            let builder = env.builder;
-
-            // Get Struct val
-            // Since this is a one-element tag union, we get the underlying value
-            // right away. However, that struct might have only one field which
-            // is not zero-sized, which would make it unwrapped. If that happens,
-            // we must be
-            match load_symbol(env, scope, structure) {
-                StructValue(argument) => builder
+        AccessAtIndex {
+            index,
+            structure,
+            wrapped: Wrapped::RecordOrSingleTagUnion,
+            ..
+        } => {
+            // extract field from a record
+            match load_symbol_and_layout(env, scope, structure) {
+                (StructValue(argument), Layout::Struct(fields)) if fields.len() > 1 => env
+                    .builder
                     .build_extract_value(
                         argument,
                         *index as u32,
-                        env.arena.alloc(format!("tag_field_access_{}_", index)),
+                        env.arena.alloc(format!("struct_field_access_{}_", index)),
                     )
                     .unwrap(),
-                other => {
-                    // If it's not a Struct, that means it was unwrapped,
-                    // so we should return it directly.
-                    other
+                (other, layout) => {
+                    unreachable!("can only index into struct layout {:?} {:?}", other, layout)
                 }
             }
         }
@@ -596,9 +668,25 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             let struct_value = cast_struct_struct(builder, argument, struct_type);
 
-            builder
+            let result = builder
                 .build_extract_value(struct_value, *index as u32, "")
-                .expect("desired field did not decode")
+                .expect("desired field did not decode");
+
+            if let Some(Layout::RecursivePointer) = field_layouts.get(*index as usize) {
+                let struct_layout = Layout::Struct(field_layouts);
+                let desired_type = block_of_memory(env.context, &struct_layout, env.ptr_bytes);
+
+                // the value is a pointer to the actual value; load that value!
+                use inkwell::types::BasicType;
+                let ptr = cast_basic_basic(
+                    builder,
+                    result,
+                    desired_type.ptr_type(AddressSpace::Generic).into(),
+                );
+                builder.build_load(ptr.into_pointer_value(), "load_recursive_field")
+            } else {
+                result
+            }
         }
         EmptyArray => empty_polymorphic_list(env),
         Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
@@ -617,6 +705,75 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         }
         RuntimeErrorFunction(_) => todo!(),
     }
+}
+
+pub fn allocate_with_refcount<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
+    value: BasicValueEnum<'ctx>,
+) -> PointerValue<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let value_type = basic_type_from_layout(env.arena, ctx, layout, env.ptr_bytes);
+    let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
+
+    let len_type = env.ptr_int();
+    // bytes per element
+    let bytes_len = len_type.const_int(value_bytes, false);
+
+    // TODO fix offset
+    let offset = (env.ptr_bytes as u64).max(value_bytes);
+
+    let ptr = {
+        let len = bytes_len;
+        let len =
+            builder.build_int_add(len, len_type.const_int(offset, false), "add_refcount_space");
+
+        env.builder
+            .build_array_malloc(ctx.i8_type(), len, "create_list_ptr")
+            .unwrap()
+
+        // TODO check if malloc returned null; if so, runtime error for OOM!
+    };
+
+    // We must return a pointer to the first element:
+    let ptr_bytes = env.ptr_bytes;
+    let int_type = ptr_int(ctx, ptr_bytes);
+    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+    let incremented = builder.build_int_add(
+        ptr_as_int,
+        ctx.i64_type().const_int(offset, false),
+        "increment_list_ptr",
+    );
+
+    let ptr_type = get_ptr_type(&value_type, AddressSpace::Generic);
+    let list_element_ptr = builder.build_int_to_ptr(incremented, ptr_type, "list_cast_ptr");
+
+    // subtract ptr_size, to access the refcount
+    let refcount_ptr = builder.build_int_sub(
+        incremented,
+        ctx.i64_type().const_int(env.ptr_bytes as u64, false),
+        "refcount_ptr",
+    );
+
+    let refcount_ptr = builder.build_int_to_ptr(
+        refcount_ptr,
+        int_type.ptr_type(AddressSpace::Generic),
+        "make ptr",
+    );
+
+    // the refcount of a new allocation is initially 1
+    // we assume that the allocation is indeed used (dead variables are eliminated)
+    let ref_count_one = ctx
+        .i64_type()
+        .const_int(crate::llvm::build::REFCOUNT_1 as _, false);
+    builder.build_store(refcount_ptr, ref_count_one);
+
+    // store the value in the pointer
+    builder.build_store(list_element_ptr, value);
+
+    list_element_ptr
 }
 
 fn list_literal<'a, 'ctx, 'env>(
@@ -687,6 +844,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     stmt: &roc_mono::ir::Stmt<'a>,
 ) -> BasicValueEnum<'ctx> {
+    use roc_mono::ir::Expr;
     use roc_mono::ir::Stmt::*;
 
     match stmt {
@@ -694,7 +852,20 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let context = &env.context;
 
             let val = build_exp_expr(env, layout_ids, &scope, parent, &expr);
-            let expr_bt = basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes);
+            let expr_bt = if let Layout::RecursivePointer = layout {
+                match expr {
+                    Expr::AccessAtIndex { field_layouts, .. } => {
+                        let layout = Layout::Struct(field_layouts);
+
+                        block_of_memory(env.context, &layout, env.ptr_bytes)
+                    }
+                    _ => unreachable!(
+                        "a recursive pointer can only be loaded from a recursive tag union"
+                    ),
+                }
+            } else {
+                basic_type_from_layout(env.arena, context, &layout, env.ptr_bytes)
+            };
             let alloca =
                 create_entry_block_alloca(env, parent, expr_bt, symbol.ident_string(&env.interns));
 
@@ -896,20 +1067,28 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let (value, layout) = load_symbol_and_layout(env, scope, symbol);
             let layout = layout.clone();
 
+            if layout.contains_refcounted() {
+                increment_refcount_layout(env, parent, layout_ids, value, &layout);
+            }
+
+            /*
             match layout {
                 Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
-                    increment_refcount_list(env, value.into_struct_value());
+                    increment_refcount_list(env, parent, value.into_struct_value());
                     build_exp_stmt(env, layout_ids, scope, parent, cont)
                 }
                 _ => build_exp_stmt(env, layout_ids, scope, parent, cont),
             }
+            */
+
+            build_exp_stmt(env, layout_ids, scope, parent, cont)
         }
         Dec(symbol, cont) => {
             let (value, layout) = load_symbol_and_layout(env, scope, symbol);
             let layout = layout.clone();
 
             if layout.contains_refcounted() {
-                decrement_refcount_layout(env, parent, value, &layout);
+                decrement_refcount_layout(env, parent, layout_ids, value, &layout);
             }
 
             build_exp_stmt(env, layout_ids, scope, parent, cont)
@@ -923,11 +1102,7 @@ fn refcount_is_one_comparison<'ctx>(
     context: &'ctx Context,
     refcount: IntValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let refcount_one: IntValue<'ctx> = context.i64_type().const_int((std::usize::MAX) as _, false);
-    // Note: Check for refcount < refcount_1 as the "true" condition,
-    // to avoid misprediction. (In practice this should usually pass,
-    // and CPUs generally default to predicting that a forward jump
-    // shouldn't be taken; that is, they predict "else" won't be taken.)
+    let refcount_one: IntValue<'ctx> = context.i64_type().const_int(REFCOUNT_1 as _, false);
     builder.build_int_compare(
         IntPredicate::EQ,
         refcount,
@@ -936,30 +1111,56 @@ fn refcount_is_one_comparison<'ctx>(
     )
 }
 
-#[allow(dead_code)]
 fn list_get_refcount_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
     list_wrapper: StructValue<'ctx>,
 ) -> PointerValue<'ctx> {
-    let builder = env.builder;
-    let ctx = env.context;
-
-    // pointer to usize
-    let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-
     // fetch the pointer to the array data, as an integer
-    let ptr_as_int = builder
+    let ptr_as_int = env
+        .builder
         .build_extract_value(list_wrapper, Builtin::WRAPPER_PTR, "read_list_ptr")
         .unwrap()
         .into_int_value();
 
-    // subtract ptr_size, to access the refcount
+    get_refcount_ptr_help(env, layout, ptr_as_int)
+}
+
+fn get_refcount_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
+    ptr: PointerValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let ptr_as_int =
+        cast_basic_basic(env.builder, ptr.into(), env.context.i64_type().into()).into_int_value();
+
+    get_refcount_ptr_help(env, layout, ptr_as_int)
+}
+
+fn get_refcount_ptr_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
+    ptr_as_int: IntValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
+    let offset = match layout {
+        Layout::Builtin(Builtin::List(_, _)) => env.ptr_bytes as u64,
+        _ => (env.ptr_bytes as u64).max(value_bytes),
+    };
+
+    // subtract offset, to access the refcount
     let refcount_ptr = builder.build_int_sub(
         ptr_as_int,
-        ctx.i64_type().const_int(env.ptr_bytes as u64, false),
+        ctx.i64_type().const_int(offset, false),
         "make_refcount_ptr",
     );
+
+    // pointer to usize
+    let ptr_bytes = env.ptr_bytes;
+    let int_type = ptr_int(ctx, ptr_bytes);
 
     builder.build_int_to_ptr(
         refcount_ptr,
@@ -971,13 +1172,14 @@ fn list_get_refcount_ptr<'a, 'ctx, 'env>(
 fn decrement_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
+    layout_ids: &mut LayoutIds<'a>,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) {
     use Layout::*;
 
     match layout {
-        Builtin(builtin) => decrement_refcount_builtin(env, parent, value, builtin),
+        Builtin(builtin) => decrement_refcount_builtin(env, parent, value, layout, builtin),
         Struct(layouts) => {
             let wrapper_struct = value.into_struct_value();
 
@@ -988,10 +1190,12 @@ fn decrement_refcount_layout<'a, 'ctx, 'env>(
                         .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
                         .unwrap();
 
-                    decrement_refcount_layout(env, parent, field_ptr, field_layout)
+                    decrement_refcount_layout(env, parent, layout_ids, field_ptr, field_layout)
                 }
             }
         }
+        RecursivePointer => todo!("TODO implement decrement layout of recursive tag union"),
+
         Union(tags) => {
             debug_assert!(!tags.is_empty());
             let wrapper_struct = value.into_struct_value();
@@ -1019,7 +1223,7 @@ fn decrement_refcount_layout<'a, 'ctx, 'env>(
                             .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
                             .unwrap();
 
-                        decrement_refcount_layout(env, parent, field_ptr, field_layout)
+                        decrement_refcount_layout(env, parent, layout_ids, field_ptr, field_layout)
                     }
                 }
 
@@ -1034,6 +1238,11 @@ fn decrement_refcount_layout<'a, 'ctx, 'env>(
 
             env.builder.position_at_end(merge_block);
         }
+
+        RecursiveUnion(tags) => {
+            build_dec_union(env, layout_ids, tags, value);
+        }
+
         FunctionPointer(_, _) | Pointer(_) | NullPointer => {}
     }
 }
@@ -1043,6 +1252,7 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     value: BasicValueEnum<'ctx>,
+    layout: &Layout<'a>,
     builtin: &Builtin<'a>,
 ) {
     use Builtin::*;
@@ -1053,7 +1263,7 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
                 // TODO decrement all values
             }
             let wrapper_struct = value.into_struct_value();
-            decrement_refcount_list(env, parent, wrapper_struct);
+            decrement_refcount_list(env, parent, layout, wrapper_struct);
         }
         List(MemoryMode::Unique, _element_layout) => {
             // do nothing
@@ -1062,16 +1272,71 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
             if element_layout.contains_refcounted() {
                 // TODO decrement all values
             }
-            let wrapper_struct = value.into_struct_value();
-            decrement_refcount_list(env, parent, wrapper_struct);
+            todo!();
         }
         Map(key_layout, value_layout) => {
             if key_layout.contains_refcounted() || value_layout.contains_refcounted() {
                 // TODO decrement all values
             }
 
+            todo!();
+        }
+        _ => {}
+    }
+}
+
+fn increment_refcount_layout<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    layout_ids: &mut LayoutIds<'a>,
+    value: BasicValueEnum<'ctx>,
+    layout: &Layout<'a>,
+) {
+    use Layout::*;
+
+    match layout {
+        Builtin(builtin) => increment_refcount_builtin(env, parent, value, layout, builtin),
+
+        RecursiveUnion(tags) => {
+            build_inc_union(env, layout_ids, tags, value);
+        }
+        _ => {}
+    }
+}
+
+#[inline(always)]
+fn increment_refcount_builtin<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    value: BasicValueEnum<'ctx>,
+    layout: &Layout<'a>,
+    builtin: &Builtin<'a>,
+) {
+    use Builtin::*;
+
+    match builtin {
+        List(MemoryMode::Refcounted, element_layout) => {
+            if element_layout.contains_refcounted() {
+                // TODO decrement all values
+            }
             let wrapper_struct = value.into_struct_value();
-            decrement_refcount_list(env, parent, wrapper_struct);
+            increment_refcount_list(env, parent, layout, wrapper_struct);
+        }
+        List(MemoryMode::Unique, _element_layout) => {
+            // do nothing
+        }
+        Set(element_layout) => {
+            if element_layout.contains_refcounted() {
+                // TODO decrement all values
+            }
+            todo!();
+        }
+        Map(key_layout, value_layout) => {
+            if key_layout.contains_refcounted() || value_layout.contains_refcounted() {
+                // TODO decrement all values
+            }
+
+            todo!();
         }
         _ => {}
     }
@@ -1079,12 +1344,31 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
 
 fn increment_refcount_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    layout: &Layout<'a>,
     original_wrapper: StructValue<'ctx>,
 ) {
     let builder = env.builder;
     let ctx = env.context;
 
-    let refcount_ptr = list_get_refcount_ptr(env, original_wrapper);
+    let len = list_len(builder, original_wrapper);
+
+    let is_non_empty = builder.build_int_compare(
+        IntPredicate::UGT,
+        len,
+        ctx.i64_type().const_zero(),
+        "len > 0",
+    );
+
+    // build blocks
+    let increment_block = ctx.append_basic_block(parent, "increment_block");
+    let cont_block = ctx.append_basic_block(parent, "after_increment_block");
+
+    builder.build_conditional_branch(is_non_empty, increment_block, cont_block);
+
+    builder.position_at_end(increment_block);
+
+    let refcount_ptr = list_get_refcount_ptr(env, layout, original_wrapper);
 
     let refcount = env
         .builder
@@ -1100,17 +1384,45 @@ fn increment_refcount_list<'a, 'ctx, 'env>(
 
     // Mutate the new array in-place to change the element.
     builder.build_store(refcount_ptr, decremented);
+    builder.build_unconditional_branch(cont_block);
+
+    builder.position_at_end(cont_block);
 }
 
 fn decrement_refcount_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
+    layout: &Layout<'a>,
     original_wrapper: StructValue<'ctx>,
 ) {
     let builder = env.builder;
     let ctx = env.context;
 
-    let refcount_ptr = list_get_refcount_ptr(env, original_wrapper);
+    // the block we'll always jump to when we're done
+    let cont_block = ctx.append_basic_block(parent, "after_decrement_block");
+    let decrement_block = ctx.append_basic_block(parent, "decrement_block");
+
+    // currently, an empty list has a null-pointer in its length is 0
+    // so we must first check the length
+
+    let len = list_len(builder, original_wrapper);
+    let is_non_empty = builder.build_int_compare(
+        IntPredicate::UGT,
+        len,
+        ctx.i64_type().const_zero(),
+        "len > 0",
+    );
+
+    // if the length is 0, we're done and jump to the continuation block
+    // otherwise, actually read and check the refcount
+    builder.build_conditional_branch(is_non_empty, decrement_block, cont_block);
+    builder.position_at_end(decrement_block);
+
+    // build blocks
+    let then_block = ctx.append_basic_block(parent, "then");
+    let else_block = ctx.append_basic_block(parent, "else");
+
+    let refcount_ptr = list_get_refcount_ptr(env, layout, original_wrapper);
 
     let refcount = env
         .builder
@@ -1119,16 +1431,24 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
 
     let comparison = refcount_is_one_comparison(builder, env.context, refcount);
 
-    // build blocks
-    let then_block = ctx.append_basic_block(parent, "then");
-    let else_block = ctx.append_basic_block(parent, "else");
-    let cont_block = ctx.append_basic_block(parent, "dec_ref_branchcont");
-
+    // TODO what would be most optimial for the branch predictor
+    //
+    // are most refcounts 1 most of the time? or not?
     builder.build_conditional_branch(comparison, then_block, else_block);
 
     // build then block
     {
         builder.position_at_end(then_block);
+        if !env.leak {
+            let free = builder.build_free(refcount_ptr);
+            builder.insert_instruction(&free, None);
+        }
+        builder.build_unconditional_branch(cont_block);
+    }
+
+    // build else block
+    {
+        builder.position_at_end(else_block);
         // our refcount 0 is actually usize::MAX, so decrementing the refcount means incrementing this value.
         let decremented = env.builder.build_int_add(
             ctx.i64_type().const_int(1 as u64, false),
@@ -1142,13 +1462,89 @@ fn decrement_refcount_list<'a, 'ctx, 'env>(
         builder.build_unconditional_branch(cont_block);
     }
 
+    // emit merge block
+    builder.position_at_end(cont_block);
+}
+
+fn increment_refcount_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _parent: FunctionValue<'ctx>,
+    layout: &Layout<'a>,
+    field_ptr: PointerValue<'ctx>,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let refcount_ptr = get_refcount_ptr(env, layout, field_ptr);
+
+    let refcount = env
+        .builder
+        .build_load(refcount_ptr, "get_refcount")
+        .into_int_value();
+
+    // our refcount 0 is actually usize::MAX, so incrementing the refcount means decrementing this value.
+    let incremented = env.builder.build_int_sub(
+        refcount,
+        ctx.i64_type().const_int(1 as u64, false),
+        "increment_refcount",
+    );
+
+    // Mutate the new array in-place to change the element.
+    builder.build_store(refcount_ptr, incremented);
+}
+
+fn decrement_refcount_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    layout: &Layout<'a>,
+    field_ptr: PointerValue<'ctx>,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    // the block we'll always jump to when we're done
+    let cont_block = ctx.append_basic_block(parent, "after_decrement_block");
+
+    let refcount_ptr = get_refcount_ptr(env, layout, field_ptr);
+
+    let refcount = env
+        .builder
+        .build_load(refcount_ptr, "get_refcount")
+        .into_int_value();
+
+    let comparison = refcount_is_one_comparison(builder, env.context, refcount);
+
+    // build blocks
+    let then_block = ctx.append_basic_block(parent, "then");
+    let else_block = ctx.append_basic_block(parent, "else");
+
+    // TODO what would be most optimial for the branch predictor
+    //
+    // are most refcounts 1 most of the time? or not?
+    builder.build_conditional_branch(comparison, then_block, else_block);
+
+    // build then block
+    {
+        builder.position_at_end(then_block);
+        if !env.leak {
+            builder.build_free(refcount_ptr);
+        }
+        builder.build_unconditional_branch(cont_block);
+    }
+
     // build else block
     {
         builder.position_at_end(else_block);
-        if !env.leak {
-            let free = builder.build_free(refcount_ptr);
-            builder.insert_instruction(&free, None);
-        }
+        // our refcount 0 is actually usize::MAX, so decrementing the refcount means incrementing this value.
+        let decremented = env.builder.build_int_add(
+            ctx.i64_type().const_int(1 as u64, false),
+            refcount,
+            "decremented_refcount",
+        );
+
+        // Mutate the new array in-place to change the element.
+        builder.build_store(refcount_ptr, decremented);
+
         builder.build_unconditional_branch(cont_block);
     }
 
@@ -1165,10 +1561,7 @@ pub fn load_symbol<'a, 'ctx, 'env>(
         Some((_, ptr)) => env
             .builder
             .build_load(*ptr, symbol.ident_string(&env.interns)),
-        None => panic!(
-            "During load_symbol, there was no entry for {:?} in scope {:?}",
-            symbol, scope
-        ),
+        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
     }
 }
 
@@ -1606,6 +1999,16 @@ fn run_low_level<'a, 'ctx, 'env>(
     use LowLevel::*;
 
     match op {
+        StrConcat => {
+            // Str.concat : Str, Str -> Str
+            debug_assert_eq!(args.len(), 2);
+
+            let first_str = load_symbol(env, scope, &args[0]);
+
+            let second_str = load_symbol(env, scope, &args[1]);
+
+            str_concat(env, parent, first_str, second_str)
+        }
         ListLen => {
             // List.len : List * -> Int
             debug_assert_eq!(args.len(), 1);
@@ -1635,11 +2038,60 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.reverse : List elem -> List elem
             debug_assert_eq!(args.len(), 1);
 
-            let list = &args[0];
+            let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
-            list_reverse(env, parent, scope, list)
+            list_reverse(env, parent, list, list_layout)
         }
-        ListConcat => list_concat(env, scope, parent, args),
+        ListConcat => {
+            debug_assert_eq!(args.len(), 2);
+
+            let (first_list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let second_list = load_symbol(env, scope, &args[1]);
+
+            list_concat(env, parent, first_list, second_list, list_layout)
+        }
+        ListMap => {
+            // List.map : List before, (before -> after) -> List after
+            debug_assert_eq!(args.len(), 2);
+
+            let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            list_map(env, parent, func, func_layout, list, list_layout)
+        }
+        ListKeepIf => {
+            // List.keepIf : List elem, (elem -> Bool) -> List elem
+            debug_assert_eq!(args.len(), 2);
+
+            let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            list_keep_if(env, parent, func, func_layout, list, list_layout)
+        }
+        ListWalkRight => {
+            // List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
+            debug_assert_eq!(args.len(), 3);
+
+            let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
+
+            let (default, default_layout) = load_symbol_and_layout(env, scope, &args[2]);
+
+            list_walk_right(
+                env,
+                parent,
+                list,
+                list_layout,
+                func,
+                func_layout,
+                default,
+                default_layout,
+            )
+        }
         ListAppend => {
             // List.append : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
@@ -1663,9 +2115,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 1);
 
             let (list, outer_list_layout) = load_symbol_and_layout(env, scope, &args[0]);
-            let outer_wrapper_struct = list.into_struct_value();
 
-            list_join(env, parent, outer_wrapper_struct, outer_list_layout)
+            list_join(env, parent, list, outer_list_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumToFloat => {
             debug_assert_eq!(args.len(), 1);
@@ -1799,13 +2250,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_get_unsafe(env, list_layout, elem_index, wrapper_struct)
         }
-        ListSet => {
+        ListSetInPlace => {
             let (list_symbol, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
-
-            let in_place = match &list_layout {
-                Layout::Builtin(Builtin::List(MemoryMode::Unique, _)) => InPlace::InPlace,
-                _ => InPlace::Clone,
-            };
 
             list_set(
                 parent,
@@ -1815,20 +2261,235 @@ fn run_low_level<'a, 'ctx, 'env>(
                     (load_symbol_and_layout(env, scope, &args[2])),
                 ],
                 env,
-                in_place,
+                InPlace::InPlace,
             )
         }
-        ListSetInPlace => list_set(
-            parent,
-            &[
-                (load_symbol_and_layout(env, scope, &args[0])),
+        ListSet => {
+            let (list_symbol, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
+
+            let arguments = &[
+                (list_symbol, list_layout),
                 (load_symbol_and_layout(env, scope, &args[1])),
                 (load_symbol_and_layout(env, scope, &args[2])),
-            ],
-            env,
-            InPlace::InPlace,
-        ),
+            ];
+
+            match list_layout {
+                Layout::Builtin(Builtin::List(MemoryMode::Unique, _)) => {
+                    // the layout tells us this List.set can be done in-place
+                    list_set(parent, arguments, env, InPlace::InPlace)
+                }
+                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
+                    // no static guarantees, but all is not lost: we can check the refcount
+                    // if it is one, we hold the final reference, and can mutate it in-place!
+                    let builder = env.builder;
+                    let ctx = env.context;
+
+                    let ret_type =
+                        basic_type_from_layout(env.arena, ctx, list_layout, env.ptr_bytes);
+
+                    let refcount_ptr =
+                        list_get_refcount_ptr(env, list_layout, list_symbol.into_struct_value());
+
+                    let refcount = env
+                        .builder
+                        .build_load(refcount_ptr, "get_refcount")
+                        .into_int_value();
+
+                    let comparison = refcount_is_one_comparison(builder, env.context, refcount);
+
+                    // build then block
+                    // refcount is 1, so work in-place
+                    let build_pass = || list_set(parent, arguments, env, InPlace::InPlace);
+
+                    // build else block
+                    // refcount != 1, so clone first
+                    let build_fail = || list_set(parent, arguments, env, InPlace::Clone);
+
+                    crate::llvm::build_list::build_basic_phi2(
+                        env, parent, comparison, build_pass, build_fail, ret_type,
+                    )
+                }
+                Layout::Builtin(Builtin::EmptyList) => list_symbol,
+                other => unreachable!("List.set: weird layout {:?}", other),
+            }
+        }
     }
+}
+
+/// Str.concat : Str, Str -> Str
+fn str_concat<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    first_str: BasicValueEnum<'ctx>,
+    second_str: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let second_str_wrapper = second_str.into_struct_value();
+    let second_str_len = list_len(builder, second_str_wrapper);
+
+    let first_str_wrapper = first_str.into_struct_value();
+    let first_str_len = list_len(builder, first_str_wrapper);
+
+    // first_str_len > 0
+    // We do this check to avoid allocating memory. If the first input
+    // str is empty, then we can just return the second str cloned
+    let first_str_length_comparison = list_is_not_empty(builder, ctx, first_str_len);
+
+    let if_first_str_is_empty = || {
+        // second_str_len > 0
+        // We do this check to avoid allocating memory. If the second input
+        // str is empty, then we can just return an empty str
+        let second_str_length_comparison = list_is_not_empty(builder, ctx, second_str_len);
+
+        let build_second_str_then = || {
+            let char_type = basic_type_from_layout(env.arena, ctx, &CHAR_LAYOUT, env.ptr_bytes);
+            let ptr_type = get_ptr_type(&char_type, AddressSpace::Generic);
+
+            let (new_wrapper, _) = clone_nonempty_list(
+                env,
+                second_str_len,
+                load_list_ptr(builder, second_str_wrapper, ptr_type),
+                &CHAR_LAYOUT,
+            );
+
+            BasicValueEnum::StructValue(new_wrapper)
+        };
+
+        let build_second_str_else = || empty_list(env);
+
+        build_basic_phi2(
+            env,
+            parent,
+            second_str_length_comparison,
+            build_second_str_then,
+            build_second_str_else,
+            BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
+        )
+    };
+
+    let if_first_str_is_not_empty = || {
+        let char_type = ctx.i8_type().into();
+        let ptr_type = get_ptr_type(&char_type, AddressSpace::Generic);
+
+        let if_second_str_is_empty = || {
+            let (new_wrapper, _) = clone_nonempty_list(
+                env,
+                first_str_len,
+                load_list_ptr(builder, first_str_wrapper, ptr_type),
+                &CHAR_LAYOUT,
+            );
+
+            BasicValueEnum::StructValue(new_wrapper)
+        };
+
+        // second_str_len > 0
+        // We do this check to avoid allocating memory. If the second input
+        // str is empty, then we can just return the first str cloned
+        let second_str_length_comparison = list_is_not_empty(builder, ctx, second_str_len);
+
+        let if_second_str_is_not_empty = || {
+            let combined_str_len =
+                builder.build_int_add(first_str_len, second_str_len, "add_list_lengths");
+
+            let combined_str_ptr = allocate_list(env, &CHAR_LAYOUT, combined_str_len);
+
+            // FIRST LOOP
+            let first_str_ptr = load_list_ptr(builder, first_str_wrapper, ptr_type);
+
+            let first_loop = |first_index, first_str_elem| {
+                // The pointer to the element in the combined list
+                let combined_str_elem_ptr = unsafe {
+                    builder.build_in_bounds_gep(
+                        combined_str_ptr,
+                        &[first_index],
+                        "load_index_combined_list",
+                    )
+                };
+
+                // Mutate the new array in-place to change the element.
+                builder.build_store(combined_str_elem_ptr, first_str_elem);
+            };
+
+            let index_name = "#index";
+
+            let index_alloca = incrementing_elem_loop(
+                builder,
+                parent,
+                ctx,
+                LoopListArg {
+                    ptr: first_str_ptr,
+                    len: first_str_len,
+                },
+                index_name,
+                None,
+                first_loop,
+            );
+
+            // Reset the index variable to 0
+            builder.build_store(index_alloca, ctx.i64_type().const_int(0, false));
+
+            // SECOND LOOP
+            let second_str_ptr = load_list_ptr(builder, second_str_wrapper, ptr_type);
+
+            let second_loop = |second_index, second_str_elem| {
+                // The pointer to the element in the combined str.
+                // Note that the pointer does not start at the index
+                // 0, it starts at the index of first_str_len. In that
+                // sense it is "offset".
+                let offset_combined_str_char_ptr = unsafe {
+                    builder.build_in_bounds_gep(combined_str_ptr, &[first_str_len], "elem")
+                };
+
+                // The pointer to the char from the second str
+                // in the combined list
+                let combined_str_char_ptr = unsafe {
+                    builder.build_in_bounds_gep(
+                        offset_combined_str_char_ptr,
+                        &[second_index],
+                        "load_index_combined_list",
+                    )
+                };
+
+                // Mutate the new array in-place to change the element.
+                builder.build_store(combined_str_char_ptr, second_str_elem);
+            };
+
+            incrementing_elem_loop(
+                builder,
+                parent,
+                ctx,
+                LoopListArg {
+                    ptr: second_str_ptr,
+                    len: second_str_len,
+                },
+                index_name,
+                Some(index_alloca),
+                second_loop,
+            );
+
+            store_list(env, combined_str_ptr, combined_str_len)
+        };
+
+        build_basic_phi2(
+            env,
+            parent,
+            second_str_length_comparison,
+            if_second_str_is_not_empty,
+            if_second_str_is_empty,
+            BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
+        )
+    };
+
+    build_basic_phi2(
+        env,
+        parent,
+        first_str_length_comparison,
+        if_first_str_is_not_empty,
+        if_first_str_is_empty,
+        BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
+    )
 }
 
 fn build_int_binop<'a, 'ctx, 'env>(
@@ -1985,4 +2646,384 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }
     }
+}
+
+pub fn build_inc_dec_header<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
+    fn_name: String,
+) -> FunctionValue<'ctx> {
+    let arena = env.arena;
+    let context = &env.context;
+
+    let arg_type = basic_type_from_layout(arena, env.context, &layout, env.ptr_bytes);
+
+    let fn_type = context.void_type().fn_type(&[arg_type], false);
+
+    let fn_val = env
+        .module
+        .add_function(fn_name.as_str(), fn_type, Some(Linkage::Private));
+
+    // If it's an internal-only function, it should use the fast calling convention.
+    fn_val.set_call_conventions(FAST_CALL_CONV);
+
+    fn_val
+}
+
+pub fn build_dec_union<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    fields: &'a [&'a [Layout<'a>]],
+    value: BasicValueEnum<'ctx>,
+) {
+    let layout = Layout::Union(fields);
+
+    let block = env.builder.get_insert_block().expect("to be in a function");
+
+    let symbol = Symbol::DEC;
+    let fn_name = layout_ids
+        .get(symbol, &layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let function_value = build_inc_dec_header(env, &layout, fn_name);
+
+            build_dec_union_help(env, layout_ids, fields, function_value);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    let call = env
+        .builder
+        .build_call(function, &[value], "decrement_union");
+
+    call.set_call_convention(FAST_CALL_CONV);
+}
+
+pub fn build_dec_union_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    tags: &[&[Layout<'a>]],
+    fn_val: FunctionValue<'ctx>,
+) {
+    debug_assert!(!tags.is_empty());
+
+    use inkwell::types::BasicType;
+
+    let context = &env.context;
+    let builder = env.builder;
+
+    // Add a basic block for the entry point
+    let entry = context.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    let mut scope = Scope::default();
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+    let layout = Layout::Union(tags);
+    let arg_val = fn_val.get_param_iter().next().unwrap();
+
+    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+
+    let alloca = create_entry_block_alloca(
+        env,
+        fn_val,
+        arg_val.get_type(),
+        arg_symbol.ident_string(&env.interns),
+    );
+
+    builder.build_store(alloca, arg_val);
+
+    scope.insert(arg_symbol, (layout.clone(), alloca));
+
+    let parent = fn_val;
+
+    let layout = Layout::RecursiveUnion(tags);
+    let before_block = env.builder.get_insert_block().expect("to be in a function");
+
+    let wrapper_struct = arg_val.into_struct_value();
+
+    // let tag_id_u8 = cast_basic_basic(env.builder, tag_id.into(), env.context.i8_type().into());
+
+    // next, make a jump table for all possible values of the tag_id
+    let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
+
+    let merge_block = env.context.append_basic_block(parent, "decrement_merge");
+
+    for (tag_id, field_layouts) in tags.iter().enumerate() {
+        let block = env.context.append_basic_block(parent, "tag_id_decrement");
+        env.builder.position_at_end(block);
+
+        let wrapper_type = basic_type_from_layout(
+            env.arena,
+            env.context,
+            &Layout::Struct(field_layouts),
+            env.ptr_bytes,
+        );
+
+        let wrapper_struct =
+            cast_struct_struct(env.builder, wrapper_struct, wrapper_type.into_struct_type());
+
+        for (i, field_layout) in field_layouts.iter().enumerate() {
+            if let Layout::RecursivePointer = field_layout {
+                // a *i64 pointer to the recursive data
+                // we need to cast this pointer to the appropriate type
+                let field_ptr = env
+                    .builder
+                    .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
+                    .unwrap();
+
+                // recursively decrement
+                let union_type = block_of_memory(env.context, &layout, env.ptr_bytes);
+                let recursive_field_ptr = cast_basic_basic(
+                    env.builder,
+                    field_ptr,
+                    union_type.ptr_type(AddressSpace::Generic).into(),
+                )
+                .into_pointer_value();
+
+                let recursive_field = env
+                    .builder
+                    .build_load(recursive_field_ptr, "load_recursive_field");
+
+                // recursively decrement the field
+                let call =
+                    env.builder
+                        .build_call(fn_val, &[recursive_field], "recursive_tag_decrement");
+
+                // Because it's an internal-only function, use the fast calling convention.
+                call.set_call_convention(FAST_CALL_CONV);
+
+                // TODO do this decrement before the recursive call?
+                // Then the recursive call is potentially TCE'd
+                decrement_refcount_ptr(env, parent, &layout, field_ptr.into_pointer_value());
+            } else if field_layout.contains_refcounted() {
+                let field_ptr = env
+                    .builder
+                    .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
+                    .unwrap();
+
+                decrement_refcount_layout(env, parent, layout_ids, field_ptr, field_layout);
+            }
+        }
+
+        env.builder.build_unconditional_branch(merge_block);
+
+        cases.push((
+            env.context.i64_type().const_int(tag_id as u64, false),
+            block,
+        ));
+    }
+
+    cases.reverse();
+
+    let (_, default_block) = cases.pop().unwrap();
+
+    env.builder.position_at_end(before_block);
+
+    // read the tag_id
+    let current_tag_id = {
+        // the first element of the wrapping struct is an array of i64
+        let first_array = env
+            .builder
+            .build_extract_value(wrapper_struct, 0, "read_tag_id")
+            .unwrap()
+            .into_array_value();
+
+        env.builder
+            .build_extract_value(first_array, 0, "read_tag_id_2")
+            .unwrap()
+            .into_int_value()
+    };
+
+    // switch on it
+    env.builder
+        .build_switch(current_tag_id, default_block, &cases);
+
+    env.builder.position_at_end(merge_block);
+
+    // this function returns void
+    builder.build_return(None);
+}
+
+pub fn build_inc_union<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    fields: &'a [&'a [Layout<'a>]],
+    value: BasicValueEnum<'ctx>,
+) {
+    let layout = Layout::Union(fields);
+
+    let block = env.builder.get_insert_block().expect("to be in a function");
+
+    let symbol = Symbol::INC;
+    let fn_name = layout_ids
+        .get(symbol, &layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let function_value = build_inc_dec_header(env, &layout, fn_name);
+
+            build_inc_union_help(env, layout_ids, fields, function_value);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    let call = env
+        .builder
+        .build_call(function, &[value], "increment_union");
+
+    call.set_call_convention(FAST_CALL_CONV);
+}
+
+pub fn build_inc_union_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    tags: &[&[Layout<'a>]],
+    fn_val: FunctionValue<'ctx>,
+) {
+    debug_assert!(!tags.is_empty());
+
+    use inkwell::types::BasicType;
+
+    let context = &env.context;
+    let builder = env.builder;
+
+    // Add a basic block for the entry point
+    let entry = context.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    let mut scope = Scope::default();
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+    let layout = Layout::Union(tags);
+    let arg_val = fn_val.get_param_iter().next().unwrap();
+
+    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+
+    let alloca = create_entry_block_alloca(
+        env,
+        fn_val,
+        arg_val.get_type(),
+        arg_symbol.ident_string(&env.interns),
+    );
+
+    builder.build_store(alloca, arg_val);
+
+    scope.insert(arg_symbol, (layout.clone(), alloca));
+
+    let parent = fn_val;
+
+    let layout = Layout::RecursiveUnion(tags);
+    let before_block = env.builder.get_insert_block().expect("to be in a function");
+
+    let wrapper_struct = arg_val.into_struct_value();
+
+    // read the tag_id
+    let tag_id = {
+        // the first element of the wrapping struct is an array of i64
+        let first_array = env
+            .builder
+            .build_extract_value(wrapper_struct, 0, "read_tag_id")
+            .unwrap()
+            .into_array_value();
+
+        env.builder
+            .build_extract_value(first_array, 0, "read_tag_id_2")
+            .unwrap()
+            .into_int_value()
+    };
+
+    let tag_id_u8 = cast_basic_basic(env.builder, tag_id.into(), env.context.i8_type().into());
+
+    // next, make a jump table for all possible values of the tag_id
+    let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
+
+    let merge_block = env.context.append_basic_block(parent, "decrement_merge");
+
+    for (tag_id, field_layouts) in tags.iter().enumerate() {
+        let block = env.context.append_basic_block(parent, "tag_id_decrement");
+        env.builder.position_at_end(block);
+
+        let wrapper_type = basic_type_from_layout(
+            env.arena,
+            env.context,
+            &Layout::Struct(field_layouts),
+            env.ptr_bytes,
+        );
+
+        let wrapper_struct =
+            cast_struct_struct(env.builder, wrapper_struct, wrapper_type.into_struct_type());
+
+        for (i, field_layout) in field_layouts.iter().enumerate() {
+            if let Layout::RecursivePointer = field_layout {
+                // a *i64 pointer to the recursive data
+                // we need to cast this pointer to the appropriate type
+                let field_ptr = env
+                    .builder
+                    .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
+                    .unwrap();
+
+                // recursively increment
+                let union_type = block_of_memory(env.context, &layout, env.ptr_bytes);
+                let recursive_field_ptr = cast_basic_basic(
+                    env.builder,
+                    field_ptr,
+                    union_type.ptr_type(AddressSpace::Generic).into(),
+                )
+                .into_pointer_value();
+
+                let recursive_field = env
+                    .builder
+                    .build_load(recursive_field_ptr, "load_recursive_field");
+
+                // recursively increment the field
+                let call =
+                    env.builder
+                        .build_call(fn_val, &[recursive_field], "recursive_tag_increment");
+
+                // Because it's an internal-only function, use the fast calling convention.
+                call.set_call_convention(FAST_CALL_CONV);
+
+                // TODO do this increment before the recursive call?
+                // Then the recursive call is potentially TCE'd
+                increment_refcount_ptr(env, parent, &layout, field_ptr.into_pointer_value());
+            } else if field_layout.contains_refcounted() {
+                let field_ptr = env
+                    .builder
+                    .build_extract_value(wrapper_struct, i as u32, "increment_struct_field")
+                    .unwrap();
+
+                increment_refcount_layout(env, parent, layout_ids, field_ptr, field_layout);
+            }
+        }
+
+        env.builder.build_unconditional_branch(merge_block);
+
+        cases.push((env.context.i8_type().const_int(tag_id as u64, false), block));
+    }
+
+    let (_, default_block) = cases.pop().unwrap();
+
+    env.builder.position_at_end(before_block);
+
+    env.builder
+        .build_switch(tag_id_u8.into_int_value(), default_block, &cases);
+
+    env.builder.position_at_end(merge_block);
+
+    // this function returns void
+    builder.build_return(None);
 }

@@ -268,11 +268,15 @@ fn constrain_pattern(
                             loc_expr.region,
                         );
 
-                        state.constraints.push(Constraint::Eq(
-                            Type::Variable(*expr_var),
-                            expr_expected.clone(),
-                            Category::DefaultValue(label.clone()),
+                        state.constraints.push(Constraint::Pattern(
                             region,
+                            PatternCategory::PatternDefault,
+                            Type::Variable(*expr_var),
+                            PExpected::ForReason(
+                                PReason::OptionalField,
+                                pat_type.clone(),
+                                loc_expr.region,
+                            ),
                         ));
 
                         state.vars.push(*expr_var);
@@ -503,7 +507,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        BlockStr(_) | Str(_) => {
+        Str(_) => {
             let uniq_type = var_store.fresh();
             let inferred = str_type(Bool::variable(uniq_type));
 
@@ -620,13 +624,19 @@ pub fn constrain_expr(
             let union_con = Eq(
                 union_type,
                 expected.clone(),
-                Category::TagApply(name.clone()),
+                Category::TagApply {
+                    tag_name: name.clone(),
+                    args_count: arguments.len(),
+                },
                 region,
             );
             let ast_con = Eq(
                 Type::Variable(*variant_var),
                 expected,
-                Category::TagApply(name.clone()),
+                Category::TagApply {
+                    tag_name: name.clone(),
+                    args_count: arguments.len(),
+                },
                 region,
             );
 

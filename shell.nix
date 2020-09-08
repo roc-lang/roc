@@ -1,12 +1,10 @@
 let
-  # Look here for information about how to generate `nixpkgs-version.json`.
+  # Look here for information about how pin version of nixpkgs
   #  → https://nixos.wiki/wiki/FAQ/Pinning_Nixpkgs
-  pinnedVersion =
-    builtins.fromJSON (builtins.readFile ./nix/nixpkgs-version.json);
   pinnedPkgs = import (builtins.fetchGit {
-    inherit (pinnedVersion) url rev;
-
-    ref = "nixos-unstable";
+    name = "nixpkgs-20.03";
+    url = "https://github.com/nixos/nixpkgs/";
+    ref = "refs/heads/release-20.03";
   }) { };
 
   # This allows overriding pkgs by passing `--arg pkgs ...`
@@ -17,11 +15,29 @@ let
   isOsX = builtins.currentSystem == "x86_64-darwin";
   darwin-frameworks = if isOsX then
     with pkgs.darwin.apple_sdk.frameworks; [
-      Security
+      AppKit
       CoreFoundation
       CoreServices
+      CoreVideo
+      Foundation
+      Metal
+      Security
     ]
   else
     [ ];
-  inputs = pkgs.callPackage ./nix/inputs.nix { };
-in pkgs.mkShell { buildInputs = inputs ++ darwin-frameworks; }
+  llvm = pkgs.llvm_10;
+  inputs =
+    [
+      pkgs.rustup
+      pkgs.cargo
+      pkgs.llvm_10
+      # libraries for llvm
+      pkgs.libffi
+      pkgs.libxml2
+      pkgs.zlib
+    ];
+in pkgs.mkShell {
+  buildInputs = inputs ++ darwin-frameworks;
+  LLVM_SYS_100_PREFIX = "${llvm}";
+}
+

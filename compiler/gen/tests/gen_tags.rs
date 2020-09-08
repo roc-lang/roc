@@ -498,9 +498,12 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                when 2 is
-                    2 if False -> 0
-                    _ -> 42
+                main = \{} -> 
+                    when 2 is
+                        2 if False -> 0
+                        _ -> 42
+
+                main {}
                 "#
             ),
             42,
@@ -513,9 +516,12 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                when 2 is
-                    2 if True -> 42
-                    _ -> 0
+                main = \{} -> 
+                    when 2 is
+                        2 if True -> 42
+                        _ -> 0
+
+                main {}
                 "#
             ),
             42,
@@ -528,9 +534,12 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                when 2 is
-                    _ if False -> 0
-                    _ -> 42
+                main = \{} -> 
+                    when 2 is
+                        _ if False -> 0
+                        _ -> 42
+
+                main {}
                 "#
             ),
             42,
@@ -708,16 +717,19 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-            x : [ Red, White, Blue ]
-            x = Blue
+            main = \{} -> 
+                x : [ Red, White, Blue ]
+                x = Blue
 
-            y = 
-                when x is
-                    Red -> 1
-                    White -> 2
-                    Blue -> 3.1
+                y = 
+                    when x is
+                        Red -> 1
+                        White -> 2
+                        Blue -> 3.1
 
-            y
+                y
+
+            main {}
             "#
             ),
             3.1,
@@ -730,13 +742,16 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-            y = 
-                when 1 + 2 is
-                    3 -> 3
-                    1 -> 1
-                    _ -> 0
+                main = \{} -> 
+                    y = 
+                        when 1 + 2 is
+                            3 -> 3
+                            1 -> 1
+                            _ -> 0
 
-            y
+                    y
+
+                main {}
             "#
             ),
             3,

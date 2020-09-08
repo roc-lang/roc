@@ -164,7 +164,7 @@ pub fn gen(
                                     pattern_symbols: bumpalo::collections::Vec::new_in(
                                         mono_env.arena,
                                     ),
-                                    is_tail_recursive: false,
+                                    is_self_recursive: false,
                                     body,
                                     closed_over,
                                 };

@@ -69,6 +69,10 @@ mod test_can {
         }
     }
 
+    fn expr_str(contents: &str) -> Expr {
+        Expr::Str(contents.into())
+    }
+
     // NUMBER LITERALS
 
     #[test]
@@ -1179,161 +1183,61 @@ mod test_can {
     //}
     //
     //
-    //// STRING LITERALS
+    // STRING LITERALS
 
-    //
-    // #[test]
-    // fn string_with_valid_unicode_escapes() {
-    //     expect_parsed_str("x\u{00A0}x", r#""x\u{00A0}x""#);
-    //     expect_parsed_str("x\u{101010}x", r#""x\u{101010}x""#);
-    // }
+    #[test]
+    fn string_with_valid_unicode_escapes() {
+        assert_can(r#""x\u(00A0)x""#, expr_str("x\u{00A0}x"));
+        assert_can(r#""x\u(101010)x""#, expr_str("x\u{101010}x"));
+    }
 
-    // #[test]
-    // fn string_with_too_large_unicode_escape() {
-    //     // Should be too big - max size should be 10FFFF.
-    //     // (Rust has this restriction. I assume it's a good idea.)
-    //     assert_malformed_str(
-    //         r#""abc\u{110000}def""#,
-    //         vec![Located::new(0, 7, 0, 12, Problem::UnicodeCodePointTooLarge)],
-    //     );
-    // }
+    //     #[test]
+    //     fn string_with_too_large_unicode_escape() {
+    //         // Should be too big - max size should be 10FFFF.
+    //         // (Rust has this restriction. I assume it's a good idea.)
+    //         assert_malformed_str(
+    //             r#""abc\u{110000}def""#,
+    //             vec![Located::new(0, 7, 0, 12, Problem::UnicodeCodePointTooLarge)],
+    //         );
+    //     }
 
-    // #[test]
-    // fn string_with_no_unicode_digits() {
-    //     // No digits specified
-    //     assert_malformed_str(
-    //         r#""blah\u{}foo""#,
-    //         vec![Located::new(0, 5, 0, 8, Problem::NoUnicodeDigits)],
-    //     );
-    // }
+    //     #[test]
+    //     fn string_with_no_unicode_digits() {
+    //         // No digits specified
+    //         assert_malformed_str(
+    //             r#""blah\u{}foo""#,
+    //             vec![Located::new(0, 5, 0, 8, Problem::NoUnicodeDigits)],
+    //         );
+    //     }
 
-    // #[test]
-    // fn string_with_no_unicode_opening_brace() {
-    //     // No opening curly brace. It can't be sure if the closing brace
-    //     // was intended to be a closing brace for the unicode escape, so
-    //     // report that there were no digits specified.
-    //     assert_malformed_str(
-    //         r#""abc\u00A0}def""#,
-    //         vec![Located::new(0, 4, 0, 5, Problem::NoUnicodeDigits)],
-    //     );
-    // }
+    //     #[test]
+    //     fn string_with_no_unicode_opening_brace() {
+    //         // No opening curly brace. It can't be sure if the closing brace
+    //         // was intended to be a closing brace for the unicode escape, so
+    //         // report that there were no digits specified.
+    //         assert_malformed_str(
+    //             r#""abc\u00A0}def""#,
+    //             vec![Located::new(0, 4, 0, 5, Problem::NoUnicodeDigits)],
+    //         );
+    //     }
 
-    // #[test]
-    // fn string_with_no_unicode_closing_brace() {
-    //     // No closing curly brace
-    //     assert_malformed_str(
-    //         r#""blah\u{stuff""#,
-    //         vec![Located::new(0, 5, 0, 12, Problem::MalformedEscapedUnicode)],
-    //     );
-    // }
+    //     #[test]
+    //     fn string_with_no_unicode_closing_brace() {
+    //         // No closing curly brace
+    //         assert_malformed_str(
+    //             r#""blah\u{stuff""#,
+    //             vec![Located::new(0, 5, 0, 12, Problem::MalformedEscapedUnicode)],
+    //         );
+    //     }
 
-    // #[test]
-    // fn string_with_no_unicode_braces() {
-    //     // No curly braces
-    //     assert_malformed_str(
-    //         r#""zzzz\uzzzzz""#,
-    //         vec![Located::new(0, 5, 0, 6, Problem::NoUnicodeDigits)],
-    //     );
-    // }
-
-    // #[test]
-    // fn string_with_interpolation_at_start() {
-    //     let input = indoc!(
-    //         r#"
-    //              "\(abc)defg"
-    //              "#
-    //     );
-    //     let (args, ret) = (vec![("", Located::new(0, 2, 0, 4, Var("abc")))], "defg");
-    //     let arena = Bump::new();
-    //     let actual = parse_with(&arena, input);
-
-    //     assert_eq!(
-    //         Ok(InterpolatedStr(&(arena.alloc_slice_clone(&args), ret))),
-    //         actual
-    //     );
-    // }
-
-    // #[test]
-    // fn string_with_interpolation_at_end() {
-    //     let input = indoc!(
-    //         r#"
-    //              "abcd\(efg)"
-    //              "#
-    //     );
-    //     let (args, ret) = (vec![("abcd", Located::new(0, 6, 0, 8, Var("efg")))], "");
-    //     let arena = Bump::new();
-    //     let actual = parse_with(&arena, input);
-
-    //     assert_eq!(
-    //         Ok(InterpolatedStr(&(arena.alloc_slice_clone(&args), ret))),
-    //         actual
-    //     );
-    // }
-
-    // #[test]
-    // fn string_with_interpolation_in_middle() {
-    //     let input = indoc!(
-    //         r#"
-    //              "abc\(defg)hij"
-    //              "#
-    //     );
-    //     let (args, ret) = (vec![("abc", Located::new(0, 5, 0, 8, Var("defg")))], "hij");
-    //     let arena = Bump::new();
-    //     let actual = parse_with(&arena, input);
-
-    //     assert_eq!(
-    //         Ok(InterpolatedStr(&(arena.alloc_slice_clone(&args), ret))),
-    //         actual
-    //     );
-    // }
-
-    // #[test]
-    // fn string_with_two_interpolations_in_middle() {
-    //     let input = indoc!(
-    //         r#"
-    //              "abc\(defg)hi\(jkl)mn"
-    //              "#
-    //     );
-    //     let (args, ret) = (
-    //         vec![
-    //             ("abc", Located::new(0, 5, 0, 8, Var("defg"))),
-    //             ("hi", Located::new(0, 14, 0, 16, Var("jkl"))),
-    //         ],
-    //         "mn",
-    //     );
-    //     let arena = Bump::new();
-    //     let actual = parse_with(&arena, input);
-
-    //     assert_eq!(
-    //         Ok(InterpolatedStr(&(arena.alloc_slice_clone(&args), ret))),
-    //         actual
-    //     );
-    // }
-
-    // #[test]
-    // fn string_with_four_interpolations() {
-    //     let input = indoc!(
-    //         r#"
-    //              "\(abc)def\(ghi)jkl\(mno)pqrs\(tuv)"
-    //              "#
-    //     );
-    //     let (args, ret) = (
-    //         vec![
-    //             ("", Located::new(0, 2, 0, 4, Var("abc"))),
-    //             ("def", Located::new(0, 11, 0, 13, Var("ghi"))),
-    //             ("jkl", Located::new(0, 20, 0, 22, Var("mno"))),
-    //             ("pqrs", Located::new(0, 30, 0, 32, Var("tuv"))),
-    //         ],
-    //         "",
-    //     );
-    //     let arena = Bump::new();
-    //     let actual = parse_with(&arena, input);
-
-    //     assert_eq!(
-    //         Ok(InterpolatedStr(&(arena.alloc_slice_clone(&args), ret))),
-    //         actual
-    //     );
-    // }
+    //     #[test]
+    //     fn string_with_no_unicode_braces() {
+    //         // No curly braces
+    //         assert_malformed_str(
+    //             r#""zzzz\uzzzzz""#,
+    //             vec![Located::new(0, 5, 0, 6, Problem::NoUnicodeDigits)],
+    //         );
+    //     }
 
     //     #[test]
     //     fn string_with_escaped_interpolation() {
@@ -1341,13 +1245,12 @@ mod test_can {
     //             // This should NOT be string interpolation, because of the \\
     //             indoc!(
     //                 r#"
-    //                 "abcd\\(efg)hij"
-    //                 "#
+    //                      "abcd\\(efg)hij"
+    //                      "#
     //             ),
     //             Str(r#"abcd\(efg)hij"#.into()),
     //         );
     //     }
-    //
 
     //     #[test]
     //     fn string_without_escape() {
@@ -1384,4 +1287,6 @@ mod test_can {
     // TODO test hex/oct/binary conversion to numbers
     //
     // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
+    //
+    // TODO test for multiline block string literals in pattern matches
 }

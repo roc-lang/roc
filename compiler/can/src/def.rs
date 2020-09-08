@@ -1443,15 +1443,6 @@ fn to_pending_def<'a>(
                 top_level_symbols,
             }
         }
-        TypedBody(loc_pattern, loc_ann, loc_expr) => pending_typed_body(
-            env,
-            loc_pattern,
-            loc_ann,
-            loc_expr,
-            var_store,
-            scope,
-            pattern_type,
-        ),
         Alias { name, vars, ann } => {
             let region = Region::span_across(&name.region, &ann.region);
 

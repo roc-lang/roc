@@ -27,7 +27,7 @@ pub fn parse_with<'a>(arena: &'a Bump, input: &'a str) -> Result<ast::Expr<'a>, 
 
 #[allow(dead_code)]
 pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast::Expr<'a>>, Fail> {
-    let state = State::new(input.as_bytes(), Attempting::Module);
+    let state = State::new(input.trim().as_bytes(), Attempting::Module);
     let parser = space0_before(loc(roc_parse::expr::expr(0)), 0);
     let answer = parser.parse(&arena, state);
 

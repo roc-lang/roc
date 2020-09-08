@@ -54,6 +54,16 @@ impl<T> RecordField<T> {
         }
     }
 
+    pub fn as_inner(&self) -> &T {
+        use RecordField::*;
+
+        match self {
+            Optional(t) => t,
+            Required(t) => t,
+            Demanded(t) => t,
+        }
+    }
+
     pub fn map<F, U>(&self, mut f: F) -> RecordField<U>
     where
         F: FnMut(&T) -> U,
@@ -894,7 +904,7 @@ pub enum Reason {
     FloatLiteral,
     IntLiteral,
     NumLiteral,
-    InterpolatedStringVar,
+    StrInterpolation,
     WhenBranch {
         index: Index,
     },
@@ -917,9 +927,13 @@ pub enum Category {
     Lookup(Symbol),
     CallResult(Option<Symbol>),
     LowLevelOpResult(LowLevel),
-    TagApply(TagName),
+    TagApply {
+        tag_name: TagName,
+        args_count: usize,
+    },
     Lambda,
     Uniqueness,
+    StrInterpolation,
 
     // storing variables in the ast
     Storage,

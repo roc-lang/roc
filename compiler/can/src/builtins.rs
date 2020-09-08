@@ -50,6 +50,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::BOOL_AND => bool_and,
         Symbol::BOOL_OR => bool_or,
         Symbol::BOOL_NOT => bool_not,
+        Symbol::STR_CONCAT => str_concat,
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
         Symbol::LIST_SET => list_set,
@@ -62,6 +63,9 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_CONCAT => list_concat,
         Symbol::LIST_PREPEND => list_prepend,
         Symbol::LIST_JOIN => list_join,
+        Symbol::LIST_MAP => list_map,
+        Symbol::LIST_KEEP_IF => list_keep_if,
+        Symbol::LIST_WALK_RIGHT => list_walk_right,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_SUB => num_sub,
         Symbol::NUM_MUL => num_mul,
@@ -619,6 +623,25 @@ fn list_reverse(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// Str.concat : Str, Str -> Str
+fn str_concat(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let str_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrConcat,
+        args: vec![(str_var, Var(Symbol::ARG_1)), (str_var, Var(Symbol::ARG_2))],
+        ret_var: str_var,
+    };
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1), (str_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        str_var,
+    )
+}
+
 /// List.concat : List elem, List elem -> List elem
 fn list_concat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
@@ -921,6 +944,82 @@ fn list_join(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         list_var,
+    )
+}
+
+/// List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
+fn list_walk_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let func_var = var_store.fresh();
+    let accum_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListWalkRight,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (func_var, Var(Symbol::ARG_2)),
+            (accum_var, Var(Symbol::ARG_3)),
+        ],
+        ret_var: accum_var,
+    };
+
+    defn(
+        symbol,
+        vec![
+            (list_var, Symbol::ARG_1),
+            (func_var, Symbol::ARG_2),
+            (accum_var, Symbol::ARG_3),
+        ],
+        var_store,
+        body,
+        accum_var,
+    )
+}
+
+/// List.keepIf : List elem, (elem -> Bool) -> List elem
+fn list_keep_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let func_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListKeepIf,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (func_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1), (func_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        list_var,
+    )
+}
+
+/// List.map : List before, (before -> after) -> List after
+fn list_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let func_var = var_store.fresh();
+    let ret_list_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListMap,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (func_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: ret_list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1), (func_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_list_var,
     )
 }
 

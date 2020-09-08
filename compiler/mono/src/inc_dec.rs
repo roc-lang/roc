@@ -1,3 +1,4 @@
+use crate::borrow::ParamMap;
 use crate::ir::{Expr, JoinPointId, Param, Proc, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
@@ -112,8 +113,20 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
         } => {
             result.extend(arguments.iter().copied());
         }
+        Reuse {
+            symbol, arguments, ..
+        } => {
+            result.extend(arguments.iter().copied());
+            result.insert(*symbol);
+        }
+        Reset(x) => {
+            result.insert(*x);
+        }
+        RunLowLevel(_, args) => {
+            result.extend(args.iter());
+        }
 
-        RunLowLevel(_, _) | EmptyArray | RuntimeErrorFunction(_) | Literal(_) => {}
+        EmptyArray | RuntimeErrorFunction(_) | Literal(_) => {}
     }
 }
 
@@ -139,7 +152,7 @@ pub struct Context<'a> {
     vars: VarMap,
     jp_live_vars: JPLiveVarMap,      // map: join point => live variables
     local_context: LocalContext<'a>, // we use it to store the join point declarations
-    function_params: MutMap<Symbol, &'a [Param<'a>]>,
+    param_map: &'a ParamMap<'a>,
 }
 
 fn update_live_vars<'a>(expr: &Expr<'a>, v: &LiveVarSet) -> LiveVarSet {
@@ -150,6 +163,7 @@ fn update_live_vars<'a>(expr: &Expr<'a>, v: &LiveVarSet) -> LiveVarSet {
     v
 }
 
+/// `isFirstOcc xs x i = true` if `xs[i]` is the first occurrence of `xs[i]` in `xs`
 fn is_first_occurence(xs: &[Symbol], i: usize) -> bool {
     match xs.get(i) {
         None => unreachable!(),
@@ -157,6 +171,9 @@ fn is_first_occurence(xs: &[Symbol], i: usize) -> bool {
     }
 }
 
+/// Return `n`, the number of times `x` is consumed.
+/// - `ys` is a sequence of instruction parameters where we search for `x`.
+/// - `consumeParamPred i = true` if parameter `i` is consumed.
 fn get_num_consumptions<F>(x: Symbol, ys: &[Symbol], consume_param_pred: F) -> usize
 where
     F: Fn(usize) -> bool,
@@ -171,6 +188,8 @@ where
     n
 }
 
+/// Return true if `x` also occurs in `ys` in a position that is not consumed.
+/// That is, it is also passed as a borrow reference.
 fn is_borrow_param_help<F>(x: Symbol, ys: &[Symbol], consume_param_pred: F) -> bool
 where
     F: Fn(usize) -> bool,
@@ -182,11 +201,11 @@ where
 
 fn is_borrow_param(x: Symbol, ys: &[Symbol], ps: &[Param]) -> bool {
     // default to owned arguments
-    let pred = |i: usize| match ps.get(i) {
+    let is_owned = |i: usize| match ps.get(i) {
         Some(param) => !param.borrow,
-        None => true,
+        None => unreachable!("or?"),
     };
-    is_borrow_param_help(x, ys, pred)
+    is_borrow_param_help(x, ys, is_owned)
 }
 
 // We do not need to consume the projection of a variable that is not consumed
@@ -201,13 +220,28 @@ fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
 }
 
 impl<'a> Context<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
+    pub fn new(arena: &'a Bump, param_map: &'a ParamMap<'a>) -> Self {
+        let mut vars = MutMap::default();
+
+        for (key, _) in param_map.into_iter() {
+            if let crate::borrow::Key::Declaration(symbol) = key {
+                vars.insert(
+                    *symbol,
+                    VarInfo {
+                        reference: false, // assume function symbols are global constants
+                        persistent: true, // assume function symbols are global constants
+                        consume: false,   // no need to consume this variable
+                    },
+                );
+            }
+        }
+
         Self {
             arena,
-            vars: MutMap::default(),
+            vars,
             jp_live_vars: MutMap::default(),
             local_context: LocalContext::default(),
-            function_params: MutMap::default(),
+            param_map,
         }
     }
 
@@ -253,56 +287,13 @@ impl<'a> Context<'a> {
         self.arena.alloc(Stmt::Dec(symbol, stmt))
     }
 
-    fn add_inc_before_consume_all_help<F>(
-        &self,
-        xs: &[Symbol],
-        consume_param_pred: F,
-        mut b: &'a Stmt<'a>,
-        live_vars_after: &LiveVarSet,
-    ) -> &'a Stmt<'a>
-    where
-        F: Fn(usize) -> bool + Clone,
-    {
-        for (i, x) in xs.iter().enumerate() {
-            let info = self.get_var_info(*x);
-            if !info.reference || !is_first_occurence(xs, i) {
-                // do nothing
-            } else {
-                // number of times the argument is used (in the body?)
-                let num_consumptions = get_num_consumptions(*x, xs, consume_param_pred.clone());
-
-                // `x` is not a variable that must be consumed by the current procedure
-                // `x` is live after executing instruction
-                // `x` is used in a position that is passed as a borrow reference
-                let lives_on = !info.consume
-                    || live_vars_after.contains(x)
-                    || is_borrow_param_help(*x, xs, consume_param_pred.clone());
-
-                let num_incs = if lives_on {
-                    num_consumptions
-                } else {
-                    num_consumptions - 1
-                };
-
-                // Lean can increment by more than 1 at once. Is that needed?
-                debug_assert!(num_incs <= 1);
-
-                if num_incs == 1 {
-                    b = self.add_inc(*x, b);
-                }
-            }
-        }
-
-        b
-    }
-
     fn add_inc_before_consume_all(
         &self,
         xs: &[Symbol],
         b: &'a Stmt<'a>,
         live_vars_after: &LiveVarSet,
     ) -> &'a Stmt<'a> {
-        self.add_inc_before_consume_all_help(xs, |_: usize| true, b, live_vars_after)
+        self.add_inc_before_help(xs, |_: usize| true, b, live_vars_after)
     }
 
     fn add_inc_before_help<F>(
@@ -321,11 +312,17 @@ impl<'a> Context<'a> {
                 // do nothing
             } else {
                 let num_consumptions = get_num_consumptions(*x, xs, consume_param_pred.clone()); // number of times the argument is used
-                let num_incs = if !info.consume ||                     // `x` is not a variable that must be consumed by the current procedure
-             live_vars_after.contains(x) ||          // `x` is live after executing instruction
-             is_borrow_param_help( *x ,xs, consume_param_pred.clone())
+
+                // `x` is not a variable that must be consumed by the current procedure
+                let need_not_consume = !info.consume;
+
+                // `x` is live after executing instruction
+                let is_live_after = live_vars_after.contains(x);
+
                 // `x` is used in a position that is passed as a borrow reference
-                {
+                let is_borrowed = is_borrow_param_help(*x, xs, consume_param_pred.clone());
+
+                let num_incs = if need_not_consume || is_live_after || is_borrowed {
                     num_consumptions
                 } else {
                     num_consumptions - 1
@@ -352,7 +349,7 @@ impl<'a> Context<'a> {
         // default to owned arguments
         let pred = |i: usize| match ps.get(i) {
             Some(param) => !param.borrow,
-            None => true,
+            None => unreachable!("or?"),
         };
         self.add_inc_before_help(xs, pred, b, live_vars_after)
     }
@@ -383,16 +380,41 @@ impl<'a> Context<'a> {
         b_live_vars: &LiveVarSet,
     ) -> &'a Stmt<'a> {
         for (i, x) in xs.iter().enumerate() {
-            /* We must add a `dec` if `x` must be consumed, it is alive after the application,
-            and it has been borrowed by the application.
-            Remark: `x` may occur multiple times in the application (e.g., `f x y x`).
-            This is why we check whether it is the first occurrence. */
+            // We must add a `dec` if `x` must be consumed, it is alive after the application,
+            // and it has been borrowed by the application.
+            // Remark: `x` may occur multiple times in the application (e.g., `f x y x`).
+            // This is why we check whether it is the first occurrence.
             if self.must_consume(*x)
                 && is_first_occurence(xs, i)
                 && is_borrow_param(*x, xs, ps)
                 && !b_live_vars.contains(x)
             {
                 b = self.add_dec(*x, b)
+            }
+        }
+
+        b
+    }
+
+    fn add_dec_after_lowlevel(
+        &self,
+        xs: &[Symbol],
+        ps: &[bool],
+        mut b: &'a Stmt<'a>,
+        b_live_vars: &LiveVarSet,
+    ) -> &'a Stmt<'a> {
+        for (i, (x, is_borrow)) in xs.iter().zip(ps.iter()).enumerate() {
+            /* We must add a `dec` if `x` must be consumed, it is alive after the application,
+            and it has been borrowed by the application.
+            Remark: `x` may occur multiple times in the application (e.g., `f x y x`).
+            This is why we check whether it is the first occurrence. */
+
+            if self.must_consume(*x)
+                && is_first_occurence(xs, i)
+                && *is_borrow
+                && !b_live_vars.contains(x)
+            {
+                b = self.add_dec(*x, b);
             }
         }
 
@@ -414,12 +436,14 @@ impl<'a> Context<'a> {
         live_vars.remove(&z);
 
         let new_b = match v {
-            Tag { arguments: ys, .. } | Struct(ys) | Array { elems: ys, .. } => self
-                .add_inc_before_consume_all(
-                    ys,
-                    self.arena.alloc(Stmt::Let(z, v, l, b)),
-                    &b_live_vars,
-                ),
+            Reuse { arguments: ys, .. }
+            | Tag { arguments: ys, .. }
+            | Struct(ys)
+            | Array { elems: ys, .. } => self.add_inc_before_consume_all(
+                ys,
+                self.arena.alloc(Stmt::Let(z, v, l, b)),
+                &b_live_vars,
+            ),
             AccessAtIndex { structure: x, .. } => {
                 let b = self.add_dec_if_needed(x, b, b_live_vars);
                 let info_x = self.get_var_info(x);
@@ -432,57 +456,44 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            RunLowLevel(_, _) => {
-                // THEORY: runlowlevel only occurs
-                //
-                // - in a custom hard-coded function
-                // - when we insert them as compiler authors
-                //
-                // if we're carefule to only use RunLowLevel for non-rc'd types
-                // (e.g. when building a cond/switch, we check equality on integers, and to boolean and)
-                // then RunLowLevel should not change in any way the refcounts.
+            RunLowLevel(op, args) => {
+                let ps = crate::borrow::lowlevel_borrow_signature(self.arena, op);
+                let b = self.add_dec_after_lowlevel(args, ps, b, b_live_vars);
 
-                // let b = self.add_dec_after_application(ys, ps, b, b_live_vars);
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
             FunctionCall {
                 args: ys,
-                call_type,
                 arg_layouts,
+                call_type,
                 ..
             } => {
-                // this is where the borrow signature would come in
-                //let ps := (getDecl ctx f).params;
-                use crate::ir::CallType;
-                use crate::layout::Builtin;
-                let symbol = match call_type {
-                    CallType::ByName(s) => s,
-                    CallType::ByPointer(s) => s,
+                // get the borrow signature
+                let ps = match self.param_map.get_symbol(call_type.get_inner()) {
+                    Some(slice) => slice,
+                    None => Vec::from_iter_in(
+                        arg_layouts.iter().cloned().map(|layout| Param {
+                            symbol: Symbol::UNDERSCORE,
+                            borrow: false,
+                            layout,
+                        }),
+                        self.arena,
+                    )
+                    .into_bump_slice(),
                 };
 
-                let ps = Vec::from_iter_in(
-                    arg_layouts.iter().map(|layout| {
-                        let borrow = match layout {
-                            Layout::Builtin(Builtin::List(_, _)) => true,
-                            _ => false,
-                        };
-
-                        Param {
-                            symbol,
-                            borrow,
-                            layout: layout.clone(),
-                        }
-                    }),
-                    self.arena,
-                )
-                .into_bump_slice();
-
                 let b = self.add_dec_after_application(ys, ps, b, b_live_vars);
-                self.arena.alloc(Stmt::Let(z, v, l, b))
+                let b = self.arena.alloc(Stmt::Let(z, v, l, b));
+
+                self.add_inc_before(ys, ps, b, b_live_vars)
             }
 
-            EmptyArray | FunctionPointer(_, _) | Literal(_) | RuntimeErrorFunction(_) => {
+            EmptyArray
+            | FunctionPointer(_, _)
+            | Literal(_)
+            | Reset(_)
+            | RuntimeErrorFunction(_) => {
                 // EmptyArray is always stack-allocated
                 // function pointers are persistent
                 self.arena.alloc(Stmt::Let(z, v, l, b))
@@ -495,13 +506,15 @@ impl<'a> Context<'a> {
     fn update_var_info(&self, symbol: Symbol, layout: &Layout<'a>, expr: &Expr<'a>) -> Self {
         let mut ctx = self.clone();
 
-        // TODO actually make these non-constant
-
         // can this type be reference-counted at runtime?
         let reference = layout.contains_refcounted();
 
         // is this value a constant?
-        let persistent = false;
+        // TODO do function pointers also fall into this category?
+        let persistent = match expr {
+            Expr::FunctionCall { args, .. } => args.is_empty(),
+            _ => false,
+        };
 
         // must this value be consumed?
         let consume = consume_expr(&ctx.vars, expr);
@@ -518,9 +531,6 @@ impl<'a> Context<'a> {
     }
 
     fn update_var_info_with_params(&self, ps: &[Param]) -> Self {
-        //def updateVarInfoWithParams (ctx : Context) (ps : Array Param) : Context :=
-        //let m := ps.foldl (fun (m : VarMap) p => m.insert p.x { ref := p.ty.isObj, consume := !p.borrow }) ctx.varMap;
-        //{ ctx with varMap := m }
         let mut ctx = self.clone();
 
         for p in ps.iter() {
@@ -535,8 +545,13 @@ impl<'a> Context<'a> {
         ctx
     }
 
-    /* Add `dec` instructions for parameters that are references, are not alive in `b`, and are not borrow.
-    That is, we must make sure these parameters are consumed. */
+    // Add `dec` instructions for parameters that are
+    //
+    //  - references
+    //  - not alive in `b`
+    //  - not borrow.
+    //
+    // That is, we must make sure these parameters are consumed.
     fn add_dec_for_dead_params(
         &self,
         ps: &[Param<'a>],
@@ -619,25 +634,20 @@ impl<'a> Context<'a> {
 
             Join {
                 id: j,
-                parameters: xs,
+                parameters: _,
                 remainder: b,
                 continuation: v,
             } => {
-                let xs = *xs;
-
-                let v_orig = v;
-
-                // NOTE deviation from lean, insert into local context
-                let mut ctx = self.clone();
-                ctx.local_context.join_points.insert(*j, (xs, v_orig));
+                // get the parameters with borrow signature
+                let xs = self.param_map.get_join_point(*j);
 
                 let (v, v_live_vars) = {
-                    let ctx = ctx.update_var_info_with_params(xs);
+                    let ctx = self.update_var_info_with_params(xs);
                     ctx.visit_stmt(v)
                 };
 
+                let mut ctx = self.clone();
                 let v = ctx.add_dec_for_dead_params(xs, v, &v_live_vars);
-                let mut ctx = ctx.clone();
 
                 update_jp_live_vars(*j, xs, v, &mut ctx.jp_live_vars);
 
@@ -673,7 +683,10 @@ impl<'a> Context<'a> {
                     Some(vars) => vars,
                     None => &empty,
                 };
-                let ps = self.local_context.join_points.get(j).unwrap().0;
+                // TODO use borrow signature here?
+                let ps = self.param_map.get_join_point(*j);
+                // let ps = self.local_context.join_points.get(j).unwrap().0;
+
                 let b = self.add_inc_before(xs, ps, stmt, j_live_vars);
 
                 let b_live_vars = collect_stmt(b, &self.jp_live_vars, MutSet::default());
@@ -765,7 +778,7 @@ impl<'a> Context<'a> {
 }
 
 #[derive(Clone, Debug, Default)]
-struct LocalContext<'a> {
+pub struct LocalContext<'a> {
     join_points: MutMap<JoinPointId, (&'a [Param<'a>], &'a Stmt<'a>)>,
 }
 
@@ -796,8 +809,15 @@ pub fn collect_stmt(
             collect_stmt(cont, jp_live_vars, vars)
         }
 
-        Jump(_, arguments) => {
+        Jump(id, arguments) => {
             vars.extend(arguments.iter().copied());
+
+            // NOTE deviation from Lean
+            // we fall through when no join point is available
+            if let Some(jvars) = jp_live_vars.get(id) {
+                vars.extend(jvars);
+            }
+
             vars
         }
 
@@ -866,8 +886,13 @@ fn update_jp_live_vars(j: JoinPointId, ys: &[Param], v: &Stmt<'_>, m: &mut JPLiv
     m.insert(j, j_live_vars);
 }
 
-pub fn visit_declaration<'a>(arena: &'a Bump, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
-    let ctx = Context::new(arena);
+/// used to process the main function in the repl
+pub fn visit_declaration<'a>(
+    arena: &'a Bump,
+    param_map: &'a ParamMap<'a>,
+    stmt: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    let ctx = Context::new(arena, param_map);
 
     let params = &[] as &[_];
     let ctx = ctx.update_var_info_with_params(params);
@@ -875,23 +900,21 @@ pub fn visit_declaration<'a>(arena: &'a Bump, stmt: &'a Stmt<'a>) -> &'a Stmt<'a
     ctx.add_dec_for_dead_params(params, b, &b_live_vars)
 }
 
-pub fn visit_proc<'a>(arena: &'a Bump, proc: &mut Proc<'a>) {
-    let ctx = Context::new(arena);
+pub fn visit_proc<'a>(arena: &'a Bump, param_map: &'a ParamMap<'a>, proc: &mut Proc<'a>) {
+    let ctx = Context::new(arena, param_map);
 
-    if proc.name.is_builtin() {
-        // we must take care of our own refcounting in builtins
-        return;
-    }
-
-    let params = Vec::from_iter_in(
-        proc.args.iter().map(|(layout, symbol)| Param {
-            symbol: *symbol,
-            layout: layout.clone(),
-            borrow: layout.contains_refcounted(),
-        }),
-        arena,
-    )
-    .into_bump_slice();
+    let params = match param_map.get_symbol(proc.name) {
+        Some(slice) => slice,
+        None => Vec::from_iter_in(
+            proc.args.iter().cloned().map(|(layout, symbol)| Param {
+                symbol,
+                borrow: false,
+                layout,
+            }),
+            arena,
+        )
+        .into_bump_slice(),
+    };
 
     let stmt = arena.alloc(proc.body.clone());
     let ctx = ctx.update_var_info_with_params(params);

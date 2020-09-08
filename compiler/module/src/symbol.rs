@@ -614,6 +614,8 @@ define_builtins! {
         7 ARG_6: "#arg6"
         8 ARG_7: "#arg7"
         9 ARG_8: "#arg8"
+        10 INC: "#inc" // internal function that increments the refcount
+        11 DEC: "#dec" // internal function that increments the refcount
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -668,6 +670,7 @@ define_builtins! {
         1 STR_AT_STR: "@Str" // the Str.@Str private tag
         2 STR_ISEMPTY: "isEmpty"
         3 STR_APPEND: "append"
+        4 STR_CONCAT: "concat"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -679,7 +682,7 @@ define_builtins! {
         6 LIST_MAP: "map"
         7 LIST_LEN: "len"
         8 LIST_FOLDL: "foldl"
-        9 LIST_FOLDR: "foldr"
+        9 LIST_WALK_RIGHT: "walkRight"
         10 LIST_CONCAT: "concat"
         11 LIST_FIRST: "first"
         12 LIST_SINGLE: "single"
@@ -687,6 +690,7 @@ define_builtins! {
         14 LIST_REVERSE: "reverse"
         15 LIST_PREPEND: "prepend"
         16 LIST_JOIN: "join"
+        17 LIST_KEEP_IF: "keepIf"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
