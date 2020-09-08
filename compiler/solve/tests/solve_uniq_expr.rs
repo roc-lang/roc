@@ -2220,7 +2220,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_walkRight_sum() {
+    fn list_walk_right_sum() {
         infer_eq(
             indoc!(
                 r#"
@@ -2291,14 +2291,6 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_walkRight() {
-        infer_eq(
-            "List.walkRight",
-            "Attr * (Attr (* | b) (List (Attr b a)), Attr Shared (Attr b a, c -> c), c -> c)",
-        );
-    }
-
-    #[test]
     fn list_push_singleton() {
         infer_eq(
             indoc!(
@@ -2313,7 +2305,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_walkRight_reverse() {
+    fn list_walk_right_reverse() {
         infer_eq(
             indoc!(
                 r#"
