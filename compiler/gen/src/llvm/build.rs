@@ -743,7 +743,7 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
         "make ptr",
     );
 
-    // the refcount of a new list is initially 1
+    // the refcount of a new allocation is initially 1
     // we assume that the list is indeed used (dead variables are eliminated)
     let ref_count_one = ctx
         .i64_type()
