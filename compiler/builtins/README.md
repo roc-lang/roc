@@ -6,7 +6,7 @@ Builtins are the functions and modules that are implicitly imported into every m
 
 Towards the bottom of `symbol.rs` there is a `define_builtins!` macro being used that takes many modules and function names. The first level (`List`, `Int` ..) is the module name, and the second level is the function or value name (`reverse`, `mod` ..). If you wanted to add a `Int` function called `addTwo` go to `2 Int: "Int" => {` and inside that case add to the bottom `38 INT_ADD_TWO: "addTwo"` (assuming there are 37 existing ones). 
 
-Some of these have `#` inside their name (`first#list`, #lt` ..). This is a trick we are doing to hide implementation details from Roc programmers. To a Roc programmer, a name with `#` in it is invalid, because `#` means everything after it is parsed to a comment. We are constructing these functions manually, so we are circumventing the parsing step and dont have such restrictions. We get to make functions and values with `#` which as a consequence are not accessible to Roc programmers. Roc programmers simply cannot reference them.
+Some of these have `#` inside their name (`first#list`, `#lt` ..). This is a trick we are doing to hide implementation details from Roc programmers. To a Roc programmer, a name with `#` in it is invalid, because `#` means everything after it is parsed to a comment. We are constructing these functions manually, so we are circumventing the parsing step and dont have such restrictions. We get to make functions and values with `#` which as a consequence are not accessible to Roc programmers. Roc programmers simply cannot reference them.
 
 But we can use these values and some of these are necessary for implementing builtins. For example, `List.get` returns tags, and it is not easy for us to create tags when composing LLVM. What is easier however, is:
 - ..writing `List.#getUnsafe` that has the dangerous signature of `List elem, Int -> elem` in LLVM
@@ -15,9 +15,9 @@ But we can use these values and some of these are necessary for implementing bui
 
 ### can/src/builtins.rs
 
-Right at the top of this module is a function called `builtin_defs`. All this is doing is mapping the `Symbol` defined in `module/src/symbol.rs` to its implementation. Some of the builtins are quite complex, such as `list_get`, which is complex the reasons mentioned in the previous section; `list_get` returns tags, and it defers to lower-level functions via an if statement.
+Right at the top of this module is a function called `builtin_defs`. All this is doing is mapping the `Symbol` defined in `module/src/symbol.rs` to its implementation. Some of the builtins are quite complex, such as `list_get`. What makes `list_get` is that it returns tags, and in order to return tags it first has to  defer to lower-level functions via an if statement.
 
-Lets look at `List.repeat : elem, Int -> List elem`, which is more straight forward, and points directly to its lower level implementation:
+Lets look at `List.repeat : elem, Int -> List elem`, which is more straight-forward, and points directly to its lower level implementation:
 ```
 fn list_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let elem_var = var_store.fresh();
@@ -48,17 +48,21 @@ Since `List.repeat` is implemented entirely as low level functions, its `body` i
 
 ## Connecting the definition to the implementation
 ### module/src/low_level.rs
-This `LowLevel` thing connects the builtin defined in this module to its implementation. Its referenced  in `can/src/builtins.rs` and it is used in `gen/src/llvm/build.rs`.
+This `LowLevel` thing connects the builtin defined in this module to its implementation. Its referenced in `can/src/builtins.rs` and it is used in `gen/src/llvm/build.rs`.
 
 ## Bottom level LLVM values and functions
 ### gen/src/llvm/build.rs
 This is where bottom-level functions that need to be written as LLVM are created. If the function leads to a tag thats a good sign it should not be written here in `build.rs`. If its simple fundamental stuff like `INT_ADD` then it certainly should be written here.
 
 ## Letting the compiler know these functions exist
-Its one thing to actually write these functions, its _another_ thing to let the Roc compiler know they exist as part of the standard library. You have to tell the compiler "Hey, this function exists, and it has this type signature". That happens in these modules:
 ### builtins/src/std.rs
-### builtins/src/unique.rs
+Its one thing to actually write these functions, its _another_ thing to let the Roc compiler know they exist as part of the standard library. You have to tell the compiler "Hey, this function exists, and it has this type signature". That happens in `std.rs`.
 
+## Specifying the uniqueness of a function
+### builtins/src/unique.rs
+One of the cool things about Roc is that it evaluates if a value in memory is shared between scopes or if it is used in just one place. If the value is used in one place then it is 'unique', and it therefore can be mutated in place. For a value created by a function, the uniqueness of the output is determined in part by the uniqueness of the input arguments. For example `List.single : elem -> List elem` can return a unique list if the `elem` is also unique.
+
+We have to define the uniqueness constraints of a function just like we have to define a type signature. That is what happens in `unique.rs`. This can be tricky so it would be a good step to ask for help on if it is confusing.
 
 # Mistakes that are easy to make!!
 
