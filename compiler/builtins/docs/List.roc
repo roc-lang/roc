@@ -274,15 +274,15 @@ join : List (List elem) -> List elem
 joinMap : List before, (before -> List after) -> List after
 
 ## Like #List.join, but only keeps elements tagged with `Ok`. Elements
-## tagged with `Err` are dropped.
+## tagged with anything else are dropped.
 ##
 ## This can be useful after using an operation that returns a #Result
 ## on each element of a list, for example #List.first:
 ##
 ## >>> [ [ 1, 2, 3 ], [], [], [ 4, 5 ] ]
 ## >>>     |> List.map List.first
-## >>>     |> List.joinOks
-joinOks : List (Result elem *) -> List elem
+## >>>     |> List.oks
+oks : List [Ok elem]* -> List elem
 
 ## Iterates over the shortest of the given lists and returns a list of `Pair`
 ## tags, each wrapping one of the elements in that list, along with the elements
