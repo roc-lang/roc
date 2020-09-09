@@ -1541,7 +1541,7 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     // we assume that the list is indeed used (dead variables are eliminated)
     let ref_count_one = ctx
         .i64_type()
-        .const_int(crate::llvm::build::REFCOUNT_1 as _, false);
+        .const_int(crate::llvm::refcounting::REFCOUNT_1 as _, false);
     builder.build_store(refcount_ptr, ref_count_one);
 
     list_element_ptr

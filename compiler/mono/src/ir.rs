@@ -1967,19 +1967,26 @@ pub fn with_hole<'a>(
         Call(boxed, loc_args, _) => {
             let (fn_var, loc_expr, ret_var) = *boxed;
 
-            // match from_can(env, loc_expr.value, procs, layout_cache) {
+            // even if a call looks like it's by name, it may in fact be by-pointer.
+            // E.g. in `(\f, x -> f x)` the call is in fact by pointer.
+            // So we check the function name against the list of partial procedures,
+            // the procedures that we have lifted to the top-level and can call by name
+            // if it's in there, it's a call by name, otherwise it's a call by pointer
+            let known_functions = &procs.partial_procs;
             match loc_expr.value {
-                roc_can::expr::Expr::Var(proc_name) => call_by_name(
-                    env,
-                    procs,
-                    fn_var,
-                    ret_var,
-                    proc_name,
-                    loc_args,
-                    layout_cache,
-                    assigned,
-                    hole,
-                ),
+                roc_can::expr::Expr::Var(proc_name) if known_functions.contains_key(&proc_name) => {
+                    call_by_name(
+                        env,
+                        procs,
+                        fn_var,
+                        ret_var,
+                        proc_name,
+                        loc_args,
+                        layout_cache,
+                        assigned,
+                        hole,
+                    )
+                }
                 _ => {
                     // Call by pointer - the closure was anonymous, e.g.
                     //
@@ -1992,11 +1999,18 @@ pub fn with_hole<'a>(
                     // It could be named too:
                     //
                     // ((if x > 0 then foo else bar) 5)
-                    let mut arg_symbols = Vec::with_capacity_in(loc_args.len(), env.arena);
+                    //
+                    // also this occurs for functions passed in as arguments, e.g.
+                    //
+                    // (\f, x -> f x)
 
-                    for _ in 0..loc_args.len() {
-                        arg_symbols.push(env.unique_symbol());
-                    }
+                    let arg_symbols = Vec::from_iter_in(
+                        loc_args.iter().map(|(_, arg_expr)| {
+                            possible_reuse_symbol(env, procs, &arg_expr.value)
+                        }),
+                        arena,
+                    )
+                    .into_bump_slice();
 
                     let full_layout = layout_cache
                         .from_var(env.arena, fn_var, env.subs)
@@ -2015,45 +2029,52 @@ pub fn with_hole<'a>(
                             panic!("TODO turn fn_var into a RuntimeError {:?}", err)
                         });
 
-                    let function_symbol = env.unique_symbol();
-                    let arg_symbols = arg_symbols.into_bump_slice();
-                    let mut result = Stmt::Let(
-                        assigned,
-                        Expr::FunctionCall {
-                            call_type: CallType::ByPointer(function_symbol),
-                            full_layout,
-                            ret_layout: ret_layout.clone(),
-                            args: arg_symbols,
-                            arg_layouts,
-                        },
-                        ret_layout,
-                        arena.alloc(hole),
-                    );
+                    // if the function expression (loc_expr) is already a symbol,
+                    // re-use that symbol, and don't define its value again
+                    let mut result;
+                    match can_reuse_symbol(procs, &loc_expr.value) {
+                        Some(function_symbol) => {
+                            result = Stmt::Let(
+                                assigned,
+                                Expr::FunctionCall {
+                                    call_type: CallType::ByPointer(function_symbol),
+                                    full_layout,
+                                    ret_layout: ret_layout.clone(),
+                                    args: arg_symbols,
+                                    arg_layouts,
+                                },
+                                ret_layout,
+                                arena.alloc(hole),
+                            );
+                        }
+                        None => {
+                            let function_symbol = env.unique_symbol();
 
-                    // let ptr = with_hole(env, loc_expr.value, procs, layout_cache, function_symbol);
-                    result = with_hole(
-                        env,
-                        loc_expr.value,
-                        procs,
-                        layout_cache,
-                        function_symbol,
-                        env.arena.alloc(result),
-                    );
+                            result = Stmt::Let(
+                                assigned,
+                                Expr::FunctionCall {
+                                    call_type: CallType::ByPointer(function_symbol),
+                                    full_layout,
+                                    ret_layout: ret_layout.clone(),
+                                    args: arg_symbols,
+                                    arg_layouts,
+                                },
+                                ret_layout,
+                                arena.alloc(hole),
+                            );
 
-                    for ((_, loc_arg), symbol) in
-                        loc_args.into_iter().rev().zip(arg_symbols.iter().rev())
-                    {
-                        result = with_hole(
-                            env,
-                            loc_arg.value,
-                            procs,
-                            layout_cache,
-                            *symbol,
-                            env.arena.alloc(result),
-                        );
+                            result = with_hole(
+                                env,
+                                loc_expr.value,
+                                procs,
+                                layout_cache,
+                                function_symbol,
+                                env.arena.alloc(result),
+                            );
+                        }
                     }
-
-                    result
+                    let iter = loc_args.into_iter().rev().zip(arg_symbols.iter().rev());
+                    assign_to_symbols(env, procs, layout_cache, iter, result)
                 }
             }
         }

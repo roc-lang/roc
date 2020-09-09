@@ -644,7 +644,6 @@ fn unify_shared_tags(
             };
 
             if problems.is_empty() {
-                // debug_assert_eq!(subs.get_root_key(actual), subs.get_root_key(expected));
                 matching_vars.push(actual);
             }
         }
@@ -737,7 +736,7 @@ fn unify_flat_type(
         }
 
         (RecursiveTagUnion(recursion_var, tags1, ext1), TagUnion(tags2, ext2)) => {
-            // unreachable!("unify of recursive with non-recursive tag union should not occur");
+            // this never happens in type-correct programs, but may happen if there is a type error
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
 

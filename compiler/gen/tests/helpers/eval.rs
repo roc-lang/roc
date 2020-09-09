@@ -1,4 +1,4 @@
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutSet;
 use roc_types::subs::Subs;
 
 pub fn helper_without_uniqueness<'a>(

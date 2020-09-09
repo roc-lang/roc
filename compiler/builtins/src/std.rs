@@ -265,6 +265,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // compare : Num a, Num a -> [ LT, EQ, GT ]
+    add_type(
+        Symbol::NUM_COMPARE,
+        SolvedType::Func(
+            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
+            Box::new(ordering_type()),
+        ),
+    );
+
     // toFloat : Num a -> Float
     add_type(
         Symbol::NUM_TO_FLOAT,
@@ -720,6 +729,19 @@ fn int_type() -> SolvedType {
 #[inline(always)]
 fn bool_type() -> SolvedType {
     SolvedType::Apply(Symbol::BOOL_BOOL, Vec::new())
+}
+
+#[inline(always)]
+fn ordering_type() -> SolvedType {
+    // [ LT, EQ, GT ]
+    SolvedType::TagUnion(
+        vec![
+            (TagName::Global("GT".into()), vec![]),
+            (TagName::Global("EQ".into()), vec![]),
+            (TagName::Global("LT".into()), vec![]),
+        ],
+        Box::new(SolvedType::EmptyTagUnion),
+    )
 }
 
 #[inline(always)]
