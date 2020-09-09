@@ -640,6 +640,7 @@ define_builtins! {
         35 NUM_SQRT: "sqrt"
         36 NUM_ROUND: "round"
         37 NUM_COMPARE: "compare"
+        38 NUM_POW: "pow"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
