@@ -244,6 +244,42 @@ mod test_can {
         assert_can_int("-0b11", -0b11);
     }
 
+    // ANNOTATIONS
+
+    #[test]
+    fn annotation_without_body() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int"#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+
+        let actual = loc_expr.value;
+
+        let can_ok = match actual {
+            roc_can::expr::Expr::LetNonRec(def, _, _, _) => match *def {
+                roc_can::def::Def {
+                    annotation: Some(_),
+                    loc_expr:
+                        crate::roc_region::all::Located {
+                            value: RuntimeError(roc_problem::can::RuntimeError::NoImplementation),
+                            ..
+                        },
+                    ..
+                } => true,
+                _ => false,
+            },
+            _ => false,
+        };
+
+        assert!(can_ok);
+    }
+
     // LOCALS
 
     // TODO rewrite this test to check only for UnusedDef reports
