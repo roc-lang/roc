@@ -90,6 +90,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_IS_POSITIVE => num_is_positive,
         Symbol::NUM_IS_NEGATIVE => num_is_negative,
         Symbol::NUM_TO_FLOAT => num_to_float,
+        Symbol::NUM_POW => num_pow,
     }
 }
 
@@ -575,6 +576,28 @@ fn num_round(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         int_var,
+    )
+}
+
+/// Num.pow : Float, Float -> Float
+fn num_pow(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let float_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumPow,
+        args: vec![
+            (float_var, Var(Symbol::ARG_1)),
+            (float_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: float_var,
+    };
+
+    defn(
+        symbol,
+        vec![(float_var, Symbol::ARG_1), (float_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        float_var,
     )
 }
 
