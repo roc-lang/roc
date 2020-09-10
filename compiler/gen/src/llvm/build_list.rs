@@ -766,13 +766,20 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
                     ctx.i64_type().const_int(0 as u64, false),
                 );
 
+                let closure_record_ptr = {
+                    env.context
+                        .i64_type()
+                        .ptr_type(AddressSpace::Generic)
+                        .const_zero()
+                };
+
                 // Return List Length Loop
                 // This loop goes through the list and counts how many
                 // elements pass the filter function `elem -> Bool`
                 let ret_list_len_loop = |_, elem: BasicValueEnum<'ctx>| {
                     let call_site_value = builder.build_call(
                         func_ptr,
-                        env.arena.alloc([elem]),
+                        &[elem, closure_record_ptr.into()],
                         "#keep_if_count_func",
                     );
 
@@ -845,7 +852,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
                 let ret_list_loop = |_, elem| {
                     let call_site_value = builder.build_call(
                         func_ptr,
-                        env.arena.alloc([elem]),
+                        &[elem, closure_record_ptr.into()],
                         "#keep_if_insert_func",
                     );
 
@@ -938,9 +945,19 @@ pub fn list_map<'a, 'ctx, 'env>(
 
                 let list_ptr = load_list_ptr(builder, list_wrapper, ptr_type);
 
+                let closure_record_ptr = {
+                    env.context
+                        .i64_type()
+                        .ptr_type(AddressSpace::Generic)
+                        .const_zero()
+                };
+
                 let list_loop = |index, before_elem| {
-                    let call_site_value =
-                        builder.build_call(func_ptr, env.arena.alloc([before_elem]), "map_func");
+                    let call_site_value = builder.build_call(
+                        func_ptr,
+                        &[before_elem, closure_record_ptr.into()],
+                        "map_func",
+                    );
 
                     // set the calling convention explicitly for this call
                     call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);

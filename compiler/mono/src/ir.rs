@@ -1439,7 +1439,13 @@ pub fn with_hole<'a>(
                 if let Closure(ann, _, recursivity, loc_args, boxed_body, _closed_over) =
                     def.loc_expr.value
                 {
-                    let closed_over = env.closures.get(symbol).unwrap();
+                    let closed_over = match env.closures.get(&symbol) {
+                        Some(references) => references.clone(),
+                        None => {
+                            println!("WARNING no references!");
+                            References::default()
+                        }
+                    };
                     let (loc_body, ret_var) = *boxed_body;
                     let closed_over = Vec::from_iter_in(
                         closed_over
@@ -1540,7 +1546,14 @@ pub fn with_hole<'a>(
                         let is_self_recursive =
                             !matches!(recursivity, roc_can::expr::Recursive::NotRecursive);
 
-                        let closed_over = env.closures.get(symbol).unwrap();
+                        let closed_over = match env.closures.get(&symbol) {
+                            Some(references) => references.clone(),
+                            None => {
+                                println!("WARNING no references!");
+                                References::default()
+                            }
+                        };
+
                         let closed_over = Vec::from_iter_in(
                             closed_over
                                 .calls
@@ -2070,7 +2083,14 @@ pub fn with_hole<'a>(
         Closure(ann, name, _, loc_args, boxed_body, closed_over) => {
             let (loc_body, ret_var) = *boxed_body;
 
-            let closed_over = env.closures.get(&name).unwrap();
+            let closed_over = match env.closures.get(&name) {
+                Some(references) => references.clone(),
+                None => {
+                    println!("WARNING no references!");
+                    References::default()
+                }
+            };
+
             let closed_over = Vec::from_iter_in(
                 closed_over
                     .calls

@@ -239,7 +239,8 @@ impl<'a> BorrowInfState<'a> {
     /// If the parameter (based on the definition of `f`) is owned,
     /// then the argument must also be owned
     fn own_args_using_params(&mut self, xs: &[Symbol], ps: &[Param<'a>]) {
-        debug_assert_eq!(xs.len(), ps.len());
+        println!("WARNING re-enable assert");
+        // debug_assert_eq!(xs.len(), ps.len());
 
         for (x, p) in xs.iter().zip(ps.iter()) {
             if !p.borrow {
@@ -361,6 +362,7 @@ impl<'a> BorrowInfState<'a> {
                 self.own_var(z);
 
                 // if the function exects an owned argument (ps), the argument must be owned (args)
+                dbg!(&call_type, &args, &ps);
                 self.own_args_using_params(args, ps);
             }
 
