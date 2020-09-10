@@ -31,4 +31,30 @@ mod gen_str {
             &'static str
         );
     }
+
+    #[test]
+    fn small_str() {
+        assert_evals_to!(
+            "\"JJJJJJJJJJJJJJJ\"",
+            [
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0b1000_1111
+            ],
+            [u8; 16]
+        );
+    }
 }

@@ -1,10 +1,10 @@
 # So you want to add a builtin?
 
-Builtins are the functions and modules that are implicitly imported into every module. Some of them compile down to llvm, others need to be constructed and defined. Making a new builtin means touching many files. Lets make it easy for you and just list out which modules you need to visit to make a builtin. Here is what it takes:
+Builtins are the functions and modules that are implicitly imported into every module. All of them compile down to llvm, but some are implemented directly as llvm and others in terms of intermediate functions. Either way, making a new builtin means touching many files. Lets make it easy for you and just list out which modules you need to visit to make a builtin. Here is what it takes:
 
 ### module/src/symbol.rs
 
-Towards the bottom of a file there is a `define_builtins!` macro being used that takes many modules and function names. The first level (`List`, `Int` ..) is the module name, and the second level is the function or value name (`reverse`, `mod` ..). If you wanted to add a `Int` function called `addTwo` go to `2 Int: "Int" => {` and inside that case add to the bottom `38 INT_ADD_TWO: "addTwo"` (assuming there are 37 existing ones). 
+Towards the bottom of `symbol.rs` there is a `define_builtins!` macro being used that takes many modules and function names. The first level (`List`, `Int` ..) is the module name, and the second level is the function or value name (`reverse`, `mod` ..). If you wanted to add a `Int` function called `addTwo` go to `2 Int: "Int" => {` and inside that case add to the bottom `38 INT_ADD_TWO: "addTwo"` (assuming there are 37 existing ones). 
 
 Some of these have `#` inside their name (`first#list`, #lt` ..). This is a trick we are doing to hide implementation details from Roc programmers. To a Roc programmer, a name with `#` in it is invalid, because `#` means everything after it is parsed to a comment. We are constructing these functions manually, so we are circumventing the parsing step and dont have such restrictions. We get to make functions and values with `#` which as a consequence are not accessible to Roc programmers. Roc programmers simply cannot reference them.
 
@@ -58,3 +58,11 @@ This is where bottom-level functions that need to be written as LLVM are created
 Its one thing to actually write these functions, its _another_ thing to let the Roc compiler know they exist as part of the standard library. You have to tell the compiler "Hey, this function exists, and it has this type signature". That happens in these modules:
 ### builtins/src/std.rs
 ### builtins/src/unique.rs
+
+
+# Mistakes that are easy to make!!
+
+When implementing a new builtin, it is often easy to copy and paste the implementation for an existing builtin. This can take you quite far since many builtins are very similar, but it also risks forgetting to change one small part of what you copy and pasted and losing a lot of time later on when you cant figure out why things dont work. So, speaking from experience, even if you are copying an existing builtin, try and implement it manually without copying and pasting. Two recent instances of this (as of September 7th, 2020):
+
+- `List.keepIf` did not work for a long time because in builtins its `LowLevel` was `ListMap`. This was because I copy and pasted the `List.map` implementation in `builtins.rs
+- `List.walkRight` had mysterious memory bugs for a little while because in `unique.rs` its return type was `list_type(flex(b))` instead of `flex(b)` since it was copy and pasted from `List.keepIf`.

@@ -233,12 +233,6 @@ pub enum Def<'a> {
     // No need to track that relationship in any data structure.
     Body(&'a Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
 
-    TypedBody(
-        &'a Loc<Pattern<'a>>,
-        Loc<TypeAnnotation<'a>>,
-        &'a Loc<Expr<'a>>,
-    ),
-
     // Blank Space (e.g. comments, spaces, newlines) before or after a def.
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a Def<'a>, &'a [CommentOrNewline<'a>]),

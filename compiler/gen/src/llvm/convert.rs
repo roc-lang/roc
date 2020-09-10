@@ -107,37 +107,13 @@ pub fn basic_type_from_layout<'ctx>(
                 .struct_type(field_types.into_bump_slice(), false)
                 .as_basic_type_enum()
         }
-        RecursiveUnion(_) => todo!("TODO implement layout of recursive tag union"),
-        Union(_) => {
+        RecursiveUnion(_) | Union(_) => block_of_memory(context, layout, ptr_bytes),
+        RecursivePointer => {
             // TODO make this dynamic
-            let ptr_size = std::mem::size_of::<i64>();
-            let union_size = layout.stack_size(ptr_size as u32);
-
-            // The memory layout of Union is a bit tricky.
-            // We have tags with different memory layouts, that are part of the same type.
-            // For llvm, all tags must have the same memory layout.
-            //
-            // So, we convert all tags to a layout of bytes of some size.
-            // It turns out that encoding to i64 for as many elements as possible is
-            // a nice optimization, the remainder is encoded as bytes.
-
-            let num_i64 = union_size / 8;
-            let num_i8 = union_size % 8;
-
-            let i64_array_type = context.i64_type().array_type(num_i64).as_basic_type_enum();
-
-            if num_i8 == 0 {
-                // the object fits perfectly in some number of i64's
-                // (i.e. the size is a multiple of 8 bytes)
-                context.struct_type(&[i64_array_type], false).into()
-            } else {
-                // there are some trailing bytes at the end
-                let i8_array_type = context.i8_type().array_type(num_i8).as_basic_type_enum();
-
-                context
-                    .struct_type(&[i64_array_type, i8_array_type], false)
-                    .into()
-            }
+            context
+                .i64_type()
+                .ptr_type(AddressSpace::Generic)
+                .as_basic_type_enum()
         }
 
         Builtin(builtin) => match builtin {
@@ -156,6 +132,41 @@ pub fn basic_type_from_layout<'ctx>(
             List(_, _) | Str | EmptyStr => collection(context, ptr_bytes).into(),
             EmptyList => BasicTypeEnum::StructType(collection(context, ptr_bytes)),
         },
+    }
+}
+
+pub fn block_of_memory<'ctx>(
+    context: &'ctx Context,
+    layout: &Layout<'_>,
+    ptr_bytes: u32,
+) -> BasicTypeEnum<'ctx> {
+    // TODO make this dynamic
+    let union_size = layout.stack_size(ptr_bytes as u32);
+
+    // The memory layout of Union is a bit tricky.
+    // We have tags with different memory layouts, that are part of the same type.
+    // For llvm, all tags must have the same memory layout.
+    //
+    // So, we convert all tags to a layout of bytes of some size.
+    // It turns out that encoding to i64 for as many elements as possible is
+    // a nice optimization, the remainder is encoded as bytes.
+
+    let num_i64 = union_size / 8;
+    let num_i8 = union_size % 8;
+
+    let i64_array_type = context.i64_type().array_type(num_i64).as_basic_type_enum();
+
+    if num_i8 == 0 {
+        // the object fits perfectly in some number of i64's
+        // (i.e. the size is a multiple of 8 bytes)
+        context.struct_type(&[i64_array_type], false).into()
+    } else {
+        // there are some trailing bytes at the end
+        let i8_array_type = context.i8_type().array_type(num_i8).as_basic_type_enum();
+
+        context
+            .struct_type(&[i64_array_type, i8_array_type], false)
+            .into()
     }
 }
 

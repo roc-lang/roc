@@ -310,6 +310,19 @@ impl<'a> BorrowInfState<'a> {
                 // the function must take it as an owned parameter
                 self.own_args_if_param(xs);
             }
+            Reset(x) => {
+                self.own_var(z);
+                self.own_var(*x);
+            }
+            Reuse {
+                symbol: x,
+                arguments: ys,
+                ..
+            } => {
+                self.own_var(z);
+                self.own_var(*x);
+                self.own_args_if_param(ys);
+            }
             EmptyArray => {
                 self.own_var(z);
             }
@@ -509,7 +522,9 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListWalkRight => arena.alloc_slice_copy(&[borrowed, irrelevant, owned]),
 
         Eq | NotEq | And | Or | NumAdd | NumSub | NumMul | NumGt | NumGte | NumLt | NumLte
-        | NumDivUnchecked | NumRemUnchecked => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
+        | NumCompare | NumDivUnchecked | NumRemUnchecked => {
+            arena.alloc_slice_copy(&[irrelevant, irrelevant])
+        }
 
         NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumRound | NumToFloat | Not => {
             arena.alloc_slice_copy(&[irrelevant])

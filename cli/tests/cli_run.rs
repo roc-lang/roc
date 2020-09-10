@@ -21,7 +21,7 @@ mod cli_run {
         ]);
 
         assert_eq!(&out.stderr, "");
-        assert!(&out.stdout.ends_with("Hello, World!\n"));
+        assert!(&out.stdout.ends_with("Hello, World!!!!!!!!!!!!!\n"));
         assert!(out.status.success());
     }
 

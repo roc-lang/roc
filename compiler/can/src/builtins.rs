@@ -73,6 +73,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_GTE => num_gte,
         Symbol::NUM_LT => num_lt,
         Symbol::NUM_LTE => num_lte,
+        Symbol::NUM_COMPARE => num_compare,
         Symbol::NUM_SIN => num_sin,
         Symbol::NUM_COS => num_cos,
         Symbol::NUM_TAN => num_tan,
@@ -260,6 +261,11 @@ fn num_lt(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.isLte : Num a, Num a -> Num a
 fn num_lte(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_bool_binop(symbol, var_store, LowLevel::NumLte)
+}
+
+/// Num.compare : Num a, Num a -> [ LT, EQ, GT ]
+fn num_compare(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_bool_binop(symbol, var_store, LowLevel::NumCompare)
 }
 
 /// Num.sin : Float -> Float

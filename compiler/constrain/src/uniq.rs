@@ -268,11 +268,15 @@ fn constrain_pattern(
                             loc_expr.region,
                         );
 
-                        state.constraints.push(Constraint::Eq(
-                            Type::Variable(*expr_var),
-                            expr_expected.clone(),
-                            Category::DefaultValue(label.clone()),
+                        state.constraints.push(Constraint::Pattern(
                             region,
+                            PatternCategory::PatternDefault,
+                            Type::Variable(*expr_var),
+                            PExpected::ForReason(
+                                PReason::OptionalField,
+                                pat_type.clone(),
+                                loc_expr.region,
+                            ),
                         ));
 
                         state.vars.push(*expr_var);
