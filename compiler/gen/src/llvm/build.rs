@@ -3,7 +3,7 @@ use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, clone_nonempty_list, empty_list, empty_polymorphic_list,
     incrementing_elem_loop, list_append, list_concat, list_get_unsafe, list_is_not_empty,
     list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set,
-    list_single, list_walk_right, load_list_ptr, store_list, LoopListArg,
+    list_single, list_walk_right, load_list_ptr, store_list,
 };
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
@@ -1543,7 +1543,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
-            list_reverse(env, parent, list, list_layout)
+            list_reverse(env, parent, InPlace::Clone, list, list_layout)
         }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
@@ -1858,46 +1858,65 @@ fn run_low_level<'a, 'ctx, 'env>(
                 (load_symbol_and_layout(env, scope, &args[2])),
             ];
 
-            match list_layout {
-                Layout::Builtin(Builtin::List(MemoryMode::Unique, _)) => {
-                    // the layout tells us this List.set can be done in-place
-                    list_set(parent, arguments, env, InPlace::InPlace)
-                }
-                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
-                    // no static guarantees, but all is not lost: we can check the refcount
-                    // if it is one, we hold the final reference, and can mutate it in-place!
-                    let builder = env.builder;
-                    let ctx = env.context;
+            let in_place = || list_set(parent, arguments, env, InPlace::InPlace);
+            let clone = || list_set(parent, arguments, env, InPlace::Clone);
+            let empty = || list_symbol;
 
-                    let ret_type =
-                        basic_type_from_layout(env.arena, ctx, list_layout, env.ptr_bytes);
-
-                    let refcount_ptr =
-                        list_get_refcount_ptr(env, list_layout, list_symbol.into_struct_value());
-
-                    let refcount = env
-                        .builder
-                        .build_load(refcount_ptr, "get_refcount")
-                        .into_int_value();
-
-                    let comparison = refcount_is_one_comparison(builder, env.context, refcount);
-
-                    // build then block
-                    // refcount is 1, so work in-place
-                    let build_pass = || list_set(parent, arguments, env, InPlace::InPlace);
-
-                    // build else block
-                    // refcount != 1, so clone first
-                    let build_fail = || list_set(parent, arguments, env, InPlace::Clone);
-
-                    crate::llvm::build_list::build_basic_phi2(
-                        env, parent, comparison, build_pass, build_fail, ret_type,
-                    )
-                }
-                Layout::Builtin(Builtin::EmptyList) => list_symbol,
-                other => unreachable!("List.set: weird layout {:?}", other),
-            }
+            maybe_inplace_list(
+                env,
+                parent,
+                list_layout,
+                list_symbol.into_struct_value(),
+                in_place,
+                clone,
+                empty,
+            )
         }
+    }
+}
+
+fn maybe_inplace_list<'a, 'ctx, 'env, InPlace, CloneFirst, Empty>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    list_layout: &Layout<'a>,
+    original_wrapper: StructValue<'ctx>,
+    mut in_place: InPlace,
+    clone: CloneFirst,
+    mut empty: Empty,
+) -> BasicValueEnum<'ctx>
+where
+    InPlace: FnMut() -> BasicValueEnum<'ctx>,
+    CloneFirst: FnMut() -> BasicValueEnum<'ctx>,
+    Empty: FnMut() -> BasicValueEnum<'ctx>,
+{
+    match list_layout {
+        Layout::Builtin(Builtin::List(MemoryMode::Unique, _)) => {
+            // the layout tells us this List.set can be done in-place
+            in_place()
+        }
+        Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
+            // no static guarantees, but all is not lost: we can check the refcount
+            // if it is one, we hold the final reference, and can mutate it in-place!
+            let builder = env.builder;
+            let ctx = env.context;
+
+            let ret_type = basic_type_from_layout(env.arena, ctx, list_layout, env.ptr_bytes);
+
+            let refcount_ptr = list_get_refcount_ptr(env, list_layout, original_wrapper);
+
+            let refcount = env
+                .builder
+                .build_load(refcount_ptr, "get_refcount")
+                .into_int_value();
+
+            let comparison = refcount_is_one_comparison(builder, env.context, refcount);
+
+            crate::llvm::build_list::build_basic_phi2(
+                env, parent, comparison, in_place, clone, ret_type,
+            )
+        }
+        Layout::Builtin(Builtin::EmptyList) => empty(),
+        other => unreachable!("Attempting list operation on invalid layout {:?}", other),
     }
 }
 
@@ -2001,14 +2020,11 @@ fn str_concat<'a, 'ctx, 'env>(
 
             let index_alloca = incrementing_elem_loop(
                 builder,
-                parent,
                 ctx,
-                LoopListArg {
-                    ptr: first_str_ptr,
-                    len: first_str_len,
-                },
+                parent,
+                first_str_ptr,
+                first_str_len,
                 index_name,
-                None,
                 first_loop,
             );
 
@@ -2043,14 +2059,11 @@ fn str_concat<'a, 'ctx, 'env>(
 
             incrementing_elem_loop(
                 builder,
-                parent,
                 ctx,
-                LoopListArg {
-                    ptr: second_str_ptr,
-                    len: second_str_len,
-                },
+                parent,
+                second_str_ptr,
+                second_str_len,
                 index_name,
-                Some(index_alloca),
                 second_loop,
             );
 
