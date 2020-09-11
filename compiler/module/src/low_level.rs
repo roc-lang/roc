@@ -35,6 +35,7 @@ pub enum LowLevel {
     NumSqrtUnchecked,
     NumRound,
     NumToFloat,
+    NumPow,
     Eq,
     NotEq,
     And,
