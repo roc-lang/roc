@@ -525,7 +525,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
 
                 list_reverse_help(env, parent, InPlace::Clone, length, list_ptr, new_list_ptr);
 
-                // store NULL pointer there
+                // store new list pointer there
                 builder.build_store(result, new_list_ptr);
                 builder.build_unconditional_branch(cont_block);
             }
