@@ -282,6 +282,10 @@ joinMap : List before, (before -> List after) -> List after
 ## >>> [ [ 1, 2, 3 ], [], [], [ 4, 5 ] ]
 ## >>>     |> List.map List.first
 ## >>>     |> List.joinOks
+##
+## Eventually, `oks` type signature will be `List [Ok elem]* -> List elem`.
+## The implementation for that is a lot tricker then `List (Result elem *)`
+## so we're sticking with `Result` for now.
 oks : List (Result elem *) -> List elem
 
 ## Iterates over the shortest of the given lists and returns a list of `Pair`
