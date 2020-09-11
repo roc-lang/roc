@@ -145,6 +145,12 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         LLVM_COS_F64,
         f64_type.fn_type(&[f64_type.into()], false),
     );
+
+    add_intrinsic(
+        module,
+        LLVM_POW_F64,
+        f64_type.fn_type(&[f64_type.into(), f64_type.into()], false),
+    );
 }
 
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
@@ -152,6 +158,7 @@ static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
 static LLVM_FABS_F64: &str = "llvm.fabs.f64";
 static LLVM_SIN_F64: &str = "llvm.sin.f64";
 static LLVM_COS_F64: &str = "llvm.cos.f64";
+static LLVM_POW_F64: &str = "llvm.pow.f64";
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -2191,6 +2198,11 @@ fn build_float_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
         NumRemUnchecked => bd.build_float_rem(lhs, rhs, "rem_float").into(),
         NumDivUnchecked => bd.build_float_div(lhs, rhs, "div_float").into(),
+        NumPow => call_intrinsic(
+            LLVM_POW_F64,
+            env,
+            &[(lhs.into(), _lhs_layout), (rhs.into(), _rhs_layout)],
+        ),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
