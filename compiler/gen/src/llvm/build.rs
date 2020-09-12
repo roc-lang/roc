@@ -1125,6 +1125,16 @@ pub fn load_symbol<'a, 'ctx, 'env>(
     }
 }
 
+pub fn ptr_from_symbol<'a, 'ctx, 'scope>(
+    scope: &'scope Scope<'a, 'ctx>,
+    symbol: Symbol,
+) -> &'scope PointerValue<'ctx> {
+    match scope.get(&symbol) {
+        Some((_, ptr)) => ptr,
+        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+    }
+}
+
 pub fn load_symbol_and_layout<'a, 'ctx, 'env, 'b>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &'b Scope<'a, 'ctx>,
@@ -1546,11 +1556,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.concat : Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            let first_str = load_symbol(env, scope, &args[0]);
-
-            let second_str = load_symbol(env, scope, &args[1]);
-
-            str_concat(env, parent, first_str, second_str)
+            str_concat(env, scope, parent, args[0], args[1])
         }
         ListLen => {
             // List.len : List * -> Int
