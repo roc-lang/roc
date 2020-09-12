@@ -86,26 +86,33 @@ where
                     return err_unexpected();
                 }
             }
-            next_ch if next_ch.is_ascii_digit() => {
-                has_parsed_digits = true;
+            '_' => {
+                // Underscores are ignored.
             }
-            next_ch
-                if next_ch != '_' &&
-            // ASCII alphabetic chars (like 'a' and 'f') are allowed in Hex int literals.
-            // We parse them in any int literal, so we can give a more helpful error
-            // in canonicalization (e.g. "the character 'f' is not allowed in Octal literals"
-            // or "the character 'g' is outside the range of valid Hex literals")
-            !next_ch.is_ascii_alphabetic() =>
-            {
-                if has_parsed_digits {
-                    // We hit an invalid number literal character; we're done!
-                    break;
+            next_ch => {
+                if next_ch.is_ascii_digit() {
+                    has_parsed_digits = true;
                 } else {
-                    // No digits! We likely parsed a minus sign that's actually an operator.
-                    return err_unexpected();
+                    if !has_parsed_digits {
+                        // No digits! We likely parsed a minus sign
+                        // that's actually a unary negation operator.
+                        return err_unexpected();
+                    }
+
+                    // ASCII alphabetic chars (like 'a' and 'f') are
+                    // allowed in Hex int literals. We verify them in
+                    // canonicalization, so if there's a problem, we can
+                    // give a more helpful error (e.g. "the character 'f'
+                    // is not allowed in Octal literals" or
+                    // "the character 'g' is outside the range of valid
+                    // Hex literals") while still allowing the formatter
+                    // to format them normally.
+                    if !next_ch.is_ascii_alphabetic() {
+                        // We hit an invalid number literal character; we're done!
+                        break;
+                    }
                 }
             }
-            _ => {}
         }
 
         // Since we only consume characters in the ASCII range for number literals,
