@@ -1405,6 +1405,23 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    #[test]
+    fn unary_negation_access() {
+        // Regression test for https://github.com/rtfeldman/roc/issues/509
+        let arena = Bump::new();
+        let var = Var {
+            module_name: "",
+            ident: "rec1",
+        };
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Negate);
+        let access = Access(arena.alloc(var), "field");
+        let loc_access = Located::new(0, 0, 1, 11, access);
+        let expected = UnaryOp(arena.alloc(loc_access), loc_op);
+        let actual = parse_with(&arena, "-rec1.field");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
     // CLOSURE
 
     #[test]
