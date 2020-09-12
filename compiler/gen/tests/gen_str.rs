@@ -19,6 +19,10 @@ mod gen_str {
         assert_evals_to!("Str.concat \"\" \"second str\"", "second str", &'static str);
         assert_evals_to!("Str.concat \"first str\" \"\"", "first str", &'static str);
         assert_evals_to!("Str.concat \"\" \"\"", "", &'static str);
+    }
+
+    #[test]
+    fn big_str_concat() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -29,6 +33,32 @@ mod gen_str {
             ),
             "First string that is fairly long. Longer strings make for different errors. Second string that is also fairly long. Two long strings test things that might not appear with short strings.",
             &'static str
+        );
+    }
+
+    #[test]
+    fn small_str_concat() {
+        assert_evals_to!(
+            "Str.concat \"JJJJJJJ\" \"JJJJJJJJ\"",
+            [
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0b1000_1111
+            ],
+            [u8; 16]
         );
     }
 

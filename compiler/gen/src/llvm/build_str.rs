@@ -1,14 +1,12 @@
 use crate::llvm::build::{ptr_from_symbol, Env, Scope};
 use crate::llvm::build_list::{
-    allocate_list, build_basic_phi2, clone_nonempty_list, empty_list, incrementing_elem_loop,
-    list_is_not_empty, list_len, load_list_ptr, store_list, LoopListArg,
+    allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, list_is_not_empty,
+    list_len, load_list_ptr, store_list, LoopListArg,
 };
-use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type, ptr_int};
-use inkwell::builder::Builder;
-use inkwell::context::Context;
-use inkwell::types::{BasicTypeEnum, PointerType};
+use crate::llvm::convert::{collection, ptr_int};
+use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
-use inkwell::AddressSpace;
+use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 
@@ -201,7 +199,6 @@ pub fn str_concat<'a, 'ctx, 'env>(
     )
 }
 
-/// Str.len : Str -> Int
 pub fn str_len<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
@@ -240,45 +237,44 @@ fn load_str<'a, 'ctx, 'env, Callback>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     wrapper_ptr: PointerValue<'ctx>,
-    mut cb: Callback,
+    cb: Callback,
 ) -> BasicValueEnum<'ctx>
 where
-    Callback: FnMut(PointerValue<'ctx>, IntValue<'ctx>, Smallness) -> BasicValueEnum<'ctx>,
+    Callback: Fn(PointerValue<'ctx>, IntValue<'ctx>, Smallness) -> BasicValueEnum<'ctx>,
 {
-    // let builder = env.builder;
-    // let ctx = env.context;
-    //
-    // let if_small = |final_byte| {
-    //     let bitmask = ctx.i8_type().const_int(0b0111_1111, false);
-    //
-    //     let len = builder.build_and(final_byte, bitmask, "small_str_length");
-    //
-    //     cb(
-    //         wrapper_ptr,
-    //         builder.build_int_cast(len, env.ptr_int(), "len_as_usize"),
-    //         Smallness::Small,
-    //     )
-    // };
-    //
-    // let if_big = |wrapper_struct| {
-    //     let list_ptr = load_list_ptr(
-    //         builder,
-    //         wrapper_struct,
-    //         env.context.i8_type().ptr_type(AddressSpace::Generic),
-    //     );
-    //
-    //     cb(list_ptr, list_len(builder, wrapper_struct), Smallness::Big)
-    // };
-    //
-    // if_small_str(
-    //     env,
-    //     parent,
-    //     wrapper_ptr,
-    //     if_small,
-    //     if_big,
-    //     BasicTypeEnum::IntType(env.ptr_int()),
-    // )
-    panic!("TODO uncomment this implementation")
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let if_small = |final_byte| {
+        let bitmask = ctx.i8_type().const_int(0b0111_1111, false);
+
+        let len = builder.build_and(final_byte, bitmask, "small_str_length");
+
+        cb(
+            wrapper_ptr,
+            builder.build_int_cast(len, env.ptr_int(), "len_as_usize"),
+            Smallness::Small,
+        )
+    };
+
+    let if_big = |wrapper_struct| {
+        let list_ptr = load_list_ptr(
+            builder,
+            wrapper_struct,
+            env.context.i8_type().ptr_type(AddressSpace::Generic),
+        );
+
+        cb(list_ptr, list_len(builder, wrapper_struct), Smallness::Big)
+    };
+
+    if_small_str(
+        env,
+        parent,
+        wrapper_ptr,
+        if_small,
+        if_big,
+        BasicTypeEnum::IntType(env.ptr_int()),
+    )
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -365,15 +361,10 @@ where
     let builder = env.builder;
     let ctx = env.context;
 
-    let ptr_bytes = env.ptr_bytes;
-
-    let array_ptr_type = ctx
-        .i8_type()
-        .array_type(ptr_bytes * 2)
-        .ptr_type(AddressSpace::Generic);
+    let array_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
 
     let byte_array_ptr = builder
-        .build_bitcast(wrapper_ptr, array_ptr_type, "str_as_array")
+        .build_bitcast(wrapper_ptr, array_ptr_type, "str_as_array_ptr")
         .into_pointer_value();
 
     let final_byte_ptr = unsafe {
@@ -387,12 +378,19 @@ where
     };
 
     let final_byte = builder
-        .build_load(final_byte_ptr, "final_byte")
+        .build_load(final_byte_ptr, "load_final_byte")
         .into_int_value();
 
     let bitmask = ctx.i8_type().const_int(0b1000_0000, false);
 
-    let is_small = builder.build_and(final_byte, bitmask, "is_small");
+    let is_small_i8 = builder.build_int_compare(
+        IntPredicate::NE,
+        ctx.i8_type().const_zero(),
+        builder.build_and(final_byte, bitmask, "is_small"),
+        "is_small_comparison",
+    );
+
+    let is_small = builder.build_int_cast(is_small_i8, ctx.bool_type(), "is_small_as_bool");
 
     build_basic_phi2(
         env,

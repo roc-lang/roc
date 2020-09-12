@@ -269,7 +269,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                             &[ctx
                                 .i8_type()
                                 .const_int(((env.ptr_bytes * 2) - 1) as u64, false)],
-                            "final_byte",
+                            "str_literal_final_byte",
                         )
                     };
 

@@ -1,5 +1,4 @@
 interface Str exposes [ Str, isEmpty, join ] imports []
-
 ## Types
 
 ## Dealing with text is a deep topic, so by design, Roc's `Str` module sticks
