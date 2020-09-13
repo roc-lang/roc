@@ -22,7 +22,7 @@ mod gen_str {
     }
 
     #[test]
-    fn big_str_concat() {
+    fn str_concat_big_to_big() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -37,33 +37,7 @@ mod gen_str {
     }
 
     #[test]
-    fn small_str_concat() {
-        assert_evals_to!(
-            "Str.concat \"JJJJJJJ\" \"JJJJJJJJ\"",
-            [
-                0x4a,
-                0x4a,
-                0x4a,
-                0x4a,
-                0x4a,
-                0x4a,
-                0x4a,
-                0x4a,
-                0x4a,
-                0x4a,
-                0x4a,
-                0x4a,
-                0x4a,
-                0x4a,
-                0x4a,
-                0b1000_1111
-            ],
-            [u8; 16]
-        );
-    }
-
-    #[test]
-    fn small_str() {
+    fn small_str_literal() {
         assert_evals_to!(
             "\"JJJJJJJJJJJJJJJ\"",
             [
@@ -86,6 +60,107 @@ mod gen_str {
             ],
             [u8; 16]
         );
+    }
+
+    #[test]
+    fn small_str_concat_empty_first_arg() {
+        assert_evals_to!(
+            r#"Str.concat "" "JJJJJJJJJJJJJJJ""#,
+            [
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0b1000_1111
+            ],
+            [u8; 16]
+        );
+    }
+
+    #[test]
+    fn small_str_concat_empty_second_arg() {
+        assert_evals_to!(
+            r#"Str.concat "JJJJJJJJJJJJJJJ" """#,
+            [
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0b1000_1111
+            ],
+            [u8; 16]
+        );
+    }
+
+    #[test]
+    fn small_str_concat_small_to_big() {
+        assert_evals_to!(
+            r#"Str.concat "abc" " this is longer than 15 chars""#,
+            "abc this is longer than 15 chars",
+            &'static str
+        );
+    }
+
+    #[test]
+    fn small_str_concat_small_to_small_staying_small() {
+        assert_evals_to!(
+            r#"Str.concat "J" "JJJJJJJJJJJJJJ""#,
+            [
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0x4a,
+                0b1000_1111
+            ],
+            [u8; 16]
+        );
+    }
+
+    #[test]
+    fn small_str_concat_small_to_small_overflow_to_big() {
+        assert_evals_to!(
+            r#"Str.concat "abcdefghijklm" "nopqrstuvwxyz""#,
+            "abcdefghijklmnopqrstuvwxyz",
+            &'static str
+        );
+    }
+
+    #[test]
+    fn str_concat_empty() {
+        assert_evals_to!(r#"Str.concat "" """#, "", &'static str);
     }
 
     #[test]
