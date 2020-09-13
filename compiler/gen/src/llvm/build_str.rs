@@ -224,15 +224,21 @@ pub fn str_len<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     let builder = env.builder;
 
-    let if_small = |final_byte| BasicValueEnum::IntValue(str_len_from_final_byte(env, final_byte));
+    let if_small = |final_byte| {
+        let len = str_len_from_final_byte(env, final_byte);
+
+        BasicValueEnum::IntValue(len)
+    };
 
     let if_big = |_| {
-        BasicValueEnum::IntValue(big_str_len(
+        let len = big_str_len(
             builder,
             builder
                 .build_load(wrapper_ptr, "big_str")
                 .into_struct_value(),
-        ))
+        );
+
+        BasicValueEnum::IntValue(len)
     };
 
     if_small_str(
@@ -438,7 +444,7 @@ fn big_str_len<'ctx>(builder: &Builder<'ctx>, wrapper_struct: StructValue<'ctx>)
         .into_int_value()
 }
 
-pub fn str_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> IntValue<'ctx> {
+fn str_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> IntValue<'ctx> {
     env.builder.build_int_compare(
         IntPredicate::UGT,
         len,

@@ -4,7 +4,7 @@ use crate::llvm::build_list::{
     list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set,
     list_single, list_walk_right,
 };
-use crate::llvm::build_str::{str_concat, str_is_not_empty, str_len, CHAR_LAYOUT};
+use crate::llvm::build_str::{str_concat, str_len, CHAR_LAYOUT};
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
     basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
@@ -24,8 +24,8 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{BasicValue, FloatValue, FunctionValue, IntValue, PointerValue, StructValue};
-use inkwell::AddressSpace;
 use inkwell::OptimizationLevel;
+use inkwell::{AddressSpace, IntPredicate};
 use roc_collections::all::{ImMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
@@ -1564,8 +1564,13 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let wrapper_ptr = ptr_from_symbol(scope, args[0]);
             let len = str_len(env, parent, wrapper_ptr.clone());
-
-            BasicValueEnum::IntValue(str_is_not_empty(env, len))
+            let is_zero = env.builder.build_int_compare(
+                IntPredicate::EQ,
+                len,
+                env.ptr_int().const_zero(),
+                "str_len_is_zero",
+            );
+            BasicValueEnum::IntValue(is_zero)
         }
         ListLen => {
             // List.len : List * -> Int
@@ -1707,7 +1712,6 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         NumCompare => {
             use inkwell::FloatPredicate;
-            use inkwell::IntPredicate;
 
             debug_assert_eq!(args.len(), 2);
 
