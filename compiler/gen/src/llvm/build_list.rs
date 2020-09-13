@@ -17,6 +17,7 @@ fn get_list_element_type<'a, 'b>(layout: &'b Layout<'a>) -> Option<&'b Layout<'a
 /// List.single : a -> List a
 pub fn list_single<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
     elem: BasicValueEnum<'ctx>,
     elem_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -1631,6 +1632,7 @@ pub fn clone_list<'a, 'ctx, 'env>(
 
 pub fn allocate_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    // in_place: InPlace,
     elem_layout: &Layout<'a>,
     length: IntValue<'ctx>,
 ) -> PointerValue<'ctx> {

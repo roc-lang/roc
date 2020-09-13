@@ -298,6 +298,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
+    layout: &Layout<'a>,
     expr: &roc_mono::ir::Expr<'a>,
 ) -> BasicValueEnum<'ctx> {
     use roc_mono::ir::CallType::*;
@@ -305,7 +306,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
     match expr {
         Literal(literal) => build_exp_literal(env, literal),
-        RunLowLevel(op, symbols) => run_low_level(env, scope, parent, *op, symbols),
+        RunLowLevel(op, symbols) => run_low_level(env, scope, parent, layout, *op, symbols),
 
         FunctionCall {
             call_type: ByName(name),
@@ -832,7 +833,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         Let(symbol, expr, layout, cont) => {
             let context = &env.context;
 
-            let val = build_exp_expr(env, layout_ids, &scope, parent, &expr);
+            let val = build_exp_expr(env, layout_ids, &scope, parent, layout, &expr);
             let expr_bt = if let Layout::RecursivePointer = layout {
                 match expr {
                     Expr::AccessAtIndex { field_layouts, .. } => {
@@ -1496,6 +1497,7 @@ fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
+    layout: &Layout<'a>,
     op: LowLevel,
     args: &[Symbol],
 ) -> BasicValueEnum<'ctx> {
@@ -1526,7 +1528,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (arg, arg_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
-            list_single(env, arg, arg_layout)
+            list_single(env, layout, arg, arg_layout)
         }
         ListRepeat => {
             // List.repeat : Int, elem -> List elem
