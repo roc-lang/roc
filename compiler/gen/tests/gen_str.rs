@@ -87,4 +87,23 @@ mod gen_str {
             [u8; 16]
         );
     }
+
+    #[test]
+    fn small_str_is_empty() {
+        assert_evals_to!(r#"Str.isEmpty "abc""#, false, bool);
+    }
+
+    #[test]
+    fn big_str_is_empty() {
+        assert_evals_to!(
+            r#"Str.isEmpty "this is more than 15 chars long""#,
+            false,
+            bool
+        );
+    }
+
+    #[test]
+    fn empty_str_is_empty() {
+        assert_evals_to!(r#"Str.isEmpty """#, true, bool);
+    }
 }

@@ -653,7 +653,7 @@ define_builtins! {
     3 STR: "Str" => {
         0 STR_STR: "Str" imported // the Str.Str type alias
         1 STR_AT_STR: "@Str" // the Str.@Str private tag
-        2 STR_ISEMPTY: "isEmpty"
+        2 STR_IS_EMPTY: "isEmpty"
         3 STR_APPEND: "append"
         4 STR_CONCAT: "concat"
     }

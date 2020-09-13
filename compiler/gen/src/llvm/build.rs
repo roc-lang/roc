@@ -4,7 +4,7 @@ use crate::llvm::build_list::{
     list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set,
     list_single, list_walk_right,
 };
-use crate::llvm::build_str::{str_concat, CHAR_LAYOUT};
+use crate::llvm::build_str::{str_concat, str_is_not_empty, str_len, CHAR_LAYOUT};
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
     basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
@@ -1557,6 +1557,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 2);
 
             str_concat(env, scope, parent, args[0], args[1])
+        }
+        StrIsEmpty => {
+            // Str.isEmpty : Str -> Str
+            debug_assert_eq!(args.len(), 1);
+
+            let wrapper_ptr = ptr_from_symbol(scope, args[0]);
+            let len = str_len(env, parent, wrapper_ptr.clone());
+
+            BasicValueEnum::IntValue(str_is_not_empty(env, len))
         }
         ListLen => {
             // List.len : List * -> Int

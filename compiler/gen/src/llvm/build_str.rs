@@ -1,9 +1,10 @@
 use crate::llvm::build::{ptr_from_symbol, Env, Scope};
 use crate::llvm::build_list::{
-    allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, list_len, load_list_ptr,
-    store_list, LoopListArg,
+    allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, load_list_ptr, store_list,
+    LoopListArg,
 };
 use crate::llvm::convert::{collection, ptr_int};
+use inkwell::builder::Builder;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
@@ -213,8 +214,8 @@ fn str_len_from_final_byte<'a, 'ctx, 'env>(
     builder.build_and(final_byte, bitmask, "small_str_length")
 }
 
-#[allow(dead_code)]
-fn str_len<'a, 'ctx, 'env>(
+/// Used by LowLevel::StrIsEmpty
+pub fn str_len<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     wrapper_ptr: PointerValue<'ctx>,
@@ -224,7 +225,7 @@ fn str_len<'a, 'ctx, 'env>(
     let if_small = |final_byte| BasicValueEnum::IntValue(str_len_from_final_byte(env, final_byte));
 
     let if_big = |_| {
-        BasicValueEnum::IntValue(list_len(
+        BasicValueEnum::IntValue(big_str_len(
             builder,
             builder
                 .build_load(wrapper_ptr, "big_str")
@@ -272,7 +273,11 @@ where
             env.context.i8_type().ptr_type(AddressSpace::Generic),
         );
 
-        cb(list_ptr, list_len(builder, wrapper_struct), Smallness::Big)
+        cb(
+            list_ptr,
+            big_str_len(builder, wrapper_struct),
+            Smallness::Big,
+        )
     };
 
     if_small_str(env, parent, wrapper_ptr, if_small, if_big, ret_type)
@@ -426,7 +431,14 @@ where
     )
 }
 
-fn str_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> IntValue<'ctx> {
+fn big_str_len<'ctx>(builder: &Builder<'ctx>, wrapper_struct: StructValue<'ctx>) -> IntValue<'ctx> {
+    builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "big_str_len")
+        .unwrap()
+        .into_int_value()
+}
+
+pub fn str_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> IntValue<'ctx> {
     env.builder.build_int_compare(
         IntPredicate::UGT,
         len,
