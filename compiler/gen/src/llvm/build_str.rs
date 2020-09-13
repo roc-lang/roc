@@ -401,7 +401,7 @@ where
             byte_array_ptr,
             &[ctx
                 .i8_type()
-                .const_int(((env.ptr_bytes * 2) - 1) as u64, false)],
+                .const_int(env.small_str_bytes() as u64 - 1, false)],
             "final_byte_ptr",
         )
     };
