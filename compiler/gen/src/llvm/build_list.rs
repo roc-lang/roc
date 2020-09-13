@@ -7,13 +7,6 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, Str
 use inkwell::{AddressSpace, IntPredicate};
 use roc_mono::layout::{Builtin, Layout, MemoryMode};
 
-fn get_list_element_type<'a, 'b>(layout: &'b Layout<'a>) -> Option<&'b Layout<'a>> {
-    match layout {
-        Layout::Builtin(Builtin::List(_, elem_layout)) => Some(elem_layout),
-        _ => None,
-    }
-}
-
 /// List.single : a -> List a
 pub fn list_single<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

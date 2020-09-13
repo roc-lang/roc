@@ -212,7 +212,7 @@ pub fn construct_optimization_passes<'a>(
     (mpm, fpm)
 }
 
-fn get_inplace_from_layout<'a, 'b>(layout: &'b Layout<'a>) -> InPlace {
+fn get_inplace_from_layout(layout: &Layout<'_>) -> InPlace {
     match layout {
         Layout::Builtin(Builtin::EmptyList) => InPlace::InPlace,
         Layout::Builtin(Builtin::List(memory_mode, _)) => match memory_mode {
