@@ -231,7 +231,7 @@ pub fn list_join<'a, 'ctx, 'env>(
             // outer_list_len > 0
             // We do this check to avoid allocating memory. If the input
             // list is empty, then we can just return an empty list.
-            let comparison = list_is_not_empty(builder, ctx, outer_list_len);
+            let comparison = list_is_not_empty(env, outer_list_len);
 
             let build_then = || {
                 let list_len_sum_name = "#listslengthsum";
@@ -284,7 +284,7 @@ pub fn list_join<'a, 'ctx, 'env>(
                     let inner_list_len = list_len(builder, inner_list_wrapper);
 
                     // inner_list_len > 0
-                    let inner_list_comparison = list_is_not_empty(builder, ctx, inner_list_len);
+                    let inner_list_comparison = list_is_not_empty(env, inner_list_len);
 
                     let inner_list_non_empty_block =
                         ctx.append_basic_block(parent, "inner_list_non_empty");
@@ -1011,14 +1011,13 @@ pub fn list_concat<'a, 'ctx, 'env>(
             // first_list_len > 0
             // We do this check to avoid allocating memory. If the first input
             // list is empty, then we can just return the second list cloned
-            let first_list_length_comparison = list_is_not_empty(builder, ctx, first_list_len);
+            let first_list_length_comparison = list_is_not_empty(env, first_list_len);
 
             let if_first_list_is_empty = || {
                 // second_list_len > 0
                 // We do this check to avoid allocating memory. If the second input
                 // list is empty, then we can just return an empty list
-                let second_list_length_comparison =
-                    list_is_not_empty(builder, ctx, second_list_len);
+                let second_list_length_comparison = list_is_not_empty(env, second_list_len);
 
                 let build_second_list_then = || {
                     let elem_type =
@@ -1065,8 +1064,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
                 // second_list_len > 0
                 // We do this check to avoid allocating memory. If the second input
                 // list is empty, then we can just return the first list cloned
-                let second_list_length_comparison =
-                    list_is_not_empty(builder, ctx, second_list_len);
+                let second_list_length_comparison = list_is_not_empty(env, second_list_len);
 
                 let if_second_list_is_not_empty = || {
                     let combined_list_len =
@@ -1390,16 +1388,12 @@ pub fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'
     BasicValueEnum::StructValue(struct_type.const_zero())
 }
 
-pub fn list_is_not_empty<'ctx>(
-    builder: &Builder<'ctx>,
-    ctx: &'ctx Context,
-    list_len: IntValue<'ctx>,
-) -> IntValue<'ctx> {
-    builder.build_int_compare(
+fn list_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> IntValue<'ctx> {
+    env.builder.build_int_compare(
         IntPredicate::UGT,
-        list_len,
-        ctx.i64_type().const_int(0, false),
-        "greaterthanzero",
+        len,
+        env.ptr_int().const_zero(),
+        "list_len_is_nonzero",
     )
 }
 

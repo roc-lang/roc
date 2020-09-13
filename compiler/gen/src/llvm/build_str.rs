@@ -1,7 +1,7 @@
 use crate::llvm::build::{ptr_from_symbol, Env, Scope};
 use crate::llvm::build_list::{
-    allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, list_is_not_empty,
-    list_len, load_list_ptr, store_list, LoopListArg,
+    allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, list_len, load_list_ptr,
+    store_list, LoopListArg,
 };
 use crate::llvm::convert::{collection, ptr_int};
 use inkwell::types::BasicTypeEnum;
@@ -9,6 +9,8 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, Str
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
+
+pub static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
 
 /// Str.concat : Str, Str -> Str
 pub fn str_concat<'a, 'ctx, 'env>(
@@ -41,15 +43,13 @@ pub fn str_concat<'a, 'ctx, 'env>(
                     // first_str_len > 0
                     // We do this check to avoid allocating memory. If the first input
                     // str is empty, then we can just return the second str cloned
-                    let first_str_length_comparison =
-                        list_is_not_empty(builder, ctx, first_str_len);
+                    let first_str_length_comparison = str_is_not_empty(env, first_str_len);
 
                     let if_first_str_is_empty = || {
                         // second_str_len > 0
                         // We do this check to avoid allocating memory. If the second input
                         // str is empty, then we can just return an empty str
-                        let second_str_length_comparison =
-                            list_is_not_empty(builder, ctx, second_str_len);
+                        let second_str_length_comparison = str_is_not_empty(env, second_str_len);
 
                         let if_second_str_is_nonempty = || {
                             let (new_wrapper, _) = clone_nonempty_str(
@@ -89,8 +89,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
                         // second_str_len > 0
                         // We do this check to avoid allocating memory. If the second input
                         // str is empty, then we can just return the first str cloned
-                        let second_str_length_comparison =
-                            list_is_not_empty(builder, ctx, second_str_len);
+                        let second_str_length_comparison = str_is_not_empty(env, second_str_len);
 
                         let if_second_str_is_not_empty = || {
                             let combined_str_len = builder.build_int_add(
@@ -426,4 +425,12 @@ where
         ret_type,
     )
 }
-pub static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
+
+fn str_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> IntValue<'ctx> {
+    env.builder.build_int_compare(
+        IntPredicate::UGT,
+        len,
+        env.ptr_int().const_zero(),
+        "str_len_is_nonzero",
+    )
+}
