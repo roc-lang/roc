@@ -823,181 +823,214 @@ pub fn list_walk_right<'a, 'ctx, 'env>(
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
 pub fn list_keep_if<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    inplace: InPlace,
+    output_inplace: InPlace,
     parent: FunctionValue<'ctx>,
     func: BasicValueEnum<'ctx>,
     func_layout: &Layout<'a>,
     list: BasicValueEnum<'ctx>,
     list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
+    use inkwell::types::BasicType;
+
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let wrapper_struct = list.into_struct_value();
+    let (input_inplace, element_layout) = match list_layout.clone() {
+        Layout::Builtin(Builtin::EmptyList) => (
+            InPlace::InPlace,
+            // this pointer will never actually be dereferenced
+            Layout::Builtin(Builtin::Int64),
+        ),
+        Layout::Builtin(Builtin::List(memory_mode, elem_layout)) => (
+            match memory_mode {
+                MemoryMode::Unique => InPlace::InPlace,
+                MemoryMode::Refcounted => InPlace::Clone,
+            },
+            elem_layout.clone(),
+        ),
+
+        _ => unreachable!("Invalid layout {:?} in List.reverse", list_layout),
+    };
+
+    let list_type = basic_type_from_layout(env.arena, env.context, &list_layout, env.ptr_bytes);
+    let elem_type = basic_type_from_layout(env.arena, env.context, &element_layout, env.ptr_bytes);
+    let ptr_type = elem_type.ptr_type(AddressSpace::Generic);
+
+    let list_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
+    let length = list_len(builder, list.into_struct_value());
+
+    let zero = ctx.i64_type().const_zero();
+
+    match input_inplace {
+        InPlace::InPlace => {
+            let new_length = list_keep_if_help(
+                env,
+                input_inplace,
+                parent,
+                length,
+                list_ptr,
+                list_ptr,
+                func,
+                func_layout,
+            );
+
+            store_list(env, list_ptr, new_length)
+        }
+        InPlace::Clone => {
+            let len_0_block = ctx.append_basic_block(parent, "len_0_block");
+            let len_n_block = ctx.append_basic_block(parent, "len_n_block");
+            let cont_block = ctx.append_basic_block(parent, "cont_block");
+
+            let result = builder.build_alloca(list_type, "result");
+
+            builder.build_switch(length, len_n_block, &[(zero, len_0_block)]);
+
+            // build block for length 0
+            {
+                builder.position_at_end(len_0_block);
+
+                let new_list = store_list(env, ptr_type.const_zero(), zero);
+
+                builder.build_store(result, new_list);
+                builder.build_unconditional_branch(cont_block);
+            }
+
+            // build block for length > 0
+            {
+                builder.position_at_end(len_n_block);
+
+                let new_list_ptr = allocate_list(env, output_inplace, &element_layout, length);
+
+                let new_length = list_keep_if_help(
+                    env,
+                    InPlace::Clone,
+                    parent,
+                    length,
+                    list_ptr,
+                    new_list_ptr,
+                    func,
+                    func_layout,
+                );
+
+                // store new list pointer there
+                let new_list = store_list(env, new_list_ptr, new_length);
+
+                builder.build_store(result, new_list);
+                builder.build_unconditional_branch(cont_block);
+            }
+
+            builder.position_at_end(cont_block);
+
+            builder.build_load(result, "load_result")
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn list_keep_if_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _inplace: InPlace,
+    parent: FunctionValue<'ctx>,
+    length: IntValue<'ctx>,
+    source_ptr: PointerValue<'ctx>,
+    dest_ptr: PointerValue<'ctx>,
+    func: BasicValueEnum<'ctx>,
+    func_layout: &Layout<'a>,
+) -> IntValue<'ctx> {
     match (func, func_layout) {
         (
             BasicValueEnum::PointerValue(func_ptr),
             Layout::FunctionPointer(_, Layout::Builtin(Builtin::Int1)),
         ) => {
-            let non_empty_fn = |elem_layout: &Layout<'a>,
-                                len: IntValue<'ctx>,
-                                list_wrapper: StructValue<'ctx>| {
-                let ctx = env.context;
-                let builder = env.builder;
+            let builder = env.builder;
+            let ctx = env.context;
 
-                let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
-                let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+            let index_alloca = builder.build_alloca(ctx.i64_type(), "index_alloca");
+            let next_free_index_alloca =
+                builder.build_alloca(ctx.i64_type(), "next_free_index_alloca");
 
-                let list_ptr = load_list_ptr(builder, list_wrapper, elem_ptr_type);
+            builder.build_store(index_alloca, ctx.i64_type().const_zero());
+            builder.build_store(next_free_index_alloca, ctx.i64_type().const_zero());
 
-                let ret_list_len_name = "#ret_list_alloca";
-                let ret_list_len_alloca = builder.build_alloca(ctx.i64_type(), ret_list_len_name);
-                builder.build_store(
-                    ret_list_len_alloca,
-                    ctx.i64_type().const_int(0 as u64, false),
-                );
+            // while (length > next_index)
+            let condition_bb = ctx.append_basic_block(parent, "condition");
+            builder.build_unconditional_branch(condition_bb);
+            builder.position_at_end(condition_bb);
 
-                // Return List Length Loop
-                // This loop goes through the list and counts how many
-                // elements pass the filter function `elem -> Bool`
-                let ret_list_len_loop = |_, elem: BasicValueEnum<'ctx>| {
-                    let call_site_value = builder.build_call(
-                        func_ptr,
-                        env.arena.alloc([elem]),
-                        "#keep_if_count_func",
-                    );
+            let index = builder.build_load(index_alloca, "index").into_int_value();
 
-                    // set the calling convention explicitly for this call
-                    call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
+            let condition = builder.build_int_compare(IntPredicate::SGT, length, index, "loopcond");
 
-                    let should_keep = call_site_value
-                        .try_as_basic_value()
-                        .left()
-                        .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
-                        .into_int_value();
+            let body_bb = ctx.append_basic_block(parent, "body");
+            let cont_bb = ctx.append_basic_block(parent, "cont");
+            builder.build_conditional_branch(condition, body_bb, cont_bb);
 
-                    let loop_bb = ctx.append_basic_block(parent, "loop");
-                    let after_bb = ctx.append_basic_block(parent, "after_loop");
+            // loop body
+            builder.position_at_end(body_bb);
 
-                    builder.build_conditional_branch(should_keep, loop_bb, after_bb);
-                    builder.position_at_end(loop_bb);
+            let elem_ptr = unsafe { builder.build_in_bounds_gep(source_ptr, &[index], "elem_ptr") };
 
-                    // If the `elem` passes the `elem -> Bool` function
-                    // then increment the return list length variable by 1
-                    let next_ret_list_len = builder.build_int_add(
-                        builder
-                            .build_load(ret_list_len_alloca, ret_list_len_name)
-                            .into_int_value(),
-                        ctx.i64_type().const_int(1, false),
-                        "next_ret_list_len",
-                    );
+            let elem = builder.build_load(elem_ptr, "load_elem");
 
-                    // ..and store that incremented length in memory
-                    builder.build_store(ret_list_len_alloca, next_ret_list_len);
+            let call_site_value =
+                builder.build_call(func_ptr, env.arena.alloc([elem]), "#keep_if_insert_func");
 
-                    builder.build_unconditional_branch(after_bb);
-                    builder.position_at_end(after_bb);
-                };
+            // set the calling convention explicitly for this call
+            call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
 
-                let index_alloca = incrementing_elem_loop(
-                    builder,
-                    ctx,
-                    parent,
-                    list_ptr,
-                    len,
-                    "#index",
-                    ret_list_len_loop,
-                );
+            let should_keep = call_site_value
+                .try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
+                .into_int_value();
 
-                // Reset the index variable to 0.
-                builder.build_store(index_alloca, ctx.i64_type().const_int(0 as u64, false));
+            let filter_pass_bb = ctx.append_basic_block(parent, "loop");
+            let after_filter_pass_bb = ctx.append_basic_block(parent, "after_loop");
 
-                let final_ret_list_len = builder
-                    .build_load(ret_list_len_alloca, ret_list_len_name)
-                    .into_int_value();
+            let one = ctx.i64_type().const_int(1, false);
 
-                // Make a new list, with a length equal to the number
-                // of `elem` that passed the `elem -> Bool` function.
-                let ret_list_ptr = allocate_list(env, inplace, elem_layout, final_ret_list_len);
+            builder.build_conditional_branch(should_keep, filter_pass_bb, after_filter_pass_bb);
+            builder.position_at_end(filter_pass_bb);
 
-                // Make a pointer into the return list. This pointer is used
-                // below to store elements into return list.
-                let dest_elem_ptr_alloca = builder.build_alloca(elem_ptr_type, "dest_elem");
-                // Store this new return list element pointer in memory as the
-                // pointer to the return list as a whole (`ret_list_ptr`). This
-                // is kind of a trick to point to the first elem in the list,
-                // because the pointer to the list is also the pointer to the first
-                // element.
-                builder.build_store(dest_elem_ptr_alloca, ret_list_ptr);
+            let next_free_index = builder
+                .build_load(next_free_index_alloca, "load_next_free")
+                .into_int_value();
 
-                // Return List Loop
-                // This loop goes through the list and adds each
-                // `elem` only if it passes the `elem -> Bool` function
-                let ret_list_loop = |_, elem| {
-                    let call_site_value = builder.build_call(
-                        func_ptr,
-                        env.arena.alloc([elem]),
-                        "#keep_if_insert_func",
-                    );
-
-                    // set the calling convention explicitly for this call
-                    call_site_value.set_call_convention(crate::llvm::build::FAST_CALL_CONV);
-
-                    let should_keep = call_site_value
-                        .try_as_basic_value()
-                        .left()
-                        .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
-                        .into_int_value();
-
-                    let loop_bb = ctx.append_basic_block(parent, "loop");
-                    let after_bb = ctx.append_basic_block(parent, "after_loop");
-
-                    builder.build_conditional_branch(should_keep, loop_bb, after_bb);
-                    builder.position_at_end(loop_bb);
-
-                    // If the `elem` passes the `elem -> Bool` function
-                    // then load the destination pointer..
-                    let dest_elem_ptr = builder
-                        .build_load(dest_elem_ptr_alloca, "load_dest_elem_ptr")
-                        .into_pointer_value();
-
-                    // .. save the element into the return list at the
-                    // destination pointer ..
-                    builder.build_store(dest_elem_ptr, elem);
-
-                    // .. and then increment the destination pointer by one ..
-                    let inc_dest_elem_ptr = BasicValueEnum::PointerValue(unsafe {
-                        builder.build_in_bounds_gep(
-                            dest_elem_ptr,
-                            &[env.ptr_int().const_int(1 as u64, false)],
-                            "increment_dest_elem",
-                        )
-                    });
-
-                    // .. and then finally, save the incremented value in memory.
-                    builder.build_store(dest_elem_ptr_alloca, inc_dest_elem_ptr);
-
-                    builder.build_unconditional_branch(after_bb);
-                    builder.position_at_end(after_bb);
-                };
-
-                incrementing_elem_loop(
-                    builder,
-                    ctx,
-                    parent,
-                    list_ptr,
-                    len,
-                    "#index",
-                    ret_list_loop,
-                );
-
-                store_list(env, ret_list_ptr, final_ret_list_len)
+            // TODO if next_free_index equals index, and we are mutating in place,
+            // then maybe we should not write this value back into memory
+            let dest_elem_ptr = unsafe {
+                builder.build_in_bounds_gep(dest_ptr, &[next_free_index], "dest_elem_ptr")
             };
 
-            if_list_is_not_empty(env, parent, non_empty_fn, list, list_layout, "List.keepIf")
-        }
-        _ => {
-            unreachable!(
-                "Invalid function basic value enum or layout for List.keepIf : {:?}",
-                (func, func_layout)
+            builder.build_store(dest_elem_ptr, elem);
+
+            builder.build_store(
+                next_free_index_alloca,
+                builder.build_int_add(next_free_index, one, "incremented_next_free_index"),
             );
+
+            builder.build_unconditional_branch(after_filter_pass_bb);
+            builder.position_at_end(after_filter_pass_bb);
+
+            builder.build_store(
+                index_alloca,
+                builder.build_int_add(index, one, "incremented_index"),
+            );
+
+            builder.build_unconditional_branch(condition_bb);
+
+            // continuation
+            builder.position_at_end(cont_bb);
+
+            builder
+                .build_load(next_free_index_alloca, "new_length")
+                .into_int_value()
         }
+        _ => unreachable!(
+            "Invalid function basic value enum or layout for List.keepIf : {:?}",
+            (func, func_layout)
+        ),
     }
 }
 
