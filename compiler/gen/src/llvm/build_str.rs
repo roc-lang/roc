@@ -203,6 +203,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
     )
 }
 
+/// Obtain the string's length, cast from i8 to usize
 fn str_len_from_final_byte<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     final_byte: IntValue<'ctx>,
@@ -210,8 +211,9 @@ fn str_len_from_final_byte<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
     let bitmask = ctx.i8_type().const_int(0b0111_1111, false);
+    let len_i8 = builder.build_and(final_byte, bitmask, "small_str_length");
 
-    builder.build_and(final_byte, bitmask, "small_str_length")
+    builder.build_int_cast(len_i8, env.ptr_int(), "len_as_usize")
 }
 
 /// Used by LowLevel::StrIsEmpty
@@ -257,11 +259,9 @@ where
     let builder = env.builder;
 
     let if_small = |final_byte| {
-        let len = str_len_from_final_byte(env, final_byte);
-
         cb(
             cast_str_wrapper_to_array(env, wrapper_ptr),
-            builder.build_int_cast(len, env.ptr_int(), "len_as_usize"),
+            str_len_from_final_byte(env, final_byte),
             Smallness::Small,
         )
     };
