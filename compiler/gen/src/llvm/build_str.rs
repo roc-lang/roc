@@ -102,6 +102,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
                             let combined_str_ptr =
                                 allocate_list(env, &CHAR_LAYOUT, combined_str_len);
 
+                            // TODO replace FIRST_LOOP with a memcpy!
                             // FIRST LOOP
                             let first_loop = |first_index, first_str_elem| {
                                 // The pointer to the element in the combined list
@@ -135,6 +136,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
                             // Reset the index variable to 0
                             builder.build_store(index_alloca, ctx.i64_type().const_int(0, false));
 
+                            // TODO replace SECOND_LOOP with a memcpy!
                             // SECOND LOOP
                             let second_loop = |second_index, second_str_elem| {
                                 // The pointer to the element in the combined str.

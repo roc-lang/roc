@@ -1075,6 +1075,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
                     let first_list_ptr = load_list_ptr(builder, first_list_wrapper, ptr_type);
 
                     // FIRST LOOP
+                    // TODO when the element type supports it, replace FIRST_LOOP with a memcpy!
                     let first_loop = |first_index, first_list_elem| {
                         // The pointer to the element in the combined list
                         let combined_list_elem_ptr = unsafe {
@@ -1110,6 +1111,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
                     let second_list_ptr = load_list_ptr(builder, second_list_wrapper, ptr_type);
 
                     // SECOND LOOP
+                    // TODO when the element type supports it, replace SECOND_LOOP with a memcpy!
                     let second_loop = |second_index, second_list_elem| {
                         // The pointer to the element in the combined list.
                         // Note that the pointer does not start at the index
