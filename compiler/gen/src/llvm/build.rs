@@ -219,6 +219,8 @@ fn get_inplace_from_layout(layout: &Layout<'_>) -> InPlace {
             MemoryMode::Unique => InPlace::InPlace,
             MemoryMode::Refcounted => InPlace::Clone,
         },
+        Layout::Builtin(Builtin::EmptyStr) => InPlace::InPlace,
+        Layout::Builtin(Builtin::Str) => InPlace::Clone,
         _ => unreachable!("Layout {:?} does not have an inplace", layout),
     }
 }
