@@ -17,7 +17,7 @@ fn get_list_element_type<'a, 'b>(layout: &'b Layout<'a>) -> Option<&'b Layout<'a
 /// List.single : a -> List a
 pub fn list_single<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout: &Layout<'a>,
+    inplace: InPlace,
     elem: BasicValueEnum<'ctx>,
     elem_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -26,7 +26,8 @@ pub fn list_single<'a, 'ctx, 'env>(
 
     // allocate a list of size 1 on the heap
     let size = ctx.i64_type().const_int(1, false);
-    let ptr = allocate_list(env, elem_layout, size);
+
+    let ptr = allocate_list(env, inplace, elem_layout, size);
 
     // Put the element into the list
     let elem_ptr = unsafe {
@@ -48,6 +49,7 @@ pub fn list_single<'a, 'ctx, 'env>(
 /// List.repeat : Int, elem -> List elem
 pub fn list_repeat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    inplace: InPlace,
     parent: FunctionValue<'ctx>,
     list_len: IntValue<'ctx>,
     elem: BasicValueEnum<'ctx>,
@@ -72,7 +74,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
 
     let build_then = || {
         // Allocate space for the new array that we'll copy into.
-        let list_ptr = allocate_list(env, elem_layout, list_len);
+        let list_ptr = allocate_list(env, inplace, elem_layout, list_len);
         // TODO check if malloc returned null; if so, runtime error for OOM!
 
         let index_name = "#index";
@@ -137,6 +139,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
 /// List.prepend List elem, elem -> List elem
 pub fn list_prepend<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    inplace: InPlace,
     original_wrapper: StructValue<'ctx>,
     elem: BasicValueEnum<'ctx>,
     elem_layout: &Layout<'a>,
@@ -158,7 +161,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
     );
 
     // Allocate space for the new array that we'll copy into.
-    let clone_ptr = allocate_list(env, elem_layout, new_list_len);
+    let clone_ptr = allocate_list(env, inplace, elem_layout, new_list_len);
 
     builder.build_store(clone_ptr, elem);
 
@@ -199,6 +202,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
 /// List.join : List (List elem) -> List elem
 pub fn list_join<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    inplace: InPlace,
     parent: FunctionValue<'ctx>,
     outer_list: BasicValueEnum<'ctx>,
     outer_list_layout: &Layout<'a>,
@@ -276,7 +280,7 @@ pub fn list_join<'a, 'ctx, 'env>(
                     .build_load(list_len_sum_alloca, list_len_sum_name)
                     .into_int_value();
 
-                let final_list_ptr = allocate_list(env, elem_layout, final_list_sum);
+                let final_list_ptr = allocate_list(env, inplace, elem_layout, final_list_sum);
 
                 let dest_elem_ptr_alloca = builder.build_alloca(elem_ptr_type, "dest_elem");
 
@@ -377,7 +381,7 @@ pub fn list_join<'a, 'ctx, 'env>(
 pub fn list_reverse_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
-    in_place: InPlace,
+    inplace: InPlace,
     length: IntValue<'ctx>,
     source_ptr: PointerValue<'ctx>,
     dest_ptr: PointerValue<'ctx>,
@@ -406,7 +410,7 @@ pub fn list_reverse_help<'a, 'ctx, 'env>(
 
     // if updating in-place, then the "middle element" can be left untouched
     // otherwise, the middle element needs to be copied over from the source to the target
-    let predicate = match in_place {
+    let predicate = match inplace {
         InPlace::InPlace => IntPredicate::SGT,
         InPlace::Clone => IntPredicate::SGE,
     };
@@ -430,7 +434,7 @@ pub fn list_reverse_help<'a, 'ctx, 'env>(
     let high_value = builder.build_load(high_ptr, "load_high");
 
     // swap the two values
-    if let InPlace::Clone = in_place {
+    if let InPlace::Clone = inplace {
         low_ptr = unsafe { builder.build_in_bounds_gep(dest_ptr, &[low], "low_ptr") };
         high_ptr = unsafe { builder.build_in_bounds_gep(dest_ptr, &[high], "high_ptr") };
     }
@@ -451,7 +455,7 @@ pub fn list_reverse_help<'a, 'ctx, 'env>(
 pub fn list_reverse<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
-    in_place: InPlace,
+    output_inplace: InPlace,
     list: BasicValueEnum<'ctx>,
     list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -461,12 +465,21 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     let ctx = env.context;
 
     let wrapper_struct = list.into_struct_value();
-    let element_layout = match get_list_element_type(list_layout) {
-        Some(element_layout) => element_layout.clone(),
-        None => {
+    let (input_inplace, element_layout) = match list_layout.clone() {
+        Layout::Builtin(Builtin::EmptyList) => (
+            InPlace::InPlace,
             // this pointer will never actually be dereferenced
-            Layout::Builtin(Builtin::Int64)
-        }
+            Layout::Builtin(Builtin::Int64),
+        ),
+        Layout::Builtin(Builtin::List(memory_mode, elem_layout)) => (
+            match memory_mode {
+                MemoryMode::Unique => InPlace::InPlace,
+                MemoryMode::Refcounted => InPlace::Clone,
+            },
+            elem_layout.clone(),
+        ),
+
+        _ => unreachable!("Invalid layout {:?} in List.reverse", list_layout),
     };
 
     let list_type = basic_type_from_layout(env.arena, env.context, &element_layout, env.ptr_bytes);
@@ -475,9 +488,9 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     let list_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
     let length = list_len(builder, list.into_struct_value());
 
-    match in_place {
+    match input_inplace {
         InPlace::InPlace => {
-            list_reverse_help(env, parent, in_place, length, list_ptr, list_ptr);
+            list_reverse_help(env, parent, input_inplace, length, list_ptr, list_ptr);
 
             list
         }
@@ -512,7 +525,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
             {
                 builder.position_at_end(len_1_block);
 
-                let new_list_ptr = clone_list(env, &element_layout, one, list_ptr);
+                let new_list_ptr = clone_list(env, output_inplace, &element_layout, one, list_ptr);
 
                 builder.build_store(result, new_list_ptr);
                 builder.build_unconditional_branch(cont_block);
@@ -522,7 +535,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
             {
                 builder.position_at_end(len_n_block);
 
-                let new_list_ptr = allocate_list(env, &element_layout, length);
+                let new_list_ptr = allocate_list(env, output_inplace, &element_layout, length);
 
                 list_reverse_help(env, parent, InPlace::Clone, length, list_ptr, new_list_ptr);
 
@@ -574,6 +587,7 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
 /// List.append : List elem, elem -> List elem
 pub fn list_append<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    inplace: InPlace,
     original_wrapper: StructValue<'ctx>,
     elem: BasicValueEnum<'ctx>,
     elem_layout: &Layout<'a>,
@@ -609,7 +623,7 @@ pub fn list_append<'a, 'ctx, 'env>(
         .build_int_mul(elem_bytes, list_len, "mul_old_len_by_elem_bytes");
 
     // Allocate space for the new array that we'll copy into.
-    let clone_ptr = allocate_list(env, elem_layout, new_list_len);
+    let clone_ptr = allocate_list(env, inplace, elem_layout, new_list_len);
 
     // TODO check if malloc returned null; if so, runtime error for OOM!
 
@@ -635,7 +649,7 @@ pub fn list_set<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
     env: &Env<'a, 'ctx, 'env>,
-    in_place: InPlace,
+    inplace: InPlace,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
@@ -657,13 +671,14 @@ pub fn list_set<'a, 'ctx, 'env>(
         let ctx = env.context;
         let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
         let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-        let (new_wrapper, array_data_ptr) = match in_place {
+        let (new_wrapper, array_data_ptr) = match inplace {
             InPlace::InPlace => (
                 original_wrapper,
                 load_list_ptr(builder, original_wrapper, ptr_type),
             ),
             InPlace::Clone => clone_nonempty_list(
                 env,
+                inplace,
                 list_len,
                 load_list_ptr(builder, original_wrapper, ptr_type),
                 elem_layout,
@@ -813,6 +828,7 @@ pub fn list_walk_right<'a, 'ctx, 'env>(
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
 pub fn list_keep_if<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    inplace: InPlace,
     parent: FunctionValue<'ctx>,
     func: BasicValueEnum<'ctx>,
     func_layout: &Layout<'a>,
@@ -903,7 +919,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
 
                 // Make a new list, with a length equal to the number
                 // of `elem` that passed the `elem -> Bool` function.
-                let ret_list_ptr = allocate_list(env, elem_layout, final_ret_list_len);
+                let ret_list_ptr = allocate_list(env, inplace, elem_layout, final_ret_list_len);
 
                 // Make a pointer into the return list. This pointer is used
                 // below to store elements into return list.
@@ -993,6 +1009,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
 /// List.map : List before, (before -> after) -> List after
 pub fn list_map<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    inplace: InPlace,
     parent: FunctionValue<'ctx>,
     func: BasicValueEnum<'ctx>,
     func_layout: &Layout<'a>,
@@ -1007,7 +1024,7 @@ pub fn list_map<'a, 'ctx, 'env>(
                 let ctx = env.context;
                 let builder = env.builder;
 
-                let ret_list_ptr = allocate_list(env, ret_elem_layout, len);
+                let ret_list_ptr = allocate_list(env, inplace, ret_elem_layout, len);
 
                 let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
                 let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
@@ -1054,6 +1071,7 @@ pub fn list_map<'a, 'ctx, 'env>(
 /// List.concat : List elem, List elem -> List elem
 pub fn list_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    inplace: InPlace,
     parent: FunctionValue<'ctx>,
     first_list: BasicValueEnum<'ctx>,
     second_list: BasicValueEnum<'ctx>,
@@ -1095,6 +1113,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
 
                     let (new_wrapper, _) = clone_nonempty_list(
                         env,
+                        inplace,
                         second_list_len,
                         load_list_ptr(builder, second_list_wrapper, ptr_type),
                         elem_layout,
@@ -1122,6 +1141,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
                 let if_second_list_is_empty = || {
                     let (new_wrapper, _) = clone_nonempty_list(
                         env,
+                        inplace,
                         first_list_len,
                         load_list_ptr(builder, first_list_wrapper, ptr_type),
                         elem_layout,
@@ -1140,7 +1160,8 @@ pub fn list_concat<'a, 'ctx, 'env>(
                     let combined_list_len =
                         builder.build_int_add(first_list_len, second_list_len, "add_list_lengths");
 
-                    let combined_list_ptr = allocate_list(env, elem_layout, combined_list_len);
+                    let combined_list_ptr =
+                        allocate_list(env, inplace, elem_layout, combined_list_len);
 
                     let first_list_ptr = load_list_ptr(builder, first_list_wrapper, ptr_type);
 
@@ -1540,6 +1561,7 @@ pub fn load_list_ptr<'ctx>(
 
 pub fn clone_nonempty_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    inplace: InPlace,
     list_len: IntValue<'ctx>,
     elems_ptr: PointerValue<'ctx>,
     elem_layout: &Layout<'_>,
@@ -1557,7 +1579,7 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
         .build_int_mul(elem_bytes, list_len, "clone_mul_len_by_elem_bytes");
 
     // Allocate space for the new array that we'll copy into.
-    let clone_ptr = allocate_list(env, elem_layout, list_len);
+    let clone_ptr = allocate_list(env, inplace, elem_layout, list_len);
 
     let int_type = ptr_int(ctx, ptr_bytes);
     let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
@@ -1607,6 +1629,7 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
 
 pub fn clone_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    output_inplace: InPlace,
     elem_layout: &Layout<'a>,
     length: IntValue<'ctx>,
     old_ptr: PointerValue<'ctx>,
@@ -1615,7 +1638,7 @@ pub fn clone_list<'a, 'ctx, 'env>(
     let ptr_bytes = env.ptr_bytes;
 
     // allocate new empty list (with refcount 1)
-    let new_ptr = allocate_list(env, elem_layout, length);
+    let new_ptr = allocate_list(env, output_inplace, elem_layout, length);
 
     let stack_size = elem_layout.stack_size(env.ptr_bytes);
     let bytes = builder.build_int_mul(
@@ -1632,7 +1655,7 @@ pub fn clone_list<'a, 'ctx, 'env>(
 
 pub fn allocate_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    // in_place: InPlace,
+    inplace: InPlace,
     elem_layout: &Layout<'a>,
     length: IntValue<'ctx>,
 ) -> PointerValue<'ctx> {
