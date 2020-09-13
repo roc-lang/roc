@@ -256,12 +256,12 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                     }
                 };
 
-                if str_literal.len() < (env.ptr_bytes * 2) as usize {
+                if str_literal.len() < env.small_str_bytes() as usize {
                     // TODO support big endian systems
 
                     let array_alloca = builder.build_array_alloca(
                         ctx.i8_type(),
-                        ctx.i8_type().const_int((env.ptr_bytes * 2) as u64, false),
+                        ctx.i8_type().const_int(env.small_str_bytes() as u64, false),
                         "alloca_small_str",
                     );
 
@@ -272,7 +272,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                             array_alloca,
                             &[ctx
                                 .i8_type()
-                                .const_int(((env.ptr_bytes * 2) - 1) as u64, false)],
+                                .const_int(env.small_str_bytes() as u64 - 1, false)],
                             "str_literal_final_byte",
                         )
                     };

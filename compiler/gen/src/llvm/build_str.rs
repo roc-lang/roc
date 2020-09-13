@@ -99,86 +99,232 @@ pub fn str_concat<'a, 'ctx, 'env>(
                                 "add_list_lengths",
                             );
 
-                            let combined_str_ptr =
-                                allocate_list(env, &CHAR_LAYOUT, combined_str_len);
-
-                            // TODO replace FIRST_LOOP with a memcpy!
-                            // FIRST LOOP
-                            let first_loop = |first_index, first_str_elem| {
-                                // The pointer to the element in the combined list
-                                let combined_str_elem_ptr = unsafe {
-                                    builder.build_in_bounds_gep(
-                                        combined_str_ptr,
-                                        &[first_index],
-                                        "load_index_combined_list",
-                                    )
-                                };
-
-                                // Mutate the new array in-place to change the element.
-                                builder.build_store(combined_str_elem_ptr, first_str_elem);
-                            };
-
-                            let index_name = "#index";
-
-                            let index_alloca = incrementing_elem_loop(
-                                builder,
-                                parent,
-                                ctx,
-                                LoopListArg {
-                                    ptr: first_str_ptr,
-                                    len: first_str_len,
-                                },
-                                index_name,
-                                None,
-                                first_loop,
+                            // The combined string is big iff its length is
+                            // greater than or equal to the size in memory
+                            // of a small str (e.g. len >= 16 on 64-bit targets)
+                            let is_big = env.builder.build_int_compare(
+                                IntPredicate::UGE,
+                                combined_str_len,
+                                env.ptr_int().const_int(env.small_str_bytes() as u64, false),
+                                "str_is_big",
                             );
 
-                            // Reset the index variable to 0
-                            builder.build_store(index_alloca, ctx.i64_type().const_int(0, false));
+                            let if_big = || {
+                                let combined_str_ptr =
+                                    allocate_list(env, &CHAR_LAYOUT, combined_str_len);
 
-                            // TODO replace SECOND_LOOP with a memcpy!
-                            // SECOND LOOP
-                            let second_loop = |second_index, second_str_elem| {
-                                // The pointer to the element in the combined str.
-                                // Note that the pointer does not start at the index
-                                // 0, it starts at the index of first_str_len. In that
-                                // sense it is "offset".
-                                let offset_combined_str_char_ptr = unsafe {
-                                    builder.build_in_bounds_gep(
-                                        combined_str_ptr,
-                                        &[first_str_len],
-                                        "elem",
-                                    )
+                                // TODO replace FIRST_LOOP with a memcpy!
+                                // FIRST LOOP
+                                let first_loop = |first_index, first_str_elem| {
+                                    // The pointer to the element in the combined list
+                                    let combined_str_elem_ptr = unsafe {
+                                        builder.build_in_bounds_gep(
+                                            combined_str_ptr,
+                                            &[first_index],
+                                            "load_index_combined_list",
+                                        )
+                                    };
+
+                                    // Mutate the new array in-place to change the element.
+                                    builder.build_store(combined_str_elem_ptr, first_str_elem);
                                 };
 
-                                // The pointer to the char from the second str
-                                // in the combined list
-                                let combined_str_char_ptr = unsafe {
-                                    builder.build_in_bounds_gep(
-                                        offset_combined_str_char_ptr,
-                                        &[second_index],
-                                        "load_index_combined_list",
-                                    )
+                                let index_name = "#index";
+
+                                let index_alloca = incrementing_elem_loop(
+                                    builder,
+                                    parent,
+                                    ctx,
+                                    LoopListArg {
+                                        ptr: first_str_ptr,
+                                        len: first_str_len,
+                                    },
+                                    index_name,
+                                    None,
+                                    first_loop,
+                                );
+
+                                // Reset the index variable to 0
+                                builder
+                                    .build_store(index_alloca, ctx.i64_type().const_int(0, false));
+
+                                // TODO replace SECOND_LOOP with a memcpy!
+                                // SECOND LOOP
+                                let second_loop = |second_index, second_str_elem| {
+                                    // The pointer to the element in the combined str.
+                                    // Note that the pointer does not start at the index
+                                    // 0, it starts at the index of first_str_len. In that
+                                    // sense it is "offset".
+                                    let offset_combined_str_char_ptr = unsafe {
+                                        builder.build_in_bounds_gep(
+                                            combined_str_ptr,
+                                            &[first_str_len],
+                                            "elem",
+                                        )
+                                    };
+
+                                    // The pointer to the char from the second str
+                                    // in the combined list
+                                    let combined_str_char_ptr = unsafe {
+                                        builder.build_in_bounds_gep(
+                                            offset_combined_str_char_ptr,
+                                            &[second_index],
+                                            "load_index_combined_list",
+                                        )
+                                    };
+
+                                    // Mutate the new array in-place to change the element.
+                                    builder.build_store(combined_str_char_ptr, second_str_elem);
                                 };
 
-                                // Mutate the new array in-place to change the element.
-                                builder.build_store(combined_str_char_ptr, second_str_elem);
+                                incrementing_elem_loop(
+                                    builder,
+                                    parent,
+                                    ctx,
+                                    LoopListArg {
+                                        ptr: second_str_ptr,
+                                        len: second_str_len,
+                                    },
+                                    index_name,
+                                    Some(index_alloca),
+                                    second_loop,
+                                );
+
+                                store_list(env, combined_str_ptr, combined_str_len)
                             };
 
-                            incrementing_elem_loop(
-                                builder,
-                                parent,
-                                ctx,
-                                LoopListArg {
-                                    ptr: second_str_ptr,
-                                    len: second_str_len,
-                                },
-                                index_name,
-                                Some(index_alloca),
-                                second_loop,
-                            );
+                            let if_small = || {
+                                let combined_str_ptr = builder.build_array_alloca(
+                                    ctx.i8_type(),
+                                    ctx.i8_type().const_int(env.small_str_bytes() as u64, false),
+                                    "alloca_small_str",
+                                );
 
-                            store_list(env, combined_str_ptr, combined_str_len)
+                                // TODO replace FIRST_LOOP with a memcpy!
+                                // FIRST LOOP
+                                let first_loop = |first_index, first_str_elem| {
+                                    // The pointer to the element in the combined list
+                                    let combined_str_elem_ptr = unsafe {
+                                        builder.build_in_bounds_gep(
+                                            combined_str_ptr,
+                                            &[first_index],
+                                            "load_index_combined_list",
+                                        )
+                                    };
+
+                                    // Mutate the new array in-place to change the element.
+                                    builder.build_store(combined_str_elem_ptr, first_str_elem);
+                                };
+
+                                let index_name = "#index";
+
+                                let index_alloca = incrementing_elem_loop(
+                                    builder,
+                                    parent,
+                                    ctx,
+                                    LoopListArg {
+                                        ptr: first_str_ptr,
+                                        len: first_str_len,
+                                    },
+                                    index_name,
+                                    None,
+                                    first_loop,
+                                );
+
+                                // Reset the index variable to 0
+                                builder
+                                    .build_store(index_alloca, ctx.i64_type().const_int(0, false));
+
+                                // TODO replace SECOND_LOOP with a memcpy!
+                                // SECOND LOOP
+                                let second_loop = |second_index, second_str_elem| {
+                                    // The pointer to the element in the combined str.
+                                    // Note that the pointer does not start at the index
+                                    // 0, it starts at the index of first_str_len. In that
+                                    // sense it is "offset".
+                                    let offset_combined_str_char_ptr = unsafe {
+                                        builder.build_in_bounds_gep(
+                                            combined_str_ptr,
+                                            &[first_str_len],
+                                            "elem",
+                                        )
+                                    };
+
+                                    // The pointer to the char from the second str
+                                    // in the combined list
+                                    let combined_str_char_ptr = unsafe {
+                                        builder.build_in_bounds_gep(
+                                            offset_combined_str_char_ptr,
+                                            &[second_index],
+                                            "load_index_combined_list",
+                                        )
+                                    };
+
+                                    // Mutate the new array in-place to change the element.
+                                    builder.build_store(combined_str_char_ptr, second_str_elem);
+                                };
+
+                                incrementing_elem_loop(
+                                    builder,
+                                    parent,
+                                    ctx,
+                                    LoopListArg {
+                                        ptr: second_str_ptr,
+                                        len: second_str_len,
+                                    },
+                                    index_name,
+                                    Some(index_alloca),
+                                    second_loop,
+                                );
+
+                                let final_byte = builder.build_int_cast(
+                                    combined_str_len,
+                                    ctx.i8_type(),
+                                    "str_len_to_i8",
+                                );
+
+                                let final_byte = builder.build_or(
+                                    final_byte,
+                                    ctx.i8_type().const_int(0b1000_0000, false),
+                                    "str_len_set_discriminant",
+                                );
+
+                                let final_byte_ptr = unsafe {
+                                    builder.build_in_bounds_gep(
+                                        combined_str_ptr,
+                                        &[ctx
+                                            .i8_type()
+                                            .const_int(env.small_str_bytes() as u64 - 1, false)],
+                                        "str_literal_final_byte",
+                                    )
+                                };
+
+                                builder.build_store(final_byte_ptr, final_byte);
+
+                                builder.build_load(
+                                    builder
+                                        .build_bitcast(
+                                            combined_str_ptr,
+                                            collection(ctx, env.ptr_bytes)
+                                                .ptr_type(AddressSpace::Generic),
+                                            "cast_collection",
+                                        )
+                                        .into_pointer_value(),
+                                    "small_str_array",
+                                )
+                            };
+
+                            // If the combined length fits in a small string,
+                            // write into a small string!
+                            build_basic_phi2(
+                                env,
+                                parent,
+                                is_big,
+                                // the result of a Str.concat is most likely big
+                                if_big,
+                                if_small,
+                                BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
+                            )
                         };
 
                         build_basic_phi2(
