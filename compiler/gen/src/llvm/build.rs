@@ -1877,6 +1877,8 @@ fn run_low_level<'a, 'ctx, 'env>(
         ListSetInPlace => {
             let (list_symbol, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
+            let output_inplace = get_inplace_from_layout(layout);
+
             list_set(
                 parent,
                 &[
@@ -1886,6 +1888,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 ],
                 env,
                 InPlace::InPlace,
+                output_inplace,
             )
         }
         ListSet => {
@@ -1897,8 +1900,10 @@ fn run_low_level<'a, 'ctx, 'env>(
                 (load_symbol_and_layout(env, scope, &args[2])),
             ];
 
-            let in_place = || list_set(parent, arguments, env, InPlace::InPlace);
-            let clone = || list_set(parent, arguments, env, InPlace::Clone);
+            let output_inplace = get_inplace_from_layout(layout);
+
+            let in_place = || list_set(parent, arguments, env, InPlace::InPlace, output_inplace);
+            let clone = || list_set(parent, arguments, env, InPlace::Clone, output_inplace);
             let empty = || list_symbol;
 
             maybe_inplace_list(

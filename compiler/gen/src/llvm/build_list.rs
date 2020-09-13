@@ -642,7 +642,8 @@ pub fn list_set<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
     env: &Env<'a, 'ctx, 'env>,
-    inplace: InPlace,
+    input_inplace: InPlace,
+    output_inplace: InPlace,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
@@ -664,14 +665,15 @@ pub fn list_set<'a, 'ctx, 'env>(
         let ctx = env.context;
         let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
         let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-        let (new_wrapper, array_data_ptr) = match inplace {
+
+        let (new_wrapper, array_data_ptr) = match input_inplace {
             InPlace::InPlace => (
                 original_wrapper,
                 load_list_ptr(builder, original_wrapper, ptr_type),
             ),
             InPlace::Clone => clone_nonempty_list(
                 env,
-                inplace,
+                output_inplace,
                 list_len,
                 load_list_ptr(builder, original_wrapper, ptr_type),
                 elem_layout,
