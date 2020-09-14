@@ -220,10 +220,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     classes: "".to_string(),
                     entries: module_link
                         .entries
-                        .clone()
                         .into_iter()
                         .map(|entry| TemplateLinkEntry {
-                            name: entry.name.clone(),
+                            name: entry.name,
                         })
                         .collect(),
                 })
