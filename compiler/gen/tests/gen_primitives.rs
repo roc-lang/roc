@@ -671,7 +671,6 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn linked_list_map() {
         // `f` is not actually a function, so the call to it fails currently
         assert_evals_to!(
