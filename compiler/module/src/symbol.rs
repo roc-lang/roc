@@ -642,6 +642,7 @@ define_builtins! {
         37 NUM_COMPARE: "compare"
         38 NUM_POW: "pow"
         39 NUM_CEILING: "ceiling"
+        40 NUM_POW_INT: "powInt"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
