@@ -212,6 +212,120 @@ pub fn construct_optimization_passes<'a>(
     (mpm, fpm)
 }
 
+/// For communication with C (tests and platforms) we need to abide by the C calling convention
+///
+/// While small values are just returned like with the fast CC, larger structures need to
+/// be written into a pointer (into the callers stack)
+enum PassVia {
+    Register,
+    Memory,
+}
+
+impl PassVia {
+    fn from_layout(ptr_bytes: u32, layout: &Layout<'_>) -> Self {
+        if layout.stack_size(ptr_bytes) > 16 {
+            PassVia::Memory
+        } else {
+            PassVia::Register
+        }
+    }
+}
+
+pub fn make_main_function<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    main_body: &roc_mono::ir::Stmt<'a>,
+) -> (&'static str, &'a FunctionValue<'ctx>) {
+    use inkwell::types::BasicType;
+    use PassVia::*;
+
+    let context = env.context;
+    let builder = env.builder;
+    let arena = env.arena;
+    let ptr_bytes = env.ptr_bytes;
+
+    let return_type = basic_type_from_layout(&arena, context, &layout, ptr_bytes);
+    let roc_main_fn_name = "$Test.roc_main";
+
+    // make the roc main function
+    let roc_main_fn_type = return_type.fn_type(&[], false);
+
+    // Add main to the module.
+    let roc_main_fn = env
+        .module
+        .add_function(roc_main_fn_name, roc_main_fn_type, None);
+
+    // our exposed main function adheres to the C calling convention
+    roc_main_fn.set_call_conventions(FAST_CALL_CONV);
+
+    // Add main's body
+    let basic_block = context.append_basic_block(roc_main_fn, "entry");
+
+    builder.position_at_end(basic_block);
+
+    // builds the function body (return statement included)
+    build_exp_stmt(
+        env,
+        layout_ids,
+        &mut Scope::default(),
+        roc_main_fn,
+        main_body,
+    );
+
+    // build the C calling convention wrapper
+
+    let main_fn_name = "$Test.main";
+    let register_or_memory = PassVia::from_layout(env.ptr_bytes, layout);
+
+    let main_fn_type = match register_or_memory {
+        Memory => {
+            let return_value_ptr = context.i64_type().ptr_type(AddressSpace::Generic).into();
+            context.void_type().fn_type(&[return_value_ptr], false)
+        }
+        Register => return_type.fn_type(&[], false),
+    };
+
+    // Add main to the module.
+    let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
+
+    // our exposed main function adheres to the C calling convention
+    main_fn.set_call_conventions(C_CALL_CONV);
+
+    // Add main's body
+    let basic_block = context.append_basic_block(main_fn, "entry");
+
+    builder.position_at_end(basic_block);
+
+    let call = builder.build_call(roc_main_fn, &[], "call_roc_main");
+    call.set_call_convention(FAST_CALL_CONV);
+
+    let call_result = call.try_as_basic_value().left().unwrap();
+
+    match register_or_memory {
+        Memory => {
+            // write the result into the supplied pointer
+            // this is a void function, therefore return None
+            let ptr_return_type = return_type.ptr_type(AddressSpace::Generic);
+
+            let ptr_as_int = main_fn.get_first_param().unwrap();
+
+            let ptr = builder.build_bitcast(ptr_as_int, ptr_return_type, "caller_ptr");
+
+            builder.build_store(ptr.into_pointer_value(), call_result);
+
+            builder.build_return(None);
+        }
+        Register => {
+            // construct a normal return
+            // values are passed to the caller via registers
+            builder.build_return(Some(&call_result));
+        }
+    }
+
+    (main_fn_name, env.arena.alloc(main_fn))
+}
+
 pub fn build_exp_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     literal: &roc_mono::ir::Literal<'a>,
