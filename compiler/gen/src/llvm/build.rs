@@ -326,6 +326,19 @@ pub fn make_main_function<'a, 'ctx, 'env>(
     (main_fn_name, env.arena.alloc(main_fn))
 }
 
+fn get_inplace_from_layout(layout: &Layout<'_>) -> InPlace {
+    match layout {
+        Layout::Builtin(Builtin::EmptyList) => InPlace::InPlace,
+        Layout::Builtin(Builtin::List(memory_mode, _)) => match memory_mode {
+            MemoryMode::Unique => InPlace::InPlace,
+            MemoryMode::Refcounted => InPlace::Clone,
+        },
+        Layout::Builtin(Builtin::EmptyStr) => InPlace::InPlace,
+        Layout::Builtin(Builtin::Str) => InPlace::Clone,
+        _ => unreachable!("Layout {:?} does not have an inplace", layout),
+    }
+}
+
 pub fn build_exp_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     literal: &roc_mono::ir::Literal<'a>,
@@ -353,7 +366,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                     let len_type = env.ptr_int();
                     let len = len_type.const_int(bytes_len, false);
 
-                    allocate_list(env, &CHAR_LAYOUT, len)
+                    allocate_list(env, InPlace::Clone, &CHAR_LAYOUT, len)
 
                     // TODO check if malloc returned null; if so, runtime error for OOM!
                 };
@@ -412,6 +425,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
+    layout: &Layout<'a>,
     expr: &roc_mono::ir::Expr<'a>,
 ) -> BasicValueEnum<'ctx> {
     use roc_mono::ir::CallType::*;
@@ -419,7 +433,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
     match expr {
         Literal(literal) => build_exp_literal(env, literal),
-        RunLowLevel(op, symbols) => run_low_level(env, scope, parent, *op, symbols),
+        RunLowLevel(op, symbols) => run_low_level(env, scope, parent, layout, *op, symbols),
 
         FunctionCall {
             call_type: ByName(name),
@@ -784,7 +798,11 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
         }
         EmptyArray => empty_polymorphic_list(env),
-        Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
+        Array { elem_layout, elems } => {
+            let inplace = get_inplace_from_layout(layout);
+
+            list_literal(env, inplace, scope, elem_layout, elems)
+        }
         FunctionPointer(symbol, layout) => {
             let fn_name = layout_ids
                 .get(*symbol, layout)
@@ -873,6 +891,7 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
 
 fn list_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    inplace: InPlace,
     scope: &Scope<'a, 'ctx>,
     elem_layout: &Layout<'a>,
     elems: &&[Symbol],
@@ -888,7 +907,7 @@ fn list_literal<'a, 'ctx, 'env>(
         let len_type = env.ptr_int();
         let len = len_type.const_int(bytes_len, false);
 
-        allocate_list(env, elem_layout, len)
+        allocate_list(env, inplace, elem_layout, len)
 
         // TODO check if malloc returned null; if so, runtime error for OOM!
     };
@@ -946,7 +965,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         Let(symbol, expr, layout, cont) => {
             let context = &env.context;
 
-            let val = build_exp_expr(env, layout_ids, &scope, parent, &expr);
+            let val = build_exp_expr(env, layout_ids, &scope, parent, layout, &expr);
             let expr_bt = if let Layout::RecursivePointer = layout {
                 match expr {
                     Expr::AccessAtIndex { field_layouts, .. } => {
@@ -1582,6 +1601,7 @@ fn call_intrinsic<'a, 'ctx, 'env>(
     })
 }
 
+#[derive(Copy, Clone)]
 pub enum InPlace {
     InPlace,
     Clone,
@@ -1610,6 +1630,7 @@ fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
+    layout: &Layout<'a>,
     op: LowLevel,
     args: &[Symbol],
 ) -> BasicValueEnum<'ctx> {
@@ -1624,7 +1645,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let second_str = load_symbol(env, scope, &args[1]);
 
-            str_concat(env, parent, first_str, second_str)
+            let inplace = get_inplace_from_layout(layout);
+
+            str_concat(env, inplace, parent, first_str, second_str)
         }
         ListLen => {
             // List.len : List * -> Int
@@ -1640,7 +1663,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (arg, arg_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
-            list_single(env, arg, arg_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_single(env, inplace, arg, arg_layout)
         }
         ListRepeat => {
             // List.repeat : Int, elem -> List elem
@@ -1649,7 +1674,9 @@ fn run_low_level<'a, 'ctx, 'env>(
             let list_len = load_symbol(env, scope, &args[0]).into_int_value();
             let (elem, elem_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            list_repeat(env, parent, list_len, elem, elem_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_repeat(env, inplace, parent, list_len, elem, elem_layout)
         }
         ListReverse => {
             // List.reverse : List elem -> List elem
@@ -1657,7 +1684,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
-            list_reverse(env, parent, InPlace::Clone, list, list_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_reverse(env, parent, inplace, list, list_layout)
         }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
@@ -1666,7 +1695,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let second_list = load_symbol(env, scope, &args[1]);
 
-            list_concat(env, parent, first_list, second_list, list_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_concat(env, inplace, parent, first_list, second_list, list_layout)
         }
         ListMap => {
             // List.map : List before, (before -> after) -> List after
@@ -1676,7 +1707,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            list_map(env, parent, func, func_layout, list, list_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_map(env, inplace, parent, func, func_layout, list, list_layout)
         }
         ListKeepIf => {
             // List.keepIf : List elem, (elem -> Bool) -> List elem
@@ -1686,7 +1719,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            list_keep_if(env, parent, func, func_layout, list, list_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_keep_if(env, inplace, parent, func, func_layout, list, list_layout)
         }
         ListWalkRight => {
             // List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
@@ -1716,7 +1751,9 @@ fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = load_symbol(env, scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            list_append(env, original_wrapper, elem, elem_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_append(env, inplace, original_wrapper, elem, elem_layout)
         }
         ListPrepend => {
             // List.prepend : List elem, elem -> List elem
@@ -1725,7 +1762,9 @@ fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = load_symbol(env, scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            list_prepend(env, original_wrapper, elem, elem_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_prepend(env, inplace, original_wrapper, elem, elem_layout)
         }
         ListJoin => {
             // List.join : List (List elem) -> List elem
@@ -1733,7 +1772,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, outer_list_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
-            list_join(env, parent, list, outer_list_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_join(env, inplace, parent, list, outer_list_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumToFloat => {
             debug_assert_eq!(args.len(), 1);
@@ -1952,6 +1993,8 @@ fn run_low_level<'a, 'ctx, 'env>(
         ListSetInPlace => {
             let (list_symbol, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
+            let output_inplace = get_inplace_from_layout(layout);
+
             list_set(
                 parent,
                 &[
@@ -1961,6 +2004,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 ],
                 env,
                 InPlace::InPlace,
+                output_inplace,
             )
         }
         ListSet => {
@@ -1972,8 +2016,10 @@ fn run_low_level<'a, 'ctx, 'env>(
                 (load_symbol_and_layout(env, scope, &args[2])),
             ];
 
-            let in_place = || list_set(parent, arguments, env, InPlace::InPlace);
-            let clone = || list_set(parent, arguments, env, InPlace::Clone);
+            let output_inplace = get_inplace_from_layout(layout);
+
+            let in_place = || list_set(parent, arguments, env, InPlace::InPlace, output_inplace);
+            let clone = || list_set(parent, arguments, env, InPlace::Clone, output_inplace);
             let empty = || list_symbol;
 
             maybe_inplace_list(
@@ -2037,6 +2083,7 @@ where
 /// Str.concat : Str, Str -> Str
 fn str_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    inplace: InPlace,
     parent: FunctionValue<'ctx>,
     first_str: BasicValueEnum<'ctx>,
     second_str: BasicValueEnum<'ctx>,
@@ -2067,6 +2114,7 @@ fn str_concat<'a, 'ctx, 'env>(
 
             let (new_wrapper, _) = clone_nonempty_list(
                 env,
+                inplace,
                 second_str_len,
                 load_list_ptr(builder, second_str_wrapper, ptr_type),
                 &CHAR_LAYOUT,
@@ -2094,6 +2142,7 @@ fn str_concat<'a, 'ctx, 'env>(
         let if_second_str_is_empty = || {
             let (new_wrapper, _) = clone_nonempty_list(
                 env,
+                inplace,
                 first_str_len,
                 load_list_ptr(builder, first_str_wrapper, ptr_type),
                 &CHAR_LAYOUT,
@@ -2111,7 +2160,7 @@ fn str_concat<'a, 'ctx, 'env>(
             let combined_str_len =
                 builder.build_int_add(first_str_len, second_str_len, "add_list_lengths");
 
-            let combined_str_ptr = allocate_list(env, &CHAR_LAYOUT, combined_str_len);
+            let combined_str_ptr = allocate_list(env, inplace, &CHAR_LAYOUT, combined_str_len);
 
             // FIRST LOOP
             let first_str_ptr = load_list_ptr(builder, first_str_wrapper, ptr_type);
