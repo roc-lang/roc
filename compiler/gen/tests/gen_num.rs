@@ -665,4 +665,9 @@ mod gen_num {
             i64
         );
     }
+
+    #[test]
+    fn pow() {
+        assert_evals_to!("Num.pow 2.0 2.0", 4.0, f64);
+    }
 }

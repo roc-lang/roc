@@ -1,7 +1,6 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::execution_engine::ExecutionEngine;
-use inkwell::types::BasicType;
 use inkwell::OptimizationLevel;
 use roc_builtins::unique::uniq_stdlib;
 use roc_can::constraint::Constraint;
@@ -15,7 +14,6 @@ use roc_constrain::module::{constrain_imported_values, load_builtin_aliases, Imp
 use roc_fmt::annotation::{Formattable, Newlines, Parens};
 use roc_gen::layout_id::LayoutIds;
 use roc_gen::llvm::build::{build_proc, build_proc_header, OptLevel};
-use roc_gen::llvm::convert::basic_type_from_layout;
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::ir::Procs;
@@ -223,10 +221,6 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         // in --release mode and then trying to eval anything in the repl.
         ExecutionEngine::link_in_mc_jit();
 
-        let main_fn_type = basic_type_from_layout(&arena, &context, &main_ret_layout, ptr_bytes)
-            .fn_type(&[], false);
-        let main_fn_name = "$Test.main";
-
         // Compile and add all the Procs before adding main
         let mut env = roc_gen::llvm::build::Env {
             arena: &arena,
@@ -322,23 +316,10 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             }
         }
 
-        // Add main to the module.
-        let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
-        let cc = roc_gen::llvm::build::FAST_CALL_CONV;
-
-        main_fn.set_call_conventions(cc);
-
-        // Add main's body
-        let basic_block = context.append_basic_block(main_fn, "entry");
-
-        builder.position_at_end(basic_block);
-
-        // builds the function body (return statement included)
-        roc_gen::llvm::build::build_exp_stmt(
+        let (main_fn_name, main_fn) = roc_gen::llvm::build::make_main_function(
             &env,
             &mut layout_ids,
-            &mut roc_gen::llvm::build::Scope::default(),
-            main_fn,
+            &main_ret_layout,
             &main_body,
         );
 
