@@ -221,9 +221,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     entries: module_link
                         .entries
                         .into_iter()
-                        .map(|entry| TemplateLinkEntry {
-                            name: entry.name,
-                        })
+                        .map(|entry| TemplateLinkEntry { name: entry.name })
                         .collect(),
                 })
                 .collect(),
