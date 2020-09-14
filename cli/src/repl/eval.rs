@@ -118,20 +118,67 @@ fn jit_to_ast_help<'a>(
                 }
             };
 
-            // Functions can return structs of either 8 or 16 bytes, depending
-            // on whether we're compiling for a 64-bit or 32-bit target.
             match env.ptr_bytes {
                 // 64-bit target (8-byte pointers, 16-byte structs)
-                8 => jit_map!(
-                    execution_engine,
-                    main_fn_name,
-                    [u8; 16],
-                    |bytes: [u8; 16]| { ptr_to_ast((&bytes).as_ptr() as *const libc::c_void) }
-                ),
+                8 => match layout.stack_size(env.ptr_bytes) {
+                    8 => {
+                        // just one eightbyte, returned as-is
+                        jit_map!(execution_engine, main_fn_name, [u8; 8], |bytes: [u8; 8]| {
+                            ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
+                        })
+                    }
+                    16 => {
+                        // two eightbytes, returned as-is
+                        jit_map!(
+                            execution_engine,
+                            main_fn_name,
+                            [u8; 16],
+                            |bytes: [u8; 16]| {
+                                ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
+                            }
+                        )
+                    }
+                    _ => {
+                        // anything more than 2 eightbytes
+                        // the return "value" is a pointer to the result
+                        jit_map!(
+                            execution_engine,
+                            main_fn_name,
+                            *const u8,
+                            |bytes: *const u8| { ptr_to_ast(bytes as *const libc::c_void) }
+                        )
+                    }
+                },
                 // 32-bit target (4-byte pointers, 8-byte structs)
-                4 => jit_map!(execution_engine, main_fn_name, [u8; 8], |bytes: [u8; 8]| {
-                    ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
-                }),
+                4 => {
+                    // TODO what are valid return sizes here?
+                    // this is just extrapolated from the 64-bit case above
+                    // and not (yet) actually tested on a 32-bit system
+                    match layout.stack_size(env.ptr_bytes) {
+                        4 => {
+                            // just one fourbyte, returned as-is
+                            jit_map!(execution_engine, main_fn_name, [u8; 4], |bytes: [u8; 4]| {
+                                ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
+                            })
+                        }
+                        8 => {
+                            // just one fourbyte, returned as-is
+                            jit_map!(execution_engine, main_fn_name, [u8; 8], |bytes: [u8; 8]| {
+                                ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
+                            })
+                        }
+                        _ => {
+                            // anything more than 2 fourbytes
+                            // the return "value" is a pointer to the result
+                            jit_map!(
+                                execution_engine,
+                                main_fn_name,
+                                *const u8,
+                                |bytes: *const u8| { ptr_to_ast(bytes as *const libc::c_void) }
+                            )
+                        }
+                    }
+                }
                 other => {
                     panic!("Unsupported target: Roc cannot currently compile to systems where pointers are {} bytes in length.", other);
                 }
@@ -280,7 +327,7 @@ fn struct_to_ast<'a>(
         output.push(loc_field);
 
         // Advance the field pointer to the next field.
-        field_ptr = unsafe { ptr.offset(field_layout.stack_size(env.ptr_bytes) as isize) };
+        field_ptr = unsafe { field_ptr.offset(field_layout.stack_size(env.ptr_bytes) as isize) };
     }
 
     Expr::Record {
