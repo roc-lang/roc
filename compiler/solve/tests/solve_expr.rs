@@ -2407,6 +2407,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn pow_int() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.powInt
+                "#
+            ),
+            "Int, Int -> Int",
+        );
+    }
+
+    #[test]
     fn reconstruct_path() {
         infer_eq_without_problem(
             indoc!(
