@@ -3,8 +3,8 @@ extern crate inlinable_string;
 extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
-// extern crate roc_cli; // TODO FIXME why doesn't this resolve?
 
+use roc_cli::repl::{INSTRUCTIONS, PROMPT, WELCOME_MESSAGE};
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
@@ -15,12 +15,6 @@ pub struct Out {
     pub stderr: String,
     pub status: ExitStatus,
 }
-
-// TODO get these from roc_cli::repl instead, after figuring out why
-// `extern crate roc_cli;` doesn't work.
-const WELCOME_MESSAGE: &str = "\n  The rockin’ \u{001b}[36mroc repl\u{001b}[0m\n\u{001b}[35m────────────────────────\u{001b}[0m\n\n";
-const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit.\n";
-const PROMPT: &str = "\n\u{001b}[36m»\u{001b}[0m ";
 
 pub fn path_to_roc_binary() -> PathBuf {
     // Adapted from https://github.com/volta-cli/volta/blob/cefdf7436a15af3ce3a38b8fe53bb0cfdb37d3dd/tests/acceptance/support/sandbox.rs#L680 - BSD-2-Clause licensed
@@ -129,8 +123,6 @@ pub fn repl_eval(input: &str) -> Out {
 
     // Remove the initial instructions from the output.
 
-    // TODO get these from roc_cli::repl instead, after figuring out why
-    // `extern crate roc_cli;` doesn't work.
     let expected_instructions = format!("{}{}{}", WELCOME_MESSAGE, INSTRUCTIONS, PROMPT);
     let stdout = String::from_utf8(output.stdout).unwrap();
 
