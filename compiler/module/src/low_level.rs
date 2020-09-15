@@ -38,6 +38,7 @@ pub enum LowLevel {
     NumToFloat,
     NumPow,
     NumCeiling,
+    NumPowInt,
     Eq,
     NotEq,
     And,

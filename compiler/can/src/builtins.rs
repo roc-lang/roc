@@ -93,6 +93,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_TO_FLOAT => num_to_float,
         Symbol::NUM_POW => num_pow,
         Symbol::NUM_CEILING => num_ceiling,
+        Symbol::NUM_POW_INT => num_pow_int,
     }
 }
 
@@ -617,6 +618,25 @@ fn num_ceiling(symbol: Symbol, var_store: &mut VarStore) -> Def {
     defn(
         symbol,
         vec![(float_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        int_var,
+    )
+}
+
+/// Num.powInt : Int, Int -> Int
+fn num_pow_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumPowInt,
+        args: vec![(int_var, Var(Symbol::ARG_1)), (int_var, Var(Symbol::ARG_2))],
+        ret_var: int_var,
+    };
+
+    defn(
+        symbol,
+        vec![(int_var, Symbol::ARG_1), (int_var, Symbol::ARG_2)],
         var_store,
         body,
         int_var,
