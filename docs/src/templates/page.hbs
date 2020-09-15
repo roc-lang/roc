@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>The Roc Programming Language</title>
+  <meta name="description" content="A language for building fast, reliable software.">
+  <meta name="viewport" content="width=device-width">
+  <link rel="icon" href="/favicon.svg">
+  <script type="text/javascript" src="/search.js" defer></script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+
+<body>
+  <nav id="sidebar-nav">
+    <input id="module-search" aria-labelledby="search-link" type="text" placeholder="Search" />
+    <label for="module-search" id="search-link">Search</label>
+    <div class="module-links">
+      {{#each module_links as |link| ~}}
+      <div class="sidebar-entry">
+        <a class="sidebar-module-link" href="{{link.href}}">{{link.name}}</a>
+        <div class="sidebar-sub-entries">
+          {{#each link.entries as |entry| ~}}
+          <a class="{{link.classes}}" href="{{link.href}}#{{entry.name}}">{{entry.name}}</a></li>
+          {{/each~}}
+        </div>
+      </div>
+      {{/each~}}
+    </div>
+  </nav>
+  <div class="top-header-extension">
+    <!-- if the window gets big, this extends the purple bar on the top header to the left edge of the window -->
+  </div>
+  <header class="top-header">
+    <nav class="pkg-and-logo">
+      <a class="logo" href="/" aria-labelledby="logo-link">
+        <svg viewBox="0 -6 51 58" fill="none" xmlns="http://www.w3.org/2000/svg" aria-labelledby="logo-link" role="img">
+          <title id="logo-link">Return to Roc packages</title>
+          <polygon role="presentation" points="0,0 23.8834,3.21052 37.2438,19.0101 45.9665,16.6324 50.5,22 45,22 44.0315,26.3689 26.4673,39.3424 27.4527,45.2132 17.655,53 23.6751,22.7086" />
+        </svg>
+      </a>
+      <h1 class="pkg-full-name">
+        <a href="/{{package_name}}">{{package_name}}</a>
+      </h1>
+      <a class="version" href="/{{package_name}}/{{package_version}}">{{package_version}}</a>
+    </nav>
+    <div class="top-header-triangle">
+      <!-- if the window gets big, this extends the purple bar on the top header to the left edge of the window -->
+    </div>
+  </header>
+  <main>
+    <h2 class="module-name"><a href="#">{{module_name}}</a></h2>
+    {{{module_docs}}}
+    {{#each module_entries as |entry| ~}}
+    <h3 id="{{entry.name}}"><a href="#{{entry.name}}">{{entry.name}}</a></h3>
+    {{{entry.docs}}}
+    {{/each~}}
+  </main>
+  <footer>
+    <p>Made by people who like to make nice things.</p>
+    <p>© 2020-present</p>
+  </footer>
+</body>
+
+</html>
