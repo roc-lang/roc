@@ -412,6 +412,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // minFloat : Float
     add_type(Symbol::NUM_MIN_FLOAT, float_type());
 
+    // pow : Float, Float -> Float
+    add_type(
+        Symbol::NUM_POW,
+        SolvedType::Func(vec![float_type(), float_type()], Box::new(float_type())),
+    );
+
     // Bool module
 
     // and : Bool, Bool -> Bool

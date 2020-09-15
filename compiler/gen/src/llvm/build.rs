@@ -145,6 +145,12 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         LLVM_COS_F64,
         f64_type.fn_type(&[f64_type.into()], false),
     );
+
+    add_intrinsic(
+        module,
+        LLVM_POW_F64,
+        f64_type.fn_type(&[f64_type.into(), f64_type.into()], false),
+    );
 }
 
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
@@ -152,6 +158,7 @@ static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
 static LLVM_FABS_F64: &str = "llvm.fabs.f64";
 static LLVM_SIN_F64: &str = "llvm.sin.f64";
 static LLVM_COS_F64: &str = "llvm.cos.f64";
+static LLVM_POW_F64: &str = "llvm.pow.f64";
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -212,6 +219,133 @@ pub fn construct_optimization_passes<'a>(
     (mpm, fpm)
 }
 
+/// For communication with C (tests and platforms) we need to abide by the C calling convention
+///
+/// While small values are just returned like with the fast CC, larger structures need to
+/// be written into a pointer (into the callers stack)
+enum PassVia {
+    Register,
+    Memory,
+}
+
+impl PassVia {
+    fn from_layout(ptr_bytes: u32, layout: &Layout<'_>) -> Self {
+        if layout.stack_size(ptr_bytes) > 16 {
+            PassVia::Memory
+        } else {
+            PassVia::Register
+        }
+    }
+}
+
+pub fn make_main_function<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    main_body: &roc_mono::ir::Stmt<'a>,
+) -> (&'static str, &'a FunctionValue<'ctx>) {
+    use inkwell::types::BasicType;
+    use PassVia::*;
+
+    let context = env.context;
+    let builder = env.builder;
+    let arena = env.arena;
+    let ptr_bytes = env.ptr_bytes;
+
+    let return_type = basic_type_from_layout(&arena, context, &layout, ptr_bytes);
+    let roc_main_fn_name = "$Test.roc_main";
+
+    // make the roc main function
+    let roc_main_fn_type = return_type.fn_type(&[], false);
+
+    // Add main to the module.
+    let roc_main_fn = env
+        .module
+        .add_function(roc_main_fn_name, roc_main_fn_type, None);
+
+    // our exposed main function adheres to the C calling convention
+    roc_main_fn.set_call_conventions(FAST_CALL_CONV);
+
+    // Add main's body
+    let basic_block = context.append_basic_block(roc_main_fn, "entry");
+
+    builder.position_at_end(basic_block);
+
+    // builds the function body (return statement included)
+    build_exp_stmt(
+        env,
+        layout_ids,
+        &mut Scope::default(),
+        roc_main_fn,
+        main_body,
+    );
+
+    // build the C calling convention wrapper
+
+    let main_fn_name = "$Test.main";
+    let register_or_memory = PassVia::from_layout(env.ptr_bytes, layout);
+
+    let main_fn_type = match register_or_memory {
+        Memory => {
+            let return_value_ptr = context.i64_type().ptr_type(AddressSpace::Generic).into();
+            context.void_type().fn_type(&[return_value_ptr], false)
+        }
+        Register => return_type.fn_type(&[], false),
+    };
+
+    // Add main to the module.
+    let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
+
+    // our exposed main function adheres to the C calling convention
+    main_fn.set_call_conventions(C_CALL_CONV);
+
+    // Add main's body
+    let basic_block = context.append_basic_block(main_fn, "entry");
+
+    builder.position_at_end(basic_block);
+
+    let call = builder.build_call(roc_main_fn, &[], "call_roc_main");
+    call.set_call_convention(FAST_CALL_CONV);
+
+    let call_result = call.try_as_basic_value().left().unwrap();
+
+    match register_or_memory {
+        Memory => {
+            // write the result into the supplied pointer
+            // this is a void function, therefore return None
+            let ptr_return_type = return_type.ptr_type(AddressSpace::Generic);
+
+            let ptr_as_int = main_fn.get_first_param().unwrap();
+
+            let ptr = builder.build_bitcast(ptr_as_int, ptr_return_type, "caller_ptr");
+
+            builder.build_store(ptr.into_pointer_value(), call_result);
+
+            builder.build_return(None);
+        }
+        Register => {
+            // construct a normal return
+            // values are passed to the caller via registers
+            builder.build_return(Some(&call_result));
+        }
+    }
+
+    (main_fn_name, env.arena.alloc(main_fn))
+}
+
+fn get_inplace_from_layout(layout: &Layout<'_>) -> InPlace {
+    match layout {
+        Layout::Builtin(Builtin::EmptyList) => InPlace::InPlace,
+        Layout::Builtin(Builtin::List(memory_mode, _)) => match memory_mode {
+            MemoryMode::Unique => InPlace::InPlace,
+            MemoryMode::Refcounted => InPlace::Clone,
+        },
+        Layout::Builtin(Builtin::EmptyStr) => InPlace::InPlace,
+        Layout::Builtin(Builtin::Str) => InPlace::Clone,
+        _ => unreachable!("Layout {:?} does not have an inplace", layout),
+    }
+}
+
 pub fn build_exp_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     literal: &roc_mono::ir::Literal<'a>,
@@ -239,7 +373,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                     let len_type = env.ptr_int();
                     let len = len_type.const_int(bytes_len, false);
 
-                    allocate_list(env, &CHAR_LAYOUT, len)
+                    allocate_list(env, InPlace::Clone, &CHAR_LAYOUT, len)
 
                     // TODO check if malloc returned null; if so, runtime error for OOM!
                 };
@@ -298,6 +432,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
+    layout: &Layout<'a>,
     expr: &roc_mono::ir::Expr<'a>,
 ) -> BasicValueEnum<'ctx> {
     use roc_mono::ir::CallType::*;
@@ -305,7 +440,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
     match expr {
         Literal(literal) => build_exp_literal(env, literal),
-        RunLowLevel(op, symbols) => run_low_level(env, scope, parent, *op, symbols),
+        RunLowLevel(op, symbols) => run_low_level(env, scope, parent, layout, *op, symbols),
 
         FunctionCall {
             call_type: ByName(name),
@@ -670,7 +805,11 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
         }
         EmptyArray => empty_polymorphic_list(env),
-        Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
+        Array { elem_layout, elems } => {
+            let inplace = get_inplace_from_layout(layout);
+
+            list_literal(env, inplace, scope, elem_layout, elems)
+        }
         FunctionPointer(symbol, layout) => {
             let fn_name = layout_ids
                 .get(*symbol, layout)
@@ -759,6 +898,7 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
 
 fn list_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    inplace: InPlace,
     scope: &Scope<'a, 'ctx>,
     elem_layout: &Layout<'a>,
     elems: &&[Symbol],
@@ -774,7 +914,7 @@ fn list_literal<'a, 'ctx, 'env>(
         let len_type = env.ptr_int();
         let len = len_type.const_int(bytes_len, false);
 
-        allocate_list(env, elem_layout, len)
+        allocate_list(env, inplace, elem_layout, len)
 
         // TODO check if malloc returned null; if so, runtime error for OOM!
     };
@@ -832,7 +972,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         Let(symbol, expr, layout, cont) => {
             let context = &env.context;
 
-            let val = build_exp_expr(env, layout_ids, &scope, parent, &expr);
+            let val = build_exp_expr(env, layout_ids, &scope, parent, layout, &expr);
             let expr_bt = if let Layout::RecursivePointer = layout {
                 match expr {
                     Expr::AccessAtIndex { field_layouts, .. } => {
@@ -1468,6 +1608,7 @@ fn call_intrinsic<'a, 'ctx, 'env>(
     })
 }
 
+#[derive(Copy, Clone)]
 pub enum InPlace {
     InPlace,
     Clone,
@@ -1496,6 +1637,7 @@ fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
+    layout: &Layout<'a>,
     op: LowLevel,
     args: &[Symbol],
 ) -> BasicValueEnum<'ctx> {
@@ -1510,7 +1652,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let second_str = load_symbol(env, scope, &args[1]);
 
-            str_concat(env, parent, first_str, second_str)
+            let inplace = get_inplace_from_layout(layout);
+
+            str_concat(env, inplace, parent, first_str, second_str)
         }
         ListLen => {
             // List.len : List * -> Int
@@ -1526,7 +1670,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (arg, arg_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
-            list_single(env, arg, arg_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_single(env, inplace, arg, arg_layout)
         }
         ListRepeat => {
             // List.repeat : Int, elem -> List elem
@@ -1535,7 +1681,9 @@ fn run_low_level<'a, 'ctx, 'env>(
             let list_len = load_symbol(env, scope, &args[0]).into_int_value();
             let (elem, elem_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            list_repeat(env, parent, list_len, elem, elem_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_repeat(env, inplace, parent, list_len, elem, elem_layout)
         }
         ListReverse => {
             // List.reverse : List elem -> List elem
@@ -1543,7 +1691,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
-            list_reverse(env, parent, InPlace::Clone, list, list_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_reverse(env, parent, inplace, list, list_layout)
         }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
@@ -1552,7 +1702,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let second_list = load_symbol(env, scope, &args[1]);
 
-            list_concat(env, parent, first_list, second_list, list_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_concat(env, inplace, parent, first_list, second_list, list_layout)
         }
         ListMap => {
             // List.map : List before, (before -> after) -> List after
@@ -1562,7 +1714,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            list_map(env, parent, func, func_layout, list, list_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_map(env, inplace, parent, func, func_layout, list, list_layout)
         }
         ListKeepIf => {
             // List.keepIf : List elem, (elem -> Bool) -> List elem
@@ -1572,7 +1726,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (func, func_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            list_keep_if(env, parent, func, func_layout, list, list_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_keep_if(env, inplace, parent, func, func_layout, list, list_layout)
         }
         ListWalkRight => {
             // List.walkRight : List elem, (elem -> accum -> accum), accum -> accum
@@ -1602,7 +1758,9 @@ fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = load_symbol(env, scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            list_append(env, original_wrapper, elem, elem_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_append(env, inplace, original_wrapper, elem, elem_layout)
         }
         ListPrepend => {
             // List.prepend : List elem, elem -> List elem
@@ -1611,7 +1769,9 @@ fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = load_symbol(env, scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(env, scope, &args[1]);
 
-            list_prepend(env, original_wrapper, elem, elem_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_prepend(env, inplace, original_wrapper, elem, elem_layout)
         }
         ListJoin => {
             // List.join : List (List elem) -> List elem
@@ -1619,7 +1779,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, outer_list_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
-            list_join(env, parent, list, outer_list_layout)
+            let inplace = get_inplace_from_layout(layout);
+
+            list_join(env, inplace, parent, list, outer_list_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumToFloat => {
             debug_assert_eq!(args.len(), 1);
@@ -1838,6 +2000,8 @@ fn run_low_level<'a, 'ctx, 'env>(
         ListSetInPlace => {
             let (list_symbol, list_layout) = load_symbol_and_layout(env, scope, &args[0]);
 
+            let output_inplace = get_inplace_from_layout(layout);
+
             list_set(
                 parent,
                 &[
@@ -1847,6 +2011,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 ],
                 env,
                 InPlace::InPlace,
+                output_inplace,
             )
         }
         ListSet => {
@@ -1858,8 +2023,10 @@ fn run_low_level<'a, 'ctx, 'env>(
                 (load_symbol_and_layout(env, scope, &args[2])),
             ];
 
-            let in_place = || list_set(parent, arguments, env, InPlace::InPlace);
-            let clone = || list_set(parent, arguments, env, InPlace::Clone);
+            let output_inplace = get_inplace_from_layout(layout);
+
+            let in_place = || list_set(parent, arguments, env, InPlace::InPlace, output_inplace);
+            let clone = || list_set(parent, arguments, env, InPlace::Clone, output_inplace);
             let empty = || list_symbol;
 
             maybe_inplace_list(
@@ -1923,6 +2090,7 @@ where
 /// Str.concat : Str, Str -> Str
 fn str_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    inplace: InPlace,
     parent: FunctionValue<'ctx>,
     first_str: BasicValueEnum<'ctx>,
     second_str: BasicValueEnum<'ctx>,
@@ -1953,6 +2121,7 @@ fn str_concat<'a, 'ctx, 'env>(
 
             let (new_wrapper, _) = clone_nonempty_list(
                 env,
+                inplace,
                 second_str_len,
                 load_list_ptr(builder, second_str_wrapper, ptr_type),
                 &CHAR_LAYOUT,
@@ -1980,6 +2149,7 @@ fn str_concat<'a, 'ctx, 'env>(
         let if_second_str_is_empty = || {
             let (new_wrapper, _) = clone_nonempty_list(
                 env,
+                inplace,
                 first_str_len,
                 load_list_ptr(builder, first_str_wrapper, ptr_type),
                 &CHAR_LAYOUT,
@@ -1997,7 +2167,7 @@ fn str_concat<'a, 'ctx, 'env>(
             let combined_str_len =
                 builder.build_int_add(first_str_len, second_str_len, "add_list_lengths");
 
-            let combined_str_ptr = allocate_list(env, &CHAR_LAYOUT, combined_str_len);
+            let combined_str_ptr = allocate_list(env, inplace, &CHAR_LAYOUT, combined_str_len);
 
             // FIRST LOOP
             let first_str_ptr = load_list_ptr(builder, first_str_wrapper, ptr_type);
@@ -2142,6 +2312,11 @@ fn build_float_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
         NumRemUnchecked => bd.build_float_rem(lhs, rhs, "rem_float").into(),
         NumDivUnchecked => bd.build_float_div(lhs, rhs, "div_float").into(),
+        NumPow => call_intrinsic(
+            LLVM_POW_F64,
+            env,
+            &[(lhs.into(), _lhs_layout), (rhs.into(), _rhs_layout)],
+        ),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
