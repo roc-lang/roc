@@ -264,6 +264,12 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         LLVM_CEILING_F64,
         f64_type.fn_type(&[f64_type.into()], false),
     );
+
+    add_intrinsic(
+        module,
+        LLVM_POW_I64,
+        i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
+    );
 }
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
@@ -275,6 +281,7 @@ static LLVM_SIN_F64: &str = "llvm.sin.f64";
 static LLVM_COS_F64: &str = "llvm.cos.f64";
 static LLVM_POW_F64: &str = "llvm.pow.f64";
 static LLVM_CEILING_F64: &str = "llvm.ceil.f64";
+static LLVM_POW_I64: &str = "llvm.powi.f64";
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -2055,7 +2062,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
 
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
-        | NumDivUnchecked | NumPow => {
+        | NumDivUnchecked | NumPow | NumPowInt => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
@@ -2270,6 +2277,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
         NumRemUnchecked => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
         NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
+        NumPowInt => env.call_intrinsic(LLVM_POW_I64, &[lhs.into(), rhs.into()]),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
