@@ -90,7 +90,7 @@ fn jit_to_ast_help<'a>(
             execution_engine,
             main_fn_name,
             &'static str,
-            |string: &'static str| { str_slice_to_ast(env.arena, env.arena.alloc(string)) }
+            |string: &'static str| { str_to_ast(env.arena, env.arena.alloc(string)) }
         ),
         Layout::Builtin(Builtin::EmptyList) => {
             jit_map!(execution_engine, main_fn_name, &'static str, |_| {
@@ -172,7 +172,7 @@ fn ptr_to_ast<'a>(
         Layout::Builtin(Builtin::Str) => {
             let arena_str = unsafe { *(ptr as *const &'static str) };
 
-            str_slice_to_ast(env.arena, arena_str)
+            str_to_ast(env.arena, arena_str)
         }
         Layout::Struct(field_layouts) => match content {
             Content::Structure(FlatType::Record(fields, _)) => {
@@ -404,6 +404,28 @@ fn i64_to_ast(arena: &Bump, num: i64) -> Expr<'_> {
 /// e.g. adding underscores for large numbers
 fn f64_to_ast(arena: &Bump, num: f64) -> Expr<'_> {
     Expr::Num(arena.alloc(format!("{}", num)))
+}
+
+#[cfg(target_endian = "little")]
+#[cfg(target_pointer_width = "64")]
+/// TODO implement this for 32-bit and big-endian targets. NOTE: As of this writing,
+/// we don't have big-endian small strings implemented yet!
+fn str_to_ast<'a>(arena: &'a Bump, string: &'a str) -> Expr<'a> {
+    let bytes: [u8; 16] = unsafe { std::mem::transmute::<&'a str, [u8; 16]>(string) };
+    let is_small = (bytes[15] & 0b1000_0000) != 0;
+
+    if is_small {
+        let len = (bytes[15] & 0b0111_1111) as usize;
+        let mut string = bumpalo::collections::String::with_capacity_in(len, arena);
+
+        for byte in bytes.iter().take(len) {
+            string.push(*byte as char);
+        }
+
+        str_slice_to_ast(arena, arena.alloc(string))
+    } else {
+        str_slice_to_ast(arena, string)
+    }
 }
 
 fn str_slice_to_ast<'a>(_arena: &'a Bump, string: &'a str) -> Expr<'a> {
