@@ -98,6 +98,46 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     pub fn small_str_bytes(&self) -> u32 {
         self.ptr_bytes * 2
     }
+
+    pub fn build_intrinsic_call(
+        &self,
+        intrinsic_name: &'static str,
+        args: &[BasicValueEnum<'ctx>],
+    ) -> CallSiteValue<'ctx> {
+        let fn_val = self
+            .module
+            .get_function(intrinsic_name)
+            .unwrap_or_else(|| panic!("Unrecognized intrinsic function: {}", intrinsic_name));
+
+        let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), self.arena);
+
+        for arg in args.iter() {
+            arg_vals.push(*arg);
+        }
+
+        let call = self
+            .builder
+            .build_call(fn_val, arg_vals.into_bump_slice(), "call");
+
+        call.set_call_convention(fn_val.get_call_conventions());
+
+        call
+    }
+
+    pub fn call_intrinsic(
+        &self,
+        intrinsic_name: &'static str,
+        args: &[BasicValueEnum<'ctx>],
+    ) -> BasicValueEnum<'ctx> {
+        let call = self.build_intrinsic_call(intrinsic_name, args);
+
+        call.try_as_basic_value().left().unwrap_or_else(|| {
+            panic!(
+                "LLVM error: Invalid call by name for intrinsic {}",
+                intrinsic_name
+            )
+        })
+    }
 }
 
 pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
@@ -233,11 +273,8 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
             } else {
                 let ctx = env.context;
                 let builder = env.builder;
-
                 let len_u64 = str_literal.len() as u64;
-
                 let elem_bytes = CHAR_LAYOUT.stack_size(env.ptr_bytes) as u64;
-
                 let ptr_bytes = env.ptr_bytes;
 
                 let populate_str = |ptr| {
@@ -1492,36 +1529,6 @@ fn call_with_args<'a, 'ctx, 'env>(
         .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
 }
 
-fn call_intrinsic<'a, 'ctx, 'env>(
-    intrinsic_name: &'static str,
-    env: &Env<'a, 'ctx, 'env>,
-    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
-) -> BasicValueEnum<'ctx> {
-    let fn_val = env
-        .module
-        .get_function(intrinsic_name)
-        .unwrap_or_else(|| panic!("Unrecognized intrinsic function: {}", intrinsic_name));
-
-    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
-
-    for (arg, _layout) in args.iter() {
-        arg_vals.push(*arg);
-    }
-
-    let call = env
-        .builder
-        .build_call(fn_val, arg_vals.into_bump_slice(), "call");
-
-    call.set_call_convention(fn_val.get_call_conventions());
-
-    call.try_as_basic_value().left().unwrap_or_else(|| {
-        panic!(
-            "LLVM error: Invalid call by name for intrinsic {}",
-            intrinsic_name
-        )
-    })
-}
-
 pub enum InPlace {
     InPlace,
     Clone,
@@ -1699,7 +1706,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                             build_int_unary_op(env, arg.into_int_value(), arg_layout, op)
                         }
                         Float128 | Float64 | Float32 | Float16 => {
-                            build_float_unary_op(env, arg.into_float_value(), arg_layout, op)
+                            build_float_unary_op(env, arg.into_float_value(), op)
                         }
                         _ => {
                             unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, arg_layout);
@@ -2099,7 +2106,6 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
 fn build_float_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: FloatValue<'ctx>,
-    arg_layout: &Layout<'a>,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     use roc_module::low_level::LowLevel::*;
@@ -2108,11 +2114,11 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
 
     match op {
         NumNeg => bd.build_float_neg(arg, "negate_float").into(),
-        NumAbs => call_intrinsic(LLVM_FABS_F64, env, &[(arg.into(), arg_layout)]),
-        NumSqrtUnchecked => call_intrinsic(LLVM_SQRT_F64, env, &[(arg.into(), arg_layout)]),
-        NumRound => call_intrinsic(LLVM_LROUND_I64_F64, env, &[(arg.into(), arg_layout)]),
-        NumSin => call_intrinsic(LLVM_SIN_F64, env, &[(arg.into(), arg_layout)]),
-        NumCos => call_intrinsic(LLVM_COS_F64, env, &[(arg.into(), arg_layout)]),
+        NumAbs => env.call_intrinsic(LLVM_FABS_F64, &[arg.into()]),
+        NumSqrtUnchecked => env.call_intrinsic(LLVM_SQRT_F64, &[arg.into()]),
+        NumRound => env.call_intrinsic(LLVM_LROUND_I64_F64, &[arg.into()]),
+        NumSin => env.call_intrinsic(LLVM_SIN_F64, &[arg.into()]),
+        NumCos => env.call_intrinsic(LLVM_COS_F64, &[arg.into()]),
         NumToFloat => arg.into(), /* Converting from Float to Float is a no-op */
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
