@@ -1406,4 +1406,53 @@ mod gen_list {
             &'static [i64]
         );
     }
+
+    #[test]
+    fn reproduce_stack_overflow() {
+        // Regression test for https://github.com/rtfeldman/roc/issues/519
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    Vec2 : { x: Float, y: Float }
+
+                    x = 1.1
+                    y = 2.2
+
+                    testVec2 = { x, y }
+
+                    negateVec2 : Vec2 -> Vec2
+                    negateVec2 =
+                        \v ->
+                            { x: -v.x, y: -v.y }
+
+                    negatedVec2 =
+                        testVec2
+                        |> negateVec2
+
+                    vec2Add : Vec2, Vec2 -> Vec2
+                    vec2Add =
+                        \v1, v2 ->
+                            { x: v1.x + v2.x, y: v1.y + v2.y }
+
+                    addedVec2 =
+                        vec2Add testVec2 testVec2
+
+                    vec2Subtract : Vec2, Vec2 -> Vec2
+                    vec2Subtract =
+                        \v1, v2 ->
+                            { x: v1.x - v2.x, y: v1.y - v2.y }
+
+                    subtractedVec2 =
+                        vec2Subtract testVec2 testVec2
+
+                    [ testVec2
+                    , negatedVec2
+                    , negateVec2 testVec2
+                    ]
+                "#
+            ),
+            &[1, 2, 3],
+            &'static [i64]
+        );
+    }
 }
