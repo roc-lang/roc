@@ -4,6 +4,7 @@
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LowLevel {
     StrConcat,
+    StrIsEmpty,
     ListLen,
     ListGetUnsafe,
     ListSet,

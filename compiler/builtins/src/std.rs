@@ -460,7 +460,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // isEmpty : Str -> Bool
     add_type(
-        Symbol::STR_ISEMPTY,
+        Symbol::STR_IS_EMPTY,
         SolvedType::Func(vec![str_type()], Box::new(bool_type())),
     );
 

@@ -1074,7 +1074,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // Str module
 
     // isEmpty : Attr * Str -> Attr * Bool
-    add_type(Symbol::STR_ISEMPTY, {
+    add_type(Symbol::STR_IS_EMPTY, {
         let_tvars! { star1, star2 };
         unique_function(vec![str_type(star1)], bool_type(star2))
     });

@@ -1,10 +1,10 @@
 use crate::layout_id::LayoutIds;
 use crate::llvm::build_list::{
-    allocate_list, build_basic_phi2, clone_nonempty_list, empty_list, empty_polymorphic_list,
-    incrementing_elem_loop, list_append, list_concat, list_get_unsafe, list_is_not_empty,
+    allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_get_unsafe,
     list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set,
-    list_single, list_walk_right, load_list_ptr, store_list,
+    list_single, list_walk_right,
 };
+use crate::llvm::build_str::{str_concat, str_len, CHAR_LAYOUT};
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
     basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
@@ -23,10 +23,12 @@ use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
-use inkwell::values::InstructionOpcode;
-use inkwell::values::{BasicValue, FloatValue, FunctionValue, IntValue, PointerValue, StructValue};
-use inkwell::AddressSpace;
+use inkwell::values::{
+    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, IntValue,
+    PointerValue, StructValue,
+};
 use inkwell::OptimizationLevel;
+use inkwell::{AddressSpace, IntPredicate};
 use roc_collections::all::{ImMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
@@ -95,6 +97,77 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     pub fn ptr_int(&self) -> IntType<'ctx> {
         ptr_int(self.context, self.ptr_bytes)
     }
+
+    pub fn small_str_bytes(&self) -> u32 {
+        self.ptr_bytes * 2
+    }
+
+    pub fn build_intrinsic_call(
+        &self,
+        intrinsic_name: &'static str,
+        args: &[BasicValueEnum<'ctx>],
+    ) -> CallSiteValue<'ctx> {
+        let fn_val = self
+            .module
+            .get_function(intrinsic_name)
+            .unwrap_or_else(|| panic!("Unrecognized intrinsic function: {}", intrinsic_name));
+
+        let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), self.arena);
+
+        for arg in args.iter() {
+            arg_vals.push(*arg);
+        }
+
+        let call = self
+            .builder
+            .build_call(fn_val, arg_vals.into_bump_slice(), "call");
+
+        call.set_call_convention(fn_val.get_call_conventions());
+
+        call
+    }
+
+    pub fn call_intrinsic(
+        &self,
+        intrinsic_name: &'static str,
+        args: &[BasicValueEnum<'ctx>],
+    ) -> BasicValueEnum<'ctx> {
+        let call = self.build_intrinsic_call(intrinsic_name, args);
+
+        call.try_as_basic_value().left().unwrap_or_else(|| {
+            panic!(
+                "LLVM error: Invalid call by name for intrinsic {}",
+                intrinsic_name
+            )
+        })
+    }
+
+    pub fn call_memset(
+        &self,
+        bytes_ptr: PointerValue<'ctx>,
+        filler: IntValue<'ctx>,
+        length: IntValue<'ctx>,
+    ) -> CallSiteValue<'ctx> {
+        let false_val = self.context.bool_type().const_int(0, false);
+
+        let intrinsic_name = match self.ptr_bytes {
+            8 => LLVM_MEMSET_I64,
+            4 => LLVM_MEMSET_I32,
+            other => {
+                unreachable!("Unsupported number of ptr_bytes {:?}", other);
+            }
+        };
+
+        self.build_intrinsic_call(
+            intrinsic_name,
+            &[
+                bytes_ptr.into(),
+                filler.into(),
+                length.into(),
+                false_val.into(),
+            ],
+        )
+    }
 }
 
 pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
@@ -114,8 +187,41 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     // List of all supported LLVM intrinsics:
     //
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
-    let i64_type = ctx.i64_type();
+    let void_type = ctx.void_type();
+    let i1_type = ctx.bool_type();
     let f64_type = ctx.f64_type();
+    let i64_type = ctx.i64_type();
+    let i32_type = ctx.i32_type();
+    let i8_type = ctx.i8_type();
+    let i8_ptr_type = i8_type.ptr_type(AddressSpace::Generic);
+
+    add_intrinsic(
+        module,
+        LLVM_MEMSET_I64,
+        void_type.fn_type(
+            &[
+                i8_ptr_type.into(),
+                i8_type.into(),
+                i64_type.into(),
+                i1_type.into(),
+            ],
+            false,
+        ),
+    );
+
+    add_intrinsic(
+        module,
+        LLVM_MEMSET_I32,
+        void_type.fn_type(
+            &[
+                i8_ptr_type.into(),
+                i8_type.into(),
+                i32_type.into(),
+                i1_type.into(),
+            ],
+            false,
+        ),
+    );
 
     add_intrinsic(
         module,
@@ -160,6 +266,8 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     );
 }
 
+static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
+static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
 static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
 static LLVM_FABS_F64: &str = "llvm.fabs.f64";
@@ -371,69 +479,123 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
             } else {
                 let ctx = env.context;
                 let builder = env.builder;
-
                 let len_u64 = str_literal.len() as u64;
-
                 let elem_bytes = CHAR_LAYOUT.stack_size(env.ptr_bytes) as u64;
+                let ptr_bytes = env.ptr_bytes;
 
-                let ptr = {
+                let populate_str = |ptr| {
+                    // Copy the elements from the list literal into the array
+                    for (index, char) in str_literal.as_bytes().iter().enumerate() {
+                        let val = env
+                            .context
+                            .i8_type()
+                            .const_int(*char as u64, false)
+                            .as_basic_value_enum();
+                        let index_val = ctx.i64_type().const_int(index as u64, false);
+                        let elem_ptr =
+                            unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+
+                        builder.build_store(elem_ptr, val);
+                    }
+                };
+
+                if str_literal.len() < env.small_str_bytes() as usize {
+                    // TODO support big endian systems
+
+                    let array_alloca = builder.build_array_alloca(
+                        ctx.i8_type(),
+                        ctx.i8_type().const_int(env.small_str_bytes() as u64, false),
+                        "alloca_small_str",
+                    );
+
+                    // Zero out all the bytes. If we don't do this, then
+                    // small strings would have uninitialized bytes, which could
+                    // cause string equality checks to fail randomly.
+                    //
+                    // We're running memset over *all* the bytes, even though
+                    // the final one is about to be manually overridden, on
+                    // the theory that LLVM will optimize the memset call
+                    // into two instructions to move appropriately-sized
+                    // zero integers into the appropriate locations instead
+                    // of doing any iteration.
+                    //
+                    // TODO: look at the compiled output to verify this theory!
+                    env.call_memset(
+                        array_alloca,
+                        ctx.i8_type().const_zero(),
+                        env.ptr_int().const_int(env.small_str_bytes() as u64, false),
+                    );
+
+                    let final_byte = (str_literal.len() as u8) | 0b1000_0000;
+
+                    let final_byte_ptr = unsafe {
+                        builder.build_in_bounds_gep(
+                            array_alloca,
+                            &[ctx
+                                .i8_type()
+                                .const_int(env.small_str_bytes() as u64 - 1, false)],
+                            "str_literal_final_byte",
+                        )
+                    };
+
+                    builder.build_store(
+                        final_byte_ptr,
+                        ctx.i8_type().const_int(final_byte as u64, false),
+                    );
+
+                    populate_str(array_alloca);
+
+                    builder.build_load(
+                        builder
+                            .build_bitcast(
+                                array_alloca,
+                                collection(ctx, ptr_bytes).ptr_type(AddressSpace::Generic),
+                                "cast_collection",
+                            )
+                            .into_pointer_value(),
+                        "small_str_array",
+                    )
+                } else {
                     let bytes_len = elem_bytes * len_u64;
                     let len_type = env.ptr_int();
                     let len = len_type.const_int(bytes_len, false);
 
-                    allocate_list(env, InPlace::Clone, &CHAR_LAYOUT, len)
+                    let ptr = allocate_list(env, InPlace::Clone, &CHAR_LAYOUT, len);
+                    let int_type = ptr_int(ctx, ptr_bytes);
+                    let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
+                    let struct_type = collection(ctx, ptr_bytes);
+                    let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
 
-                    // TODO check if malloc returned null; if so, runtime error for OOM!
-                };
+                    let mut struct_val;
 
-                // Copy the elements from the list literal into the array
-                for (index, char) in str_literal.as_bytes().iter().enumerate() {
-                    let val = env
-                        .context
-                        .i8_type()
-                        .const_int(*char as u64, false)
-                        .as_basic_value_enum();
-                    let index_val = ctx.i64_type().const_int(index as u64, false);
-                    let elem_ptr =
-                        unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+                    // Store the pointer
+                    struct_val = builder
+                        .build_insert_value(
+                            struct_type.get_undef(),
+                            ptr_as_int,
+                            Builtin::WRAPPER_PTR,
+                            "insert_ptr",
+                        )
+                        .unwrap();
 
-                    builder.build_store(elem_ptr, val);
-                }
+                    // Store the length
+                    struct_val = builder
+                        .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
+                        .unwrap();
 
-                let ptr_bytes = env.ptr_bytes;
-                let int_type = ptr_int(ctx, ptr_bytes);
-                let ptr_as_int = builder.build_ptr_to_int(ptr, int_type, "list_cast_ptr");
-                let struct_type = collection(ctx, ptr_bytes);
-                let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
-                let mut struct_val;
+                    populate_str(ptr);
 
-                // Store the pointer
-                struct_val = builder
-                    .build_insert_value(
-                        struct_type.get_undef(),
-                        ptr_as_int,
-                        Builtin::WRAPPER_PTR,
-                        "insert_ptr",
+                    builder.build_bitcast(
+                        struct_val.into_struct_value(),
+                        collection(ctx, ptr_bytes),
+                        "cast_collection",
                     )
-                    .unwrap();
-
-                // Store the length
-                struct_val = builder
-                    .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
-                    .unwrap();
-
-                // Bitcast to an array of raw bytes
-                builder.build_bitcast(
-                    struct_val.into_struct_value(),
-                    collection(ctx, ptr_bytes),
-                    "cast_collection",
-                )
+                    // TODO check if malloc returned null; if so, runtime error for OOM!
+                }
             }
         }
     }
 }
-
-static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
 
 pub fn build_exp_expr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -1233,6 +1395,16 @@ pub fn load_symbol<'a, 'ctx, 'env>(
     }
 }
 
+pub fn ptr_from_symbol<'a, 'ctx, 'scope>(
+    scope: &'scope Scope<'a, 'ctx>,
+    symbol: Symbol,
+) -> &'scope PointerValue<'ctx> {
+    match scope.get(&symbol) {
+        Some((_, ptr)) => ptr,
+        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+    }
+}
+
 pub fn load_symbol_and_layout<'a, 'ctx, 'env, 'b>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &'b Scope<'a, 'ctx>,
@@ -1586,36 +1758,6 @@ fn call_with_args<'a, 'ctx, 'env>(
         .unwrap_or_else(|| panic!("LLVM error: Invalid call by name for name {:?}", symbol))
 }
 
-fn call_intrinsic<'a, 'ctx, 'env>(
-    intrinsic_name: &'static str,
-    env: &Env<'a, 'ctx, 'env>,
-    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
-) -> BasicValueEnum<'ctx> {
-    let fn_val = env
-        .module
-        .get_function(intrinsic_name)
-        .unwrap_or_else(|| panic!("Unrecognized intrinsic function: {}", intrinsic_name));
-
-    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(args.len(), env.arena);
-
-    for (arg, _layout) in args.iter() {
-        arg_vals.push(*arg);
-    }
-
-    let call = env
-        .builder
-        .build_call(fn_val, arg_vals.into_bump_slice(), "call");
-
-    call.set_call_convention(fn_val.get_call_conventions());
-
-    call.try_as_basic_value().left().unwrap_or_else(|| {
-        panic!(
-            "LLVM error: Invalid call by name for intrinsic {}",
-            intrinsic_name
-        )
-    })
-}
-
 #[derive(Copy, Clone)]
 pub enum InPlace {
     InPlace,
@@ -1656,13 +1798,23 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.concat : Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            let first_str = load_symbol(env, scope, &args[0]);
-
-            let second_str = load_symbol(env, scope, &args[1]);
-
             let inplace = get_inplace_from_layout(layout);
 
-            str_concat(env, inplace, parent, first_str, second_str)
+            str_concat(env, inplace, scope, parent, args[0], args[1])
+        }
+        StrIsEmpty => {
+            // Str.isEmpty : Str -> Str
+            debug_assert_eq!(args.len(), 1);
+
+            let wrapper_ptr = ptr_from_symbol(scope, args[0]);
+            let len = str_len(env, parent, *wrapper_ptr);
+            let is_zero = env.builder.build_int_compare(
+                IntPredicate::EQ,
+                len,
+                env.ptr_int().const_zero(),
+                "str_len_is_zero",
+            );
+            BasicValueEnum::IntValue(is_zero)
         }
         ListLen => {
             // List.len : List * -> Int
@@ -1806,7 +1958,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                             build_int_unary_op(env, arg.into_int_value(), arg_layout, op)
                         }
                         Float128 | Float64 | Float32 | Float16 => {
-                            build_float_unary_op(env, arg.into_float_value(), arg_layout, op)
+                            build_float_unary_op(env, arg.into_float_value(), op)
                         }
                         _ => {
                             unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, arg_layout);
@@ -1823,7 +1975,6 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         NumCompare => {
             use inkwell::FloatPredicate;
-            use inkwell::IntPredicate;
 
             debug_assert_eq!(args.len(), 2);
 
@@ -2096,179 +2247,6 @@ where
     }
 }
 
-/// Str.concat : Str, Str -> Str
-fn str_concat<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    inplace: InPlace,
-    parent: FunctionValue<'ctx>,
-    first_str: BasicValueEnum<'ctx>,
-    second_str: BasicValueEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-    let ctx = env.context;
-
-    let second_str_wrapper = second_str.into_struct_value();
-    let second_str_len = list_len(builder, second_str_wrapper);
-
-    let first_str_wrapper = first_str.into_struct_value();
-    let first_str_len = list_len(builder, first_str_wrapper);
-
-    // first_str_len > 0
-    // We do this check to avoid allocating memory. If the first input
-    // str is empty, then we can just return the second str cloned
-    let first_str_length_comparison = list_is_not_empty(builder, ctx, first_str_len);
-
-    let if_first_str_is_empty = || {
-        // second_str_len > 0
-        // We do this check to avoid allocating memory. If the second input
-        // str is empty, then we can just return an empty str
-        let second_str_length_comparison = list_is_not_empty(builder, ctx, second_str_len);
-
-        let build_second_str_then = || {
-            let char_type = basic_type_from_layout(env.arena, ctx, &CHAR_LAYOUT, env.ptr_bytes);
-            let ptr_type = get_ptr_type(&char_type, AddressSpace::Generic);
-
-            let (new_wrapper, _) = clone_nonempty_list(
-                env,
-                inplace,
-                second_str_len,
-                load_list_ptr(builder, second_str_wrapper, ptr_type),
-                &CHAR_LAYOUT,
-            );
-
-            BasicValueEnum::StructValue(new_wrapper)
-        };
-
-        let build_second_str_else = || empty_list(env);
-
-        build_basic_phi2(
-            env,
-            parent,
-            second_str_length_comparison,
-            build_second_str_then,
-            build_second_str_else,
-            BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
-        )
-    };
-
-    let if_first_str_is_not_empty = || {
-        let char_type = ctx.i8_type().into();
-        let ptr_type = get_ptr_type(&char_type, AddressSpace::Generic);
-
-        let if_second_str_is_empty = || {
-            let (new_wrapper, _) = clone_nonempty_list(
-                env,
-                inplace,
-                first_str_len,
-                load_list_ptr(builder, first_str_wrapper, ptr_type),
-                &CHAR_LAYOUT,
-            );
-
-            BasicValueEnum::StructValue(new_wrapper)
-        };
-
-        // second_str_len > 0
-        // We do this check to avoid allocating memory. If the second input
-        // str is empty, then we can just return the first str cloned
-        let second_str_length_comparison = list_is_not_empty(builder, ctx, second_str_len);
-
-        let if_second_str_is_not_empty = || {
-            let combined_str_len =
-                builder.build_int_add(first_str_len, second_str_len, "add_list_lengths");
-
-            let combined_str_ptr = allocate_list(env, inplace, &CHAR_LAYOUT, combined_str_len);
-
-            // FIRST LOOP
-            let first_str_ptr = load_list_ptr(builder, first_str_wrapper, ptr_type);
-
-            let first_loop = |first_index, first_str_elem| {
-                // The pointer to the element in the combined list
-                let combined_str_elem_ptr = unsafe {
-                    builder.build_in_bounds_gep(
-                        combined_str_ptr,
-                        &[first_index],
-                        "load_index_combined_list",
-                    )
-                };
-
-                // Mutate the new array in-place to change the element.
-                builder.build_store(combined_str_elem_ptr, first_str_elem);
-            };
-
-            let index_name = "#index";
-
-            let index_alloca = incrementing_elem_loop(
-                builder,
-                ctx,
-                parent,
-                first_str_ptr,
-                first_str_len,
-                index_name,
-                first_loop,
-            );
-
-            // Reset the index variable to 0
-            builder.build_store(index_alloca, ctx.i64_type().const_int(0, false));
-
-            // SECOND LOOP
-            let second_str_ptr = load_list_ptr(builder, second_str_wrapper, ptr_type);
-
-            let second_loop = |second_index, second_str_elem| {
-                // The pointer to the element in the combined str.
-                // Note that the pointer does not start at the index
-                // 0, it starts at the index of first_str_len. In that
-                // sense it is "offset".
-                let offset_combined_str_char_ptr = unsafe {
-                    builder.build_in_bounds_gep(combined_str_ptr, &[first_str_len], "elem")
-                };
-
-                // The pointer to the char from the second str
-                // in the combined list
-                let combined_str_char_ptr = unsafe {
-                    builder.build_in_bounds_gep(
-                        offset_combined_str_char_ptr,
-                        &[second_index],
-                        "load_index_combined_list",
-                    )
-                };
-
-                // Mutate the new array in-place to change the element.
-                builder.build_store(combined_str_char_ptr, second_str_elem);
-            };
-
-            incrementing_elem_loop(
-                builder,
-                ctx,
-                parent,
-                second_str_ptr,
-                second_str_len,
-                index_name,
-                second_loop,
-            );
-
-            store_list(env, combined_str_ptr, combined_str_len)
-        };
-
-        build_basic_phi2(
-            env,
-            parent,
-            second_str_length_comparison,
-            if_second_str_is_not_empty,
-            if_second_str_is_empty,
-            BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
-        )
-    };
-
-    build_basic_phi2(
-        env,
-        parent,
-        first_str_length_comparison,
-        if_first_str_is_not_empty,
-        if_first_str_is_empty,
-        BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
-    )
-}
-
 fn build_int_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     lhs: IntValue<'ctx>,
@@ -2321,11 +2299,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
         NumRemUnchecked => bd.build_float_rem(lhs, rhs, "rem_float").into(),
         NumDivUnchecked => bd.build_float_div(lhs, rhs, "div_float").into(),
-        NumPow => call_intrinsic(
-            LLVM_POW_F64,
-            env,
-            &[(lhs.into(), _lhs_layout), (rhs.into(), _rhs_layout)],
-        ),
+        NumPow => env.call_intrinsic(LLVM_POW_F64, &[lhs.into(), rhs.into()]),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
@@ -2409,7 +2383,6 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
 fn build_float_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arg: FloatValue<'ctx>,
-    arg_layout: &Layout<'a>,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     use roc_module::low_level::LowLevel::*;
@@ -2418,15 +2391,15 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
 
     match op {
         NumNeg => bd.build_float_neg(arg, "negate_float").into(),
-        NumAbs => call_intrinsic(LLVM_FABS_F64, env, &[(arg.into(), arg_layout)]),
-        NumSqrtUnchecked => call_intrinsic(LLVM_SQRT_F64, env, &[(arg.into(), arg_layout)]),
-        NumRound => call_intrinsic(LLVM_LROUND_I64_F64, env, &[(arg.into(), arg_layout)]),
-        NumSin => call_intrinsic(LLVM_SIN_F64, env, &[(arg.into(), arg_layout)]),
-        NumCos => call_intrinsic(LLVM_COS_F64, env, &[(arg.into(), arg_layout)]),
+        NumAbs => env.call_intrinsic(LLVM_FABS_F64, &[arg.into()]),
+        NumSqrtUnchecked => env.call_intrinsic(LLVM_SQRT_F64, &[arg.into()]),
+        NumRound => env.call_intrinsic(LLVM_LROUND_I64_F64, &[arg.into()]),
+        NumSin => env.call_intrinsic(LLVM_SIN_F64, &[arg.into()]),
+        NumCos => env.call_intrinsic(LLVM_COS_F64, &[arg.into()]),
         NumToFloat => arg.into(), /* Converting from Float to Float is a no-op */
         NumCeiling => env.builder.build_cast(
             InstructionOpcode::FPToSI,
-            call_intrinsic(LLVM_CEILING_F64, env, &[(arg.into(), arg_layout)]),
+            env.call_intrinsic(LLVM_CEILING_F64, &[arg.into()]),
             env.context.i64_type(),
             "num_ceiling",
         ),
