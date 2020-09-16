@@ -2383,6 +2383,30 @@ mod solve_expr {
     }
 
     #[test]
+    fn ceiling() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.ceiling
+                "#
+            ),
+            "Float -> Int",
+        );
+    }
+
+    #[test]
+    fn pow() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.pow
+                "#
+            ),
+            "Float, Float -> Float",
+        );
+    }
+
+    #[test]
     fn reconstruct_path() {
         infer_eq_without_problem(
             indoc!(

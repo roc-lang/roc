@@ -1,7 +1,6 @@
-use crate::llvm::build::{ptr_from_symbol, Env, Scope};
+use crate::llvm::build::{ptr_from_symbol, Env, InPlace, Scope};
 use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, load_list_ptr, store_list,
-    LoopListArg,
 };
 use crate::llvm::convert::{collection, ptr_int};
 use inkwell::builder::Builder;
@@ -16,6 +15,7 @@ pub static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
 /// Str.concat : Str, Str -> Str
 pub fn str_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    inplace: InPlace,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     first_str_symbol: Symbol,
@@ -55,6 +55,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
                         let if_second_str_is_nonempty = || {
                             let (new_wrapper, _) = clone_nonempty_str(
                                 env,
+                                inplace,
                                 second_str_smallness,
                                 second_str_len,
                                 second_str_ptr,
@@ -79,6 +80,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
                         let if_second_str_is_empty = || {
                             let (new_wrapper, _) = clone_nonempty_str(
                                 env,
+                                inplace,
                                 first_str_smallness,
                                 first_str_len,
                                 first_str_ptr,
@@ -111,7 +113,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
 
                             let if_big = || {
                                 let combined_str_ptr =
-                                    allocate_list(env, &CHAR_LAYOUT, combined_str_len);
+                                    allocate_list(env, inplace, &CHAR_LAYOUT, combined_str_len);
 
                                 // TODO replace FIRST_LOOP with a memcpy!
                                 // FIRST LOOP
@@ -133,14 +135,11 @@ pub fn str_concat<'a, 'ctx, 'env>(
 
                                 let index_alloca = incrementing_elem_loop(
                                     builder,
-                                    parent,
                                     ctx,
-                                    LoopListArg {
-                                        ptr: first_str_ptr,
-                                        len: first_str_len,
-                                    },
+                                    parent,
+                                    first_str_ptr,
+                                    first_str_len,
                                     index_name,
-                                    None,
                                     first_loop,
                                 );
 
@@ -179,14 +178,11 @@ pub fn str_concat<'a, 'ctx, 'env>(
 
                                 incrementing_elem_loop(
                                     builder,
-                                    parent,
                                     ctx,
-                                    LoopListArg {
-                                        ptr: second_str_ptr,
-                                        len: second_str_len,
-                                    },
+                                    parent,
+                                    second_str_ptr,
+                                    second_str_len,
                                     index_name,
-                                    Some(index_alloca),
                                     second_loop,
                                 );
 
@@ -220,14 +216,11 @@ pub fn str_concat<'a, 'ctx, 'env>(
 
                                 let index_alloca = incrementing_elem_loop(
                                     builder,
-                                    parent,
                                     ctx,
-                                    LoopListArg {
-                                        ptr: first_str_ptr,
-                                        len: first_str_len,
-                                    },
+                                    parent,
+                                    first_str_ptr,
+                                    first_str_len,
                                     index_name,
-                                    None,
                                     first_loop,
                                 );
 
@@ -266,14 +259,11 @@ pub fn str_concat<'a, 'ctx, 'env>(
 
                                 incrementing_elem_loop(
                                     builder,
-                                    parent,
                                     ctx,
-                                    LoopListArg {
-                                        ptr: second_str_ptr,
-                                        len: second_str_len,
-                                    },
+                                    parent,
+                                    second_str_ptr,
+                                    second_str_len,
                                     index_name,
-                                    Some(index_alloca),
                                     second_loop,
                                 );
 
@@ -445,6 +435,7 @@ enum Smallness {
 
 fn clone_nonempty_str<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    inplace: InPlace,
     smallness: Smallness,
     len: IntValue<'ctx>,
     bytes_ptr: PointerValue<'ctx>,
@@ -465,7 +456,7 @@ fn clone_nonempty_str<'a, 'ctx, 'env>(
             (wrapper_struct.into_struct_value(), alloca)
         }
         Smallness::Big => {
-            let clone_ptr = allocate_list(env, &CHAR_LAYOUT, len);
+            let clone_ptr = allocate_list(env, inplace, &CHAR_LAYOUT, len);
             let int_type = ptr_int(ctx, ptr_bytes);
             let ptr_as_int = builder.build_ptr_to_int(clone_ptr, int_type, "list_cast_ptr");
 

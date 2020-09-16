@@ -665,4 +665,14 @@ mod gen_num {
             i64
         );
     }
+
+    #[test]
+    fn pow() {
+        assert_evals_to!("Num.pow 2.0 2.0", 4.0, f64);
+    }
+
+    #[test]
+    fn ceiling() {
+        assert_evals_to!("Num.ceiling 1.5", 2, i64);
+    }
 }

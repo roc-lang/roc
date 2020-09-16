@@ -8,11 +8,8 @@ pub fn helper_without_uniqueness<'a>(
     context: &'a inkwell::context::Context,
 ) -> (&'static str, inkwell::execution_engine::ExecutionEngine<'a>) {
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
-    use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
-    use roc_gen::llvm::build::Scope;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
-    use roc_gen::llvm::convert::basic_type_from_layout;
     use roc_mono::layout::Layout;
 
     let target = target_lexicon::Triple::host();
@@ -66,7 +63,7 @@ pub fn helper_without_uniqueness<'a>(
         roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compute main_fn_type before moving subs to Env
-    let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
+    let return_layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
         panic!(
             "Code gen error in NON-OPTIMIZED test: could not convert to layout. Err was {:?}",
             err
@@ -75,10 +72,6 @@ pub fn helper_without_uniqueness<'a>(
     let execution_engine = module
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("Error creating JIT execution engine for test");
-
-    let main_fn_type =
-        basic_type_from_layout(&arena, context, &layout, ptr_bytes).fn_type(&[], false);
-    let main_fn_name = "$Test.main";
 
     // Compile and add all the Procs before adding main
     let mut env = roc_gen::llvm::build::Env {
@@ -163,25 +156,8 @@ pub fn helper_without_uniqueness<'a>(
         }
     }
 
-    // Add main to the module.
-    let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
-    let cc = roc_gen::llvm::build::FAST_CALL_CONV;
-
-    main_fn.set_call_conventions(cc);
-
-    // Add main's body
-    let basic_block = context.append_basic_block(main_fn, "entry");
-
-    builder.position_at_end(basic_block);
-
-    // builds the function body (return statement included)
-    roc_gen::llvm::build::build_exp_stmt(
-        &env,
-        &mut layout_ids,
-        &mut Scope::default(),
-        main_fn,
-        &main_body,
-    );
+    let (main_fn_name, main_fn) =
+        roc_gen::llvm::build::make_main_function(&env, &mut layout_ids, &return_layout, &main_body);
 
     // Uncomment this to see the module's un-optimized LLVM instruction output:
     // env.module.print_to_stderr();
@@ -212,11 +188,8 @@ pub fn helper_with_uniqueness<'a>(
     context: &'a inkwell::context::Context,
 ) -> (&'static str, inkwell::execution_engine::ExecutionEngine<'a>) {
     use crate::helpers::{infer_expr, uniq_expr};
-    use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
-    use roc_gen::llvm::build::Scope;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
-    use roc_gen::llvm::convert::basic_type_from_layout;
     use roc_mono::layout::Layout;
 
     let target = target_lexicon::Triple::host();
@@ -258,7 +231,7 @@ pub fn helper_with_uniqueness<'a>(
     let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compute main_fn_type before moving subs to Env
-    let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
+    let return_layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
         panic!(
             "Code gen error in OPTIMIZED test: could not convert to layout. Err was {:?}",
             err
@@ -268,11 +241,6 @@ pub fn helper_with_uniqueness<'a>(
     let execution_engine = module
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("Error creating JIT execution engine for test");
-
-    let main_fn_type = basic_type_from_layout(&arena, context, &layout, ptr_bytes)
-        .fn_type(&[], false)
-        .clone();
-    let main_fn_name = "$Test.main";
 
     // Compile and add all the Procs before adding main
     let mut env = roc_gen::llvm::build::Env {
@@ -357,25 +325,8 @@ pub fn helper_with_uniqueness<'a>(
         }
     }
 
-    // Add main to the module.
-    let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
-    let cc = roc_gen::llvm::build::FAST_CALL_CONV;
-
-    main_fn.set_call_conventions(cc);
-
-    // Add main's body
-    let basic_block = context.append_basic_block(main_fn, "entry");
-
-    builder.position_at_end(basic_block);
-
-    // builds the function body (return statement included)
-    roc_gen::llvm::build::build_exp_stmt(
-        &env,
-        &mut layout_ids,
-        &mut Scope::default(),
-        main_fn,
-        &main_body,
-    );
+    let (main_fn_name, main_fn) =
+        roc_gen::llvm::build::make_main_function(&env, &mut layout_ids, &return_layout, &main_body);
 
     // you're in the version with uniqueness!
 

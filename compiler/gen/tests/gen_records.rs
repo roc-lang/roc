@@ -533,4 +533,147 @@ mod gen_records {
             i64
         );
     }
+
+    #[test]
+    fn return_record_2() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { x: 3, y: 5 }
+                "#
+            ),
+            [3, 5],
+            [i64; 2]
+        );
+    }
+
+    #[test]
+    fn return_record_3() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { x: 3, y: 5, z: 4 }
+                "#
+            ),
+            (3, 5, 4),
+            (i64, i64, i64)
+        );
+    }
+
+    #[test]
+    fn return_record_4() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 3, b: 5, c: 4, d: 2 }
+                "#
+            ),
+            [3, 5, 4, 2],
+            [i64; 4]
+        );
+    }
+
+    #[test]
+    fn return_record_5() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 3, b: 5, c: 4, d: 2, e: 1 }
+                "#
+            ),
+            [3, 5, 4, 2, 1],
+            [i64; 5]
+        );
+    }
+
+    #[test]
+    fn return_record_6() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 3, b: 5, c: 4, d: 2, e: 1, f: 7 }
+                "#
+            ),
+            [3, 5, 4, 2, 1, 7],
+            [i64; 6]
+        );
+    }
+
+    #[test]
+    fn return_record_7() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 3, b: 5, c: 4, d: 2, e: 1, f: 7, g: 8 }
+                "#
+            ),
+            [3, 5, 4, 2, 1, 7, 8],
+            [i64; 7]
+        );
+    }
+
+    #[test]
+    fn return_record_float_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 3.14, b: 0x1 } 
+                "#
+            ),
+            (3.14, 0x1),
+            (f64, i64)
+        );
+    }
+
+    #[test]
+    fn return_record_int_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 0x1, b: 3.14 }
+                "#
+            ),
+            (0x1, 3.14),
+            (i64, f64)
+        );
+    }
+
+    #[test]
+    fn return_record_float_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 6.28, b: 3.14 }
+                "#
+            ),
+            (6.28, 3.14),
+            (f64, f64)
+        );
+    }
+
+    #[test]
+    fn return_record_float_float_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 6.28, b: 3.14, c: 0.1 }
+                "#
+            ),
+            (6.28, 3.14, 0.1),
+            (f64, f64, f64)
+        );
+    }
+
+    #[test]
+    fn just_to_be_sure() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 1, b : 2, c : 3 }
+                "#
+            ),
+            [1, 2, 3],
+            [i64; 3]
+        );
+    }
 }

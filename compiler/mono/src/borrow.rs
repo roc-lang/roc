@@ -522,12 +522,11 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListWalkRight => arena.alloc_slice_copy(&[borrowed, irrelevant, owned]),
 
         Eq | NotEq | And | Or | NumAdd | NumSub | NumMul | NumGt | NumGte | NumLt | NumLte
-        | NumCompare | NumDivUnchecked | NumRemUnchecked => {
+        | NumCompare | NumDivUnchecked | NumRemUnchecked | NumPow => {
             arena.alloc_slice_copy(&[irrelevant, irrelevant])
         }
 
-        NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumRound | NumToFloat | Not => {
-            arena.alloc_slice_copy(&[irrelevant])
-        }
+        NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumRound | NumToFloat
+        | NumCeiling | Not => arena.alloc_slice_copy(&[irrelevant]),
     }
 }
