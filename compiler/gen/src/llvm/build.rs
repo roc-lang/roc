@@ -23,6 +23,7 @@ use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
+use inkwell::values::InstructionOpcode;
 use inkwell::values::{BasicValue, FloatValue, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
 use inkwell::OptimizationLevel;
@@ -151,6 +152,12 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         LLVM_POW_F64,
         f64_type.fn_type(&[f64_type.into(), f64_type.into()], false),
     );
+
+    add_intrinsic(
+        module,
+        LLVM_CEILING_F64,
+        f64_type.fn_type(&[f64_type.into()], false),
+    );
 }
 
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
@@ -159,6 +166,7 @@ static LLVM_FABS_F64: &str = "llvm.fabs.f64";
 static LLVM_SIN_F64: &str = "llvm.sin.f64";
 static LLVM_COS_F64: &str = "llvm.cos.f64";
 static LLVM_POW_F64: &str = "llvm.pow.f64";
+static LLVM_CEILING_F64: &str = "llvm.ceil.f64";
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -1783,7 +1791,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_join(env, inplace, parent, list, outer_list_layout)
         }
-        NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumToFloat => {
+        NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumCeiling
+        | NumToFloat => {
             debug_assert_eq!(args.len(), 1);
 
             let (arg, arg_layout) = load_symbol_and_layout(env, scope, &args[0]);
@@ -2415,6 +2424,12 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
         NumSin => call_intrinsic(LLVM_SIN_F64, env, &[(arg.into(), arg_layout)]),
         NumCos => call_intrinsic(LLVM_COS_F64, env, &[(arg.into(), arg_layout)]),
         NumToFloat => arg.into(), /* Converting from Float to Float is a no-op */
+        NumCeiling => env.builder.build_cast(
+            InstructionOpcode::FPToSI,
+            call_intrinsic(LLVM_CEILING_F64, env, &[(arg.into(), arg_layout)]),
+            env.context.i64_type(),
+            "num_ceiling",
+        ),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }

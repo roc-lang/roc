@@ -418,6 +418,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         SolvedType::Func(vec![float_type(), float_type()], Box::new(float_type())),
     );
 
+    // ceiling : Float -> Int
+    add_type(
+        Symbol::NUM_CEILING,
+        SolvedType::Func(vec![float_type()], Box::new(int_type())),
+    );
+
     // Bool module
 
     // and : Bool, Bool -> Bool

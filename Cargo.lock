@@ -1631,9 +1631,9 @@ checksum = "99b8db626e31e5b81787b9783425769681b347011cc59471e33ea46d2ea0cf55"
 dependencies = [
  "pest",
  "pest_meta",
- "proc-macro2 1.0.19",
+ "proc-macro2 1.0.21",
  "quote 1.0.7",
- "syn 1.0.35",
+ "syn 1.0.40",
 ]
 
 [[package]]

@@ -36,6 +36,7 @@ pub enum LowLevel {
     NumRound,
     NumToFloat,
     NumPow,
+    NumCeiling,
     Eq,
     NotEq,
     And,
