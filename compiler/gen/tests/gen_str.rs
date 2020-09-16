@@ -55,6 +55,35 @@ mod gen_str {
     }
 
     #[test]
+    fn small_str_zeroed_literal() {
+        // Verifies that we zero out unused bytes in the string.
+        // This is important so that string equality tests don't randomly
+        // fail due to unused memory being there!
+        assert_evals_to!(
+            "\"J\"",
+            [
+                0x4a,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0b1000_0001
+            ],
+            [u8; 16]
+        );
+    }
+
+    #[test]
     fn small_str_concat_empty_first_arg() {
         assert_evals_to!(
             r#"Str.concat "" "JJJJJJJJJJJJJJJ""#,
