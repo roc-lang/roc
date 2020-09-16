@@ -13,13 +13,6 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_primitives {
-
-    #[test]
-    fn basic_str() {
-        assert_evals_to!("\"\"", "", &'static str);
-        assert_evals_to!("\"shirt and hat\"", "shirt and hat", &'static str);
-    }
-
     #[test]
     fn basic_int() {
         assert_evals_to!("123", 123, i64);
