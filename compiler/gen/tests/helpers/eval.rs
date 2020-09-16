@@ -14,6 +14,8 @@ pub fn helper_without_uniqueness<'a>(
 
     let target = target_lexicon::Triple::host();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+
+    dbg!("before can_expr");
     let CanExprOut {
         loc_expr,
         var_store,
@@ -24,6 +26,7 @@ pub fn helper_without_uniqueness<'a>(
         problems,
         ..
     } = can_expr(src);
+    dbg!("after can_expr");
     let errors = problems
         .into_iter()
         .filter(|problem| {
