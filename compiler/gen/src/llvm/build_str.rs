@@ -32,13 +32,13 @@ pub fn str_concat<'a, 'ctx, 'env>(
     load_str(
         env,
         parent,
-        second_str_ptr.clone(),
+        *second_str_ptr,
         str_wrapper_type,
         |second_str_ptr, second_str_len, second_str_smallness| {
             load_str(
                 env,
                 parent,
-                first_str_ptr.clone(),
+                *first_str_ptr,
                 str_wrapper_type,
                 |first_str_ptr, first_str_len, first_str_smallness| {
                     // first_str_len > 0
