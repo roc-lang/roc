@@ -23,7 +23,9 @@ use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
-use inkwell::values::{BasicValue, FloatValue, FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{
+    BasicValue, CallSiteValue, FloatValue, FunctionValue, IntValue, PointerValue, StructValue,
+};
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
 use roc_collections::all::{ImMap, MutSet};
@@ -138,6 +140,33 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
             )
         })
     }
+
+    pub fn call_memset(
+        &self,
+        bytes_ptr: PointerValue<'ctx>,
+        filler: IntValue<'ctx>,
+        length: IntValue<'ctx>,
+    ) -> CallSiteValue<'ctx> {
+        let false_val = self.context.bool_type().const_int(0, false);
+
+        let intrinsic_name = match self.ptr_bytes {
+            8 => LLVM_MEMSET_I64,
+            4 => LLVM_MEMSET_I32,
+            other => {
+                unreachable!("Unsupported number of ptr_bytes {:?}", other);
+            }
+        };
+
+        self.build_intrinsic_call(
+            intrinsic_name,
+            &[
+                bytes_ptr.into(),
+                filler.into(),
+                length.into(),
+                false_val.into(),
+            ],
+        )
+    }
 }
 
 pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
@@ -157,8 +186,13 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     // List of all supported LLVM intrinsics:
     //
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
-    let i64_type = ctx.i64_type();
+    let void_type = ctx.void_type();
+    let i1_type = ctx.bool_type();
     let f64_type = ctx.f64_type();
+    let i64_type = ctx.i64_type();
+    let i32_type = ctx.i32_type();
+    let i8_type = ctx.i8_type();
+    let i8_ptr_type = i8_type.ptr_type(AddressSpace::Generic);
 
     add_intrinsic(
         module,
@@ -189,8 +223,38 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         LLVM_COS_F64,
         f64_type.fn_type(&[f64_type.into()], false),
     );
+
+    add_intrinsic(
+        module,
+        LLVM_MEMSET_I64,
+        void_type.fn_type(
+            &[
+                i8_ptr_type.into(),
+                i8_type.into(),
+                i64_type.into(),
+                i1_type.into(),
+            ],
+            false,
+        ),
+    );
+
+    add_intrinsic(
+        module,
+        LLVM_MEMSET_I32,
+        void_type.fn_type(
+            &[
+                i8_ptr_type.into(),
+                i8_type.into(),
+                i32_type.into(),
+                i1_type.into(),
+            ],
+            false,
+        ),
+    );
 }
 
+static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
+static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
 static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
 static LLVM_FABS_F64: &str = "llvm.fabs.f64";
