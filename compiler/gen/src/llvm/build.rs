@@ -366,6 +366,24 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                         "alloca_small_str",
                     );
 
+                    // Zero out all the bytes. If we don't do this, then
+                    // small strings would have uninitialized bytes, which could
+                    // cause string equality checks to fail randomly.
+                    //
+                    // We're running memset over *all* the bytes, even though
+                    // the final one is about to be manually overridden, on
+                    // the theory that LLVM will optimize the memset call
+                    // into two instructions to move appropriately-sized
+                    // zero integers into the appropriate locations instead
+                    // of doing any iteration.
+                    //
+                    // TODO: look at the compiled output to verify this theory!
+                    env.call_memset(
+                        array_alloca,
+                        ctx.i8_type().const_zero(),
+                        env.ptr_int().const_int(env.small_str_bytes() as u64, false),
+                    );
+
                     let final_byte = (str_literal.len() as u8) | 0b1000_0000;
 
                     let final_byte_ptr = unsafe {
