@@ -813,4 +813,18 @@ mod gen_primitives {
             i64
         );
     }
+
+    #[test]
+    #[should_panic(expected = "Roc failed with message: ")]
+    fn exception() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                x + z
+                "#
+            ),
+            3,
+            i64
+        );
+    }
 }

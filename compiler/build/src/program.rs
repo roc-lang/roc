@@ -273,6 +273,9 @@ pub fn gen(
         }
     }
 
+    // Uncomment this to see the module's optimized LLVM instruction output:
+    // env.module.print_to_stderr();
+
     mpm.run_on(module);
 
     // Verify the module
