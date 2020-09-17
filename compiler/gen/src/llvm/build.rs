@@ -2270,28 +2270,30 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
         NumRemUnchecked => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
         NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
-        NumPowInt => {
-            let builtin_fn_name = "pow_int_";
-
-            let fn_val = env
-                .module
-                .get_function(builtin_fn_name)
-                .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", builtin_fn_name));
-
-            let call = env
-                .builder
-                .build_call(fn_val, &[lhs.into(), rhs.into()], "call_builtin");
-
-            call.set_call_convention(fn_val.get_call_conventions());
-
-            call.try_as_basic_value()
-                .left()
-                .unwrap_or_else(|| panic!("LLVM error: Invalid call for low-level op {:?}", op))
-        }
+        NumPowInt => call_bitcode_fn(NumPowInt, env, &[lhs.into(), rhs.into()], "pow_int_"),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
     }
+}
+
+fn call_bitcode_fn<'a, 'ctx, 'env>(
+    op: LowLevel,
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) -> BasicValueEnum<'ctx> {
+    let fn_val = env
+                .module
+                .get_function(fn_name)
+                .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
+    let call = env.builder.build_call(fn_val, args, "call_builtin");
+
+    call.set_call_convention(fn_val.get_call_conventions());
+
+    call.try_as_basic_value()
+        .left()
+        .unwrap_or_else(|| panic!("LLVM error: Invalid call for low-level op {:?}", op))
 }
 
 fn build_float_binop<'a, 'ctx, 'env>(
@@ -2375,22 +2377,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
         }
         NumToFloat => {
             // TODO specialize this to be not just for i64!
-            let builtin_fn_name = "i64_to_f64_";
-
-            let fn_val = env
-                .module
-                .get_function(builtin_fn_name)
-                .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", builtin_fn_name));
-
-            let call = env
-                .builder
-                .build_call(fn_val, &[arg.into()], "call_builtin");
-
-            call.set_call_convention(fn_val.get_call_conventions());
-
-            call.try_as_basic_value()
-                .left()
-                .unwrap_or_else(|| panic!("LLVM error: Invalid call for low-level op {:?}", op))
+            call_bitcode_fn(NumToFloat, env, &[arg.into()], "i64_to_f64_")
         }
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
