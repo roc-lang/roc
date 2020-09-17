@@ -264,12 +264,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         LLVM_CEILING_F64,
         f64_type.fn_type(&[f64_type.into()], false),
     );
-
-    add_intrinsic(
-        module,
-        LLVM_POW_I64,
-        i64_type.fn_type(&[i64_type.into(), i64_type.into()], false),
-    );
 }
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
@@ -281,7 +275,6 @@ static LLVM_SIN_F64: &str = "llvm.sin.f64";
 static LLVM_COS_F64: &str = "llvm.cos.f64";
 static LLVM_POW_F64: &str = "llvm.pow.f64";
 static LLVM_CEILING_F64: &str = "llvm.ceil.f64";
-static LLVM_POW_I64: &str = "llvm.powi.f64";
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -2277,7 +2270,24 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
         NumRemUnchecked => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
         NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
-        NumPowInt => env.call_intrinsic(LLVM_POW_I64, &[lhs.into(), rhs.into()]),
+        NumPowInt => {
+            let builtin_fn_name = "pow_int_";
+
+            let fn_val = env
+                .module
+                .get_function(builtin_fn_name)
+                .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", builtin_fn_name));
+
+            let call = env
+                .builder
+                .build_call(fn_val, &[lhs.into(), rhs.into()], "call_builtin");
+
+            call.set_call_convention(fn_val.get_call_conventions());
+
+            call.try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| panic!("LLVM error: Invalid call for low-level op {:?}", op))
+        }
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
