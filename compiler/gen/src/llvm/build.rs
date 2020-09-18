@@ -264,6 +264,12 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         LLVM_CEILING_F64,
         f64_type.fn_type(&[f64_type.into()], false),
     );
+
+    add_intrinsic(
+        module,
+        LLVM_FLOOR_F64,
+        f64_type.fn_type(&[f64_type.into()], false),
+    );
 }
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
@@ -275,6 +281,7 @@ static LLVM_SIN_F64: &str = "llvm.sin.f64";
 static LLVM_COS_F64: &str = "llvm.cos.f64";
 static LLVM_POW_F64: &str = "llvm.pow.f64";
 static LLVM_CEILING_F64: &str = "llvm.ceil.f64";
+static LLVM_FLOOR_F64: &str = "llvm.floor.f64";
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -1943,7 +1950,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_join(env, inplace, parent, list, outer_list_layout)
         }
-        NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumCeiling
+        NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumCeiling | NumFloor
         | NumToFloat => {
             debug_assert_eq!(args.len(), 1);
 
@@ -2407,6 +2414,12 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             env.call_intrinsic(LLVM_CEILING_F64, &[arg.into()]),
             env.context.i64_type(),
             "num_ceiling",
+        ),
+        NumFloor => env.builder.build_cast(
+            InstructionOpcode::FPToSI,
+            env.call_intrinsic(LLVM_FLOOR_F64, &[arg.into()]),
+            env.context.i64_type(),
+            "num_floor",
         ),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);

@@ -94,6 +94,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_POW => num_pow,
         Symbol::NUM_CEILING => num_ceiling,
         Symbol::NUM_POW_INT => num_pow_int,
+        Symbol::NUM_FLOOR => num_floor,
     }
 }
 
@@ -642,6 +643,27 @@ fn num_pow_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
         int_var,
     )
 }
+
+/// Num.floor : Float -> Int
+fn num_floor(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let float_var = var_store.fresh();
+    let int_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumFloor,
+        args: vec![(float_var, Var(Symbol::ARG_1))],
+        ret_var: int_var,
+    };
+
+    defn(
+        symbol,
+        vec![(float_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        int_var,
+    )
+}
+
 /// List.isEmpty : List * -> Bool
 fn list_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
