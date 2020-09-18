@@ -15,6 +15,14 @@ mod repl_eval {
         assert!(out.status.success());
     }
 
+    fn expect_failure(input: &str, expected: &str) {
+        let out = helpers::repl_eval(input);
+
+        assert_eq!(&out.stderr, "");
+        assert_eq!(&out.stdout, expected);
+        assert!(out.status.success());
+    }
+
     #[test]
     fn literal_0() {
         expect_success("0", "0 : Num *");
@@ -238,6 +246,15 @@ mod repl_eval {
         expect_success(
             "{ a: 1, b: 2, c: 3 }",
             "{ a: 1, b: 2, c: 3 } : { a : Num *, b : Num *, c : Num * }",
+        );
+    }
+
+    #[test]
+    fn four_element_record() {
+        // if this tests turns out to fail on 32-bit platforms, look at jit_to_ast_help
+        expect_success(
+            "{ a: 1, b: 2, c: 3, d: 4 }",
+            "{ a: 1, b: 2, c: 3, d: 4 } : { a : Num *, b : Num *, c : Num *, d : Num * }",
         );
     }
 

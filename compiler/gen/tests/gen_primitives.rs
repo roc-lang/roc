@@ -820,7 +820,10 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                x + z
+                if True then
+                    x + z
+                else
+                    y + z
                 "#
             ),
             3,

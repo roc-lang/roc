@@ -238,7 +238,10 @@ enum PassVia {
 
 impl PassVia {
     fn from_layout(ptr_bytes: u32, layout: &Layout<'_>) -> Self {
-        if layout.stack_size(ptr_bytes) > 16 {
+        let stack_size = layout.stack_size(ptr_bytes);
+        let eightbyte = 8;
+
+        if stack_size > 2 * eightbyte {
             PassVia::Memory
         } else {
             PassVia::Register
@@ -246,42 +249,19 @@ impl PassVia {
     }
 }
 
-pub fn make_main_function<'a, 'ctx, 'env>(
+/// entry point to roc code; uses the fastcc calling convention
+pub fn build_roc_main<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
     main_body: &roc_mono::ir::Stmt<'a>,
-) -> (&'static str, &'a FunctionValue<'ctx>) {
+) -> &'a FunctionValue<'ctx> {
     use inkwell::types::BasicType;
-    use PassVia::*;
 
-    let module = env.module;
     let context = env.context;
     let builder = env.builder;
     let arena = env.arena;
     let ptr_bytes = env.ptr_bytes;
-
-    let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
-
-    let personality_func = module.add_function(
-        "__gxx_personality_v0",
-        context.i64_type().fn_type(&[], false),
-        Some(Linkage::External),
-    );
-
-    let cxa_begin_catch = module.add_function(
-        "__cxa_begin_catch",
-        u8_ptr.fn_type(&[u8_ptr.into()], false),
-        Some(Linkage::External),
-    );
-    cxa_begin_catch.set_call_conventions(C_CALL_CONV);
-
-    let cxa_end_catch = module.add_function(
-        "__cxa_end_catch",
-        context.void_type().fn_type(&[], false),
-        Some(Linkage::External),
-    );
-    cxa_end_catch.set_call_conventions(C_CALL_CONV);
 
     let return_type = basic_type_from_layout(&arena, context, &layout, ptr_bytes);
     let roc_main_fn_name = "$Test.roc_main";
@@ -294,9 +274,7 @@ pub fn make_main_function<'a, 'ctx, 'env>(
         .module
         .add_function(roc_main_fn_name, roc_main_fn_type, None);
 
-    // roc_main_fn.set_personality_function(personality_func);
-
-    // our exposed main function adheres to the C calling convention
+    // internal function, use fast calling convention
     roc_main_fn.set_call_conventions(FAST_CALL_CONV);
 
     // Add main's body
@@ -312,6 +290,26 @@ pub fn make_main_function<'a, 'ctx, 'env>(
         roc_main_fn,
         main_body,
     );
+
+    env.arena.alloc(roc_main_fn)
+}
+
+pub fn make_main_function<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    main_body: &roc_mono::ir::Stmt<'a>,
+) -> (&'static str, &'a FunctionValue<'ctx>) {
+    use inkwell::types::BasicType;
+    use PassVia::*;
+
+    let context = env.context;
+    let builder = env.builder;
+
+    let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
+
+    // internal main function
+    let roc_main_fn = *build_roc_main(env, layout_ids, layout, main_body);
 
     // build the C calling convention wrapper
 
@@ -332,11 +330,7 @@ pub fn make_main_function<'a, 'ctx, 'env>(
     };
 
     // Add main to the module.
-
-    // Add main to the module.
-    let main_fn = env.module.add_function("$Test.main", main_fn_type, None);
-
-    // main_fn.set_personality_function(personality_func);
+    let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
 
     // our exposed main function adheres to the C calling convention
     main_fn.set_call_conventions(C_CALL_CONV);
@@ -352,144 +346,146 @@ pub fn make_main_function<'a, 'ctx, 'env>(
     let result_alloca = builder.build_alloca(main_return_type, "result");
 
     // invoke instead of call, so that we can catch any exeptions thrown in Roc code
-    let call = builder.build_invoke(roc_main_fn, &[], then_block, catch_block, "call_roc_main");
-
-    call.set_call_convention(FAST_CALL_CONV);
-
-    let call_result = call.try_as_basic_value().left().unwrap();
+    let call_result = {
+        let call = builder.build_invoke(roc_main_fn, &[], then_block, catch_block, "call_roc_main");
+        call.set_call_convention(FAST_CALL_CONV);
+        call.try_as_basic_value().left().unwrap()
+    };
 
     // exception handling
-    builder.position_at_end(catch_block);
+    {
+        builder.position_at_end(catch_block);
 
-    let landing_pad_type = context.struct_type(
-        &[
-            context.i8_type().ptr_type(AddressSpace::Generic).into(),
-            context.i32_type().into(),
-        ],
-        false,
-    );
+        let landing_pad_type = {
+            let exception_ptr = context.i8_type().ptr_type(AddressSpace::Generic).into();
+            let selector_value = context.i32_type().into();
 
-    let info = builder
-        .build_landing_pad(
-            &landing_pad_type,
-            &BasicValueEnum::IntValue(context.i8_type().const_zero()),
-            context
-                .i8_type()
-                .ptr_type(AddressSpace::Generic)
-                .const_zero(),
-            "main_landing_pad",
-        )
-        .into_struct_value();
+            context.struct_type(&[exception_ptr, selector_value], false)
+        };
 
-    let exception_ptr = builder
-        .build_extract_value(info, 0, "exception_ptr")
-        .unwrap();
+        let info = builder
+            .build_catch_all_landing_pad(
+                &landing_pad_type,
+                &BasicValueEnum::IntValue(context.i8_type().const_zero()),
+                context.i8_type().ptr_type(AddressSpace::Generic),
+                "main_landing_pad",
+            )
+            .into_struct_value();
 
-    let puts = module.add_function(
-        "puts",
-        context.i32_type().fn_type(&[u8_ptr.into()], false),
-        Some(Linkage::External),
-    );
-
-    /*
-    let v = module.get_global("error_msg").unwrap().as_pointer_value();
-    let vv = builder.build_bitcast(v, u8_ptr, "name");
-    */
-    let call = builder.build_call(cxa_begin_catch, &[exception_ptr], "call");
-    let thrown = call.try_as_basic_value().left().unwrap();
-
-    let v42 = context.i64_type().const_int(42, false);
-
-    let exception_type = u8_ptr;
-    let ptr = builder.build_bitcast(
-        thrown,
-        exception_type.ptr_type(AddressSpace::Generic),
-        "cast",
-    );
-    let val = builder.build_load(ptr.into_pointer_value(), "name");
-    // builder.build_call(puts, &[val], "call");
-
-    let return_type = context.struct_type(&[context.i64_type().into(), u8_ptr.into()], false);
-
-    let return_value = {
-        let v1 = return_type.const_zero();
-
-        let v2 = builder
-            .build_insert_value(v1, context.i64_type().const_int(1, false), 0, "set_error")
-            .unwrap();
-        let v3 = builder
-            .build_insert_value(v2, val, 1, "set_exception")
+        let exception_ptr = builder
+            .build_extract_value(info, 0, "exception_ptr")
             .unwrap();
 
-        v3
-    };
+        let thrown = cxa_begin_catch(env, exception_ptr);
 
-    let ptr = builder.build_bitcast(
-        result_alloca,
-        return_type.ptr_type(AddressSpace::Generic),
-        "name",
-    );
-    builder.build_store(ptr.into_pointer_value(), return_value);
+        let error_msg = {
+            let exception_type = u8_ptr;
+            let ptr = builder.build_bitcast(
+                thrown,
+                exception_type.ptr_type(AddressSpace::Generic),
+                "cast",
+            );
 
-    builder.build_call(cxa_end_catch, &[], "call");
+            builder.build_load(ptr.into_pointer_value(), "error_msg")
+        };
 
-    builder.build_unconditional_branch(cont_block);
+        let return_type = context.struct_type(&[context.i64_type().into(), u8_ptr.into()], false);
 
-    builder.position_at_end(then_block);
+        let return_value = {
+            let v1 = return_type.const_zero();
 
-    let actual_return_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
-    let return_type = context.struct_type(&[context.i64_type().into(), actual_return_type], false);
+            // flag is non-zero, indicating failure
+            let flag = context.i64_type().const_int(1, false);
 
-    let return_value = {
-        let v1 = return_type.const_zero();
+            let v2 = builder
+                .build_insert_value(v1, flag, 0, "set_error")
+                .unwrap();
 
-        let v2 = builder
-            .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
-            .unwrap();
-        let v3 = builder
-            .build_insert_value(v2, call_result, 1, "set_call_result")
-            .unwrap();
+            let v3 = builder
+                .build_insert_value(v2, error_msg, 1, "set_exception")
+                .unwrap();
 
-        v3
-    };
+            v3
+        };
 
-    let ptr = builder.build_bitcast(
-        result_alloca,
-        return_type.ptr_type(AddressSpace::Generic),
-        "name",
-    );
-    builder.build_store(ptr.into_pointer_value(), return_value);
+        // bitcast result alloca so we can store our concrete type { flag, error_msg } in there
+        let result_alloca_bitcast = builder
+            .build_bitcast(
+                result_alloca,
+                return_type.ptr_type(AddressSpace::Generic),
+                "result_alloca_bitcast",
+            )
+            .into_pointer_value();
 
-    builder.build_unconditional_branch(cont_block);
+        // store our return value
+        builder.build_store(result_alloca_bitcast, return_value);
 
-    builder.position_at_end(cont_block);
+        cxa_end_catch(env);
 
-    let result = builder.build_load(result_alloca, "result");
+        builder.build_unconditional_branch(cont_block);
+    }
 
-    match register_or_memory {
-        Memory => {
-            // write the result into the supplied pointer
-            // this is a void function, therefore return None
+    {
+        builder.position_at_end(then_block);
 
-            let ptr_return_type = main_return_type.ptr_type(AddressSpace::Generic);
+        let actual_return_type =
+            basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+        let return_type =
+            context.struct_type(&[context.i64_type().into(), actual_return_type], false);
 
-            let ptr_as_int = main_fn.get_first_param().unwrap();
+        let return_value = {
+            let v1 = return_type.const_zero();
 
-            let ptr = builder.build_bitcast(ptr_as_int, ptr_return_type, "caller_ptr");
+            let v2 = builder
+                .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
+                .unwrap();
+            let v3 = builder
+                .build_insert_value(v2, call_result, 1, "set_call_result")
+                .unwrap();
 
-            builder.build_store(ptr.into_pointer_value(), result);
+            v3
+        };
 
-            builder.build_return(None);
-        }
-        Register => {
-            // construct a normal return
-            // values are passed to the caller via registers
-            builder.build_return(Some(&result));
+        let ptr = builder.build_bitcast(
+            result_alloca,
+            return_type.ptr_type(AddressSpace::Generic),
+            "name",
+        );
+        builder.build_store(ptr.into_pointer_value(), return_value);
+
+        builder.build_unconditional_branch(cont_block);
+    }
+
+    {
+        builder.position_at_end(cont_block);
+
+        let result = builder.build_load(result_alloca, "result");
+
+        match register_or_memory {
+            Memory => {
+                // write the result into the supplied pointer
+                let ptr_return_type = main_return_type.ptr_type(AddressSpace::Generic);
+
+                let ptr_as_int = main_fn.get_first_param().unwrap();
+
+                let ptr = builder.build_bitcast(ptr_as_int, ptr_return_type, "caller_ptr");
+
+                builder.build_store(ptr.into_pointer_value(), result);
+
+                // this is a void function, therefore return None
+                builder.build_return(None);
+            }
+            Register => {
+                // construct a normal return
+                // values are passed to the caller via registers
+                builder.build_return(Some(&result));
+            }
         }
     }
 
-    // MUST set the personality at the bottom; doing it earlier can cause the personality to be
-    // ignored
+    // MUST set the personality at the very end;
+    // doing it earlier can cause the personality to be ignored
+    let personality_func = get_gxx_personality_v0(env);
     main_fn.set_personality_function(personality_func);
 
     (main_fn_name, env.arena.alloc(main_fn))
@@ -1372,100 +1368,12 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         }
 
         RuntimeError(error_msg) => {
-            let context = env.context;
-            let module = env.module;
-            let builder = env.builder;
+            throw_exception(env, error_msg);
 
-            // define the error message as a global constant
-            let error_msg_global = module.add_global(
-                context.i8_type().array_type(error_msg.len() as u32),
-                None,
-                "error_msg",
-            );
-
-            let i8_type = context.i8_type();
-            let error_msg_bytes = error_msg
-                .chars()
-                .map(|c| i8_type.const_int(c as u64, false))
-                .collect::<std::vec::Vec<_>>();
-            let const_array = i8_type.const_array(&error_msg_bytes);
-            error_msg_global.set_initializer(&const_array);
-
-            let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
-            let void_ptr = u8_ptr.clone();
-
-            // void *__cxa_allocate_exception(size_t thrown_size);
-            let cxa_allocate_exception = module.add_function(
-                "__cxa_allocate_exception",
-                void_ptr.fn_type(&[context.i64_type().into()], false),
-                Some(Linkage::External),
-            );
-
-            // void __cxa_throw (void *thrown_exception, std::type_info *tinfo, void (*dest) (void *) );
-            let cxa_throw = module.add_function(
-                "__cxa_throw",
-                context
-                    .void_type()
-                    .fn_type(&[u8_ptr.into(), u8_ptr.into(), u8_ptr.into()], false),
-                Some(Linkage::External),
-            );
-
-            let cxa_rethrow = module.add_function(
-                "__cxa_rethrow",
-                context.void_type().fn_type(&[], false),
-                Some(Linkage::External),
-            );
-            cxa_rethrow.set_call_conventions(C_CALL_CONV);
-
-            let ztii = module.add_global(u8_ptr, Some(AddressSpace::Generic), "_ZTIi");
-            ztii.set_linkage(Linkage::External);
-
-            let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
-
-            let zero = context.i64_type().const_int(8, false);
-            let call =
-                builder.build_call(cxa_allocate_exception, &[zero.into()], "allocate_exception");
-            call.set_call_convention(C_CALL_CONV);
-
-            let info = {
-                let initial = call.try_as_basic_value().left().unwrap();
-
-                let error_msg_ptr = error_msg_global.as_pointer_value();
-                let error_msg_ptr2 = builder.build_bitcast(error_msg_ptr, u8_ptr, "cast_u8ptr");
-
-                let exception_type = u8_ptr;
-                let exception_value = error_msg_ptr2;
-
-                let temp = builder
-                    .build_bitcast(
-                        initial,
-                        exception_type.ptr_type(AddressSpace::Generic),
-                        "name",
-                    )
-                    .into_pointer_value();
-
-                builder.build_store(temp, exception_value);
-
-                initial
-            };
-
-            let arg1 = builder.build_bitcast(ztii.as_pointer_value(), u8_ptr, "cast");
-            let arg2 = context
-                .i8_type()
-                .ptr_type(AddressSpace::Generic)
-                .const_zero();
-
-            let call = builder.build_call(cxa_throw, &[info, arg1, arg2.into()], "throw");
-            call.set_call_convention(C_CALL_CONV);
-
-            builder.build_unreachable();
-
-            let zero = context.i64_type().const_zero();
-
-            // builder.build_return(Some(&BasicValueEnum::IntValue(zero)));
+            // unused value (must return a BasicValue)
+            let zero = env.context.i64_type().const_zero();
             zero.into()
         }
-        _ => todo!("unsupported expr {:?}", stmt),
     }
 }
 
@@ -2683,4 +2591,273 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }
     }
+}
+
+fn define_global_str<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    message: &str,
+) -> inkwell::values::GlobalValue<'ctx> {
+    let context = env.context;
+    let module = env.module;
+
+    // hash the name so we don't re-define existing messages
+    let name = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        message.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        format!("message_{}", hash)
+    };
+
+    match module.get_global(&name) {
+        Some(current) => current,
+        None => {
+            let i8_type = context.i8_type();
+
+            // define the error message as a global constant
+            let message_global =
+                module.add_global(i8_type.array_type(message.len() as u32), None, &name);
+
+            let mut message_bytes = Vec::with_capacity_in(message.len(), env.arena);
+
+            for c in message.chars() {
+                message_bytes.push(i8_type.const_int(c as u64, false));
+            }
+
+            let const_array = i8_type.const_array(&message_bytes);
+            message_global.set_initializer(&const_array);
+
+            message_global
+        }
+    }
+}
+
+fn throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, message: &str) {
+    let context = env.context;
+    let builder = env.builder;
+
+    let info = {
+        // we represend both void and char pointers with `u8*`
+        let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
+
+        // allocate an exception (that can hold a pointer to a string)
+        let str_ptr_size = env
+            .context
+            .i64_type()
+            .const_int(env.ptr_bytes as u64, false);
+        let initial = cxa_allocate_exception(env, str_ptr_size);
+
+        // define the error message as a global
+        // (a hash is used such that the same value is not defined repeatedly)
+        let error_msg_global = define_global_str(env, message);
+
+        // cast this to a void pointer
+        let error_msg_ptr =
+            builder.build_bitcast(error_msg_global.as_pointer_value(), u8_ptr, "unused");
+
+        // store this void pointer in the exception
+        let exception_type = u8_ptr;
+        let exception_value = error_msg_ptr;
+
+        let temp = builder
+            .build_bitcast(
+                initial,
+                exception_type.ptr_type(AddressSpace::Generic),
+                "exception_object_str_ptr_ptr",
+            )
+            .into_pointer_value();
+
+        builder.build_store(temp, exception_value);
+
+        initial
+    };
+
+    cxa_throw_exception(env, info);
+
+    builder.build_unreachable();
+}
+
+fn cxa_allocate_exception<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    exception_size: IntValue<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let name = "__cxa_allocate_exception";
+
+    let module = env.module;
+    let context = env.context;
+    let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let function = match module.get_function(&name) {
+        Some(gvalue) => gvalue,
+        None => {
+            // void *__cxa_allocate_exception(size_t thrown_size);
+            let cxa_allocate_exception = module.add_function(
+                name,
+                u8_ptr.fn_type(&[context.i64_type().into()], false),
+                Some(Linkage::External),
+            );
+            cxa_allocate_exception.set_call_conventions(C_CALL_CONV);
+
+            cxa_allocate_exception
+        }
+    };
+    let call = env.builder.build_call(
+        function,
+        &[exception_size.into()],
+        "exception_object_void_ptr",
+    );
+
+    call.set_call_convention(C_CALL_CONV);
+    call.try_as_basic_value().left().unwrap()
+}
+
+fn cxa_throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, info: BasicValueEnum<'ctx>) {
+    let name = "__cxa_throw";
+
+    let module = env.module;
+    let context = env.context;
+    let builder = env.builder;
+
+    let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let function = match module.get_function(&name) {
+        Some(value) => value,
+        None => {
+            // void __cxa_throw (void *thrown_exception, std::type_info *tinfo, void (*dest) (void *) );
+            let cxa_throw = module.add_function(
+                name,
+                context
+                    .void_type()
+                    .fn_type(&[u8_ptr.into(), u8_ptr.into(), u8_ptr.into()], false),
+                Some(Linkage::External),
+            );
+            cxa_throw.set_call_conventions(C_CALL_CONV);
+
+            cxa_throw
+        }
+    };
+
+    // global storing the type info of a c++ int (equivalent to `i32` in llvm)
+    // we just need any valid such value, and arbitrarily use this one
+    let ztii = match module.get_global("_ZTIi") {
+        Some(gvalue) => gvalue.as_pointer_value(),
+        None => {
+            let ztii = module.add_global(u8_ptr, Some(AddressSpace::Generic), "_ZTIi");
+            ztii.set_linkage(Linkage::External);
+
+            ztii.as_pointer_value()
+        }
+    };
+
+    let type_info = builder.build_bitcast(ztii, u8_ptr, "cast");
+    let null: BasicValueEnum = u8_ptr.const_zero().into();
+
+    let call = builder.build_call(function, &[info, type_info, null], "throw");
+    call.set_call_convention(C_CALL_CONV);
+}
+
+#[allow(dead_code)]
+fn cxa_rethrow_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+    let name = "__cxa_rethrow";
+
+    let module = env.module;
+    let context = env.context;
+
+    let function = match module.get_function(&name) {
+        Some(gvalue) => gvalue,
+        None => {
+            let cxa_rethrow = module.add_function(
+                name,
+                context.void_type().fn_type(&[], false),
+                Some(Linkage::External),
+            );
+            cxa_rethrow.set_call_conventions(C_CALL_CONV);
+
+            cxa_rethrow
+        }
+    };
+    let call = env.builder.build_call(function, &[], "never_used");
+
+    call.set_call_convention(C_CALL_CONV);
+    call.try_as_basic_value().left().unwrap()
+}
+
+fn get_gxx_personality_v0<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> FunctionValue<'ctx> {
+    let name = "__cxa_rethrow";
+
+    let module = env.module;
+    let context = env.context;
+
+    match module.get_function(&name) {
+        Some(gvalue) => gvalue,
+        None => {
+            let personality_func = module.add_function(
+                "__gxx_personality_v0",
+                context.i64_type().fn_type(&[], false),
+                Some(Linkage::External),
+            );
+            personality_func.set_call_conventions(C_CALL_CONV);
+
+            personality_func
+        }
+    }
+}
+
+fn cxa_end_catch<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) {
+    let name = "__cxa_end_catch";
+
+    let module = env.module;
+    let context = env.context;
+
+    let function = match module.get_function(&name) {
+        Some(gvalue) => gvalue,
+        None => {
+            let cxa_end_catch = module.add_function(
+                name,
+                context.void_type().fn_type(&[], false),
+                Some(Linkage::External),
+            );
+            cxa_end_catch.set_call_conventions(C_CALL_CONV);
+
+            cxa_end_catch
+        }
+    };
+    let call = env.builder.build_call(function, &[], "never_used");
+
+    call.set_call_convention(C_CALL_CONV);
+}
+
+fn cxa_begin_catch<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    exception_ptr: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let name = "__cxa_begin_catch";
+
+    let module = env.module;
+    let context = env.context;
+
+    let function = match module.get_function(&name) {
+        Some(gvalue) => gvalue,
+        None => {
+            let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
+
+            let cxa_begin_catch = module.add_function(
+                "__cxa_begin_catch",
+                u8_ptr.fn_type(&[u8_ptr.into()], false),
+                Some(Linkage::External),
+            );
+            cxa_begin_catch.set_call_conventions(C_CALL_CONV);
+
+            cxa_begin_catch
+        }
+    };
+    let call = env
+        .builder
+        .build_call(function, &[exception_ptr], "exception_payload_ptr");
+
+    call.set_call_convention(C_CALL_CONV);
+    call.try_as_basic_value().left().unwrap()
 }
