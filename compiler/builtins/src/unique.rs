@@ -463,6 +463,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![float_type(star1)], int_type(star2))
     });
 
+    // powInt : Int, Int -> Int
+    add_type(Symbol::NUM_POW_INT, {
+        let_tvars! { star1, star2, star3 };
+        unique_function(vec![int_type(star1), int_type(star2)], int_type(star3))
+    });
+
     // Bool module
 
     // isEq or (==) : Attr * a, Attr * a -> Attr * Bool
