@@ -1,37 +1,5 @@
 use roc_collections::all::MutSet;
 use roc_types::subs::Subs;
-use std::ffi::CString;
-use std::os::raw::c_char;
-
-#[repr(C)]
-union Payload<T: Copy> {
-    success: T,
-    failure: *mut c_char,
-}
-
-#[repr(C)]
-pub struct RocCallResult<T: Copy> {
-    pub flag: u64,
-    payload: Payload<T>,
-}
-
-impl<T: Copy> Into<Result<T, String>> for RocCallResult<T> {
-    fn into(self) -> Result<T, String> {
-        if self.flag == 0 {
-            Ok(unsafe { self.payload.success })
-        } else {
-            Err(unsafe {
-                let raw = CString::from_raw(self.payload.failure);
-
-                let result = format!("{:?}", raw);
-
-                std::mem::forget(raw);
-
-                result
-            })
-        }
-    }
-}
 
 pub fn helper_without_uniqueness<'a>(
     arena: &'a bumpalo::Bump,
@@ -394,10 +362,9 @@ pub fn helper_with_uniqueness<'a>(
 #[macro_export]
 macro_rules! assert_opt_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
-        use crate::helpers::eval::RocCallResult;
         use bumpalo::Bump;
         use inkwell::context::Context;
-        use inkwell::execution_engine::JitFunction;
+        use roc_gen::run_jit_function;
 
         let arena = Bump::new();
 
@@ -406,18 +373,8 @@ macro_rules! assert_opt_evals_to {
         let (main_fn_name, execution_engine) =
             $crate::helpers::eval::helper_with_uniqueness(&arena, $src, $leak, &context);
 
-        unsafe {
-            let main: JitFunction<unsafe extern "C" fn() -> RocCallResult<$ty>> = execution_engine
-                .get_function(main_fn_name)
-                .ok()
-                .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
-                .expect("errored");
-
-            match main.call().into() {
-                Ok(success) => assert_eq!($transform(success), $expected),
-                Err(error_msg) => panic!("Roc failed with message: {}", error_msg),
-            }
-        }
+        let transform = |success| assert_eq!($transform(success), $expected);
+        run_jit_function!(execution_engine, main_fn_name, $ty, transform)
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
@@ -428,10 +385,9 @@ macro_rules! assert_opt_evals_to {
 #[macro_export]
 macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
-        use crate::helpers::eval::RocCallResult;
         use bumpalo::Bump;
         use inkwell::context::Context;
-        use inkwell::execution_engine::JitFunction;
+        use roc_gen::run_jit_function;
 
         let arena = Bump::new();
 
@@ -440,23 +396,8 @@ macro_rules! assert_llvm_evals_to {
         let (main_fn_name, errors, execution_engine) =
             $crate::helpers::eval::helper_without_uniqueness(&arena, $src, $leak, &context);
 
-        unsafe {
-            let main: JitFunction<unsafe extern "C" fn() -> RocCallResult<$ty>> = execution_engine
-                .get_function(main_fn_name)
-                .ok()
-                .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
-                .expect("errored");
-
-            match main.call().into() {
-                Ok(success) => {
-                    // only if there are no exceptions thrown, check for errors
-                    assert_eq!(errors, Vec::new(), "Encountered errors: {:?}", errors);
-
-                    assert_eq!($transform(success), $expected);
-                }
-                Err(error_msg) => panic!("Roc failed with message: {}", error_msg),
-            }
-        }
+        let transform = |success| assert_eq!($transform(success), $expected);
+        run_jit_function!(execution_engine, main_fn_name, $ty, transform, errors)
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {

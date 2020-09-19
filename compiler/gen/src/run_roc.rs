@@ -23,6 +23,7 @@ impl<T: Copy> Into<Result<T, String>> for RocCallResult<T> {
 
                 let result = format!("{:?}", raw);
 
+                // make sure rust does not try to free the Roc string
                 std::mem::forget(raw);
 
                 result
@@ -102,13 +103,17 @@ macro_rules! run_jit_function_dynamic_type {
                 use std::ffi::CString;
                 use std::os::raw::c_char;
 
+                // first field is a char pointer (to the error message)
+                // read value, and transmute to a pointer
                 let ptr_as_int = *(result as *const u64).offset(1);
                 let ptr = std::mem::transmute::<u64, *mut c_char>(ptr_as_int);
 
+                // make CString (null-terminated)
                 let raw = CString::from_raw(ptr);
 
                 let result = format!("{:?}", raw);
 
+                // make sure rust doesn't try to free the Roc constant string
                 std::mem::forget(raw);
 
                 eprintln!("{}", result);

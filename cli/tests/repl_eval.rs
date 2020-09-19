@@ -15,14 +15,6 @@ mod repl_eval {
         assert!(out.status.success());
     }
 
-    fn expect_failure(input: &str, expected: &str) {
-        let out = helpers::repl_eval(input);
-
-        assert_eq!(&out.stderr, "");
-        assert_eq!(&out.stdout, expected);
-        assert!(out.status.success());
-    }
-
     #[test]
     fn literal_0() {
         expect_success("0", "0 : Num *");

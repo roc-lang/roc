@@ -1123,9 +1123,10 @@ dependencies = [
 [[package]]
 name = "inkwell"
 version = "0.1.0"
+source = "git+https://github.com/rtfeldman/inkwell#d0a1ce5e678cf0f0e62b757760d1019301c603c9"
 dependencies = [
  "either",
- "inkwell_internals 0.1.0",
+ "inkwell_internals 0.1.0 (git+https://github.com/rtfeldman/inkwell)",
  "libc",
  "llvm-sys",
  "once_cell",
@@ -1146,6 +1147,7 @@ dependencies = [
 [[package]]
 name = "inkwell_internals"
 version = "0.1.0"
+source = "git+https://github.com/rtfeldman/inkwell#d0a1ce5e678cf0f0e62b757760d1019301c603c9"
 dependencies = [
  "proc-macro2 0.4.30",
  "quote 0.6.13",
@@ -2119,7 +2121,7 @@ dependencies = [
  "im",
  "im-rc",
  "indoc",
- "inkwell 0.1.0",
+ "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell)",
  "inlinable_string",
  "maplit",
  "pretty_assertions",
@@ -2196,7 +2198,7 @@ dependencies = [
  "im",
  "im-rc",
  "indoc",
- "inkwell 0.1.0",
+ "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell)",
  "inlinable_string",
  "libc",
  "maplit",
@@ -2327,7 +2329,7 @@ dependencies = [
  "im",
  "im-rc",
  "indoc",
- "inkwell 0.1.0",
+ "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell)",
  "inlinable_string",
  "libc",
  "maplit",
