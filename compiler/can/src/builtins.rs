@@ -51,6 +51,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::BOOL_OR => bool_or,
         Symbol::BOOL_NOT => bool_not,
         Symbol::STR_CONCAT => str_concat,
+        Symbol::STR_IS_EMPTY => str_is_empty,
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
         Symbol::LIST_SET => list_set,
@@ -92,6 +93,8 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_TO_FLOAT => num_to_float,
         Symbol::NUM_POW => num_pow,
         Symbol::NUM_CEILING => num_ceiling,
+        Symbol::NUM_POW_INT => num_pow_int,
+        Symbol::NUM_FLOOR => num_floor,
     }
 }
 
@@ -621,6 +624,46 @@ fn num_ceiling(symbol: Symbol, var_store: &mut VarStore) -> Def {
         int_var,
     )
 }
+
+/// Num.powInt : Int, Int -> Int
+fn num_pow_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumPowInt,
+        args: vec![(int_var, Var(Symbol::ARG_1)), (int_var, Var(Symbol::ARG_2))],
+        ret_var: int_var,
+    };
+
+    defn(
+        symbol,
+        vec![(int_var, Symbol::ARG_1), (int_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        int_var,
+    )
+}
+
+/// Num.floor : Float -> Int
+fn num_floor(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let float_var = var_store.fresh();
+    let int_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumFloor,
+        args: vec![(float_var, Var(Symbol::ARG_1))],
+        ret_var: int_var,
+    };
+
+    defn(
+        symbol,
+        vec![(float_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        int_var,
+    )
+}
+
 /// List.isEmpty : List * -> Bool
 fn list_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
@@ -688,6 +731,26 @@ fn str_concat(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         str_var,
+    )
+}
+
+/// Str.isEmpty : List * -> Bool
+fn str_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let str_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrIsEmpty,
+        args: vec![(str_var, Var(Symbol::ARG_1))],
+        ret_var: bool_var,
+    };
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        bool_var,
     )
 }
 

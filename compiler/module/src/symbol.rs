@@ -642,6 +642,8 @@ define_builtins! {
         37 NUM_COMPARE: "compare"
         38 NUM_POW: "pow"
         39 NUM_CEILING: "ceiling"
+        40 NUM_POW_INT: "powInt"
+        41 NUM_FLOOR: "floor"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -655,7 +657,7 @@ define_builtins! {
     3 STR: "Str" => {
         0 STR_STR: "Str" imported // the Str.Str type alias
         1 STR_AT_STR: "@Str" // the Str.@Str private tag
-        2 STR_ISEMPTY: "isEmpty"
+        2 STR_IS_EMPTY: "isEmpty"
         3 STR_APPEND: "append"
         4 STR_CONCAT: "concat"
     }

@@ -11,26 +11,26 @@ let
 in { pkgs ? pinnedPkgs }:
 
 let
-
   isOsX = builtins.currentSystem == "x86_64-darwin";
-  darwin-frameworks = if isOsX then
-    with pkgs.darwin.apple_sdk.frameworks; [
-      AppKit
-      CoreFoundation
-      CoreServices
-      CoreVideo
-      Foundation
-      Metal
-      Security
-    ]
-  else
-    [ ];
+  darwin-frameworks =
+    if isOsX then
+      with pkgs.darwin.apple_sdk.frameworks; [
+        AppKit
+        CoreFoundation
+        CoreServices
+        CoreVideo
+        Foundation
+        Metal
+        Security
+      ]
+    else
+      [ ];
   llvm = pkgs.llvm_10;
   inputs =
     [
       pkgs.rustup
       pkgs.cargo
-      pkgs.llvm_10
+      llvm
       # libraries for llvm
       pkgs.libffi
       pkgs.libxml2

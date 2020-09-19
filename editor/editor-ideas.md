@@ -27,6 +27,11 @@ These are potentially inspirational resources for the editor's design.
 * [Xi](https://xi-editor.io/) modern text editor with concurrent editing (related to [Druid](https://github.com/linebender/druid))
 * [Self](https://selflanguage.org/) programming language
 
+### Debugging
+
+* [VS code debug visualization](https://marketplace.visualstudio.com/items?itemName=hediet.debug-visualizer)
+* [Algorithm visualization for javascript](https://algorithm-visualizer.org)
+
 ### Structured Editing
 
 * [Deuce](http://ravichugh.github.io/sketch-n-sketch/) (videos on the right) by [Ravi Chugh](http://people.cs.uchicago.edu/~rchugh/) and others

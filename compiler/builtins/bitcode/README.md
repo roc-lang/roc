@@ -33,6 +33,8 @@ the `cargo rustc` command above to regenerate it.
 > $ cargo rustc --release --lib -- --emit=llvm-ir
 > ```
 
+**Note**: In order to be able to address the bitcode functions by name, they need to be defined with the `#[no_mangle]` attribute.
+
 ## Importing the bitcode
 
 The bitcode is a bunch of bytes that aren't particularly human-readable.
@@ -54,3 +56,7 @@ compiler/gen/src/llvm/builtins.bc
 
 Once that's done, `git status` should show that the `builtins.bc` file
 has been changed. Commit that change and you're done!
+
+## Calling bitcode functions
+
+Use the `call_bitcode_fn` function defined in `llvm/src/build.rs` to call bitcode funcitons.

@@ -673,6 +673,16 @@ mod gen_num {
 
     #[test]
     fn ceiling() {
-        assert_evals_to!("Num.ceiling 1.5", 2, i64);
+        assert_evals_to!("Num.ceiling 1.1", 2, i64);
+    }
+
+    #[test]
+    fn floor() {
+        assert_evals_to!("Num.floor 1.9", 1, i64);
+    }
+
+    #[test]
+    fn pow_int() {
+        assert_evals_to!("Num.powInt 2 3", 8, i64);
     }
 }

@@ -505,7 +505,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     // - arguments that we may want to update destructively must be Owned
     // - other refcounted arguments are Borrowed
     match op {
-        ListLen => arena.alloc_slice_copy(&[borrowed]),
+        ListLen | StrIsEmpty => arena.alloc_slice_copy(&[borrowed]),
         ListSet => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListSetInPlace => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
@@ -522,11 +522,11 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListWalkRight => arena.alloc_slice_copy(&[borrowed, irrelevant, owned]),
 
         Eq | NotEq | And | Or | NumAdd | NumSub | NumMul | NumGt | NumGte | NumLt | NumLte
-        | NumCompare | NumDivUnchecked | NumRemUnchecked | NumPow => {
+        | NumCompare | NumDivUnchecked | NumRemUnchecked | NumPow | NumPowInt => {
             arena.alloc_slice_copy(&[irrelevant, irrelevant])
         }
 
-        NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumRound | NumToFloat
-        | NumCeiling | Not => arena.alloc_slice_copy(&[irrelevant]),
+        NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumRound | NumCeiling | NumFloor
+        | NumToFloat | Not => arena.alloc_slice_copy(&[irrelevant]),
     }
 }

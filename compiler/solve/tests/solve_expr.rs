@@ -2383,6 +2383,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn pow() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.pow
+                "#
+            ),
+            "Float, Float -> Float",
+        );
+    }
+
+    #[test]
     fn ceiling() {
         infer_eq_without_problem(
             indoc!(
@@ -2395,14 +2407,26 @@ mod solve_expr {
     }
 
     #[test]
-    fn pow() {
+    fn floor() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Num.pow
+                Num.floor
                 "#
             ),
-            "Float, Float -> Float",
+            "Float -> Int",
+        );
+    }
+
+    #[test]
+    fn pow_int() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.powInt
+                "#
+            ),
+            "Int, Int -> Int",
         );
     }
 
