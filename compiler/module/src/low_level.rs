@@ -20,6 +20,8 @@ pub enum LowLevel {
     ListKeepIf,
     ListWalkRight,
     NumAdd,
+    NumAddWrap,
+    NumAddChecked,
     NumSub,
     NumMul,
     NumGt,

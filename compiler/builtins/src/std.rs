@@ -187,6 +187,26 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // addChecked or (+) : Num a, Num a -> Result (Num a) [ IntOverflow ]*
+    let int_overflow = SolvedType::TagUnion(
+        vec![(TagName::Global("IntOverflow".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    add_type(
+        Symbol::NUM_ADD_CHECKED,
+        SolvedType::Func(
+            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
+            Box::new(result_type(num_type(flex(TVAR1)), int_overflow)),
+        ),
+    );
+
+    // addWrap or (+) : Int, Int -> Int
+    add_type(
+        Symbol::NUM_ADD_WRAP,
+        SolvedType::Func(vec![int_type(), int_type()], Box::new(int_type())),
+    );
+
     // sub or (-) : Num a, Num a -> Num a
     add_type(
         Symbol::NUM_SUB,

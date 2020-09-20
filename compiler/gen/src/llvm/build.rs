@@ -270,6 +270,12 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         LLVM_FLOOR_F64,
         f64_type.fn_type(&[f64_type.into()], false),
     );
+
+    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I64, {
+        let fields = [i64_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i64_type.into(), i64_type.into()], false)
+    });
 }
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
@@ -282,6 +288,7 @@ static LLVM_COS_F64: &str = "llvm.cos.f64";
 static LLVM_POW_F64: &str = "llvm.pow.f64";
 static LLVM_CEILING_F64: &str = "llvm.ceil.f64";
 static LLVM_FLOOR_F64: &str = "llvm.floor.f64";
+static LLVM_SADD_WITH_OVERFLOW_I64: &str = "llvm.sadd.with.overflow.i64";
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -2219,7 +2226,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
 
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
-        | NumDivUnchecked | NumPow | NumPowInt => {
+        | NumAddWrap | NumAddChecked | NumDivUnchecked | NumPow | NumPowInt => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(env, scope, &args[0]);
@@ -2234,6 +2241,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     match lhs_builtin {
                         Int128 | Int64 | Int32 | Int16 | Int8 => build_int_binop(
                             env,
+                            parent,
                             lhs_arg.into_int_value(),
                             lhs_layout,
                             rhs_arg.into_int_value(),
@@ -2413,6 +2421,7 @@ where
 
 fn build_int_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
     lhs: IntValue<'ctx>,
     _lhs_layout: &Layout<'a>,
     rhs: IntValue<'ctx>,
@@ -2425,7 +2434,40 @@ fn build_int_binop<'a, 'ctx, 'env>(
     let bd = env.builder;
 
     match op {
-        NumAdd => bd.build_int_add(lhs, rhs, "add_int").into(),
+        NumAdd => {
+            // TODO
+            let builder = env.builder;
+            let context = env.context;
+
+            let result = env
+                .call_intrinsic(LLVM_SADD_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()])
+                .into_struct_value();
+
+            let add_result = bd.build_extract_value(result, 0, "add_result").unwrap();
+            let has_overflowed = bd.build_extract_value(result, 1, "has_overflowed").unwrap();
+
+            let condition = builder.build_int_compare(
+                IntPredicate::EQ,
+                has_overflowed.into_int_value(),
+                context.bool_type().const_zero(),
+                "has_not_overflowed",
+            );
+
+            let then_block = context.append_basic_block(parent, "then_block");
+            let throw_block = context.append_basic_block(parent, "throw_block");
+
+            builder.build_conditional_branch(condition, then_block, throw_block);
+
+            builder.position_at_end(throw_block);
+
+            throw_exception(env, "integer addition overflowed!");
+
+            builder.position_at_end(then_block);
+
+            add_result
+        }
+        NumAddWrap => bd.build_int_add(lhs, rhs, "add_int_wrap").into(),
+        NumAddChecked => bd.build_int_add(lhs, rhs, "add_int_checked").into(),
         NumSub => bd.build_int_sub(lhs, rhs, "sub_int").into(),
         NumMul => bd.build_int_mul(lhs, rhs, "mul_int").into(),
         NumGt => bd.build_int_compare(SGT, lhs, rhs, "int_gt").into(),
@@ -2475,6 +2517,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
 
     match op {
         NumAdd => bd.build_float_add(lhs, rhs, "add_float").into(),
+        NumAddWrap => unreachable!("wrapping addition is not defined on floats"),
+        NumAddChecked => bd.build_float_add(lhs, rhs, "add_float_checked").into(),
         NumSub => bd.build_float_sub(lhs, rhs, "sub_float").into(),
         NumMul => bd.build_float_mul(lhs, rhs, "mul_float").into(),
         NumGt => bd.build_float_compare(OGT, lhs, rhs, "float_gt").into(),
