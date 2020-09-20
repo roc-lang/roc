@@ -1109,24 +1109,10 @@ dependencies = [
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm10-0.release1#005de45445d6ddae80f09ed012e6c3dfe674201a"
+source = "git+https://github.com/rtfeldman/inkwell?tag=llvm10-0.release2#d0a1ce5e678cf0f0e62b757760d1019301c603c9"
 dependencies = [
  "either",
- "inkwell_internals 0.1.0 (git+https://github.com/rtfeldman/inkwell?tag=llvm10-0.release1)",
- "libc",
- "llvm-sys",
- "once_cell",
- "parking_lot",
- "regex",
-]
-
-[[package]]
-name = "inkwell"
-version = "0.1.0"
-source = "git+https://github.com/rtfeldman/inkwell#d0a1ce5e678cf0f0e62b757760d1019301c603c9"
-dependencies = [
- "either",
- "inkwell_internals 0.1.0 (git+https://github.com/rtfeldman/inkwell)",
+ "inkwell_internals",
  "libc",
  "llvm-sys",
  "once_cell",
@@ -1137,17 +1123,7 @@ dependencies = [
 [[package]]
 name = "inkwell_internals"
 version = "0.1.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm10-0.release1#005de45445d6ddae80f09ed012e6c3dfe674201a"
-dependencies = [
- "proc-macro2 0.4.30",
- "quote 0.6.13",
- "syn 0.15.44",
-]
-
-[[package]]
-name = "inkwell_internals"
-version = "0.1.0"
-source = "git+https://github.com/rtfeldman/inkwell#d0a1ce5e678cf0f0e62b757760d1019301c603c9"
+source = "git+https://github.com/rtfeldman/inkwell?tag=llvm10-0.release2#d0a1ce5e678cf0f0e62b757760d1019301c603c9"
 dependencies = [
  "proc-macro2 0.4.30",
  "quote 0.6.13",
@@ -2121,7 +2097,7 @@ dependencies = [
  "im",
  "im-rc",
  "indoc",
- "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell)",
+ "inkwell",
  "inlinable_string",
  "maplit",
  "pretty_assertions",
@@ -2198,7 +2174,7 @@ dependencies = [
  "im",
  "im-rc",
  "indoc",
- "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell)",
+ "inkwell",
  "inlinable_string",
  "libc",
  "maplit",
@@ -2269,7 +2245,7 @@ dependencies = [
  "im",
  "im-rc",
  "indoc",
- "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell?tag=llvm10-0.release1)",
+ "inkwell",
  "inlinable_string",
  "log",
  "maplit",
@@ -2329,7 +2305,7 @@ dependencies = [
  "im",
  "im-rc",
  "indoc",
- "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell)",
+ "inkwell",
  "inlinable_string",
  "libc",
  "maplit",
