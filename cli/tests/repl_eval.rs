@@ -241,6 +241,15 @@ mod repl_eval {
         );
     }
 
+    #[test]
+    fn four_element_record() {
+        // if this tests turns out to fail on 32-bit platforms, look at jit_to_ast_help
+        expect_success(
+            "{ a: 1, b: 2, c: 3, d: 4 }",
+            "{ a: 1, b: 2, c: 3, d: 4 } : { a : Num *, b : Num *, c : Num *, d : Num * }",
+        );
+    }
+
     // #[test]
     // fn multiline_string() {
     //     // If a string contains newlines, format it as a multiline string in the output

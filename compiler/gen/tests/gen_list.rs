@@ -663,12 +663,14 @@ mod gen_list {
 
     #[test]
     fn list_concat_large() {
-        // these values produce mono ASTs so large that
-        // it can cause a stack overflow. This has been solved
-        // for current code, but may become a problem again in the future.
-        assert_concat_worked(150, 150);
-        assert_concat_worked(129, 350);
-        assert_concat_worked(350, 129);
+        with_larger_debug_stack(|| {
+            // these values produce mono ASTs so large that
+            // it can cause a stack overflow. This has been solved
+            // for current code, but may become a problem again in the future.
+            assert_concat_worked(150, 150);
+            assert_concat_worked(129, 350);
+            assert_concat_worked(350, 129);
+        })
     }
 
     #[test]
