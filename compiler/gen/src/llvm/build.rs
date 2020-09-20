@@ -2467,7 +2467,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
             add_result
         }
         NumAddWrap => bd.build_int_add(lhs, rhs, "add_int_wrap").into(),
-        NumAddChecked => bd.build_int_add(lhs, rhs, "add_int_checked").into(),
+        NumAddChecked => env.call_intrinsic(LLVM_SADD_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
         NumSub => bd.build_int_sub(lhs, rhs, "sub_int").into(),
         NumMul => bd.build_int_mul(lhs, rhs, "mul_int").into(),
         NumGt => bd.build_int_compare(SGT, lhs, rhs, "int_gt").into(),

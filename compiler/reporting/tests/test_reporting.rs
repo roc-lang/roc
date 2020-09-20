@@ -3847,4 +3847,31 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn foobar() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Num.addChecked 1 2
+                "#
+            ),
+            indoc!(
+                r#"
+            ── REDUNDANT PATTERN ───────────────────────────────────────────────────────────
+
+            The 3rd pattern is redundant:
+
+            1│  when Foo 1 2 3 is
+            2│      Foo _ 1 _ -> 1
+            3│      _ -> 2
+            4│      _ -> 3
+                    ^
+
+            Any value of this shape will be handled by a previous pattern, so this
+            one should be removed.
+            "#
+            ),
+        )
+    }
 }

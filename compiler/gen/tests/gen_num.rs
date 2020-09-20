@@ -699,4 +699,57 @@ mod gen_num {
             i64
         );
     }
+
+    #[test]
+    fn add_checked() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.addChecked 1 2 is
+                    Ok 3 -> True
+                    _ -> False
+                "#
+            ),
+            true,
+            bool
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.addChecked 9_223_372_036_854_775_807 1 is
+                    Err IntOverflow -> True
+                    _ -> False
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn add_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.addWrap 9_223_372_036_854_775_807 1
+                "#
+            ),
+            std::i64::MIN,
+            i64
+        );
+    }
+
+    #[test]
+    fn float_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                1.7976931348623157E+308 + 1
+                "#
+            ),
+            0.0,
+            f64
+        );
+    }
 }
