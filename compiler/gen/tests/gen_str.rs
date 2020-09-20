@@ -202,4 +202,13 @@ mod gen_str {
     fn empty_str_is_empty() {
         assert_evals_to!(r#"Str.isEmpty """#, true, bool);
     }
+
+    #[test]
+    fn str_starts_with() {
+        assert_evals_to!(r#"Str.startsWith "hello world" "hell""#, false, bool);
+        assert_evals_to!(r#"Str.startsWith "hello world" """#, false, bool);
+        assert_evals_to!(r#"Str.startsWith "nope" "hello world""#, false, bool);
+        assert_evals_to!(r#"Str.startsWith "hell" "hello world""#, true, bool);
+        assert_evals_to!(r#"Str.startsWith "" "hello world""#, true, bool);
+    }
 }

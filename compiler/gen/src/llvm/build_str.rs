@@ -591,3 +591,58 @@ fn str_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> IntVa
         "str_len_is_nonzero",
     )
 }
+
+/// Str.startsWith : Str, Str -> Bool
+pub fn str_starts_with<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _inplace: InPlace,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    first_str_symbol: Symbol,
+    second_str_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let _builder = env.builder;
+    let ctx = env.context;
+    let prefix_str_ptr = ptr_from_symbol(scope, first_str_symbol);
+    let str_ptr = ptr_from_symbol(scope, second_str_symbol);
+    let bool_wrapper_type = BasicTypeEnum::IntType(ctx.bool_type());
+
+    load_str(
+        env,
+        parent,
+        *prefix_str_ptr,
+        bool_wrapper_type,
+        |_prefix_str_ptr, prefix_str_len, _prefix_str_smallness| {
+            load_str(
+                env,
+                parent,
+                *str_ptr,
+                bool_wrapper_type,
+                |_second_str_ptr, second_str_len, _second_str_smallness| {
+                    let return_false = || ctx.bool_type().const_int(0, false).into();
+
+                    let if_second_str_is_longer_or_equal_to_prefix = env.builder.build_int_compare(
+                        IntPredicate::UGE,
+                        second_str_len,
+                        prefix_str_len,
+                        "str_longer_than_prefix",
+                    );
+                    let check_if_str_starts_with_prefix = || {
+                        ctx.bool_type().const_int(1, false).into()
+                        // Loop over prefix and compare each character to the one from the input
+                        // string at the  same index
+                        // If they are different - return false
+                    };
+                    build_basic_phi2(
+                        env,
+                        parent,
+                        if_second_str_is_longer_or_equal_to_prefix,
+                        check_if_str_starts_with_prefix,
+                        return_false,
+                        bool_wrapper_type,
+                    )
+                },
+            )
+        },
+    )
+}

@@ -52,6 +52,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::BOOL_NOT => bool_not,
         Symbol::STR_CONCAT => str_concat,
         Symbol::STR_IS_EMPTY => str_is_empty,
+        Symbol::STR_STARTS_WITH => str_starts_with,
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
         Symbol::LIST_SET => list_set,
@@ -870,6 +871,26 @@ fn str_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     defn(
         symbol,
         vec![(str_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        bool_var,
+    )
+}
+
+/// Str.startsWith : Str, Str -> Bool
+fn str_starts_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let str_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrStartsWith,
+        args: vec![(str_var, Var(Symbol::ARG_1)), (str_var, Var(Symbol::ARG_2))],
+        ret_var: bool_var,
+    };
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1), (str_var, Symbol::ARG_2)],
         var_store,
         body,
         bool_var,
