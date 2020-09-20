@@ -1134,6 +1134,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![str_type(star1), str_type(star2)], str_type(star3))
     });
 
+    // Str.startsWith : Attr * Str, Attr * Str -> Attr * Bool
+    add_type(Symbol::STR_STARTS_WITH, {
+        let_tvars! { star1, star2, star3 };
+        unique_function(vec![str_type(star1), str_type(star2)], bool_type(star3))
+    });
+
     // Result module
 
     // map : Attr * (Result (Attr a e))

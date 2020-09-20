@@ -192,6 +192,18 @@ mod solve_expr {
         );
     }
 
+    #[test]
+    fn string_starts_with() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.startsWith
+                "#
+            ),
+            "Str, Str -> Bool",
+        );
+    }
+
     // #[test]
     // fn block_string_literal() {
     //     infer_eq(
