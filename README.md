@@ -65,7 +65,7 @@ One of the reasons this editor is coupled with the language itself is to allow p
 
 A trivial example: suppose I'm writing a Roc app for an Arduino platform. I install a platform-specific package for displaying text on a grid of LEDs. Because I've installed this package, at the call site where I call the function to specify the color of the text on the LEDs, my Roc editor displays an inline color picker. As I move a slider around to try out different colors, not only does my code change to reflect that value in realtime, but the physical LEDs in my room change color in realtime as well. As the application author, all I did to get that experience was to install the "text on an LED grid" package, nothing else.
 
-The goal is for this to be one of the most trivial, bare minimum examples of what the editor experience would be like. Hopefully, people in the future will look back on this example and say "that's so embarassingly basic; why didn't you talk about one of the *actually great* things in the seamless editor plugin ecosystem?"
+The goal is for this to be one of the most trivial, bare minimum examples of what the editor experience would be like. Hopefully, people in the future will look back on this example and say "that's so embarrassingly basic; why didn't you talk about one of the *actually great* things in the seamless editor plugin ecosystem?"
 
 Finally, some implementation goals:
 
