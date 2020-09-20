@@ -138,10 +138,7 @@ fn jit_to_ast_help<'a>(
                             execution_engine,
                             main_fn_name,
                             larger_size as usize,
-                            |bytes: *const u8| {
-                                dbg!(bytes);
-                                ptr_to_ast(bytes as *const libc::c_void)
-                            }
+                            |bytes: *const u8| { ptr_to_ast(bytes as *const libc::c_void) }
                         )
                     }
                 },
@@ -180,10 +177,7 @@ fn jit_to_ast_help<'a>(
                                 execution_engine,
                                 main_fn_name,
                                 larger_size as usize,
-                                |bytes: *const u8| {
-                                    dbg!(bytes);
-                                    ptr_to_ast(bytes as *const libc::c_void)
-                                }
+                                |bytes: *const u8| { ptr_to_ast(bytes as *const libc::c_void) }
                             )
                         }
                     }
@@ -297,7 +291,6 @@ fn struct_to_ast<'a>(
     field_layouts: &[Layout<'a>],
     fields: &MutMap<Lowercase, RecordField<Variable>>,
 ) -> Expr<'a> {
-    dbg!(&ptr);
     let arena = env.arena;
     let subs = env.subs;
     let mut output = Vec::with_capacity_in(field_layouts.len(), &arena);
