@@ -990,8 +990,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 }
             }
 
-            // TODO verify that this is required (better safe than sorry)
             if filler > 0 {
+                // TODO verify that this is required (better safe than sorry)
                 field_types.push(env.context.i8_type().array_type(filler).into());
             }
 
@@ -1381,15 +1381,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
                     builder.build_conditional_branch(value, then_block, else_block);
 
-                    // build then block
-                    builder.position_at_end(then_block);
-                    let then_val = build_exp_stmt(env, layout_ids, scope, parent, pass_stmt);
-                    if then_block.get_terminator().is_none() {
-                        builder.build_unconditional_branch(cont_block);
-                        let then_block = builder.get_insert_block().unwrap();
-                        blocks.push((&then_val, then_block));
-                    }
-
                     // build else block
                     builder.position_at_end(else_block);
                     let else_val = build_exp_stmt(env, layout_ids, scope, parent, fail_stmt);
@@ -1397,6 +1388,15 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         let else_block = builder.get_insert_block().unwrap();
                         builder.build_unconditional_branch(cont_block);
                         blocks.push((&else_val, else_block));
+                    }
+
+                    // build then block
+                    builder.position_at_end(then_block);
+                    let then_val = build_exp_stmt(env, layout_ids, scope, parent, pass_stmt);
+                    if then_block.get_terminator().is_none() {
+                        builder.build_unconditional_branch(cont_block);
+                        let then_block = builder.get_insert_block().unwrap();
+                        blocks.push((&then_val, then_block));
                     }
 
                     // emit merge block
@@ -2115,7 +2115,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             list_join(env, inplace, parent, list, outer_list_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumCeiling | NumFloor
-        | NumToFloat => {
+        | NumToFloat | NumIsFinite => {
             debug_assert_eq!(args.len(), 1);
 
             let (arg, arg_layout) = load_symbol_and_layout(env, scope, &args[0]);
@@ -2250,6 +2250,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                         ),
                         Float128 | Float64 | Float32 | Float16 => build_float_binop(
                             env,
+                            parent,
                             lhs_arg.into_float_value(),
                             lhs_layout,
                             rhs_arg.into_float_value(),
@@ -2504,6 +2505,7 @@ fn call_bitcode_fn<'a, 'ctx, 'env>(
 
 fn build_float_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
     lhs: FloatValue<'ctx>,
     _lhs_layout: &Layout<'a>,
     rhs: FloatValue<'ctx>,
@@ -2516,9 +2518,60 @@ fn build_float_binop<'a, 'ctx, 'env>(
     let bd = env.builder;
 
     match op {
-        NumAdd => bd.build_float_add(lhs, rhs, "add_float").into(),
+        NumAdd => {
+            let builder = env.builder;
+            let context = env.context;
+
+            let result = bd.build_float_add(lhs, rhs, "add_float");
+
+            let is_finite =
+                call_bitcode_fn(NumIsFinite, env, &[result.into()], "is_finite_").into_int_value();
+
+            let then_block = context.append_basic_block(parent, "then_block");
+            let throw_block = context.append_basic_block(parent, "throw_block");
+
+            builder.build_conditional_branch(is_finite, then_block, throw_block);
+
+            builder.position_at_end(throw_block);
+
+            throw_exception(env, "float addition overflowed!");
+
+            builder.position_at_end(then_block);
+
+            result.into()
+        }
+        NumAddChecked => {
+            let builder = env.builder;
+            let context = env.context;
+
+            let result = bd.build_float_add(lhs, rhs, "add_float");
+
+            let is_finite =
+                call_bitcode_fn(NumIsFinite, env, &[result.into()], "is_finite_").into_int_value();
+            let is_infinite = bd.build_not(is_finite, "negate");
+
+            let struct_type = context.struct_type(
+                &[context.f64_type().into(), context.bool_type().into()],
+                false,
+            );
+
+            let struct_value = {
+                let v1 = struct_type.const_zero();
+
+                let v2 = builder
+                    .build_insert_value(v1, result, 0, "set_result")
+                    .unwrap();
+
+                let v3 = builder
+                    .build_insert_value(v2, is_infinite, 1, "set_is_infinite")
+                    .unwrap();
+
+                v3.into_struct_value()
+            };
+
+            struct_value.into()
+        }
         NumAddWrap => unreachable!("wrapping addition is not defined on floats"),
-        NumAddChecked => bd.build_float_add(lhs, rhs, "add_float_checked").into(),
         NumSub => bd.build_float_sub(lhs, rhs, "sub_float").into(),
         NumMul => bd.build_float_mul(lhs, rhs, "mul_float").into(),
         NumGt => bd.build_float_compare(OGT, lhs, rhs, "float_gt").into(),
@@ -2622,6 +2675,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             env.context.i64_type(),
             "num_floor",
         ),
+        NumIsFinite => call_bitcode_fn(NumIsFinite, env, &[arg.into()], "is_finite_"),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }
@@ -2632,7 +2686,6 @@ fn define_global_str<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     message: &str,
 ) -> inkwell::values::GlobalValue<'ctx> {
-    let context = env.context;
     let module = env.module;
 
     // hash the name so we don't re-define existing messages
@@ -2644,29 +2697,12 @@ fn define_global_str<'a, 'ctx, 'env>(
         message.hash(&mut hasher);
         let hash = hasher.finish();
 
-        format!("message_{}", hash)
+        format!("_Error_message_{}", hash)
     };
 
     match module.get_global(&name) {
         Some(current) => current,
-        None => {
-            let i8_type = context.i8_type();
-
-            // define the error message as a global constant
-            let message_global =
-                module.add_global(i8_type.array_type(message.len() as u32), None, &name);
-
-            let mut message_bytes = Vec::with_capacity_in(message.len(), env.arena);
-
-            for c in message.chars() {
-                message_bytes.push(i8_type.const_int(c as u64, false));
-            }
-
-            let const_array = i8_type.const_array(&message_bytes);
-            message_global.set_initializer(&const_array);
-
-            message_global
-        }
+        None => unsafe { env.builder.build_global_string(message, name.as_str()) },
     }
 }
 

@@ -188,8 +188,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     // addChecked or (+) : Num a, Num a -> Result (Num a) [ IntOverflow ]*
-    let int_overflow = SolvedType::TagUnion(
-        vec![(TagName::Global("IntOverflow".into()), vec![])],
+    let overflow = SolvedType::TagUnion(
+        vec![(TagName::Global("Overflow".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
@@ -197,7 +197,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Symbol::NUM_ADD_CHECKED,
         SolvedType::Func(
             vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
-            Box::new(result_type(num_type(flex(TVAR1)), int_overflow)),
+            Box::new(result_type(num_type(flex(TVAR1)), overflow)),
         ),
     );
 

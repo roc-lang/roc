@@ -258,7 +258,7 @@ fn num_add_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     //
     // if arg_3.b then
     //  # overflow
-    //  Err IntOverflow
+    //  Err Overflow
     // else
     //  # all is well
     //  Ok arg_3.a
@@ -281,7 +281,7 @@ fn num_add_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
             // overflow!
             no_region(tag(
                 "Err",
-                vec![tag("DivByZero", Vec::new(), var_store)],
+                vec![tag("Overflow", Vec::new(), var_store)],
                 var_store,
             )),
         )],

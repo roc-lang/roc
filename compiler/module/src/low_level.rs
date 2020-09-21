@@ -42,6 +42,7 @@ pub enum LowLevel {
     NumCeiling,
     NumPowInt,
     NumFloor,
+    NumIsFinite,
     Eq,
     NotEq,
     And,
