@@ -947,8 +947,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             debug_assert!(*union_size > 1);
             let ptr_size = env.ptr_bytes;
 
-            let mut filler = tag_layout.stack_size(ptr_size);
-
             let ctx = env.context;
             let builder = env.builder;
 
@@ -985,14 +983,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     } else {
                         field_vals.push(val);
                     }
-
-                    filler -= field_size;
                 }
-            }
-
-            if filler > 0 {
-                // TODO verify that this is required (better safe than sorry)
-                field_types.push(env.context.i8_type().array_type(filler).into());
             }
 
             // Create the struct_type
