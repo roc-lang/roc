@@ -269,7 +269,7 @@ fn num_add_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
         branches: vec![(
             // if-condition
             no_region(
-                // Num.neq denominator 0
+                // arg_3.b
                 Access {
                     record_var,
                     ext_var: var_store.fresh(),
@@ -288,11 +288,11 @@ fn num_add_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
         final_else: Box::new(
             // all is well
             no_region(
-                // Ok (Float.#divUnchecked numerator denominator)
+                // Ok arg_3.a
                 tag(
                     "Ok",
                     vec![
-                        // Num.#divUnchecked numerator denominator
+                        // arg_3.a
                         Access {
                             record_var,
                             ext_var: var_store.fresh(),
@@ -307,19 +307,17 @@ fn num_add_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ),
     };
 
+    // arg_3 = RunLowLevel NumAddChecked arg_1 arg_2
     let def = crate::def::Def {
         loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_3)),
-        loc_expr: no_region(
-            // Num.neq denominator 0
-            RunLowLevel {
-                op: LowLevel::NumAddChecked,
-                args: vec![
-                    (num_var_1, Var(Symbol::ARG_1)),
-                    (num_var_2, Var(Symbol::ARG_2)),
-                ],
-                ret_var: record_var,
-            },
-        ),
+        loc_expr: no_region(RunLowLevel {
+            op: LowLevel::NumAddChecked,
+            args: vec![
+                (num_var_1, Var(Symbol::ARG_1)),
+                (num_var_2, Var(Symbol::ARG_2)),
+            ],
+            ret_var: record_var,
+        }),
         expr_var: record_var,
         pattern_vars: SendMap::default(),
         annotation: None,
