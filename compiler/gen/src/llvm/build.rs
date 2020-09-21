@@ -1372,15 +1372,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
                     builder.build_conditional_branch(value, then_block, else_block);
 
-                    // build else block
-                    builder.position_at_end(else_block);
-                    let else_val = build_exp_stmt(env, layout_ids, scope, parent, fail_stmt);
-                    if else_block.get_terminator().is_none() {
-                        let else_block = builder.get_insert_block().unwrap();
-                        builder.build_unconditional_branch(cont_block);
-                        blocks.push((&else_val, else_block));
-                    }
-
                     // build then block
                     builder.position_at_end(then_block);
                     let then_val = build_exp_stmt(env, layout_ids, scope, parent, pass_stmt);
@@ -1388,6 +1379,15 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         builder.build_unconditional_branch(cont_block);
                         let then_block = builder.get_insert_block().unwrap();
                         blocks.push((&then_val, then_block));
+                    }
+
+                    // build else block
+                    builder.position_at_end(else_block);
+                    let else_val = build_exp_stmt(env, layout_ids, scope, parent, fail_stmt);
+                    if else_block.get_terminator().is_none() {
+                        let else_block = builder.get_insert_block().unwrap();
+                        builder.build_unconditional_branch(cont_block);
+                        blocks.push((&else_val, else_block));
                     }
 
                     // emit merge block
@@ -2427,7 +2427,6 @@ fn build_int_binop<'a, 'ctx, 'env>(
 
     match op {
         NumAdd => {
-            // TODO
             let builder = env.builder;
             let context = env.context;
 
