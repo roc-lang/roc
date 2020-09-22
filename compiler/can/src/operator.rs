@@ -51,7 +51,7 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
 }
 
 /// Reorder the expression tree based on operator precedence and associativity rules,
-/// then replace the BinOp nodes with Apply nodes. Also drop SpaceBefore and SpaceAfter nodes.
+/// then replace the BinOp nodes with Apply nodes.
 pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Located<Expr<'a>> {
     match &loc_expr.value {
         Float(_)
@@ -218,14 +218,36 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 region: loc_expr.region,
             })
         }
-        SpaceBefore(expr, _)
-        | Nested(SpaceBefore(expr, _))
-        | SpaceAfter(expr, _)
-        | Nested(SpaceAfter(expr, _))
-        | ParensAround(expr)
-        | Nested(ParensAround(expr))
-        | Nested(Nested(expr)) => {
-            // Since we've already begun canonicalization, spaces and parens
+        SpaceBefore(sub_expr, coment_or_new_line)
+        | Nested(SpaceBefore(sub_expr, coment_or_new_line)) => {
+            let region = loc_expr.region;
+            let loc_sub_expr = Located {
+                region,
+                value: Nested(sub_expr),
+            };
+            let value = SpaceBefore(
+                &desugar_expr(arena, arena.alloc(loc_sub_expr)).value,
+                coment_or_new_line,
+            );
+
+            arena.alloc(Located { region, value })
+        }
+        SpaceAfter(sub_expr, coment_or_new_line)
+        | Nested(SpaceAfter(sub_expr, coment_or_new_line)) => {
+            let region = loc_expr.region;
+            let loc_sub_expr = Located {
+                region,
+                value: Nested(sub_expr),
+            };
+            let value = SpaceAfter(
+                &desugar_expr(arena, arena.alloc(loc_sub_expr)).value,
+                coment_or_new_line,
+            );
+
+            arena.alloc(Located { region, value })
+        }
+        ParensAround(expr) | Nested(ParensAround(expr)) | Nested(Nested(expr)) => {
+            // Since we've already begun canonicalization, parens
             // are no longer needed and should be dropped.
             desugar_expr(
                 arena,
