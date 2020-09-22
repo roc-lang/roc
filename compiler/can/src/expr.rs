@@ -647,31 +647,24 @@ pub fn canonicalize_expr<'a>(
 
             (answer, Output::default())
         }
+        ast::Expr::SpaceBefore(sub_expr, _spaces) => {
+            let (answer, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
+
+            (answer.value, output)
+        }
+        ast::Expr::SpaceAfter(sub_expr, _spaces) => {
+            let (answer, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
+
+            (answer.value, output)
+        }
+
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
         ast::Expr::ParensAround(sub_expr) => {
-            // panic!(
-            // "A ParensAround did not get removed during operator desugaring somehow: {:?}",
-            let (answer, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
-
-            (answer.value, output)
-            // );
-        }
-        ast::Expr::SpaceBefore(sub_expr, _spaces) => {
-            // panic!(
-            //     "A SpaceBefore did not get removed during operator desugaring somehow: {:?}",
-            let (answer, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
-
-            (answer.value, output)
-            // );
-        }
-        ast::Expr::SpaceAfter(sub_expr, _spaces) => {
-            // panic!(
-            //     "A SpaceAfter did not get removed during operator desugaring somehow: {:?}",
-            let (answer, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
-
-            (answer.value, output)
-            // );
+            panic!(
+                "A ParensAround did not get removed during operator desugaring somehow: {:?}",
+                loc_op
+            );
         }
         ast::Expr::BinOp((_, loc_op, _)) => {
             panic!(

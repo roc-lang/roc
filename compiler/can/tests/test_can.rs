@@ -256,9 +256,7 @@ mod test_can {
             "#
         );
         let arena = Bump::new();
-        let CanExprOut {
-            problems, ..
-        } = can_expr_with(&arena, test_home(), src);
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems, Vec::new());
     }
@@ -274,9 +272,7 @@ mod test_can {
             "#
         );
         let arena = Bump::new();
-        let CanExprOut {
-            problems, ..
-        } = can_expr_with(&arena, test_home(), src);
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems, Vec::new());
     }
