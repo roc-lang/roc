@@ -480,7 +480,9 @@ fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a L
                 // Rewrite the Pizza operator into an Apply
 
                 match &right.value {
-                    Apply(function, arguments, _called_via) => {
+                    SpaceBefore(Apply(function, arguments, _called_via), _)
+                    | SpaceAfter(Apply(function, arguments, _called_via), _)
+                    | Apply(function, arguments, _called_via) => {
                         let mut args = Vec::with_capacity_in(1 + arguments.len(), arena);
 
                         args.push(left);

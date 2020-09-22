@@ -245,41 +245,41 @@ mod test_can {
     }
 
     // ANNOTATIONS
-    // #[test]
-    // fn correct_annotated_body() {
-    //     let src = indoc!(
-    //         r#"
-    //             f : Int -> Int
-    //             f = \ a -> a
+    #[test]
+    fn correct_annotated_body() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int
+                f = \ a -> a
 
-    //             f
-    //         "#
-    //     );
-    //     let arena = Bump::new();
-    //     let CanExprOut {
-    //         problems, ..
-    //     } = can_expr_with(&arena, test_home(), src);
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            problems, ..
+        } = can_expr_with(&arena, test_home(), src);
 
-    //     assert_eq!(problems, Vec::new());
-    // }
+        assert_eq!(problems, Vec::new());
+    }
 
-    // #[test]
-    // fn correct_annotated_body_with_comments() {
-    //     let src = indoc!(
-    //         r#"
-    //             f : Int -> Int # comment
-    //             f = \ a -> a
+    #[test]
+    fn correct_annotated_body_with_comments() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int # comment
+                f = \ a -> a
 
-    //             f
-    //         "#
-    //     );
-    //     let arena = Bump::new();
-    //     let CanExprOut {
-    //         problems, ..
-    //     } = can_expr_with(&arena, test_home(), src);
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            problems, ..
+        } = can_expr_with(&arena, test_home(), src);
 
-    //     assert_eq!(problems, Vec::new());
-    // }
+        assert_eq!(problems, Vec::new());
+    }
 
     // #[test]
     // fn name_mismatch_annotated_body() {
@@ -336,6 +336,7 @@ mod test_can {
     //         _ => false,
     //     }));
     // }
+
     // #[test]
     // fn separated_annotated_body() {
     //     let src = indoc!(
