@@ -2427,9 +2427,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
 
     match op {
         NumAdd => {
-            let builder = env.builder;
             let context = env.context;
-
             let result = env
                 .call_intrinsic(LLVM_SADD_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()])
                 .into_struct_value();
@@ -2437,7 +2435,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
             let add_result = bd.build_extract_value(result, 0, "add_result").unwrap();
             let has_overflowed = bd.build_extract_value(result, 1, "has_overflowed").unwrap();
 
-            let condition = builder.build_int_compare(
+            let condition = bd.build_int_compare(
                 IntPredicate::EQ,
                 has_overflowed.into_int_value(),
                 context.bool_type().const_zero(),
@@ -2447,13 +2445,13 @@ fn build_int_binop<'a, 'ctx, 'env>(
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
 
-            builder.build_conditional_branch(condition, then_block, throw_block);
+            bd.build_conditional_branch(condition, then_block, throw_block);
 
-            builder.position_at_end(throw_block);
+            bd.position_at_end(throw_block);
 
             throw_exception(env, "integer addition overflowed!");
 
-            builder.position_at_end(then_block);
+            bd.position_at_end(then_block);
 
             add_result
         }
@@ -2531,7 +2529,6 @@ fn build_float_binop<'a, 'ctx, 'env>(
             result.into()
         }
         NumAddChecked => {
-            let builder = env.builder;
             let context = env.context;
 
             let result = bd.build_float_add(lhs, rhs, "add_float");
@@ -2547,12 +2544,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
 
             let struct_value = {
                 let v1 = struct_type.const_zero();
-
-                let v2 = builder
-                    .build_insert_value(v1, result, 0, "set_result")
-                    .unwrap();
-
-                let v3 = builder
+                let v2 = bd.build_insert_value(v1, result, 0, "set_result").unwrap();
+                let v3 = bd
                     .build_insert_value(v2, is_infinite, 1, "set_is_infinite")
                     .unwrap();
 
