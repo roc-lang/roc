@@ -682,7 +682,7 @@ has the fields `x` and `y`.
 In Roc, you can do this like so:
 
 ```elm
-table { height = 800, width = 600 }
+table { height: 800, width: 600 }
 ```
 
 ...and the `table` function will fill in its default values for `x` and `y`.
