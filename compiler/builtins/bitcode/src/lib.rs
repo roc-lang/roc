@@ -36,3 +36,12 @@ pub fn pow_int_(mut base: i64, mut exp: i64) -> i64 {
 
     acc
 }
+
+/// Adapted from Rust's core::num module, by the Rust core team,
+/// licensed under the Apache License, version 2.0 - https://www.apache.org/licenses/LICENSE-2.0
+///
+/// Thank you, Rust core team!
+#[no_mangle]
+pub fn is_finite_(num: f64) -> bool {
+    f64::is_finite(num)
+}

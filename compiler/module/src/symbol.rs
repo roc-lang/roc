@@ -644,6 +644,8 @@ define_builtins! {
         39 NUM_CEILING: "ceiling"
         40 NUM_POW_INT: "powInt"
         41 NUM_FLOOR: "floor"
+        42 NUM_ADD_WRAP: "addWrap"
+        43 NUM_ADD_CHECKED: "addChecked"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
