@@ -1570,6 +1570,26 @@ pub fn list_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> 
     )
 }
 
+pub fn load_list<'ctx>(
+    builder: &Builder<'ctx>,
+    wrapper_struct: StructValue<'ctx>,
+    ptr_type: PointerType<'ctx>,
+) -> (IntValue<'ctx>, PointerValue<'ctx>) {
+    let ptr_as_int = builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "read_list_ptr")
+        .unwrap()
+        .into_int_value();
+
+    let ptr = builder.build_int_to_ptr(ptr_as_int, ptr_type, "list_cast_ptr");
+
+    let length = builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "list_len")
+        .unwrap()
+        .into_int_value();
+
+    (length, ptr)
+}
+
 pub fn load_list_ptr<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
