@@ -38,10 +38,12 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
         Body(loc_pattern, loc_expr) | Nested(Body(loc_pattern, loc_expr)) => {
             Body(loc_pattern, desugar_expr(arena, loc_expr))
         }
-        SpaceBefore(def, _)
-        | SpaceAfter(def, _)
-        | Nested(SpaceBefore(def, _))
-        | Nested(SpaceAfter(def, _)) => desugar_def(arena, def),
+        SpaceBefore(def, spaces) | Nested(SpaceBefore(def, spaces)) => {
+            SpaceBefore(arena.alloc(desugar_def(arena, def)), spaces)
+        }
+        SpaceAfter(def, spaces) | Nested(SpaceAfter(def, spaces)) => {
+            SpaceAfter(arena.alloc(desugar_def(arena, def)), spaces)
+        }
         Nested(Nested(def)) => desugar_def(arena, def),
         alias @ Alias { .. } => Nested(alias),
         Nested(alias @ Alias { .. }) => Nested(alias),
@@ -480,8 +482,7 @@ fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a L
                 // Rewrite the Pizza operator into an Apply
 
                 match &right.value {
-                    SpaceBefore(Apply(function, arguments, _called_via), _)
-                    | SpaceAfter(Apply(function, arguments, _called_via), _)
+                    SpaceAfter(Apply(function, arguments, _called_via), _)
                     | Apply(function, arguments, _called_via) => {
                         let mut args = Vec::with_capacity_in(1 + arguments.len(), arena);
 

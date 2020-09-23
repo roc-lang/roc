@@ -140,7 +140,7 @@ pub fn canonicalize_defs<'a>(
     let mut can_defs_by_symbol = HashMap::with_capacity_and_hasher(num_defs, default_hasher());
     let mut pending = Vec::with_capacity(num_defs); // TODO bump allocate this!
     let mut iter = loc_defs.iter().peekable();
-
+    //println!("{:#?}", loc_defs);
     // Canonicalize all the patterns, record shadowing problems, and store
     // the ast::Expr values in pending_exprs for further canonicalization
     // once we've finished assembling the entire scope.
@@ -167,10 +167,6 @@ pub fn canonicalize_defs<'a>(
                                 &mut scope,
                                 pattern_type,
                             )
-                        } else if loc_def.region.lines_between(body_region) > 1 {
-                            // there is a line of whitespace between the annotation and the body
-                            // treat annotation and body separately
-                            to_pending_def(env, var_store, &loc_def.value, &mut scope, pattern_type)
                         } else {
                             // the pattern of the annotation does not match the pattern of the body directly below it
                             env.problems.push(Problem::SignatureDefMismatch {

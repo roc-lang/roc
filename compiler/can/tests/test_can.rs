@@ -333,28 +333,29 @@ mod test_can {
     //     }));
     // }
 
-    // #[test]
-    // fn separated_annotated_body() {
-    //     let src = indoc!(
-    //         r#"
-    //             f : Int -> Int
+    #[test]
+    fn separated_annotated_body() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int
 
-    //             f = \ a -> a
+                f = \ a -> a
 
-    //             f 42
-    //         "#
-    //     );
-    //     let arena = Bump::new();
-    //     let CanExprOut {
-    //         problems, ..
-    //     } = can_expr_with(&arena, test_home(), src);
+                f 42
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            problems, loc_expr, ..
+        } = can_expr_with(&arena, test_home(), src);
 
-    //     assert_eq!(problems.len(), 1);
-    //     assert!(problems.iter().all(|problem| match problem {
-    //         Problem::ShadowingInAnnotation{..} => true,
-    //         _ => false,
-    //     }));
-    // }
+        // println!("{:#?}", loc_expr.value);
+        assert_eq!(problems.len(), 1);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::ShadowingInAnnotation { .. } => true,
+            _ => false,
+        }));
+    }
 
     // #[test]
     // fn separated_annotated_body_with_comment() {
