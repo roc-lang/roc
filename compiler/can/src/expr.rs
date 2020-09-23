@@ -663,7 +663,7 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::ParensAround(sub_expr) => {
             panic!(
                 "A ParensAround did not get removed during operator desugaring somehow: {:?}",
-                loc_op
+                sub_expr
             );
         }
         ast::Expr::BinOp((_, loc_op, _)) => {
