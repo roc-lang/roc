@@ -100,7 +100,7 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
 #[inline(always)]
 fn decrement_refcount_builtin<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _parent: FunctionValue<'ctx>,
+    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
@@ -109,14 +109,37 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
     use Builtin::*;
 
     match builtin {
-        List(MemoryMode::Refcounted, element_layout) => {
+        List(memory_mode, element_layout) => {
+            let wrapper_struct = value.into_struct_value();
             if element_layout.contains_refcounted() {
-                // TODO decrement all values
+                use crate::llvm::build_list::{incrementing_elem_loop, load_list};
+                use inkwell::types::BasicType;
+
+                let ptr_type =
+                    basic_type_from_layout(env.arena, env.context, element_layout, env.ptr_bytes)
+                        .ptr_type(AddressSpace::Generic);
+
+                let (len, ptr) = load_list(env.builder, wrapper_struct, ptr_type);
+
+                let loop_fn = |_index, element| {
+                    decrement_refcount_layout(env, parent, layout_ids, element, element_layout);
+                };
+
+                incrementing_elem_loop(
+                    env.builder,
+                    env.context,
+                    parent,
+                    ptr,
+                    len,
+                    "dec_index",
+                    loop_fn,
+                );
             }
-            build_dec_list(env, layout_ids, layout, value.into_struct_value());
-        }
-        List(MemoryMode::Unique, _element_layout) => {
-            // do nothing
+
+            if let MemoryMode::Refcounted = memory_mode {
+                build_inc_list(env, layout_ids, layout, wrapper_struct);
+            }
+            build_dec_list(env, layout_ids, layout, wrapper_struct);
         }
         Set(element_layout) => {
             if element_layout.contains_refcounted() {
@@ -158,7 +181,7 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
 #[inline(always)]
 fn increment_refcount_builtin<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _parent: FunctionValue<'ctx>,
+    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
@@ -167,15 +190,36 @@ fn increment_refcount_builtin<'a, 'ctx, 'env>(
     use Builtin::*;
 
     match builtin {
-        List(MemoryMode::Refcounted, element_layout) => {
-            if element_layout.contains_refcounted() {
-                // TODO decrement all values
-            }
+        List(memory_mode, element_layout) => {
             let wrapper_struct = value.into_struct_value();
-            build_inc_list(env, layout_ids, layout, wrapper_struct);
-        }
-        List(MemoryMode::Unique, _element_layout) => {
-            // do nothing
+            if element_layout.contains_refcounted() {
+                use crate::llvm::build_list::{incrementing_elem_loop, load_list};
+                use inkwell::types::BasicType;
+
+                let ptr_type =
+                    basic_type_from_layout(env.arena, env.context, element_layout, env.ptr_bytes)
+                        .ptr_type(AddressSpace::Generic);
+
+                let (len, ptr) = load_list(env.builder, wrapper_struct, ptr_type);
+
+                let loop_fn = |_index, element| {
+                    increment_refcount_layout(env, parent, layout_ids, element, element_layout);
+                };
+
+                incrementing_elem_loop(
+                    env.builder,
+                    env.context,
+                    parent,
+                    ptr,
+                    len,
+                    "inc_index",
+                    loop_fn,
+                );
+            }
+
+            if let MemoryMode::Refcounted = memory_mode {
+                build_inc_list(env, layout_ids, layout, wrapper_struct);
+            }
         }
         Set(element_layout) => {
             if element_layout.contains_refcounted() {
