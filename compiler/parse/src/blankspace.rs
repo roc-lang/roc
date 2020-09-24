@@ -1,7 +1,8 @@
 use crate::ast::CommentOrNewline::{self, *};
-use crate::ast::Spaceable;
+use crate::ast::{Attempting, Spaceable};
 use crate::parser::{
-    self, and, peek_utf8_char, unexpected, unexpected_eof, FailReason, Parser, State,
+    self, and, ascii_char, ascii_string, optional, parse_utf8, peek_utf8_char, then, unexpected,
+    unexpected_eof, FailReason, Parser, State,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -209,6 +210,33 @@ enum LineState {
     Normal,
     Comment,
     DocComment,
+}
+
+pub fn line_comment<'a>() -> impl Parser<'a, &'a str> {
+    then(
+        and!(ascii_char('#'), optional(ascii_string("# "))),
+        |_arena: &'a Bump, state: State<'a>, (_, opt_doc)| {
+            if opt_doc != None {
+                return Err(unexpected(3, state, Attempting::LineComment));
+            }
+            let mut length = 0;
+
+            for &byte in state.bytes.iter() {
+                if byte != b'\n' {
+                    length += 1;
+                } else {
+                    break;
+                }
+            }
+
+            let comment = &state.bytes[..length];
+            let state = state.advance_without_indenting(length + 1)?;
+            match parse_utf8(comment) {
+                Ok(comment_str) => Ok((comment_str, state)),
+                Err(reason) => state.fail(reason),
+            }
+        },
+    )
 }
 
 #[inline(always)]
