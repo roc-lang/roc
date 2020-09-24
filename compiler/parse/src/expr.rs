@@ -530,7 +530,7 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
             Either::Second(comment) => Some(comment),
         }
     );
-    let spaces_then_comment_or_newline: dyn Parser<'a, Option<&'a str>> =
+    let spaces_then_comment_or_newline =
         skip_first!(zero_or_more!(ascii_char(' ')), comment_or_newline);
     let annotated_body = and!(
         annotation,
