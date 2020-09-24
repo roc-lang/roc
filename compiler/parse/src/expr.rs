@@ -2,7 +2,8 @@ use crate::ast::{
     AssignedField, Attempting, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation,
 };
 use crate::blankspace::{
-    space0, space0_after, space0_around, space0_before, space1, space1_around, space1_before,
+    line_comment, space0, space0_after, space0_around, space0_before, space1, space1_around,
+    space1_before,
 };
 use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::keyword;
@@ -497,35 +498,66 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
     // Indented more beyond the original indent.
     let indented_more = min_indent + 1;
 
-    // Constant or annotation
-    map_with_arena!(
-        and!(
-            // A pattern followed by '=' or ':'
-            space0_after(loc_closure_param(min_indent), min_indent),
-            either!(
-                // Constant
-                skip_first!(
-                    equals_for_def(),
-                    // Spaces after the '=' (at a normal indentation level) and then the expr.
-                    // The expr itself must be indented more than the pattern and '='
-                    space0_before(
-                        loc!(move |arena, state| parse_expr(indented_more, arena, state)),
-                        min_indent,
-                    )
-                ),
-                // Annotation
-                skip_first!(
-                    ascii_char(b':'),
-                    // Spaces after the ':' (at a normal indentation level) and then the type.
-                    // The type itself must be indented more than the pattern and ':'
-                    space0_before(type_annotation::located(indented_more), indented_more)
-                )
+    let pattern = space0_after(loc_closure_param(min_indent), min_indent);
+
+    let annotation = and!(
+        pattern,
+        skip_first!(
+            ascii_char(b':'),
+            // Spaces after the ':' (at a normal indentation level) and then the type.
+            // The type itself must be indented more than the pattern and ':'
+            space0_before(type_annotation::located(indented_more), indented_more)
+        )
+    );
+
+    let body = and!(
+        pattern,
+        skip_first!(
+            equals_for_def(),
+            // Spaces after the '=' (at a normal indentation level) and then the expr.
+            // The expr itself must be indented more than the pattern and '='
+            space0_before(
+                loc!(move |arena, state| parse_expr(indented_more, arena, state)),
+                min_indent,
             )
-        ),
-        |arena: &'a Bump, (loc_pattern, expr_or_ann)| match expr_or_ann {
-            Either::First(loc_expr) => Def::Body(arena.alloc(loc_pattern), arena.alloc(loc_expr)),
-            Either::Second(loc_ann) =>
-                annotation_or_alias(arena, &loc_pattern.value, loc_pattern.region, loc_ann),
+        )
+    );
+
+    let comment_or_newline = map!(
+        either!(ascii_char('\n'), line_comment()),
+        |either_comment_or_newline| match either_comment_or_newline {
+            Either::First(_) => None,
+            Either::Second(comment) => Some(comment),
+        }
+    );
+    let spaces_then_comment_or_newline: dyn Parser<'a, Option<&'a str>> =
+        skip_first!(zero_or_more!(ascii_char(' ')), comment_or_newline);
+    let annotated_body = and!(
+        annotation,
+        optional(and!(spaces_then_comment_or_newline, body))
+    );
+
+    map_with_arena!(
+        either!(annotated_body, body),
+        |arena: &'a Bump, ann_body_or_body| match ann_body_or_body {
+            Either::First((body_pattern, body_expr)) =>
+                Def::Body(arena.alloc(body_pattern), arena.alloc(body_expr)),
+            Either::Second(((ann_pattern, ann_type), None)) => annotation_or_alias(
+                arena,
+                &(ann_pattern as Located<Pattern>).value,
+                (ann_pattern as Located<Pattern>).region,
+                ann_type
+            ),
+            Either::Second((
+                (ann_pattern, ann_type),
+                Some((opt_comment, (body_pattern, body_expr))),
+            )) => Def::AnnotatedBody {
+                ann_pattern: ann_pattern,
+                ann_type: ann_type,
+                comment: opt_comment,
+                body_pattern: body_pattern,
+                body_expr: body_expr,
+            },
         }
     )
 }

@@ -277,6 +277,14 @@ pub enum Def<'a> {
     // No need to track that relationship in any data structure.
     Body(&'a Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
 
+    AnnotatedBody {
+        ann_pattern: Loc<Pattern<'a>>,
+        ann_type: Loc<TypeAnnotation<'a>>,
+        comment: Option<&'a str>,
+        body_pattern: Loc<Pattern<'a>>,
+        body_expr: Loc<Expr<'a>>,
+    },
+
     // Blank Space (e.g. comments, spaces, newlines) before or after a def.
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a Def<'a>, &'a [CommentOrNewline<'a>]),
@@ -668,6 +676,7 @@ impl<'a> Spaceable<'a> for Def<'a> {
 /// "currently attempting to parse a list." This helps error messages!
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Attempting {
+    LineComment,
     List,
     Keyword,
     StrLiteral,
