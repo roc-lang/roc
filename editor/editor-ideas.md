@@ -17,6 +17,7 @@ These are potentially inspirational resources for the editor's design.
 * [Unity game engine](https://unity.com/)
     * Scripts can expose values as text inputs, sliders, checkboxes, etc or even generate custom graphical inputs
     * Drag-n-drop game objects and component into script interfaces
+* [How to Visualize Data Structures in VS Code](https://addyosmani.com/blog/visualize-data-structures-vscode/)
 
 ### Live Interactivity
 
