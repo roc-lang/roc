@@ -496,7 +496,7 @@ fn equals_for_def<'a>() -> impl Parser<'a, ()> {
 /// * A type annotation followed on the next line by a pattern, an `=`, and an expression
 pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
     map_with_arena!(
-        either!(annotated_body(min_indent), body(min_indent)),
+        either!(body(min_indent), annotated_body(min_indent)),
         to_def
     )
 }
@@ -511,8 +511,8 @@ fn to_def<'a>(
         }
         Either::Second(((ann_pattern, ann_type), None)) => annotation_or_alias(
             arena,
-            &(ann_pattern as Located<Pattern>).value,
-            (ann_pattern as Located<Pattern>).region,
+            &ann_pattern.value,
+            ann_pattern.region,
             ann_type,
         ),
         Either::Second((
@@ -567,7 +567,7 @@ type Body<'a> = (Located<Pattern<'a>>, Located<Expr<'a>>);
 fn body<'a>(min_indent: u16) -> impl Parser<'a, Body<'a>> {
     let indented_more = min_indent + 1;
     and!(
-        pattern,
+        pattern(min_indent),
         skip_first!(
             equals_for_def(),
             // Spaces after the '=' (at a normal indentation level) and then the expr.
