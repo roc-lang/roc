@@ -495,22 +495,78 @@ fn equals_for_def<'a>() -> impl Parser<'a, ()> {
 /// * A type annotation
 /// * A type annotation followed on the next line by a pattern, an `=`, and an expression
 pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
-    // Indented more beyond the original indent.
+    map_with_arena!(
+        either!(annotated_body(min_indent), body(min_indent)),
+        to_def
+    )
+}
+
+fn to_def<'a>(
+    arena: &'a Bump,
+    ann_body_or_body: Either<Body<'a>, AnnotationOrAnnotatedBody<'a>>,
+) -> Def<'a> {
+    match ann_body_or_body {
+        Either::First((body_pattern, body_expr)) => {
+            Def::Body(arena.alloc(body_pattern), arena.alloc(body_expr))
+        }
+        Either::Second(((ann_pattern, ann_type), None)) => annotation_or_alias(
+            arena,
+            &(ann_pattern as Located<Pattern>).value,
+            (ann_pattern as Located<Pattern>).region,
+            ann_type,
+        ),
+        Either::Second((
+            (ann_pattern, ann_type),
+            Some((opt_comment, (body_pattern, body_expr))),
+        )) => Def::AnnotatedBody {
+            ann_pattern: ann_pattern,
+            ann_type: ann_type,
+            comment: opt_comment,
+            body_pattern: body_pattern,
+            body_expr: body_expr,
+        },
+    }
+}
+
+// PARSER HELPERS
+
+fn pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>>> {
+    space0_after(loc_closure_param(min_indent), min_indent)
+}
+
+fn annotation<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, (Located<Pattern<'a>>, Located<TypeAnnotation<'a>>)> {
     let indented_more = min_indent + 1;
-
-    let pattern = space0_after(loc_closure_param(min_indent), min_indent);
-
-    let annotation = and!(
-        pattern,
+    and!(
+        pattern(min_indent),
         skip_first!(
             ascii_char(b':'),
             // Spaces after the ':' (at a normal indentation level) and then the type.
             // The type itself must be indented more than the pattern and ':'
             space0_before(type_annotation::located(indented_more), indented_more)
         )
-    );
+    )
+}
 
-    let body = and!(
+fn spaces_then_comment_or_newline<'a>() -> impl Parser<'a, Option<&'a str>> {
+    skip_first!(
+        zero_or_more!(ascii_char(' ')),
+        map!(
+            either!(ascii_char('\n'), line_comment()),
+            |either_comment_or_newline| match either_comment_or_newline {
+                Either::First(_) => None,
+                Either::Second(comment) => Some(comment),
+            }
+        )
+    )
+}
+
+type Body<'a> = (Located<Pattern<'a>>, Located<Expr<'a>>);
+
+fn body<'a>(min_indent: u16) -> impl Parser<'a, Body<'a>> {
+    let indented_more = min_indent + 1;
+    and!(
         pattern,
         skip_first!(
             equals_for_def(),
@@ -521,44 +577,18 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
                 min_indent,
             )
         )
-    );
+    )
+}
 
-    let comment_or_newline = map!(
-        either!(ascii_char('\n'), line_comment()),
-        |either_comment_or_newline| match either_comment_or_newline {
-            Either::First(_) => None,
-            Either::Second(comment) => Some(comment),
-        }
-    );
-    let spaces_then_comment_or_newline =
-        skip_first!(zero_or_more!(ascii_char(' ')), comment_or_newline);
-    let annotated_body = and!(
-        annotation,
-        optional(and!(spaces_then_comment_or_newline, body))
-    );
+type AnnotationOrAnnotatedBody<'a> = (
+    (Located<Pattern<'a>>, Located<TypeAnnotation<'a>>),
+    Option<(Option<&'a str>, Body<'a>)>,
+);
 
-    map_with_arena!(
-        either!(annotated_body, body),
-        |arena: &'a Bump, ann_body_or_body| match ann_body_or_body {
-            Either::First((body_pattern, body_expr)) =>
-                Def::Body(arena.alloc(body_pattern), arena.alloc(body_expr)),
-            Either::Second(((ann_pattern, ann_type), None)) => annotation_or_alias(
-                arena,
-                &(ann_pattern as Located<Pattern>).value,
-                (ann_pattern as Located<Pattern>).region,
-                ann_type
-            ),
-            Either::Second((
-                (ann_pattern, ann_type),
-                Some((opt_comment, (body_pattern, body_expr))),
-            )) => Def::AnnotatedBody {
-                ann_pattern: ann_pattern,
-                ann_type: ann_type,
-                comment: opt_comment,
-                body_pattern: body_pattern,
-                body_expr: body_expr,
-            },
-        }
+fn annotated_body<'a>(min_indent: u16) -> impl Parser<'a, AnnotationOrAnnotatedBody<'a>> {
+    and!(
+        annotation(min_indent),
+        optional(and!(spaces_then_comment_or_newline(), body(min_indent)))
     )
 }
 
