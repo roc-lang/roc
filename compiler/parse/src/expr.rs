@@ -506,12 +506,9 @@ fn to_def<'a>(
         Either::First((body_pattern, body_expr)) => {
             Def::Body(arena.alloc(body_pattern), arena.alloc(body_expr))
         }
-        Either::Second(((ann_pattern, ann_type), None)) => annotation_or_alias(
-            arena,
-            &ann_pattern.value,
-            ann_pattern.region,
-            ann_type,
-        ),
+        Either::Second(((ann_pattern, ann_type), None)) => {
+            annotation_or_alias(arena, &ann_pattern.value, ann_pattern.region, ann_type)
+        }
         Either::Second((
             (ann_pattern, ann_type),
             Some((opt_comment, (body_pattern, body_expr))),
@@ -519,8 +516,8 @@ fn to_def<'a>(
             ann_pattern: ann_pattern,
             ann_type: ann_type,
             comment: opt_comment,
-            body_pattern: body_pattern,
-            body_expr: body_expr,
+            body_pattern: arena.alloc(body_pattern),
+            body_expr: arena.alloc(body_expr),
         },
     }
 }
