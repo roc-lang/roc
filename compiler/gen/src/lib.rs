@@ -13,3 +13,5 @@
 
 pub mod layout_id;
 pub mod llvm;
+
+pub mod run_roc;

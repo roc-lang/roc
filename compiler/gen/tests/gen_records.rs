@@ -665,6 +665,19 @@ mod gen_records {
     }
 
     #[test]
+    fn return_nested_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { flag: 0x0, payload: { a: 6.28, b: 3.14, c: 0.1 } }
+                "#
+            ),
+            (0x0, (6.28, 3.14, 0.1)),
+            (i64, (f64, f64, f64))
+        );
+    }
+
+    #[test]
     fn just_to_be_sure() {
         assert_evals_to!(
             indoc!(

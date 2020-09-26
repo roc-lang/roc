@@ -26,7 +26,7 @@ This `Expr` representation of the expression is useful for things like:
 
 Since the parser is only concerned with translating String values into Expr values, it will happily translate syntactically valid strings into expressions that won't work at runtime.
 
-For example, parsing will transalte this string:
+For example, parsing will translate this string:
 
   not "foo", "bar"
 
@@ -87,11 +87,11 @@ The first thing it does is to call `eval` on the right `Expr` values on either s
 
 Since the second call to `eval` will match on another `BinOp`, it's once again going to recursively call `eval` on both of its `Expr` values. Since those are both `Int` values, though, their `eval` calls will return them right away without doing anything else.
 
-Now that it's evaluated the expressions on either side of the `Minus`, `eval` will look at the particular operator being applied to those expressoins (in this case, a minus operator) and check to see if the expressions it was given work with that operation.
+Now that it's evaluated the expressions on either side of the `Minus`, `eval` will look at the particular operator being applied to those expressions (in this case, a minus operator) and check to see if the expressions it was given work with that operation.
 
 > Remember, this `Expr` value potentially came directly from the parser. `eval` can't be sure any type checking has been done on it!
 
-If `eval` detects a non-numeric `Expr` value (that is, the `Expr` is not `Int` or `Frac`) on either side of the `Mnus`, then it will immediately give an error and halt the evaluation. This sort of runtime type error is common to dynamic languages, and you can think of `eval` as being a dynamic evaluation of Roc code that hasn't necessarily been type-checked.
+If `eval` detects a non-numeric `Expr` value (that is, the `Expr` is not `Int` or `Frac`) on either side of the `Minus`, then it will immediately give an error and halt the evaluation. This sort of runtime type error is common to dynamic languages, and you can think of `eval` as being a dynamic evaluation of Roc code that hasn't necessarily been type-checked.
 
 Assuming there's no type problem, `eval` can go ahead and run the Rust code of `8 - 3` and store the result in an `Int` expr.
 

@@ -210,6 +210,12 @@ fn build_file(
             "host.rs",
             "-o",
             binary_path.as_path().to_str().unwrap(),
+            // ensure we don't make a position-independent executable
+            "-C",
+            "link-arg=-no-pie",
+            // explicitly link in the c++ stdlib, for exceptions
+            "-C",
+            "link-arg=-lc++",
         ])
         .current_dir(cwd)
         .spawn()

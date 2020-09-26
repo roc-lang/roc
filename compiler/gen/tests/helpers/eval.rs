@@ -6,7 +6,11 @@ pub fn helper_without_uniqueness<'a>(
     src: &str,
     leak: bool,
     context: &'a inkwell::context::Context,
-) -> (&'static str, inkwell::execution_engine::ExecutionEngine<'a>) {
+) -> (
+    &'static str,
+    Vec<roc_problem::can::Problem>,
+    inkwell::execution_engine::ExecutionEngine<'a>,
+) {
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
     use inkwell::OptimizationLevel;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
@@ -24,6 +28,8 @@ pub fn helper_without_uniqueness<'a>(
         problems,
         ..
     } = can_expr(src);
+
+    // don't panic based on the errors here, so we can test that RuntimeError generates the correct code
     let errors = problems
         .into_iter()
         .filter(|problem| {
@@ -36,8 +42,6 @@ pub fn helper_without_uniqueness<'a>(
             }
         })
         .collect::<Vec<roc_problem::can::Problem>>();
-
-    assert_eq!(errors, Vec::new(), "Encountered errors: {:?}", errors);
 
     let subs = Subs::new(var_store.into());
     let mut unify_problems = Vec::new();
@@ -178,7 +182,7 @@ pub fn helper_without_uniqueness<'a>(
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    (main_fn_name, execution_engine.clone())
+    (main_fn_name, errors, execution_engine.clone())
 }
 
 pub fn helper_with_uniqueness<'a>(
@@ -360,7 +364,7 @@ macro_rules! assert_opt_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
         use bumpalo::Bump;
         use inkwell::context::Context;
-        use inkwell::execution_engine::JitFunction;
+        use roc_gen::run_jit_function;
 
         let arena = Bump::new();
 
@@ -369,15 +373,8 @@ macro_rules! assert_opt_evals_to {
         let (main_fn_name, execution_engine) =
             $crate::helpers::eval::helper_with_uniqueness(&arena, $src, $leak, &context);
 
-        unsafe {
-            let main: JitFunction<unsafe extern "C" fn() -> $ty> = execution_engine
-                .get_function(main_fn_name)
-                .ok()
-                .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
-                .expect("errored");
-
-            assert_eq!($transform(main.call()), $expected);
-        }
+        let transform = |success| assert_eq!($transform(success), $expected);
+        run_jit_function!(execution_engine, main_fn_name, $ty, transform)
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
@@ -390,24 +387,17 @@ macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
         use bumpalo::Bump;
         use inkwell::context::Context;
-        use inkwell::execution_engine::JitFunction;
+        use roc_gen::run_jit_function;
 
         let arena = Bump::new();
 
         let context = Context::create();
 
-        let (main_fn_name, execution_engine) =
+        let (main_fn_name, errors, execution_engine) =
             $crate::helpers::eval::helper_without_uniqueness(&arena, $src, $leak, &context);
 
-        unsafe {
-            let main: JitFunction<unsafe extern "C" fn() -> $ty> = execution_engine
-                .get_function(main_fn_name)
-                .ok()
-                .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
-                .expect("errored");
-
-            assert_eq!($transform(main.call()), $expected);
-        }
+        let transform = |success| assert_eq!($transform(success), $expected);
+        run_jit_function!(execution_engine, main_fn_name, $ty, transform, errors)
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {

@@ -68,6 +68,8 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_KEEP_IF => list_keep_if,
         Symbol::LIST_WALK_RIGHT => list_walk_right,
         Symbol::NUM_ADD => num_add,
+        Symbol::NUM_ADD_CHECKED => num_add_checked,
+        Symbol::NUM_ADD_WRAP => num_add_wrap,
         Symbol::NUM_SUB => num_sub,
         Symbol::NUM_MUL => num_mul,
         Symbol::NUM_GT => num_gt,
@@ -236,6 +238,105 @@ fn num_bool_binop(symbol: Symbol, var_store: &mut VarStore, op: LowLevel) -> Def
 /// Num.add : Num a, Num a -> Num a
 fn num_add(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumAdd)
+}
+
+/// Num.add : Num a, Num a -> Num a
+fn num_add_wrap(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumAddWrap)
+}
+
+/// Num.add : Num a, Num a -> Num a
+fn num_add_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let bool_var = var_store.fresh();
+    let num_var_1 = var_store.fresh();
+    let num_var_2 = var_store.fresh();
+    let num_var_3 = var_store.fresh();
+    let ret_var = var_store.fresh();
+    let record_var = var_store.fresh();
+
+    // let arg_3 = RunLowLevel NumAddChecked arg_1 arg_2
+    //
+    // if arg_3.b then
+    //  # overflow
+    //  Err Overflow
+    // else
+    //  # all is well
+    //  Ok arg_3.a
+
+    let cont = If {
+        branch_var: ret_var,
+        cond_var: bool_var,
+        branches: vec![(
+            // if-condition
+            no_region(
+                // arg_3.b
+                Access {
+                    record_var,
+                    ext_var: var_store.fresh(),
+                    field: "b".into(),
+                    field_var: var_store.fresh(),
+                    loc_expr: Box::new(no_region(Var(Symbol::ARG_3))),
+                },
+            ),
+            // overflow!
+            no_region(tag(
+                "Err",
+                vec![tag("Overflow", Vec::new(), var_store)],
+                var_store,
+            )),
+        )],
+        final_else: Box::new(
+            // all is well
+            no_region(
+                // Ok arg_3.a
+                tag(
+                    "Ok",
+                    vec![
+                        // arg_3.a
+                        Access {
+                            record_var,
+                            ext_var: var_store.fresh(),
+                            field: "a".into(),
+                            field_var: num_var_3,
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_3))),
+                        },
+                    ],
+                    var_store,
+                ),
+            ),
+        ),
+    };
+
+    // arg_3 = RunLowLevel NumAddChecked arg_1 arg_2
+    let def = crate::def::Def {
+        loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_3)),
+        loc_expr: no_region(RunLowLevel {
+            op: LowLevel::NumAddChecked,
+            args: vec![
+                (num_var_1, Var(Symbol::ARG_1)),
+                (num_var_2, Var(Symbol::ARG_2)),
+            ],
+            ret_var: record_var,
+        }),
+        expr_var: record_var,
+        pattern_vars: SendMap::default(),
+        annotation: None,
+    };
+
+    let body = LetNonRec(
+        Box::new(def),
+        Box::new(no_region(cont)),
+        ret_var,
+        SendMap::default(),
+    );
+
+    defn(
+        symbol,
+        vec![(num_var_1, Symbol::ARG_1), (num_var_2, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
 }
 
 /// Num.sub : Num a, Num a -> Num a

@@ -685,4 +685,102 @@ mod gen_num {
     fn pow_int() {
         assert_evals_to!("Num.powInt 2 3", 8, i64);
     }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
+    fn int_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                9_223_372_036_854_775_807 + 1
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    fn int_add_checked() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.addChecked 1 2 is
+                    Ok v -> v
+                    _ -> -1
+                "#
+            ),
+            3,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.addChecked 9_223_372_036_854_775_807 1 is
+                    Err Overflow -> -1
+                    Ok v -> v
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    #[test]
+    fn int_add_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.addWrap 9_223_372_036_854_775_807 1
+                "#
+            ),
+            std::i64::MIN,
+            i64
+        );
+    }
+
+    #[test]
+    fn float_add_checked_pass() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.addChecked 1.0 0.0 is 
+                    Ok v -> v
+                    Err Overflow -> -1.0
+                "#
+            ),
+            1.0,
+            f64
+        );
+    }
+
+    #[test]
+    fn float_add_checked_fail() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.addChecked 1.7976931348623157e308 1.7976931348623157e308 is
+                    Err Overflow -> -1
+                    Ok v -> v
+                "#
+            ),
+            -1.0,
+            f64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "float addition overflowed!"#)]
+    fn float_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                1.7976931348623157e308 + 1.7976931348623157e308
+                "#
+            ),
+            0.0,
+            f64
+        );
+    }
 }
