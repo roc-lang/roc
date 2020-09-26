@@ -12,6 +12,43 @@ use roc_mono::layout::{Builtin, Layout};
 
 pub static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
 
+/// Str.split : Str, Str -> List Str
+pub fn str_split<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    str_symbol: Symbol,
+    delimiter_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let str_ptr = ptr_from_symbol(scope, str_symbol);
+    let delimiter_ptr = ptr_from_symbol(scope, delimiter_symbol);
+
+    let str_wrapper_type = BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes));
+
+    load_str(
+        env,
+        parent,
+        *str_ptr,
+        str_wrapper_type,
+        |_, str_len, str_smallness| {
+            load_str(
+                env,
+                parent,
+                *delimiter_ptr,
+                |_, delimiter_len, delimiter_smallness| {
+                    let ret_list_len_alloca =
+                        builder.build_alloca(ctx.i64_type(), "ret_list_len_alloca");
+
+                    builder.build_store(ret_list_len_alloca, ctx.i64_type().const_zero());
+                },
+            )
+        },
+    )
+}
+
 /// Str.concat : Str, Str -> Str
 pub fn str_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

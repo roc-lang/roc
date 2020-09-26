@@ -4,7 +4,7 @@ use crate::llvm::build_list::{
     list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat, list_reverse, list_set,
     list_single, list_walk_right,
 };
-use crate::llvm::build_str::{str_concat, str_len, CHAR_LAYOUT};
+use crate::llvm::build_str::{str_concat, str_len, str_split, CHAR_LAYOUT};
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
     basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
@@ -1808,6 +1808,12 @@ fn run_low_level<'a, 'ctx, 'env>(
             let inplace = get_inplace_from_layout(layout);
 
             str_concat(env, inplace, scope, parent, args[0], args[1])
+        }
+        StrSplit => {
+            // Str.split : Str, Str -> List Str
+            debug_assert_eq!(args.len(), 2);
+
+            str_split(env, scope, parent, args[0], args[1])
         }
         StrIsEmpty => {
             // Str.isEmpty : Str -> Str

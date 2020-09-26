@@ -5,6 +5,7 @@
 pub enum LowLevel {
     StrConcat,
     StrIsEmpty,
+    StrSplit,
     ListLen,
     ListGetUnsafe,
     ListSet,
