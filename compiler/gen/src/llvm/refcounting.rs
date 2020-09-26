@@ -6,6 +6,7 @@ use crate::llvm::build::{
 use crate::llvm::build_list::list_len;
 use crate::llvm::convert::{basic_type_from_layout, block_of_memory, ptr_int};
 use bumpalo::collections::Vec;
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
@@ -14,8 +15,7 @@ use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, MemoryMode};
 
-pub const REFCOUNT_0: usize = std::usize::MAX;
-pub const REFCOUNT_1: usize = REFCOUNT_0 - 1;
+pub const REFCOUNT_1: usize = isize::MIN as usize;
 
 pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -324,21 +324,8 @@ fn build_inc_list_help<'a, 'ctx, 'env>(
     builder.position_at_end(increment_block);
 
     let refcount_ptr = list_get_refcount_ptr(env, layout, original_wrapper);
+    increment_refcount_help(env, parent, refcount_ptr);
 
-    let refcount = env
-        .builder
-        .build_load(refcount_ptr, "get_refcount")
-        .into_int_value();
-
-    // our refcount 0 is actually usize::MAX, so incrementing the refcount means decrementing this value.
-    let decremented = env.builder.build_int_sub(
-        refcount,
-        ctx.i64_type().const_int(1 as u64, false),
-        "incremented_refcount",
-    );
-
-    // Mutate the new array in-place to change the element.
-    builder.build_store(refcount_ptr, decremented);
     builder.build_unconditional_branch(cont_block);
 
     builder.position_at_end(cont_block);
@@ -435,51 +422,9 @@ fn build_dec_list_help<'a, 'ctx, 'env>(
     builder.build_conditional_branch(is_non_empty, decrement_block, cont_block);
     builder.position_at_end(decrement_block);
 
-    // build blocks
-    let then_block = ctx.append_basic_block(parent, "then");
-    let else_block = ctx.append_basic_block(parent, "else");
-
     let refcount_ptr = list_get_refcount_ptr(env, layout, original_wrapper);
 
-    let refcount = env
-        .builder
-        .build_load(refcount_ptr, "get_refcount")
-        .into_int_value();
-
-    let comparison = refcount_is_one_comparison(builder, env.context, refcount);
-
-    // TODO what would be most optimial for the branch predictor
-    //
-    // are most refcounts 1 most of the time? or not?
-    builder.build_conditional_branch(comparison, then_block, else_block);
-
-    // build then block
-    {
-        builder.position_at_end(then_block);
-        if !env.leak {
-            builder.build_free(refcount_ptr);
-        }
-        builder.build_unconditional_branch(cont_block);
-    }
-
-    // build else block
-    {
-        builder.position_at_end(else_block);
-        // our refcount 0 is actually usize::MAX, so decrementing the refcount means incrementing this value.
-        let decremented = env.builder.build_int_add(
-            ctx.i64_type().const_int(1 as u64, false),
-            refcount,
-            "decremented_refcount",
-        );
-
-        // Mutate the new array in-place to change the element.
-        builder.build_store(refcount_ptr, decremented);
-
-        builder.build_unconditional_branch(cont_block);
-    }
-
-    // emit merge block
-    builder.position_at_end(cont_block);
+    decrement_refcount_help(env, parent, refcount_ptr, cont_block);
 
     // this function returns void
     builder.build_return(None);
@@ -491,24 +436,29 @@ fn increment_refcount_ptr<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     field_ptr: PointerValue<'ctx>,
 ) {
+    let refcount_ptr = get_refcount_ptr(env, layout, field_ptr);
+    increment_refcount_help(env, _parent, refcount_ptr);
+}
+
+fn increment_refcount_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _parent: FunctionValue<'ctx>,
+    refcount_ptr: PointerValue<'ctx>,
+) {
     let builder = env.builder;
     let ctx = env.context;
-
-    let refcount_ptr = get_refcount_ptr(env, layout, field_ptr);
 
     let refcount = env
         .builder
         .build_load(refcount_ptr, "get_refcount")
         .into_int_value();
 
-    // our refcount 0 is actually usize::MAX, so incrementing the refcount means decrementing this value.
-    let incremented = env.builder.build_int_sub(
+    let incremented = env.builder.build_int_add(
         refcount,
         ctx.i64_type().const_int(1 as u64, false),
         "increment_refcount",
     );
 
-    // Mutate the new array in-place to change the element.
     builder.build_store(refcount_ptr, incremented);
 }
 
@@ -518,13 +468,23 @@ fn decrement_refcount_ptr<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     field_ptr: PointerValue<'ctx>,
 ) {
-    let builder = env.builder;
     let ctx = env.context;
 
     // the block we'll always jump to when we're done
     let cont_block = ctx.append_basic_block(parent, "after_decrement_block");
 
     let refcount_ptr = get_refcount_ptr(env, layout, field_ptr);
+    decrement_refcount_help(env, parent, refcount_ptr, cont_block);
+}
+
+fn decrement_refcount_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    refcount_ptr: PointerValue<'ctx>,
+    cont_block: BasicBlock,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
 
     let refcount = env
         .builder
@@ -553,12 +513,12 @@ fn decrement_refcount_ptr<'a, 'ctx, 'env>(
 
     // build else block
     {
+        // TODO: Avoid decrementing if the refcount is 0(read-only/leaked memory)
         builder.position_at_end(else_block);
-        // our refcount 0 is actually usize::MAX, so decrementing the refcount means incrementing this value.
-        let decremented = env.builder.build_int_add(
-            ctx.i64_type().const_int(1 as u64, false),
+        let decremented = env.builder.build_int_sub(
             refcount,
-            "decremented_refcount",
+            ctx.i64_type().const_int(1 as u64, false),
+            "decrement_refcount",
         );
 
         // Mutate the new array in-place to change the element.
