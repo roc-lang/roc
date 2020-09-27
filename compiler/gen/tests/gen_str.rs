@@ -13,6 +13,32 @@ mod helpers;
 
 #[cfg(test)]
 mod gen_str {
+    // #[test]
+    // fn str_split_bigger_delimiter_small_str() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 Str.split "hello" "hello there"
+    //             "#
+    //         ),
+    //         &["hello"],
+    //         &'static [&'static str]
+    //     );
+    // }
+    //
+    // #[test]
+    // fn str_split_bigger_delimiter_big_str() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 Str.split "hello there long long" "hello there long long long long long"
+    //             "#
+    //         ),
+    //         &["hello"],
+    //         &'static [&'static str]
+    //     );
+    // }
+
     #[test]
     fn str_concat_big_to_big() {
         assert_evals_to!(

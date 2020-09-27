@@ -1,6 +1,9 @@
-use crate::llvm::build::{ptr_from_symbol, Env, InPlace, Scope};
+use crate::llvm::build::{
+    load_symbol, load_symbol_and_layout, ptr_from_symbol, Env, InPlace, Scope,
+};
 use crate::llvm::build_list::{
-    allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, load_list_ptr, store_list,
+    allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, list_single,
+    load_list_ptr, store_list,
 };
 use crate::llvm::convert::{collection, ptr_int};
 use inkwell::builder::Builder;
@@ -17,6 +20,7 @@ pub fn str_split<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
+    inplace: InPlace,
     str_symbol: Symbol,
     delimiter_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
@@ -38,11 +42,36 @@ pub fn str_split<'a, 'ctx, 'env>(
                 env,
                 parent,
                 *delimiter_ptr,
+                str_wrapper_type,
                 |_, delimiter_len, delimiter_smallness| {
                     let ret_list_len_alloca =
                         builder.build_alloca(ctx.i64_type(), "ret_list_len_alloca");
 
                     builder.build_store(ret_list_len_alloca, ctx.i64_type().const_zero());
+
+                    let delimiter_is_longer_comparison = env.builder.build_int_compare(
+                        IntPredicate::UGT,
+                        delimiter_len,
+                        str_len,
+                        "delimiter_is_longer_than_input_str",
+                    );
+
+                    let if_delimiter_is_longer = || {
+                        let (str, str_layout) = load_symbol_and_layout(env, scope, &str_symbol);
+
+                        list_single(env, inplace, str, str_layout)
+                    };
+
+                    let if_delimiter_is_shorter = || empty_list(env);
+
+                    build_basic_phi2(
+                        env,
+                        parent,
+                        delimiter_is_longer_comparison,
+                        if_delimiter_is_longer,
+                        if_delimiter_is_shorter,
+                        str_wrapper_type,
+                    )
                 },
             )
         },

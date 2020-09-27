@@ -484,6 +484,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // Str module
 
+    // Str.split : Str, Str -> List Str
+    add_type(
+        Symbol::STR_SPLIT,
+        SolvedType::Func(
+            vec![str_type(), str_type()],
+            Box::new(list_type(str_type())),
+        ),
+    );
+
     // Str.concat : Str, Str -> Str
     add_type(
         Symbol::STR_CONCAT,

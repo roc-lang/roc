@@ -1968,7 +1968,9 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.split : Str, Str -> List Str
             debug_assert_eq!(args.len(), 2);
 
-            str_split(env, scope, parent, args[0], args[1])
+            let inplace = get_inplace_from_layout(layout);
+
+            str_split(env, scope, parent, inplace, args[0], args[1])
         }
         StrIsEmpty => {
             // Str.isEmpty : Str -> Str
