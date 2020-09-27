@@ -7,27 +7,9 @@ extern crate pulldown_cmark;
 extern crate serde_json;
 use std::error::Error;
 use std::fs;
-
-#[derive(Serialize)]
-pub struct Package {
-    name: String,
-    version: String,
-    docs: String,
-    modules: Vec<Module>,
-}
-
-#[derive(Serialize, Clone)]
-pub struct Module {
-    name: String,
-    docs: String,
-    entries: Vec<ModuleEntry>,
-}
-
-#[derive(Serialize, Clone)]
-pub struct ModuleEntry {
-    name: String,
-    docs: String,
-}
+extern crate roc_load;
+use roc_collections::all::MutMap;
+use std::path::{Path, PathBuf};
 
 #[derive(Serialize)]
 pub struct Template {
@@ -37,6 +19,12 @@ pub struct Template {
     module_docs: String,
     module_entries: Vec<ModuleEntry>,
     module_links: Vec<TemplateLink>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ModuleEntry {
+    name: String,
+    docs: String,
 }
 
 #[derive(Serialize)]
@@ -53,132 +41,44 @@ pub struct TemplateLinkEntry {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let package = Package {
+    let std_lib = roc_builtins::std::standard_stdlib();
+    let subs_by_module = MutMap::default();
+    let src_dir = Path::new("../compiler/builtins/docs");
+    let files = vec![
+        PathBuf::from(r"../compiler/builtins/docs/Bool.roc"),
+        PathBuf::from(r"../compiler/builtins/docs/Map.roc"),
+        PathBuf::from(r"../compiler/builtins/docs/List.roc"),
+    ];
+
+    let mut modules_docs = vec![];
+
+    // Load each file is files vector
+    for filename in files {
+        let loaded = roc_load::docs::load(filename, &std_lib, src_dir, subs_by_module.clone())
+            .expect("TODO gracefully handle load failing");
+        modules_docs.push(loaded.module_docs);
+    }
+
+    let package = roc_load::docs::Documentation {
         name: "roc/builtins".to_string(),
         version: "1.0.0".to_string(),
         docs: "Package introduction or README.".to_string(),
-        modules: vec![
-            Module {
-                name: "Str".to_string(),
-                docs: "Module introduction".to_string(),
-                entries: vec![
-                    ModuleEntry {
-                        name: "Str".to_string(),
-                        docs: "Hello world, this is a **complicated** *very simple* example."
-                            .to_string(),
-                    },
-                    ModuleEntry {
-                        name: "isEmpty".to_string(),
-                        docs: "Hello world, this is a **complicated** *very simple* example."
-                            .to_string(),
-                    },
-                    ModuleEntry {
-                        name: "append".to_string(),
-                        docs: "Hello world, this is a **complicated** *very simple* example."
-                            .to_string(),
-                    },
-                    ModuleEntry {
-                        name: "prepend".to_string(),
-                        docs: "Hello world, this is a **complicated** *very simple* example."
-                            .to_string(),
-                    },
-                    ModuleEntry {
-                        name: "concat".to_string(),
-                        docs: "Hello world, this is a **complicated** *very simple* example."
-                            .to_string(),
-                    },
-                    ModuleEntry {
-                        name: "join".to_string(),
-                        docs: "Hello world, this is a **complicated** *very simple* example."
-                            .to_string(),
-                    },
-                    ModuleEntry {
-                        name: "split".to_string(),
-                        docs: "Hello world, this is a **complicated** *very simple* example."
-                            .to_string(),
-                    },
-                    ModuleEntry {
-                        name: "countGraphemes".to_string(),
-                        docs: "Hello world, this is a **complicated** *very simple* example."
-                            .to_string(),
-                    },
-                    ModuleEntry {
-                        name: "foldGraphemes".to_string(),
-                        docs: "Hello world, this is a **complicated** *very simple* example."
-                            .to_string(),
-                    },
-                ],
-            },
-            Module {
-                name: "Bool".to_string(),
-                docs: "Hello world, this is a **complicated** *very simple* example.".to_string(),
-                entries: vec![
-                    ModuleEntry {
-                        name: "isEq".to_string(),
-                        docs: "Hello world, this is a **complicated** *very simple* example."
-                            .to_string(),
-                    },
-                    ModuleEntry {
-                        name: "isNeq".to_string(),
-                        docs: "Hello world, this is a **complicated** *very simple* example."
-                            .to_string(),
-                    },
-                ],
-            },
-            Module {
-                name: "Num".to_string(),
-                docs: "Hello world, this is a **complicated** *very simple* example.".to_string(),
-                entries: vec![
-                    ModuleEntry {
-                        name: "add".to_string(),
-                        docs: "Hello world, this is a **complicated** *very simple* example."
-                            .to_string(),
-                    },
-                    ModuleEntry {
-                        name: "sub".to_string(),
-                        docs: "Hello world, this is a **complicated** *very simple* example."
-                            .to_string(),
-                    },
-                    ModuleEntry {
-                        name: "mul".to_string(),
-                        docs: "Hello world, this is a **complicated** *very simple* example."
-                            .to_string(),
-                    },
-                ],
-            },
-            Module {
-                name: "List".to_string(),
-                docs: "Hello world, this is a **complicated** *very simple* example.".to_string(),
-                entries: vec![],
-            },
-            Module {
-                name: "Set".to_string(),
-                docs: "Hello world, this is a **complicated** *very simple* example.".to_string(),
-                entries: vec![],
-            },
-            Module {
-                name: "Map".to_string(),
-                docs: "Hello world, this is a **complicated** *very simple* example.".to_string(),
-                entries: vec![],
-            },
-            Module {
-                name: "Result".to_string(),
-                docs: "Hello world, this is a **complicated** *very simple* example.".to_string(),
-                entries: vec![],
-            },
-        ],
+        modules: modules_docs,
     };
 
-    // Make sure the directories exists
+    // Remove old build folder
+    fs::remove_dir_all("./build")?;
+
+    // Make sure the output directories exists
     fs::create_dir_all(format!("./build/{}/{}", package.name, package.version))?;
 
-    // Register handlebar template
+    // Register handlebars template
     let mut handlebars = handlebars::Handlebars::new();
     assert!(handlebars
         .register_template_file("page", "./src/templates/page.hbs")
         .is_ok());
 
-    let markdown_options = pulldown_cmark::Options::empty();
+    let markdown_options = pulldown_cmark::Options::all();
 
     // Write each package's module docs
     for module in &package.modules {
