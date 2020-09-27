@@ -107,7 +107,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     if let Some(docs) = entry.docs {
                         let entry_docs_parser =
                             pulldown_cmark::Parser::new_ext(&docs, markdown_options);
-                            pulldown_cmark::html::push_html(&mut entry_docs_html, entry_docs_parser);
+                        pulldown_cmark::html::push_html(&mut entry_docs_html, entry_docs_parser);
                     }
 
                     ModuleEntry {
