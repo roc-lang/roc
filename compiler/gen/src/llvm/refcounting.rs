@@ -138,9 +138,8 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
             }
 
             if let MemoryMode::Refcounted = memory_mode {
-                build_inc_list(env, layout_ids, layout, wrapper_struct);
+                build_dec_list(env, layout_ids, layout, wrapper_struct);
             }
-            build_dec_list(env, layout_ids, layout, wrapper_struct);
         }
         Set(element_layout) => {
             if element_layout.contains_refcounted() {
