@@ -1,9 +1,9 @@
 # Building the Roc compiler from source
 
 
-## Installing LLVM
+## Installing LLVM and libc++abi
 
-To build the compiler, you need a particular version of LLVM installed on your system.
+To build the compiler, you need both `libc++abi` and a particular version of LLVM installed on your system. Some systems may already have `libc++abi` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `apt-get install libc++abi-dev`.)
 
 To see which version of LLVM you need, take a look at `Cargo.toml`, in particular the `branch` section of the `inkwell` dependency. It should have something like `llvmX-Y` where X and Y are the major and minor revisions of LLVM you need.
 
