@@ -47,7 +47,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let files = vec![
         PathBuf::from(r"../compiler/builtins/docs/Bool.roc"),
         PathBuf::from(r"../compiler/builtins/docs/Map.roc"),
-        PathBuf::from(r"../compiler/builtins/docs/List.roc"),
+        // Not working
+        // PathBuf::from(r"../compiler/builtins/docs/List.roc"),
+        // Not working
+        // PathBuf::from(r"../compiler/builtins/docs/Num.roc"),
+        PathBuf::from(r"../compiler/builtins/docs/Set.roc"),
+        PathBuf::from(r"../compiler/builtins/docs/Str.roc"),
     ];
 
     let mut modules_docs = vec![];
@@ -98,11 +103,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .into_iter()
                 .map(|entry| {
                     // Convert entry docs from markdown to html
-                    let entry_docs_parser =
-                        pulldown_cmark::Parser::new_ext(&entry.docs, markdown_options);
-                    let mut entry_docs_html: String =
-                        String::with_capacity(entry.docs.len() * 3 / 2);
-                    pulldown_cmark::html::push_html(&mut entry_docs_html, entry_docs_parser);
+                    let mut entry_docs_html: String = String::new();
+                    if let Some(docs) = entry.docs {
+                        let entry_docs_parser =
+                            pulldown_cmark::Parser::new_ext(&docs, markdown_options);
+                            pulldown_cmark::html::push_html(&mut entry_docs_html, entry_docs_parser);
+                    }
 
                     ModuleEntry {
                         name: entry.name.clone(),

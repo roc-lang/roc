@@ -1,5 +1,6 @@
 // This file was copied from file.rs and modified to expose information
 // required to auto-generate documentation
+use inlinable_string::InlinableString;
 use bumpalo::Bump;
 use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
@@ -1373,7 +1374,7 @@ fn parse_and_constrain<'a>(
 
     // Generate documentation information
     // TODO: store timing information?
-    let module_docs = generate_module_docs(header.module_name, &parsed_defs);
+    let module_docs = generate_module_docs(header.module_name, &header.exposed_ident_ids, &parsed_defs);
 
     let module_id = header.module_id;
     let mut var_store = VarStore::default();
@@ -1558,18 +1559,19 @@ pub struct ModuleDocumentation {
 #[derive(Debug, Clone)]
 pub struct DocEntry {
     pub name: String,
-    pub docs: String,
+    pub docs: Option<String>,
 }
 
 fn generate_module_docs<'a>(
     module_name: ModuleName,
+    exposed_ident_ids: &'a IdentIds,
     parsed_defs: &'a bumpalo::collections::Vec<'a, Located<Def<'a>>>,
 ) -> ModuleDocumentation {
     let (entries, _) =
         parsed_defs
             .iter()
             .fold((vec![], None), |(acc, maybe_comments_after), def| {
-                generate_module_doc(acc, maybe_comments_after, &def.value)
+                generate_module_doc(exposed_ident_ids, acc, maybe_comments_after, &def.value)
             });
 
     ModuleDocumentation {
@@ -1580,6 +1582,7 @@ fn generate_module_docs<'a>(
 }
 
 fn generate_module_doc<'a>(
+    exposed_ident_ids: &'a IdentIds,
     mut acc: Vec<DocEntry>,
     before_comments_or_new_lines: Option<&'a [roc_parse::ast::CommentOrNewline<'a>]>,
     def: &'a ast::Def<'a>,
@@ -1593,37 +1596,29 @@ fn generate_module_doc<'a>(
     match def {
         SpaceBefore(sub_def, comments_or_new_lines) => {
             // Comments before a definition are attached to the current defition
-            generate_module_doc(acc, Some(comments_or_new_lines), sub_def)
+            generate_module_doc(exposed_ident_ids, acc, Some(comments_or_new_lines), sub_def)
         }
 
         SpaceAfter(sub_def, comments_or_new_lines) => {
             let (new_acc, _) =
                 // If there are comments before, attach to this definition
-                generate_module_doc(acc, before_comments_or_new_lines, sub_def);
+                generate_module_doc(exposed_ident_ids, acc, before_comments_or_new_lines, sub_def);
 
             // Comments after a definition are attached to the next defition
             (new_acc, Some(comments_or_new_lines))
         }
 
         Annotation(loc_pattern, _loc_ann) => match loc_pattern.value {
-            Pattern::Identifier(identifier) => match before_comments_or_new_lines {
-                Some(comments_or_new_lines) => {
-                    let maybe_docs = comments_or_new_lines_to_docs(comments_or_new_lines);
-                    match maybe_docs {
-                        Some(docs) => {
-                            let entry = DocEntry {
-                                name: identifier.to_string(),
-                                docs,
-                            };
-                            acc.push(entry);
-                            (acc, None)
-                        }
-
-                        None => (acc, None),
-                    }
+            Pattern::Identifier(identifier) => {
+                // Check if the definition is exposed
+                if exposed_ident_ids.get_id(&InlinableString::from(identifier)).is_some()  {
+                    let entry = DocEntry {
+                        name: identifier.to_string(),
+                        docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
+                    };
+                    acc.push(entry);
                 }
-
-                None => (acc, None),
+                (acc, None)
             },
 
             _ => (acc, None),
