@@ -1,7 +1,7 @@
 use crate::layout_id::LayoutIds;
 use crate::llvm::build::{
     cast_basic_basic, cast_struct_struct, create_entry_block_alloca, set_name, Env, Scope,
-    FAST_CALL_CONV,
+    FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I64,
 };
 use crate::llvm::build_list::list_len;
 use crate::llvm::convert::{basic_type_from_layout, block_of_memory, ptr_int};
@@ -16,6 +16,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, MemoryMode};
 
 pub const REFCOUNT_1: usize = isize::MIN as usize;
+pub const REFCOUNT_MAX: usize = 0 as usize;
 
 pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -453,13 +454,20 @@ fn increment_refcount_help<'a, 'ctx, 'env>(
         .build_load(refcount_ptr, "get_refcount")
         .into_int_value();
 
-    let incremented = env.builder.build_int_add(
+    let max = builder.build_int_compare(
+        IntPredicate::EQ,
+        refcount,
+        ctx.i64_type().const_int(REFCOUNT_MAX as u64, false),
+        "refcount_max_check",
+    );
+    let incremented = builder.build_int_add(
         refcount,
         ctx.i64_type().const_int(1 as u64, false),
         "increment_refcount",
     );
+    let selected = builder.build_select(max, refcount, incremented, "select_refcount");
 
-    builder.build_store(refcount_ptr, incremented);
+    builder.build_store(refcount_ptr, selected);
 }
 
 fn decrement_refcount_ptr<'a, 'ctx, 'env>(
@@ -491,8 +499,25 @@ fn decrement_refcount_help<'a, 'ctx, 'env>(
         .build_load(refcount_ptr, "get_refcount")
         .into_int_value();
 
-    let comparison = refcount_is_one_comparison(builder, env.context, refcount);
+    let add_with_overflow = env
+        .call_intrinsic(
+            LLVM_SADD_WITH_OVERFLOW_I64,
+            &[
+                refcount.into(),
+                ctx.i64_type().const_int((-1 as i64) as u64, false).into(),
+            ],
+        )
+        .into_struct_value();
+    let has_overflowed = builder
+        .build_extract_value(add_with_overflow, 1, "has_overflowed")
+        .unwrap();
 
+    let has_overflowed_comparison = builder.build_int_compare(
+        IntPredicate::EQ,
+        has_overflowed.into_int_value(),
+        ctx.bool_type().const_int(1 as u64, false),
+        "has_overflowed",
+    );
     // build blocks
     let then_block = ctx.append_basic_block(parent, "then");
     let else_block = ctx.append_basic_block(parent, "else");
@@ -500,7 +525,7 @@ fn decrement_refcount_help<'a, 'ctx, 'env>(
     // TODO what would be most optimial for the branch predictor
     //
     // are most refcounts 1 most of the time? or not?
-    builder.build_conditional_branch(comparison, then_block, else_block);
+    builder.build_conditional_branch(has_overflowed_comparison, then_block, else_block);
 
     // build then block
     {
@@ -513,16 +538,19 @@ fn decrement_refcount_help<'a, 'ctx, 'env>(
 
     // build else block
     {
-        // TODO: Avoid decrementing if the refcount is 0(read-only/leaked memory)
         builder.position_at_end(else_block);
-        let decremented = env.builder.build_int_sub(
+        let max = builder.build_int_compare(
+            IntPredicate::EQ,
             refcount,
-            ctx.i64_type().const_int(1 as u64, false),
-            "decrement_refcount",
+            ctx.i64_type().const_int(REFCOUNT_MAX as u64, false),
+            "refcount_max_check",
         );
-
-        // Mutate the new array in-place to change the element.
-        builder.build_store(refcount_ptr, decremented);
+        let decremented = builder
+            .build_extract_value(add_with_overflow, 0, "decrement_refcount")
+            .unwrap()
+            .into_int_value();
+        let selected = builder.build_select(max, refcount, decremented, "select_refcount");
+        builder.build_store(refcount_ptr, selected);
 
         builder.build_unconditional_branch(cont_block);
     }
