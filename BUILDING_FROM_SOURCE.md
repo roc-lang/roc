@@ -1,9 +1,9 @@
 # Building the Roc compiler from source
 
 
-## Installing LLVM
+## Installing LLVM and libc++abi
 
-To build the compiler, you need a particular version of LLVM installed on your system.
+To build the compiler, you need both `libc++abi` and a particular version of LLVM installed on your system. Some systems may already have `libc++abi` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `apt-get install libc++abi-dev`.)
 
 To see which version of LLVM you need, take a look at `Cargo.toml`, in particular the `branch` section of the `inkwell` dependency. It should have something like `llvmX-Y` where X and Y are the major and minor revisions of LLVM you need.
 
@@ -35,6 +35,8 @@ $ brew install https://raw.githubusercontent.com/Homebrew/homebrew-core/6616d50f
 # "pinning" ensures that homebrew doesn't update it automatically
 $ brew pin llvm
 ```
+
+If that doesn't work and you get a `brew` error `Error: Calling Installation of llvm from a GitHub commit URL is disabled! Use 'brew extract llvm' to stable tap on GitHub instead.` while trying the above solution, you can follow the steps extracting the formula into your private tap (one public version is at `sladwig/tap/llvm`). If installing LLVM still fails, it might help to run `sudo xcode-select -r` before installing again.
 
 ### LLVM installation on Windows
 

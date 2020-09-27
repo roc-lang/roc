@@ -11,9 +11,9 @@ let
 in { pkgs ? pinnedPkgs }:
 
 let
-  isOsX = builtins.currentSystem == "x86_64-darwin";
+  isMacOS = builtins.currentSystem == "x86_64-darwin";
   darwin-frameworks =
-    if isOsX then
+    if isMacOS then
       with pkgs.darwin.apple_sdk.frameworks; [
         AppKit
         CoreFoundation
@@ -26,6 +26,7 @@ let
     else
       [ ];
   llvm = pkgs.llvm_10;
+  lld = pkgs.lld_10; # this should match llvm's version
   inputs =
     [
       pkgs.rustup
@@ -35,6 +36,8 @@ let
       pkgs.libffi
       pkgs.libxml2
       pkgs.zlib
+      # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
+      lld
     ];
 in pkgs.mkShell {
   buildInputs = inputs ++ darwin-frameworks;

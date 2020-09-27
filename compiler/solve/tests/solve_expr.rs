@@ -2431,6 +2431,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn atan() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.atan
+                "#
+            ),
+            "Float -> Float",
+        );
+    }
+
+    #[test]
     fn reconstruct_path() {
         infer_eq_without_problem(
             indoc!(

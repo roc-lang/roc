@@ -17,6 +17,7 @@ These are potentially inspirational resources for the editor's design.
 * [Unity game engine](https://unity.com/)
     * Scripts can expose values as text inputs, sliders, checkboxes, etc or even generate custom graphical inputs
     * Drag-n-drop game objects and component into script interfaces
+* [How to Visualize Data Structures in VS Code](https://addyosmani.com/blog/visualize-data-structures-vscode/)
 
 ### Live Interactivity
 
@@ -26,6 +27,11 @@ These are potentially inspirational resources for the editor's design.
 * [Sketch-n-Sketch: Interactive SVG Programming with Direct Manipulation](https://youtu.be/YuGVC8VqXz0) by [Ravi Chugh](http://people.cs.uchicago.edu/~rchugh/)
 * [Xi](https://xi-editor.io/) modern text editor with concurrent editing (related to [Druid](https://github.com/linebender/druid))
 * [Self](https://selflanguage.org/) programming language
+
+### Debugging
+
+* [VS code debug visualization](https://marketplace.visualstudio.com/items?itemName=hediet.debug-visualizer)
+* [Algorithm visualization for javascript](https://algorithm-visualizer.org)
 
 ### Structured Editing
 
