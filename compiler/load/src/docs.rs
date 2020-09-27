@@ -1,10 +1,10 @@
 // This file was copied from file.rs and modified to expose information
 // required to auto-generate documentation
-use inlinable_string::InlinableString;
 use bumpalo::Bump;
 use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
+use inlinable_string::InlinableString;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
@@ -1374,7 +1374,8 @@ fn parse_and_constrain<'a>(
 
     // Generate documentation information
     // TODO: store timing information?
-    let module_docs = generate_module_docs(header.module_name, &header.exposed_ident_ids, &parsed_defs);
+    let module_docs =
+        generate_module_docs(header.module_name, &header.exposed_ident_ids, &parsed_defs);
 
     let module_id = header.module_id;
     let mut var_store = VarStore::default();
@@ -1611,7 +1612,10 @@ fn generate_module_doc<'a>(
         Annotation(loc_pattern, _loc_ann) => match loc_pattern.value {
             Pattern::Identifier(identifier) => {
                 // Check if the definition is exposed
-                if exposed_ident_ids.get_id(&InlinableString::from(identifier)).is_some()  {
+                if exposed_ident_ids
+                    .get_id(&InlinableString::from(identifier))
+                    .is_some()
+                {
                     let entry = DocEntry {
                         name: identifier.to_string(),
                         docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
@@ -1619,7 +1623,7 @@ fn generate_module_doc<'a>(
                     acc.push(entry);
                 }
                 (acc, None)
-            },
+            }
 
             _ => (acc, None),
         },
