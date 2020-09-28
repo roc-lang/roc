@@ -1,9 +1,11 @@
+#![crate_type = "lib"]
+
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
 #[link(name = "roc_app")]
 extern "C" {
-    #[link_name = "main#1"]
+    #[link_name = "main_1"]
     fn str_from_roc() -> *const c_char;
 }
 
