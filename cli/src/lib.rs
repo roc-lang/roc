@@ -136,8 +136,7 @@ fn build_file(
     };
     let loaded =
         roc_load::file::load(filename.clone(), &stdlib, src_dir.as_path(), subs_by_module)?;
-    let dest_filename = filename.with_extension("o");
-
+    let dest_filename = filename.with_file_name("roc_app.o");
     let buf = &mut String::with_capacity(1024);
 
     for (module_id, module_timing) in loaded.timings.iter() {
@@ -180,42 +179,54 @@ fn build_file(
     );
 
     let cwd = dest_filename.parent().unwrap();
-    let lib_path = dest_filename.with_file_name("libroc_app.a");
 
-    // Step 2: turn the .o file into a .a static library
-    Command::new("ar") // TODO on Windows, use `link`
-        .args(&[
-            "rcs",
-            lib_path.to_str().unwrap(),
-            dest_filename.to_str().unwrap(),
-        ])
-        .spawn()
-        .map_err(|_| {
-            todo!("gracefully handle `ar` failing to spawn.");
-        })?
-        .wait()
-        .map_err(|_| {
-            todo!("gracefully handle error after `ar` spawned");
-        })?;
-
-    // Step 3: have rustc compile the host and link in the .a file
-    let binary_path = cwd.join("app");
+    // Step 2: have rustc compile the host
+    let host_output_path = cwd.join("libhost.a"); // TODO should be host.lib on Windows
 
     Command::new("rustc")
         .args(&[
             "-L",
             ".",
             "--crate-type",
-            "bin",
+            "staticlib",
             "host.rs",
             "-o",
-            binary_path.as_path().to_str().unwrap(),
+            host_output_path.as_path().to_str().unwrap(),
             // ensure we don't make a position-independent executable
             "-C",
             "link-arg=-no-pie",
             // explicitly link in the c++ stdlib, for exceptions
             "-C",
             "link-arg=-lc++",
+        ])
+        .current_dir(cwd)
+        .spawn()
+        .map_err(|_| {
+            todo!("gracefully handle `rustc` failing to spawn.");
+        })?
+        .wait()
+        .map_err(|_| {
+            todo!("gracefully handle error after `rustc` spawned");
+        })?;
+
+    // Step 3: link the compiled host and compiled app
+    let binary_path = cwd.join("app"); // TODO should be app.exe on Windows
+    let arch = "x86_64"; // TODO determine this based on target
+
+    // TODO do we need -lSystem on macOS? -lpthread? -lm? -lresolv? -lc++?
+    Command::new("ld") // TODO use lld
+        .args(&[
+            "-L",
+            ".",
+            "-arch",
+            arch,
+            "-lc",    // libc
+            "-lhost", // libhost.a
+            "-e",
+            "_main", // assume hosts use `main` as their entry points
+            "-o",
+            binary_path.as_path().to_str().unwrap(),
+            dest_filename.as_path().to_str().unwrap(), // roc_app.o
         ])
         .current_dir(cwd)
         .spawn()

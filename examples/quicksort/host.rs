@@ -1,6 +1,6 @@
 use std::time::SystemTime;
 
-#[link(name = "roc_app", kind = "static")]
+#[link(name = "roc_app")]
 extern "C" {
     #[allow(improper_ctypes)]
     #[link_name = "quicksort#1"]
