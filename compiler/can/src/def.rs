@@ -130,8 +130,6 @@ pub fn canonicalize_defs<'a>(
     // This naturally handles recursion too, because a given expr which refers
     // to itself won't be processed until after its def has been added to scope.
 
-    use roc_parse::ast::Def::*;
-
     // Record both the original and final idents from the scope,
     // so we can diff them while detecting unused defs.
     let mut scope = original_scope.clone();
@@ -157,59 +155,6 @@ pub fn canonicalize_defs<'a>(
             }
         }
     }
-    // while let Some(loc_def) = iter.next() {
-    //     // Any time we have an Annotation followed immediately by a Body,
-    //     // check to see if their patterns are equivalent. If they are,
-    //     // turn it into a TypedBody. Otherwise, give an error.
-    //     let (new_output, pending_def) = match &loc_def.value {
-    //         Annotation(pattern, annotation) | Nested(Annotation(pattern, annotation)) => {
-    //             match iter.peek() {
-    //                 Some(Located {
-    //                     value: Body(body_pattern, body_expr),
-    //                     region: body_region,
-    //                 }) => {
-    //                     if pattern.value.equivalent(&body_pattern.value) {
-    //                         iter.next();
-
-    //                         pending_typed_body(
-    //                             env,
-    //                             body_pattern,
-    //                             annotation,
-    //                             body_expr,
-    //                             var_store,
-    //                             &mut scope,
-    //                             pattern_type,
-    //                         )
-    //                     } else if loc_def.region.lines_between(body_region) > 1 {
-    //                         // there is a line of whitespace between the annotation and the body
-    //                         // treat annotation and body separately
-    //                         to_pending_def(env, var_store, &loc_def.value, &mut scope, pattern_type)
-    //                     } else {
-    //                         // the pattern of the annotation does not match the pattern of the body directly below it
-    //                         env.problems.push(Problem::SignatureDefMismatch {
-    //                             annotation_pattern: pattern.region,
-    //                             def_pattern: body_pattern.region,
-    //                         });
-
-    //                         // both the annotation and definition are skipped!
-    //                         iter.next();
-    //                         continue;
-    //                     }
-    //                 }
-    //                 _ => to_pending_def(env, var_store, &loc_def.value, &mut scope, pattern_type),
-    //             }
-    //         }
-    //         _ => to_pending_def(env, var_store, &loc_def.value, &mut scope, pattern_type),
-    //     };
-
-    //     output.union(new_output);
-
-    //     // Record the ast::Expr for later. We'll do another pass through these
-    //     // once we have the entire scope assembled. If we were to canonicalize
-    //     // the exprs right now, they wouldn't have symbols in scope from defs
-    //     // that get would have gotten added later in the defs list!
-    //     pending.push(pending_def);
-    // }
 
     if cfg!(debug_assertions) {
         env.home.register_debug_idents(&env.ident_ids);

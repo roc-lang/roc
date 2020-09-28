@@ -59,6 +59,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
             expr_str, e
         )
     });
+    println!("{:#?}", loc_expr);
 
     let mut var_store = VarStore::default();
     let var = var_store.fresh();

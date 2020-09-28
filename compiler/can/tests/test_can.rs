@@ -244,6 +244,164 @@ mod test_can {
         assert_can_int("-0b11", -0b11);
     }
 
+    // ANNOTATIONS
+    #[test]
+    fn correct_annotated_body() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int
+                f = \ a -> a
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
+    #[test]
+    fn correct_annotated_body_with_comments() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int # comment
+                f = \ a -> a
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
+    #[test]
+    fn name_mismatch_annotated_body() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int
+                g = \ a -> a
+
+                g
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        // Here we have 2 issues:
+        // 1. `g` doesn't match the previous annotation named `f`, so we
+        //     have a `SignatureDefMismatch`.
+        // 2. Thus, `g` is not defined then final reference to it is a
+        //    `LookupNotInScope`.
+        assert_eq!(problems.len(), 2);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::SignatureDefMismatch{..} => true,
+            Problem::RuntimeError(RuntimeError::LookupNotInScope(_, _)) => true,
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn name_mismatch_annotated_body_with_comment() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int # comment
+                g = \ a -> a
+
+                g
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        // Here we have 2 issues:
+        // 1. `g` doesn't match the previous annotation named `f`, so we
+        //     have a `SignatureDefMismatch`.
+        // 2. Thus, `g` is not defined then final reference to it is a
+        //    `LookupNotInScope`.
+        assert_eq!(problems.len(), 2);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::SignatureDefMismatch{..} => true,
+            Problem::RuntimeError(RuntimeError::LookupNotInScope(_, _)) => true,
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn separated_annotated_body() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int
+
+                f = \ a -> a
+
+                f 42
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 1);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn separated_annotated_body_with_comment() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int
+                # comment
+                f = \ a -> a
+
+                f 42
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 1);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
+            _ => false,
+        }));
+    }
+    #[test]
+    fn shadowed_annotation() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int
+
+                f : Int -> Int
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 1);
+        println!("{:#?}", problems);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::RuntimeError(RuntimeError::Shadowing { .. }) => true,
+            _ => false,
+        }));
+    }
+
     // LOCALS
 
     // TODO rewrite this test to check only for UnusedDef reports
