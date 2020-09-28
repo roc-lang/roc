@@ -1,5 +1,5 @@
-interface Bool
-    exposes [ not, isEq, isNe ]
+interface Bool2
+    exposes [ not, and, or, xor, isEq, isNotEq ]
     imports []
 
 ## Returns #False when given #True, and vice versa.
@@ -76,7 +76,9 @@ xor : Bool, Bool -> Bool
 ##
 ## Note that `isEq` takes `'val` instead of `val`, which means `isEq` does not
 ## accept arguments whose types contain functions.
-isEq : 'val, 'val -> Bool
+# TODO: removed `'` from signature because parser does not support it yet
+# Original signature: `isEq : 'val, 'val -> Bool`
+isEq : val, val -> Bool
 
 ## Calls #eq on the given values, then calls #not on the result.
 ##
@@ -84,4 +86,6 @@ isEq : 'val, 'val -> Bool
 ##
 ## Note that `isNotEq` takes `'val` instead of `val`, which means `isNotEq` does not
 ## accept arguments whose types contain functions.
-isNotEq : 'val, 'val -> Bool
+# TODO: removed `'` from signature because parser does not support it yet
+# Original signature: `isNotEq : 'val, 'val -> Bool`
+isNotEq : val, val -> Bool
