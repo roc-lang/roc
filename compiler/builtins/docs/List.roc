@@ -1,5 +1,5 @@
-interface List
-    exposes [ List, map, fold ]
+interface List2
+    exposes [ List, single, empty, repeat, range, reverse, sort, map, mapWithIndex, mapOrCancel, mapOks, update, updater, allOks, append, prepend, concat, join, joinMap, oks, zip, zipMap, keepIf, dropIf, first, last, get, max, min, put, drop, append, prepend, dropLast, dropFirst, takeFirst, takeLast, split, sublist, walk, walkBackwards, walkUntil, walkBackwardsUntil, len, isEmpty, contains, all, any ]
     imports []
 
 ## Types
