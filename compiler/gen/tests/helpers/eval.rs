@@ -398,14 +398,8 @@ macro_rules! assert_llvm_evals_to {
 
         let transform = |success| {
             let expected = $expected;
-            //assert_eq!(&x, &x);
-            if true {
-                let x = $transform(success);
-                assert_eq!(&x, &expected);
-            } else {
-                assert_eq!(expected, expected);
-                panic!();
-            }
+            let given = $transform(success);
+            assert_eq!(&given, &expected);
         };
         run_jit_function!(execution_engine, main_fn_name, $ty, transform, errors)
     };

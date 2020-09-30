@@ -8,7 +8,7 @@ extern "C" {
     pub fn printf(format: *const u8, ...) -> i32;
 }
 
-const REFCOUNT_1: usize = usize::MAX - 1;
+const REFCOUNT_1: usize = usize::MAX;
 
 //#[macro_export]
 //macro_rules! roclist {
@@ -80,12 +80,7 @@ impl<T> RocList<T> {
             // NOTE doesn't work with elements of 16 or more bytes
             match usize::cmp(&0, &value) {
                 Equal => Some(Storage::ReadOnly),
-                Less => {
-                    // let rc = (isize::MIN - (value as isize)) as usize;
-                    // let rc = usize::MAX - value;
-                    let rc = value;
-                    Some(Storage::Refcounted(rc))
-                }
+                Less => Some(Storage::Refcounted(value)),
                 Greater => Some(Storage::Capacity(value)),
             }
         }
@@ -133,11 +128,12 @@ impl<T> RocList<T> {
         let element_bytes = capacity * core::mem::size_of::<T>();
         let num_bytes = core::mem::size_of::<usize>() + element_bytes;
 
-        let num_bytes = num_bytes + (num_bytes % 16);
+        // we must round up to the nearest multiple of 16
+        // otherwise we get segfault / double free issues
+        let padding = 16 - (num_bytes % 16);
+        let num_bytes = num_bytes + padding;
 
         let elements = unsafe {
-            // dbg!(&num_bytes);
-            printf("num bytes %d\n".as_ptr(), num_bytes);
             let raw_ptr = libc::malloc(num_bytes);
 
             // write the capacity
@@ -205,13 +201,11 @@ impl<T: Eq> Eq for RocList<T> {}
 
 impl<T> Drop for RocList<T> {
     fn drop(&mut self) {
-        return;
-
         use Storage::*;
         match self.storage() {
             None | Some(ReadOnly) => {}
             Some(Capacity(_)) | Some(Refcounted(REFCOUNT_1)) => unsafe {
-                //libc::free(self.get_storage_ptr() as *mut libc::c_void);
+                libc::free(self.get_storage_ptr() as *mut libc::c_void);
             },
             Some(Refcounted(rc)) => {
                 let sptr = self.get_storage_ptr_mut();

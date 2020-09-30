@@ -55,13 +55,7 @@ macro_rules! run_jit_function {
                         $errors
                     );
 
-                    let result = $transform(success);
-
-                    if true {
-                        result
-                    } else {
-                        todo!()
-                    }
+                    $transform(success)
                 }
                 Err(error_msg) => panic!("Roc failed with message: {}", error_msg),
             }

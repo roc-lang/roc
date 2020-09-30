@@ -19,7 +19,7 @@ mod gen_list {
 
     #[test]
     fn roc_list_construction() {
-        let list = RocList::from_slice(&[1, 2]);
+        let list = RocList::from_slice(&[true, false]);
         assert_eq!(&list, &list);
     }
 
@@ -30,14 +30,12 @@ mod gen_list {
 
     #[test]
     fn int_singleton_list_literal() {
-        // assert_evals_to!("[1]", RocList::from_slice(&[1]), RocList<i64>);
-        //assert_evals_to!("[1, 2]", roclist![1, 2], RocList<i64>);
         assert_evals_to!("[1, 2]", RocList::from_slice(&[1, 2]), RocList<i64>);
     }
 
     #[test]
     fn int_list_literal() {
-        assert_evals_to!("[ 12, 9 ]", RocList::from_slice(&[12, 9,]), RocList<i64>);
+        assert_evals_to!("[ 12, 9 ]", RocList::from_slice(&[12, 9]), RocList<i64>);
     }
 
     #[test]
@@ -47,6 +45,31 @@ mod gen_list {
             RocList::from_slice(&[true, false, true]),
             RocList<bool>
         );
+    }
+
+    #[test]
+    fn various_list_literals() {
+        assert_evals_to!("[]", RocList::from_slice(&[]), RocList<i64>);
+        assert_evals_to!("[1]", RocList::from_slice(&[1]), RocList<i64>);
+        assert_evals_to!("[1, 2]", RocList::from_slice(&[1, 2]), RocList<i64>);
+        assert_evals_to!("[1, 2, 3]", RocList::from_slice(&[1, 2, 3]), RocList<i64>);
+        assert_evals_to!(
+            "[1, 2, 3, 4]",
+            RocList::from_slice(&[1, 2, 3, 4]),
+            RocList<i64>
+        );
+        assert_evals_to!(
+            "[1, 2, 3, 4, 5]",
+            RocList::from_slice(&[1, 2, 3, 4, 5]),
+            RocList<i64>
+        );
+        /*
+        assert_evals_to!(
+            "[ True, False, True ]",
+            RocList::from_slice(&[true, false, true]),
+            RocList<bool>
+        );
+        */
     }
 
     #[test]
