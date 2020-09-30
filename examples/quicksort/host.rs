@@ -7,14 +7,14 @@ extern "C" {
     fn quicksort(list: Box<[i64]>) -> Box<[i64]>;
 }
 
-const NUM_NUMS: usize = 1_000_000;
+const NUM_NUMS: usize = 10_000;
 
 pub fn main() {
     let nums: Box<[i64]> = {
         let mut nums = Vec::with_capacity(NUM_NUMS);
 
         for index in 0..nums.capacity() {
-            let num = index as i64 % 12345;
+            let num = index as i64 % 123;
 
             nums.push(num);
         }

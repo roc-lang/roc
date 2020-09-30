@@ -55,6 +55,27 @@ pub fn run_roc(args: &[&str]) -> Out {
 }
 
 #[allow(dead_code)]
+pub fn run_with_valgrind(args: &[&str]) -> Out {
+    //TODO: figure out if there is a better way to get the valgrind executable.
+    let mut cmd = Command::new("valgrind");
+
+    //cmd.arg("--leak-check=full");
+    for arg in args {
+        cmd.arg(arg);
+    }
+
+    let output = cmd
+        .output()
+        .expect("failed to execute compiled `valgrind` binary in CLI test");
+
+    Out {
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8(output.stderr).unwrap(),
+        status: output.status,
+    }
+}
+
+#[allow(dead_code)]
 pub fn example_dir(dir_name: &str) -> PathBuf {
     let mut path = env::current_exe().ok().unwrap();
 
