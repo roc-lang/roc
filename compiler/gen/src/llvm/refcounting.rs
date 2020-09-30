@@ -521,19 +521,20 @@ fn build_inc_str_help<'a, 'ctx, 'env>(
         .unwrap()
         .into_int_value();
 
-    let bitmask = refcount_1(ctx, env.ptr_bytes);
-    let is_small = builder.build_int_compare(
-        IntPredicate::NE,
+    // Small strings have 1 as the first bit of length, making them negative.
+    // Thus, to check for big and non empty, just needs a signed len > 0.
+    let is_big_and_non_empty = builder.build_int_compare(
+        IntPredicate::SGT,
+        len,
         ptr_int(ctx, env.ptr_bytes).const_zero(),
-        builder.build_and(len, bitmask, "is_small"),
-        "is_small_comparison",
+        "len > 0",
     );
 
     // the block we'll always jump to when we're done
     let cont_block = ctx.append_basic_block(parent, "after_increment_block");
     let decrement_block = ctx.append_basic_block(parent, "increment_block");
 
-    builder.build_conditional_branch(is_small, cont_block, decrement_block);
+    builder.build_conditional_branch(is_big_and_non_empty, decrement_block, cont_block);
     builder.position_at_end(decrement_block);
 
     let refcount_ptr = list_get_refcount_ptr(env, layout, str_wrapper);
@@ -618,19 +619,20 @@ fn build_dec_str_help<'a, 'ctx, 'env>(
         .unwrap()
         .into_int_value();
 
-    let bitmask = refcount_1(ctx, env.ptr_bytes);
-    let is_small = builder.build_int_compare(
-        IntPredicate::NE,
+    // Small strings have 1 as the first bit of length, making them negative.
+    // Thus, to check for big and non empty, just needs a signed len > 0.
+    let is_big_and_non_empty = builder.build_int_compare(
+        IntPredicate::SGT,
+        len,
         ptr_int(ctx, env.ptr_bytes).const_zero(),
-        builder.build_and(len, bitmask, "is_small"),
-        "is_small_comparison",
+        "len > 0",
     );
 
     // the block we'll always jump to when we're done
     let cont_block = ctx.append_basic_block(parent, "after_decrement_block");
     let decrement_block = ctx.append_basic_block(parent, "decrement_block");
 
-    builder.build_conditional_branch(is_small, cont_block, decrement_block);
+    builder.build_conditional_branch(is_big_and_non_empty, decrement_block, cont_block);
     builder.position_at_end(decrement_block);
 
     let refcount_ptr = list_get_refcount_ptr(env, layout, str_wrapper);
