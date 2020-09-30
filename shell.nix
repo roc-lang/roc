@@ -4,7 +4,7 @@ let
   pinnedPkgs = import (builtins.fetchGit {
     name = "nixpkgs-20.03";
     url = "https://github.com/nixos/nixpkgs/";
-    ref = "refs/heads/release-20.03";
+    ref = "refs/heads/release-20.09";
   }) { };
 
   # This allows overriding pkgs by passing `--arg pkgs ...`

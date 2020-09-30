@@ -17,14 +17,14 @@ The source we'll use to generate the bitcode is in `src/lib.rs` in this director
 To generate the bitcode, `cd` into `compiler/builtins/bitcode/` and run:
 
 ```bash
-$ ./regenerate.sh
+./regenerate.sh
 ```
 
 > If you want to take a look at the human-readable LLVM IR rather than the
 > bitcode, run this instead and look for a `.ll` file instead of a `.bc` file:
 >
 > ```bash
-> $ cargo rustc --release --lib -- --emit=llvm-ir
+> cargo rustc --release --lib -- --emit=llvm-ir
 > ```
 >
 > Then look in the root `roc` source directory under `target/release/deps/` for a file
