@@ -51,17 +51,15 @@ impl<T> RocList<T> {
     pub fn get(&self, index: usize) -> Option<&T> {
         if index < self.len() {
             Some(unsafe {
-                let raw = self.elements.offset(index as isize);
-                let reference = core::mem::transmute::<*mut T, &T>(raw);
+                let raw = self.elements.add(index);
 
-                reference
+                &*raw
             })
         } else {
             None
         }
     }
 
-    //#[no_mangle]
     pub fn storage(&self) -> Option<Storage> {
         use core::cmp::Ordering::*;
 
