@@ -332,7 +332,7 @@ fn build_inc_list_help<'a, 'ctx, 'env>(
     builder.position_at_end(increment_block);
 
     let refcount_ptr = list_get_refcount_ptr(env, layout, original_wrapper);
-    increment_refcount_help(env, parent, refcount_ptr);
+    increment_refcount_help(env, refcount_ptr);
 
     builder.build_unconditional_branch(cont_block);
 
@@ -526,7 +526,7 @@ fn build_inc_str_help<'a, 'ctx, 'env>(
     builder.position_at_end(decrement_block);
 
     let refcount_ptr = list_get_refcount_ptr(env, layout, str_wrapper);
-    increment_refcount_help(env, parent, refcount_ptr);
+    increment_refcount_help(env, refcount_ptr);
     builder.build_unconditional_branch(cont_block);
 
     builder.position_at_end(cont_block);
@@ -631,17 +631,15 @@ fn build_dec_str_help<'a, 'ctx, 'env>(
 
 fn increment_refcount_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _parent: FunctionValue<'ctx>,
     layout: &Layout<'a>,
     field_ptr: PointerValue<'ctx>,
 ) {
     let refcount_ptr = get_refcount_ptr(env, layout, field_ptr);
-    increment_refcount_help(env, _parent, refcount_ptr);
+    increment_refcount_help(env, refcount_ptr);
 }
 
 fn increment_refcount_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _parent: FunctionValue<'ctx>,
     refcount_ptr: PointerValue<'ctx>,
 ) {
     let builder = env.builder;
@@ -1110,7 +1108,7 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
 
                 // TODO do this increment before the recursive call?
                 // Then the recursive call is potentially TCE'd
-                increment_refcount_ptr(env, parent, &layout, field_ptr.into_pointer_value());
+                increment_refcount_ptr(env, &layout, field_ptr.into_pointer_value());
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env
                     .builder
