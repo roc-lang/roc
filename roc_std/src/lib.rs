@@ -226,14 +226,3 @@ impl<T> Drop for RocList<T> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sanity_check() {
-        // TODO get the refcount/capacity of a list with 8-byte elements
-        // TODO get the refcount/capacity of a list with 16-byte elements
-    }
-}
