@@ -34,17 +34,14 @@ pub enum Storage {
 }
 
 impl<T> RocList<T> {
-    #[no_mangle]
     pub fn len(&self) -> usize {
         self.length
     }
 
-    #[no_mangle]
     pub fn is_empty(&self) -> bool {
         self.length == 0
     }
 
-    #[no_mangle]
     pub fn empty() -> Self {
         RocList {
             length: 0,
@@ -52,7 +49,6 @@ impl<T> RocList<T> {
         }
     }
 
-    #[no_mangle]
     pub fn get(&self, index: usize) -> Option<&T> {
         if index < self.len() {
             Some(unsafe {
