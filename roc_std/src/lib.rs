@@ -8,7 +8,7 @@ extern "C" {
     pub fn printf(format: *const u8, ...) -> i32;
 }
 
-const REFCOUNT_1: usize = usize::MAX;
+const REFCOUNT_1: usize = isize::MIN as usize;
 
 //#[macro_export]
 //macro_rules! roclist {
