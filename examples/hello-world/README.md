@@ -12,6 +12,10 @@ To run in release mode instead, do:
 $ cargo run --release run Hello.roc
 ```
 
+## Troubleshooting
+
+If you encounter `cannot find -lc++`, run the following for ubuntu `sudo apt install libc++-dev`.
+
 ## Design Notes
 
 This demonstrates the basic design of hosts: Roc code gets compiled into a pure 

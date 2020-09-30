@@ -1210,10 +1210,10 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
 
     // the refcount of a new allocation is initially 1
     // we assume that the allocation is indeed used (dead variables are eliminated)
-    let ref_count_one = ctx
-        .i64_type()
-        .const_int(crate::llvm::refcounting::REFCOUNT_1 as _, false);
-    builder.build_store(refcount_ptr, ref_count_one);
+    builder.build_store(
+        refcount_ptr,
+        crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes),
+    );
 
     // store the value in the pointer
     builder.build_store(list_element_ptr, value);
@@ -2388,7 +2388,6 @@ where
         Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
             // no static guarantees, but all is not lost: we can check the refcount
             // if it is one, we hold the final reference, and can mutate it in-place!
-            let builder = env.builder;
             let ctx = env.context;
 
             let ret_type = basic_type_from_layout(env.arena, ctx, list_layout, env.ptr_bytes);
@@ -2400,7 +2399,7 @@ where
                 .build_load(refcount_ptr, "get_refcount")
                 .into_int_value();
 
-            let comparison = refcount_is_one_comparison(builder, env.context, refcount);
+            let comparison = refcount_is_one_comparison(env, refcount);
 
             crate::llvm::build_list::build_basic_phi2(
                 env, parent, comparison, in_place, clone, ret_type,
