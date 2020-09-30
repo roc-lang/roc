@@ -7,7 +7,6 @@ use crate::llvm::build_list::list_len;
 use crate::llvm::convert::{basic_type_from_layout, block_of_memory, ptr_int};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
-use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
@@ -15,8 +14,23 @@ use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, MemoryMode};
 
-pub const REFCOUNT_1: usize = isize::MIN as usize;
 pub const REFCOUNT_MAX: usize = 0 as usize;
+
+pub fn refcount_1(ctx: &Context, ptr_bytes: u32) -> IntValue<'_> {
+    match ptr_bytes {
+        1 => ctx.i8_type().const_int(i8::MIN as u64, false),
+        2 => ctx.i16_type().const_int(i16::MIN as u64, false),
+        4 => ctx.i32_type().const_int(i32::MIN as u64, false),
+        8 => ctx.i64_type().const_int(i64::MIN as u64, false),
+        16 => ctx
+            .i128_type()
+            .const_int_arbitrary_precision(&[i64::MIN as u64, 0]),
+        _ => panic!(
+            "Invalid target: Roc does't support compiling to {}-bit systems.",
+            ptr_bytes * 8
+        ),
+    }
+}
 
 pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -447,6 +461,7 @@ fn increment_refcount_help<'a, 'ctx, 'env>(
 ) {
     let builder = env.builder;
     let ctx = env.context;
+    let refcount_type = ptr_int(ctx, env.ptr_bytes);
 
     let refcount = env
         .builder
@@ -456,12 +471,12 @@ fn increment_refcount_help<'a, 'ctx, 'env>(
     let max = builder.build_int_compare(
         IntPredicate::EQ,
         refcount,
-        ctx.i64_type().const_int(REFCOUNT_MAX as u64, false),
+        refcount_type.const_int(REFCOUNT_MAX as u64, false),
         "refcount_max_check",
     );
     let incremented = builder.build_int_add(
         refcount,
-        ctx.i64_type().const_int(1 as u64, false),
+        refcount_type.const_int(1 as u64, false),
         "increment_refcount",
     );
     let selected = builder.build_select(max, refcount, incremented, "select_refcount");
@@ -492,6 +507,7 @@ fn decrement_refcount_help<'a, 'ctx, 'env>(
 ) {
     let builder = env.builder;
     let ctx = env.context;
+    let refcount_type = ptr_int(ctx, env.ptr_bytes);
 
     let refcount = env
         .builder
@@ -503,7 +519,7 @@ fn decrement_refcount_help<'a, 'ctx, 'env>(
             LLVM_SADD_WITH_OVERFLOW_I64,
             &[
                 refcount.into(),
-                ctx.i64_type().const_int((-1 as i64) as u64, false).into(),
+                refcount_type.const_int((-1 as i64) as u64, true).into(),
             ],
         )
         .into_struct_value();
@@ -541,7 +557,7 @@ fn decrement_refcount_help<'a, 'ctx, 'env>(
         let max = builder.build_int_compare(
             IntPredicate::EQ,
             refcount,
-            ctx.i64_type().const_int(REFCOUNT_MAX as u64, false),
+            refcount_type.const_int(REFCOUNT_MAX as u64, false),
             "refcount_max_check",
         );
         let decremented = builder
@@ -940,16 +956,14 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
     builder.build_return(None);
 }
 
-pub fn refcount_is_one_comparison<'ctx>(
-    builder: &Builder<'ctx>,
-    context: &'ctx Context,
+pub fn refcount_is_one_comparison<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
     refcount: IntValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let refcount_one: IntValue<'ctx> = context.i64_type().const_int(REFCOUNT_1 as _, false);
-    builder.build_int_compare(
+    env.builder.build_int_compare(
         IntPredicate::EQ,
         refcount,
-        refcount_one,
+        refcount_1(env.context, env.ptr_bytes),
         "refcount_one_check",
     )
 }
@@ -974,8 +988,9 @@ fn get_refcount_ptr<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     ptr: PointerValue<'ctx>,
 ) -> PointerValue<'ctx> {
+    let refcount_type = ptr_int(env.context, env.ptr_bytes);
     let ptr_as_int =
-        cast_basic_basic(env.builder, ptr.into(), env.context.i64_type().into()).into_int_value();
+        cast_basic_basic(env.builder, ptr.into(), refcount_type.into()).into_int_value();
 
     get_refcount_ptr_help(env, layout, ptr_as_int)
 }
@@ -994,20 +1009,19 @@ fn get_refcount_ptr_help<'a, 'ctx, 'env>(
         _ => (env.ptr_bytes as u64).max(value_bytes),
     };
 
+    // pointer to usize
+    let refcount_type = ptr_int(ctx, env.ptr_bytes);
+
     // subtract offset, to access the refcount
     let refcount_ptr = builder.build_int_sub(
         ptr_as_int,
-        ctx.i64_type().const_int(offset, false),
+        refcount_type.const_int(offset, false),
         "make_refcount_ptr",
     );
 
-    // pointer to usize
-    let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-
     builder.build_int_to_ptr(
         refcount_ptr,
-        int_type.ptr_type(AddressSpace::Generic),
+        refcount_type.ptr_type(AddressSpace::Generic),
         "get_refcount_ptr",
     )
 }
