@@ -14,20 +14,39 @@ mod helpers;
 #[cfg(test)]
 mod gen_list {
     use crate::helpers::with_larger_debug_stack;
+    //use roc_std::roclist;
+    use roc_std::RocList;
+
+    #[test]
+    fn roc_list_construction() {
+        let list = RocList::from_slice(&[1, 2]);
+        assert_eq!(&list, &list);
+    }
 
     #[test]
     fn empty_list_literal() {
-        assert_evals_to!("[]", &[], &'static [i64]);
+        assert_evals_to!("[]", RocList::from_slice(&[]), RocList<i64>);
     }
 
     #[test]
     fn int_singleton_list_literal() {
-        assert_evals_to!("[1]", &[1], &'static [i64]);
+        // assert_evals_to!("[1]", RocList::from_slice(&[1]), RocList<i64>);
+        //assert_evals_to!("[1, 2]", roclist![1, 2], RocList<i64>);
+        assert_evals_to!("[1, 2]", RocList::from_slice(&[1, 2]), RocList<i64>);
     }
 
     #[test]
     fn int_list_literal() {
-        assert_evals_to!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64]);
+        assert_evals_to!("[ 12, 9 ]", RocList::from_slice(&[12, 9,]), RocList<i64>);
+    }
+
+    #[test]
+    fn bool_list_literal() {
+        assert_evals_to!(
+            "[ True, False, True ]",
+            RocList::from_slice(&[true, false, true]),
+            RocList<bool>
+        );
     }
 
     #[test]

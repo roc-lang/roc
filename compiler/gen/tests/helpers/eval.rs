@@ -396,7 +396,17 @@ macro_rules! assert_llvm_evals_to {
         let (main_fn_name, errors, execution_engine) =
             $crate::helpers::eval::helper_without_uniqueness(&arena, $src, $leak, &context);
 
-        let transform = |success| assert_eq!($transform(success), $expected);
+        let transform = |success| {
+            let expected = $expected;
+            //assert_eq!(&x, &x);
+            if true {
+                let x = $transform(success);
+                assert_eq!(&x, &expected);
+            } else {
+                assert_eq!(expected, expected);
+                panic!();
+            }
+        };
         run_jit_function!(execution_engine, main_fn_name, $ty, transform, errors)
     };
 
