@@ -11,7 +11,7 @@ mod helpers;
 
 #[cfg(test)]
 mod cli_run {
-    use crate::helpers::{example_file, run_roc, run_with_valgrind};
+    use crate::helpers::{example_file, extract_valgrind_errors, run_roc, run_with_valgrind};
 
     #[test]
     fn run_hello_world() {
@@ -28,7 +28,10 @@ mod cli_run {
             run_with_valgrind(&[example_file("hello-world", "app").to_str().unwrap()]);
         assert!(&valgrind_out.stdout.ends_with("Hello, World!!!!!!!!!!!!!\n"));
         assert!(valgrind_out.status.success());
-        // TODO: Actually process the valgrind output for leaks.
+        let memory_errors = extract_valgrind_errors(&valgrind_out.stderr);
+        if !memory_errors.is_empty() {
+            panic!("{:?}", memory_errors);
+        }
     }
 
     #[test]
@@ -47,6 +50,9 @@ mod cli_run {
             .stdout
             .ends_with("[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]\n"));
         assert!(valgrind_out.status.success());
-        // TODO: Actually process the valgrind output for leaks.
+        let memory_errors = extract_valgrind_errors(&valgrind_out.stderr);
+        if !memory_errors.is_empty() {
+            panic!("{:?}", memory_errors);
+        }
     }
 }
