@@ -19,7 +19,7 @@ mod gen_list {
 
     #[test]
     fn roc_list_construction() {
-        let list = RocList::from_slice(&[true, false]);
+        let list = RocList::from_slice(&vec![1i64; 23]);
         assert_eq!(&list, &list);
     }
 
@@ -36,19 +36,93 @@ mod gen_list {
     #[test]
     fn int_list_literal() {
         assert_evals_to!("[ 12, 9 ]", RocList::from_slice(&[12, 9]), RocList<i64>);
+        assert_evals_to!(
+            "[ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 ]",
+            RocList::from_slice(&(vec![1i64; 23])),
+            RocList<i64>
+        );
     }
 
     #[test]
     fn bool_list_literal() {
+        // NOTE: make sure to explicitly declare the elements to be of type bool, or
+        // use both True and False; only using one of them causes the list to in practice be
+        // of type `List [ True ]` or `List [ False ]`, those are tag unions with one constructor
+        // and not fields, and don't have a runtime representation.
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   false : Bool
+                   false = False
+
+                   [ false ]
+                   "#
+            ),
+            RocList::from_slice(&(vec![false; 1])),
+            RocList<bool>
+        );
+
         assert_evals_to!(
             "[ True, False, True ]",
             RocList::from_slice(&[true, false, true]),
             RocList<bool>
         );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   false : Bool
+                   false = False
+
+                   [false ]
+                   "#
+            ),
+            RocList::from_slice(&(vec![false; 1])),
+            RocList<bool>
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   true : Bool
+                   true = True
+
+                   List.repeat 23 true
+                   "#
+            ),
+            RocList::from_slice(&(vec![true; 23])),
+            RocList<bool>
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   true : Bool
+                   true = True
+
+                   List.repeat 23 { x: true, y: true }
+                   "#
+            ),
+            RocList::from_slice(&(vec![[true, true]; 23])),
+            RocList<[bool; 2]>
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   true : Bool
+                   true = True
+
+                   List.repeat 23 { x: true, y: true, a: true, b: true, c: true, d : true, e: true, f: true }
+                   "#
+            ),
+            RocList::from_slice(&(vec![[true, true, true, true, true, true, true, true]; 23])),
+            RocList<[bool; 8]>
+        );
     }
 
     #[test]
-    fn various_list_literals() {
+    fn variously_sized_list_literals() {
         assert_evals_to!("[]", RocList::from_slice(&[]), RocList<i64>);
         assert_evals_to!("[1]", RocList::from_slice(&[1]), RocList<i64>);
         assert_evals_to!("[1, 2]", RocList::from_slice(&[1, 2]), RocList<i64>);
@@ -63,13 +137,6 @@ mod gen_list {
             RocList::from_slice(&[1, 2, 3, 4, 5]),
             RocList<i64>
         );
-        /*
-        assert_evals_to!(
-            "[ True, False, True ]",
-            RocList::from_slice(&[true, false, true]),
-            RocList<bool>
-        );
-        */
     }
 
     #[test]

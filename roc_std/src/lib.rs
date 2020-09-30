@@ -126,12 +126,18 @@ impl<T> RocList<T> {
 
         let ptr = slice.as_ptr();
         let element_bytes = capacity * core::mem::size_of::<T>();
-        let num_bytes = core::mem::size_of::<usize>() + element_bytes;
 
-        // we must round up to the nearest multiple of 16
-        // otherwise we get segfault / double free issues
-        let padding = 16 - (num_bytes % 16);
-        let num_bytes = num_bytes + padding;
+        let padding = {
+            if core::mem::align_of::<T>() <= core::mem::align_of::<usize>() {
+                // aligned on usize (8 bytes on 64-bit systems)
+                0
+            } else {
+                // aligned on 2*usize (16 bytes on 64-bit systems)
+                core::mem::size_of::<usize>()
+            }
+        };
+
+        let num_bytes = core::mem::size_of::<usize>() + padding + element_bytes;
 
         let elements = unsafe {
             let raw_ptr = libc::malloc(num_bytes);
@@ -142,11 +148,15 @@ impl<T> RocList<T> {
 
             let raw_ptr = Self::get_element_ptr(raw_ptr as *mut T);
 
-            libc::memcpy(
-                raw_ptr as *mut libc::c_void,
-                ptr as *mut libc::c_void,
-                num_bytes,
-            );
+            {
+                // NOTE: using a memcpy here causes weird issues
+                let target_ptr = raw_ptr as *mut T;
+                let source_ptr = ptr as *const T;
+                let length = slice.len() as isize;
+                for index in 0..length {
+                    *target_ptr.offset(index) = *source_ptr.offset(index);
+                }
+            }
 
             raw_ptr as *mut T
         };
