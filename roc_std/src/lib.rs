@@ -1,7 +1,6 @@
 #![crate_type = "lib"]
 #![no_std]
 use core::fmt;
-use libc;
 
 // A list of C functions that are being imported
 extern "C" {
