@@ -521,10 +521,10 @@ fn build_inc_str_help<'a, 'ctx, 'env>(
         .unwrap()
         .into_int_value();
 
-    let bitmask = ctx.i64_type().const_int(isize::MIN as u64, false);
+    let bitmask = refcount_1(ctx, env.ptr_bytes);
     let is_small = builder.build_int_compare(
         IntPredicate::NE,
-        ctx.i64_type().const_zero(),
+        ptr_int(ctx, env.ptr_bytes).const_zero(),
         builder.build_and(len, bitmask, "is_small"),
         "is_small_comparison",
     );
@@ -618,10 +618,10 @@ fn build_dec_str_help<'a, 'ctx, 'env>(
         .unwrap()
         .into_int_value();
 
-    let bitmask = ctx.i64_type().const_int(isize::MIN as u64, false);
+    let bitmask = refcount_1(ctx, env.ptr_bytes);
     let is_small = builder.build_int_compare(
         IntPredicate::NE,
-        ctx.i64_type().const_zero(),
+        ptr_int(ctx, env.ptr_bytes).const_zero(),
         builder.build_and(len, bitmask, "is_small"),
         "is_small_comparison",
     );
