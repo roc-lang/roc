@@ -22,9 +22,6 @@ pub fn refcount_1(ctx: &Context, ptr_bytes: u32) -> IntValue<'_> {
         2 => ctx.i16_type().const_int(i16::MIN as u64, false),
         4 => ctx.i32_type().const_int(i32::MIN as u64, false),
         8 => ctx.i64_type().const_int(i64::MIN as u64, false),
-        16 => ctx
-            .i128_type()
-            .const_int_arbitrary_precision(&[i64::MIN as u64, 0]),
         _ => panic!(
             "Invalid target: Roc does't support compiling to {}-bit systems.",
             ptr_bytes * 8
