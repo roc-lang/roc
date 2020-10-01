@@ -11,10 +11,11 @@ Ordinarily you'd only implement your host once, in your preferred language.
 $ clang -c host.c -o host.o 
 ```
 
+Then `mv` the compiled `host.o` into the apropriate subdirectory under
+`host/` based on the operating system you've compiled it for.
+
 ### Recompiling the Rust implementation
 
 ```shell
 $ rustc
 ```
-
-ld -L . -arch "x86_64" -lc -lroc_app.o -e "_main" host.o -o app
