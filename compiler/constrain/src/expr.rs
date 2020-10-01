@@ -239,7 +239,7 @@ pub fn constrain_expr(
             }
         }
         Call(boxed, loc_args, _application_style) => {
-            let (fn_var, loc_fn, ret_var) = &**boxed;
+            let (fn_var, loc_fn, closure_var, ret_var) = &**boxed;
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
             let opt_symbol = if let Var(symbol) = loc_fn.value {
@@ -262,11 +262,15 @@ pub fn constrain_expr(
             // The function's return type
             let ret_type = Variable(*ret_var);
 
+            // type of values captured in the closure
+            let closure_type = Variable(*closure_var);
+
             // This will be used in the occurs check
             let mut vars = Vec::with_capacity(2 + loc_args.len());
 
             vars.push(*fn_var);
             vars.push(*ret_var);
+            vars.push(*closure_var);
 
             let mut arg_types = Vec::with_capacity(loc_args.len());
             let mut arg_cons = Vec::with_capacity(loc_args.len());
@@ -289,7 +293,11 @@ pub fn constrain_expr(
 
             let expected_fn_type = ForReason(
                 fn_reason,
-                Function(arg_types, Box::new(ret_type.clone())),
+                Function(
+                    arg_types,
+                    Box::new(closure_type),
+                    Box::new(ret_type.clone()),
+                ),
                 region,
             );
 
@@ -306,21 +314,31 @@ pub fn constrain_expr(
             )
         }
         Var(symbol) => Lookup(*symbol, expected, region),
-        Closure(fn_var, _symbol, _recursive, args, boxed) => {
-            let (loc_body_expr, ret_var) = boxed.as_ref();
+        Closure {
+            function_type: fn_var,
+            closure_type: closure_var,
+            return_type: ret_var,
+            arguments,
+            loc_body: boxed,
+            ..
+        } => {
+            let loc_body_expr = &**boxed;
             let mut state = PatternState {
                 headers: SendMap::default(),
-                vars: Vec::with_capacity(args.len()),
+                vars: Vec::with_capacity(arguments.len()),
                 constraints: Vec::with_capacity(1),
             };
             let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
             let mut pattern_types = Vec::with_capacity(state.vars.capacity());
             let ret_var = *ret_var;
+            let closure_var = *closure_var;
             let ret_type = Type::Variable(ret_var);
+            let closure_type = Type::Variable(closure_var);
 
             vars.push(ret_var);
+            vars.push(closure_var);
 
-            for (pattern_var, loc_pattern) in args {
+            for (pattern_var, loc_pattern) in arguments {
                 let pattern_type = Type::Variable(*pattern_var);
                 let pattern_expected = PExpected::NoExpectation(pattern_type.clone());
 
@@ -337,7 +355,11 @@ pub fn constrain_expr(
                 vars.push(*pattern_var);
             }
 
-            let fn_type = Type::Function(pattern_types, Box::new(ret_type.clone()));
+            let fn_type = Type::Function(
+                pattern_types,
+                Box::new(closure_type),
+                Box::new(ret_type.clone()),
+            );
             let body_type = NoExpectation(ret_type);
             let ret_constraint =
                 constrain_expr(env, loc_body_expr.region, &loc_body_expr.value, body_type);
@@ -655,6 +677,7 @@ pub fn constrain_expr(
         Accessor {
             field,
             record_var,
+            closure_var,
             ext_var,
             field_var,
         } => {
@@ -679,10 +702,14 @@ pub fn constrain_expr(
             );
 
             exists(
-                vec![*record_var, field_var, ext_var],
+                vec![*record_var, *closure_var, field_var, ext_var],
                 And(vec![
                     Eq(
-                        Type::Function(vec![record_type], Box::new(field_type)),
+                        Type::Function(
+                            vec![record_type],
+                            Box::new(Type::Variable(*closure_var)),
+                            Box::new(field_type),
+                        ),
                         expected,
                         category,
                         region,
@@ -1032,26 +1059,36 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
             // instead of the more generic "something is wrong with the body of `f`"
             match (&def.loc_expr.value, &signature) {
                 (
-                    Closure(fn_var, _symbol, _recursive, args, boxed),
-                    Type::Function(arg_types, _),
+                    Closure {
+                        function_type: fn_var,
+                        closure_type: closure_var,
+                        return_type: ret_var,
+                        arguments,
+                        loc_body,
+                        ..
+                    },
+                    Type::Function(arg_types, _, _),
                 ) => {
                     let expected = annotation_expected;
                     let region = def.loc_expr.region;
 
-                    let (loc_body_expr, ret_var) = boxed.as_ref();
+                    let loc_body_expr = &**loc_body;
                     let mut state = PatternState {
                         headers: SendMap::default(),
-                        vars: Vec::with_capacity(args.len()),
+                        vars: Vec::with_capacity(arguments.len()),
                         constraints: Vec::with_capacity(1),
                     };
                     let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
                     let mut pattern_types = Vec::with_capacity(state.vars.capacity());
                     let ret_var = *ret_var;
+                    let closure_var = *closure_var;
                     let ret_type = Type::Variable(ret_var);
+                    let closure_type = Type::Variable(closure_var);
 
                     vars.push(ret_var);
+                    vars.push(closure_var);
 
-                    let it = args.iter().zip(arg_types.iter()).enumerate();
+                    let it = arguments.iter().zip(arg_types.iter()).enumerate();
                     for (index, ((pattern_var, loc_pattern), loc_ann)) in it {
                         {
                             // ensure type matches the one in the annotation
@@ -1098,7 +1135,11 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                         }
                     }
 
-                    let fn_type = Type::Function(pattern_types, Box::new(ret_type.clone()));
+                    let fn_type = Type::Function(
+                        pattern_types,
+                        Box::new(closure_type),
+                        Box::new(ret_type.clone()),
+                    );
                     let body_type = NoExpectation(ret_type);
                     let ret_constraint =
                         constrain_expr(env, loc_body_expr.region, &loc_body_expr.value, body_type);
