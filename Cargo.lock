@@ -2327,6 +2327,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_solve",
+ "roc_std",
  "roc_types",
  "roc_unify",
  "roc_uniq",
@@ -2484,6 +2485,13 @@ dependencies = [
  "roc_solve",
  "roc_types",
  "roc_unify",
+]
+
+[[package]]
+name = "roc_std"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

@@ -22,9 +22,6 @@ pub fn refcount_1(ctx: &Context, ptr_bytes: u32) -> IntValue<'_> {
         2 => ctx.i16_type().const_int(i16::MIN as u64, false),
         4 => ctx.i32_type().const_int(i32::MIN as u64, false),
         8 => ctx.i64_type().const_int(i64::MIN as u64, false),
-        16 => ctx
-            .i128_type()
-            .const_int_arbitrary_precision(&[i64::MIN as u64, 0]),
         _ => panic!(
             "Invalid target: Roc does't support compiling to {}-bit systems.",
             ptr_bytes * 8
@@ -168,6 +165,10 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
 
             todo!();
         }
+        Str => {
+            let wrapper_struct = value.into_struct_value();
+            build_dec_str(env, layout_ids, layout, wrapper_struct);
+        }
         _ => {}
     }
 }
@@ -248,6 +249,10 @@ fn increment_refcount_builtin<'a, 'ctx, 'env>(
 
             todo!();
         }
+        Str => {
+            let wrapper_struct = value.into_struct_value();
+            build_inc_str(env, layout_ids, layout, wrapper_struct);
+        }
         _ => {}
     }
 }
@@ -279,7 +284,7 @@ pub fn build_inc_list<'a, 'ctx, 'env>(
     env.builder.position_at_end(block);
     let call = env
         .builder
-        .build_call(function, &[original_wrapper.into()], "decrement_union");
+        .build_call(function, &[original_wrapper.into()], "increment_list");
 
     call.set_call_convention(FAST_CALL_CONV);
 }
@@ -338,7 +343,7 @@ fn build_inc_list_help<'a, 'ctx, 'env>(
     builder.position_at_end(increment_block);
 
     let refcount_ptr = list_get_refcount_ptr(env, layout, original_wrapper);
-    increment_refcount_help(env, parent, refcount_ptr);
+    increment_refcount_help(env, refcount_ptr);
 
     builder.build_unconditional_branch(cont_block);
 
@@ -375,7 +380,7 @@ pub fn build_dec_list<'a, 'ctx, 'env>(
     env.builder.position_at_end(block);
     let call = env
         .builder
-        .build_call(function, &[original_wrapper.into()], "decrement_union");
+        .build_call(function, &[original_wrapper.into()], "decrement_list");
     call.set_call_convention(FAST_CALL_CONV);
 }
 
@@ -444,19 +449,210 @@ fn build_dec_list_help<'a, 'ctx, 'env>(
     builder.build_return(None);
 }
 
+pub fn build_inc_str<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    original_wrapper: StructValue<'ctx>,
+) {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+
+    let symbol = Symbol::INC;
+    let fn_name = layout_ids
+        .get(symbol, &layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let function_value = build_header(env, &layout, fn_name);
+
+            build_inc_str_help(env, layout_ids, layout, function_value);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    let call = env
+        .builder
+        .build_call(function, &[original_wrapper.into()], "increment_str");
+    call.set_call_convention(FAST_CALL_CONV);
+}
+
+fn build_inc_str_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    fn_val: FunctionValue<'ctx>,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    // Add a basic block for the entry point
+    let entry = ctx.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    let mut scope = Scope::default();
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+    let arg_val = fn_val.get_param_iter().next().unwrap();
+
+    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+
+    let alloca = create_entry_block_alloca(
+        env,
+        fn_val,
+        arg_val.get_type(),
+        arg_symbol.ident_string(&env.interns),
+    );
+
+    builder.build_store(alloca, arg_val);
+
+    scope.insert(arg_symbol, (layout.clone(), alloca));
+
+    let parent = fn_val;
+
+    let str_wrapper = arg_val.into_struct_value();
+    let len = builder
+        .build_extract_value(str_wrapper, Builtin::WRAPPER_LEN, "read_str_ptr")
+        .unwrap()
+        .into_int_value();
+
+    // Small strings have 1 as the first bit of length, making them negative.
+    // Thus, to check for big and non empty, just needs a signed len > 0.
+    let is_big_and_non_empty = builder.build_int_compare(
+        IntPredicate::SGT,
+        len,
+        ptr_int(ctx, env.ptr_bytes).const_zero(),
+        "len > 0",
+    );
+
+    // the block we'll always jump to when we're done
+    let cont_block = ctx.append_basic_block(parent, "after_increment_block");
+    let decrement_block = ctx.append_basic_block(parent, "increment_block");
+
+    builder.build_conditional_branch(is_big_and_non_empty, decrement_block, cont_block);
+    builder.position_at_end(decrement_block);
+
+    let refcount_ptr = list_get_refcount_ptr(env, layout, str_wrapper);
+    increment_refcount_help(env, refcount_ptr);
+    builder.build_unconditional_branch(cont_block);
+
+    builder.position_at_end(cont_block);
+
+    // this function returns void
+    builder.build_return(None);
+}
+
+pub fn build_dec_str<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    original_wrapper: StructValue<'ctx>,
+) {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+
+    let symbol = Symbol::DEC;
+    let fn_name = layout_ids
+        .get(symbol, &layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let function_value = build_header(env, &layout, fn_name);
+
+            build_dec_str_help(env, layout_ids, layout, function_value);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    let call = env
+        .builder
+        .build_call(function, &[original_wrapper.into()], "decrement_str");
+    call.set_call_convention(FAST_CALL_CONV);
+}
+
+fn build_dec_str_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    fn_val: FunctionValue<'ctx>,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    // Add a basic block for the entry point
+    let entry = ctx.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    let mut scope = Scope::default();
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+    let arg_val = fn_val.get_param_iter().next().unwrap();
+
+    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+
+    let alloca = create_entry_block_alloca(
+        env,
+        fn_val,
+        arg_val.get_type(),
+        arg_symbol.ident_string(&env.interns),
+    );
+
+    builder.build_store(alloca, arg_val);
+
+    scope.insert(arg_symbol, (layout.clone(), alloca));
+
+    let parent = fn_val;
+
+    let str_wrapper = arg_val.into_struct_value();
+    let len = builder
+        .build_extract_value(str_wrapper, Builtin::WRAPPER_LEN, "read_str_ptr")
+        .unwrap()
+        .into_int_value();
+
+    // Small strings have 1 as the first bit of length, making them negative.
+    // Thus, to check for big and non empty, just needs a signed len > 0.
+    let is_big_and_non_empty = builder.build_int_compare(
+        IntPredicate::SGT,
+        len,
+        ptr_int(ctx, env.ptr_bytes).const_zero(),
+        "len > 0",
+    );
+
+    // the block we'll always jump to when we're done
+    let cont_block = ctx.append_basic_block(parent, "after_decrement_block");
+    let decrement_block = ctx.append_basic_block(parent, "decrement_block");
+
+    builder.build_conditional_branch(is_big_and_non_empty, decrement_block, cont_block);
+    builder.position_at_end(decrement_block);
+
+    let refcount_ptr = list_get_refcount_ptr(env, layout, str_wrapper);
+    decrement_refcount_help(env, parent, refcount_ptr, cont_block);
+
+    // this function returns void
+    builder.build_return(None);
+}
+
 fn increment_refcount_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _parent: FunctionValue<'ctx>,
     layout: &Layout<'a>,
     field_ptr: PointerValue<'ctx>,
 ) {
     let refcount_ptr = get_refcount_ptr(env, layout, field_ptr);
-    increment_refcount_help(env, _parent, refcount_ptr);
+    increment_refcount_help(env, refcount_ptr);
 }
 
 fn increment_refcount_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _parent: FunctionValue<'ctx>,
     refcount_ptr: PointerValue<'ctx>,
 ) {
     let builder = env.builder;
@@ -927,7 +1123,7 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
 
                 // TODO do this increment before the recursive call?
                 // Then the recursive call is potentially TCE'd
-                increment_refcount_ptr(env, parent, &layout, field_ptr.into_pointer_value());
+                increment_refcount_ptr(env, &layout, field_ptr.into_pointer_value());
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env
                     .builder
@@ -1006,6 +1202,7 @@ fn get_refcount_ptr_help<'a, 'ctx, 'env>(
     let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
     let offset = match layout {
         Layout::Builtin(Builtin::List(_, _)) => env.ptr_bytes as u64,
+        Layout::Builtin(Builtin::Str) => env.ptr_bytes as u64,
         _ => (env.ptr_bytes as u64).max(value_bytes),
     };
 

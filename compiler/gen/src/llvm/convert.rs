@@ -200,7 +200,6 @@ pub fn ptr_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {
         2 => ctx.i16_type(),
         4 => ctx.i32_type(),
         8 => ctx.i64_type(),
-        16 => ctx.i128_type(),
         _ => panic!(
             "Invalid target: Roc does't support compiling to {}-bit systems.",
             ptr_bytes * 8

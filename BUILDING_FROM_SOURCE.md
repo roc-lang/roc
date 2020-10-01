@@ -24,7 +24,9 @@ That will help us improve this document for everyone who reads it in the future!
 ### LLVM installation on Linux
 
 On some Linux systems we've seen the error "failed to run custom build command for x11".
-On Ubuntu, running `sudo apt-get install cmake libx11-dev` fixed this.
+On Ubuntu, running `sudo apt install pkg-config cmake libx11-dev` fixed this.
+
+If you encounter `cannot find -lz` run `sudo apt install zlib1g-dev`.
 
 ### LLVM installation on macOS
 
