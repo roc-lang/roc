@@ -12,7 +12,7 @@ use roc_mono::ir::{Env, PartialProc, Procs};
 use roc_mono::layout::{Layout, LayoutCache};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
+use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 // TODO how should imported modules factor into this? What if those use builtins too?
 // TODO this should probably use more helper functions
@@ -334,28 +334,14 @@ pub fn gen(
     let target_triple_str = match target {
         Triple {
             architecture: Architecture::X86_64,
-            vendor: Vendor::Unknown,
             operating_system: OperatingSystem::Linux,
             ..
         } => "x86_64-unknown-linux-gnu",
         Triple {
             architecture: Architecture::X86_64,
-            vendor: Vendor::Pc,
-            operating_system: OperatingSystem::Linux,
-            ..
-        } => "x86_64-pc-linux-gnu",
-        Triple {
-            architecture: Architecture::X86_64,
-            vendor: Vendor::Unknown,
             operating_system: OperatingSystem::Darwin,
             ..
         } => "x86_64-unknown-darwin10",
-        Triple {
-            architecture: Architecture::X86_64,
-            vendor: Vendor::Apple,
-            operating_system: OperatingSystem::Darwin,
-            ..
-        } => "x86_64-apple-darwin10",
         _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
     };
     let target_machine = Target::from_name(arch_str)
