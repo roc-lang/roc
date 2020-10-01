@@ -116,8 +116,10 @@ pub struct ValgrindError {
 #[derive(Debug, Deserialize, Clone)]
 pub struct ValgrindErrorXWhat {
     text: String,
-    leakedbytes: isize,
-    leakedblocks: isize,
+    #[serde(default)]
+    leakedbytes: Option<isize>,
+    #[serde(default)]
+    leakedblocks: Option<isize>,
 }
 
 pub fn extract_valgrind_errors(xml: &str) -> Vec<ValgrindError> {
