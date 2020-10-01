@@ -1,8 +1,9 @@
 app Hello provides [ main ] imports []
 
 greeting =
-    hi = "Hello, World!!!!!!!!!!!!!"
+    hi = "Hello"
+    name = "World"
 
-    hi
+    "\(hi), \(name)!!!!!!!!!!!!!"
 
 main = greeting
