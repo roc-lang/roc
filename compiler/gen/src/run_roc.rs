@@ -1,25 +1,19 @@
 use std::ffi::CString;
 use std::os::raw::c_char;
+use RocCallResult::*;
 
-#[repr(C)]
-union Payload<T: Copy> {
-    success: T,
-    failure: *mut c_char,
+#[repr(u64)]
+pub enum RocCallResult<T> {
+    Success(T),
+    Failure(*mut c_char),
 }
 
-#[repr(C)]
-pub struct RocCallResult<T: Copy> {
-    pub flag: u64,
-    payload: Payload<T>,
-}
-
-impl<T: Copy> Into<Result<T, String>> for RocCallResult<T> {
+impl<T: Sized> Into<Result<T, String>> for RocCallResult<T> {
     fn into(self) -> Result<T, String> {
-        if self.flag == 0 {
-            Ok(unsafe { self.payload.success })
-        } else {
-            Err(unsafe {
-                let raw = CString::from_raw(self.payload.failure);
+        match self {
+            Success(value) => Ok(value),
+            Failure(failure) => Err({
+                let raw = unsafe { CString::from_raw(failure) };
 
                 let result = format!("{:?}", raw);
 
@@ -27,7 +21,7 @@ impl<T: Copy> Into<Result<T, String>> for RocCallResult<T> {
                 std::mem::forget(raw);
 
                 result
-            })
+            }),
         }
     }
 }
