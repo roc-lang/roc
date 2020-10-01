@@ -180,52 +180,42 @@ fn build_file(
 
     let cwd = dest_filename.parent().unwrap();
 
-    // Step 2: have rustc compile the host
-    let host_output_path = cwd.join("libhost.a"); // TODO should be host.lib on Windows
-
-    Command::new("rustc")
-        .args(&[
-            "-L",
-            ".",
-            "--crate-type",
-            "staticlib",
-            "host.rs",
-            "-o",
-            host_output_path.as_path().to_str().unwrap(),
-            // ensure we don't make a position-independent executable
-            "-C",
-            "link-arg=-no-pie",
-            // explicitly link in the c++ stdlib, for exceptions
-            "-C",
-            "link-arg=-lc++",
-        ])
-        .current_dir(cwd)
-        .spawn()
-        .map_err(|_| {
-            todo!("gracefully handle `rustc` failing to spawn.");
-        })?
-        .wait()
-        .map_err(|_| {
-            todo!("gracefully handle error after `rustc` spawned");
-        })?;
-
-    // Step 3: link the compiled host and compiled app
-    let binary_path = cwd.join("app"); // TODO should be app.exe on Windows
+    // Step 2: link the precompiled host and compiled app
     let arch = "x86_64"; // TODO determine this based on target
+    let target_triple = "x86_64-unknown-linux-gnu";
+    let host_input_path = cwd
+        .join("platform")
+        .join("host")
+        .join(target_triple)
+        .join("host.o");
+    let binary_path = cwd.join("app"); // TODO should be app.exe on Windows
 
-    // TODO do we need -lSystem on macOS? -lpthread? -lm? -lresolv? -lc++?
+    // TODO try to move as much of this linking as possible to the precompiled
+    // host, to minimize the amount of host-application linking required.
     Command::new("ld") // TODO use lld
         .args(&[
-            "-L",
-            ".",
             "-arch",
             arch,
-            "-lc",    // libc
-            "-lhost", // libhost.a
-            "-e",
-            "_main", // assume hosts use `main` as their entry points
+            "/usr/lib/x86_64-linux-gnu/crti.o",
+            "/usr/lib/x86_64-linux-gnu/crtn.o",
+            "/usr/lib/x86_64-linux-gnu/Scrt1.o",
+            "-dynamic-linker",
+            "/lib64/ld-linux-x86-64.so.2",
+            // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925
+            // for discussion and further references
+            "-lc",
+            "-lm",
+            "-lpthread",
+            "-ldl",
+            "-lrt",
+            "-lutil",
+            "-lc_nonshared",
+            // "-lc++", // TODO shouldn't we need this?
+            // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
+            // "-lunwind", // TODO will eventually need this, see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
             "-o",
-            binary_path.as_path().to_str().unwrap(),
+            binary_path.as_path().to_str().unwrap(), // app
+            host_input_path.as_path().to_str().unwrap(), // host.o
             dest_filename.as_path().to_str().unwrap(), // roc_app.o
         ])
         .current_dir(cwd)
