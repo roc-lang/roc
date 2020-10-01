@@ -1914,6 +1914,11 @@ fn annotation_to_attr_type(
             arg_vars.extend(closure_vars);
             arg_vars.push(uniq_var);
 
+            match **closure {
+                Type::Variable(c) => arg_vars.push(c),
+                _ => unreachable!("closure must contain a type variable"),
+            }
+
             (
                 arg_vars,
                 attr_type(

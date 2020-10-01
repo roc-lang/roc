@@ -158,7 +158,7 @@ impl fmt::Debug for Type {
         match self {
             Type::EmptyRec => write!(f, "{{}}"),
             Type::EmptyTagUnion => write!(f, "[]"),
-            Type::Function(args, _closure, ret) => {
+            Type::Function(args, closure, ret) => {
                 write!(f, "Fn(")?;
 
                 for (index, arg) in args.iter().enumerate() {
@@ -169,7 +169,9 @@ impl fmt::Debug for Type {
                     arg.fmt(f)?;
                 }
 
-                write!(f, " -> ")?;
+                write!(f, " -")?;
+                closure.fmt(f)?;
+                write!(f, "-> ")?;
 
                 ret.fmt(f)?;
 
