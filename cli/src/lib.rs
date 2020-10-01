@@ -8,6 +8,7 @@ use roc_build::program::gen;
 use roc_collections::all::MutMap;
 use roc_gen::llvm::build::OptLevel;
 use roc_load::file::LoadingProblem;
+use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::process;
@@ -192,7 +193,7 @@ fn build_file(
 
     // TODO try to move as much of this linking as possible to the precompiled
     // host, to minimize the amount of host-application linking required.
-    Command::new("ld") // TODO use lld
+    let cmd_result = Command::new("ld") // TODO use lld
         .args(&[
             "-arch",
             arch,
@@ -218,7 +219,6 @@ fn build_file(
             host_input_path.as_path().to_str().unwrap(), // host.o
             dest_filename.as_path().to_str().unwrap(), // roc_app.o
         ])
-        .current_dir(cwd)
         .spawn()
         .map_err(|_| {
             todo!("gracefully handle `rustc` failing to spawn.");
@@ -226,7 +226,15 @@ fn build_file(
         .wait()
         .map_err(|_| {
             todo!("gracefully handle error after `rustc` spawned");
-        })?;
+        });
+
+    // Clean up the leftover .o file from the Roc, if possible.
+    // (If cleaning it up fails, that's fine. No need to take action.)
+    // TODO compile the dest_filename to a tmpdir, as an extra precaution.
+    let _ = fs::remove_file(dest_filename);
+
+    // If the cmd errored out, return the Err.
+    cmd_result?;
 
     Ok(binary_path)
 }
