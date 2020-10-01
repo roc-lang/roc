@@ -80,17 +80,9 @@ impl<T> RocList<T> {
     }
 
     fn get_storage_ptr(&self) -> *const usize {
-        let elem_alignment = core::mem::align_of::<T>();
+        let ptr = self.elements as *const usize;
 
-        unsafe {
-            if elem_alignment <= core::mem::align_of::<usize>() {
-                let ptr = self.elements as *const usize;
-                ptr.offset(-1)
-            } else {
-                let ptr = self.elements as *const (usize, usize);
-                (ptr.offset(-1)) as *const usize
-            }
-        }
+        unsafe { ptr.offset(-1) }
     }
 
     fn get_storage_ptr_mut(&mut self) -> *mut usize {
@@ -99,14 +91,17 @@ impl<T> RocList<T> {
 
     fn get_element_ptr<Q>(elements: *const Q) -> *const usize {
         let elem_alignment = core::mem::align_of::<T>();
+        let ptr = elements as *const usize;
 
         unsafe {
             if elem_alignment <= core::mem::align_of::<usize>() {
-                let ptr = elements as *const usize;
                 ptr.offset(1)
             } else {
-                let ptr = elements as *const (usize, usize);
-                (ptr.offset(1)) as *const usize
+                // If elements have an alignment bigger than usize (e.g. an i128),
+                // we will have necessarily allocated two usize slots worth of
+                // space for the storage value (with the first usize slot being
+                // padding for alignment's sake), and we need to skip past both.
+                ptr.offset(2)
             }
         }
     }
