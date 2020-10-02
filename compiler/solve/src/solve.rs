@@ -70,7 +70,7 @@ pub enum TypeError {
     BadType(roc_types::types::Problem),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Env {
     pub vars_by_symbol: SendMap<Symbol, Variable>,
     pub aliases: MutMap<Symbol, Alias>,

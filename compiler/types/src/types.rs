@@ -942,6 +942,7 @@ pub enum Category {
     },
     Lambda,
     Uniqueness,
+    ClosureSize,
     StrInterpolation,
 
     // storing variables in the ast

@@ -6,7 +6,7 @@ use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
     int_expr_from_result, num_expr_from_result,
 };
-use crate::pattern::{canonicalize_pattern, Pattern};
+use crate::pattern::{canonicalize_pattern, symbols_from_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
 use inlinable_string::InlinableString;
@@ -1524,4 +1524,131 @@ pub fn unescape_char(escaped: &EscapedChar) -> char {
         Tab => '\t',
         Newline => '\n',
     }
+}
+
+pub fn free_variables(expr: &Expr) -> MutSet<Symbol> {
+    use Expr::*;
+
+    let mut stack = vec![expr.clone()];
+
+    let mut bound = MutSet::default();
+    let mut used: std::collections::HashSet<roc_module::symbol::Symbol, _> = MutSet::default();
+
+    while let Some(expr) = stack.pop() {
+        match expr {
+            Num(_, _) | Int(_, _) | Float(_, _) | Str(_) | EmptyRecord | RuntimeError(_) => {}
+
+            Var(s) => {
+                used.insert(s);
+            }
+            List { loc_elems, .. } => {
+                for e in loc_elems {
+                    stack.push(e.value);
+                }
+            }
+            When {
+                loc_cond, branches, ..
+            } => {
+                stack.push(loc_cond.value);
+
+                for branch in branches {
+                    stack.push(branch.value.value);
+
+                    if let Some(guard) = branch.guard {
+                        stack.push(guard.value);
+                    }
+
+                    bound.extend(
+                        branch
+                            .patterns
+                            .iter()
+                            .map(|t| symbols_from_pattern(&t.value).into_iter())
+                            .flatten(),
+                    );
+                }
+            }
+            If {
+                branches,
+                final_else,
+                ..
+            } => {
+                for (cond, then) in branches {
+                    stack.push(cond.value);
+                    stack.push(then.value);
+                }
+                stack.push(final_else.value);
+            }
+
+            LetRec(defs, cont, _, _) => {
+                stack.push(cont.value);
+
+                for def in defs {
+                    bound.extend(symbols_from_pattern(&def.loc_pattern.value));
+                    stack.push(def.loc_expr.value);
+                }
+            }
+            LetNonRec(def, cont, _, _) => {
+                stack.push(cont.value);
+
+                bound.extend(symbols_from_pattern(&def.loc_pattern.value));
+                stack.push(def.loc_expr.value);
+            }
+            Call(boxed, args, _) => {
+                let (_, function, _, _) = *boxed;
+
+                stack.push(function.value);
+                for (_, arg) in args {
+                    stack.push(arg.value);
+                }
+            }
+            RunLowLevel { args, .. } => {
+                for (_, arg) in args {
+                    stack.push(arg);
+                }
+            }
+
+            Closure {
+                arguments: args,
+                loc_body: boxed_body,
+                ..
+            } => {
+                bound.extend(
+                    args.iter()
+                        .map(|t| symbols_from_pattern(&t.1.value).into_iter())
+                        .flatten(),
+                );
+                stack.push(boxed_body.value);
+            }
+            Record { fields, .. } => {
+                for (_, field) in fields {
+                    stack.push(field.loc_expr.value);
+                }
+            }
+            Update {
+                symbol, updates, ..
+            } => {
+                used.insert(symbol);
+                for (_, field) in updates {
+                    stack.push(field.loc_expr.value);
+                }
+            }
+            Access { loc_expr, .. } => {
+                stack.push(loc_expr.value);
+            }
+
+            Accessor { .. } => {}
+
+            Tag { arguments, .. } => {
+                for (_, arg) in arguments {
+                    stack.push(arg.value);
+                }
+            }
+        }
+    }
+
+    for b in bound {
+        used.remove(&b);
+    }
+
+    used
 }

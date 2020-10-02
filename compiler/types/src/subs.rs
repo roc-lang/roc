@@ -72,6 +72,13 @@ impl VarStore {
         VarStore { next: next_var.0 }
     }
 
+    pub fn new_from_subs(subs: &Subs) -> Self {
+        let next_var = subs.utable.len() as u32;
+        debug_assert!(next_var >= Variable::FIRST_USER_SPACE_VAR.0);
+
+        VarStore { next: next_var }
+    }
+
     pub fn fresh(&mut self) -> Variable {
         // Increment the counter and return the value it had before it was incremented.
         let answer = self.next;
@@ -162,6 +169,10 @@ impl Variable {
     /// This should only ever be called from tests!
     pub unsafe fn unsafe_test_debug_variable(v: u32) -> Self {
         Variable(v)
+    }
+
+    pub fn index(&self) -> u32 {
+        self.0
     }
 }
 
