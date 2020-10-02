@@ -1,8 +1,7 @@
+use crate::target;
 use bumpalo::Bump;
 use inkwell::context::Context;
-use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
-};
+use inkwell::targets::{CodeModel, FileType, RelocMode};
 use inkwell::OptimizationLevel;
 use roc_collections::all::default_hasher;
 use roc_gen::layout_id::LayoutIds;
@@ -12,7 +11,7 @@ use roc_mono::ir::{Env, PartialProc, Procs};
 use roc_mono::layout::{Layout, LayoutCache};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use target_lexicon::{Architecture, OperatingSystem, Triple};
+use target_lexicon::Triple;
 
 // TODO how should imported modules factor into this? What if those use builtins too?
 // TODO this should probably use more helper functions
@@ -295,66 +294,10 @@ pub fn gen(
 
     // Emit the .o file
 
-    // NOTE: arch_str is *not* the same as the beginning of the magic target triple
-    // string! For example, if it's "x86-64" here, the magic target triple string
-    // will begin with "x86_64" (with an underscore) instead.
-    let arch_str = match target.architecture {
-        Architecture::X86_64 => {
-            Target::initialize_x86(&InitializationConfig::default());
-
-            "x86-64"
-        }
-        Architecture::Arm(_) if cfg!(feature = "target-arm") => {
-            // NOTE: why not enable arm and wasm by default?
-            //
-            // We had some trouble getting them to link properly. This may be resolved in the
-            // future, or maybe it was just some weird configuration on one machine.
-            Target::initialize_arm(&InitializationConfig::default());
-
-            "arm"
-        }
-        Architecture::Wasm32 if cfg!(feature = "target-webassembly") => {
-            Target::initialize_webassembly(&InitializationConfig::default());
-
-            "wasm32"
-        }
-        _ => panic!(
-            "TODO gracefully handle unsupported target architecture: {:?}",
-            target.architecture
-        ),
-    };
-
     let opt = OptimizationLevel::Aggressive;
     let reloc = RelocMode::Default;
     let model = CodeModel::Default;
-
-    // Best guide I've found on how to determine these magic strings:
-    //
-    // https://stackoverflow.com/questions/15036909/clang-how-to-list-supported-target-architectures
-    let target_triple_str = match target {
-        Triple {
-            architecture: Architecture::X86_64,
-            operating_system: OperatingSystem::Linux,
-            ..
-        } => "x86_64-unknown-linux-gnu",
-        Triple {
-            architecture: Architecture::X86_64,
-            operating_system: OperatingSystem::Darwin,
-            ..
-        } => "x86_64-unknown-darwin10",
-        _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
-    };
-    let target_machine = Target::from_name(arch_str)
-        .unwrap()
-        .create_target_machine(
-            &TargetTriple::create(target_triple_str),
-            arch_str,
-            "+avx2", // TODO this string was used uncritically from an example, and should be reexamined
-            opt,
-            reloc,
-            model,
-        )
-        .unwrap();
+    let target_machine = target::target_machine(&target, opt, reloc, model).unwrap();
 
     target_machine
         .write_to_file(&env.module, FileType::Object, &dest_filename)
