@@ -796,7 +796,7 @@ fn count_arguments(tipe: &ErrorType) -> usize {
     use ErrorType::*;
 
     match tipe {
-        Function(args, _) => args.len(),
+        Function(args, _, _) => args.len(),
         Type(Symbol::ATTR_ATTR, args) => count_arguments(&args[1]),
         Alias(_, _, actual) => count_arguments(actual),
         _ => 0,
@@ -1334,7 +1334,7 @@ pub fn to_doc<'b>(
     use ErrorType::*;
 
     match tipe {
-        Function(args, ret) => report_text::function(
+        Function(args, _, ret) => report_text::function(
             alloc,
             parens,
             args.into_iter()
@@ -1474,7 +1474,7 @@ fn to_diff<'b>(
         (FlexVar(x), FlexVar(y)) if x == y => same(alloc, parens, type1),
         (RigidVar(x), RigidVar(y)) if x == y => same(alloc, parens, type1),
 
-        (Function(args1, ret1), Function(args2, ret2)) => {
+        (Function(args1, _, ret1), Function(args2, _, ret2)) => {
             if args1.len() == args2.len() {
                 let mut status = Status::Similar;
                 let arg_diff = traverse(alloc, Parens::InFn, args1, args2);
@@ -2406,7 +2406,7 @@ fn type_problem_to_pretty<'b>(
             match tipe {
                 Infinite | Error | FlexVar(_) => alloc.nil(),
                 RigidVar(y) => bad_double_rigid(x, y),
-                Function(_, _) => bad_rigid_var(x, alloc.reflow("a function value")),
+                Function(_, _, _) => bad_rigid_var(x, alloc.reflow("a function value")),
                 Record(_, _) => bad_rigid_var(x, alloc.reflow("a record value")),
                 TagUnion(_, _) | RecursiveTagUnion(_, _, _) => {
                     bad_rigid_var(x, alloc.reflow("a tag value"))

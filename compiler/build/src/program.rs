@@ -105,11 +105,18 @@ pub fn gen(
                 Declare(def) | Builtin(def) => match def.loc_pattern.value {
                     Identifier(symbol) => {
                         match def.loc_expr.value {
-                            Closure(annotation, _, recursivity, loc_args, boxed_body) => {
+                            Closure {
+                                function_type: annotation,
+                                return_type: ret_var,
+                                recursive: recursivity,
+                                arguments: loc_args,
+                                loc_body: boxed_body,
+                                ..
+                            } => {
                                 let is_tail_recursive =
                                     matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
 
-                                let (loc_body, ret_var) = *boxed_body;
+                                let loc_body = *boxed_body;
 
                                 // If this is an exposed symbol, we need to
                                 // register it as such. Otherwise, since it
