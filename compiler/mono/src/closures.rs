@@ -6,19 +6,22 @@ use roc_collections::all::MutSet;
 use roc_constrain::expr::exists;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
+use roc_solve::solve;
 use roc_types::subs::{Subs, VarStore};
 use roc_types::types::{Category, Type};
 
-pub fn infer_closure_size(expr: &Expr, subs: &mut Subs) {
-    use roc_solve::solve;
-
+pub fn infer_closure_size(expr: &Expr, subs: &mut Subs, solve_env: &solve::Env) {
     let mut var_store = VarStore::new_from_subs(subs);
 
-    let env = solve::Env::default();
     let mut problems = Vec::new();
     let constraint = generate_constraint(expr, &mut var_store);
 
-    let _new_env = solve::run_in_place(&env, &mut problems, subs, &constraint);
+    let next = var_store.fresh().index();
+    let variables_introduced = next as usize - (subs.len() - 1);
+
+    subs.extend_by(variables_introduced);
+
+    let _new_env = solve::run_in_place(solve_env, &mut problems, subs, &constraint);
 
     debug_assert_eq!(problems.len(), 0);
 }
@@ -224,7 +227,8 @@ pub fn generate_constraints_help(
         }
 
         Closure {
-            arguments: _,
+            arguments,
+            name,
             closure_type: closure_var,
             loc_body: boxed_body,
             ..
@@ -232,7 +236,18 @@ pub fn generate_constraints_help(
             let mut cons = Vec::new();
             let mut variables = Vec::new();
 
-            let closed_over_symbols = MutSet::default();
+            let bound_by_closure = arguments
+                .iter()
+                .map(|(_, pattern)| symbols_from_pattern(&pattern.value))
+                .flatten()
+                .collect::<MutSet<_>>();
+
+            // let closed_over_symbols = MutSet::default();
+            let closed_over_symbols = free_variables(expr)
+                .into_iter()
+                .filter(|x| !x.is_builtin() && !bound_by_closure.contains(&x) && !(x == name))
+                .collect::<MutSet<_>>();
+
             let closure_ext_var = var_store.fresh();
             let closure_var = *closure_var;
 

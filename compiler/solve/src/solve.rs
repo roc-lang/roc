@@ -196,8 +196,9 @@ fn solve(
     constraint: &Constraint,
 ) -> State {
     match constraint {
-        True => state,
-        SaveTheEnvironment => {
+        // True =>  state,
+        True | SaveTheEnvironment => {
+            // NOTE deviation: elm only copies the env into the state on SaveTheEnvironment
             let mut copy = state;
 
             copy.env = env.clone();

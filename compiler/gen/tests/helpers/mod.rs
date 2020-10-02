@@ -74,16 +74,16 @@ pub fn infer_expr(
     problems: &mut Vec<roc_solve::solve::TypeError>,
     constraint: &Constraint,
     expr_var: Variable,
-) -> (Content, Subs) {
+) -> (Content, Subs, solve::Env) {
     let env = solve::Env {
         aliases: MutMap::default(),
         vars_by_symbol: SendMap::default(),
     };
-    let (solved, _) = solve::run(&env, problems, subs, constraint);
+    let (solved, env) = solve::run(&env, problems, subs, constraint);
 
     let content = solved.inner().get_without_compacting(expr_var).content;
 
-    (content, solved.into_inner())
+    (content, solved.into_inner(), env)
 }
 
 pub fn parse_loc_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Located<ast::Expr<'a>>, Fail> {

@@ -45,7 +45,7 @@ pub fn helper_without_uniqueness<'a>(
 
     let subs = Subs::new(var_store.into());
     let mut unify_problems = Vec::new();
-    let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+    let (content, mut subs, solve_env) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
     assert_eq!(
         unify_problems,
@@ -103,7 +103,7 @@ pub fn helper_without_uniqueness<'a>(
     };
 
     // infer the size of any closures
-    roc_mono::closures::infer_closure_size(&loc_expr.value, mono_env.subs);
+    roc_mono::closures::infer_closure_size(&loc_expr.value, mono_env.subs, &solve_env);
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
 
@@ -219,7 +219,7 @@ pub fn helper_with_uniqueness<'a>(
     assert_eq!(errors, Vec::new(), "Encountered errors: {:?}", errors);
 
     let mut unify_problems = Vec::new();
-    let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+    let (content, mut subs, solve_env) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
     assert_eq!(
         unify_problems,
@@ -275,7 +275,7 @@ pub fn helper_with_uniqueness<'a>(
     };
 
     // infer the size of any closures
-    roc_mono::closures::infer_closure_size(&loc_expr.value, mono_env.subs);
+    roc_mono::closures::infer_closure_size(&loc_expr.value, mono_env.subs, &solve_env);
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
     let mut headers = {
