@@ -9,20 +9,18 @@ use roc_region::all::Region;
 use roc_types::subs::{Subs, VarStore};
 use roc_types::types::{Category, Type};
 
-pub fn infer_closure_size(expr: &Expr, mut subs: Subs) -> Subs {
+pub fn infer_closure_size(expr: &Expr, subs: &mut Subs) {
     use roc_solve::solve;
 
-    let mut var_store = VarStore::new_from_subs(&mut subs);
+    let mut var_store = VarStore::new_from_subs(subs);
 
     let env = solve::Env::default();
     let mut problems = Vec::new();
     let constraint = generate_constraint(expr, &mut var_store);
 
-    let (solved_subs, _new_env) = solve::run(&env, &mut problems, subs, &constraint);
+    let _new_env = solve::run_in_place(&env, &mut problems, subs, &constraint);
 
     debug_assert_eq!(problems.len(), 0);
-
-    solved_subs.0
 }
 
 pub fn free_variables(expr: &Expr) -> MutSet<Symbol> {

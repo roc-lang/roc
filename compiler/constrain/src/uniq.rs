@@ -1905,13 +1905,15 @@ fn annotation_to_attr_type(
             let uniq_var = var_store.fresh();
             let (mut arg_vars, args_lifted) =
                 annotation_to_attr_type_many(var_store, arguments, rigids, change_var_kind);
-            let (closure_vars, closure_lifted) =
-                annotation_to_attr_type(var_store, closure, rigids, change_var_kind);
+
+            // NOTE: we don't lift the closure var!
+            // their uniqueness will never matter (it's a phantom parameter)
+            // and not lifting makes code reuse possible
+
             let (result_vars, result_lifted) =
                 annotation_to_attr_type(var_store, result, rigids, change_var_kind);
 
             arg_vars.extend(result_vars);
-            arg_vars.extend(closure_vars);
             arg_vars.push(uniq_var);
 
             match **closure {
@@ -1923,11 +1925,7 @@ fn annotation_to_attr_type(
                 arg_vars,
                 attr_type(
                     Bool::variable(uniq_var),
-                    Type::Function(
-                        args_lifted,
-                        Box::new(closure_lifted),
-                        Box::new(result_lifted),
-                    ),
+                    Type::Function(args_lifted, closure.clone(), Box::new(result_lifted)),
                 ),
             )
         }

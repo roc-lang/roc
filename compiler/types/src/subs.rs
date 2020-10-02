@@ -73,7 +73,7 @@ impl VarStore {
     }
 
     pub fn new_from_subs(subs: &Subs) -> Self {
-        let next_var = subs.utable.len() as u32;
+        let next_var = (subs.utable.len() - 1) as u32;
         debug_assert!(next_var >= Variable::FIRST_USER_SPACE_VAR.0);
 
         VarStore { next: next_var }

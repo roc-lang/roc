@@ -157,6 +157,33 @@ pub fn run(
     (Solved(subs), state.env)
 }
 
+/// Modify an existing subs in-place instead
+pub fn run_in_place(
+    env: &Env,
+    problems: &mut Vec<TypeError>,
+    subs: &mut Subs,
+    constraint: &Constraint,
+) -> Env {
+    let mut pools = Pools::default();
+    let state = State {
+        env: env.clone(),
+        mark: Mark::NONE.next(),
+    };
+    let rank = Rank::toplevel();
+    let state = solve(
+        env,
+        state,
+        rank,
+        &mut pools,
+        problems,
+        &mut MutMap::default(),
+        subs,
+        constraint,
+    );
+
+    state.env
+}
+
 #[allow(clippy::too_many_arguments)]
 fn solve(
     env: &Env,

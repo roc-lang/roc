@@ -81,11 +81,11 @@ pub fn helper_without_uniqueness<'a>(
     let mut env = roc_gen::llvm::build::Env {
         arena: &arena,
         builder: &builder,
-        context: context,
+        context,
         interns,
         module,
         ptr_bytes,
-        leak: leak,
+        leak,
         exposed_to_host: MutSet::default(),
     };
     let mut procs = roc_mono::ir::Procs::default();
@@ -101,6 +101,9 @@ pub fn helper_without_uniqueness<'a>(
         home,
         ident_ids: &mut ident_ids,
     };
+
+    // infer the size of any closures
+    roc_mono::closures::infer_closure_size(&loc_expr.value, mono_env.subs);
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
 
@@ -250,11 +253,11 @@ pub fn helper_with_uniqueness<'a>(
     let mut env = roc_gen::llvm::build::Env {
         arena: &arena,
         builder: &builder,
-        context: context,
+        context,
         interns,
         module,
         ptr_bytes,
-        leak: leak,
+        leak,
         exposed_to_host: MutSet::default(),
     };
     let mut procs = roc_mono::ir::Procs::default();
@@ -270,6 +273,9 @@ pub fn helper_with_uniqueness<'a>(
         home,
         ident_ids: &mut ident_ids,
     };
+
+    // infer the size of any closures
+    roc_mono::closures::infer_closure_size(&loc_expr.value, mono_env.subs);
 
     let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
     let mut headers = {
