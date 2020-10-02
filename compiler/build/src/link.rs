@@ -15,23 +15,18 @@ pub fn link(
             architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Linux,
             ..
-        } => link_linux(
-            arch_str(target),
-            binary_path,
-            host_input_path,
-            dest_filename,
-        ),
+        } => link_linux(target, binary_path, host_input_path, dest_filename),
         Triple {
             architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Darwin,
             ..
-        } => todo!("link macos"),
+        } => link_macos(target, binary_path, host_input_path, dest_filename),
         _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
 
 fn link_linux(
-    arch: &str,
+    target: &Triple,
     binary_path: &Path,
     host_input_path: &Path,
     dest_filename: &Path,
@@ -39,7 +34,7 @@ fn link_linux(
     Command::new("ld")
         .args(&[
             "-arch",
-            arch,
+            arch_str(target),
             "/usr/lib/x86_64-linux-gnu/crti.o",
             "/usr/lib/x86_64-linux-gnu/crtn.o",
             "/usr/lib/x86_64-linux-gnu/Scrt1.o",
@@ -54,6 +49,32 @@ fn link_linux(
             "-lrt",
             "-lutil",
             "-lc_nonshared",
+            // "-lc++", // TODO shouldn't we need this?
+            // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
+            // "-lunwind", // TODO will eventually need this, see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
+            "-o",
+            binary_path.to_str().unwrap(),     // app
+            host_input_path.to_str().unwrap(), // host.o
+            dest_filename.to_str().unwrap(),   // roc_app.o
+        ])
+        .spawn()
+}
+
+fn link_macos(
+    target: &Triple,
+    binary_path: &Path,
+    host_input_path: &Path,
+    dest_filename: &Path,
+) -> io::Result<Child> {
+    Command::new("ld")
+        .args(&[
+            "-arch",
+            target.architecture.to_string().as_str(),
+            // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
+            // for discussion and further references
+            "-lSystem",
+            // "-lrt", // TODO shouldn't we need this?
+            // "-lc_nonshared", // TODO sho
             // "-lc++", // TODO shouldn't we need this?
             // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
             // "-lunwind", // TODO will eventually need this, see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
