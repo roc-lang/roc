@@ -37,6 +37,7 @@ const NUM_BUILTIN_IMPORTS: usize = 7;
 
 /// These can be shared between definitions, they will get instantiated when converted to Type
 const FUVAR: VarId = VarId::from_u32(1000);
+const TOP_LEVEL_CLOSURE_VAR: VarId = VarId::from_u32(1001);
 
 fn shared(base: SolvedType) -> SolvedType {
     SolvedType::Apply(
@@ -495,6 +496,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![float_type(star1)], int_type(star2))
     });
 
+    // atan : Float -> Float
+    add_type(Symbol::NUM_ATAN, {
+        let_tvars! { star1, star2 };
+        unique_function(vec![float_type(star1)], float_type(star2))
+    });
+
     // Bool module
 
     // isEq or (==) : Attr * a, Attr * a -> Attr * Bool
@@ -825,12 +832,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //     , Attr Shared (a -> b)
     //    -> Attr * (List b)
     add_type(Symbol::LIST_MAP, {
-        let_tvars! { a, b, star1, star2 };
+        let_tvars! { a, b, star1, star2, closure };
 
         unique_function(
             vec![
                 list_type(star1, a),
-                shared(SolvedType::Func(vec![flex(a)], Box::new(flex(b)))),
+                shared(SolvedType::Func(
+                    vec![flex(a)],
+                    Box::new(flex(closure)),
+                    Box::new(flex(b)),
+                )),
             ],
             list_type(star2, b),
         )
@@ -840,12 +851,16 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //        , Attr Shared (a -> Attr * Bool)
     //       -> Attr * (List a)
     add_type(Symbol::LIST_KEEP_IF, {
-        let_tvars! { a, star1, star2, star3 };
+        let_tvars! { a, star1, star2, star3, closure };
 
         unique_function(
             vec![
                 list_type(star1, a),
-                shared(SolvedType::Func(vec![flex(a)], Box::new(bool_type(star2)))),
+                shared(SolvedType::Func(
+                    vec![flex(a)],
+                    Box::new(flex(closure)),
+                    Box::new(bool_type(star2)),
+                )),
             ],
             list_type(star3, a),
         )
@@ -856,7 +871,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //           , b
     //          -> b
     add_type(Symbol::LIST_WALK_RIGHT, {
-        let_tvars! { u, a, b, star1 };
+        let_tvars! { u, a, b, star1, closure };
 
         unique_function(
             vec![
@@ -869,6 +884,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 ),
                 shared(SolvedType::Func(
                     vec![attr_type(u, a), flex(b)],
+                    Box::new(flex(closure)),
                     Box::new(flex(b)),
                 )),
                 flex(b),
@@ -1026,7 +1042,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //       , b
     //      -> b
     add_type(Symbol::SET_FOLDL, {
-        let_tvars! { star, u, a, b };
+        let_tvars! { star, u, a, b, closure };
 
         unique_function(
             vec![
@@ -1039,6 +1055,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 ),
                 shared(SolvedType::Func(
                     vec![attr_type(u, a), flex(b)],
+                    Box::new(flex(closure)),
                     Box::new(flex(b)),
                 )),
                 flex(b),
@@ -1141,7 +1158,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //     , Attr * (a -> b)
     //    -> Attr * (Result b e)
     add_type(Symbol::RESULT_MAP, {
-        let_tvars! { star1, star2, star3, a, b, e };
+        let_tvars! { star1, star2, star3, a, b, e, closure };
         unique_function(
             vec![
                 SolvedType::Apply(
@@ -1155,7 +1172,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                     Symbol::ATTR_ATTR,
                     vec![
                         flex(star2),
-                        SolvedType::Func(vec![flex(a)], Box::new(flex(b))),
+                        SolvedType::Func(vec![flex(a)], Box::new(flex(closure)), Box::new(flex(b))),
                     ],
                 ),
             ],
@@ -1181,7 +1198,14 @@ fn flex(tvar: VarId) -> SolvedType {
 fn unique_function(args: Vec<SolvedType>, ret: SolvedType) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![flex(FUVAR), SolvedType::Func(args, Box::new(ret))],
+        vec![
+            flex(FUVAR),
+            SolvedType::Func(
+                args,
+                Box::new(SolvedType::Flex(TOP_LEVEL_CLOSURE_VAR)),
+                Box::new(ret),
+            ),
+        ],
     )
 }
 

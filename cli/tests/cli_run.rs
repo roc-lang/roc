@@ -1,4 +1,4 @@
-#[macro_use]
+// #[macro_use]
 extern crate pretty_assertions;
 
 extern crate bumpalo;
@@ -20,7 +20,9 @@ mod cli_run {
             example_file("hello-world", "Hello.roc").to_str().unwrap(),
         ]);
 
-        assert_eq!(&out.stderr, "");
+        if !out.stderr.is_empty() {
+            panic!(out.stderr);
+        }
         assert!(&out.stdout.ends_with("Hello, World!!!!!!!!!!!!!\n"));
         assert!(out.status.success());
     }
@@ -33,7 +35,9 @@ mod cli_run {
             "--optimize",
         ]);
 
-        assert_eq!(&out.stderr, "");
+        if !out.stderr.is_empty() {
+            panic!(out.stderr);
+        }
         assert!(&out
             .stdout
             .ends_with("[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]\n"));

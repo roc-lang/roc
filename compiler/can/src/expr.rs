@@ -87,7 +87,7 @@ pub enum Expr {
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
     Call(
-        Box<(Variable, Located<Expr>, Variable)>,
+        Box<(Variable, Located<Expr>, Variable, Variable)>,
         Vec<(Variable, Located<Expr>)>,
         CalledVia,
     ),
@@ -97,13 +97,15 @@ pub enum Expr {
         ret_var: Variable,
     },
 
-    Closure(
-        Variable,
-        Symbol,
-        Recursive,
-        Vec<(Variable, Located<Pattern>)>,
-        Box<(Located<Expr>, Variable)>,
-    ),
+    Closure {
+        function_type: Variable,
+        closure_type: Variable,
+        return_type: Variable,
+        name: Symbol,
+        recursive: Recursive,
+        arguments: Vec<(Variable, Located<Pattern>)>,
+        loc_body: Box<Located<Expr>>,
+    },
 
     // Product Types
     Record {
@@ -125,6 +127,7 @@ pub enum Expr {
     /// field accessor as a function, e.g. (.foo) expr
     Accessor {
         record_var: Variable,
+        closure_var: Variable,
         ext_var: Variable,
         field_var: Variable,
         field: Lowercase,
@@ -323,7 +326,12 @@ pub fn canonicalize_expr<'a>(
                     };
 
                     Call(
-                        Box::new((var_store.fresh(), fn_expr, var_store.fresh())),
+                        Box::new((
+                            var_store.fresh(),
+                            fn_expr,
+                            var_store.fresh(),
+                            var_store.fresh(),
+                        )),
                         args,
                         *application_style,
                     )
@@ -346,7 +354,12 @@ pub fn canonicalize_expr<'a>(
                 _ => {
                     // This could be something like ((if True then fn1 else fn2) arg1 arg2).
                     Call(
-                        Box::new((var_store.fresh(), fn_expr, var_store.fresh())),
+                        Box::new((
+                            var_store.fresh(),
+                            fn_expr,
+                            var_store.fresh(),
+                            var_store.fresh(),
+                        )),
                         args,
                         *application_style,
                     )
@@ -471,13 +484,15 @@ pub fn canonicalize_expr<'a>(
             env.register_closure(symbol, output.references.clone());
 
             (
-                Closure(
-                    var_store.fresh(),
-                    symbol,
-                    Recursive::NotRecursive,
-                    can_args,
-                    Box::new((loc_body_expr, var_store.fresh())),
-                ),
+                Closure {
+                    function_type: var_store.fresh(),
+                    closure_type: var_store.fresh(),
+                    return_type: var_store.fresh(),
+                    name: symbol,
+                    recursive: Recursive::NotRecursive,
+                    arguments: can_args,
+                    loc_body: Box::new(loc_body_expr),
+                },
                 output,
             )
         }
@@ -537,6 +552,7 @@ pub fn canonicalize_expr<'a>(
             Accessor {
                 record_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
+                closure_var: var_store.fresh(),
                 field_var: var_store.fresh(),
                 field: (*field).into(),
             },
@@ -1193,20 +1209,30 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             LetNonRec(Box::new(def), Box::new(loc_expr), var, aliases)
         }
 
-        Closure(var, symbol, recursive, patterns, boxed_expr) => {
-            let (loc_expr, expr_var) = *boxed_expr;
+        Closure {
+            function_type,
+            closure_type,
+            return_type,
+            recursive,
+            name,
+            arguments,
+            loc_body,
+        } => {
+            let loc_expr = *loc_body;
             let loc_expr = Located {
                 value: inline_calls(var_store, scope, loc_expr.value),
                 region: loc_expr.region,
             };
 
-            Closure(
-                var,
-                symbol,
+            Closure {
+                function_type,
+                closure_type,
+                return_type,
                 recursive,
-                patterns,
-                Box::new((loc_expr, expr_var)),
-            )
+                name,
+                arguments,
+                loc_body: Box::new(loc_expr),
+            }
         }
 
         Record { record_var, fields } => {
@@ -1243,14 +1269,20 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         }
 
         Call(boxed_tuple, args, called_via) => {
-            let (fn_var, loc_expr, expr_var) = *boxed_tuple;
+            let (fn_var, loc_expr, closure_var, expr_var) = *boxed_tuple;
 
             match loc_expr.value {
                 Var(symbol) if symbol.is_builtin() => match builtin_defs(var_store).get(&symbol) {
                     Some(Def {
                         loc_expr:
                             Located {
-                                value: Closure(_var, _, recursive, params, boxed_body),
+                                value:
+                                    Closure {
+                                        recursive,
+                                        arguments: params,
+                                        loc_body: boxed_body,
+                                        ..
+                                    },
                                 ..
                             },
                         ..
@@ -1263,7 +1295,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                         debug_assert_eq!(params.len(), args.len());
 
                         // Start with the function's body as the answer.
-                        let (mut loc_answer, _body_var) = *boxed_body.clone();
+                        let mut loc_answer = *boxed_body.clone();
 
                         // Wrap the body in one LetNonRec for each argument,
                         // such that at the end we have all the arguments in
@@ -1311,7 +1343,11 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 },
                 _ => {
                     // For now, we only inline calls to builtins. Leave this alone!
-                    Call(Box::new((fn_var, loc_expr, expr_var)), args, called_via)
+                    Call(
+                        Box::new((fn_var, loc_expr, closure_var, expr_var)),
+                        args,
+                        called_via,
+                    )
                 }
             }
         }
@@ -1458,7 +1494,12 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
 
         let fn_expr = Located::new(0, 0, 0, 0, Expr::Var(Symbol::STR_CONCAT));
         let expr = Expr::Call(
-            Box::new((var_store.fresh(), fn_expr, var_store.fresh())),
+            Box::new((
+                var_store.fresh(),
+                fn_expr,
+                var_store.fresh(),
+                var_store.fresh(),
+            )),
             vec![
                 (var_store.fresh(), loc_new_expr),
                 (var_store.fresh(), loc_expr),

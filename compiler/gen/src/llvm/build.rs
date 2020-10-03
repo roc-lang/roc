@@ -288,7 +288,7 @@ static LLVM_COS_F64: &str = "llvm.cos.f64";
 static LLVM_POW_F64: &str = "llvm.pow.f64";
 static LLVM_CEILING_F64: &str = "llvm.ceil.f64";
 static LLVM_FLOOR_F64: &str = "llvm.floor.f64";
-static LLVM_SADD_WITH_OVERFLOW_I64: &str = "llvm.sadd.with.overflow.i64";
+pub static LLVM_SADD_WITH_OVERFLOW_I64: &str = "llvm.sadd.with.overflow.i64";
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -1210,10 +1210,10 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
 
     // the refcount of a new allocation is initially 1
     // we assume that the allocation is indeed used (dead variables are eliminated)
-    let ref_count_one = ctx
-        .i64_type()
-        .const_int(crate::llvm::refcounting::REFCOUNT_1 as _, false);
-    builder.build_store(refcount_ptr, ref_count_one);
+    builder.build_store(
+        refcount_ptr,
+        crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes),
+    );
 
     // store the value in the pointer
     builder.build_store(list_element_ptr, value);
@@ -2114,7 +2114,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             list_join(env, inplace, parent, list, outer_list_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumCeiling | NumFloor
-        | NumToFloat | NumIsFinite => {
+        | NumToFloat | NumIsFinite | NumAtan => {
             debug_assert_eq!(args.len(), 1);
 
             let (arg, arg_layout) = load_symbol_and_layout(env, scope, &args[0]);
@@ -2396,7 +2396,6 @@ where
         Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
             // no static guarantees, but all is not lost: we can check the refcount
             // if it is one, we hold the final reference, and can mutate it in-place!
-            let builder = env.builder;
             let ctx = env.context;
 
             let ret_type = basic_type_from_layout(env.arena, ctx, list_layout, env.ptr_bytes);
@@ -2408,7 +2407,7 @@ where
                 .build_load(refcount_ptr, "get_refcount")
                 .into_int_value();
 
-            let comparison = refcount_is_one_comparison(builder, env.context, refcount);
+            let comparison = refcount_is_one_comparison(env, refcount);
 
             crate::llvm::build_list::build_basic_phi2(
                 env, parent, comparison, in_place, clone, ret_type,
@@ -2667,6 +2666,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             "num_floor",
         ),
         NumIsFinite => call_bitcode_fn(NumIsFinite, env, &[arg.into()], "is_finite_"),
+        NumAtan => call_bitcode_fn(NumAtan, env, &[arg.into()], "atan_"),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }

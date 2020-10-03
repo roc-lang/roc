@@ -1,12 +1,12 @@
 use crate::layout_id::LayoutIds;
 use crate::llvm::build::{
     cast_basic_basic, cast_struct_struct, create_entry_block_alloca, set_name, Env, Scope,
-    FAST_CALL_CONV,
+    FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I64,
 };
 use crate::llvm::build_list::list_len;
 use crate::llvm::convert::{basic_type_from_layout, block_of_memory, ptr_int};
 use bumpalo::collections::Vec;
-use inkwell::builder::Builder;
+use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
@@ -14,8 +14,20 @@ use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, MemoryMode};
 
-pub const REFCOUNT_0: usize = std::usize::MAX;
-pub const REFCOUNT_1: usize = REFCOUNT_0 - 1;
+pub const REFCOUNT_MAX: usize = 0 as usize;
+
+pub fn refcount_1(ctx: &Context, ptr_bytes: u32) -> IntValue<'_> {
+    match ptr_bytes {
+        1 => ctx.i8_type().const_int(i8::MIN as u64, false),
+        2 => ctx.i16_type().const_int(i16::MIN as u64, false),
+        4 => ctx.i32_type().const_int(i32::MIN as u64, false),
+        8 => ctx.i64_type().const_int(i64::MIN as u64, false),
+        _ => panic!(
+            "Invalid target: Roc does't support compiling to {}-bit systems.",
+            ptr_bytes * 8
+        ),
+    }
+}
 
 pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -137,9 +149,8 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
             }
 
             if let MemoryMode::Refcounted = memory_mode {
-                build_inc_list(env, layout_ids, layout, wrapper_struct);
+                build_dec_list(env, layout_ids, layout, wrapper_struct);
             }
-            build_dec_list(env, layout_ids, layout, wrapper_struct);
         }
         Set(element_layout) => {
             if element_layout.contains_refcounted() {
@@ -153,6 +164,10 @@ fn decrement_refcount_builtin<'a, 'ctx, 'env>(
             }
 
             todo!();
+        }
+        Str => {
+            let wrapper_struct = value.into_struct_value();
+            build_dec_str(env, layout_ids, layout, wrapper_struct);
         }
         _ => {}
     }
@@ -234,6 +249,10 @@ fn increment_refcount_builtin<'a, 'ctx, 'env>(
 
             todo!();
         }
+        Str => {
+            let wrapper_struct = value.into_struct_value();
+            build_inc_str(env, layout_ids, layout, wrapper_struct);
+        }
         _ => {}
     }
 }
@@ -265,7 +284,7 @@ pub fn build_inc_list<'a, 'ctx, 'env>(
     env.builder.position_at_end(block);
     let call = env
         .builder
-        .build_call(function, &[original_wrapper.into()], "decrement_union");
+        .build_call(function, &[original_wrapper.into()], "increment_list");
 
     call.set_call_convention(FAST_CALL_CONV);
 }
@@ -324,21 +343,8 @@ fn build_inc_list_help<'a, 'ctx, 'env>(
     builder.position_at_end(increment_block);
 
     let refcount_ptr = list_get_refcount_ptr(env, layout, original_wrapper);
+    increment_refcount_help(env, refcount_ptr);
 
-    let refcount = env
-        .builder
-        .build_load(refcount_ptr, "get_refcount")
-        .into_int_value();
-
-    // our refcount 0 is actually usize::MAX, so incrementing the refcount means decrementing this value.
-    let decremented = env.builder.build_int_sub(
-        refcount,
-        ctx.i64_type().const_int(1 as u64, false),
-        "incremented_refcount",
-    );
-
-    // Mutate the new array in-place to change the element.
-    builder.build_store(refcount_ptr, decremented);
     builder.build_unconditional_branch(cont_block);
 
     builder.position_at_end(cont_block);
@@ -374,7 +380,7 @@ pub fn build_dec_list<'a, 'ctx, 'env>(
     env.builder.position_at_end(block);
     let call = env
         .builder
-        .build_call(function, &[original_wrapper.into()], "decrement_union");
+        .build_call(function, &[original_wrapper.into()], "decrement_list");
     call.set_call_convention(FAST_CALL_CONV);
 }
 
@@ -435,51 +441,202 @@ fn build_dec_list_help<'a, 'ctx, 'env>(
     builder.build_conditional_branch(is_non_empty, decrement_block, cont_block);
     builder.position_at_end(decrement_block);
 
-    // build blocks
-    let then_block = ctx.append_basic_block(parent, "then");
-    let else_block = ctx.append_basic_block(parent, "else");
-
     let refcount_ptr = list_get_refcount_ptr(env, layout, original_wrapper);
 
-    let refcount = env
+    decrement_refcount_help(env, parent, refcount_ptr, cont_block);
+
+    // this function returns void
+    builder.build_return(None);
+}
+
+pub fn build_inc_str<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    original_wrapper: StructValue<'ctx>,
+) {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+
+    let symbol = Symbol::INC;
+    let fn_name = layout_ids
+        .get(symbol, &layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let function_value = build_header(env, &layout, fn_name);
+
+            build_inc_str_help(env, layout_ids, layout, function_value);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    let call = env
         .builder
-        .build_load(refcount_ptr, "get_refcount")
+        .build_call(function, &[original_wrapper.into()], "increment_str");
+    call.set_call_convention(FAST_CALL_CONV);
+}
+
+fn build_inc_str_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    fn_val: FunctionValue<'ctx>,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    // Add a basic block for the entry point
+    let entry = ctx.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    let mut scope = Scope::default();
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+    let arg_val = fn_val.get_param_iter().next().unwrap();
+
+    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+
+    let alloca = create_entry_block_alloca(
+        env,
+        fn_val,
+        arg_val.get_type(),
+        arg_symbol.ident_string(&env.interns),
+    );
+
+    builder.build_store(alloca, arg_val);
+
+    scope.insert(arg_symbol, (layout.clone(), alloca));
+
+    let parent = fn_val;
+
+    let str_wrapper = arg_val.into_struct_value();
+    let len = builder
+        .build_extract_value(str_wrapper, Builtin::WRAPPER_LEN, "read_str_ptr")
+        .unwrap()
         .into_int_value();
 
-    let comparison = refcount_is_one_comparison(builder, env.context, refcount);
+    // Small strings have 1 as the first bit of length, making them negative.
+    // Thus, to check for big and non empty, just needs a signed len > 0.
+    let is_big_and_non_empty = builder.build_int_compare(
+        IntPredicate::SGT,
+        len,
+        ptr_int(ctx, env.ptr_bytes).const_zero(),
+        "len > 0",
+    );
 
-    // TODO what would be most optimial for the branch predictor
-    //
-    // are most refcounts 1 most of the time? or not?
-    builder.build_conditional_branch(comparison, then_block, else_block);
+    // the block we'll always jump to when we're done
+    let cont_block = ctx.append_basic_block(parent, "after_increment_block");
+    let decrement_block = ctx.append_basic_block(parent, "increment_block");
 
-    // build then block
-    {
-        builder.position_at_end(then_block);
-        if !env.leak {
-            builder.build_free(refcount_ptr);
-        }
-        builder.build_unconditional_branch(cont_block);
-    }
+    builder.build_conditional_branch(is_big_and_non_empty, decrement_block, cont_block);
+    builder.position_at_end(decrement_block);
 
-    // build else block
-    {
-        builder.position_at_end(else_block);
-        // our refcount 0 is actually usize::MAX, so decrementing the refcount means incrementing this value.
-        let decremented = env.builder.build_int_add(
-            ctx.i64_type().const_int(1 as u64, false),
-            refcount,
-            "decremented_refcount",
-        );
+    let refcount_ptr = list_get_refcount_ptr(env, layout, str_wrapper);
+    increment_refcount_help(env, refcount_ptr);
+    builder.build_unconditional_branch(cont_block);
 
-        // Mutate the new array in-place to change the element.
-        builder.build_store(refcount_ptr, decremented);
-
-        builder.build_unconditional_branch(cont_block);
-    }
-
-    // emit merge block
     builder.position_at_end(cont_block);
+
+    // this function returns void
+    builder.build_return(None);
+}
+
+pub fn build_dec_str<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    original_wrapper: StructValue<'ctx>,
+) {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+
+    let symbol = Symbol::DEC;
+    let fn_name = layout_ids
+        .get(symbol, &layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let function_value = build_header(env, &layout, fn_name);
+
+            build_dec_str_help(env, layout_ids, layout, function_value);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    let call = env
+        .builder
+        .build_call(function, &[original_wrapper.into()], "decrement_str");
+    call.set_call_convention(FAST_CALL_CONV);
+}
+
+fn build_dec_str_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _layout_ids: &mut LayoutIds<'a>,
+    layout: &Layout<'a>,
+    fn_val: FunctionValue<'ctx>,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    // Add a basic block for the entry point
+    let entry = ctx.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    let mut scope = Scope::default();
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+    let arg_val = fn_val.get_param_iter().next().unwrap();
+
+    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+
+    let alloca = create_entry_block_alloca(
+        env,
+        fn_val,
+        arg_val.get_type(),
+        arg_symbol.ident_string(&env.interns),
+    );
+
+    builder.build_store(alloca, arg_val);
+
+    scope.insert(arg_symbol, (layout.clone(), alloca));
+
+    let parent = fn_val;
+
+    let str_wrapper = arg_val.into_struct_value();
+    let len = builder
+        .build_extract_value(str_wrapper, Builtin::WRAPPER_LEN, "read_str_ptr")
+        .unwrap()
+        .into_int_value();
+
+    // Small strings have 1 as the first bit of length, making them negative.
+    // Thus, to check for big and non empty, just needs a signed len > 0.
+    let is_big_and_non_empty = builder.build_int_compare(
+        IntPredicate::SGT,
+        len,
+        ptr_int(ctx, env.ptr_bytes).const_zero(),
+        "len > 0",
+    );
+
+    // the block we'll always jump to when we're done
+    let cont_block = ctx.append_basic_block(parent, "after_decrement_block");
+    let decrement_block = ctx.append_basic_block(parent, "decrement_block");
+
+    builder.build_conditional_branch(is_big_and_non_empty, decrement_block, cont_block);
+    builder.position_at_end(decrement_block);
+
+    let refcount_ptr = list_get_refcount_ptr(env, layout, str_wrapper);
+    decrement_refcount_help(env, parent, refcount_ptr, cont_block);
 
     // this function returns void
     builder.build_return(None);
@@ -487,29 +644,40 @@ fn build_dec_list_help<'a, 'ctx, 'env>(
 
 fn increment_refcount_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _parent: FunctionValue<'ctx>,
     layout: &Layout<'a>,
     field_ptr: PointerValue<'ctx>,
 ) {
+    let refcount_ptr = get_refcount_ptr(env, layout, field_ptr);
+    increment_refcount_help(env, refcount_ptr);
+}
+
+fn increment_refcount_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    refcount_ptr: PointerValue<'ctx>,
+) {
     let builder = env.builder;
     let ctx = env.context;
-
-    let refcount_ptr = get_refcount_ptr(env, layout, field_ptr);
+    let refcount_type = ptr_int(ctx, env.ptr_bytes);
 
     let refcount = env
         .builder
         .build_load(refcount_ptr, "get_refcount")
         .into_int_value();
 
-    // our refcount 0 is actually usize::MAX, so incrementing the refcount means decrementing this value.
-    let incremented = env.builder.build_int_sub(
+    let max = builder.build_int_compare(
+        IntPredicate::EQ,
         refcount,
-        ctx.i64_type().const_int(1 as u64, false),
+        refcount_type.const_int(REFCOUNT_MAX as u64, false),
+        "refcount_max_check",
+    );
+    let incremented = builder.build_int_add(
+        refcount,
+        refcount_type.const_int(1 as u64, false),
         "increment_refcount",
     );
+    let selected = builder.build_select(max, refcount, incremented, "select_refcount");
 
-    // Mutate the new array in-place to change the element.
-    builder.build_store(refcount_ptr, incremented);
+    builder.build_store(refcount_ptr, selected);
 }
 
 fn decrement_refcount_ptr<'a, 'ctx, 'env>(
@@ -518,21 +686,49 @@ fn decrement_refcount_ptr<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     field_ptr: PointerValue<'ctx>,
 ) {
-    let builder = env.builder;
     let ctx = env.context;
 
     // the block we'll always jump to when we're done
     let cont_block = ctx.append_basic_block(parent, "after_decrement_block");
 
     let refcount_ptr = get_refcount_ptr(env, layout, field_ptr);
+    decrement_refcount_help(env, parent, refcount_ptr, cont_block);
+}
+
+fn decrement_refcount_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    refcount_ptr: PointerValue<'ctx>,
+    cont_block: BasicBlock,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+    let refcount_type = ptr_int(ctx, env.ptr_bytes);
 
     let refcount = env
         .builder
         .build_load(refcount_ptr, "get_refcount")
         .into_int_value();
 
-    let comparison = refcount_is_one_comparison(builder, env.context, refcount);
+    let add_with_overflow = env
+        .call_intrinsic(
+            LLVM_SADD_WITH_OVERFLOW_I64,
+            &[
+                refcount.into(),
+                refcount_type.const_int((-1 as i64) as u64, true).into(),
+            ],
+        )
+        .into_struct_value();
+    let has_overflowed = builder
+        .build_extract_value(add_with_overflow, 1, "has_overflowed")
+        .unwrap();
 
+    let has_overflowed_comparison = builder.build_int_compare(
+        IntPredicate::EQ,
+        has_overflowed.into_int_value(),
+        ctx.bool_type().const_int(1 as u64, false),
+        "has_overflowed",
+    );
     // build blocks
     let then_block = ctx.append_basic_block(parent, "then");
     let else_block = ctx.append_basic_block(parent, "else");
@@ -540,7 +736,7 @@ fn decrement_refcount_ptr<'a, 'ctx, 'env>(
     // TODO what would be most optimial for the branch predictor
     //
     // are most refcounts 1 most of the time? or not?
-    builder.build_conditional_branch(comparison, then_block, else_block);
+    builder.build_conditional_branch(has_overflowed_comparison, then_block, else_block);
 
     // build then block
     {
@@ -554,15 +750,18 @@ fn decrement_refcount_ptr<'a, 'ctx, 'env>(
     // build else block
     {
         builder.position_at_end(else_block);
-        // our refcount 0 is actually usize::MAX, so decrementing the refcount means incrementing this value.
-        let decremented = env.builder.build_int_add(
-            ctx.i64_type().const_int(1 as u64, false),
+        let max = builder.build_int_compare(
+            IntPredicate::EQ,
             refcount,
-            "decremented_refcount",
+            refcount_type.const_int(REFCOUNT_MAX as u64, false),
+            "refcount_max_check",
         );
-
-        // Mutate the new array in-place to change the element.
-        builder.build_store(refcount_ptr, decremented);
+        let decremented = builder
+            .build_extract_value(add_with_overflow, 0, "decrement_refcount")
+            .unwrap()
+            .into_int_value();
+        let selected = builder.build_select(max, refcount, decremented, "select_refcount");
+        builder.build_store(refcount_ptr, selected);
 
         builder.build_unconditional_branch(cont_block);
     }
@@ -924,7 +1123,7 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
 
                 // TODO do this increment before the recursive call?
                 // Then the recursive call is potentially TCE'd
-                increment_refcount_ptr(env, parent, &layout, field_ptr.into_pointer_value());
+                increment_refcount_ptr(env, &layout, field_ptr.into_pointer_value());
             } else if field_layout.contains_refcounted() {
                 let field_ptr = env
                     .builder
@@ -953,16 +1152,14 @@ pub fn build_inc_union_help<'a, 'ctx, 'env>(
     builder.build_return(None);
 }
 
-pub fn refcount_is_one_comparison<'ctx>(
-    builder: &Builder<'ctx>,
-    context: &'ctx Context,
+pub fn refcount_is_one_comparison<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
     refcount: IntValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let refcount_one: IntValue<'ctx> = context.i64_type().const_int(REFCOUNT_1 as _, false);
-    builder.build_int_compare(
+    env.builder.build_int_compare(
         IntPredicate::EQ,
         refcount,
-        refcount_one,
+        refcount_1(env.context, env.ptr_bytes),
         "refcount_one_check",
     )
 }
@@ -987,8 +1184,9 @@ fn get_refcount_ptr<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     ptr: PointerValue<'ctx>,
 ) -> PointerValue<'ctx> {
+    let refcount_type = ptr_int(env.context, env.ptr_bytes);
     let ptr_as_int =
-        cast_basic_basic(env.builder, ptr.into(), env.context.i64_type().into()).into_int_value();
+        cast_basic_basic(env.builder, ptr.into(), refcount_type.into()).into_int_value();
 
     get_refcount_ptr_help(env, layout, ptr_as_int)
 }
@@ -1004,23 +1202,23 @@ fn get_refcount_ptr_help<'a, 'ctx, 'env>(
     let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
     let offset = match layout {
         Layout::Builtin(Builtin::List(_, _)) => env.ptr_bytes as u64,
+        Layout::Builtin(Builtin::Str) => env.ptr_bytes as u64,
         _ => (env.ptr_bytes as u64).max(value_bytes),
     };
+
+    // pointer to usize
+    let refcount_type = ptr_int(ctx, env.ptr_bytes);
 
     // subtract offset, to access the refcount
     let refcount_ptr = builder.build_int_sub(
         ptr_as_int,
-        ctx.i64_type().const_int(offset, false),
+        refcount_type.const_int(offset, false),
         "make_refcount_ptr",
     );
 
-    // pointer to usize
-    let ptr_bytes = env.ptr_bytes;
-    let int_type = ptr_int(ctx, ptr_bytes);
-
     builder.build_int_to_ptr(
         refcount_ptr,
-        int_type.ptr_type(AddressSpace::Generic),
+        refcount_type.ptr_type(AddressSpace::Generic),
         "get_refcount_ptr",
     )
 }

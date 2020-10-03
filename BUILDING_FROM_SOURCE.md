@@ -1,9 +1,9 @@
 # Building the Roc compiler from source
 
 
-## Installing LLVM
+## Installing LLVM and libc++abi
 
-To build the compiler, you need a particular version of LLVM installed on your system.
+To build the compiler, you need both `libc++abi` and a particular version of LLVM installed on your system. Some systems may already have `libc++abi` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `apt-get install libc++abi-dev`.)
 
 To see which version of LLVM you need, take a look at `Cargo.toml`, in particular the `branch` section of the `inkwell` dependency. It should have something like `llvmX-Y` where X and Y are the major and minor revisions of LLVM you need.
 
@@ -24,7 +24,9 @@ That will help us improve this document for everyone who reads it in the future!
 ### LLVM installation on Linux
 
 On some Linux systems we've seen the error "failed to run custom build command for x11".
-On Ubuntu, running `sudo apt-get install cmake libx11-dev` fixed this.
+On Ubuntu, running `sudo apt install pkg-config cmake libx11-dev` fixed this.
+
+If you encounter `cannot find -lz` run `sudo apt install zlib1g-dev`.
 
 ### LLVM installation on macOS
 

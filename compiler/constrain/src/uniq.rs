@@ -707,24 +707,35 @@ pub fn constrain_expr(
                 expected,
             )
         }
-        Closure(fn_var, _symbol, recursion, args, boxed) => {
+        Closure {
+            function_type: fn_var,
+            return_type: ret_var,
+            closure_type: closure_var,
+            recursive: recursion,
+            arguments,
+            loc_body: boxed,
+            ..
+        } => {
             use roc_can::expr::Recursive;
 
-            let (loc_body_expr, ret_var) = &**boxed;
+            let loc_body_expr = &**boxed;
             let mut state = PatternState {
                 headers: SendMap::default(),
-                vars: Vec::with_capacity(args.len()),
+                vars: Vec::with_capacity(arguments.len()),
                 constraints: Vec::with_capacity(1),
             };
             let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
             let mut pattern_types = Vec::with_capacity(state.vars.capacity());
             let ret_var = *ret_var;
             let ret_type = Type::Variable(ret_var);
+            let closure_var = *closure_var;
+            let closure_type = Type::Variable(closure_var);
 
             vars.push(ret_var);
+            vars.push(closure_var);
             vars.push(*fn_var);
 
-            for (pattern_var, loc_pattern) in args {
+            for (pattern_var, loc_pattern) in arguments {
                 let pattern_type = Type::Variable(*pattern_var);
                 let pattern_expected = PExpected::NoExpectation(pattern_type.clone());
 
@@ -755,7 +766,11 @@ pub fn constrain_expr(
 
             let fn_type = attr_type(
                 fn_uniq_type,
-                Type::Function(pattern_types, Box::new(ret_type.clone())),
+                Type::Function(
+                    pattern_types,
+                    Box::new(closure_type),
+                    Box::new(ret_type.clone()),
+                ),
             );
             let body_type = Expected::NoExpectation(ret_type);
             let ret_constraint = constrain_expr(
@@ -795,9 +810,10 @@ pub fn constrain_expr(
         }
 
         Call(boxed, loc_args, _) => {
-            let (fn_var, fn_expr, ret_var) = &**boxed;
+            let (fn_var, fn_expr, closure_var, ret_var) = &**boxed;
             let fn_type = Variable(*fn_var);
             let ret_type = Variable(*ret_var);
+            let closure_type = Variable(*closure_var);
             let fn_expected = Expected::NoExpectation(fn_type.clone());
             let fn_region = fn_expr.region;
 
@@ -811,6 +827,7 @@ pub fn constrain_expr(
 
             vars.push(*fn_var);
             vars.push(*ret_var);
+            vars.push(*closure_var);
 
             // Canonicalize the function expression and its arguments
             let fn_con = constrain_expr(
@@ -862,7 +879,11 @@ pub fn constrain_expr(
                 fn_reason,
                 attr_type(
                     Bool::variable(expected_uniq_type),
-                    Function(arg_types, Box::new(ret_type.clone())),
+                    Function(
+                        arg_types,
+                        Box::new(closure_type),
+                        Box::new(ret_type.clone()),
+                    ),
                 ),
                 region,
             );
@@ -1426,6 +1447,7 @@ pub fn constrain_expr(
         Accessor {
             field,
             record_var,
+            closure_var,
             field_var,
             ext_var,
         } => {
@@ -1455,14 +1477,20 @@ pub fn constrain_expr(
             );
 
             let fn_uniq_var = var_store.fresh();
+            let closure_type = Type::Variable(*closure_var);
             let fn_type = attr_type(
                 Bool::variable(fn_uniq_var),
-                Type::Function(vec![record_type], Box::new(field_type)),
+                Type::Function(
+                    vec![record_type],
+                    Box::new(closure_type),
+                    Box::new(field_type),
+                ),
             );
 
             exists(
                 vec![
                     *record_var,
+                    *closure_var,
                     *field_var,
                     *ext_var,
                     fn_uniq_var,
@@ -1873,21 +1901,33 @@ fn annotation_to_attr_type(
             )
         }
 
-        Function(arguments, result) => {
+        Function(arguments, closure, result) => {
             let uniq_var = var_store.fresh();
             let (mut arg_vars, args_lifted) =
                 annotation_to_attr_type_many(var_store, arguments, rigids, change_var_kind);
+            let (closure_vars, closure_lifted) =
+                annotation_to_attr_type(var_store, closure, rigids, change_var_kind);
             let (result_vars, result_lifted) =
                 annotation_to_attr_type(var_store, result, rigids, change_var_kind);
 
             arg_vars.extend(result_vars);
+            arg_vars.extend(closure_vars);
             arg_vars.push(uniq_var);
+
+            match **closure {
+                Type::Variable(c) => arg_vars.push(c),
+                _ => unreachable!("closure must contain a type variable"),
+            }
 
             (
                 arg_vars,
                 attr_type(
                     Bool::variable(uniq_var),
-                    Type::Function(args_lifted, Box::new(result_lifted)),
+                    Type::Function(
+                        args_lifted,
+                        Box::new(closure_lifted),
+                        Box::new(result_lifted),
+                    ),
                 ),
             )
         }
@@ -2542,8 +2582,9 @@ fn fix_mutual_recursive_alias_help_help(rec_var: Variable, attribute: &Type, int
     use Type::*;
 
     match into_type {
-        Function(args, ret) => {
+        Function(args, closure, ret) => {
             fix_mutual_recursive_alias_help(rec_var, attribute, ret);
+            fix_mutual_recursive_alias_help(rec_var, attribute, closure);
             args.iter_mut()
                 .for_each(|arg| fix_mutual_recursive_alias_help(rec_var, attribute, arg));
         }

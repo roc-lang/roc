@@ -1,4 +1,4 @@
-interface Num
+interface Num2
     exposes [ Num, neg, abs, add, sub, mul, isOdd, isEven, isPositive, isNegative, isZero ]
     imports []
 

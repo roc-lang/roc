@@ -391,7 +391,7 @@ fn layout_from_flat_type<'a>(
                 }
             }
         }
-        Func(args, ret_var) => {
+        Func(args, _, ret_var) => {
             let mut fn_args = Vec::with_capacity_in(args.len(), arena);
 
             for arg_var in args {

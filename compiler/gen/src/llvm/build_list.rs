@@ -1757,8 +1757,7 @@ pub fn allocate_list<'a, 'ctx, 'env>(
         InPlace::Clone => {
             // the refcount of a new list is initially 1
             // we assume that the list is indeed used (dead variables are eliminated)
-            ctx.i64_type()
-                .const_int(crate::llvm::refcounting::REFCOUNT_1 as _, false)
+            crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes)
         }
     };
 

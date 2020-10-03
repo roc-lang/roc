@@ -138,8 +138,8 @@ impl RecordField<Type> {
 pub enum Type {
     EmptyRec,
     EmptyTagUnion,
-    /// A function. The types of its arguments, then the type of its return value.
-    Function(Vec<Type>, Box<Type>),
+    /// A function. The types of its arguments, size of its closure, then the type of its return value.
+    Function(Vec<Type>, Box<Type>, Box<Type>),
     Record(SendMap<Lowercase, RecordField<Type>>, Box<Type>),
     TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
     Alias(Symbol, Vec<(Lowercase, Type)>, Box<Type>),
@@ -158,7 +158,7 @@ impl fmt::Debug for Type {
         match self {
             Type::EmptyRec => write!(f, "{{}}"),
             Type::EmptyTagUnion => write!(f, "[]"),
-            Type::Function(args, ret) => {
+            Type::Function(args, closure, ret) => {
                 write!(f, "Fn(")?;
 
                 for (index, arg) in args.iter().enumerate() {
@@ -169,7 +169,9 @@ impl fmt::Debug for Type {
                     arg.fmt(f)?;
                 }
 
-                write!(f, " -> ")?;
+                write!(f, " -")?;
+                closure.fmt(f)?;
+                write!(f, "-> ")?;
 
                 ret.fmt(f)?;
 
@@ -339,7 +341,7 @@ impl fmt::Debug for Type {
 
 impl Type {
     pub fn arity(&self) -> usize {
-        if let Type::Function(args, _) = self {
+        if let Type::Function(args, _, _) = self {
             args.len()
         } else {
             0
@@ -369,10 +371,11 @@ impl Type {
                     *self = replacement.clone();
                 }
             }
-            Function(args, ret) => {
+            Function(args, closure, ret) => {
                 for arg in args {
                     arg.substitute(substitutions);
                 }
+                closure.substitute(substitutions);
                 ret.substitute(substitutions);
             }
             TagUnion(tags, ext) => {
@@ -427,10 +430,11 @@ impl Type {
         use Type::*;
 
         match self {
-            Function(args, ret) => {
+            Function(args, closure, ret) => {
                 for arg in args {
                     arg.substitute_alias(rep_symbol, actual);
                 }
+                closure.substitute_alias(rep_symbol, actual);
                 ret.substitute_alias(rep_symbol, actual);
             }
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
@@ -472,8 +476,9 @@ impl Type {
         use Type::*;
 
         match self {
-            Function(args, ret) => {
+            Function(args, closure, ret) => {
                 ret.contains_symbol(rep_symbol)
+                    || closure.contains_symbol(rep_symbol)
                     || args.iter().any(|arg| arg.contains_symbol(rep_symbol))
             }
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
@@ -503,8 +508,9 @@ impl Type {
 
         match self {
             Variable(v) => *v == rep_variable,
-            Function(args, ret) => {
+            Function(args, closure, ret) => {
                 ret.contains_variable(rep_variable)
+                    || closure.contains_variable(rep_variable)
                     || args.iter().any(|arg| arg.contains_variable(rep_variable))
             }
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
@@ -553,10 +559,11 @@ impl Type {
         use Type::*;
 
         match self {
-            Function(args, ret) => {
+            Function(args, closure, ret) => {
                 for arg in args {
                     arg.instantiate_aliases(region, aliases, var_store, introduced);
                 }
+                closure.instantiate_aliases(region, aliases, var_store, introduced);
                 ret.instantiate_aliases(region, aliases, var_store, introduced);
             }
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
@@ -726,8 +733,9 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
     use Type::*;
 
     match tipe {
-        Function(args, ret) => {
+        Function(args, closure, ret) => {
             symbols_help(&ret, accum);
+            symbols_help(&closure, accum);
             args.iter().for_each(|arg| symbols_help(arg, accum));
         }
         RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
@@ -776,10 +784,11 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             accum.insert(*v);
         }
 
-        Function(args, ret) => {
+        Function(args, closure, ret) => {
             for arg in args {
                 variables_help(arg, accum);
             }
+            variables_help(closure, accum);
             variables_help(ret, accum);
         }
         Record(fields, ext) => {
@@ -1014,7 +1023,7 @@ pub enum ErrorType {
     Record(SendMap<Lowercase, RecordField<ErrorType>>, TypeExt),
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
     RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
-    Function(Vec<ErrorType>, Box<ErrorType>),
+    Function(Vec<ErrorType>, Box<ErrorType>, Box<ErrorType>),
     Alias(Symbol, Vec<(Lowercase, ErrorType)>, Box<ErrorType>),
     Boolean(boolean_algebra::Bool),
     Error,
@@ -1102,7 +1111,7 @@ fn write_error_type_help(
                 }
             }
         }
-        Function(arguments, result) => {
+        Function(arguments, _closure, result) => {
             let write_parens = parens != Parens::Unnecessary;
 
             if write_parens {
@@ -1246,7 +1255,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 buf.push(')');
             }
         }
-        Function(arguments, result) => {
+        Function(arguments, _closure, result) => {
             let write_parens = parens != Parens::Unnecessary;
 
             if write_parens {

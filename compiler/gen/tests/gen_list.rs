@@ -14,31 +14,148 @@ mod helpers;
 #[cfg(test)]
 mod gen_list {
     use crate::helpers::with_larger_debug_stack;
+    //use roc_std::roclist;
+    use roc_std::RocList;
+
+    #[test]
+    fn roc_list_construction() {
+        let list = RocList::from_slice(&vec![1i64; 23]);
+        assert_eq!(&list, &list);
+    }
 
     #[test]
     fn empty_list_literal() {
-        assert_evals_to!("[]", &[], &'static [i64]);
+        assert_evals_to!("[]", RocList::from_slice(&[]), RocList<i64>);
     }
 
     #[test]
     fn int_singleton_list_literal() {
-        assert_evals_to!("[1]", &[1], &'static [i64]);
+        assert_evals_to!("[1, 2]", RocList::from_slice(&[1, 2]), RocList<i64>);
     }
 
     #[test]
     fn int_list_literal() {
-        assert_evals_to!("[ 12, 9, 6, 3 ]", &[12, 9, 6, 3], &'static [i64]);
+        assert_evals_to!("[ 12, 9 ]", RocList::from_slice(&[12, 9]), RocList<i64>);
+        assert_evals_to!(
+            "[ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 ]",
+            RocList::from_slice(&(vec![1i64; 23])),
+            RocList<i64>
+        );
+    }
+
+    #[test]
+    fn bool_list_literal() {
+        // NOTE: make sure to explicitly declare the elements to be of type bool, or
+        // use both True and False; only using one of them causes the list to in practice be
+        // of type `List [ True ]` or `List [ False ]`, those are tag unions with one constructor
+        // and not fields, and don't have a runtime representation.
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   false : Bool
+                   false = False
+
+                   [ false ]
+                   "#
+            ),
+            RocList::from_slice(&(vec![false; 1])),
+            RocList<bool>
+        );
+
+        assert_evals_to!(
+            "[ True, False, True ]",
+            RocList::from_slice(&[true, false, true]),
+            RocList<bool>
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   false : Bool
+                   false = False
+
+                   [false ]
+                   "#
+            ),
+            RocList::from_slice(&(vec![false; 1])),
+            RocList<bool>
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   true : Bool
+                   true = True
+
+                   List.repeat 23 true
+                   "#
+            ),
+            RocList::from_slice(&(vec![true; 23])),
+            RocList<bool>
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   true : Bool
+                   true = True
+
+                   List.repeat 23 { x: true, y: true }
+                   "#
+            ),
+            RocList::from_slice(&(vec![[true, true]; 23])),
+            RocList<[bool; 2]>
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                   true : Bool
+                   true = True
+
+                   List.repeat 23 { x: true, y: true, a: true, b: true, c: true, d : true, e: true, f: true }
+                   "#
+            ),
+            RocList::from_slice(&(vec![[true, true, true, true, true, true, true, true]; 23])),
+            RocList<[bool; 8]>
+        );
+    }
+
+    #[test]
+    fn variously_sized_list_literals() {
+        assert_evals_to!("[]", RocList::from_slice(&[]), RocList<i64>);
+        assert_evals_to!("[1]", RocList::from_slice(&[1]), RocList<i64>);
+        assert_evals_to!("[1, 2]", RocList::from_slice(&[1, 2]), RocList<i64>);
+        assert_evals_to!("[1, 2, 3]", RocList::from_slice(&[1, 2, 3]), RocList<i64>);
+        assert_evals_to!(
+            "[1, 2, 3, 4]",
+            RocList::from_slice(&[1, 2, 3, 4]),
+            RocList<i64>
+        );
+        assert_evals_to!(
+            "[1, 2, 3, 4, 5]",
+            RocList::from_slice(&[1, 2, 3, 4, 5]),
+            RocList<i64>
+        );
     }
 
     #[test]
     fn list_append() {
-        assert_evals_to!("List.append [1] 2", &[1, 2], &'static [i64]);
-        assert_evals_to!("List.append [1, 1] 2", &[1, 1, 2], &'static [i64]);
+        assert_evals_to!(
+            "List.append [1] 2",
+            RocList::from_slice(&[1, 2]),
+            RocList<i64>
+        );
+        assert_evals_to!(
+            "List.append [1, 1] 2",
+            RocList::from_slice(&[1, 1, 2]),
+            RocList<i64>
+        );
     }
 
     #[test]
     fn list_append_to_empty_list() {
-        assert_evals_to!("List.append [] 3", &[3], &'static [i64]);
+        assert_evals_to!("List.append [] 3", RocList::from_slice(&[3]), RocList<i64>);
     }
 
     #[test]
@@ -53,8 +170,8 @@ mod gen_list {
                     List.append (List.append initThrees 3) 3
                 "#
             ),
-            &[3, 3],
-            &'static [i64]
+            RocList::from_slice(&[3, 3]),
+            RocList<i64>
         );
     }
 
@@ -62,8 +179,8 @@ mod gen_list {
     fn list_append_bools() {
         assert_evals_to!(
             "List.append [ True, False ] True",
-            &[true, false, true],
-            &'static [bool]
+            RocList::from_slice(&[true, false, true]),
+            RocList<bool>
         );
     }
 
@@ -71,15 +188,19 @@ mod gen_list {
     fn list_append_longer_list() {
         assert_evals_to!(
             "List.append [ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22 ] 23",
-            &[11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
-            &'static [i64]
+            RocList::from_slice(&[11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]),
+            RocList<i64>
         );
     }
 
     #[test]
     fn list_prepend() {
-        assert_evals_to!("List.prepend [] 1", &[1], &'static [i64]);
-        assert_evals_to!("List.prepend [2] 1", &[1, 2], &'static [i64]);
+        assert_evals_to!("List.prepend [] 1", RocList::from_slice(&[1]), RocList<i64>);
+        assert_evals_to!(
+            "List.prepend [2] 1",
+            RocList::from_slice(&[1, 2]),
+            RocList<i64>
+        );
 
         assert_evals_to!(
             indoc!(
@@ -91,8 +212,8 @@ mod gen_list {
                     List.prepend (List.prepend init 4) 6
                 "#
             ),
-            &[6, 4],
-            &'static [i64]
+            RocList::from_slice(&[6, 4]),
+            RocList<i64>
         );
     }
 
@@ -100,8 +221,8 @@ mod gen_list {
     fn list_prepend_bools() {
         assert_evals_to!(
             "List.prepend [ True, False ] True",
-            &[true, true, false],
-            &'static [bool]
+            RocList::from_slice(&[true, true, false]),
+            RocList<bool>
         );
     }
 
@@ -109,8 +230,10 @@ mod gen_list {
     fn list_prepend_big_list() {
         assert_evals_to!(
             "List.prepend [ 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 100, 100, 100, 100 ] 9",
-            &[9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 100, 100, 100, 100],
-            &'static [i64]
+            RocList::from_slice(&[
+                9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 100, 100, 100, 100
+            ]),
+            RocList<i64>
         );
     }
 
@@ -153,8 +276,8 @@ mod gen_list {
                 List.keepIf empty (\x -> True)
                 "#
             ),
-            &[],
-            &'static [i64]
+            RocList::from_slice(&[]),
+            RocList<i64>
         );
     }
 
@@ -171,8 +294,8 @@ mod gen_list {
                 List.keepIf [] alwaysTrue
                 "#
             ),
-            &[],
-            &'static [i64]
+            RocList::from_slice(&[]),
+            RocList<i64>
         );
     }
 
@@ -192,8 +315,8 @@ mod gen_list {
                 List.keepIf oneThroughEight alwaysTrue
                 "#
             ),
-            &[1, 2, 3, 4, 5, 6, 7, 8],
-            &'static [i64]
+            RocList::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]),
+            RocList<i64>
         );
     }
 
@@ -209,8 +332,8 @@ mod gen_list {
                 List.keepIf [1,2,3,4,5,6,7,8] alwaysFalse
                 "#
             ),
-            &[],
-            &'static [i64]
+            RocList::from_slice(&[]),
+            RocList<i64>
         );
     }
 
@@ -226,8 +349,8 @@ mod gen_list {
                 List.keepIf [1,2,3,4,5,6,7,8] intIsLessThanThree 
                 "#
             ),
-            &[1, 2],
-            &'static [i64]
+            RocList::from_slice(&[1, 2]),
+            RocList<i64>
         );
     }
 
@@ -246,8 +369,8 @@ mod gen_list {
     //             List.keepIf ["Hello", "Hello", "Goodbye"] strIsHello
     //             "#
     //         ),
-    //         &["Hello", "Hello"],
-    //         &'static [&'static str]
+    //         RocList::from_slice(&["Hello", "Hello"]),
+    //         RocList<&'static str>
     //     );
     // }
 
@@ -263,8 +386,8 @@ mod gen_list {
                 List.map empty (\x -> x)
                 "#
             ),
-            &[],
-            &'static [i64]
+            RocList::from_slice(&[]),
+            RocList<i64>
         );
     }
 
@@ -280,8 +403,8 @@ mod gen_list {
                 List.map nonEmpty (\x -> x)
                 "#
             ),
-            &[1],
-            &'static [i64]
+            RocList::from_slice(&[1]),
+            RocList<i64>
         );
     }
 
@@ -297,8 +420,8 @@ mod gen_list {
                 List.map nonEmpty (\x -> x + 1)
                 "#
             ),
-            &[2],
-            &'static [i64]
+            RocList::from_slice(&[2]),
+            RocList<i64>
         );
     }
 
@@ -314,8 +437,10 @@ mod gen_list {
                 List.map nonEmpty (\x -> x * 2)
                 "#
             ),
-            &[2, 4, 6, 8, 10, 2, 4, 6, 8, 10, 2, 4, 6, 8, 10, 2, 4, 6, 8, 10, 2, 4, 6, 8, 10],
-            &'static [i64]
+            RocList::from_slice(&[
+                2, 4, 6, 8, 10, 2, 4, 6, 8, 10, 2, 4, 6, 8, 10, 2, 4, 6, 8, 10, 2, 4, 6, 8, 10
+            ]),
+            RocList<i64>
         );
     }
 
@@ -332,8 +457,8 @@ mod gen_list {
                 List.map nonEmpty (\x -> x > 0)
                 "#
             ),
-            &[true, true, false, true, true],
-            &'static [bool]
+            RocList::from_slice(&[true, true, false, true, true]),
+            RocList<bool>
         );
     }
 
@@ -353,8 +478,8 @@ mod gen_list {
                  List.map nonEmpty greaterThanOne
                  "#
             ),
-            &[true, true, false, true, true],
-            &'static [bool]
+            RocList::from_slice(&[true, true, false, true, true]),
+            RocList<bool>
         );
     }
 
@@ -366,27 +491,31 @@ mod gen_list {
                 List.map [] (\x -> x > 0)
                 "#
             ),
-            &[],
-            &'static [bool]
+            RocList::from_slice(&[]),
+            RocList<bool>
         );
     }
 
     #[test]
     fn list_join_empty_list() {
-        assert_evals_to!("List.join []", &[], &'static [i64]);
+        assert_evals_to!("List.join []", RocList::from_slice(&[]), RocList<i64>);
     }
 
     #[test]
     fn list_join_one_list() {
-        assert_evals_to!("List.join [ [1, 2, 3 ] ]", &[1, 2, 3], &'static [i64]);
+        assert_evals_to!(
+            "List.join [ [1, 2, 3 ] ]",
+            RocList::from_slice(&[1, 2, 3]),
+            RocList<i64>
+        );
     }
 
     #[test]
     fn list_join_two_non_empty_lists() {
         assert_evals_to!(
             "List.join [ [1, 2, 3 ] , [4 ,5, 6] ]",
-            &[1, 2, 3, 4, 5, 6],
-            &'static [i64]
+            RocList::from_slice(&[1, 2, 3, 4, 5, 6]),
+            RocList<i64>
         );
     }
 
@@ -394,8 +523,8 @@ mod gen_list {
     fn list_join_two_non_empty_lists_of_float() {
         assert_evals_to!(
             "List.join [ [ 1.2, 1.1 ], [ 2.1, 2.2 ] ]",
-            &[1.2, 1.1, 2.1, 2.2],
-            &'static [f64]
+            RocList::from_slice(&[1.2, 1.1, 2.1, 2.2]),
+            RocList<f64>
         );
     }
 
@@ -416,11 +545,11 @@ mod gen_list {
                         ]
                 "#
             ),
-            &[
+            RocList::from_slice(&[
                 1.2, 1.1, 2.1, 2.2, 3.0, 4.0, 5.0, 6.1, 9.0, 3.0, 4.0, 5.0, 6.1, 9.0, 3.0, 4.0,
                 5.0, 6.1, 9.0, 3.0, 4.0, 5.0, 6.1, 9.0, 3.0, 4.0, 5.0, 6.1, 9.0
-            ],
-            &'static [f64]
+            ]),
+            RocList<f64>
         );
     }
 
@@ -436,35 +565,47 @@ mod gen_list {
                     List.join [ [ 0.2, 11.11 ], empty ]
                 "#
             ),
-            &[0.2, 11.11],
-            &'static [f64]
+            RocList::from_slice(&[0.2, 11.11]),
+            RocList<f64>
         );
     }
 
     #[test]
     fn list_join_all_empty_lists() {
-        assert_evals_to!("List.join [ [], [], [] ]", &[], &'static [f64]);
+        assert_evals_to!(
+            "List.join [ [], [], [] ]",
+            RocList::from_slice(&[]),
+            RocList<f64>
+        );
     }
 
     #[test]
     fn list_join_one_empty_list() {
         assert_evals_to!(
             "List.join [ [ 1.2, 1.1 ], [] ]",
-            &[1.2, 1.1],
-            &'static [f64]
+            RocList::from_slice(&[1.2, 1.1]),
+            RocList<f64>
         );
     }
 
     #[test]
     fn list_single() {
-        assert_evals_to!("List.single 1", &[1], &'static [i64]);
-        assert_evals_to!("List.single 5.6", &[5.6], &'static [f64]);
+        assert_evals_to!("List.single 1", RocList::from_slice(&[1]), RocList<i64>);
+        assert_evals_to!("List.single 5.6", RocList::from_slice(&[5.6]), RocList<f64>);
     }
 
     #[test]
     fn list_repeat() {
-        assert_evals_to!("List.repeat 5 1", &[1, 1, 1, 1, 1], &'static [i64]);
-        assert_evals_to!("List.repeat 4 2", &[2, 2, 2, 2], &'static [i64]);
+        assert_evals_to!(
+            "List.repeat 5 1",
+            RocList::from_slice(&[1, 1, 1, 1, 1]),
+            RocList<i64>
+        );
+        assert_evals_to!(
+            "List.repeat 4 2",
+            RocList::from_slice(&[2, 2, 2, 2]),
+            RocList<i64>
+        );
 
         assert_evals_to!("List.repeat 2 []", &[&[], &[]], &'static [&'static [i64]]);
         assert_evals_to!(
@@ -483,8 +624,8 @@ mod gen_list {
 
         assert_evals_to!(
             "List.repeat 15 4",
-            &[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
-            &'static [i64]
+            RocList::from_slice(&[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]),
+            RocList<i64>
         );
     }
 
@@ -492,11 +633,15 @@ mod gen_list {
     fn list_reverse() {
         assert_evals_to!(
             "List.reverse [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 ]",
-            &[12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
-            &'static [i64]
+            RocList::from_slice(&[12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]),
+            RocList<i64>
         );
-        assert_evals_to!("List.reverse [1, 2, 3]", &[3, 2, 1], &'static [i64]);
-        assert_evals_to!("List.reverse [4]", &[4], &'static [i64]);
+        assert_evals_to!(
+            "List.reverse [1, 2, 3]",
+            RocList::from_slice(&[3, 2, 1]),
+            RocList<i64>
+        );
+        assert_evals_to!("List.reverse [4]", RocList::from_slice(&[4]), RocList<i64>);
     }
 
     #[test]
@@ -511,14 +656,14 @@ mod gen_list {
                     List.reverse emptyList
                 "#
             ),
-            &[],
-            &'static [i64]
+            RocList::from_slice(&[]),
+            RocList<i64>
         );
     }
 
     #[test]
     fn list_reverse_empty_list() {
-        assert_evals_to!("List.reverse []", &[], &'static [i64]);
+        assert_evals_to!("List.reverse []", RocList::from_slice(&[]), RocList<i64>);
     }
 
     #[test]
@@ -537,14 +682,14 @@ mod gen_list {
                     List.concat firstList secondList
                 "#
             ),
-            &[],
-            &'static [i64]
+            RocList::from_slice(&[]),
+            RocList<i64>
         );
     }
 
     #[test]
     fn list_concat_two_empty_lists() {
-        assert_evals_to!("List.concat [] []", &[], &'static [i64]);
+        assert_evals_to!("List.concat [] []", RocList::from_slice(&[]), RocList<i64>);
     }
 
     #[test]
@@ -563,32 +708,40 @@ mod gen_list {
                     List.concat firstList secondList
                 "#
             ),
-            &[],
-            &'static [i64]
+            RocList::from_slice(&[]),
+            RocList<i64>
         );
     }
 
     #[test]
     fn list_concat_second_list_is_empty() {
-        assert_evals_to!("List.concat [ 12, 13 ] []", &[12, 13], &'static [i64]);
+        assert_evals_to!(
+            "List.concat [ 12, 13 ] []",
+            RocList::from_slice(&[12, 13]),
+            RocList<i64>
+        );
         assert_evals_to!(
             "List.concat [ 34, 43 ] [ 64, 55, 66 ]",
-            &[34, 43, 64, 55, 66],
-            &'static [i64]
+            RocList::from_slice(&[34, 43, 64, 55, 66]),
+            RocList<i64>
         );
     }
 
     #[test]
     fn list_concat_first_list_is_empty() {
-        assert_evals_to!("List.concat [] [ 23, 24 ]", &[23, 24], &'static [i64]);
+        assert_evals_to!(
+            "List.concat [] [ 23, 24 ]",
+            RocList::from_slice(&[23, 24]),
+            RocList<i64>
+        );
     }
 
     #[test]
     fn list_concat_two_non_empty_lists() {
         assert_evals_to!(
             "List.concat [1, 2 ] [ 3, 4 ]",
-            &[1, 2, 3, 4],
-            &'static [i64]
+            RocList::from_slice(&[1, 2, 3, 4]),
+            RocList<i64>
         );
     }
 
@@ -596,8 +749,8 @@ mod gen_list {
     fn list_concat_two_bigger_non_empty_lists() {
         assert_evals_to!(
             "List.concat [ 1.1, 2.2 ] [ 3.3, 4.4, 5.5 ]",
-            &[1.1, 2.2, 3.3, 4.4, 5.5],
-            &'static [f64]
+            RocList::from_slice(&[1.1, 2.2, 3.3, 4.4, 5.5]),
+            RocList<f64>
         );
     }
 
@@ -614,12 +767,10 @@ mod gen_list {
 
         expected.extend(vec2);
 
-        let expected_slice: &[i64] = expected.as_ref();
-
         assert_evals_to!(
             &format!("List.concat {} {}", slice_str1, slice_str2),
-            expected_slice,
-            &'static [i64]
+            RocList::from_slice(&expected),
+            RocList<i64>
         );
     }
 
@@ -849,8 +1000,8 @@ mod gen_list {
     fn set_unique_int_list() {
         assert_evals_to!(
             "List.set [ 12, 9, 7, 1, 5 ] 2 33",
-            &[12, 9, 33, 1, 5],
-            &'static [i64]
+            RocList::from_slice(&[12, 9, 33, 1, 5]),
+            RocList<i64>
         );
     }
 
@@ -858,8 +1009,8 @@ mod gen_list {
     fn set_unique_list_oob() {
         assert_evals_to!(
             "List.set [ 3, 17, 4.1 ] 1337 9.25",
-            &[3.0, 17.0, 4.1],
-            &'static [f64]
+            RocList::from_slice(&[3.0, 17.0, 4.1]),
+            RocList<f64>
         );
     }
 
@@ -948,8 +1099,8 @@ mod gen_list {
                     wrapLen [ 1, 7, 9 ]
                 "#
             ),
-            &[3],
-            &'static [i64]
+            RocList::from_slice(&[3]),
+            RocList<i64>
         );
     }
 
@@ -964,6 +1115,8 @@ mod gen_list {
                     wrapFirst [ 1, 2 ]
                 "#
             ),
+            //            RocList::from_slice(&[1]),
+            //            RocList<i64>
             &[1],
             &'static [i64]
         );
@@ -986,8 +1139,8 @@ mod gen_list {
                     dupe [ 1, 2 ]
                 "#
             ),
-            &[1, 1],
-            &'static [i64]
+            RocList::from_slice(&[1, 1]),
+            RocList<i64>
         );
     }
 
@@ -1009,8 +1162,8 @@ mod gen_list {
                     swap 0 1 [ 1, 2 ]
                 "#
             ),
-            &[2, 1],
-            &'static [i64]
+            RocList::from_slice(&[2, 1]),
+            RocList<i64>
         );
     }
 
@@ -1061,8 +1214,8 @@ mod gen_list {
     //                    [ 1,3 ]
     //                "#
     //            ),
-    //            &[2, 1],
-    //            &'static [i64]
+    //            RocList::from_slice(&[2, 1]),
+    //            RocList<i64>
     //        );
     //    }
 
@@ -1100,8 +1253,8 @@ mod gen_list {
     //                    [ 1,3 ]
     //                "#
     //            ),
-    //            &[2, 1],
-    //            &'static [i64]
+    //            RocList::from_slice(&[2, 1]),
+    //            RocList<i64>
     //        );
     //    }
 
@@ -1170,8 +1323,8 @@ mod gen_list {
                     quicksort [ 7, 4, 21, 19 ]
                 "#
                 ),
-                &[4, 7, 19, 21],
-                &'static [i64]
+                RocList::from_slice(&[4, 7, 19, 21]),
+                RocList<i64>
             );
         })
     }
@@ -1243,8 +1396,8 @@ mod gen_list {
                        quicksort [ 7, 4, 21, 19 ]
                    "#
                 ),
-                &[19, 7, 4, 21],
-                &'static [i64]
+                RocList::from_slice(&[19, 7, 4, 21]),
+                RocList<i64>
             );
         })
     }
@@ -1368,8 +1521,8 @@ mod gen_list {
                 id x
                 "#
             ),
-            &[1, 2, 3],
-            &'static [i64]
+            RocList::from_slice(&[1, 2, 3]),
+            RocList<i64>
         );
     }
 
@@ -1387,8 +1540,8 @@ mod gen_list {
                 id x
                 "#
             ),
-            &[0, 2, 3],
-            &'static [i64]
+            RocList::from_slice(&[0, 2, 3]),
+            RocList<i64>
         );
     }
 
@@ -1404,8 +1557,8 @@ mod gen_list {
                     Pair v _ -> v
                 "#
             ),
-            &[1, 2, 3],
-            &'static [i64]
+            RocList::from_slice(&[1, 2, 3]),
+            RocList<i64>
         );
     }
 }

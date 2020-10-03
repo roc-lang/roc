@@ -687,6 +687,11 @@ mod gen_num {
     }
 
     #[test]
+    fn atan() {
+        assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
+    }
+
+    #[test]
     #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
     fn int_overflow() {
         assert_evals_to!(
