@@ -73,9 +73,11 @@ fn link_macos(
             // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
             // for discussion and further references
             "-lSystem",
+            "-lresolv",
+            "-lpthread",
             // "-lrt", // TODO shouldn't we need this?
-            // "-lc_nonshared", // TODO sho
-            // "-lc++", // TODO shouldn't we need this?
+            // "-lc_nonshared", // TODO shouldn't we need this?
+            "-lc++", // TODO shouldn't we need this?
             // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
             // "-lunwind", // TODO will eventually need this, see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
             "-o",
