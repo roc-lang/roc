@@ -1981,7 +1981,7 @@ pub fn with_hole<'a>(
                 ext_var,
                 field_var,
                 loc_expr: Box::new(Located::at_zero(roc_can::expr::Expr::Var(record_symbol))),
-                field: field.clone(),
+                field,
             };
 
             let loc_body = Located::at_zero(body);
