@@ -678,15 +678,15 @@ mod gen_records {
     }
 
     #[test]
-    fn just_to_be_sure() {
+    fn accessor() {
         assert_evals_to!(
             indoc!(
                 r#"
-                { a: 1, b : 2, c : 3 }
+                .foo { foo: 4 } + .foo { bar: 6.28, foo: 3 }
                 "#
             ),
-            [1, 2, 3],
-            [i64; 3]
+            7,
+            i64
         );
     }
 }

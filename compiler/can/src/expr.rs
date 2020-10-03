@@ -126,6 +126,7 @@ pub enum Expr {
     },
     /// field accessor as a function, e.g. (.foo) expr
     Accessor {
+        function_var: Variable,
         record_var: Variable,
         closure_var: Variable,
         ext_var: Variable,
@@ -550,6 +551,7 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::AccessorFunction(field) => (
             Accessor {
+                function_var: var_store.fresh(),
                 record_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
                 closure_var: var_store.fresh(),

@@ -1959,7 +1959,65 @@ pub fn with_hole<'a>(
             stmt
         }
 
-        Accessor { .. } | Update { .. } => todo!("record access/accessor/update"),
+        Accessor {
+            function_var,
+            record_var,
+            closure_var: _,
+            ext_var,
+            field_var,
+            field,
+        } => {
+            // IDEA: convert accessor fromt
+            //
+            // .foo
+            //
+            // into
+            //
+            // (\r -> r.foo)
+            let record_symbol = env.unique_symbol();
+            let body = roc_can::expr::Expr::Access {
+                record_var,
+                ext_var,
+                field_var,
+                loc_expr: Box::new(Located::at_zero(roc_can::expr::Expr::Var(record_symbol))),
+                field: field.clone(),
+            };
+
+            let loc_body = Located::at_zero(body);
+
+            let name = env.unique_symbol();
+
+            let arguments = vec![(
+                record_var,
+                Located::at_zero(roc_can::pattern::Pattern::Identifier(record_symbol)),
+            )];
+
+            match procs.insert_anonymous(
+                env,
+                name,
+                function_var,
+                arguments,
+                loc_body,
+                field_var,
+                layout_cache,
+            ) {
+                Ok(layout) => {
+                    // TODO should the let have layout Pointer?
+                    Stmt::Let(
+                        assigned,
+                        Expr::FunctionPointer(name, layout.clone()),
+                        layout,
+                        hole,
+                    )
+                }
+
+                Err(_error) => Stmt::RuntimeError(
+                    "TODO convert anonymous function error to a RuntimeError string",
+                ),
+            }
+        }
+
+        Update { .. } => todo!("record access/accessor/update"),
 
         Closure {
             function_type,
