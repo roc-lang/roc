@@ -680,11 +680,17 @@ pub enum Expr<'a> {
         arguments: &'a [Symbol],
     },
     Struct(&'a [Symbol]),
+
     AccessAtIndex {
         index: u64,
         field_layouts: &'a [Layout<'a>],
         structure: Symbol,
         wrapped: Wrapped,
+    },
+    Update {
+        structure: Symbol,
+        field_layouts: &'a [Layout<'a>],
+        updates: &'a [(u64, Symbol)],
     },
 
     Array {
@@ -845,6 +851,23 @@ impl<'a> Expr<'a> {
             } => alloc
                 .text(format!("Index {} ", index))
                 .append(symbol_to_doc(alloc, *structure)),
+
+            Update {
+                structure, updates, ..
+            } => {
+                let it = updates.iter().map(|(index, symbol)| {
+                    alloc
+                        .text(format!(".{} => ", index))
+                        .append(symbol_to_doc(alloc, *symbol))
+                });
+
+                alloc
+                    .text("Update ")
+                    .append(symbol_to_doc(alloc, *structure))
+                    .append(alloc.text("{ "))
+                    .append(alloc.intersperse(it, ", "))
+                    .append(alloc.text(" }"))
+            }
 
             RuntimeErrorFunction(s) => alloc.text(format!("ErrorFunction {}", s)),
         }
@@ -2017,7 +2040,12 @@ pub fn with_hole<'a>(
             }
         }
 
-        Update { .. } => todo!("record access/accessor/update"),
+        Update {
+            record_var, // Variable,
+            ext_var,    // Variable,
+            symbol,     // Symbol,
+            updates,    // SendMap<Lowercase, Field>,
+        } => todo!("record access/accessor/update"),
 
         Closure {
             function_type,
@@ -2965,6 +2993,36 @@ fn substitute_in_expr<'a>(
             }),
             None => None,
         },
+
+        Update {
+            structure,
+            field_layouts,
+            updates,
+        } => {
+            let mut did_change = false;
+            let new_updates = Vec::from_iter_in(
+                updates.iter().map(|(index, s)| match substitute(subs, *s) {
+                    None => (*index, *s),
+                    Some(s) => {
+                        did_change = true;
+                        (*index, s)
+                    }
+                }),
+                arena,
+            );
+
+            if did_change {
+                let updates = new_updates.into_bump_slice();
+
+                Some(Update {
+                    structure: *structure,
+                    field_layouts,
+                    updates,
+                })
+            } else {
+                None
+            }
+        }
     }
 }
 

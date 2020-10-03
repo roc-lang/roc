@@ -100,6 +100,13 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
             result.insert(*symbol);
         }
 
+        Update {
+            structure, updates, ..
+        } => {
+            result.insert(*structure);
+            result.extend(updates.iter().map(|r| r.1));
+        }
+
         FunctionCall { args, .. } => {
             // NOTE thouth the function name does occur, it is a static constant in the program
             // for liveness, it should not be included here.
@@ -455,6 +462,8 @@ impl<'a> Context<'a> {
 
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
+
+            Update { .. } => todo!(),
 
             RunLowLevel(op, args) => {
                 let ps = crate::borrow::lowlevel_borrow_signature(self.arena, op);
