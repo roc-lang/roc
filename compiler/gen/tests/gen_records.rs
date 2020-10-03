@@ -410,9 +410,9 @@ mod gen_records {
                         { x: Blue, y ? 3 } -> y
                         { x: Red, y ? 5 } -> y
 
-                a = f { x: Blue, y: 7 } 
+                a = f { x: Blue, y: 7 }
                 b = f { x: Blue }
-                c = f { x: Red, y: 11 } 
+                c = f { x: Red, y: 11 }
                 d = f { x: Red }
 
                 a * b * c * d
@@ -617,7 +617,7 @@ mod gen_records {
         assert_evals_to!(
             indoc!(
                 r#"
-                { a: 3.14, b: 0x1 } 
+                { a: 3.14, b: 0x1 }
                 "#
             ),
             (3.14, 0x1),
@@ -686,6 +686,49 @@ mod gen_records {
                 "#
             ),
             7,
+            i64
+        );
+    }
+
+    #[test]
+    fn accessor_single_element_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                .foo { foo: 4 }
+                "#
+            ),
+            4,
+            i64
+        );
+    }
+
+    #[test]
+    fn update_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                rec = { foo: 42, bar: 6.28 }
+
+                { rec & foo: rec.foo + 1 }
+                "#
+            ),
+            (6.28, 43),
+            (f64, i64)
+        );
+    }
+
+    #[test]
+    fn update_single_element_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                rec = { foo: 42}
+
+                { rec & foo: rec.foo + 1 }
+                "#
+            ),
+            43,
             i64
         );
     }

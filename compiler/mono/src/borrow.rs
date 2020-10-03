@@ -337,7 +337,7 @@ impl<'a> BorrowInfState<'a> {
                     self.own_var(*x);
                 }
             }
-            Update { .. } => todo!(),
+
             FunctionCall {
                 call_type,
                 args,

@@ -1035,8 +1035,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Reset(_) => todo!(),
         Reuse { .. } => todo!(),
 
-        Update { .. } => todo!(),
-
         AccessAtIndex {
             index,
             structure,

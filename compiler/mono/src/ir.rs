@@ -687,11 +687,6 @@ pub enum Expr<'a> {
         structure: Symbol,
         wrapped: Wrapped,
     },
-    Update {
-        structure: Symbol,
-        field_layouts: &'a [Layout<'a>],
-        updates: &'a [(u64, Symbol)],
-    },
 
     Array {
         elem_layout: Layout<'a>,
@@ -851,23 +846,6 @@ impl<'a> Expr<'a> {
             } => alloc
                 .text(format!("Index {} ", index))
                 .append(symbol_to_doc(alloc, *structure)),
-
-            Update {
-                structure, updates, ..
-            } => {
-                let it = updates.iter().map(|(index, symbol)| {
-                    alloc
-                        .text(format!(".{} => ", index))
-                        .append(symbol_to_doc(alloc, *symbol))
-                });
-
-                alloc
-                    .text("Update ")
-                    .append(symbol_to_doc(alloc, *structure))
-                    .append(alloc.text("{ "))
-                    .append(alloc.intersperse(it, ", "))
-                    .append(alloc.text(" }"))
-            }
 
             RuntimeErrorFunction(s) => alloc.text(format!("ErrorFunction {}", s)),
         }
@@ -2041,11 +2019,109 @@ pub fn with_hole<'a>(
         }
 
         Update {
-            record_var, // Variable,
-            ext_var,    // Variable,
-            symbol,     // Symbol,
-            updates,    // SendMap<Lowercase, Field>,
-        } => todo!("record access/accessor/update"),
+            record_var,
+            symbol: structure,
+            updates,
+            ..
+        } => {
+            use FieldType::*;
+
+            enum FieldType<'a> {
+                CopyExisting(u64),
+                UpdateExisting(&'a roc_can::expr::Field),
+            };
+
+            // Strategy: turn a record update into the creation of a new record.
+            // This has the benefit that we don't need to do anything special for reference
+            // counting
+
+            let sorted_fields = crate::layout::sort_record_fields(env.arena, record_var, env.subs);
+
+            let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
+
+            let mut symbols = Vec::with_capacity_in(sorted_fields.len(), env.arena);
+            let mut fields = Vec::with_capacity_in(sorted_fields.len(), env.arena);
+
+            let mut current = 0;
+            for (label, opt_field_layout) in sorted_fields.into_iter() {
+                match opt_field_layout {
+                    Err(_) => {
+                        debug_assert!(!updates.contains_key(&label));
+                        // this was an optional field, and now does not exist!
+                        // do not increment `current`!
+                    }
+                    Ok(field_layout) => {
+                        field_layouts.push(field_layout);
+
+                        if let Some(field) = updates.get(&label) {
+                            // TODO
+                            let field_symbol =
+                                possible_reuse_symbol(env, procs, &field.loc_expr.value);
+
+                            fields.push(UpdateExisting(field));
+                            symbols.push(field_symbol);
+                        } else {
+                            fields.push(CopyExisting(current));
+                            symbols.push(env.unique_symbol());
+                        }
+
+                        current += 1;
+                    }
+                }
+            }
+            let symbols = symbols.into_bump_slice();
+
+            let record_layout = layout_cache
+                .from_var(env.arena, record_var, env.subs)
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+            let field_layouts = match &record_layout {
+                Layout::Struct(layouts) => *layouts,
+                other => arena.alloc([other.clone()]),
+            };
+
+            let wrapped = if field_layouts.len() == 1 {
+                Wrapped::SingleElementRecord
+            } else {
+                Wrapped::RecordOrSingleTagUnion
+            };
+
+            let expr = Expr::Struct(symbols);
+            let mut stmt = Stmt::Let(assigned, expr, record_layout, hole);
+
+            let it = field_layouts.iter().zip(symbols.iter()).zip(fields);
+            for ((field_layout, symbol), what_to_do) in it {
+                match what_to_do {
+                    UpdateExisting(field) => {
+                        stmt = assign_to_symbol(
+                            env,
+                            procs,
+                            layout_cache,
+                            field.var,
+                            *field.loc_expr.clone(),
+                            *symbol,
+                            stmt,
+                        );
+                    }
+                    CopyExisting(index) => {
+                        let access_expr = Expr::AccessAtIndex {
+                            structure,
+                            index,
+                            field_layouts,
+                            wrapped,
+                        };
+                        stmt = Stmt::Let(
+                            *symbol,
+                            access_expr,
+                            field_layout.clone(),
+                            arena.alloc(stmt),
+                        );
+                    }
+                }
+            }
+
+            stmt
+        }
 
         Closure {
             function_type,
@@ -2993,36 +3069,6 @@ fn substitute_in_expr<'a>(
             }),
             None => None,
         },
-
-        Update {
-            structure,
-            field_layouts,
-            updates,
-        } => {
-            let mut did_change = false;
-            let new_updates = Vec::from_iter_in(
-                updates.iter().map(|(index, s)| match substitute(subs, *s) {
-                    None => (*index, *s),
-                    Some(s) => {
-                        did_change = true;
-                        (*index, s)
-                    }
-                }),
-                arena,
-            );
-
-            if did_change {
-                let updates = new_updates.into_bump_slice();
-
-                Some(Update {
-                    structure: *structure,
-                    field_layouts,
-                    updates,
-                })
-            } else {
-                None
-            }
-        }
     }
 }
 
