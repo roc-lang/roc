@@ -1,3 +1,2 @@
 app
-*.o
-*.a
+host.o
