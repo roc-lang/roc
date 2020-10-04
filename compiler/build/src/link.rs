@@ -31,6 +31,8 @@ fn link_linux(
     host_input_path: &Path,
     dest_filename: &Path,
 ) -> io::Result<Child> {
+    // NOTE: order of arguments to `ld` matters here!
+    // The `-l` flags should go after the `.o` arguments
     Command::new("ld")
         .args(&[
             "-arch",
@@ -40,6 +42,12 @@ fn link_linux(
             "/usr/lib/x86_64-linux-gnu/Scrt1.o",
             "-dynamic-linker",
             "/lib64/ld-linux-x86-64.so.2",
+            // Output
+            "-o",
+            binary_path.to_str().unwrap(), // app
+            // Inputs
+            host_input_path.to_str().unwrap(), // host.o
+            dest_filename.to_str().unwrap(),   // app.o
             // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925
             // for discussion and further references
             "-lc",
@@ -51,11 +59,7 @@ fn link_linux(
             "-lc_nonshared",
             // "-lc++", // TODO shouldn't we need this?
             // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
-            // "-lunwind", // TODO will eventually need this, see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
-            "-o",
-            binary_path.to_str().unwrap(),     // app
-            host_input_path.to_str().unwrap(), // host.o
-            dest_filename.to_str().unwrap(),   // roc_app.o
+            "-lunwind", // TODO will eventually need this, see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
         ])
         .spawn()
 }
@@ -66,10 +70,18 @@ fn link_macos(
     host_input_path: &Path,
     dest_filename: &Path,
 ) -> io::Result<Child> {
+    // NOTE: order of arguments to `ld` matters here!
+    // The `-l` flags should go after the `.o` arguments
     Command::new("ld")
         .args(&[
             "-arch",
             target.architecture.to_string().as_str(),
+            // Output
+            "-o",
+            binary_path.to_str().unwrap(), // app
+            // Inputs
+            host_input_path.to_str().unwrap(), // host.o
+            dest_filename.to_str().unwrap(),   // roc_app.o
             // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
             // for discussion and further references
             "-lSystem",
@@ -78,12 +90,8 @@ fn link_macos(
             // "-lrt", // TODO shouldn't we need this?
             // "-lc_nonshared", // TODO shouldn't we need this?
             "-lc++", // TODO shouldn't we need this?
-            // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
-            // "-lunwind", // TODO will eventually need this, see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
-            "-o",
-            binary_path.to_str().unwrap(),     // app
-            host_input_path.to_str().unwrap(), // host.o
-            dest_filename.to_str().unwrap(),   // roc_app.o
+                     // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
+                     // "-lunwind", // TODO will eventually need this, see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
         ])
         .spawn()
 }
