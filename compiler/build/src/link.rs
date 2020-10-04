@@ -10,6 +10,10 @@ pub fn link(
     host_input_path: &Path,
     dest_filename: &Path,
 ) -> io::Result<Child> {
+    // TODO we should no longer need to do this once we have platforms on
+    // a package repository, as we can then get precompiled hosts from there.
+    rebuild_host(host_input_path);
+
     match target {
         Triple {
             architecture: Architecture::X86_64,
@@ -25,6 +29,68 @@ pub fn link(
     }
 }
 
+fn rebuild_host(host_input_path: &Path) {
+    let c_host_src = host_input_path.with_file_name("host.c");
+    let c_host_dest = host_input_path.with_file_name("c_host.o");
+    let rust_host_src = host_input_path.with_file_name("host.rs");
+    let rust_host_dest = host_input_path.with_file_name("rust_host.o");
+    let host_dest = host_input_path.with_file_name("host.o");
+
+    // Compile host.c
+    Command::new("clang")
+        .env_clear()
+        .args(&[
+            "-c",
+            c_host_src.to_str().unwrap(),
+            "-o",
+            c_host_dest.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    if rust_host_src.exists() {
+        // Compile and link host.rs, if it exists
+        Command::new("rustc")
+            .args(&[
+                rust_host_src.to_str().unwrap(),
+                "-o",
+                rust_host_dest.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        Command::new("ld")
+            .env_clear()
+            .args(&[
+                "-r",
+                c_host_dest.to_str().unwrap(),
+                rust_host_dest.to_str().unwrap(),
+                "-o",
+                host_dest.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        // Clean up rust_host.o
+        Command::new("rm")
+            .env_clear()
+            .args(&[
+                "-f",
+                rust_host_dest.to_str().unwrap(),
+                c_host_dest.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+    } else {
+        // Clean up rust_host.o
+        Command::new("mv")
+            .env_clear()
+            .args(&[c_host_dest, host_dest])
+            .output()
+            .unwrap();
+    }
+}
+
 fn link_linux(
     target: &Triple,
     binary_path: &Path,
@@ -34,6 +100,8 @@ fn link_linux(
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
     Command::new("ld")
+        // Don't allow LD_ env vars to affect this
+        .env_clear()
         .args(&[
             "-arch",
             arch_str(target),
@@ -73,6 +141,8 @@ fn link_macos(
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
     Command::new("ld")
+        // Don't allow LD_ env vars to affect this
+        .env_clear()
         .args(&[
             "-arch",
             target.architecture.to_string().as_str(),

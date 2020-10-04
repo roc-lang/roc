@@ -1,21 +1,8 @@
-## Recompiling the platform from source
+# Rebuilding the host from source
 
-This example platform for "Hello, World!" includes the same host implemented
-in two different languages—C and Rust—to demonstrate how it's done in both.
-Ordinarily you'd only implement your host once, in your preferred language.
+Run `build.sh` to manually rebuild this platform's host.
 
-
-### Recompiling the C implementation
-
-```shell
-$ clang -c host.c -o host.o 
-```
-
-Then `mv` the compiled `host.o` into the apropriate subdirectory under
-`host/` based on the operating system you've compiled it for.
-
-### Recompiling the Rust implementation
-
-```shell
-$ rustc
-```
+Note that the compiler currently has its own logic for rebuilding these hosts
+(in `link.rs`). It's hardcoded for now, but the long-term goal is that
+hosts will be precompiled by platform authors and distributed in packages,
+at which point only package authors will need to think about rebuilding hosts.
