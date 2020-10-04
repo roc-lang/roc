@@ -1,5 +1,5 @@
 use bumpalo::Bump;
-use roc_build::{link::link, program, target::target_triple_str};
+use roc_build::{link::link, program};
 use roc_collections::all::MutMap;
 use roc_gen::llvm::build::OptLevel;
 use roc_load::file::LoadingProblem;
@@ -80,11 +80,7 @@ pub fn build_file(
     let cwd = dest_filename.parent().unwrap();
 
     // Step 2: link the precompiled host and compiled app
-    let host_input_path = cwd
-        .join("platform")
-        .join("host")
-        .join(target_triple_str(target))
-        .join("host.o");
+    let host_input_path = cwd.join("platform").join("host.o");
     let binary_path = cwd.join("app"); // TODO should be app.exe on Windows
 
     // TODO try to move as much of this linking as possible to the precompiled
