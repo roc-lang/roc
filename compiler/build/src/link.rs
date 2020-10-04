@@ -57,9 +57,9 @@ fn link_linux(
             "-lrt",
             "-lutil",
             "-lc_nonshared",
-            // "-lc++", // TODO shouldn't we need this?
+            "-lc++",
+            "-lunwind",
             // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
-            "-lunwind", // TODO will eventually need this, see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
         ])
         .spawn()
 }
