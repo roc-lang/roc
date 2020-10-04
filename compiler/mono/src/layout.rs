@@ -406,14 +406,18 @@ fn layout_from_flat_type<'a>(
             ))
         }
         Record(fields, ext_var) => {
-            debug_assert!(ext_var_is_empty_record(subs, ext_var));
-
             // Sort the fields by label
             let mut sorted_fields = Vec::with_capacity_in(fields.len(), arena);
+            sorted_fields.extend(fields.into_iter());
 
-            for tuple in fields {
-                sorted_fields.push(tuple);
+            // extract any values from the ext_var
+            let mut fields_map = MutMap::default();
+            match roc_types::pretty_print::chase_ext_record(subs, ext_var, &mut fields_map) {
+                Ok(()) | Err((_, Content::FlexVar(_))) => {}
+                Err(_) => unreachable!("this would have been a type error"),
             }
+
+            sorted_fields.extend(fields_map.into_iter());
 
             sorted_fields.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
 
@@ -779,16 +783,6 @@ fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
 fn ext_var_is_empty_tag_union(_: &Subs, _: Variable) -> bool {
     // This should only ever be used in debug_assert! macros
     unreachable!();
-}
-
-#[cfg(debug_assertions)]
-fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
-    // the ext_var is empty
-    let mut ext_fields = MutMap::default();
-    match roc_types::pretty_print::chase_ext_record(subs, ext_var, &mut ext_fields) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => ext_fields.is_empty(),
-        Err((_, content)) => panic!("invalid content in ext_var: {:?}", content),
-    }
 }
 
 #[cfg(not(debug_assertions))]
