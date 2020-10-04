@@ -6,10 +6,10 @@
 To build the compiler, you need these installed:
 
 * `libunwind` (macOS should already have this one installed)
-* `libc++abi` 
+* `libc++-dev`
 * a particular version of LLVM 
 
-Some systems may already have `libc++abi` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++abi-dev`.) macOS systems
+Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev`.) macOS systems
 should already have `libunwind`, but other systems will need to install it
 (e.g. with `sudo apt-get install libunwind-dev`).
 
