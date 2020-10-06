@@ -34,6 +34,7 @@ fn rebuild_host(host_input_path: &Path) {
     let c_host_dest = host_input_path.with_file_name("c_host.o");
     let rust_host_src = host_input_path.with_file_name("host.rs");
     let rust_host_dest = host_input_path.with_file_name("rust_host.o");
+    let cargo_host_src = host_input_path.with_file_name("Cargo.toml");
     let host_dest = host_input_path.with_file_name("host.o");
 
     // Compile host.c
@@ -48,7 +49,31 @@ fn rebuild_host(host_input_path: &Path) {
         .output()
         .unwrap();
 
-    if rust_host_src.exists() {
+    if cargo_host_src.exists() {
+        // Compile and link Cargo.toml, if it exists
+        let cargo_dir = host_input_path.parent().unwrap();
+        let libhost_dir = cargo_dir.join("target").join("release");
+
+        Command::new("cargo")
+            .args(&["build", "--release"])
+            .current_dir(cargo_dir)
+            .output()
+            .unwrap();
+
+        Command::new("ld")
+            .env_clear()
+            .args(&[
+                "-r",
+                "-L",
+                libhost_dir.to_str().unwrap(),
+                c_host_dest.to_str().unwrap(),
+                "-lhost",
+                "-o",
+                host_dest.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+    } else if rust_host_src.exists() {
         // Compile and link host.rs, if it exists
         Command::new("rustc")
             .args(&[

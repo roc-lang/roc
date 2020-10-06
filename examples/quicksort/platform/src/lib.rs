@@ -1,18 +1,16 @@
-#![crate_type = "staticlib"]
-
+use roc_std::RocList;
 use std::time::SystemTime;
 
 extern "C" {
-    #[allow(improper_ctypes)]
     #[link_name = "quicksort_1"]
-    fn quicksort(list: Box<[i64]>) -> Box<[i64]>;
+    fn quicksort(list: RocList<i64>) -> RocList<i64>;
 }
 
 const NUM_NUMS: usize = 1_000_000;
 
 #[no_mangle]
 pub fn rust_main() -> isize {
-    let nums: Box<[i64]> = {
+    let nums: RocList<i64> = {
         let mut nums = Vec::with_capacity(NUM_NUMS);
 
         for index in 0..nums.capacity() {
@@ -20,7 +18,8 @@ pub fn rust_main() -> isize {
 
             nums.push(num);
         }
-        nums.into()
+
+        RocList::from_slice(&nums)
     };
 
     println!("Running Roc quicksort on {} numbers...", nums.len());
@@ -33,14 +32,8 @@ pub fn rust_main() -> isize {
         "Roc quicksort took {:.4} ms to compute this answer: {:?}",
         duration.as_secs_f64() * 1000.0,
         // truncate the answer, so stdout is not swamped
-        &answer[0..20]
+        &answer.as_slice()[0..20]
     );
-
-    // the pointer is to the first _element_ of the list,
-    // but the refcount precedes it. Thus calling free() on
-    // this pointer would segfault/cause badness. Therefore, we
-    // leak it for now
-    Box::leak(answer);
 
     // Exit code
     0
