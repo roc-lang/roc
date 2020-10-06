@@ -2145,6 +2145,9 @@ dependencies = [
 [[package]]
 name = "roc_builtins_bitcode"
 version = "0.1.0"
+dependencies = [
+ "pretty_assertions",
+]
 
 [[package]]
 name = "roc_can"

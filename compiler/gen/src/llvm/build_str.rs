@@ -1,5 +1,5 @@
 use crate::llvm::build::{
-    load_symbol, load_symbol_and_layout, ptr_from_symbol, Env, InPlace, Scope,
+    call_bitcode_fn, load_symbol, load_symbol_and_layout, ptr_from_symbol, Env, InPlace, Scope,
 };
 use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, list_single,
@@ -49,20 +49,11 @@ pub fn str_split<'a, 'ctx, 'env>(
 
                     builder.build_store(ret_list_len_alloca, ctx.i64_type().const_zero());
 
-                    let delimiter_is_longer_comparison = env.builder.build_int_compare(
-                        IntPredicate::UGT,
-                        delimiter_len,
-                        str_len,
-                        "delimiter_is_longer_than_input_str",
-                    );
-
-                    let if_delimiter_is_longer = || {
-                        let (str, str_layout) = load_symbol_and_layout(env, scope, &str_symbol);
-
-                        list_single(env, inplace, str, str_layout)
-                    };
-
-                    let if_delimiter_is_shorter = || empty_list(env);
+                    let str: BasicValueEnum<'ctx> = panic!("Get str basic value enum");
+                    let delimiter: BasicValueEnum<'ctx> = panic!("Get delimiter basic value enum");
+git 
+                    let delimiter_count =
+                        call_bitcode_fn(env, &[str, delimiter], "count_delimiters_");
 
                     build_basic_phi2(
                         env,

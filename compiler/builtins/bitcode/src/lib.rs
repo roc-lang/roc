@@ -39,6 +39,41 @@ pub fn pow_int_(mut base: i64, mut exp: i64) -> i64 {
     acc
 }
 
+#[no_mangle]
+pub fn count_delimiters_(str: &[u8], delimiter: &[u8]) -> i64 {
+    let mut count: i64 = 0;
+
+    let str_len = str.len();
+    let delimiter_len = delimiter.len();
+
+    if delimiter_len > str_len {
+        0
+    } else {
+        for str_index in 0..(str_len - delimiter_len) {
+            let mut delimiter_index = 0;
+
+            let mut matches_delimiter = true;
+
+            while matches_delimiter && delimiter_index < delimiter_len {
+                let delimiter_char = delimiter[delimiter_index];
+                let str_char = str[str_index + delimiter_index];
+
+                if delimiter_char != str_char {
+                    matches_delimiter = false;
+                }
+
+                delimiter_index += 1;
+            }
+
+            if matches_delimiter {
+                count += 1;
+            }
+        }
+
+        count
+    }
+}
+
 /// Adapted from Rust's core::num module, by the Rust core team,
 /// licensed under the Apache License, version 2.0 - https://www.apache.org/licenses/LICENSE-2.0
 ///

@@ -2472,15 +2472,14 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
         NumRemUnchecked => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
         NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
-        NumPowInt => call_bitcode_fn(NumPowInt, env, &[lhs.into(), rhs.into()], "pow_int_"),
+        NumPowInt => call_bitcode_fn(env, &[lhs.into(), rhs.into()], "pow_int_"),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
     }
 }
 
-fn call_bitcode_fn<'a, 'ctx, 'env>(
-    op: LowLevel,
+pub fn call_bitcode_fn<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
@@ -2495,7 +2494,7 @@ fn call_bitcode_fn<'a, 'ctx, 'env>(
 
     call.try_as_basic_value()
         .left()
-        .unwrap_or_else(|| panic!("LLVM error: Invalid call for low-level op {:?}", op))
+        .unwrap_or_else(|| panic!("LLVM error: Invalid call for bitcode call {:?}", fn_name))
 }
 
 fn build_float_binop<'a, 'ctx, 'env>(
