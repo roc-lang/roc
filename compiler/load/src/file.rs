@@ -1727,6 +1727,7 @@ fn ident_from_exposed(entry: &ExposesEntry<'_>) -> Ident {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_pending_specializations<'a>(
     arena: &'a Bump,
     solved_subs: Solved<Subs>,
