@@ -14,7 +14,6 @@ pub fn helper_without_uniqueness<'a>(
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
     use inkwell::OptimizationLevel;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
-    use roc_gen::llvm::convert::basic_type_from_layout;
     use roc_mono::layout::{Layout, LayoutCache};
 
     let target = target_lexicon::Triple::host();
@@ -196,7 +195,6 @@ pub fn helper_with_uniqueness<'a>(
     use crate::helpers::{infer_expr, uniq_expr};
     use inkwell::OptimizationLevel;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
-    use roc_gen::llvm::convert::basic_type_from_layout;
     use roc_mono::layout::{Layout, LayoutCache};
 
     let target = target_lexicon::Triple::host();

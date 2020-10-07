@@ -108,9 +108,7 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         finished_info: FinishedInfo<'a>,
     },
-    Specialized {
-        specialization: (),
-    },
+    // Specialized { specialization: (), },
 }
 
 #[derive(Debug)]
@@ -767,8 +765,6 @@ fn update<'a>(
             let State {
                 waiting_for_solve,
                 exposed_types,
-                constrained_ident_ids,
-                declarations_by_id,
                 unsolved_modules,
                 solve_listeners,
                 ..
@@ -1109,9 +1105,6 @@ fn update<'a>(
             }
 
             todo!();
-        }
-        Msg::Specialized { .. } => {
-            unreachable!();
         }
         Msg::Finished { .. } => {
             unreachable!();
@@ -1740,7 +1733,8 @@ fn build_pending_specializations<'a>(
     home: ModuleId,
     mut ident_ids: IdentIds,
     decls: Vec<Declaration>,
-    module_timing: ModuleTiming,
+    // TODO use this?
+    _module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
     finished_info: FinishedInfo<'a>,
 ) -> Msg<'a> {
