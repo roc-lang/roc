@@ -438,7 +438,9 @@ impl<'a> Procs<'a> {
 
 fn get_args_ret_var(subs: &Subs, var: Variable) -> Option<(std::vec::Vec<Variable>, Variable)> {
     match subs.get_without_compacting(var).content {
-        Content::Structure(FlatType::Func(pattern_vars, ret_var)) => Some((pattern_vars, ret_var)),
+        Content::Structure(FlatType::Func(pattern_vars, _closure_var, ret_var)) => {
+            Some((pattern_vars, ret_var))
+        }
         Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
             get_args_ret_var(subs, args[1])
         }
@@ -678,6 +680,7 @@ pub enum Expr<'a> {
         arguments: &'a [Symbol],
     },
     Struct(&'a [Symbol]),
+
     AccessAtIndex {
         index: u64,
         field_layouts: &'a [Layout<'a>],
@@ -1334,24 +1337,32 @@ pub fn with_hole<'a>(
         },
         LetNonRec(def, cont, _, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                if let Closure(ann, _, recursivity, loc_args, boxed_body) = def.loc_expr.value {
+                if let Closure {
+                    function_type,
+                    return_type,
+                    recursive,
+                    arguments,
+                    loc_body: boxed_body,
+                    ..
+                } = def.loc_expr.value
+                {
                     // Extract Procs, but discard the resulting Expr::Load.
                     // That Load looks up the pointer, which we won't use here!
 
-                    let (loc_body, ret_var) = *boxed_body;
+                    let loc_body = *boxed_body;
 
                     let is_self_recursive =
-                        !matches!(recursivity, roc_can::expr::Recursive::NotRecursive);
+                        !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
                     procs.insert_named(
                         env,
                         layout_cache,
                         *symbol,
-                        ann,
-                        loc_args,
+                        function_type,
+                        arguments,
                         loc_body,
                         is_self_recursive,
-                        ret_var,
+                        return_type,
                     );
 
                     return with_hole(env, cont.value, procs, layout_cache, assigned, hole);
@@ -1418,24 +1429,32 @@ pub fn with_hole<'a>(
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                    if let Closure(ann, _, recursivity, loc_args, boxed_body) = def.loc_expr.value {
+                    if let Closure {
+                        function_type,
+                        return_type,
+                        recursive,
+                        arguments,
+                        loc_body: boxed_body,
+                        ..
+                    } = def.loc_expr.value
+                    {
                         // Extract Procs, but discard the resulting Expr::Load.
                         // That Load looks up the pointer, which we won't use here!
 
-                        let (loc_body, ret_var) = *boxed_body;
+                        let loc_body = *boxed_body;
 
                         let is_self_recursive =
-                            !matches!(recursivity, roc_can::expr::Recursive::NotRecursive);
+                            !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
                         procs.insert_named(
                             env,
                             layout_cache,
                             *symbol,
-                            ann,
-                            loc_args,
+                            function_type,
+                            arguments,
                             loc_body,
                             is_self_recursive,
-                            ret_var,
+                            return_type,
                         );
 
                         continue;
@@ -1941,13 +1960,188 @@ pub fn with_hole<'a>(
             stmt
         }
 
-        Accessor { .. } | Update { .. } => todo!("record access/accessor/update"),
+        Accessor {
+            function_var,
+            record_var,
+            closure_var: _,
+            ext_var,
+            field_var,
+            field,
+        } => {
+            // IDEA: convert accessor fromt
+            //
+            // .foo
+            //
+            // into
+            //
+            // (\r -> r.foo)
+            let record_symbol = env.unique_symbol();
+            let body = roc_can::expr::Expr::Access {
+                record_var,
+                ext_var,
+                field_var,
+                loc_expr: Box::new(Located::at_zero(roc_can::expr::Expr::Var(record_symbol))),
+                field,
+            };
 
-        Closure(ann, name, _, loc_args, boxed_body) => {
-            let (loc_body, ret_var) = *boxed_body;
+            let loc_body = Located::at_zero(body);
 
-            match procs.insert_anonymous(env, name, ann, loc_args, loc_body, ret_var, layout_cache)
-            {
+            let name = env.unique_symbol();
+
+            let arguments = vec![(
+                record_var,
+                Located::at_zero(roc_can::pattern::Pattern::Identifier(record_symbol)),
+            )];
+
+            match procs.insert_anonymous(
+                env,
+                name,
+                function_var,
+                arguments,
+                loc_body,
+                field_var,
+                layout_cache,
+            ) {
+                Ok(layout) => {
+                    // TODO should the let have layout Pointer?
+                    Stmt::Let(
+                        assigned,
+                        Expr::FunctionPointer(name, layout.clone()),
+                        layout,
+                        hole,
+                    )
+                }
+
+                Err(_error) => Stmt::RuntimeError(
+                    "TODO convert anonymous function error to a RuntimeError string",
+                ),
+            }
+        }
+
+        Update {
+            record_var,
+            symbol: structure,
+            updates,
+            ..
+        } => {
+            use FieldType::*;
+
+            enum FieldType<'a> {
+                CopyExisting(u64),
+                UpdateExisting(&'a roc_can::expr::Field),
+            };
+
+            // Strategy: turn a record update into the creation of a new record.
+            // This has the benefit that we don't need to do anything special for reference
+            // counting
+
+            let sorted_fields = crate::layout::sort_record_fields(env.arena, record_var, env.subs);
+
+            let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
+
+            let mut symbols = Vec::with_capacity_in(sorted_fields.len(), env.arena);
+            let mut fields = Vec::with_capacity_in(sorted_fields.len(), env.arena);
+
+            let mut current = 0;
+            for (label, opt_field_layout) in sorted_fields.into_iter() {
+                match opt_field_layout {
+                    Err(_) => {
+                        debug_assert!(!updates.contains_key(&label));
+                        // this was an optional field, and now does not exist!
+                        // do not increment `current`!
+                    }
+                    Ok(field_layout) => {
+                        field_layouts.push(field_layout);
+
+                        if let Some(field) = updates.get(&label) {
+                            // TODO
+                            let field_symbol =
+                                possible_reuse_symbol(env, procs, &field.loc_expr.value);
+
+                            fields.push(UpdateExisting(field));
+                            symbols.push(field_symbol);
+                        } else {
+                            fields.push(CopyExisting(current));
+                            symbols.push(env.unique_symbol());
+                        }
+
+                        current += 1;
+                    }
+                }
+            }
+            let symbols = symbols.into_bump_slice();
+
+            let record_layout = layout_cache
+                .from_var(env.arena, record_var, env.subs)
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+            let field_layouts = match &record_layout {
+                Layout::Struct(layouts) => *layouts,
+                other => arena.alloc([other.clone()]),
+            };
+
+            let wrapped = if field_layouts.len() == 1 {
+                Wrapped::SingleElementRecord
+            } else {
+                Wrapped::RecordOrSingleTagUnion
+            };
+
+            let expr = Expr::Struct(symbols);
+            let mut stmt = Stmt::Let(assigned, expr, record_layout, hole);
+
+            let it = field_layouts.iter().zip(symbols.iter()).zip(fields);
+            for ((field_layout, symbol), what_to_do) in it {
+                match what_to_do {
+                    UpdateExisting(field) => {
+                        stmt = assign_to_symbol(
+                            env,
+                            procs,
+                            layout_cache,
+                            field.var,
+                            *field.loc_expr.clone(),
+                            *symbol,
+                            stmt,
+                        );
+                    }
+                    CopyExisting(index) => {
+                        let access_expr = Expr::AccessAtIndex {
+                            structure,
+                            index,
+                            field_layouts,
+                            wrapped,
+                        };
+                        stmt = Stmt::Let(
+                            *symbol,
+                            access_expr,
+                            field_layout.clone(),
+                            arena.alloc(stmt),
+                        );
+                    }
+                }
+            }
+
+            stmt
+        }
+
+        Closure {
+            function_type,
+            return_type,
+            name,
+            arguments,
+            loc_body: boxed_body,
+            ..
+        } => {
+            let loc_body = *boxed_body;
+
+            match procs.insert_anonymous(
+                env,
+                name,
+                function_type,
+                arguments,
+                loc_body,
+                return_type,
+                layout_cache,
+            ) {
                 Ok(layout) => {
                     // TODO should the let have layout Pointer?
                     Stmt::Let(
@@ -1965,7 +2159,7 @@ pub fn with_hole<'a>(
         }
 
         Call(boxed, loc_args, _) => {
-            let (fn_var, loc_expr, ret_var) = *boxed;
+            let (fn_var, loc_expr, _closure_var, ret_var) = *boxed;
 
             // even if a call looks like it's by name, it may in fact be by-pointer.
             // E.g. in `(\f, x -> f x)` the call is in fact by pointer.
@@ -2197,24 +2391,31 @@ pub fn from_can<'a>(
                     // Now that we know for sure it's a closure, get an owned
                     // version of these variant args so we can use them properly.
                     match def.loc_expr.value {
-                        Closure(ann, _, recursivity, loc_args, boxed_body) => {
+                        Closure {
+                            function_type,
+                            return_type,
+                            recursive,
+                            arguments,
+                            loc_body: boxed_body,
+                            ..
+                        } => {
                             // Extract Procs, but discard the resulting Expr::Load.
                             // That Load looks up the pointer, which we won't use here!
 
-                            let (loc_body, ret_var) = *boxed_body;
+                            let loc_body = *boxed_body;
 
                             let is_self_recursive =
-                                !matches!(recursivity, roc_can::expr::Recursive::NotRecursive);
+                                !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
                             procs.insert_named(
                                 env,
                                 layout_cache,
                                 *symbol,
-                                ann,
-                                loc_args,
+                                function_type,
+                                arguments,
                                 loc_body,
                                 is_self_recursive,
-                                ret_var,
+                                return_type,
                             );
 
                             continue;
@@ -2229,28 +2430,35 @@ pub fn from_can<'a>(
         }
         LetNonRec(def, cont, _, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                if let Closure(_, _, _, _, _) = &def.loc_expr.value {
+                if let Closure { .. } = &def.loc_expr.value {
                     // Now that we know for sure it's a closure, get an owned
                     // version of these variant args so we can use them properly.
                     match def.loc_expr.value {
-                        Closure(ann, _, recursivity, loc_args, boxed_body) => {
+                        Closure {
+                            function_type,
+                            return_type,
+                            recursive,
+                            arguments,
+                            loc_body: boxed_body,
+                            ..
+                        } => {
                             // Extract Procs, but discard the resulting Expr::Load.
                             // That Load looks up the pointer, which we won't use here!
 
-                            let (loc_body, ret_var) = *boxed_body;
+                            let loc_body = *boxed_body;
 
                             let is_self_recursive =
-                                !matches!(recursivity, roc_can::expr::Recursive::NotRecursive);
+                                !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
                             procs.insert_named(
                                 env,
                                 layout_cache,
                                 *symbol,
-                                ann,
-                                loc_args,
+                                function_type,
+                                arguments,
                                 loc_body,
                                 is_self_recursive,
-                                ret_var,
+                                return_type,
                             );
 
                             return from_can(env, cont.value, procs, layout_cache);

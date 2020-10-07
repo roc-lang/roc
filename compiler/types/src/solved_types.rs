@@ -24,7 +24,7 @@ impl<T> Solved<T> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SolvedType {
     /// A function. The types of its arguments, then the type of its return value.
-    Func(Vec<SolvedType>, Box<SolvedType>),
+    Func(Vec<SolvedType>, Box<SolvedType>, Box<SolvedType>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply(Symbol, Vec<SolvedType>),
     /// A bound type variable, e.g. `a` in `(a -> a)`
@@ -107,8 +107,9 @@ impl SolvedType {
 
                 SolvedType::Apply(symbol, solved_types)
             }
-            Function(args, box_ret) => {
+            Function(args, box_closure, box_ret) => {
                 let solved_ret = Self::from_type(solved_subs, *box_ret);
+                let solved_closure = Self::from_type(solved_subs, *box_closure);
                 let mut solved_args = Vec::with_capacity(args.len());
 
                 for arg in args.into_iter() {
@@ -117,7 +118,7 @@ impl SolvedType {
                     solved_args.push(solved_arg);
                 }
 
-                SolvedType::Func(solved_args, Box::new(solved_ret))
+                SolvedType::Func(solved_args, Box::new(solved_closure), Box::new(solved_ret))
             }
             Record(fields, box_ext) => {
                 let solved_ext = Self::from_type(solved_subs, *box_ext);
@@ -227,7 +228,7 @@ impl SolvedType {
 
                 SolvedType::Apply(symbol, new_args)
             }
-            Func(args, ret) => {
+            Func(args, closure, ret) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
                 for var in args {
@@ -235,8 +236,9 @@ impl SolvedType {
                 }
 
                 let ret = Self::from_var(subs, ret);
+                let closure = Self::from_var(subs, closure);
 
-                SolvedType::Func(new_args, Box::new(ret))
+                SolvedType::Func(new_args, Box::new(closure), Box::new(ret))
             }
             Record(fields, ext_var) => {
                 let mut new_fields = Vec::with_capacity(fields.len());

@@ -140,6 +140,13 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         println!("\n --- \n");
         dbg!(ctx.second, type2);
         println!("\n --------------- \n");
+        println!(
+            "{:?} {:?} ~ {:?} {:?}",
+            ctx.first,
+            subs.get(ctx.first).content,
+            ctx.second,
+            subs.get(ctx.second).content
+        );
     }
     match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, &ctx.second_desc.content),
@@ -849,15 +856,23 @@ fn unify_flat_type(
                 problems
             }
         }
-        (Func(l_args, l_ret), Func(r_args, r_ret)) if l_args.len() == r_args.len() => {
+        (Func(l_args, l_closure, l_ret), Func(r_args, r_closure, r_ret))
+            if l_args.len() == r_args.len() =>
+        {
             let arg_problems = unify_zip(subs, pool, l_args.iter(), r_args.iter());
             let ret_problems = unify_pool(subs, pool, *l_ret, *r_ret);
+            let closure_problems = unify_pool(subs, pool, *l_closure, *r_closure);
 
-            if arg_problems.is_empty() && ret_problems.is_empty() {
-                merge(subs, ctx, Structure(Func((*r_args).clone(), *r_ret)))
+            if arg_problems.is_empty() && closure_problems.is_empty() && ret_problems.is_empty() {
+                merge(
+                    subs,
+                    ctx,
+                    Structure(Func((*r_args).clone(), *r_closure, *r_ret)),
+                )
             } else {
                 let mut problems = ret_problems;
 
+                problems.extend(closure_problems);
                 problems.extend(arg_problems);
 
                 problems

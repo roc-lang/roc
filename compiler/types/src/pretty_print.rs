@@ -150,7 +150,7 @@ fn find_names_needed(
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
         }
-        Structure(Func(arg_vars, ret_var)) => {
+        Structure(Func(arg_vars, _closure_var, ret_var)) => {
             for var in arg_vars {
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
@@ -376,7 +376,7 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
         Apply(symbol, args) => write_apply(env, symbol, args, subs, buf, parens),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
-        Func(args, ret) => write_fn(env, args, ret, subs, buf, parens),
+        Func(args, _closure, ret) => write_fn(env, args, ret, subs, buf, parens),
         Record(fields, ext_var) => {
             use crate::types::{gather_fields, RecordStructure};
 

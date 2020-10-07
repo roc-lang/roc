@@ -130,7 +130,9 @@ fn can_annotation_help(
                 references,
             );
 
-            Type::Function(args, Box::new(ret))
+            let closure = Type::Variable(var_store.fresh());
+
+            Type::Function(args, Box::new(closure), Box::new(ret))
         }
         Apply(module_name, ident, type_arguments) => {
             let symbol = if module_name.is_empty() {
