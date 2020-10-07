@@ -37,6 +37,7 @@ const NUM_BUILTIN_IMPORTS: usize = 7;
 
 /// These can be shared between definitions, they will get instantiated when converted to Type
 const FUVAR: VarId = VarId::from_u32(1000);
+const TOP_LEVEL_CLOSURE_VAR: VarId = VarId::from_u32(1001);
 
 fn shared(base: SolvedType) -> SolvedType {
     SolvedType::Apply(
@@ -274,6 +275,26 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![num_type(u, num), num_type(v, num)], num_type(w, num))
     });
 
+    // addChecked : Num a, Num a -> Result (Num a) [ IntOverflow ]*
+    let overflow = SolvedType::TagUnion(
+        vec![(TagName::Global("Overflow".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    add_type(Symbol::NUM_ADD_CHECKED, {
+        let_tvars! { u, v, w, num, result, star };
+        unique_function(
+            vec![num_type(u, num), num_type(v, num)],
+            result_type(result, num_type(w, num), lift(star, overflow)),
+        )
+    });
+
+    // addWrap : Int, Int -> Int
+    add_type(Symbol::NUM_ADD_WRAP, {
+        let_tvars! { u, v, w };
+        unique_function(vec![int_type(u), int_type(v)], int_type(w))
+    });
+
     // sub or (-) : Num a, Num a -> Num a
     add_type(Symbol::NUM_SUB, {
         let_tvars! { u, v, w, num };
@@ -316,6 +337,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // isGte or (>=) : Num a, Num a -> Bool
     add_num_comparison(Symbol::NUM_GTE);
+
+    // compare : Num a, Num a -> [ LT, EQ, GT ]
+    add_type(Symbol::NUM_COMPARE, {
+        let_tvars! { u, v, w, num };
+        unique_function(vec![num_type(u, num), num_type(v, num)], ordering_type(w))
+    });
 
     // toFloat : Num a -> Float
     add_type(Symbol::NUM_TO_FLOAT, {
@@ -440,6 +467,39 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(Symbol::NUM_IS_ODD, {
         let_tvars! { star1, star2, a };
         unique_function(vec![num_type(star1, a)], bool_type(star2))
+    });
+
+    // pow : Float, Float -> Float
+    add_type(Symbol::NUM_POW, {
+        let_tvars! { star1, star2, star3 };
+        unique_function(
+            vec![float_type(star1), float_type(star2)],
+            float_type(star3),
+        )
+    });
+
+    // ceiling : Float -> Int
+    add_type(Symbol::NUM_CEILING, {
+        let_tvars! { star1, star2 };
+        unique_function(vec![float_type(star1)], int_type(star2))
+    });
+
+    // powInt : Int, Int -> Int
+    add_type(Symbol::NUM_POW_INT, {
+        let_tvars! { star1, star2, star3 };
+        unique_function(vec![int_type(star1), int_type(star2)], int_type(star3))
+    });
+
+    // floor : Float -> Int
+    add_type(Symbol::NUM_FLOOR, {
+        let_tvars! { star1, star2 };
+        unique_function(vec![float_type(star1)], int_type(star2))
+    });
+
+    // atan : Float -> Float
+    add_type(Symbol::NUM_ATAN, {
+        let_tvars! { star1, star2 };
+        unique_function(vec![float_type(star1)], float_type(star2))
     });
 
     // Bool module
@@ -772,23 +832,46 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //     , Attr Shared (a -> b)
     //    -> Attr * (List b)
     add_type(Symbol::LIST_MAP, {
-        let_tvars! { a, b, star1, star2 };
+        let_tvars! { a, b, star1, star2, closure };
 
         unique_function(
             vec![
                 list_type(star1, a),
-                shared(SolvedType::Func(vec![flex(a)], Box::new(flex(b)))),
+                shared(SolvedType::Func(
+                    vec![flex(a)],
+                    Box::new(flex(closure)),
+                    Box::new(flex(b)),
+                )),
             ],
             list_type(star2, b),
         )
     });
 
-    // foldr : Attr (* | u) (List (Attr u a))
-    //       , Attr Shared (Attr u a -> b -> b)
-    //       , b
-    //      -> b
-    add_type(Symbol::LIST_FOLDR, {
-        let_tvars! { u, a, b, star1 };
+    // keepIf : Attr * (List a)
+    //        , Attr Shared (a -> Attr * Bool)
+    //       -> Attr * (List a)
+    add_type(Symbol::LIST_KEEP_IF, {
+        let_tvars! { a, star1, star2, star3, closure };
+
+        unique_function(
+            vec![
+                list_type(star1, a),
+                shared(SolvedType::Func(
+                    vec![flex(a)],
+                    Box::new(flex(closure)),
+                    Box::new(bool_type(star2)),
+                )),
+            ],
+            list_type(star3, a),
+        )
+    });
+
+    // walkRight : Attr (* | u) (List (Attr u a))
+    //           , Attr Shared (Attr u a -> b -> b)
+    //           , b
+    //          -> b
+    add_type(Symbol::LIST_WALK_RIGHT, {
+        let_tvars! { u, a, b, star1, closure };
 
         unique_function(
             vec![
@@ -801,6 +884,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 ),
                 shared(SolvedType::Func(
                     vec![attr_type(u, a), flex(b)],
+                    Box::new(flex(closure)),
                     Box::new(flex(b)),
                 )),
                 flex(b),
@@ -958,7 +1042,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //       , b
     //      -> b
     add_type(Symbol::SET_FOLDL, {
-        let_tvars! { star, u, a, b };
+        let_tvars! { star, u, a, b, closure };
 
         unique_function(
             vec![
@@ -971,6 +1055,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 ),
                 shared(SolvedType::Func(
                     vec![attr_type(u, a), flex(b)],
+                    Box::new(flex(closure)),
                     Box::new(flex(b)),
                 )),
                 flex(b),
@@ -1038,13 +1123,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // Str module
 
     // isEmpty : Attr * Str -> Attr * Bool
-    add_type(Symbol::STR_ISEMPTY, {
+    add_type(Symbol::STR_IS_EMPTY, {
         let_tvars! { star1, star2 };
         unique_function(vec![str_type(star1)], bool_type(star2))
     });
 
-    // append : Attr * Str, Attr * Str -> Attr * Str
-    add_type(Symbol::STR_APPEND, {
+    // Str.concat : Attr * Str, Attr * Str -> Attr * Str
+    add_type(Symbol::STR_CONCAT, {
         let_tvars! { star1, star2, star3 };
         unique_function(vec![str_type(star1), str_type(star2)], str_type(star3))
     });
@@ -1055,7 +1140,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     //     , Attr * (a -> b)
     //    -> Attr * (Result b e)
     add_type(Symbol::RESULT_MAP, {
-        let_tvars! { star1, star2, star3, a, b, e };
+        let_tvars! { star1, star2, star3, a, b, e, closure };
         unique_function(
             vec![
                 SolvedType::Apply(
@@ -1069,7 +1154,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                     Symbol::ATTR_ATTR,
                     vec![
                         flex(star2),
-                        SolvedType::Func(vec![flex(a)], Box::new(flex(b))),
+                        SolvedType::Func(vec![flex(a)], Box::new(flex(closure)), Box::new(flex(b))),
                     ],
                 ),
             ],
@@ -1095,7 +1180,14 @@ fn flex(tvar: VarId) -> SolvedType {
 fn unique_function(args: Vec<SolvedType>, ret: SolvedType) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![flex(FUVAR), SolvedType::Func(args, Box::new(ret))],
+        vec![
+            flex(FUVAR),
+            SolvedType::Func(
+                args,
+                Box::new(SolvedType::Flex(TOP_LEVEL_CLOSURE_VAR)),
+                Box::new(ret),
+            ),
+        ],
     )
 }
 
@@ -1187,6 +1279,25 @@ fn map_type(u: VarId, key: VarId, value: VarId) -> SolvedType {
         vec![
             flex(u),
             SolvedType::Apply(Symbol::MAP_MAP, vec![flex(key), flex(value)]),
+        ],
+    )
+}
+
+#[inline(always)]
+fn ordering_type(u: VarId) -> SolvedType {
+    // [ LT, EQ, GT ]
+    SolvedType::Apply(
+        Symbol::ATTR_ATTR,
+        vec![
+            flex(u),
+            SolvedType::TagUnion(
+                vec![
+                    (TagName::Global("GT".into()), vec![]),
+                    (TagName::Global("EQ".into()), vec![]),
+                    (TagName::Global("LT".into()), vec![]),
+                ],
+                Box::new(SolvedType::EmptyTagUnion),
+            ),
         ],
     )
 }

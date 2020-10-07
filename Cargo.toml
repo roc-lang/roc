@@ -25,7 +25,9 @@ members = [
     "vendor/pathfinding",
     "vendor/pretty",
     "editor",
-    "cli"
+    "cli",
+    "roc_std",
+    "docs"
 ]
 
 # Optimizations based on https://deterministic.space/high-performance-rust.html

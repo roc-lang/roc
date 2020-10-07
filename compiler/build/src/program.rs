@@ -1,8 +1,7 @@
+use crate::target;
 use bumpalo::Bump;
 use inkwell::context::Context;
-use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
-};
+use inkwell::targets::{CodeModel, FileType, RelocMode};
 use inkwell::OptimizationLevel;
 use roc_collections::all::default_hasher;
 use roc_gen::layout_id::LayoutIds;
@@ -12,7 +11,7 @@ use roc_mono::ir::{Env, PartialProc, Procs};
 use roc_mono::layout::{Layout, LayoutCache};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use target_lexicon::{Architecture, OperatingSystem, Triple, Vendor};
+use target_lexicon::Triple;
 
 // TODO how should imported modules factor into this? What if those use builtins too?
 // TODO this should probably use more helper functions
@@ -105,11 +104,18 @@ pub fn gen(
                 Declare(def) | Builtin(def) => match def.loc_pattern.value {
                     Identifier(symbol) => {
                         match def.loc_expr.value {
-                            Closure(annotation, _, recursivity, loc_args, boxed_body) => {
+                            Closure {
+                                function_type: annotation,
+                                return_type: ret_var,
+                                recursive: recursivity,
+                                arguments: loc_args,
+                                loc_body: boxed_body,
+                                ..
+                            } => {
                                 let is_tail_recursive =
                                     matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
 
-                                let (loc_body, ret_var) = *boxed_body;
+                                let loc_body = *boxed_body;
 
                                 // If this is an exposed symbol, we need to
                                 // register it as such. Otherwise, since it
@@ -156,7 +162,7 @@ pub fn gen(
                                     annotation,
                                     // This is a 0-arity thunk, so it has no arguments.
                                     pattern_symbols: &[],
-                                    is_tail_recursive: false,
+                                    is_self_recursive: false,
                                     body,
                                 };
 
@@ -248,19 +254,18 @@ pub fn gen(
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
     for ((symbol, layout), proc) in procs.get_specialized_procs(arena) {
-        let (fn_val, arg_basic_types) =
-            build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-        headers.push((proc, fn_val, arg_basic_types));
+        headers.push((proc, fn_val));
     }
 
     // Build each proc using its header info.
-    for (proc, fn_val, arg_basic_types) in headers {
+    for (proc, fn_val) in headers {
         // NOTE: This is here to be uncommented in case verification fails.
         // (This approach means we don't have to defensively clone name here.)
         //
         // println!("\n\nBuilding and then verifying function {:?}\n\n", proc);
-        build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
+        build_proc(&env, &mut layout_ids, proc, fn_val);
 
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);
@@ -271,6 +276,9 @@ pub fn gen(
             );
         }
     }
+
+    // Uncomment this to see the module's optimized LLVM instruction output:
+    // env.module.print_to_stderr();
 
     mpm.run_on(module);
 
@@ -284,80 +292,10 @@ pub fn gen(
 
     // Emit the .o file
 
-    // NOTE: arch_str is *not* the same as the beginning of the magic target triple
-    // string! For example, if it's "x86-64" here, the magic target triple string
-    // will begin with "x86_64" (with an underscore) instead.
-    let arch_str = match target.architecture {
-        Architecture::X86_64 => {
-            Target::initialize_x86(&InitializationConfig::default());
-
-            "x86-64"
-        }
-        Architecture::Arm(_) if cfg!(feature = "target-arm") => {
-            // NOTE: why not enable arm and wasm by default?
-            //
-            // We had some trouble getting them to link properly. This may be resolved in the
-            // future, or maybe it was just some weird configuration on one machine.
-            Target::initialize_arm(&InitializationConfig::default());
-
-            "arm"
-        }
-        Architecture::Wasm32 if cfg!(feature = "target-webassembly") => {
-            Target::initialize_webassembly(&InitializationConfig::default());
-
-            "wasm32"
-        }
-        _ => panic!(
-            "TODO gracefully handle unsupported target architecture: {:?}",
-            target.architecture
-        ),
-    };
-
     let opt = OptimizationLevel::Aggressive;
     let reloc = RelocMode::Default;
     let model = CodeModel::Default;
-
-    // Best guide I've found on how to determine these magic strings:
-    //
-    // https://stackoverflow.com/questions/15036909/clang-how-to-list-supported-target-architectures
-    let target_triple_str = match target {
-        Triple {
-            architecture: Architecture::X86_64,
-            vendor: Vendor::Unknown,
-            operating_system: OperatingSystem::Linux,
-            ..
-        } => "x86_64-unknown-linux-gnu",
-        Triple {
-            architecture: Architecture::X86_64,
-            vendor: Vendor::Pc,
-            operating_system: OperatingSystem::Linux,
-            ..
-        } => "x86_64-pc-linux-gnu",
-        Triple {
-            architecture: Architecture::X86_64,
-            vendor: Vendor::Unknown,
-            operating_system: OperatingSystem::Darwin,
-            ..
-        } => "x86_64-unknown-darwin10",
-        Triple {
-            architecture: Architecture::X86_64,
-            vendor: Vendor::Apple,
-            operating_system: OperatingSystem::Darwin,
-            ..
-        } => "x86_64-apple-darwin10",
-        _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
-    };
-    let target_machine = Target::from_name(arch_str)
-        .unwrap()
-        .create_target_machine(
-            &TargetTriple::create(target_triple_str),
-            arch_str,
-            "+avx2", // TODO this string was used uncritically from an example, and should be reexamined
-            opt,
-            reloc,
-            model,
-        )
-        .unwrap();
+    let target_machine = target::target_machine(&target, opt, reloc, model).unwrap();
 
     target_machine
         .write_to_file(&env.module, FileType::Object, &dest_filename)

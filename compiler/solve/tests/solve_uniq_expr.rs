@@ -893,7 +893,7 @@ mod solve_uniq_expr {
 
     #[test]
     fn record() {
-        infer_eq("{ foo: 42 }", "Attr * { foo : (Attr * (Num (Attr * *))) }");
+        infer_eq("{ foo: 42 }", "Attr * { foo : Attr * (Num (Attr * *)) }");
     }
 
     #[test]
@@ -930,7 +930,7 @@ mod solve_uniq_expr {
                     { user & year: "foo" }
                 "#
             ),
-            "Attr * { name : (Attr * Str), year : (Attr * Str) }",
+            "Attr * { name : Attr * Str, year : Attr * Str }",
         );
     }
 
@@ -1017,7 +1017,7 @@ mod solve_uniq_expr {
                     .left
                 "#
             ),
-            "Attr * (Attr (* | b) { left : (Attr b a) }* -> Attr b a)",
+            "Attr * (Attr (* | b) { left : Attr b a }* -> Attr b a)",
         );
     }
 
@@ -1029,7 +1029,7 @@ mod solve_uniq_expr {
                     \rec -> rec.left
                 "#
             ),
-            "Attr * (Attr (* | b) { left : (Attr b a) }* -> Attr b a)",
+            "Attr * (Attr (* | b) { left : Attr b a }* -> Attr b a)",
         );
     }
 
@@ -1041,7 +1041,7 @@ mod solve_uniq_expr {
                     \{ left, right } -> { left, right }
                 "#
             ),
-            "Attr * (Attr (* | b | d) { left : (Attr b a), right : (Attr d c) }* -> Attr * { left : (Attr b a), right : (Attr d c) })"
+            "Attr * (Attr (* | b | d) { left : Attr b a, right : Attr d c }* -> Attr * { left : Attr b a, right : Attr d c })"
         );
     }
 
@@ -1136,7 +1136,7 @@ mod solve_uniq_expr {
                     \{ left } -> left
                 "#
             ),
-            "Attr * (Attr (* | b) { left : (Attr b a) }* -> Attr b a)",
+            "Attr * (Attr (* | b) { left : Attr b a }* -> Attr b a)",
         );
     }
 
@@ -1148,7 +1148,7 @@ mod solve_uniq_expr {
                     \{ left } -> left
                 "#
             ),
-            "Attr * (Attr (* | b) { left : (Attr b a) }* -> Attr b a)",
+            "Attr * (Attr (* | b) { left : Attr b a }* -> Attr b a)",
         );
     }
 
@@ -1178,7 +1178,7 @@ mod solve_uniq_expr {
                         x
                 "#
             ),
-            "Attr * (Attr (* | b) { left : (Attr b a) }* -> Attr b a)",
+            "Attr * (Attr (* | b) { left : Attr b a }* -> Attr b a)",
         );
     }
 
@@ -1193,7 +1193,7 @@ mod solve_uniq_expr {
                         x
                 "#
             ),
-            "Attr * (Attr (* | b) { left : (Attr b a) }* -> Attr b a)",
+            "Attr * (Attr (* | b) { left : Attr b a }* -> Attr b a)",
         );
     }
 
@@ -1211,7 +1211,7 @@ mod solve_uniq_expr {
                    { numIdentity, p, q }
                 "#
             ),
-        "Attr * { numIdentity : (Attr Shared (Attr b (Num (Attr a p)) -> Attr b (Num (Attr a p)))), p : (Attr * (Num (Attr * p))), q : (Attr * Float) }"
+        "Attr * { numIdentity : Attr Shared (Attr b (Num (Attr a p)) -> Attr b (Num (Attr a p))), p : Attr * (Num (Attr * p)), q : Attr * Float }"
         );
     }
 
@@ -1227,7 +1227,7 @@ mod solve_uniq_expr {
                         r
                 "#
             ),
-            "Attr * (Attr c { x : (Attr Shared a) }b -> Attr c { x : (Attr Shared a) }b)",
+            "Attr * (Attr c { x : Attr Shared a }b -> Attr c { x : Attr Shared a }b)",
         );
     }
 
@@ -1243,7 +1243,7 @@ mod solve_uniq_expr {
                         r
                 "#
             ),
-        "Attr * (Attr d { x : (Attr Shared a), y : (Attr Shared b) }c -> Attr d { x : (Attr Shared a), y : (Attr Shared b) }c)",
+        "Attr * (Attr d { x : Attr Shared a, y : Attr Shared b }c -> Attr d { x : Attr Shared a, y : Attr Shared b }c)",
         );
     }
 
@@ -1262,7 +1262,7 @@ mod solve_uniq_expr {
                         p)
                 "#
             ),
-            "Attr * (Attr d { x : (Attr Shared a), y : (Attr Shared b) }c -> Attr d { x : (Attr Shared a), y : (Attr Shared b) }c)"
+            "Attr * (Attr d { x : Attr Shared a, y : Attr Shared b }c -> Attr d { x : Attr Shared a, y : Attr Shared b }c)"
         );
     }
 
@@ -1278,7 +1278,7 @@ mod solve_uniq_expr {
                         r
                 "#
             ),
-            "Attr * (Attr c { x : (Attr Shared a) }b -> Attr c { x : (Attr Shared a) }b)",
+            "Attr * (Attr c { x : Attr Shared a }b -> Attr c { x : Attr Shared a }b)",
         );
     }
 
@@ -1290,7 +1290,7 @@ mod solve_uniq_expr {
                     \r -> { r & x: r.x, y: r.x }
                 "#
             ),
-         "Attr * (Attr c { x : (Attr Shared a), y : (Attr Shared a) }b -> Attr c { x : (Attr Shared a), y : (Attr Shared a) }b)"
+         "Attr * (Attr c { x : Attr Shared a, y : Attr Shared a }b -> Attr c { x : Attr Shared a, y : Attr Shared a }b)"
         );
     }
 
@@ -1306,7 +1306,7 @@ mod solve_uniq_expr {
                         r
                 "#
             ),
-            "Attr * (Attr (f | d) { foo : (Attr d { bar : (Attr Shared a), baz : (Attr Shared b) }c) }e -> Attr (f | d) { foo : (Attr d { bar : (Attr Shared a), baz : (Attr Shared b) }c) }e)"
+            "Attr * (Attr (f | d) { foo : Attr d { bar : Attr Shared a, baz : Attr Shared b }c }e -> Attr (f | d) { foo : Attr d { bar : Attr Shared a, baz : Attr Shared b }c }e)"
         );
     }
 
@@ -1324,7 +1324,7 @@ mod solve_uniq_expr {
                         r
                 "#
             ),
-            "Attr * (Attr (e | c) { foo : (Attr c { bar : (Attr Shared a) }b) }d -> Attr (e | c) { foo : (Attr c { bar : (Attr Shared a) }b) }d)"
+            "Attr * (Attr (e | c) { foo : Attr c { bar : Attr Shared a }b }d -> Attr (e | c) { foo : Attr c { bar : Attr Shared a }b }d)"
         );
     }
 
@@ -1343,7 +1343,7 @@ mod solve_uniq_expr {
                         s
                 "#
             ),
-            "Attr * (Attr c { x : (Attr Shared a), y : (Attr Shared a) }b -> Attr c { x : (Attr Shared a), y : (Attr Shared a) }b)",
+            "Attr * (Attr c { x : Attr Shared a, y : Attr Shared a }b -> Attr c { x : Attr Shared a, y : Attr Shared a }b)",
         );
     }
 
@@ -1359,7 +1359,7 @@ mod solve_uniq_expr {
                             r.tic.tac.toe
                 "#
             ),
-            "Attr * (Attr (* | b | c | d | e | f) { foo : (Attr (d | b | c) { bar : (Attr (c | b) { baz : (Attr b a) }*) }*), tic : (Attr (f | b | e) { tac : (Attr (e | b) { toe : (Attr b a) }*) }*) }* -> Attr b a)"
+            "Attr * (Attr (* | b | c | d | e | f) { foo : Attr (d | b | c) { bar : Attr (c | b) { baz : Attr b a }* }*, tic : Attr (f | b | e) { tac : Attr (e | b) { toe : Attr b a }* }* }* -> Attr b a)"
         );
     }
 
@@ -1516,7 +1516,7 @@ mod solve_uniq_expr {
                         { y: s.left }
                 "#
             ),
-            "Attr * { y : (Attr Shared (Num (Attr * *))) }",
+            "Attr * { y : Attr Shared (Num (Attr * *)) }",
         );
     }
 
@@ -1533,7 +1533,7 @@ mod solve_uniq_expr {
                         0 -> { x: s.left, y: r }
                 "#
             ),
-            "Attr * { x : (Attr Shared Str), y : (Attr Shared Str) }",
+            "Attr * { x : Attr Shared Str, y : Attr Shared Str }",
         );
     }
 
@@ -1552,7 +1552,7 @@ mod solve_uniq_expr {
                         0 -> { x: v, y: r }
                 "#
             ),
-            "Attr * { x : (Attr Shared Str), y : (Attr Shared Str) }",
+            "Attr * { x : Attr Shared Str, y : Attr Shared Str }",
         );
     }
 
@@ -1567,7 +1567,7 @@ mod solve_uniq_expr {
                 "#
             ),
             // it's fine that the inner fields are not shared: only shared extraction is possible
-            "Attr * { left : (Attr Shared { left : (Attr * (Num (Attr * *))), right : (Attr * (Num (Attr * *))) }), right : (Attr Shared { left : (Attr * (Num (Attr * *))), right : (Attr * (Num (Attr * *))) }) }",
+            "Attr * { left : Attr Shared { left : Attr * (Num (Attr * *)), right : Attr * (Num (Attr * *)) }, right : Attr Shared { left : Attr * (Num (Attr * *)), right : Attr * (Num (Attr * *)) } }",
         );
     }
 
@@ -1895,7 +1895,7 @@ mod solve_uniq_expr {
                    head
                "#
            ),
-            "Attr * (Attr (* | c) (AssocList (Attr a k) (Attr b v)) -> Attr * (Maybe (Attr c { key : (Attr a k), value : (Attr b v) })))"
+            "Attr * (Attr (* | c) (AssocList (Attr a k) (Attr b v)) -> Attr * (Maybe (Attr c { key : Attr a k, value : Attr b v })))"
        );
     }
 
@@ -1919,7 +1919,7 @@ mod solve_uniq_expr {
                    head
                "#
            ),
-        "Attr * (Attr (* | c) (ConsList (Attr c { key : (Attr a k), value : (Attr b v) })) -> Attr * (Maybe (Attr c { key : (Attr a k), value : (Attr b v) })))"
+        "Attr * (Attr (* | c) (ConsList (Attr c { key : Attr a k, value : Attr b v })) -> Attr * (Maybe (Attr c { key : Attr a k, value : Attr b v })))"
        );
     }
 
@@ -2005,7 +2005,7 @@ mod solve_uniq_expr {
                             toAs
                              "#
                     ),
-                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr (* | a | b) (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
+                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr (c | a | b) (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
                 );
     }
 
@@ -2039,7 +2039,7 @@ mod solve_uniq_expr {
                         toAs
                         "#
                     ),
-                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr (* | a | b) (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
+                    "Attr Shared (Attr Shared (Attr a q -> Attr b p), Attr (c | a | b) (ListA (Attr b p) (Attr a q)) -> Attr * (ConsList (Attr b p)))"
                 );
     }
 
@@ -2173,7 +2173,7 @@ mod solve_uniq_expr {
                         { p, q }
                 "#
             ),
-            "Attr * (Attr * (List (Attr Shared a)) -> Attr * { p : (Attr * (Result (Attr Shared a) (Attr * [ OutOfBounds ]*))), q : (Attr * (Result (Attr Shared a) (Attr * [ OutOfBounds ]*))) })"
+            "Attr * (Attr * (List (Attr Shared a)) -> Attr * { p : Attr * (Result (Attr Shared a) (Attr * [ OutOfBounds ]*)), q : Attr * (Result (Attr Shared a) (Attr * [ OutOfBounds ]*)) })"
         );
     }
 
@@ -2220,11 +2220,11 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_foldr_sum() {
+    fn list_walk_right_sum() {
         infer_eq(
             indoc!(
                 r#"
-                    sum = \list -> List.foldr list Num.add 0
+                    sum = \list -> List.walkRight list Num.add 0
 
                     sum
                 "#
@@ -2291,14 +2291,6 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_foldr() {
-        infer_eq(
-            "List.foldr",
-            "Attr * (Attr (* | b) (List (Attr b a)), Attr Shared (Attr b a, c -> c), c -> c)",
-        );
-    }
-
-    #[test]
     fn list_push_singleton() {
         infer_eq(
             indoc!(
@@ -2313,11 +2305,11 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn list_foldr_reverse() {
+    fn list_walk_right_reverse() {
         infer_eq(
             indoc!(
                 r#"
-                    reverse = \list -> List.foldr list (\e, l -> List.append l e) []
+                    reverse = \list -> List.walkRight list (\e, l -> List.append l e) []
 
                     reverse
                 "#
@@ -2416,9 +2408,9 @@ mod solve_uniq_expr {
     }
 
     #[test]
-    fn str_append() {
+    fn str_concat() {
         infer_eq(
-            "Str.append",
+            "Str.concat",
             "Attr * (Attr * Str, Attr * Str -> Attr * Str)",
         );
     }
@@ -2607,7 +2599,7 @@ mod solve_uniq_expr {
                 f
                 "#
             ),
-            "Attr * (Attr (* | a) { x : (Attr a b) } -> Attr a b)",
+            "Attr * (Attr (* | a) { x : Attr a b } -> Attr a b)",
         );
     }
 
@@ -2725,8 +2717,8 @@ mod solve_uniq_expr {
                 f
                 "#
             ),
-            //"Attr * (Attr (* | a | b) { p : (Attr a *), q : (Attr b *) }* -> Attr * (Num (Attr * *)))",
-            "Attr * (Attr (* | a | b) { p : (Attr a *), q : (Attr b *) }* -> Attr * (Num (Attr * *)))"
+            //"Attr * (Attr (* | a | b) { p : Attr a *, q : Attr b * }* -> Attr * (Num (Attr * *)))",
+            "Attr * (Attr (* | a | b) { p : Attr a *, q : Attr b * }* -> Attr * (Num (Attr * *)))",
         );
     }
 
@@ -2789,7 +2781,7 @@ mod solve_uniq_expr {
                 cheapestOpen
                 "#
             ),
-            "Attr * (Attr * (Attr Shared position -> Attr * Float), Attr (* | * | * | *) (Model (Attr Shared position)) -> Attr * (Result (Attr Shared position) (Attr * [ KeyNotFound ]*)))"
+            "Attr * (Attr * (Attr Shared position -> Attr * Float), Attr (* | * | a | b) (Model (Attr Shared position)) -> Attr * (Result (Attr Shared position) (Attr * [ KeyNotFound ]*)))"
         )
         });
     }
@@ -2956,7 +2948,7 @@ mod solve_uniq_expr {
                     findPath
                 "#
             ),
-            "Attr * (Attr * { costFunction : (Attr Shared (Attr Shared position, Attr Shared position -> Attr * Float)), end : (Attr Shared position), moveFunction : (Attr Shared (Attr Shared position -> Attr * (Set (Attr * position)))), start : (Attr Shared position) } -> Attr * (Result (Attr * (List (Attr Shared position))) (Attr * [ KeyNotFound ]*)))"
+            "Attr * (Attr * { costFunction : Attr Shared (Attr Shared position, Attr Shared position -> Attr * Float), end : Attr Shared position, moveFunction : Attr Shared (Attr Shared position -> Attr * (Set (Attr * position))), start : Attr Shared position } -> Attr * (Result (Attr * (List (Attr Shared position))) (Attr * [ KeyNotFound ]*)))"
         )
         });
     }
@@ -3024,7 +3016,7 @@ mod solve_uniq_expr {
                     negatePoint { x: 1, y: 2 }
                 "#
             ),
-            "Attr * { x : (Attr * Int), y : (Attr * Int), z : (Attr * (Num (Attr * c))) }",
+            "Attr * { x : Attr * Int, y : Attr * Int, z : Attr * (Num (Attr * c)) }",
         );
     }
 
@@ -3041,7 +3033,7 @@ mod solve_uniq_expr {
                     { a, b }
                 "#
             ),
-            "Attr * { a : (Attr * { x : (Attr * Int), y : (Attr * Int), z : (Attr * (Num (Attr * c))) }), b : (Attr * { blah : (Attr * Str), x : (Attr * Int), y : (Attr * Int), z : (Attr * (Num (Attr * c))) }) }"
+            "Attr * { a : Attr * { x : Attr * Int, y : Attr * Int, z : Attr * (Num (Attr * c)) }, b : Attr * { blah : Attr * Str, x : Attr * Int, y : Attr * Int, z : Attr * (Num (Attr * c)) } }"
         );
     }
 
@@ -3055,7 +3047,7 @@ mod solve_uniq_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "Attr * { x : (Attr * (Num (Attr * a))), y : (Attr * Float), z : (Attr * Int) }",
+            "Attr * { x : Attr * (Num (Attr * a)), y : Attr * Float, z : Attr * Int }",
         );
     }
 
@@ -3072,7 +3064,7 @@ mod solve_uniq_expr {
                     { a, b }
                 "#
             ),
-            "Attr * { a : (Attr * { x : (Attr * (Num (Attr * a))), y : (Attr * Float), z : (Attr * c) }), b : (Attr * { blah : (Attr * Str), x : (Attr * (Num (Attr * a))), y : (Attr * Float), z : (Attr * c) }) }"
+            "Attr * { a : Attr * { x : Attr * (Num (Attr * a)), y : Attr * Float, z : Attr * c }, b : Attr * { blah : Attr * Str, x : Attr * (Num (Attr * a)), y : Attr * Float, z : Attr * c } }"
         );
     }
 
@@ -3084,7 +3076,7 @@ mod solve_uniq_expr {
                 \{ x, y ? 0 } -> x + y
                 "#
             ),
-            "Attr * (Attr (* | b | c) { x : (Attr b (Num (Attr b a))), y ? (Attr c (Num (Attr c a))) }* -> Attr d (Num (Attr d a)))"
+            "Attr * (Attr (* | b | c) { x : Attr b (Num (Attr b a)), y ? Attr c (Num (Attr c a)) }* -> Attr d (Num (Attr d a)))"
         );
     }
 
@@ -3112,7 +3104,35 @@ mod solve_uniq_expr {
                         { x, y ? 0 } -> x + y
                 "#
             ),
-            "Attr * (Attr (* | b | c) { x : (Attr b (Num (Attr b a))), y ? (Attr c (Num (Attr c a))) }* -> Attr d (Num (Attr d a)))"
+            "Attr * (Attr (* | b | c) { x : Attr b (Num (Attr b a)), y ? Attr c (Num (Attr c a)) }* -> Attr d (Num (Attr d a)))"
+        );
+    }
+
+    #[test]
+    fn list_walk_right() {
+        infer_eq(
+            indoc!(
+                r#"
+                List.walkRight 
+                "#
+            ),
+            "Attr * (Attr (* | b) (List (Attr b a)), Attr Shared (Attr b a, c -> c), c -> c)",
+        );
+    }
+
+    #[test]
+    fn list_walk_right_example() {
+        infer_eq(
+            indoc!(
+                r#"
+                empty : List Int
+                empty = 
+                    []
+
+                List.walkRight empty (\a, b -> a + b) 0
+                "#
+            ),
+            "Attr a Int",
         );
     }
 }

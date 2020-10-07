@@ -24,8 +24,11 @@ mod test_parse {
     use roc_parse::ast::CommentOrNewline::*;
     use roc_parse::ast::Expr::{self, *};
     use roc_parse::ast::Pattern::{self, *};
+    use roc_parse::ast::StrLiteral::*;
+    use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{
-        Attempting, Def, InterfaceHeader, Spaceable, Tag, TypeAnnotation, WhenBranch,
+        self, Attempting, Def, EscapedChar, InterfaceHeader, Spaceable, Tag, TypeAnnotation,
+        WhenBranch,
     };
     use roc_parse::header::ModuleName;
     use roc_parse::module::{interface_header, module_defs};
@@ -35,7 +38,7 @@ mod test_parse {
 
     fn assert_parses_to<'a>(input: &'a str, expected_expr: Expr<'a>) {
         let arena = Bump::new();
-        let actual = parse_with(&arena, input);
+        let actual = parse_with(&arena, input.trim());
 
         assert_eq!(Ok(expected_expr), actual);
     }
@@ -48,10 +51,44 @@ mod test_parse {
         assert_eq!(Err(expected_fail), actual);
     }
 
+    fn assert_segments<E: Fn(&Bump) -> Vec<'_, ast::StrSegment<'_>>>(input: &str, to_expected: E) {
+        let arena = Bump::new();
+        let actual = parse_with(&arena, arena.alloc(input));
+        let expected_slice = to_expected(&arena).into_bump_slice();
+        let expected_expr = Expr::Str(Line(expected_slice));
+
+        assert_eq!(Ok(expected_expr), actual);
+    }
+
+    fn parses_with_escaped_char<
+        I: Fn(&str) -> String,
+        E: Fn(EscapedChar, &Bump) -> Vec<'_, ast::StrSegment<'_>>,
+    >(
+        to_input: I,
+        to_expected: E,
+    ) {
+        let arena = Bump::new();
+
+        // Try parsing with each of the escaped chars Roc supports
+        for (string, escaped) in &[
+            ("\\\\", EscapedChar::Backslash),
+            ("\\n", EscapedChar::Newline),
+            ("\\r", EscapedChar::CarriageReturn),
+            ("\\t", EscapedChar::Tab),
+            ("\\\"", EscapedChar::Quote),
+        ] {
+            let actual = parse_with(&arena, arena.alloc(to_input(string)));
+            let expected_slice = to_expected(*escaped, &arena).into_bump_slice();
+            let expected_expr = Expr::Str(Line(expected_slice));
+
+            assert_eq!(Ok(expected_expr), actual);
+        }
+    }
+
     // STRING LITERALS
 
     fn expect_parsed_str(input: &str, expected: &str) {
-        assert_parses_to(expected, Str(input.into()));
+        assert_parses_to(expected, Expr::Str(PlainLine(input)));
     }
 
     #[test]
@@ -59,10 +96,10 @@ mod test_parse {
         assert_parses_to(
             indoc!(
                 r#"
-                ""
+                    ""
                 "#
             ),
-            Str(""),
+            Str(PlainLine("")),
         );
     }
 
@@ -71,10 +108,10 @@ mod test_parse {
         assert_parses_to(
             indoc!(
                 r#"
-                "x"
+                    "x"
                 "#
             ),
-            Str("x".into()),
+            Expr::Str(PlainLine("x".into())),
         );
     }
 
@@ -83,10 +120,10 @@ mod test_parse {
         assert_parses_to(
             indoc!(
                 r#"
-                "foo"
+                    "foo"
                 "#
             ),
-            Str("foo".into()),
+            Expr::Str(PlainLine("foo".into())),
         );
     }
 
@@ -101,19 +138,155 @@ mod test_parse {
         expect_parsed_str("123 abc 456 def", r#""123 abc 456 def""#);
     }
 
+    // BACKSLASH ESCAPES
+
     #[test]
-    fn string_with_special_escapes() {
-        expect_parsed_str(r#"x\\x"#, r#""x\\x""#);
-        expect_parsed_str(r#"x\"x"#, r#""x\"x""#);
-        expect_parsed_str(r#"x\tx"#, r#""x\tx""#);
-        expect_parsed_str(r#"x\rx"#, r#""x\rx""#);
-        expect_parsed_str(r#"x\nx"#, r#""x\nx""#);
+    fn string_with_escaped_char_at_end() {
+        parses_with_escaped_char(
+            |esc| format!(r#""abcd{}""#, esc),
+            |esc, arena| bumpalo::vec![in arena;  Plaintext("abcd"), EscapedChar(esc)],
+        );
     }
 
     #[test]
-    fn string_with_single_quote() {
-        // This shoud NOT be escaped in a string.
-        expect_parsed_str("x'x", r#""x'x""#);
+    fn string_with_escaped_char_in_front() {
+        parses_with_escaped_char(
+            |esc| format!(r#""{}abcd""#, esc),
+            |esc, arena| bumpalo::vec![in arena; EscapedChar(esc), Plaintext("abcd")],
+        );
+    }
+
+    #[test]
+    fn string_with_escaped_char_in_middle() {
+        parses_with_escaped_char(
+            |esc| format!(r#""ab{}cd""#, esc),
+            |esc, arena| bumpalo::vec![in arena; Plaintext("ab"), EscapedChar(esc), Plaintext("cd")],
+        );
+    }
+
+    #[test]
+    fn string_with_multiple_escaped_chars() {
+        parses_with_escaped_char(
+            |esc| format!(r#""{}abc{}de{}fghi{}""#, esc, esc, esc, esc),
+            |esc, arena| bumpalo::vec![in arena; EscapedChar(esc), Plaintext("abc"), EscapedChar(esc), Plaintext("de"), EscapedChar(esc), Plaintext("fghi"), EscapedChar(esc)],
+        );
+    }
+
+    // UNICODE ESCAPES
+
+    #[test]
+    fn unicode_escape_in_middle() {
+        assert_segments(r#""Hi, \u(123)!""#, |arena| {
+            bumpalo::vec![in arena;
+                Plaintext("Hi, "),
+                Unicode(Located::new(0, 0, 8, 11, "123")),
+                Plaintext("!")
+            ]
+        });
+    }
+
+    #[test]
+    fn unicode_escape_in_front() {
+        assert_segments(r#""\u(1234) is a unicode char""#, |arena| {
+            bumpalo::vec![in arena;
+                Unicode(Located::new(0, 0, 4, 8, "1234")),
+                Plaintext(" is a unicode char")
+            ]
+        });
+    }
+
+    #[test]
+    fn unicode_escape_in_back() {
+        assert_segments(r#""this is unicode: \u(1)""#, |arena| {
+            bumpalo::vec![in arena;
+                Plaintext("this is unicode: "),
+                Unicode(Located::new(0, 0, 21, 22, "1"))
+            ]
+        });
+    }
+
+    #[test]
+    fn unicode_escape_multiple() {
+        assert_segments(r#""\u(a1) this is \u(2Bcd) unicode \u(ef97)""#, |arena| {
+            bumpalo::vec![in arena;
+                Unicode(Located::new(0, 0, 4, 6, "a1")),
+                Plaintext(" this is "),
+                Unicode(Located::new(0, 0, 19, 23, "2Bcd")),
+                Plaintext(" unicode "),
+                Unicode(Located::new(0, 0, 36, 40, "ef97"))
+            ]
+        });
+    }
+
+    // INTERPOLATION
+
+    #[test]
+    fn string_with_interpolation_in_middle() {
+        assert_segments(r#""Hi, \(name)!""#, |arena| {
+            let expr = arena.alloc(Var {
+                module_name: "",
+                ident: "name",
+            });
+
+            bumpalo::vec![in arena;
+                Plaintext("Hi, "),
+                Interpolated(Located::new(0, 0, 7, 11, expr)),
+                Plaintext("!")
+            ]
+        });
+    }
+
+    #[test]
+    fn string_with_interpolation_in_front() {
+        assert_segments(r#""\(name), hi!""#, |arena| {
+            let expr = arena.alloc(Var {
+                module_name: "",
+                ident: "name",
+            });
+
+            bumpalo::vec![in arena;
+                Interpolated(Located::new(0, 0, 3, 7, expr)),
+                Plaintext(", hi!")
+            ]
+        });
+    }
+
+    #[test]
+    fn string_with_interpolation_in_back() {
+        assert_segments(r#""Hello \(name)""#, |arena| {
+            let expr = arena.alloc(Var {
+                module_name: "",
+                ident: "name",
+            });
+
+            bumpalo::vec![in arena;
+                Plaintext("Hello "),
+                Interpolated(Located::new(0, 0, 9, 13, expr))
+            ]
+        });
+    }
+
+    #[test]
+    fn string_with_multiple_interpolations() {
+        assert_segments(r#""Hi, \(name)! How is \(project) going?""#, |arena| {
+            let expr1 = arena.alloc(Var {
+                module_name: "",
+                ident: "name",
+            });
+
+            let expr2 = arena.alloc(Var {
+                module_name: "",
+                ident: "project",
+            });
+
+            bumpalo::vec![in arena;
+                Plaintext("Hi, "),
+                Interpolated(Located::new(0, 0, 7, 11, expr1)),
+                Plaintext("! How is "),
+                Interpolated(Located::new(0, 0, 23, 30, expr2)),
+                Plaintext(" going?")
+            ]
+        });
     }
 
     #[test]
@@ -460,7 +633,7 @@ mod test_parse {
     }
 
     #[test]
-    fn comment_with_unicode() {
+    fn comment_with_non_ascii() {
         let arena = Bump::new();
         let spaced_int = arena
             .alloc(Num("3"))
@@ -1232,6 +1405,23 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    #[test]
+    fn unary_negation_access() {
+        // Regression test for https://github.com/rtfeldman/roc/issues/509
+        let arena = Bump::new();
+        let var = Var {
+            module_name: "",
+            ident: "rec1",
+        };
+        let loc_op = Located::new(0, 0, 0, 1, UnaryOp::Negate);
+        let access = Access(arena.alloc(var), "field");
+        let loc_access = Located::new(0, 0, 1, 11, access);
+        let expected = UnaryOp(arena.alloc(loc_access), loc_op);
+        let actual = parse_with(&arena, "-rec1.field");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
     // CLOSURE
 
     #[test]
@@ -1859,19 +2049,23 @@ mod test_parse {
     fn two_branch_when() {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline];
-        let pattern1 =
-            Pattern::SpaceBefore(arena.alloc(StrLiteral("blah")), newlines.into_bump_slice());
-        let loc_pattern1 = Located::new(1, 1, 1, 7, pattern1);
+        let pattern1 = Pattern::SpaceBefore(
+            arena.alloc(StrLiteral(PlainLine(""))),
+            newlines.into_bump_slice(),
+        );
+        let loc_pattern1 = Located::new(1, 1, 1, 3, pattern1);
         let expr1 = Num("1");
-        let loc_expr1 = Located::new(1, 1, 11, 12, expr1);
+        let loc_expr1 = Located::new(1, 1, 7, 8, expr1);
         let branch1 = &*arena.alloc(WhenBranch {
             patterns: bumpalo::vec![in &arena;loc_pattern1],
             value: loc_expr1,
             guard: None,
         });
         let newlines = bumpalo::vec![in &arena; Newline];
-        let pattern2 =
-            Pattern::SpaceBefore(arena.alloc(StrLiteral("mise")), newlines.into_bump_slice());
+        let pattern2 = Pattern::SpaceBefore(
+            arena.alloc(StrLiteral(PlainLine("mise"))),
+            newlines.into_bump_slice(),
+        );
         let loc_pattern2 = Located::new(2, 2, 1, 7, pattern2);
         let expr2 = Num("2");
         let loc_expr2 = Located::new(2, 2, 11, 12, expr2);
@@ -1891,9 +2085,9 @@ mod test_parse {
             &arena,
             indoc!(
                 r#"
-                when x is
-                 "blah" -> 1
-                 "mise" -> 2
+                    when x is
+                     "" -> 1
+                     "mise" -> 2
                 "#
             ),
         );
@@ -2003,9 +2197,11 @@ mod test_parse {
     fn when_with_alternative_patterns() {
         let arena = Bump::new();
         let newlines = bumpalo::vec![in &arena; Newline];
-        let pattern1 =
-            Pattern::SpaceBefore(arena.alloc(StrLiteral("blah")), newlines.into_bump_slice());
-        let pattern1_alt = StrLiteral("blop");
+        let pattern1 = Pattern::SpaceBefore(
+            arena.alloc(StrLiteral(PlainLine("blah"))),
+            newlines.into_bump_slice(),
+        );
+        let pattern1_alt = StrLiteral(PlainLine("blop"));
         let loc_pattern1 = Located::new(1, 1, 1, 7, pattern1);
         let loc_pattern1_alt = Located::new(1, 1, 10, 16, pattern1_alt);
         let expr1 = Num("1");
@@ -2016,11 +2212,15 @@ mod test_parse {
             guard: None,
         });
         let newlines = bumpalo::vec![in &arena; Newline];
-        let pattern2 =
-            Pattern::SpaceBefore(arena.alloc(StrLiteral("foo")), newlines.into_bump_slice());
+        let pattern2 = Pattern::SpaceBefore(
+            arena.alloc(StrLiteral(PlainLine("foo"))),
+            newlines.into_bump_slice(),
+        );
         let newlines = bumpalo::vec![in &arena; Newline];
-        let pattern2_alt =
-            Pattern::SpaceBefore(arena.alloc(StrLiteral("bar")), newlines.into_bump_slice());
+        let pattern2_alt = Pattern::SpaceBefore(
+            arena.alloc(StrLiteral(PlainLine("bar"))),
+            newlines.into_bump_slice(),
+        );
         let loc_pattern2 = Located::new(2, 2, 1, 6, pattern2);
         let loc_pattern2_alt = Located::new(3, 3, 1, 6, pattern2_alt);
         let expr2 = Num("2");
@@ -2133,14 +2333,14 @@ mod test_parse {
         let def2 = SpaceAfter(
             arena.alloc(Body(
                 arena.alloc(Located::new(2, 2, 0, 3, pattern2)),
-                arena.alloc(Located::new(2, 2, 6, 10, Str("hi"))),
+                arena.alloc(Located::new(2, 2, 6, 10, Str(PlainLine("hi")))),
             )),
             newlines2.into_bump_slice(),
         );
         let def3 = SpaceAfter(
             arena.alloc(Body(
                 arena.alloc(Located::new(3, 3, 0, 3, pattern3)),
-                arena.alloc(Located::new(3, 3, 6, 13, Str("stuff"))),
+                arena.alloc(Located::new(3, 3, 6, 13, Str(PlainLine("stuff")))),
             )),
             newlines3.into_bump_slice(),
         );
@@ -2426,12 +2626,10 @@ mod test_parse {
     //                     )
     //             "#
     //         ),
-    //         Str(""),
+    //         Str(PlainLine("")),
     //     );
     // }
 
-    // TODO test for \t \r and \n in string literals *outside* unicode escape sequence!
-    //
     // TODO test for non-ASCII variables
     //
     // TODO verify that when a string literal contains a newline before the

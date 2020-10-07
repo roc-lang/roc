@@ -38,12 +38,6 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
         Body(loc_pattern, loc_expr) | Nested(Body(loc_pattern, loc_expr)) => {
             Body(loc_pattern, desugar_expr(arena, loc_expr))
         }
-        TypedBody(loc_pattern, loc_annotation, loc_expr)
-        | Nested(TypedBody(loc_pattern, loc_annotation, loc_expr)) => TypedBody(
-            loc_pattern,
-            loc_annotation.clone(),
-            desugar_expr(arena, loc_expr),
-        ),
         SpaceBefore(def, _)
         | SpaceAfter(def, _)
         | Nested(SpaceBefore(def, _))
@@ -68,8 +62,6 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
         | Nested(NonBase10Int { .. })
         | Str(_)
         | Nested(Str(_))
-        | BlockStr(_)
-        | Nested(BlockStr(_))
         | AccessorFunction(_)
         | Nested(AccessorFunction(_))
         | Var { .. }

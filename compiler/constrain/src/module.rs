@@ -178,7 +178,7 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &mut V
     use roc_types::solved_types::SolvedType::*;
 
     match solved_type {
-        Func(args, ret) => {
+        Func(args, closure, ret) => {
             let mut new_args = Vec::with_capacity(args.len());
 
             for arg in args {
@@ -186,8 +186,9 @@ fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &mut V
             }
 
             let new_ret = to_type(&ret, free_vars, var_store);
+            let new_closure = to_type(&closure, free_vars, var_store);
 
-            Type::Function(new_args, Box::new(new_ret))
+            Type::Function(new_args, Box::new(new_closure), Box::new(new_ret))
         }
         Apply(symbol, args) => {
             let mut new_args = Vec::with_capacity(args.len());

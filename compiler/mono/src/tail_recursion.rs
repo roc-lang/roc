@@ -1,19 +1,40 @@
-use crate::ir::{CallType, Env, Expr, JoinPointId, Param, Stmt};
+use crate::ir::{CallType, Expr, JoinPointId, Param, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::symbol::Symbol;
 
+/// Make tail calls into loops (using join points)
+///
+/// e.g.
+///
+/// > factorial n accum = if n == 1 then accum else factorial (n - 1) (n * accum)
+///
+/// becomes
+///
+/// ```elm
+/// factorial n1 accum1 =
+///     let joinpoint j n accum =
+///             if n == 1 then
+///                 accum
+///             else
+///                 jump j (n - 1) (n * accum)
+///
+///     in
+///         jump j n1 accum1
+/// ```
+///
+/// This will effectively compile into a loop in llvm, and
+/// won't grow the call stack for each iteration
 pub fn make_tail_recursive<'a>(
-    env: &mut Env<'a, '_>,
+    arena: &'a Bump,
+    id: JoinPointId,
     needle: Symbol,
     stmt: Stmt<'a>,
     args: &'a [(Layout<'a>, Symbol)],
 ) -> Stmt<'a> {
-    let id = JoinPointId(env.unique_symbol());
-
-    let alloced = env.arena.alloc(stmt);
-    match insert_jumps(env.arena, alloced, id, needle) {
+    let alloced = arena.alloc(stmt);
+    match insert_jumps(arena, alloced, id, needle) {
         None => alloced.clone(),
         Some(new) => {
             // jumps were inserted, we must now add a join point
@@ -24,13 +45,14 @@ pub fn make_tail_recursive<'a>(
                     layout: layout.clone(),
                     borrow: true,
                 }),
-                env.arena,
+                arena,
             )
             .into_bump_slice();
 
-            let args = Vec::from_iter_in(args.iter().map(|t| t.1), env.arena).into_bump_slice();
+            // TODO could this be &[]?
+            let args = Vec::from_iter_in(args.iter().map(|t| t.1), arena).into_bump_slice();
 
-            let jump = env.arena.alloc(Stmt::Jump(id, args));
+            let jump = arena.alloc(Stmt::Jump(id, args));
 
             Stmt::Join {
                 id,
@@ -185,7 +207,6 @@ fn insert_jumps<'a>(
                 None
             }
         }
-        Ret(_) => None,
         Inc(symbol, cont) => match insert_jumps(arena, cont, goal_id, needle) {
             Some(cont) => Some(arena.alloc(Inc(*symbol, cont))),
             None => None,
@@ -195,6 +216,7 @@ fn insert_jumps<'a>(
             None => None,
         },
 
+        Ret(_) => None,
         Jump(_, _) => None,
         RuntimeError(_) => None,
     }

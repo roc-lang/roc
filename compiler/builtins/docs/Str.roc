@@ -1,5 +1,6 @@
-interface Str exposes [ Str, isEmpty, join ] imports []
-
+interface Str2
+    exposes [ Str2, decimal, split, isEmpty, startsWith, endsWith, contains, anyGraphemes, allGraphemes, join, joinWith, padGraphemesStart, padGraphemesEnd, graphemes, reverseGraphemes, isCaseInsensitiveEq, isCaseInsensitiveNeq, walkGraphemes, isCapitalized, isAllUppercase, isAllLowercase, toUtf8, toUtf16, toUtf32, walkUtf8, walkUtf16, walkUtf32, walkRevUtf8, walkRevUtf16, walkRevUtf32 ]
+    imports []
 ## Types
 
 ## Dealing with text is a deep topic, so by design, Roc's `Str` module sticks
@@ -7,33 +8,36 @@ interface Str exposes [ Str, isEmpty, join ] imports []
 ##
 ## _For more advanced use cases like working with raw [code points](https://unicode.org/glossary/#code_point),
 ## see the [roc/unicode](roc/unicode) package. For locale-specific text
-## functions (including capitalizing a string, as capitalization rules vary by locale)
-## see the [roc/locale](roc/locale) package._
+## functions (including uppercasing strings, as capitalization rules vary by locale;
+## in English, `"i"` capitalizes to `"I"`, but [in Turkish](https://en.wikipedia.org/wiki/Dotted_and_dotless_I#In_computing),
+## the same `"i"` capitalizes to `"İ"` - as well as sorting strings, which also varies
+## by locale; `"ö"` is sorted differently in German and Swedish) see the [roc/locale](roc/locale) package._
 ##
 ## ### Unicode
 ##
 ## Unicode can represent text values which span multiple languages, symbols, and emoji.
 ## Here are some valid Roc strings:
 ##
-## "Roc"
+## "Roc!"
 ## "鹏"
 ## "🕊"
 ##
-## Every Unicode string is a sequence of [grapheme clusters](https://unicode.org/glossary/#grapheme_cluster).
-## A grapheme cluster corresponds to what a person reading a string might call a "character",
-## but because the term "character" is used to mean many different concepts across
-## different programming languages, the documentation for Roc strings intentionally
-## avoids it. Instead, we use the term "clusters" as a shorthand for "grapheme clusters."
+## Every Unicode string is a sequence of [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster).
+## An extended grapheme cluster represents what a person reading a string might
+## call a "character" - like "A" or "ö" or "👩‍👩‍👦‍👦".
+## Because the term "character" means different things in different areas of
+## programming, and "extended grapheme cluster" is a mouthful, in Roc we use the
+## term "grapheme" as a shorthand for the more precise "extended grapheme cluster."
 ##
-## You can get the number of grapheme clusters in a string by calling #Str.countClusters on it:
+## You can get the number of graphemes in a string by calling #Str.countGraphemes on it:
 ##
-##     Str.countClusters "Roc!"
-##     Str.countClusters "折り紙"
-##     Str.countClusters "🕊"
+##     Str.countGraphemes "Roc!"
+##     Str.countGraphemes "折り紙"
+##     Str.countGraphemes "🕊"
 ##
-## > The `countClusters` function walks through the entire string to get its answer,
+## > The `countGraphemes` function walks through the entire string to get its answer,
 ## > so if you want to check whether a string is empty, you'll get much better performance
-## > by calling `Str.isEmpty myStr` instead of `Str.countClusters myStr == 0`.
+## > by calling `Str.isEmpty myStr` instead of `Str.countGraphemes myStr == 0`.
 ##
 ## ### Escape sequences
 ##
@@ -96,7 +100,7 @@ interface Str exposes [ Str, isEmpty, join ] imports []
 
 ## A [Unicode](https://unicode.org) text value.
 ##
-Str : [ @Str ]
+Str2 : [ @Str ]
 
 ## Convert
 
@@ -107,7 +111,7 @@ Str : [ @Str ]
 ##
 ## If you want to keep all the digits, passing the same float to #Str.num
 ## will do that.
-decimal : Float *, Ulen -> Str
+decimal : Float *, Len -> Str
 
 ## Split a string around a separator.
 ##
@@ -118,7 +122,7 @@ decimal : Float *, Ulen -> Str
 ##
 ## >>> Str.split "1,2,3" ""
 ##
-## To split a string into its individual grapheme clusters, use #Str.clusters
+## To split a string into its individual graphemes, use #Str.graphemes
 split : Str, Str -> List Str
 
 ## Check
@@ -136,9 +140,9 @@ endsWith : Str, Str -> Bool
 
 contains : Str, Str -> Bool
 
-anyClusters : Str, (Str -> Bool) -> Bool
+anyGraphemes : Str, (Str -> Bool) -> Bool
 
-allClusters : Str, (Str -> Bool) -> Bool
+allGraphemes : Str, (Str -> Bool) -> Bool
 
 ## Combine
 
@@ -154,59 +158,68 @@ join : List Str -> Str
 joinWith : List Str, Str -> Str
 
 ## Add to the start of a string until it has at least the given number of
-## grapheme clusters.
+## graphemes.
 ##
-## >>> Str.padClustersStart "0" 5 "36"
+## >>> Str.padGraphemesStart "0" 5 "36"
 ##
-## >>> Str.padClustersStart "0" 1 "36"
+## >>> Str.padGraphemesStart "0" 1 "36"
 ##
-## >>> Str.padClustersStart "0" 5 "12345"
+## >>> Str.padGraphemesStart "0" 5 "12345"
 ##
-## >>> Str.padClustersStart "✈️"" 5 "👩‍👩‍👦‍👦👩‍👩‍👦‍👦👩‍👩‍👦‍👦"
-padClustersStart : Str, Int, Str -> Str
+## >>> Str.padGraphemesStart "✈️"" 5 "👩‍👩‍👦‍👦👩‍👩‍👦‍👦👩‍👩‍👦‍👦"
+padGraphemesStart : Str, Int, Str -> Str
 
 ## Add to the end of a string until it has at least the given number of
-## grapheme clusters.
+## graphemes.
 ##
-## >>> Str.padClustersStart "0" 5 "36"
+## >>> Str.padGraphemesStart "0" 5 "36"
 ##
-## >>> Str.padClustersStart "0" 1 "36"
+## >>> Str.padGraphemesStart "0" 1 "36"
 ##
-## >>> Str.padClustersStart "0" 5 "12345"
+## >>> Str.padGraphemesStart "0" 5 "12345"
 ##
-## >>> Str.padClustersStart "✈️"" 5 "👩‍👩‍👦‍👦👩‍👩‍👦‍👦👩‍👩‍👦‍👦"
-padClustersEnd : Str, Int, Str -> Str
+## >>> Str.padGraphemesStart "✈️"" 5 "👩‍👩‍👦‍👦👩‍👩‍👦‍👦👩‍👩‍👦‍👦"
+padGraphemesEnd : Str, Int, Str -> Str
 
-## Grapheme Clusters
+## Graphemes
 
-## Split a string into its individual grapheme clusters.
+## Split a string into its individual graphemes.
 ##
-## >>> Str.clusters "1,2,3"
+## >>> Str.graphemes "1,2,3"
 ##
-## >>> Str.clusters  "👍👍👍"
+## >>> Str.graphemes  "👍👍👍"
 ##
-clusters : Str -> List Str
+graphemes : Str -> List Str
 
-##     Str.countClusters "Roc!"   # 4
-##     Str.countClusters "七巧板" # 3
-##     Str.countClusters "🕊"     # 1
+##     Str.countGraphemes "Roc!"   # 4
+##     Str.countGraphemes "七巧板" # 3
+##     Str.countGraphemes "🕊"     # 1
 
-## Reverse the order of the string's individual grapheme clusters.
+## Reverse the order of the string's individual graphemes.
 ##
-## >>> Str.reverseClusters "1-2-3"
+## >>> Str.reverseGraphemes "1-2-3"
 ##
-## >>> Str.reverseClusters  "🐦✈️"👩‍👩‍👦‍👦"
-reverseClusters : Str -> Str
+## >>> Str.reverseGraphemes  "🐦✈️"👩‍👩‍👦‍👦"
+##
+## >>> Str.reversegraphemes "Crème Brûlée"
+reverseGraphemes : Str -> Str
 
-foldClusters : Str, { start: state, step: (state, Str -> state) } -> state
-
-## Returns #True if the string begins with a capital letter, and #False otherwise.
+## Returns #True if the two strings are equal when ignoring case.
 ##
-## >>> Str.isCapitalized "hi"
+## >>> Str.caseInsensitiveEq "hi" "Hi"
+isCaseInsensitiveEq : Str, Str -> Bool
+
+isCaseInsensitiveNeq : Str, Str -> Bool
+
+walkGraphemes : Str, { start: state, step: (state, Str -> state) } -> state
+
+## Returns #True if the string begins with an uppercase letter.
 ##
 ## >>> Str.isCapitalized "Hi"
 ##
 ## >>> Str.isCapitalized " Hi"
+##
+## >>> Str.isCapitalized "hi"
 ##
 ## >>> Str.isCapitalized "Česká"
 ##
@@ -218,18 +231,63 @@ foldClusters : Str, { start: state, step: (state, Str -> state) } -> state
 ##
 ## >>> Str.isCapitalized ""
 ##
-## Since the rules for how to capitalize an uncapitalized string vary by locale,
-## see the [roc/locale](roc/locale) package for functions which do that.
+## Since the rules for how to capitalize a string vary by locale,
+## (for example, in English, `"i"` capitalizes to `"I"`, but
+## [in Turkish](https://en.wikipedia.org/wiki/Dotted_and_dotless_I#In_computing),
+## the same `"i"` capitalizes to `"İ"`) see the [roc/locale](roc/locale) package
+## package for functions which capitalize strings.
 isCapitalized : Str -> Bool
 
-## ## Code Units
+## Returns #True if the string consists entirely of uppercase letters.
 ##
-## Besides grapheme clusters, another way to break down strings is into
+## >>> Str.isAllUppercase "hi"
+##
+## >>> Str.isAllUppercase "Hi"
+##
+## >>> Str.isAllUppercase "HI"
+##
+## >>> Str.isAllUppercase " Hi"
+##
+## >>> Str.isAllUppercase "Česká"
+##
+## >>> Str.isAllUppercase "Э"
+##
+## >>> Str.isAllUppercase "東京"
+##
+## >>> Str.isAllUppercase "🐦"
+##
+## >>> Str.isAllUppercase ""
+isAllUppercase : Str -> Bool
+
+## Returns #True if the string consists entirely of lowercase letters.
+##
+## >>> Str.isAllLowercase "hi"
+##
+## >>> Str.isAllLowercase "Hi"
+##
+## >>> Str.isAllLowercase "HI"
+##
+## >>> Str.isAllLowercase " Hi"
+##
+## >>> Str.isAllLowercase "Česká"
+##
+## >>> Str.isAllLowercase "Э"
+##
+## >>> Str.isAllLowercase "東京"
+##
+## >>> Str.isAllLowercase "🐦"
+##
+## >>> Str.isAllLowercase ""
+isAllLowercase : Str -> Bool
+
+## Code Units
+
+## Besides graphemes, another way to break down strings is into
 ## raw code unit integers.
 ##
-## Code units are no substitute for grapheme clusters!
+## Code units are no substitute for graphemes!
 ## These functions exist to support advanced use cases like those found in
-## [roc/unicode](roc/unicode), and using code units when grapheme clusters would
+## [roc/unicode](roc/unicode), and using code units when graphemes would
 ## be more appropriate can very easily lead to bugs.
 ##
 ## For example, `Str.countGraphemes "👩‍👩‍👦‍👦"` returns `1`,
@@ -239,7 +297,7 @@ isCapitalized : Str -> Bool
 
 ## Return a #List of the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a #List of smaller #Str values instead of #U8 values,
-## see #Str.split and #Str.clusters.)
+## see #Str.split and #Str.graphemes.)
 ##
 ## >>> Str.toUtf8 "👩‍👩‍👦‍👦"
 ##
@@ -250,12 +308,12 @@ isCapitalized : Str -> Bool
 ## >>> Str.toUtf8 "🐦"
 ##
 ## For a more flexible function that walks through each of these #U8 code units
-## without creating a #List, see #Str.foldUtf8 and #Str.foldRevUtf8.
+## without creating a #List, see #Str.walkUtf8 and #Str.walkRevUtf8.
 toUtf8 : Str -> List U8
 
 ## Return a #List of the string's #U16 UTF-16 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a #List of smaller #Str values instead of #U16 values,
-## see #Str.split and #Str.clusters.)
+## see #Str.split and #Str.graphemes.)
 ##
 ## >>> Str.toUtf16 "👩‍👩‍👦‍👦"
 ##
@@ -266,12 +324,12 @@ toUtf8 : Str -> List U8
 ## >>> Str.toUtf16 "🐦"
 ##
 ## For a more flexible function that walks through each of these #U16 code units
-## without creating a #List, see #Str.foldUtf16 and #Str.foldRevUtf16.
+## without creating a #List, see #Str.walkUtf16 and #Str.walkRevUtf16.
 toUtf16 : Str -> List U16
 
 ## Return a #List of the string's #U32 UTF-32 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a #List of smaller #Str values instead of #U32 values,
-## see #Str.split and #Str.clusters.)
+## see #Str.split and #Str.graphemes.)
 ##
 ## >>> Str.toUtf32 "👩‍👩‍👦‍👦"
 ##
@@ -282,13 +340,12 @@ toUtf16 : Str -> List U16
 ## >>> Str.toUtf32 "🐦"
 ##
 ## For a more flexible function that walks through each of these #U32 code units
-## without creating a #List, see #Str.foldUtf32 and #Str.foldRevUtf32.
+## without creating a #List, see #Str.walkUtf32 and #Str.walkRevUtf32.
 toUtf32 : Str -> List U32
-
 
 ## Walk through the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit)
 ## to build up a state.
-## (If you want a `step` function which receives a #Str instead of an #U8, see #Str.foldClusters.)
+## (If you want a `step` function which receives a #Str instead of an #U8, see #Str.walkGraphemes.)
 ##
 ## Here are the #U8 values that will be passed to `step` when this function is
 ## called on various strings:
@@ -299,11 +356,11 @@ toUtf32 : Str -> List U32
 ## * `"🐦"` passes 240, 159, 144, 166
 ##
 ## To convert a #Str into a plain `List U8` of UTF-8 code units, see #Str.toUtf8.
-foldUtf8 : Str, { start: state, step: (state, U8 -> state) } -> state
+walkUtf8 : Str, { start: state, step: (state, U8 -> state) } -> state
 
 ## Walk through the string's #U16 UTF-16 [code units](https://unicode.org/glossary/#code_unit)
 ## to build up a state.
-## (If you want a `step` function which receives a #Str instead of an #U16, see #Str.foldClusters.)
+## (If you want a `step` function which receives a #Str instead of an #U16, see #Str.walkGraphemes.)
 ##
 ## Here are the #U16 values that will be passed to `step` when this function is
 ## called on various strings:
@@ -314,11 +371,11 @@ foldUtf8 : Str, { start: state, step: (state, U8 -> state) } -> state
 ## * `"🐦"` passes 55357, 56358
 ##
 ## To convert a #Str into a plain `List U16` of UTF-16 code units, see #Str.toUtf16.
-foldUtf16 : Str, { start: state, step: (state, U16 -> state) } -> state
+walkUtf16 : Str, { start: state, step: (state, U16 -> state) } -> state
 
 ## Walk through the string's #U32 UTF-32 [code units](https://unicode.org/glossary/#code_unit)
 ## to build up a state.
-## (If you want a `step` function which receives a #Str instead of an #U32, see #Str.foldClusters.)
+## (If you want a `step` function which receives a #Str instead of an #U32, see #Str.walkGraphemes.)
 ##
 ## Here are the #U32 values that will be passed to `step` when this function is
 ## called on various strings:
@@ -329,12 +386,12 @@ foldUtf16 : Str, { start: state, step: (state, U16 -> state) } -> state
 ## * `"🐦"` passes 128038
 ##
 ## To convert a #Str into a plain `List U32` of UTF-32 code units, see #Str.toUtf32.
-foldUtf32 : Str, { start: state, step: (state, U32 -> state) } -> state
+walkUtf32 : Str, { start: state, step: (state, U32 -> state) } -> state
 
 
 ## Walk backwards through the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit)
 ## to build up a state.
-## (If you want a `step` function which receives a #Str instead of an #U8, see #Str.foldClusters.)
+## (If you want a `step` function which receives a #Str instead of an #U8, see #Str.walkGraphemes.)
 ##
 ## Here are the #U8 values that will be passed to `step` when this function is
 ## called on various strings:
@@ -345,11 +402,11 @@ foldUtf32 : Str, { start: state, step: (state, U32 -> state) } -> state
 ## * `"🐦"` passes 166, 144, 159, 240
 ##
 ## To convert a #Str into a plain `List U8` of UTF-8 code units, see #Str.toUtf8.
-foldRevUtf8 : Str, { start: state, step: (state, U8 -> state) } -> state
+walkRevUtf8 : Str, { start: state, step: (state, U8 -> state) } -> state
 
 ## Walk backwards through the string's #U16 UTF-16 [code units](https://unicode.org/glossary/#code_unit)
 ## to build up a state.
-## (If you want a `step` function which receives a #Str instead of an #U16, see #Str.foldClusters.)
+## (If you want a `step` function which receives a #Str instead of an #U16, see #Str.walkGraphemes.)
 ##
 ## Here are the #U16 values that will be passed to `step` when this function is
 ## called on various strings:
@@ -360,11 +417,11 @@ foldRevUtf8 : Str, { start: state, step: (state, U8 -> state) } -> state
 ## * `"🐦"` passes 56358, 55357
 ##
 ## To convert a #Str into a plain `List U16` of UTF-16 code units, see #Str.toUtf16.
-foldRevUtf16 : Str, { start: state, step: (state, U16 -> state) } -> state
+walkRevUtf16 : Str, { start: state, step: (state, U16 -> state) } -> state
 
 ## Walk backwards through the string's #U32 UTF-32 [code units](https://unicode.org/glossary/#code_unit)
 ## to build up a state.
-## (If you want a `step` function which receives a #Str instead of an #U32, see #Str.foldClusters.)
+## (If you want a `step` function which receives a #Str instead of an #U32, see #Str.walkGraphemes.)
 ##
 ## Here are the #U32 values that will be passed to `step` when this function is
 ## called on various strings:
@@ -375,4 +432,4 @@ foldRevUtf16 : Str, { start: state, step: (state, U16 -> state) } -> state
 ## * `"🐦"` passes 128038
 ##
 ## To convert a #Str into a plain `List U32` of UTF-32 code units, see #Str.toUtf32.
-foldRevUtf32 : Str, { start: state, step: (state, U32 -> state) } -> state
+walkRevUtf32 : Str, { start: state, step: (state, U32 -> state) } -> state

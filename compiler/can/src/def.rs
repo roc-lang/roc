@@ -650,12 +650,12 @@ fn group_to_declaration(
                 let mut new_def = can_def.clone();
 
                 // Determine recursivity of closures that are not tail-recursive
-                if let Closure(fn_var, name, Recursive::NotRecursive, args, body) =
-                    new_def.loc_expr.value
+                if let Closure {
+                    recursive: recursive @ Recursive::NotRecursive,
+                    ..
+                } = &mut new_def.loc_expr.value
                 {
-                    let recursion = closure_recursivity(*symbol, closures);
-
-                    new_def.loc_expr.value = Closure(fn_var, name, recursion, args, body);
+                    *recursive = closure_recursivity(*symbol, closures);
                 }
 
                 let is_recursive = successors(&symbol).contains(&symbol);
@@ -678,12 +678,12 @@ fn group_to_declaration(
                     let mut new_def = can_def.clone();
 
                     // Determine recursivity of closures that are not tail-recursive
-                    if let Closure(fn_var, name, Recursive::NotRecursive, args, body) =
-                        new_def.loc_expr.value
+                    if let Closure {
+                        recursive: recursive @ Recursive::NotRecursive,
+                        ..
+                    } = &mut new_def.loc_expr.value
                     {
-                        let recursion = closure_recursivity(symbol, closures);
-
-                        new_def.loc_expr.value = Closure(fn_var, name, recursion, args, body);
+                        *recursive = closure_recursivity(symbol, closures);
                     }
 
                     if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
@@ -808,16 +808,16 @@ fn canonicalize_pending_def<'a>(
                     region: loc_ann.region,
                 };
 
-                let body = Box::new((body_expr, var_store.fresh()));
-
                 Located {
-                    value: Closure(
-                        var_store.fresh(),
-                        symbol,
-                        Recursive::NotRecursive,
-                        underscores,
-                        body,
-                    ),
+                    value: Closure {
+                        function_type: var_store.fresh(),
+                        closure_type: var_store.fresh(),
+                        return_type: var_store.fresh(),
+                        name: symbol,
+                        recursive: Recursive::NotRecursive,
+                        arguments: underscores,
+                        loc_body: Box::new(body_expr),
+                    },
                     region: loc_ann.region,
                 }
             };
@@ -962,7 +962,15 @@ fn canonicalize_pending_def<'a>(
             if let (
                 &ast::Pattern::Identifier(ref _name),
                 &Pattern::Identifier(ref defined_symbol),
-                &Closure(fn_var, ref symbol, _, ref arguments, ref body),
+                &Closure {
+                    function_type,
+                    closure_type,
+                    return_type,
+                    name: ref symbol,
+                    ref arguments,
+                    loc_body: ref body,
+                    ..
+                },
             ) = (
                 &loc_pattern.value,
                 &loc_can_pattern.value,
@@ -1000,13 +1008,15 @@ fn canonicalize_pending_def<'a>(
                     });
 
                 // renamed_closure_def = Some(&defined_symbol);
-                loc_can_expr.value = Closure(
-                    fn_var,
-                    *symbol,
-                    is_recursive,
-                    arguments.clone(),
-                    body.clone(),
-                );
+                loc_can_expr.value = Closure {
+                    function_type,
+                    closure_type,
+                    return_type,
+                    name: *symbol,
+                    recursive: is_recursive,
+                    arguments: arguments.clone(),
+                    loc_body: body.clone(),
+                };
             }
 
             // Store the referenced locals in the refs_by_symbol map, so we can later figure out
@@ -1086,7 +1096,15 @@ fn canonicalize_pending_def<'a>(
             if let (
                 &ast::Pattern::Identifier(ref _name),
                 &Pattern::Identifier(ref defined_symbol),
-                &Closure(fn_var, ref symbol, _, ref arguments, ref body),
+                &Closure {
+                    function_type,
+                    closure_type,
+                    return_type,
+                    name: ref symbol,
+                    ref arguments,
+                    loc_body: ref body,
+                    ..
+                },
             ) = (
                 &loc_pattern.value,
                 &loc_can_pattern.value,
@@ -1123,13 +1141,15 @@ fn canonicalize_pending_def<'a>(
                         refs.lookups = refs.lookups.without(defined_symbol);
                     });
 
-                loc_can_expr.value = Closure(
-                    fn_var,
-                    *symbol,
-                    is_recursive,
-                    arguments.clone(),
-                    body.clone(),
-                );
+                loc_can_expr.value = Closure {
+                    function_type,
+                    closure_type,
+                    return_type,
+                    name: *symbol,
+                    recursive: is_recursive,
+                    arguments: arguments.clone(),
+                    loc_body: body.clone(),
+                };
             }
 
             // Store the referenced locals in the refs_by_symbol map, so we can later figure out
@@ -1326,15 +1346,6 @@ fn to_pending_def<'a>(
                 PendingDef::Body(loc_pattern, loc_can_pattern, loc_expr),
             )
         }
-        TypedBody(loc_pattern, loc_ann, loc_expr) => pending_typed_body(
-            env,
-            loc_pattern,
-            loc_ann,
-            loc_expr,
-            var_store,
-            scope,
-            pattern_type,
-        ),
 
         Alias { name, vars, ann } => {
             let region = Region::span_across(&name.region, &ann.region);

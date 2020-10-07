@@ -1,9 +1,7 @@
-#[macro_use]
-extern crate clap;
-
 use bumpalo::Bump;
-use clap::{App, Arg, ArgMatches};
+use clap::ArgMatches;
 use roc_build::program::gen;
+use roc_cli::{build, build_app, repl, DIRECTORY_OR_FILES, FLAG_OPTIMIZE, FLAG_ROC_FILE};
 use roc_collections::all::MutMap;
 use roc_gen::llvm::build::OptLevel;
 use roc_load::file::{LoadingProblem, Phases};
@@ -14,64 +12,21 @@ use std::process::Command;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
 
-pub mod repl;
-
-pub static FLAG_OPTIMIZE: &str = "optimize";
-pub static FLAG_ROC_FILE: &str = "ROC_FILE";
-pub static DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
-
-pub fn build_app<'a>() -> App<'a> {
-    App::new("roc")
-        .version(crate_version!())
-        .subcommand(App::new("build")
-            .about("Build a program")
-            .arg(
-                Arg::with_name(FLAG_ROC_FILE)
-                    .help("The .roc file to build")
-                    .required(true),
-            )
-            .arg(
-                Arg::with_name(FLAG_OPTIMIZE)
-                    .long(FLAG_OPTIMIZE)
-                    .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
-                    .required(false),
-            )
-        )
-        .subcommand(App::new("run")
-            .about("Build and run a program")
-            .arg(
-                Arg::with_name(FLAG_ROC_FILE)
-                    .help("The .roc file to build and run")
-                    .required(true),
-            )
-            .arg(
-                Arg::with_name(FLAG_OPTIMIZE)
-                    .long(FLAG_OPTIMIZE)
-                    .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
-                    .required(false),
-            )
-        )
-        .subcommand(App::new("repl")
-            .about("Launch the interactive Read Eval Print Loop (REPL)")
-        )
-        .subcommand(App::new("edit")
-            .about("Launch the Roc editor")
-            .arg(Arg::with_name(DIRECTORY_OR_FILES)
-                .index(1)
-                .multiple(true)
-                .required(false)
-                .help("(optional) The directory or files to open on launch.")
-            )
-        )
-}
-
 fn main() -> io::Result<()> {
     let matches = build_app().get_matches();
 
     match matches.subcommand_name() {
         None => roc_editor::launch(&[]),
-        Some("build") => build(matches.subcommand_matches("build").unwrap(), false),
-        Some("run") => build(matches.subcommand_matches("run").unwrap(), true),
+        Some("build") => build(
+            &Triple::host(),
+            matches.subcommand_matches("build").unwrap(),
+            false,
+        ),
+        Some("run") => build(
+            &Triple::host(),
+            matches.subcommand_matches("run").unwrap(),
+            true,
+        ),
         Some("repl") => repl::main(),
         Some("edit") => {
             match matches
@@ -93,7 +48,7 @@ fn main() -> io::Result<()> {
     }
 }
 
-pub fn build(matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {
+pub fn _build(matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {
     let filename = matches.value_of(FLAG_ROC_FILE).unwrap();
     let opt_level = if matches.is_present(FLAG_OPTIMIZE) {
         OptLevel::Optimize

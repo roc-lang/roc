@@ -277,21 +277,53 @@ mod solve_expr {
         );
     }
 
-    // // INTERPOLATED STRING
+    // INTERPOLATED STRING
 
-    // #[test]
-    // fn infer_interpolated_string() {
-    //     infer_eq(
-    //         indoc!(
-    //             r#"
-    //             whatItIs = "great"
+    #[test]
+    fn infer_interpolated_string() {
+        infer_eq(
+            indoc!(
+                r#"
+                whatItIs = "great"
 
-    //             "type inference is \(whatItIs)!"
-    //         "#
-    //         ),
-    //         "Str",
-    //     );
-    // }
+                "type inference is \(whatItIs)!"
+            "#
+            ),
+            "Str",
+        );
+    }
+
+    #[test]
+    fn infer_interpolated_var() {
+        infer_eq(
+            indoc!(
+                r#"
+                whatItIs = "great"
+
+                str = "type inference is \(whatItIs)!"
+
+                whatItIs
+            "#
+            ),
+            "Str",
+        );
+    }
+
+    #[test]
+    fn infer_interpolated_field() {
+        infer_eq(
+            indoc!(
+                r#"
+                rec = { whatItIs: "great" }
+
+                str = "type inference is \(rec.whatItIs)!"
+
+                rec
+            "#
+            ),
+            "{ whatItIs : Str }",
+        );
+    }
 
     // LIST MISMATCH
 
@@ -2351,6 +2383,66 @@ mod solve_expr {
     }
 
     #[test]
+    fn pow() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.pow
+                "#
+            ),
+            "Float, Float -> Float",
+        );
+    }
+
+    #[test]
+    fn ceiling() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.ceiling
+                "#
+            ),
+            "Float -> Int",
+        );
+    }
+
+    #[test]
+    fn floor() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.floor
+                "#
+            ),
+            "Float -> Int",
+        );
+    }
+
+    #[test]
+    fn pow_int() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.powInt
+                "#
+            ),
+            "Int, Int -> Int",
+        );
+    }
+
+    #[test]
+    fn atan() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.atan
+                "#
+            ),
+            "Float -> Float",
+        );
+    }
+
+    #[test]
     fn reconstruct_path() {
         infer_eq_without_problem(
             indoc!(
@@ -2683,6 +2775,34 @@ mod solve_expr {
                 "#
             ),
             "{ x : Int, y ? Bool }* -> { x : Int, y : Bool }",
+        );
+    }
+
+    #[test]
+    fn list_walk_right() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.walkRight 
+                "#
+            ),
+            "List a, (a, b -> b), b -> b",
+        );
+    }
+
+    #[test]
+    fn list_walk_right_example() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                empty : List Int
+                empty = 
+                    []
+
+                List.walkRight empty (\a, b -> a + b) 0
+                "#
+            ),
+            "Int",
         );
     }
 }

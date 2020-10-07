@@ -1,6 +1,6 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::MutMap;
+use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::{Content, FlatType, Subs, Variable};
@@ -22,6 +22,8 @@ pub enum Layout<'a> {
     Builtin(Builtin<'a>),
     Struct(&'a [Layout<'a>]),
     Union(&'a [&'a [Layout<'a>]]),
+    RecursiveUnion(&'a [&'a [Layout<'a>]]),
+    RecursivePointer,
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
     Pointer(&'a Layout<'a>),
@@ -55,13 +57,43 @@ pub enum Builtin<'a> {
     EmptySet,
 }
 
+pub struct Env<'a, 'b> {
+    arena: &'a Bump,
+    seen: MutSet<Variable>,
+    subs: &'b Subs,
+}
+
+impl<'a, 'b> Env<'a, 'b> {
+    fn is_seen(&self, var: Variable) -> bool {
+        let var = self.subs.get_root_key_without_compacting(var);
+
+        self.seen.contains(&var)
+    }
+
+    fn insert_seen(&mut self, var: Variable) -> bool {
+        let var = self.subs.get_root_key_without_compacting(var);
+
+        self.seen.insert(var)
+    }
+}
+
 impl<'a> Layout<'a> {
     pub fn new(arena: &'a Bump, content: Content, subs: &Subs) -> Result<Self, LayoutProblem> {
+        let mut env = Env {
+            arena,
+            subs,
+            seen: MutSet::default(),
+        };
+
+        Self::new_help(&mut env, content)
+    }
+
+    fn new_help<'b>(env: &mut Env<'a, 'b>, content: Content) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
 
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar),
-            Structure(flat_type) => layout_from_flat_type(arena, flat_type, subs),
+            Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
             Alias(Symbol::NUM_INT, args, _) => {
                 debug_assert!(args.is_empty());
@@ -71,7 +103,7 @@ impl<'a> Layout<'a> {
                 debug_assert!(args.is_empty());
                 Ok(Layout::Builtin(Builtin::Float64))
             }
-            Alias(_, _, var) => Self::new(arena, subs.get_without_compacting(var).content, subs),
+            Alias(_, _, var) => Self::from_var(env, var),
             Error => Err(LayoutProblem::Erroneous),
         }
     }
@@ -79,10 +111,13 @@ impl<'a> Layout<'a> {
     /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
     /// Panics if given a FlexVar or RigidVar, since those should have been
     /// monomorphized away already!
-    fn from_var(arena: &'a Bump, var: Variable, subs: &Subs) -> Result<Self, LayoutProblem> {
-        let content = subs.get_without_compacting(var).content;
-
-        Self::new(arena, content, subs)
+    fn from_var(env: &mut Env<'a, '_>, var: Variable) -> Result<Self, LayoutProblem> {
+        if env.is_seen(var) {
+            Ok(Layout::RecursivePointer)
+        } else {
+            let content = env.subs.get_without_compacting(var).content;
+            Self::new_help(env, content)
+        }
     }
 
     pub fn safe_to_memcpy(&self) -> bool {
@@ -96,11 +131,19 @@ impl<'a> Layout<'a> {
             Union(tags) => tags
                 .iter()
                 .all(|tag_layout| tag_layout.iter().all(|field| field.safe_to_memcpy())),
+            RecursiveUnion(_) => {
+                // a recursive union will always contain a pointer, and are thus not safe to memcpy
+                false
+            }
             FunctionPointer(_, _) => {
                 // Function pointers are immutable and can always be safely copied
                 true
             }
             Pointer(_) => {
+                // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
+                false
+            }
+            RecursivePointer => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
             }
@@ -138,7 +181,18 @@ impl<'a> Layout<'a> {
                 })
                 .max()
                 .unwrap_or_default(),
+            RecursiveUnion(fields) => fields
+                .iter()
+                .map(|tag_layout| {
+                    tag_layout
+                        .iter()
+                        .map(|field| field.stack_size(pointer_size))
+                        .sum()
+                })
+                .max()
+                .unwrap_or_default(),
             FunctionPointer(_, _) => pointer_size,
+            RecursivePointer => pointer_size,
             Pointer(_) => pointer_size,
         }
     }
@@ -146,6 +200,7 @@ impl<'a> Layout<'a> {
     pub fn is_refcounted(&self) -> bool {
         match self {
             Layout::Builtin(Builtin::List(_, _)) => true,
+            Layout::RecursiveUnion(_) => true,
             _ => false,
         }
     }
@@ -164,7 +219,8 @@ impl<'a> Layout<'a> {
                 .map(|ls| ls.iter())
                 .flatten()
                 .any(|f| f.is_refcounted()),
-            FunctionPointer(_, _) | Pointer(_) => false,
+            RecursiveUnion(_) => true,
+            FunctionPointer(_, _) | RecursivePointer | Pointer(_) => false,
         }
     }
 }
@@ -188,13 +244,15 @@ impl<'a> LayoutCache<'a> {
         // Store things according to the root Variable, to avoid duplicate work.
         let var = subs.get_root_key_without_compacting(var);
 
+        let mut env = Env {
+            arena,
+            subs,
+            seen: MutSet::default(),
+        };
+
         self.layouts
             .entry(var)
-            .or_insert_with(|| {
-                let content = subs.get_without_compacting(var).content;
-
-                Layout::new(arena, content, subs)
-            })
+            .or_insert_with(|| Layout::from_var(&mut env, var))
             .clone()
     }
 }
@@ -273,11 +331,13 @@ impl<'a> Builtin<'a> {
 }
 
 fn layout_from_flat_type<'a>(
-    arena: &'a Bump,
+    env: &mut Env<'a, '_>,
     flat_type: FlatType,
-    subs: &Subs,
 ) -> Result<Layout<'a>, LayoutProblem> {
     use roc_types::subs::FlatType::*;
+
+    let arena = env.arena;
+    let subs = env.subs;
 
     match flat_type {
         Apply(symbol, args) => {
@@ -294,13 +354,13 @@ fn layout_from_flat_type<'a>(
                     // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
                     debug_assert_eq!(args.len(), 1);
 
-                    let var = args.iter().next().unwrap();
+                    let var = args.first().unwrap();
                     let content = subs.get_without_compacting(*var).content;
 
                     layout_from_num_content(content)
                 }
                 Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
-                Symbol::LIST_LIST => list_layout_from_elem(arena, subs, args[0]),
+                Symbol::LIST_LIST => list_layout_from_elem(env, args[0]),
                 Symbol::ATTR_ATTR => {
                     debug_assert_eq!(args.len(), 2);
 
@@ -309,7 +369,7 @@ fn layout_from_flat_type<'a>(
                     let wrapped_var = args[1];
 
                     // correct the memory mode of unique lists
-                    match Layout::from_var(arena, wrapped_var, subs)? {
+                    match Layout::from_var(env, wrapped_var)? {
                         Layout::Builtin(Builtin::List(_, elem_layout)) => {
                             let uniqueness_var = args[0];
                             let uniqueness_content =
@@ -331,17 +391,14 @@ fn layout_from_flat_type<'a>(
                 }
             }
         }
-        Func(args, ret_var) => {
+        Func(args, _, ret_var) => {
             let mut fn_args = Vec::with_capacity_in(args.len(), arena);
 
             for arg_var in args {
-                let arg_content = subs.get_without_compacting(arg_var).content;
-
-                fn_args.push(Layout::new(arena, arg_content, subs)?);
+                fn_args.push(Layout::from_var(env, arg_var)?);
             }
 
-            let ret_content = subs.get_without_compacting(ret_var).content;
-            let ret = Layout::new(arena, ret_content, subs)?;
+            let ret = Layout::from_var(env, ret_var)?;
 
             Ok(Layout::FunctionPointer(
                 fn_args.into_bump_slice(),
@@ -349,14 +406,18 @@ fn layout_from_flat_type<'a>(
             ))
         }
         Record(fields, ext_var) => {
-            debug_assert!(ext_var_is_empty_record(subs, ext_var));
-
             // Sort the fields by label
             let mut sorted_fields = Vec::with_capacity_in(fields.len(), arena);
+            sorted_fields.extend(fields.into_iter());
 
-            for tuple in fields {
-                sorted_fields.push(tuple);
+            // extract any values from the ext_var
+            let mut fields_map = MutMap::default();
+            match roc_types::pretty_print::chase_ext_record(subs, ext_var, &mut fields_map) {
+                Ok(()) | Err((_, Content::FlexVar(_))) => {}
+                Err(_) => unreachable!("this would have been a type error"),
             }
+
+            sorted_fields.extend(fields_map.into_iter());
 
             sorted_fields.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
 
@@ -366,10 +427,19 @@ fn layout_from_flat_type<'a>(
             for (_, field) in sorted_fields {
                 use LayoutProblem::*;
 
-                let field_var = field.into_inner();
-                let field_content = subs.get_without_compacting(field_var).content;
+                let field_var = {
+                    use roc_types::types::RecordField::*;
+                    match field {
+                        Optional(_) => {
+                            // optional values are not available at this point
+                            continue;
+                        }
+                        Required(var) => var,
+                        Demanded(var) => var,
+                    }
+                };
 
-                match Layout::new(arena, field_content, subs) {
+                match Layout::from_var(env, field_var) {
                     Ok(layout) => {
                         // Drop any zero-sized fields like {}.
                         if !layout.is_zero_sized() {
@@ -396,8 +466,45 @@ fn layout_from_flat_type<'a>(
 
             Ok(layout_from_tag_union(arena, tags, subs))
         }
-        RecursiveTagUnion(_rec_var, _tags, _ext_var) => {
-            panic!("TODO make Layout for empty RecursiveTagUnion");
+        RecursiveTagUnion(rec_var, tags, ext_var) => {
+            debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
+
+            // some observations
+            //
+            // * recursive tag unions are always recursive
+            // * therefore at least one tag has a pointer (non-zero sized) field
+            // * they must (to be instantiated) have 2 or more tags
+            //
+            // That means none of the optimizations for enums or single tag tag unions apply
+
+            let rec_var = subs.get_root_key_without_compacting(rec_var);
+            env.insert_seen(rec_var);
+            let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
+
+            // VERY IMPORTANT: sort the tags
+            let mut tags_vec: std::vec::Vec<_> = tags.into_iter().collect();
+            tags_vec.sort();
+
+            for (_name, variables) in tags_vec {
+                let mut tag_layout = Vec::with_capacity_in(variables.len() + 1, arena);
+
+                // store the discriminant
+                tag_layout.push(Layout::Builtin(Builtin::Int64));
+
+                for var in variables {
+                    // TODO does this cause problems with mutually recursive unions?
+                    if rec_var == subs.get_root_key_without_compacting(var) {
+                        tag_layout.push(Layout::RecursivePointer);
+                        continue;
+                    }
+
+                    tag_layout.push(Layout::from_var(env, var)?);
+                }
+
+                tag_layouts.push(tag_layout.into_bump_slice());
+            }
+
+            Ok(Layout::RecursiveUnion(tag_layouts.into_bump_slice()))
         }
         EmptyTagUnion => {
             panic!("TODO make Layout for empty Tag Union");
@@ -414,21 +521,38 @@ pub fn sort_record_fields<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
-) -> Vec<'a, (Lowercase, Layout<'a>)> {
+) -> Vec<'a, (Lowercase, Result<Layout<'a>, Layout<'a>>)> {
     let mut fields_map = MutMap::default();
+
+    let mut env = Env {
+        arena,
+        subs,
+        seen: MutSet::default(),
+    };
 
     match roc_types::pretty_print::chase_ext_record(subs, var, &mut fields_map) {
         Ok(()) | Err((_, Content::FlexVar(_))) => {
             // Sort the fields by label
             let mut sorted_fields = Vec::with_capacity_in(fields_map.len(), arena);
 
+            use roc_types::types::RecordField;
             for (label, field) in fields_map {
-                let var = field.into_inner();
-                let layout = Layout::from_var(arena, var, subs).expect("invalid layout from var");
+                let var = match field {
+                    RecordField::Demanded(v) => v,
+                    RecordField::Required(v) => v,
+                    RecordField::Optional(v) => {
+                        let layout =
+                            Layout::from_var(&mut env, v).expect("invalid layout from var");
+                        sorted_fields.push((label, Err(layout)));
+                        continue;
+                    }
+                };
+
+                let layout = Layout::from_var(&mut env, var).expect("invalid layout from var");
 
                 // Drop any zero-sized fields like {}
                 if !layout.is_zero_sized() {
-                    sorted_fields.push((label, layout));
+                    sorted_fields.push((label, Ok(layout)));
                 }
             }
 
@@ -452,19 +576,46 @@ pub enum UnionVariant<'a> {
 
 pub fn union_sorted_tags<'a>(arena: &'a Bump, var: Variable, subs: &Subs) -> UnionVariant<'a> {
     let mut tags_vec = std::vec::Vec::new();
-    match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => union_sorted_tags_help(arena, tags_vec, subs),
+    let result = match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
+        Ok(()) | Err((_, Content::FlexVar(_))) => {
+            let opt_rec_var = get_recursion_var(subs, var);
+            union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs)
+        }
         Err(other) => panic!("invalid content in tag union variable: {:?}", other),
+    };
+
+    result
+}
+
+fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
+    match subs.get_without_compacting(var).content {
+        Content::Structure(FlatType::RecursiveTagUnion(rec_var, _, _)) => Some(rec_var),
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
+            get_recursion_var(subs, args[1])
+        }
+        Content::Alias(_, _, actual) => get_recursion_var(subs, actual),
+        _ => None,
     }
 }
 
 fn union_sorted_tags_help<'a>(
     arena: &'a Bump,
     mut tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)>,
+    opt_rec_var: Option<Variable>,
     subs: &Subs,
 ) -> UnionVariant<'a> {
     // sort up front; make sure the ordering stays intact!
     tags_vec.sort();
+
+    let mut env = Env {
+        arena,
+        subs,
+        seen: MutSet::default(),
+    };
+
+    if let Some(rec_var) = opt_rec_var {
+        env.insert_seen(rec_var);
+    }
 
     match tags_vec.len() {
         0 => {
@@ -484,7 +635,7 @@ fn union_sorted_tags_help<'a>(
                 }
                 _ => {
                     for var in arguments {
-                        match Layout::from_var(arena, var, subs) {
+                        match Layout::from_var(&mut env, var) {
                             Ok(layout) => {
                                 // Drop any zero-sized arguments like {}
                                 if !layout.is_zero_sized() {
@@ -523,7 +674,7 @@ fn union_sorted_tags_help<'a>(
                 arg_layouts.push(Layout::Builtin(Builtin::Int64));
 
                 for var in arguments {
-                    match Layout::from_var(arena, var, subs) {
+                    match Layout::from_var(&mut env, var) {
                         Ok(layout) => {
                             // Drop any zero-sized arguments like {}
                             if !layout.is_zero_sized() {
@@ -583,7 +734,8 @@ pub fn layout_from_tag_union<'a>(
     let tags_vec: std::vec::Vec<_> = tags.into_iter().collect();
 
     if tags_vec[0].0 != TagName::Private(Symbol::NUM_AT_NUM) {
-        let variant = union_sorted_tags_help(arena, tags_vec, subs);
+        let opt_rec_var = None;
+        let variant = union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs);
 
         match variant {
             Never => panic!("TODO gracefully handle trying to instantiate Never"),
@@ -631,16 +783,6 @@ fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
 fn ext_var_is_empty_tag_union(_: &Subs, _: Variable) -> bool {
     // This should only ever be used in debug_assert! macros
     unreachable!();
-}
-
-#[cfg(debug_assertions)]
-fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
-    // the ext_var is empty
-    let mut ext_fields = MutMap::default();
-    match roc_types::pretty_print::chase_ext_record(subs, ext_var, &mut ext_fields) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => ext_fields.is_empty(),
-        Err((_, content)) => panic!("invalid content in ext_var: {:?}", content),
-    }
 }
 
 #[cfg(not(debug_assertions))]
@@ -714,29 +856,28 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
 }
 
 pub fn list_layout_from_elem<'a>(
-    arena: &'a Bump,
-    subs: &Subs,
+    env: &mut Env<'a, '_>,
     elem_var: Variable,
 ) -> Result<Layout<'a>, LayoutProblem> {
-    match subs.get_without_compacting(elem_var).content {
+    match env.subs.get_without_compacting(elem_var).content {
         Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
             debug_assert_eq!(args.len(), 2);
 
             let var = *args.get(1).unwrap();
 
-            list_layout_from_elem(arena, subs, var)
+            list_layout_from_elem(env, var)
         }
         Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (List *) then it must have been an empty list
             Ok(Layout::Builtin(Builtin::EmptyList))
         }
         content => {
-            let elem_layout = Layout::new(arena, content, subs)?;
+            let elem_layout = Layout::new_help(env, content)?;
 
             // This is a normal list.
             Ok(Layout::Builtin(Builtin::List(
                 MemoryMode::Refcounted,
-                arena.alloc(elem_layout),
+                env.arena.alloc(elem_layout),
             )))
         }
     }

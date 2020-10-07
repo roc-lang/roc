@@ -482,9 +482,12 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                when 10 is
-                    x if x == 5 -> 0
-                    _ -> 42
+                main = \{} -> 
+                    when 10 is
+                        x if x == 5 -> 0
+                        _ -> 42
+
+                main {}
                 "#
             ),
             42,
@@ -497,9 +500,12 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                when 10 is
-                    x if x == 10 -> 42
-                    _ -> 0
+                main = \{} -> 
+                    when 10 is
+                        x if x == 10 -> 42
+                        _ -> 0
+
+                main {}
                 "#
             ),
             42,
@@ -574,5 +580,212 @@ mod gen_num {
     #[test]
     fn float_to_float() {
         assert_evals_to!("Num.toFloat 0.5", 0.5, f64);
+    }
+
+    #[test]
+    fn int_compare() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.compare 0 1 is
+                    LT -> 0
+                    EQ -> 1
+                    GT -> 2
+                "#
+            ),
+            0,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.compare 1 1 is
+                    LT -> 0
+                    EQ -> 1
+                    GT -> 2
+                "#
+            ),
+            1,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.compare 1 0 is
+                    LT -> 0
+                    EQ -> 1
+                    GT -> 2
+                "#
+            ),
+            2,
+            i64
+        );
+    }
+
+    #[test]
+    fn float_compare() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.compare 0 3.14 is
+                    LT -> 0
+                    EQ -> 1
+                    GT -> 2
+                "#
+            ),
+            0,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.compare 3.14 3.14 is
+                    LT -> 0
+                    EQ -> 1
+                    GT -> 2
+                "#
+            ),
+            1,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.compare 3.14 0 is
+                    LT -> 0
+                    EQ -> 1
+                    GT -> 2
+                "#
+            ),
+            2,
+            i64
+        );
+    }
+
+    #[test]
+    fn pow() {
+        assert_evals_to!("Num.pow 2.0 2.0", 4.0, f64);
+    }
+
+    #[test]
+    fn ceiling() {
+        assert_evals_to!("Num.ceiling 1.1", 2, i64);
+    }
+
+    #[test]
+    fn floor() {
+        assert_evals_to!("Num.floor 1.9", 1, i64);
+    }
+
+    #[test]
+    fn pow_int() {
+        assert_evals_to!("Num.powInt 2 3", 8, i64);
+    }
+
+    #[test]
+    fn atan() {
+        assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
+    fn int_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                9_223_372_036_854_775_807 + 1
+                "#
+            ),
+            0,
+            i64
+        );
+    }
+
+    #[test]
+    fn int_add_checked() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.addChecked 1 2 is
+                    Ok v -> v
+                    _ -> -1
+                "#
+            ),
+            3,
+            i64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.addChecked 9_223_372_036_854_775_807 1 is
+                    Err Overflow -> -1
+                    Ok v -> v
+                "#
+            ),
+            -1,
+            i64
+        );
+    }
+
+    #[test]
+    fn int_add_wrap() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.addWrap 9_223_372_036_854_775_807 1
+                "#
+            ),
+            std::i64::MIN,
+            i64
+        );
+    }
+
+    #[test]
+    fn float_add_checked_pass() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.addChecked 1.0 0.0 is 
+                    Ok v -> v
+                    Err Overflow -> -1.0
+                "#
+            ),
+            1.0,
+            f64
+        );
+    }
+
+    #[test]
+    fn float_add_checked_fail() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.addChecked 1.7976931348623157e308 1.7976931348623157e308 is
+                    Err Overflow -> -1
+                    Ok v -> v
+                "#
+            ),
+            -1.0,
+            f64
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = r#"Roc failed with message: "float addition overflowed!"#)]
+    fn float_overflow() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                1.7976931348623157e308 + 1.7976931348623157e308
+                "#
+            ),
+            0.0,
+            f64
+        );
     }
 }

@@ -1,5 +1,5 @@
-interface List
-    exposes [ List, map, fold ]
+interface List2
+    exposes [ List, single, empty, repeat, range, reverse, sort, map, mapWithIndex, mapOrCancel, mapOks, update, updater, allOks, append, prepend, concat, join, joinMap, oks, zip, zipMap, keepIf, dropIf, first, last, get, max, min, put, drop, append, prepend, dropLast, dropFirst, takeFirst, takeLast, split, sublist, walk, walkBackwards, walkUntil, walkBackwardsUntil, len, isEmpty, contains, all, any ]
     imports []
 
 ## Types
@@ -215,6 +215,23 @@ mapOrCancel : List before, (before -> Result after err) -> Result (List after) e
 ## >>> List.mapOks [ "", "a", "bc", "", "d", "ef", "" ]
 mapOks : List before, (before -> Result after *) -> List after
 
+## Returns a list with the element at the given index having been transformed by
+## the given function.
+##
+## For a version of this which gives you more control over when to perform
+## the transformation, see #List.updater
+##
+## ## Performance notes
+##
+## In particular when updating nested collections, this is potentially much more
+## efficient than using #List.get to obtain the element, transforming it,
+## and then putting it back in the same place.
+update : List elem, Len, (elem -> elem) -> List elem
+
+## A more flexible version of #List.update, which returns an "updater" function
+## that lets you delay performing the update until later.
+updater : List elem, Len -> { elem, new : elem -> List elem }
+
 ## If all the elements in the list are #Ok, return a new list containing the
 ## contents of those #Ok tags. If any elements are #Err, return #Err.
 allOks : List (Result ok err) -> Result (List ok) err
@@ -265,7 +282,11 @@ joinMap : List before, (before -> List after) -> List after
 ## >>> [ [ 1, 2, 3 ], [], [], [ 4, 5 ] ]
 ## >>>     |> List.map List.first
 ## >>>     |> List.joinOks
-joinOks : List (Result elem *) -> List elem
+##
+## Eventually, `oks` type signature will be `List [Ok elem]* -> List elem`.
+## The implementation for that is a lot tricker then `List (Result elem *)`
+## so we're sticking with `Result` for now.
+oks : List (Result elem *) -> List elem
 
 ## Iterates over the shortest of the given lists and returns a list of `Pair`
 ## tags, each wrapping one of the elements in that list, along with the elements
@@ -347,7 +368,16 @@ min : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 ##
 ## If the given index is outside the bounds of the list, returns the original
 ## list unmodified.
+##
+## To drop the element at a given index, instead of replacing it, see #List.drop.
 put : List elem, Len, elem -> List elem
+
+## Drops the element at the given index from the list.
+##
+## This has no effect if the given index is outside the bounds of the list.
+##
+## To replace the element at a given index, instead of dropping it, see #List.put.
+drop : List elem, Len -> List elem
 
 ## Adds a new element to the end of the list.
 ##

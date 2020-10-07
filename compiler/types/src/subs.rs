@@ -151,10 +151,9 @@ impl Variable {
     pub const EMPTY_TAG_UNION: Variable = Variable(2);
     // Builtins
     const BOOL_ENUM: Variable = Variable(3);
-    pub const BOOL: Variable = Variable(4);
-    pub const LIST_GET: Variable = Variable(5);
+    pub const BOOL: Variable = Variable(4); // Used in `if` conditions
 
-    pub const NUM_RESERVED_VARS: usize = 6;
+    pub const NUM_RESERVED_VARS: usize = 5;
 
     const FIRST_USER_SPACE_VAR: Variable = Variable(Self::NUM_RESERVED_VARS as u32);
 
@@ -566,7 +565,7 @@ impl Content {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FlatType {
     Apply(Symbol, Vec<Variable>),
-    Func(Vec<Variable>, Variable),
+    Func(Vec<Variable>, Variable, Variable),
     Record(MutMap<Lowercase, RecordField<Variable>>, Variable),
     TagUnion(MutMap<TagName, Vec<Variable>>, Variable),
     RecursiveTagUnion(Variable, MutMap<TagName, Vec<Variable>>, Variable),
@@ -607,8 +606,10 @@ fn occurs(
 
                 match flat_type {
                     Apply(_, args) => short_circuit(subs, root_var, &new_seen, args.iter()),
-                    Func(arg_vars, ret_var) => {
-                        let it = once(&ret_var).chain(arg_vars.iter());
+                    Func(arg_vars, closure_var, ret_var) => {
+                        let it = once(&ret_var)
+                            .chain(once(&closure_var))
+                            .chain(arg_vars.iter());
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     Record(vars_by_field, ext_var) => {
@@ -700,14 +701,19 @@ fn explicit_substitute(
 
                             subs.set_content(in_var, Structure(Apply(symbol, new_args)));
                         }
-                        Func(arg_vars, ret_var) => {
+                        Func(arg_vars, closure_var, ret_var) => {
                             let new_arg_vars = arg_vars
                                 .iter()
                                 .map(|var| explicit_substitute(subs, from, to, *var, seen))
                                 .collect();
                             let new_ret_var = explicit_substitute(subs, from, to, ret_var, seen);
+                            let new_closure_var =
+                                explicit_substitute(subs, from, to, closure_var, seen);
 
-                            subs.set_content(in_var, Structure(Func(new_arg_vars, new_ret_var)));
+                            subs.set_content(
+                                in_var,
+                                Structure(Func(new_arg_vars, new_closure_var, new_ret_var)),
+                            );
                         }
                         TagUnion(mut tags, ext_var) => {
                             let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
@@ -805,8 +811,9 @@ fn get_var_names(
                     })
                 }
 
-                FlatType::Func(arg_vars, ret_var) => {
+                FlatType::Func(arg_vars, closure_var, ret_var) => {
                     let taken_names = get_var_names(subs, ret_var, taken_names);
+                    let taken_names = get_var_names(subs, closure_var, taken_names);
 
                     arg_vars.into_iter().fold(taken_names, |answer, arg_var| {
                         get_var_names(subs, arg_var, answer)
@@ -999,14 +1006,15 @@ fn flat_type_to_err_type(
             ErrorType::Type(symbol, arg_types)
         }
 
-        Func(arg_vars, ret_var) => {
+        Func(arg_vars, closure_var, ret_var) => {
             let args = arg_vars
                 .into_iter()
                 .map(|arg_var| var_to_err_type(subs, state, arg_var))
                 .collect();
             let ret = var_to_err_type(subs, state, ret_var);
+            let closure = var_to_err_type(subs, state, closure_var);
 
-            ErrorType::Function(args, Box::new(ret))
+            ErrorType::Function(args, Box::new(closure), Box::new(ret))
         }
 
         EmptyRecord => ErrorType::Record(SendMap::default(), TypeExt::Closed),
@@ -1146,12 +1154,13 @@ fn restore_content(subs: &mut Subs, content: &Content) {
                 }
             }
 
-            Func(arg_vars, ret_var) => {
+            Func(arg_vars, closure_var, ret_var) => {
                 for &var in arg_vars {
                     subs.restore(var);
                 }
 
                 subs.restore(*ret_var);
+                subs.restore(*closure_var);
             }
 
             EmptyRecord => (),

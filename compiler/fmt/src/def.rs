@@ -16,10 +16,6 @@ impl<'a> Formattable<'a> for Def<'a> {
             }
             Body(loc_pattern, loc_expr) => loc_pattern.is_multiline() || loc_expr.is_multiline(),
 
-            TypedBody(_loc_pattern, _loc_annotation, _loc_expr) => {
-                unreachable!("annotations and bodies have not yet been merged into TypedBody");
-            }
-
             SpaceBefore(sub_def, spaces) | SpaceAfter(sub_def, spaces) => {
                 spaces.iter().any(|s| is_comment(s)) || sub_def.is_multiline()
             }
@@ -60,9 +56,6 @@ impl<'a> Formattable<'a> for Def<'a> {
             }
             Body(loc_pattern, loc_expr) => {
                 fmt_body(buf, &loc_pattern.value, &loc_expr.value, indent);
-            }
-            TypedBody(_loc_pattern, _loc_annotation, _loc_expr) => {
-                unreachable!("annotations and bodies have not yet been merged into TypedBody");
             }
             SpaceBefore(sub_def, spaces) => {
                 fmt_spaces(buf, spaces.iter(), indent);

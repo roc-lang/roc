@@ -787,8 +787,7 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
         | Num(_, _)
         | Int(_, _)
         | Float(_, _)
-        | Str(_)
-        | BlockStr(_)
+        | Str { .. }
         | EmptyRecord
         | Accessor { .. }
         | RunLowLevel { .. } => {}
@@ -924,13 +923,17 @@ pub fn annotate_usage(expr: &Expr, usage: &mut VarUsage) {
                 annotate_usage(&arg.value, usage);
             }
         }
-        Closure(_, _, _, args, body) => {
+        Closure {
+            arguments,
+            loc_body,
+            ..
+        } => {
             // annotate defaults of optional record fields
-            for (_, loc_pattern) in args {
+            for (_, loc_pattern) in arguments {
                 annotate_usage_pattern(&loc_pattern.value, usage);
             }
 
-            annotate_usage(&body.0.value, usage);
+            annotate_usage(&loc_body.value, usage);
         }
 
         Tag { arguments, .. } => {

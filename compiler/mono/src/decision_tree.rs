@@ -1,5 +1,7 @@
 use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
-use crate::ir::{DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt};
+use crate::ir::{
+    DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt, Wrapped,
+};
 use crate::layout::{Builtin, Layout, LayoutCache};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
@@ -409,7 +411,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
                                 arguments.push((Pattern::Underscore, destruct.layout.clone()));
                             }
                             DestructType::Optional(_expr) => {
-                                todo!("test_at_type for optional destruct");
+                                arguments.push((Pattern::Underscore, destruct.layout.clone()));
                             }
                         }
                     }
@@ -541,9 +543,7 @@ fn to_relevant_branch_help<'a>(
                     let pattern = match destruct.typ {
                         DestructType::Guard(guard) => guard.clone(),
                         DestructType::Required => Pattern::Underscore,
-                        DestructType::Optional(_expr) => {
-                            todo!("TODO decision tree for optional field branch");
-                        }
+                        DestructType::Optional(_expr) => Pattern::Underscore,
                     };
 
                     (
@@ -570,7 +570,7 @@ fn to_relevant_branch_help<'a>(
         AppliedTag {
             tag_name,
             arguments,
-            union,
+            layout,
             ..
         } => {
             match test {
@@ -579,39 +579,51 @@ fn to_relevant_branch_help<'a>(
                     tag_id,
                     ..
                 } if &tag_name == test_name => {
-                    // Theory: Unbox doesn't have any value for us
-                    if arguments.len() == 1 && union.alternatives.len() == 1 {
-                        let arg = arguments[0].clone();
-                        {
-                            start.push((Path::Unbox(Box::new(path.clone())), guard, arg.0));
-                            start.extend(end);
-                        }
-                    } else if union.alternatives.len() == 1 {
-                        todo!("this should need a special index, right?")
-                    } else {
-                        let sub_positions =
-                            arguments
-                                .into_iter()
-                                .enumerate()
-                                .map(|(index, (pattern, _))| {
-                                    (
-                                        Path::Index {
-                                            index: index as u64,
-                                            tag_id: *tag_id,
-                                            path: Box::new(path.clone()),
+                    match Wrapped::opt_from_layout(&layout) {
+                        None => todo!(),
+                        Some(wrapped) => {
+                            match wrapped {
+                                Wrapped::SingleElementRecord => {
+                                    // Theory: Unbox doesn't have any value for us
+                                    let arg = arguments[0].clone();
+                                    {
+                                        start.push((
+                                            Path::Unbox(Box::new(path.clone())),
+                                            guard,
+                                            arg.0,
+                                        ));
+                                        start.extend(end);
+                                    }
+                                }
+                                Wrapped::RecordOrSingleTagUnion => {
+                                    todo!("this should need a special index, right?")
+                                }
+                                Wrapped::MultiTagUnion => {
+                                    let sub_positions = arguments.into_iter().enumerate().map(
+                                        |(index, (pattern, _))| {
+                                            (
+                                                Path::Index {
+                                                    index: 1 + index as u64,
+                                                    tag_id: *tag_id,
+                                                    path: Box::new(path.clone()),
+                                                },
+                                                Guard::NoGuard,
+                                                pattern,
+                                            )
                                         },
-                                        Guard::NoGuard,
-                                        pattern,
-                                    )
-                                });
-                        start.extend(sub_positions);
-                        start.extend(end);
-                    }
+                                    );
+                                    start.extend(sub_positions);
+                                    start.extend(end);
+                                }
+                                Wrapped::EmptyRecord => todo!(),
+                            }
 
-                    Some(Branch {
-                        goal: branch.goal,
-                        patterns: start,
-                    })
+                            Some(Branch {
+                                goal: branch.goal,
+                                patterns: start,
+                            })
+                        }
+                    }
                 }
                 _ => None,
             }
@@ -922,18 +934,7 @@ pub fn optimize_when<'a>(
     )
 }
 
-fn path_to_expr<'a>(
-    env: &mut Env<'a, '_>,
-    symbol: Symbol,
-    path: &Path,
-    layout: &Layout<'a>,
-) -> (StoresVec<'a>, Symbol) {
-    let (symbol, stores, _) = path_to_expr_help2(env, symbol, path, layout.clone());
-
-    (stores, symbol)
-}
-
-fn path_to_expr_help2<'a>(
+fn path_to_expr_help<'a>(
     env: &mut Env<'a, '_>,
     mut symbol: Symbol,
     mut path: &Path,
@@ -952,32 +953,58 @@ fn path_to_expr_help2<'a>(
                 index,
                 tag_id,
                 path: nested,
-            } => {
-                let (is_unwrapped, field_layouts) = match layout.clone() {
-                    Layout::Union(layouts) => {
-                        (layouts.is_empty(), layouts[*tag_id as usize].to_vec())
-                    }
-                    Layout::Struct(layouts) => (true, layouts.to_vec()),
-                    other => (true, vec![other]),
-                };
+            } => match Wrapped::opt_from_layout(&layout) {
+                None => {
+                    // this MUST be an index into a single-element (hence unwrapped) record
 
-                debug_assert!(*index < field_layouts.len() as u64);
+                    debug_assert_eq!(*index, 0);
+                    debug_assert_eq!(*tag_id, 0);
+                    debug_assert_eq!(**nested, Path::Empty);
 
-                let inner_layout = field_layouts[*index as usize].clone();
+                    let field_layouts = vec![layout.clone()];
 
-                let inner_expr = Expr::AccessAtIndex {
-                    index: *index,
-                    field_layouts: env.arena.alloc(field_layouts),
-                    structure: symbol,
-                    is_unwrapped,
-                };
+                    debug_assert!(*index < field_layouts.len() as u64);
 
-                symbol = env.unique_symbol();
-                stores.push((symbol, inner_layout.clone(), inner_expr));
+                    let inner_layout = field_layouts[*index as usize].clone();
+                    let inner_expr = Expr::AccessAtIndex {
+                        index: *index,
+                        field_layouts: env.arena.alloc(field_layouts),
+                        structure: symbol,
+                        wrapped: Wrapped::SingleElementRecord,
+                    };
 
-                layout = inner_layout;
-                path = nested;
-            }
+                    symbol = env.unique_symbol();
+                    stores.push((symbol, inner_layout.clone(), inner_expr));
+
+                    break;
+                }
+                Some(wrapped) => {
+                    let field_layouts = match layout {
+                        Layout::Union(layouts) | Layout::RecursiveUnion(layouts) => {
+                            layouts[*tag_id as usize].to_vec()
+                        }
+                        Layout::Struct(layouts) => layouts.to_vec(),
+                        other => vec![other.clone()],
+                    };
+
+                    debug_assert!(*index < field_layouts.len() as u64);
+
+                    let inner_layout = field_layouts[*index as usize].clone();
+
+                    let inner_expr = Expr::AccessAtIndex {
+                        index: *index,
+                        field_layouts: env.arena.alloc(field_layouts),
+                        structure: symbol,
+                        wrapped,
+                    };
+
+                    symbol = env.unique_symbol();
+                    stores.push((symbol, inner_layout.clone(), inner_expr));
+
+                    layout = inner_layout;
+                    path = nested;
+                }
+            },
         }
     }
 
@@ -991,6 +1018,9 @@ fn test_to_equality<'a>(
     path: &Path,
     test: Test<'a>,
 ) -> (StoresVec<'a>, Symbol, Symbol, Layout<'a>) {
+    let (rhs_symbol, mut stores, _layout) =
+        path_to_expr_help(env, cond_symbol, &path, cond_layout.clone());
+
     match test {
         Test::IsCtor {
             tag_id,
@@ -998,6 +1028,7 @@ fn test_to_equality<'a>(
             arguments,
             ..
         } => {
+            let path_symbol = rhs_symbol;
             // the IsCtor check should never be generated for tag unions of size 1
             // (e.g. record pattern guard matches)
             debug_assert!(union.alternatives.len() > 1);
@@ -1013,21 +1044,20 @@ fn test_to_equality<'a>(
             for (_, layout) in arguments {
                 field_layouts.push(layout);
             }
+            let field_layouts = field_layouts.into_bump_slice();
 
             let rhs = Expr::AccessAtIndex {
                 index: 0,
-                field_layouts: field_layouts.into_bump_slice(),
-                structure: cond_symbol,
-                is_unwrapped: union.alternatives.len() == 1,
+                field_layouts,
+                structure: path_symbol,
+                wrapped: Wrapped::MultiTagUnion,
             };
 
             let lhs_symbol = env.unique_symbol();
             let rhs_symbol = env.unique_symbol();
 
-            let mut stores = bumpalo::collections::Vec::with_capacity_in(2, env.arena);
-
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
-            stores.push((rhs_symbol, Layout::Builtin(Builtin::Int64), rhs));
+            stores.insert(0, (rhs_symbol, Layout::Builtin(Builtin::Int64), rhs));
 
             (
                 stores,
@@ -1039,7 +1069,6 @@ fn test_to_equality<'a>(
         Test::IsInt(test_int) => {
             let lhs = Expr::Literal(Literal::Int(test_int));
             let lhs_symbol = env.unique_symbol();
-            let (mut stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
 
             (
@@ -1055,7 +1084,6 @@ fn test_to_equality<'a>(
             let test_float = f64::from_bits(test_int as u64);
             let lhs = Expr::Literal(Literal::Float(test_float));
             let lhs_symbol = env.unique_symbol();
-            let (mut stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Float64), lhs));
 
             (
@@ -1071,7 +1099,6 @@ fn test_to_equality<'a>(
         } => {
             let lhs = Expr::Literal(Literal::Byte(test_byte));
             let lhs_symbol = env.unique_symbol();
-            let (mut stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int8), lhs));
 
             (
@@ -1085,7 +1112,6 @@ fn test_to_equality<'a>(
         Test::IsBit(test_bit) => {
             let lhs = Expr::Literal(Literal::Bool(test_bit));
             let lhs_symbol = env.unique_symbol();
-            let (mut stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int1), lhs));
 
             (
@@ -1099,7 +1125,6 @@ fn test_to_equality<'a>(
         Test::IsStr(test_str) => {
             let lhs = Expr::Literal(Literal::Str(env.arena.alloc(test_str)));
             let lhs_symbol = env.unique_symbol();
-            let (mut stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
 
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Str), lhs));
 
@@ -1323,7 +1348,7 @@ fn decide_to_branching<'a>(
             // switch on the tag discriminant (currently an i64 value)
             // NOTE the tag discriminant is not actually loaded, `cond` can point to a tag
             let (cond, cond_stores_vec, cond_layout) =
-                path_to_expr_help2(env, cond_symbol, &path, cond_layout);
+                path_to_expr_help(env, cond_symbol, &path, cond_layout);
 
             let default_branch = decide_to_branching(
                 env,

@@ -122,50 +122,6 @@ You can rewrite the above like so:
 \UserId id ->
 ```
 
-## Function equality
-
-In Elm, if you write `(\val -> val) == (\val -> val)`, you currently get a runtime exception
-which links to [the `==` docs](https://package.elm-lang.org/packages/elm/core/latest/Basics#==), which explain why this is the current behavior and what the better version will look like.
-
-> OCaml also has the "runtime exception if you compare functions for structural equality" behavior, but unlike Elm, in OCaml this appears to be the long-term design.
-
-In Roc, the design is for function equality to be a compile error, but not tracked visibly
-in the type system. In this way it's like tail calls; the compiler tracks them, but
-it tracks them in a way that is not exposed to the author directly.
-
-So if you write `(\val -> val) == (\val -> val)` in Roc, you'll get a compile error about "function equality," but not a type mismatch - because the types will be identical (`a -> a` in both cases).
-
-The reason for this design is that in practice, the Elm stopgap runtime exception design has
-revealed that this edge case comes up absurdly infrequently - to the point where many seasoned Elm programmers do not even know this is a runtime exception, because they've never even accidentally written code that triggers it!
-
-Clearly since this is detectable at compile time, it's a nicer design to give the feedback
-at compile time rather than crashing at runtime. Also, it happens so infrequently that it would
-be hard to justify lots of type signatures gaining an `Eq` constraint of some sort -
-especially when the syntax for that would be added to the language *solely* for the sake
-of this extreme edge case.
-
-Instead the design is to track this behind the scenes only, and give
-a separate class of compiler error for it than the "type mismatch" error you'd see
-for this in Rust or Haskell.
-
-> It's possible that it would be nice to present a note when printing these types
-> in a REPL or editor, e.g.
->
-> ```
-> > \a, b -> a == b
-> <function> : a, a -> Bool
->
-> Note: this `a` type variable will not accept types that contain functions
-> ```
->
-> I can see a similar argument for noting information about whether a function
-> is tail-recursive. For example:
->
-> ```
-> > fibonacci
-> <tail-recursive function> : Int -> Int
-> ```
-
 ## Unbound type variables
 
 In Elm, every type variable is named. For example:
@@ -269,7 +225,7 @@ not only will this type-check, but at the end we get a combined error type which
 has the union of all the possible errors that could have occurred in this sequence.
 We can then handle those errors using a single `when`, like so:
 
-```elm
+```coffeescript
 when error is
     # Http.Err possibilities
     PageNotFound -> ...
@@ -287,11 +243,8 @@ when error is
     DiskFull -> ...
 ```
 
-
-
-Here is a set
-of slightly different types that would make the above expression compile.
-(`after` is unchanged.)
+Here is the set of slightly different types that will make the original chained
+expression compile. (`after` is unchanged.)
 
 ```elm
 File.read : Filename -> Task File.Data (File.ReadErr *)
@@ -301,28 +254,21 @@ Http.get : Url -> Task Http.Response (Http.Err *)
 after : Task a err, (a -> Task b err) -> Task b err
 ```
 
-The key is that each of the error types expands to a Roc *tag union*. Here's how
-they look:
+The key is that each of the error types is a type alias for a Roc *tag union*.
+Here's how they look:
 
 ```elm
-Http.Err a : [PageNotFound, Timeout, BadPayload]a
-File.ReadErr a : [FileNotFound, Corrupted, BadFormat]a
-File.WriteErr a : [FileNotFound, DiskFull]a
+Http.Err a : [ PageNotFound, Timeout, BadPayload ]a
+File.ReadErr a : [ FileNotFound, Corrupted, BadFormat ]a
+File.WriteErr a : [ FileNotFound, DiskFull ]a
 ```
 
+In Elm, these would be defined as custom types (aka algebraic data types) using
+the `type` keyword. However, instead of traditional algebraic data types, Roc has
+only tags - which work more like OCaml's *polymorphic variants*, and which
+can be used in type aliases without a separate `type` keyword. (Roc has no `type` keyword.)
 
-```elm
-first : List elem -> [Ok elem, ListWasEmpty]*
-```
-
-> It's motivated primarily by error handling in chained effects
-> (e.g. multiple consecutive `Task.andThen`s between tasks with incompatible error types),
-> which doesn't really come up in Elm but often will in Roc. Explaining how
-> this improves that situation is out of scope for this document; even without
-> that explanation, this section is already the longest!
-
-Instead of traditional algebraic data types (like Elm has), Roc uses something more like
-OCaml's *polymorphic variants*. In Roc they're called *tags*. Here are some examples of using tags in a REPL:
+Here are some examples of using tags in a REPL:
 
 ```
 > True
@@ -347,7 +293,8 @@ Foo "hi" 5 : [ Foo Str Int ]*
 Foo 1 2 : [ Foo Int Int ]*
 ```
 
-Tags are different from variants in Elm in several ways.
+Tags have a lot in common with traditional algebraic data types' *variants*,
+but are different in several ways.
 
 One difference is that you can make up any tag you want, on the fly, and use it in any module,
 without declaring it first. (These cannot be used to create opaque types; we'll discuss those
@@ -657,7 +604,7 @@ Here, the open record's type variable appears attached to the `}`.
 
 > In the Elm example, the `a` is unbound, which in Roc means it appears as `*`.
 
-Here's how that looks with a bound type varaible. In Elm:
+Here's how that looks with a bound type variable. In Elm:
 
 ```elm
 { a | x : Int, y : Int } -> { a | x : Int, y : Int }
@@ -735,7 +682,7 @@ has the fields `x` and `y`.
 In Roc, you can do this like so:
 
 ```elm
-table { height = 800, width = 600 }
+table { height: 800, width: 600 }
 ```
 
 ...and the `table` function will fill in its default values for `x` and `y`.
@@ -776,25 +723,54 @@ outside a record field. Optionality is a concept that exists only in record fiel
 and it's intended for the use case of config records like this. The ergonomics
 of destructuring mean this wouldn't be a good fit for data modeling.
 
+## Function equality
+
+In Elm, if you write `(\val -> val) == (\val -> val)`, you currently get a runtime exception
+which links to [the `==` docs](https://package.elm-lang.org/packages/elm/core/latest/Basics#==),
+which explain why this is the current behavior and what the better version will look like.
+
+> OCaml also has the "runtime exception if you compare functions for structural equality"
+> behavior, but unlike Elm, in OCaml this appears to be the long-term design.
+
+In Roc, function equality is a compile error, tracked explicitly in the type system.
+Here's the type of Roc's equality function:
+
+```elm
+'val, 'val -> Bool
+```
+
+Whenever a named type variable in Roc has a `'` at the beginning, that means
+it is a *functionless* type - a type which cannot involve functions.
+If there are any functions in that type, it's a type mismatch. This is true
+whether `val` itself is a function, or if it's a type that wraps a function,
+like `{ predicate: (Int -> Bool) }` or `List (Bool -> Bool)`.
+
+So if you write `(\a -> a) == (\a -> a)` in Roc, you'll get a type mismatch.
+If you wrap both sides of that `==` in a record or list, you'll still get a
+type mismatch.
+
+If a named type variable has a `'` anywhere in a given type, then it must have a `'`
+everywhere in that type. So it would be an error to have a type like `x, 'x -> Bool`
+because `x` has a `'` in one place but not everywhere.
+
 ## Standard Data Structures
 
 Elm has `List`, `Array`, `Set`, and `Dict` in the standard library.
 
-Roc has `List`, `Bytes`, `Set`, and `Map` in the standard library.
+Roc has `List`, `Set`, and `Map` in the standard library.
 
 Here are the differences:
 
-* `List` in Roc uses the term "list" the way Python does: to mean an unordered sequence of elements. Roc's `List` is more like Elm's `Array`; under the hood it is a RRB tree - specifically, [this one](https://docs.rs/im/14.0.0/im/vector/index.html). It still uses the `[` `]` syntax for values. Also there is no `::` operator because "cons" is not a notably efficient operation on a RRB tree like it is in a linked list; adding an element to either the beginning or end of a Roc `List` is an amortized constant time operation.
-* `Bytes` in Roc works like [`Bytes` in `elm/bytes`](https://package.elm-lang.org/packages/elm/bytes/latest/Bytes). It's in the standard library because Roc does not have a concept analogous to Elm's `Kernel`, so if `Bytes` weren't in the standard library, it could not exist as a separate package (and thus operating on raw byte streams would not be supported in Roc).
-* `Map` in Roc is like `Dict` in Elm, except it's backed by hashing rather than ordering. Like `List`, it uses [one of Bodil Stokke's `im-rs` persistent data structures](https://docs.rs/im/14.0.0/im/hashmap/index.html) under the hood. Roc also silently computes hash values for any value that can be used with `==`, so there is no `comparable` (or similar) constraint on `Map` keys in Roc.
-* `Set` in Roc is like `Set` in Elm: it's shorthand for a `Map` with keys but no value, and it has a slightly different API. Like with `Map`, there is no `comparable` (or similar) constraint on the values that can go in a Roc `Set`.
+* `List` in Roc uses the term "list" the way Python does: to mean an ordered sequence of elements. Roc's `List` is more like an array, in that all the elements are sequential in memory and can be accessed in constant time. It still uses the `[` `]` syntax for list literals. Also there is no `::` operator because "cons" is not an efficient operation on an array like it is in a linked list.
+* `Map` in Roc is like `Dict` in Elm, except it's backed by hashing rather than ordering. Roc silently computes hash values for any value that can be used with `==`, so instead of a `comparable` constraint on `Set` elements and `Map` keys, in Roc they instead have the *functionless* constraint indicated with a `'`. So to add to a `Set` you use `Set.add : Set 'elem, 'elem -> Set 'elem`, and putting a value into a Map is `Map.put : Map 'key val, 'key, val -> Map 'key val`.
+* `Set` in Roc is like `Set` in Elm: it's shorthand for a `Map` with keys but no value, and it has a slightly different API.
 
 > The main reason it's called `Map` instead of `Dict` is that it's annoying to have a conversation about `Dict` out loud, let alone to teach it in a workshop, because you have to be so careful to enunciate. `Map` is one letter shorter, doesn't have this problem, is widely used, and never seems to be confused with the `map` function in practice (in e.g. JavaScript and Rust, both of which have both `Map` and `map`) even though it seems like it would in theory.
 
-Roc also has a special literal syntax for maps and sets. Here's how to write a `Map` literal:
+Roc also has a literal syntax for maps and sets. Here's how to write a `Map` literal:
 
 ```elm
-{{ "Sam" => 1, "Ali" => 2, firstName => 3 }}
+{: "Sam" => 1, "Ali" => 2, firstName => 3 :}
 ```
 
 This expression has the type `Map Str Int`, and the `firstName` variable would
@@ -812,17 +788,18 @@ This works, but is not nearly as nice to read.
 
 Additionally, map literals can compile direcly to efficient initialization code without needing to (hopefully be able to) optimize away the intermediate `List` involved in  `fromList`.
 
-`{{}}` is an empty `Map`.
+`{::}` is an empty `Map`.
 
 You can write a `Set` literal like this:
 
 ```elm
-{[ "Sam", "Ali", firstName ]}
+[: "Sam", "Ali", firstName :]
 ```
+
 The `Set` literal syntax is partly for the initialization benefit, and also for symmetry
 with the `Map` literal syntax.
 
-`{[]}` is an empty `Set`.
+`[::]` is an empty `Set`.
 
 Roc does not have syntax for pattern matching on data structures - not even `[` `]` like Elm does.
 

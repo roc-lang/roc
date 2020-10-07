@@ -1776,9 +1776,13 @@ fn build_pending_specializations<'a>(
             Declare(def) | Builtin(def) => match def.loc_pattern.value {
                 Identifier(symbol) => {
                     match def.loc_expr.value {
-                        Closure(annotation, _, _, loc_args, boxed_body) => {
-                            let (loc_body, ret_var) = *boxed_body;
-
+                        Closure {
+                            function_type: annotation,
+                            return_type: ret_var,
+                            arguments: loc_args,
+                            loc_body,
+                            ..
+                        } => {
                             // this is a non-recursive declaration
                             let is_tail_recursive = false;
 
@@ -1788,7 +1792,7 @@ fn build_pending_specializations<'a>(
                                 symbol,
                                 annotation,
                                 loc_args,
-                                loc_body,
+                                *loc_body,
                                 is_tail_recursive,
                                 ret_var,
                             );
@@ -1800,7 +1804,7 @@ fn build_pending_specializations<'a>(
                                 pattern_symbols: &[],
                                 body,
                                 // This is a 0-arity thunk, so it cannot be recursive
-                                is_tail_recursive: false,
+                                is_self_recursive: false,
                             };
 
                             procs.partial_procs.insert(symbol, proc);

@@ -6,11 +6,13 @@ pub fn helper_without_uniqueness<'a>(
     src: &str,
     leak: bool,
     context: &'a inkwell::context::Context,
-) -> (&'static str, inkwell::execution_engine::ExecutionEngine<'a>) {
+) -> (
+    &'static str,
+    Vec<roc_problem::can::Problem>,
+    inkwell::execution_engine::ExecutionEngine<'a>,
+) {
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
-    use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
-    use roc_gen::llvm::build::Scope;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
     use roc_gen::llvm::convert::basic_type_from_layout;
     use roc_mono::layout::{Layout, LayoutCache};
@@ -27,6 +29,8 @@ pub fn helper_without_uniqueness<'a>(
         problems,
         ..
     } = can_expr(src);
+
+    // don't panic based on the errors here, so we can test that RuntimeError generates the correct code
     let errors = problems
         .into_iter()
         .filter(|problem| {
@@ -39,8 +43,6 @@ pub fn helper_without_uniqueness<'a>(
             }
         })
         .collect::<Vec<roc_problem::can::Problem>>();
-
-    assert_eq!(errors, Vec::new(), "Encountered errors: {:?}", errors);
 
     let subs = Subs::new(var_store.into());
     let mut unify_problems = Vec::new();
@@ -66,7 +68,7 @@ pub fn helper_without_uniqueness<'a>(
         roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compute main_fn_type before moving subs to Env
-    let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
+    let return_layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
         panic!(
             "Code gen error in NON-OPTIMIZED test: could not convert to layout. Err was {:?}",
             err
@@ -75,10 +77,6 @@ pub fn helper_without_uniqueness<'a>(
     let execution_engine = module
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("Error creating JIT execution engine for test");
-
-    let main_fn_type =
-        basic_type_from_layout(&arena, context, &layout, ptr_bytes).fn_type(&[], false);
-    let main_fn_name = "$Test.main";
 
     // Compile and add all the Procs before adding main
     let mut env = roc_gen::llvm::build::Env {
@@ -108,8 +106,6 @@ pub fn helper_without_uniqueness<'a>(
     let mut layout_cache = LayoutCache::default();
     let main_body =
         roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
-    let main_body =
-        roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
 
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
@@ -119,12 +115,18 @@ pub fn helper_without_uniqueness<'a>(
 
         Vec::with_capacity(num_headers)
     };
-    let mut layout_cache = roc_mono::layout::LayoutCache::default();
     let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
     assert_eq!(
         procs.runtime_errors,
         roc_collections::all::MutMap::default()
+    );
+
+    let (mut procs, param_map) = procs.get_specialized_procs_help(mono_env.arena);
+    let main_body = roc_mono::inc_dec::visit_declaration(
+        mono_env.arena,
+        param_map,
+        mono_env.arena.alloc(main_body),
     );
 
     // Put this module's ident_ids back in the interns, so we can use them in env.
@@ -135,17 +137,15 @@ pub fn helper_without_uniqueness<'a>(
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
+    for ((symbol, layout), proc) in procs.drain() {
+        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-    for ((symbol, layout), proc) in procs.get_specialized_procs(env.arena).drain() {
-        let (fn_val, arg_basic_types) =
-            build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
-
-        headers.push((proc, fn_val, arg_basic_types));
+        headers.push((proc, fn_val));
     }
 
     // Build each proc using its header info.
-    for (proc, fn_val, arg_basic_types) in headers {
-        build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
+    for (proc, fn_val) in headers {
+        build_proc(&env, &mut layout_ids, proc, fn_val);
 
         if fn_val.verify(true) {
             function_pass.run_on(&fn_val);
@@ -162,25 +162,8 @@ pub fn helper_without_uniqueness<'a>(
         }
     }
 
-    // Add main to the module.
-    let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
-    let cc = roc_gen::llvm::build::FAST_CALL_CONV;
-
-    main_fn.set_call_conventions(cc);
-
-    // Add main's body
-    let basic_block = context.append_basic_block(main_fn, "entry");
-
-    builder.position_at_end(basic_block);
-
-    // builds the function body (return statement included)
-    roc_gen::llvm::build::build_exp_stmt(
-        &env,
-        &mut layout_ids,
-        &mut Scope::default(),
-        main_fn,
-        &main_body,
-    );
+    let (main_fn_name, main_fn) =
+        roc_gen::llvm::build::make_main_function(&env, &mut layout_ids, &return_layout, &main_body);
 
     // Uncomment this to see the module's un-optimized LLVM instruction output:
     // env.module.print_to_stderr();
@@ -201,7 +184,7 @@ pub fn helper_without_uniqueness<'a>(
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    (main_fn_name, execution_engine.clone())
+    (main_fn_name, errors, execution_engine.clone())
 }
 
 pub fn helper_with_uniqueness<'a>(
@@ -211,9 +194,7 @@ pub fn helper_with_uniqueness<'a>(
     context: &'a inkwell::context::Context,
 ) -> (&'static str, inkwell::execution_engine::ExecutionEngine<'a>) {
     use crate::helpers::{infer_expr, uniq_expr};
-    use inkwell::types::BasicType;
     use inkwell::OptimizationLevel;
-    use roc_gen::llvm::build::Scope;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
     use roc_gen::llvm::convert::basic_type_from_layout;
     use roc_mono::layout::{Layout, LayoutCache};
@@ -257,7 +238,7 @@ pub fn helper_with_uniqueness<'a>(
     let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compute main_fn_type before moving subs to Env
-    let layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
+    let return_layout = Layout::new(&arena, content, &subs).unwrap_or_else(|err| {
         panic!(
             "Code gen error in OPTIMIZED test: could not convert to layout. Err was {:?}",
             err
@@ -267,11 +248,6 @@ pub fn helper_with_uniqueness<'a>(
     let execution_engine = module
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("Error creating JIT execution engine for test");
-
-    let main_fn_type = basic_type_from_layout(&arena, context, &layout, ptr_bytes)
-        .fn_type(&[], false)
-        .clone();
-    let main_fn_name = "$Test.main";
 
     // Compile and add all the Procs before adding main
     let mut env = roc_gen::llvm::build::Env {
@@ -301,8 +277,6 @@ pub fn helper_with_uniqueness<'a>(
     let mut layout_cache = LayoutCache::default();
     let main_body =
         roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
-    let main_body =
-        roc_mono::inc_dec::visit_declaration(mono_env.arena, mono_env.arena.alloc(main_body));
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),
@@ -311,12 +285,18 @@ pub fn helper_with_uniqueness<'a>(
 
         Vec::with_capacity(num_headers)
     };
-    let mut layout_cache = roc_mono::layout::LayoutCache::default();
     let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
     assert_eq!(
         procs.runtime_errors,
         roc_collections::all::MutMap::default()
+    );
+
+    let (mut procs, param_map) = procs.get_specialized_procs_help(mono_env.arena);
+    let main_body = roc_mono::inc_dec::visit_declaration(
+        mono_env.arena,
+        param_map,
+        mono_env.arena.alloc(main_body),
     );
 
     // Put this module's ident_ids back in the interns, so we can use them in env.
@@ -327,16 +307,15 @@ pub fn helper_with_uniqueness<'a>(
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    for ((symbol, layout), proc) in procs.get_specialized_procs(env.arena).drain() {
-        let (fn_val, arg_basic_types) =
-            build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+    for ((symbol, layout), proc) in procs.drain() {
+        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
-        headers.push((proc, fn_val, arg_basic_types));
+        headers.push((proc, fn_val));
     }
 
     // Build each proc using its header info.
-    for (proc, fn_val, arg_basic_types) in headers {
-        build_proc(&env, &mut layout_ids, proc, fn_val, arg_basic_types);
+    for (proc, fn_val) in headers {
+        build_proc(&env, &mut layout_ids, proc, fn_val);
 
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);
@@ -354,25 +333,8 @@ pub fn helper_with_uniqueness<'a>(
         }
     }
 
-    // Add main to the module.
-    let main_fn = env.module.add_function(main_fn_name, main_fn_type, None);
-    let cc = roc_gen::llvm::build::FAST_CALL_CONV;
-
-    main_fn.set_call_conventions(cc);
-
-    // Add main's body
-    let basic_block = context.append_basic_block(main_fn, "entry");
-
-    builder.position_at_end(basic_block);
-
-    // builds the function body (return statement included)
-    roc_gen::llvm::build::build_exp_stmt(
-        &env,
-        &mut layout_ids,
-        &mut Scope::default(),
-        main_fn,
-        &main_body,
-    );
+    let (main_fn_name, main_fn) =
+        roc_gen::llvm::build::make_main_function(&env, &mut layout_ids, &return_layout, &main_body);
 
     // you're in the version with uniqueness!
 
@@ -406,7 +368,7 @@ macro_rules! assert_opt_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
         use bumpalo::Bump;
         use inkwell::context::Context;
-        use inkwell::execution_engine::JitFunction;
+        use roc_gen::run_jit_function;
 
         let arena = Bump::new();
 
@@ -415,15 +377,8 @@ macro_rules! assert_opt_evals_to {
         let (main_fn_name, execution_engine) =
             $crate::helpers::eval::helper_with_uniqueness(&arena, $src, $leak, &context);
 
-        unsafe {
-            let main: JitFunction<unsafe extern "C" fn() -> $ty> = execution_engine
-                .get_function(main_fn_name)
-                .ok()
-                .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
-                .expect("errored");
-
-            assert_eq!($transform(main.call()), $expected);
-        }
+        let transform = |success| assert_eq!($transform(success), $expected);
+        run_jit_function!(execution_engine, main_fn_name, $ty, transform)
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
@@ -436,24 +391,21 @@ macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
         use bumpalo::Bump;
         use inkwell::context::Context;
-        use inkwell::execution_engine::JitFunction;
+        use roc_gen::run_jit_function;
 
         let arena = Bump::new();
 
         let context = Context::create();
 
-        let (main_fn_name, execution_engine) =
+        let (main_fn_name, errors, execution_engine) =
             $crate::helpers::eval::helper_without_uniqueness(&arena, $src, $leak, &context);
 
-        unsafe {
-            let main: JitFunction<unsafe extern "C" fn() -> $ty> = execution_engine
-                .get_function(main_fn_name)
-                .ok()
-                .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
-                .expect("errored");
-
-            assert_eq!($transform(main.call()), $expected);
-        }
+        let transform = |success| {
+            let expected = $expected;
+            let given = $transform(success);
+            assert_eq!(&given, &expected);
+        };
+        run_jit_function!(execution_engine, main_fn_name, $ty, transform, errors)
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {

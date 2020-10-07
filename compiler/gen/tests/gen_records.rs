@@ -190,7 +190,7 @@ mod gen_records {
     }
 
     #[test]
-    fn when_on_record_with_guard_pattern() {
+    fn when_record_with_guard_pattern() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -397,6 +397,339 @@ mod gen_records {
             ),
             (4, 3),
             (i64, i64)
+        );
+    }
+
+    #[test]
+    fn optional_field_when_use_default() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \r ->
+                    when r is
+                        { x: Blue, y ? 3 } -> y
+                        { x: Red, y ? 5 } -> y
+
+                a = f { x: Blue, y: 7 }
+                b = f { x: Blue }
+                c = f { x: Red, y: 11 }
+                d = f { x: Red }
+
+                a * b * c * d
+                "#
+            ),
+            3 * 5 * 7 * 11,
+            i64
+        );
+    }
+
+    #[test]
+    fn optional_field_when_no_use_default() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \r ->
+                    { x ? 10, y } = r
+                    x + y
+
+                f { x: 4, y: 9 }
+                "#
+            ),
+            13,
+            i64
+        );
+    }
+
+    #[test]
+    fn optional_field_let_use_default() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \r ->
+                    { x ? 10, y } = r
+                    x + y
+
+                f { y: 9 }
+                "#
+            ),
+            19,
+            i64
+        );
+    }
+
+    #[test]
+    fn optional_field_let_no_use_default() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \r ->
+                    { x ? 10, y } = r
+                    x + y
+
+                f { x: 4, y: 9 }
+                "#
+            ),
+            13,
+            i64
+        );
+    }
+
+    #[test]
+    fn optional_field_function_use_default() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \{ x ? 10, y } -> x + y
+
+
+                f { y: 9 }
+                "#
+            ),
+            19,
+            i64
+        );
+    }
+
+    #[test]
+    fn optional_field_function_no_use_default() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                f = \{ x ? 10, y } -> x + y
+
+
+                f { x: 4, y: 9 }
+                "#
+            ),
+            13,
+            i64
+        );
+    }
+
+    #[test]
+    fn optional_field_singleton_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when { x : 4 } is
+                    { x ? 3 } -> x
+                "#
+            ),
+            4,
+            i64
+        );
+    }
+
+    #[test]
+    fn optional_field_empty_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when { } is
+                    { x ? 3 } -> x
+                "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
+    fn return_record_2() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { x: 3, y: 5 }
+                "#
+            ),
+            [3, 5],
+            [i64; 2]
+        );
+    }
+
+    #[test]
+    fn return_record_3() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { x: 3, y: 5, z: 4 }
+                "#
+            ),
+            (3, 5, 4),
+            (i64, i64, i64)
+        );
+    }
+
+    #[test]
+    fn return_record_4() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 3, b: 5, c: 4, d: 2 }
+                "#
+            ),
+            [3, 5, 4, 2],
+            [i64; 4]
+        );
+    }
+
+    #[test]
+    fn return_record_5() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 3, b: 5, c: 4, d: 2, e: 1 }
+                "#
+            ),
+            [3, 5, 4, 2, 1],
+            [i64; 5]
+        );
+    }
+
+    #[test]
+    fn return_record_6() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 3, b: 5, c: 4, d: 2, e: 1, f: 7 }
+                "#
+            ),
+            [3, 5, 4, 2, 1, 7],
+            [i64; 6]
+        );
+    }
+
+    #[test]
+    fn return_record_7() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 3, b: 5, c: 4, d: 2, e: 1, f: 7, g: 8 }
+                "#
+            ),
+            [3, 5, 4, 2, 1, 7, 8],
+            [i64; 7]
+        );
+    }
+
+    #[test]
+    fn return_record_float_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 3.14, b: 0x1 }
+                "#
+            ),
+            (3.14, 0x1),
+            (f64, i64)
+        );
+    }
+
+    #[test]
+    fn return_record_int_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 0x1, b: 3.14 }
+                "#
+            ),
+            (0x1, 3.14),
+            (i64, f64)
+        );
+    }
+
+    #[test]
+    fn return_record_float_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 6.28, b: 3.14 }
+                "#
+            ),
+            (6.28, 3.14),
+            (f64, f64)
+        );
+    }
+
+    #[test]
+    fn return_record_float_float_float() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { a: 6.28, b: 3.14, c: 0.1 }
+                "#
+            ),
+            (6.28, 3.14, 0.1),
+            (f64, f64, f64)
+        );
+    }
+
+    #[test]
+    fn return_nested_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                { flag: 0x0, payload: { a: 6.28, b: 3.14, c: 0.1 } }
+                "#
+            ),
+            (0x0, (6.28, 3.14, 0.1)),
+            (i64, (f64, f64, f64))
+        );
+    }
+
+    #[test]
+    fn accessor() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                .foo { foo: 4 } + .foo { bar: 6.28, foo: 3 }
+                "#
+            ),
+            7,
+            i64
+        );
+    }
+
+    #[test]
+    fn accessor_single_element_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                .foo { foo: 4 }
+                "#
+            ),
+            4,
+            i64
+        );
+    }
+
+    #[test]
+    fn update_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                rec = { foo: 42, bar: 6.28 }
+
+                { rec & foo: rec.foo + 1 }
+                "#
+            ),
+            (6.28, 43),
+            (f64, i64)
+        );
+    }
+
+    #[test]
+    fn update_single_element_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                rec = { foo: 42}
+
+                { rec & foo: rec.foo + 1 }
+                "#
+            ),
+            43,
+            i64
         );
     }
 }

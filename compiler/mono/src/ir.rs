@@ -23,7 +23,7 @@ pub struct PartialProc<'a> {
     pub annotation: Variable,
     pub pattern_symbols: &'a [Symbol],
     pub body: roc_can::expr::Expr,
-    pub is_tail_recursive: bool,
+    pub is_self_recursive: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -40,7 +40,13 @@ pub struct Proc<'a> {
     pub body: Stmt<'a>,
     pub closes_over: Layout<'a>,
     pub ret_layout: Layout<'a>,
-    pub is_tail_recursive: bool,
+    pub is_self_recursive: SelfRecursive,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SelfRecursive {
+    NotSelfRecursive,
+    SelfRecursive(JoinPointId),
 }
 
 impl<'a> Proc<'a> {
@@ -144,13 +150,72 @@ impl<'a> Procs<'a> {
         for (key, in_prog_proc) in self.specialized.into_iter() {
             match in_prog_proc {
                 InProgress => unreachable!("The procedure {:?} should have be done by now", key),
-                Done(mut proc) => {
-                    crate::inc_dec::visit_proc(arena, &mut proc);
+                Done(proc) => {
                     result.insert(key, proc);
                 }
             }
         }
+
+        for (_, proc) in result.iter_mut() {
+            use self::SelfRecursive::*;
+            if let SelfRecursive(id) = proc.is_self_recursive {
+                proc.body = crate::tail_recursion::make_tail_recursive(
+                    arena,
+                    id,
+                    proc.name,
+                    proc.body.clone(),
+                    proc.args,
+                );
+            }
+        }
+
+        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
+
+        for (_, proc) in result.iter_mut() {
+            crate::inc_dec::visit_proc(arena, borrow_params, proc);
+        }
+
         result
+    }
+
+    pub fn get_specialized_procs_help(
+        self,
+        arena: &'a Bump,
+    ) -> (
+        MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+        &'a crate::borrow::ParamMap<'a>,
+    ) {
+        let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
+
+        for (key, in_prog_proc) in self.specialized.into_iter() {
+            match in_prog_proc {
+                InProgress => unreachable!("The procedure {:?} should have be done by now", key),
+                Done(proc) => {
+                    result.insert(key, proc);
+                }
+            }
+        }
+
+        for (_, proc) in result.iter_mut() {
+            use self::SelfRecursive::*;
+            if let SelfRecursive(id) = proc.is_self_recursive {
+                proc.body = crate::tail_recursion::make_tail_recursive(
+                    arena,
+                    id,
+                    proc.name,
+                    proc.body.clone(),
+                    proc.args,
+                );
+            }
+        }
+
+        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
+
+        for (_, proc) in result.iter_mut() {
+            crate::inc_dec::visit_proc(arena, borrow_params, proc);
+        }
+
+        (result, borrow_params)
     }
 
     // TODO trim down these arguments!
@@ -163,7 +228,7 @@ impl<'a> Procs<'a> {
         annotation: Variable,
         loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
         loc_body: Located<roc_can::expr::Expr>,
-        is_tail_recursive: bool,
+        is_self_recursive: bool,
         ret_var: Variable,
     ) {
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
@@ -179,7 +244,7 @@ impl<'a> Procs<'a> {
                         annotation,
                         pattern_symbols,
                         body: body.value,
-                        is_tail_recursive,
+                        is_self_recursive,
                     },
                 );
             }
@@ -213,7 +278,7 @@ impl<'a> Procs<'a> {
         layout_cache: &mut LayoutCache<'a>,
     ) -> Result<Layout<'a>, RuntimeError> {
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
-        let is_tail_recursive = false;
+        let is_self_recursive = false;
 
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((pattern_vars, pattern_symbols, body)) => {
@@ -254,7 +319,7 @@ impl<'a> Procs<'a> {
                                     annotation,
                                     pattern_symbols,
                                     body: body.value,
-                                    is_tail_recursive,
+                                    is_self_recursive,
                                 },
                             );
                         }
@@ -264,7 +329,7 @@ impl<'a> Procs<'a> {
                                 annotation,
                                 pattern_symbols,
                                 body: body.value,
-                                is_tail_recursive,
+                                is_self_recursive,
                             };
 
                             // Mark this proc as in-progress, so if we're dealing with
@@ -331,6 +396,92 @@ impl<'a> Procs<'a> {
             }
             None => unreachable!("insert_exposed was called after the pending specializations phase had already completed!"),
         }
+    }
+
+    /// TODO
+    pub fn insert_passed_by_name(
+        &mut self,
+        env: &mut Env<'a, '_>,
+        fn_var: Variable,
+        name: Symbol,
+        layout: Layout<'a>,
+        layout_cache: &mut LayoutCache<'a>,
+    ) {
+        let tuple = (name, layout);
+
+        // If we've already specialized this one, no further work is needed.
+        if self.specialized.contains_key(&tuple) {
+            return;
+        }
+
+        // We're done with that tuple, so move layout back out to avoid cloning it.
+        let (name, layout) = tuple;
+
+        // now we have to pull some tricks to extract the return var and pattern vars from Subs
+        match get_args_ret_var(env.subs, fn_var) {
+            Some((pattern_vars, ret_var)) => {
+                let pattern_vars =
+                    Vec::from_iter_in(pattern_vars.into_iter(), env.arena).into_bump_slice();
+                let pending = PendingSpecialization {
+                    pattern_vars,
+                    ret_var,
+                    fn_var,
+                };
+
+                // This should only be called when pending_specializations is Some.
+                // Otherwise, it's being called in the wrong pass!
+                match &mut self.pending_specializations {
+                    Some(pending_specializations) => {
+                        // register the pending specialization, so this gets code genned later
+                        add_pending(pending_specializations, name, layout, pending)
+                    }
+                    None => {
+                        let symbol = name;
+
+                        // TODO should pending_procs hold a Rc<Proc>?
+                        let partial_proc = self.partial_procs.get(&symbol).unwrap().clone();
+
+                        // Mark this proc as in-progress, so if we're dealing with
+                        // mutually recursive functions, we don't loop forever.
+                        // (We had a bug around this before this system existed!)
+                        self.specialized
+                            .insert((symbol, layout.clone()), InProgress);
+
+                        match specialize(env, self, symbol, layout_cache, pending, partial_proc) {
+                            Ok(proc) => {
+                                self.specialized
+                                    .insert((symbol, layout.clone()), Done(proc));
+                            }
+                            Err(error) => {
+                                let error_msg =
+                                    format!("TODO generate a RuntimeError message for {:?}", error);
+                                self.runtime_errors
+                                    .insert(symbol, env.arena.alloc(error_msg));
+                            }
+                        }
+                    }
+                }
+            }
+            other => {
+                unreachable!(
+                    "trying to insert a symbol that is not a function: {:?} {:?}",
+                    name, other
+                );
+            }
+        }
+    }
+}
+
+fn get_args_ret_var(subs: &Subs, var: Variable) -> Option<(std::vec::Vec<Variable>, Variable)> {
+    match subs.get_without_compacting(var).content {
+        Content::Structure(FlatType::Func(pattern_vars, _closure_var, ret_var)) => {
+            Some((pattern_vars, ret_var))
+        }
+        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
+            get_args_ret_var(subs, args[1])
+        }
+        Content::Alias(_, _, actual) => get_args_ret_var(subs, actual),
+        _ => None,
     }
 }
 
@@ -472,6 +623,7 @@ pub enum Stmt<'a> {
     Jump(JoinPointId, &'a [Symbol]),
     RuntimeError(&'a str),
 }
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Literal<'a> {
     // Literals
@@ -494,6 +646,53 @@ pub enum CallType {
     ByPointer(Symbol),
 }
 
+impl CallType {
+    pub fn get_inner(&self) -> Symbol {
+        match self {
+            CallType::ByName(s) => *s,
+            CallType::ByPointer(s) => *s,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Wrapped {
+    EmptyRecord,
+    SingleElementRecord,
+    RecordOrSingleTagUnion,
+    MultiTagUnion,
+}
+
+impl Wrapped {
+    pub fn from_layout(layout: &Layout<'_>) -> Self {
+        match Self::opt_from_layout(layout) {
+            Some(result) => result,
+            None => unreachable!("not an indexable type {:?}", layout),
+        }
+    }
+
+    pub fn opt_from_layout(layout: &Layout<'_>) -> Option<Self> {
+        match layout {
+            Layout::Struct(fields) => match fields.len() {
+                0 => Some(Wrapped::EmptyRecord),
+                1 => Some(Wrapped::SingleElementRecord),
+                _ => Some(Wrapped::RecordOrSingleTagUnion),
+            },
+
+            Layout::Union(tags) | Layout::RecursiveUnion(tags) => match tags {
+                [] => todo!("how to handle empty tag unions?"),
+                [single] => match single.len() {
+                    0 => Some(Wrapped::EmptyRecord),
+                    1 => Some(Wrapped::SingleElementRecord),
+                    _ => Some(Wrapped::RecordOrSingleTagUnion),
+                },
+                _ => Some(Wrapped::MultiTagUnion),
+            },
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr<'a> {
     Literal(Literal<'a>),
@@ -502,7 +701,8 @@ pub enum Expr<'a> {
     FunctionPointer(Symbol, Layout<'a>),
     FunctionCall {
         call_type: CallType,
-        layout: Layout<'a>,
+        full_layout: Layout<'a>,
+        ret_layout: Layout<'a>,
         arg_layouts: &'a [Layout<'a>],
         args: &'a [Symbol],
     },
@@ -516,11 +716,12 @@ pub enum Expr<'a> {
         arguments: &'a [Symbol],
     },
     Struct(&'a [Symbol]),
+
     AccessAtIndex {
         index: u64,
         field_layouts: &'a [Layout<'a>],
         structure: Symbol,
-        is_unwrapped: bool,
+        wrapped: Wrapped,
     },
 
     Array {
@@ -528,6 +729,14 @@ pub enum Expr<'a> {
         elems: &'a [Symbol],
     },
     EmptyArray,
+
+    Reuse {
+        symbol: Symbol,
+        tag_name: TagName,
+        tag_id: u8,
+        arguments: &'a [Symbol],
+    },
+    Reset(Symbol),
 
     RuntimeErrorFunction(&'a str),
 }
@@ -581,7 +790,9 @@ impl<'a> Expr<'a> {
         match self {
             Literal(lit) => lit.to_doc(alloc),
 
-            FunctionPointer(symbol, _) => symbol_to_doc(alloc, *symbol),
+            FunctionPointer(symbol, _) => alloc
+                .text("FunctionPointer ")
+                .append(symbol_to_doc(alloc, *symbol)),
 
             FunctionCall {
                 call_type, args, ..
@@ -626,6 +837,28 @@ impl<'a> Expr<'a> {
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
+            Reuse {
+                symbol,
+                tag_name,
+                arguments,
+                ..
+            } => {
+                let doc_tag = match tag_name {
+                    TagName::Global(s) => alloc.text(s.as_str()),
+                    TagName::Private(s) => alloc.text(format!("{}", s)),
+                };
+
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+
+                alloc
+                    .text("Reuse ")
+                    .append(symbol_to_doc(alloc, *symbol))
+                    .append(doc_tag)
+                    .append(alloc.space())
+                    .append(alloc.intersperse(it, " "))
+            }
+            Reset(symbol) => alloc.text("Reuse ").append(symbol_to_doc(alloc, *symbol)),
+
             Struct(args) => {
                 let it = args.iter().map(|s| symbol_to_doc(alloc, *s));
 
@@ -1035,7 +1268,7 @@ fn specialize<'a>(
         annotation,
         pattern_symbols,
         body,
-        is_tail_recursive,
+        is_self_recursive,
     } = partial_proc;
 
     // unify the called function with the specialized signature, then specialize the function body
@@ -1065,9 +1298,6 @@ fn specialize<'a>(
 
     let proc_args = proc_args.into_bump_slice();
 
-    let specialized_body =
-        crate::tail_recursion::make_tail_recursive(env, proc_name, specialized_body, proc_args);
-
     let ret_layout = layout_cache
         .from_var(&env.arena, ret_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
@@ -1075,13 +1305,19 @@ fn specialize<'a>(
     // TODO WRONG
     let closes_over_layout = Layout::Struct(&[]);
 
+    let recursivity = if is_self_recursive {
+        SelfRecursive::SelfRecursive(JoinPointId(env.unique_symbol()))
+    } else {
+        SelfRecursive::NotSelfRecursive
+    };
+
     let proc = Proc {
         name: proc_name,
         args: proc_args,
         body: specialized_body,
         closes_over: closes_over_layout,
         ret_layout,
-        is_tail_recursive,
+        is_self_recursive: recursivity,
     };
 
     Ok(proc)
@@ -1114,7 +1350,7 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        Str(string) | BlockStr(string) => Stmt::Let(
+        Str(string) => Stmt::Let(
             assigned,
             Expr::Literal(Literal::Str(arena.alloc(string))),
             Layout::Builtin(Builtin::Str),
@@ -1137,24 +1373,32 @@ pub fn with_hole<'a>(
         },
         LetNonRec(def, cont, _, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                if let Closure(ann, _, recursivity, loc_args, boxed_body) = def.loc_expr.value {
+                if let Closure {
+                    function_type,
+                    return_type,
+                    recursive,
+                    arguments,
+                    loc_body: boxed_body,
+                    ..
+                } = def.loc_expr.value
+                {
                     // Extract Procs, but discard the resulting Expr::Load.
                     // That Load looks up the pointer, which we won't use here!
 
-                    let (loc_body, ret_var) = *boxed_body;
+                    let loc_body = *boxed_body;
 
-                    let is_tail_recursive =
-                        matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
+                    let is_self_recursive =
+                        !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
                     procs.insert_named(
                         env,
                         layout_cache,
                         *symbol,
-                        ann,
-                        loc_args,
+                        function_type,
+                        arguments,
                         loc_body,
-                        is_tail_recursive,
-                        ret_var,
+                        is_self_recursive,
+                        return_type,
                     );
 
                     return with_hole(env, cont.value, procs, layout_cache, assigned, hole);
@@ -1221,24 +1465,32 @@ pub fn with_hole<'a>(
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                    if let Closure(ann, _, recursivity, loc_args, boxed_body) = def.loc_expr.value {
+                    if let Closure {
+                        function_type,
+                        return_type,
+                        recursive,
+                        arguments,
+                        loc_body: boxed_body,
+                        ..
+                    } = def.loc_expr.value
+                    {
                         // Extract Procs, but discard the resulting Expr::Load.
                         // That Load looks up the pointer, which we won't use here!
 
-                        let (loc_body, ret_var) = *boxed_body;
+                        let loc_body = *boxed_body;
 
-                        let is_tail_recursive =
-                            matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
+                        let is_self_recursive =
+                            !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
                         procs.insert_named(
                             env,
                             layout_cache,
                             *symbol,
-                            ann,
-                            loc_args,
+                            function_type,
+                            arguments,
                             loc_body,
-                            is_tail_recursive,
-                            ret_var,
+                            is_self_recursive,
+                            return_type,
                         );
 
                         continue;
@@ -1321,12 +1573,9 @@ pub fn with_hole<'a>(
                     let mut field_symbols = Vec::with_capacity_in(field_layouts.len(), env.arena);
 
                     for (_, arg) in args.iter() {
-                        if let roc_can::expr::Expr::Var(symbol) = arg.value {
-                            field_symbols.push(symbol);
-                        } else {
-                            field_symbols.push(env.unique_symbol());
-                        }
+                        field_symbols.push(possible_reuse_symbol(env, procs, &arg.value));
                     }
+                    let field_symbols = field_symbols.into_bump_slice();
 
                     // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
                     let layout = layout_cache
@@ -1336,30 +1585,10 @@ pub fn with_hole<'a>(
                         });
 
                     // even though this was originally a Tag, we treat it as a Struct from now on
-                    let mut stmt = Stmt::Let(
-                        assigned,
-                        Expr::Struct(field_symbols.clone().into_bump_slice()),
-                        layout,
-                        hole,
-                    );
+                    let stmt = Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole);
 
-                    for ((_, arg), symbol) in args.into_iter().rev().zip(field_symbols.iter().rev())
-                    {
-                        // if this argument is already a symbol, we don't need to re-define it
-                        if let roc_can::expr::Expr::Var(_) = arg.value {
-                            continue;
-                        }
-                        stmt = with_hole(
-                            env,
-                            arg.value,
-                            procs,
-                            layout_cache,
-                            *symbol,
-                            env.arena.alloc(stmt),
-                        );
-                    }
-
-                    stmt
+                    let iter = args.into_iter().rev().zip(field_symbols.iter().rev());
+                    assign_to_symbols(env, procs, layout_cache, iter, stmt)
                 }
                 Wrapped(sorted_tag_layouts) => {
                     let union_size = sorted_tag_layouts.len() as u8;
@@ -1374,11 +1603,7 @@ pub fn with_hole<'a>(
                     field_symbols.push(tag_id_symbol);
 
                     for (_, arg) in args.iter() {
-                        if let roc_can::expr::Expr::Var(symbol) = arg.value {
-                            field_symbols.push(symbol);
-                        } else {
-                            field_symbols.push(env.unique_symbol());
-                        }
+                        field_symbols.push(possible_reuse_symbol(env, procs, &arg.value));
                     }
 
                     let mut layouts: Vec<&'a [Layout<'a>]> =
@@ -1399,23 +1624,9 @@ pub fn with_hole<'a>(
                     };
 
                     let mut stmt = Stmt::Let(assigned, tag, layout, hole);
+                    let iter = args.into_iter().rev().zip(field_symbols.iter().rev());
 
-                    for ((_, arg), symbol) in args.into_iter().rev().zip(field_symbols.iter().rev())
-                    {
-                        // if this argument is already a symbol, we don't need to re-define it
-                        if let roc_can::expr::Expr::Var(_) = arg.value {
-                            continue;
-                        }
-
-                        stmt = with_hole(
-                            env,
-                            arg.value,
-                            procs,
-                            layout_cache,
-                            *symbol,
-                            env.arena.alloc(stmt),
-                        );
-                    }
+                    stmt = assign_to_symbols(env, procs, layout_cache, iter, stmt);
 
                     // define the tag id
                     stmt = Stmt::Let(
@@ -1444,13 +1655,22 @@ pub fn with_hole<'a>(
             for (label, layout) in sorted_fields.into_iter() {
                 field_layouts.push(layout);
 
-                let field = fields.remove(&label).unwrap();
-                if let roc_can::expr::Expr::Var(symbol) = field.loc_expr.value {
-                    field_symbols.push(symbol);
-                    can_fields.push(None);
-                } else {
-                    field_symbols.push(env.unique_symbol());
-                    can_fields.push(Some(field));
+                // TODO how should function pointers be handled here?
+                match fields.remove(&label) {
+                    Some(field) => match can_reuse_symbol(procs, &field.loc_expr.value) {
+                        Some(reusable) => {
+                            field_symbols.push(reusable);
+                            can_fields.push(None);
+                        }
+                        None => {
+                            field_symbols.push(env.unique_symbol());
+                            can_fields.push(Some(field));
+                        }
+                    },
+                    None => {
+                        // this field was optional, but not given
+                        continue;
+                    }
                 }
             }
 
@@ -1617,11 +1837,7 @@ pub fn with_hole<'a>(
             loc_cond,
             branches,
         } => {
-            let cond_symbol = if let roc_can::expr::Expr::Var(symbol) = loc_cond.value {
-                symbol
-            } else {
-                env.unique_symbol()
-            };
+            let cond_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
 
             let id = JoinPointId(env.unique_symbol());
 
@@ -1638,18 +1854,15 @@ pub fn with_hole<'a>(
             );
 
             // define the `when` condition
-            if let roc_can::expr::Expr::Var(_) = loc_cond.value {
-                // do nothing
-            } else {
-                stmt = with_hole(
-                    env,
-                    loc_cond.value,
-                    procs,
-                    layout_cache,
-                    cond_symbol,
-                    env.arena.alloc(stmt),
-                );
-            };
+            stmt = assign_to_symbol(
+                env,
+                procs,
+                layout_cache,
+                cond_var,
+                *loc_cond,
+                cond_symbol,
+                stmt,
+            );
 
             let layout = layout_cache
                 .from_var(env.arena, expr_var, env.subs)
@@ -1682,11 +1895,7 @@ pub fn with_hole<'a>(
         } => {
             let mut arg_symbols = Vec::with_capacity_in(loc_elems.len(), env.arena);
             for arg_expr in loc_elems.iter() {
-                if let roc_can::expr::Expr::Var(symbol) = arg_expr.value {
-                    arg_symbols.push(symbol);
-                } else {
-                    arg_symbols.push(env.unique_symbol());
-                }
+                arg_symbols.push(possible_reuse_symbol(env, procs, &arg_expr.value));
             }
             let arg_symbols = arg_symbols.into_bump_slice();
 
@@ -1701,30 +1910,20 @@ pub fn with_hole<'a>(
 
             let mode = crate::layout::mode_from_var(list_var, env.subs);
 
-            let mut stmt = Stmt::Let(
+            let stmt = Stmt::Let(
                 assigned,
                 expr,
                 Layout::Builtin(Builtin::List(mode, env.arena.alloc(elem_layout))),
                 hole,
             );
 
-            for (arg_expr, symbol) in loc_elems.into_iter().rev().zip(arg_symbols.iter().rev()) {
-                // if this argument is already a symbol, we don't need to re-define it
-                if let roc_can::expr::Expr::Var(_) = arg_expr.value {
-                    continue;
-                }
+            let iter = loc_elems
+                .into_iter()
+                .rev()
+                .map(|e| (elem_var, e))
+                .zip(arg_symbols.iter().rev());
 
-                stmt = with_hole(
-                    env,
-                    arg_expr.value,
-                    procs,
-                    layout_cache,
-                    *symbol,
-                    env.arena.alloc(stmt),
-                );
-            }
-
-            stmt
+            assign_to_symbols(env, procs, layout_cache, iter, stmt)
         }
 
         Access {
@@ -1739,25 +1938,43 @@ pub fn with_hole<'a>(
             let mut index = None;
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 
-            for (current, (label, field_layout)) in sorted_fields.into_iter().enumerate() {
-                field_layouts.push(field_layout);
+            let mut current = 0;
+            for (label, opt_field_layout) in sorted_fields.into_iter() {
+                match opt_field_layout {
+                    Err(_) => {
+                        // this was an optional field, and now does not exist!
+                        // do not increment `current`!
+                    }
+                    Ok(field_layout) => {
+                        field_layouts.push(field_layout);
 
-                if label == field {
-                    index = Some(current);
+                        if label == field {
+                            index = Some(current);
+                        }
+
+                        current += 1;
+                    }
                 }
             }
 
-            let record_symbol = if let roc_can::expr::Expr::Var(symbol) = loc_expr.value {
-                symbol
-            } else {
-                env.unique_symbol()
+            let record_symbol = possible_reuse_symbol(env, procs, &loc_expr.value);
+
+            let wrapped = {
+                let record_layout = layout_cache
+                    .from_var(env.arena, record_var, env.subs)
+                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+                match Wrapped::opt_from_layout(&record_layout) {
+                    Some(result) => result,
+                    None => Wrapped::SingleElementRecord,
+                }
             };
 
             let expr = Expr::AccessAtIndex {
                 index: index.expect("field not in its own type") as u64,
                 field_layouts: field_layouts.into_bump_slice(),
                 structure: record_symbol,
-                is_unwrapped: true,
+                wrapped,
             };
 
             let layout = layout_cache
@@ -1766,29 +1983,201 @@ pub fn with_hole<'a>(
 
             let mut stmt = Stmt::Let(assigned, expr, layout, hole);
 
-            if let roc_can::expr::Expr::Var(_) = loc_expr.value {
-                // do nothing
-            } else {
-                stmt = with_hole(
-                    env,
-                    loc_expr.value,
-                    procs,
-                    layout_cache,
-                    record_symbol,
-                    env.arena.alloc(stmt),
-                );
-            };
+            stmt = assign_to_symbol(
+                env,
+                procs,
+                layout_cache,
+                record_var,
+                *loc_expr,
+                record_symbol,
+                stmt,
+            );
 
             stmt
         }
 
-        Accessor { .. } | Update { .. } => todo!("record access/accessor/update"),
+        Accessor {
+            function_var,
+            record_var,
+            closure_var: _,
+            ext_var,
+            field_var,
+            field,
+        } => {
+            // IDEA: convert accessor fromt
+            //
+            // .foo
+            //
+            // into
+            //
+            // (\r -> r.foo)
+            let record_symbol = env.unique_symbol();
+            let body = roc_can::expr::Expr::Access {
+                record_var,
+                ext_var,
+                field_var,
+                loc_expr: Box::new(Located::at_zero(roc_can::expr::Expr::Var(record_symbol))),
+                field,
+            };
 
-        Closure(ann, name, _, loc_args, boxed_body) => {
-            let (loc_body, ret_var) = *boxed_body;
+            let loc_body = Located::at_zero(body);
 
-            match procs.insert_anonymous(env, name, ann, loc_args, loc_body, ret_var, layout_cache)
-            {
+            let name = env.unique_symbol();
+
+            let arguments = vec![(
+                record_var,
+                Located::at_zero(roc_can::pattern::Pattern::Identifier(record_symbol)),
+            )];
+
+            match procs.insert_anonymous(
+                env,
+                name,
+                function_var,
+                arguments,
+                loc_body,
+                field_var,
+                layout_cache,
+            ) {
+                Ok(layout) => {
+                    // TODO should the let have layout Pointer?
+                    Stmt::Let(
+                        assigned,
+                        Expr::FunctionPointer(name, layout.clone()),
+                        layout,
+                        hole,
+                    )
+                }
+
+                Err(_error) => Stmt::RuntimeError(
+                    "TODO convert anonymous function error to a RuntimeError string",
+                ),
+            }
+        }
+
+        Update {
+            record_var,
+            symbol: structure,
+            updates,
+            ..
+        } => {
+            use FieldType::*;
+
+            enum FieldType<'a> {
+                CopyExisting(u64),
+                UpdateExisting(&'a roc_can::expr::Field),
+            };
+
+            // Strategy: turn a record update into the creation of a new record.
+            // This has the benefit that we don't need to do anything special for reference
+            // counting
+
+            let sorted_fields = crate::layout::sort_record_fields(env.arena, record_var, env.subs);
+
+            let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
+
+            let mut symbols = Vec::with_capacity_in(sorted_fields.len(), env.arena);
+            let mut fields = Vec::with_capacity_in(sorted_fields.len(), env.arena);
+
+            let mut current = 0;
+            for (label, opt_field_layout) in sorted_fields.into_iter() {
+                match opt_field_layout {
+                    Err(_) => {
+                        debug_assert!(!updates.contains_key(&label));
+                        // this was an optional field, and now does not exist!
+                        // do not increment `current`!
+                    }
+                    Ok(field_layout) => {
+                        field_layouts.push(field_layout);
+
+                        if let Some(field) = updates.get(&label) {
+                            // TODO
+                            let field_symbol =
+                                possible_reuse_symbol(env, procs, &field.loc_expr.value);
+
+                            fields.push(UpdateExisting(field));
+                            symbols.push(field_symbol);
+                        } else {
+                            fields.push(CopyExisting(current));
+                            symbols.push(env.unique_symbol());
+                        }
+
+                        current += 1;
+                    }
+                }
+            }
+            let symbols = symbols.into_bump_slice();
+
+            let record_layout = layout_cache
+                .from_var(env.arena, record_var, env.subs)
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+            let field_layouts = match &record_layout {
+                Layout::Struct(layouts) => *layouts,
+                other => arena.alloc([other.clone()]),
+            };
+
+            let wrapped = if field_layouts.len() == 1 {
+                Wrapped::SingleElementRecord
+            } else {
+                Wrapped::RecordOrSingleTagUnion
+            };
+
+            let expr = Expr::Struct(symbols);
+            let mut stmt = Stmt::Let(assigned, expr, record_layout, hole);
+
+            let it = field_layouts.iter().zip(symbols.iter()).zip(fields);
+            for ((field_layout, symbol), what_to_do) in it {
+                match what_to_do {
+                    UpdateExisting(field) => {
+                        stmt = assign_to_symbol(
+                            env,
+                            procs,
+                            layout_cache,
+                            field.var,
+                            *field.loc_expr.clone(),
+                            *symbol,
+                            stmt,
+                        );
+                    }
+                    CopyExisting(index) => {
+                        let access_expr = Expr::AccessAtIndex {
+                            structure,
+                            index,
+                            field_layouts,
+                            wrapped,
+                        };
+                        stmt = Stmt::Let(
+                            *symbol,
+                            access_expr,
+                            field_layout.clone(),
+                            arena.alloc(stmt),
+                        );
+                    }
+                }
+            }
+
+            stmt
+        }
+
+        Closure {
+            function_type,
+            return_type,
+            name,
+            arguments,
+            loc_body: boxed_body,
+            ..
+        } => {
+            let loc_body = *boxed_body;
+
+            match procs.insert_anonymous(
+                env,
+                name,
+                function_type,
+                arguments,
+                loc_body,
+                return_type,
+                layout_cache,
+            ) {
                 Ok(layout) => {
                     // TODO should the let have layout Pointer?
                     Stmt::Let(
@@ -1806,48 +2195,28 @@ pub fn with_hole<'a>(
         }
 
         Call(boxed, loc_args, _) => {
-            let (fn_var, loc_expr, ret_var) = *boxed;
+            let (fn_var, loc_expr, _closure_var, ret_var) = *boxed;
 
-            /*
-            Var(symbol) => {
-                if procs.module_thunks.contains(&symbol) {
-                    let partial_proc = procs.partial_procs.get(&symbol).unwrap();
-                    let fn_var = partial_proc.annotation;
-                    let ret_var = fn_var; // These are the same for a thunk.
-
-                    // This is a top-level declaration, which will code gen to a 0-arity thunk.
+            // even if a call looks like it's by name, it may in fact be by-pointer.
+            // E.g. in `(\f, x -> f x)` the call is in fact by pointer.
+            // So we check the function name against the list of partial procedures,
+            // the procedures that we have lifted to the top-level and can call by name
+            // if it's in there, it's a call by name, otherwise it's a call by pointer
+            let known_functions = &procs.partial_procs;
+            match loc_expr.value {
+                roc_can::expr::Expr::Var(proc_name) if known_functions.contains_key(&proc_name) => {
                     call_by_name(
                         env,
                         procs,
                         fn_var,
                         ret_var,
-                        symbol,
-                        std::vec::Vec::new(),
+                        proc_name,
+                        loc_args,
                         layout_cache,
+                        assigned,
+                        hole,
                     )
-                } else {
-                    // NOTE Load will always increment the refcount
-                    Expr::Load(symbol)
                 }
-            }
-                */
-
-            // match from_can(env, loc_expr.value, procs, layout_cache) {
-            match loc_expr.value {
-                roc_can::expr::Expr::Var(proc_name) if procs.module_thunks.contains(&proc_name) => {
-                    todo!()
-                }
-                roc_can::expr::Expr::Var(proc_name) => call_by_name(
-                    env,
-                    procs,
-                    fn_var,
-                    ret_var,
-                    proc_name,
-                    loc_args,
-                    layout_cache,
-                    assigned,
-                    hole,
-                ),
                 _ => {
                     // Call by pointer - the closure was anonymous, e.g.
                     //
@@ -1860,19 +2229,26 @@ pub fn with_hole<'a>(
                     // It could be named too:
                     //
                     // ((if x > 0 then foo else bar) 5)
-                    let mut arg_symbols = Vec::with_capacity_in(loc_args.len(), env.arena);
+                    //
+                    // also this occurs for functions passed in as arguments, e.g.
+                    //
+                    // (\f, x -> f x)
 
-                    for _ in 0..loc_args.len() {
-                        arg_symbols.push(env.unique_symbol());
-                    }
+                    let arg_symbols = Vec::from_iter_in(
+                        loc_args.iter().map(|(_, arg_expr)| {
+                            possible_reuse_symbol(env, procs, &arg_expr.value)
+                        }),
+                        arena,
+                    )
+                    .into_bump_slice();
 
-                    let layout = layout_cache
+                    let full_layout = layout_cache
                         .from_var(env.arena, fn_var, env.subs)
                         .unwrap_or_else(|err| {
                             panic!("TODO turn fn_var into a RuntimeError {:?}", err)
                         });
 
-                    let arg_layouts = match layout {
+                    let arg_layouts = match full_layout {
                         Layout::FunctionPointer(args, _) => args,
                         _ => unreachable!("function has layout that is not function pointer"),
                     };
@@ -1883,44 +2259,52 @@ pub fn with_hole<'a>(
                             panic!("TODO turn fn_var into a RuntimeError {:?}", err)
                         });
 
-                    let function_symbol = env.unique_symbol();
-                    let arg_symbols = arg_symbols.into_bump_slice();
-                    let mut result = Stmt::Let(
-                        assigned,
-                        Expr::FunctionCall {
-                            call_type: CallType::ByPointer(function_symbol),
-                            layout,
-                            args: arg_symbols,
-                            arg_layouts,
-                        },
-                        ret_layout,
-                        arena.alloc(hole),
-                    );
+                    // if the function expression (loc_expr) is already a symbol,
+                    // re-use that symbol, and don't define its value again
+                    let mut result;
+                    match can_reuse_symbol(procs, &loc_expr.value) {
+                        Some(function_symbol) => {
+                            result = Stmt::Let(
+                                assigned,
+                                Expr::FunctionCall {
+                                    call_type: CallType::ByPointer(function_symbol),
+                                    full_layout,
+                                    ret_layout: ret_layout.clone(),
+                                    args: arg_symbols,
+                                    arg_layouts,
+                                },
+                                ret_layout,
+                                arena.alloc(hole),
+                            );
+                        }
+                        None => {
+                            let function_symbol = env.unique_symbol();
 
-                    // let ptr = with_hole(env, loc_expr.value, procs, layout_cache, function_symbol);
-                    result = with_hole(
-                        env,
-                        loc_expr.value,
-                        procs,
-                        layout_cache,
-                        function_symbol,
-                        env.arena.alloc(result),
-                    );
+                            result = Stmt::Let(
+                                assigned,
+                                Expr::FunctionCall {
+                                    call_type: CallType::ByPointer(function_symbol),
+                                    full_layout,
+                                    ret_layout: ret_layout.clone(),
+                                    args: arg_symbols,
+                                    arg_layouts,
+                                },
+                                ret_layout,
+                                arena.alloc(hole),
+                            );
 
-                    for ((_, loc_arg), symbol) in
-                        loc_args.into_iter().rev().zip(arg_symbols.iter().rev())
-                    {
-                        result = with_hole(
-                            env,
-                            loc_arg.value,
-                            procs,
-                            layout_cache,
-                            *symbol,
-                            env.arena.alloc(result),
-                        );
+                            result = with_hole(
+                                env,
+                                loc_expr.value,
+                                procs,
+                                layout_cache,
+                                function_symbol,
+                                env.arena.alloc(result),
+                            );
+                        }
                     }
-
-                    result
+                    let iter = loc_args.into_iter().rev().zip(arg_symbols.iter().rev());
+                    assign_to_symbols(env, procs, layout_cache, iter, result)
                 }
             }
         }
@@ -1931,11 +2315,7 @@ pub fn with_hole<'a>(
             let mut arg_symbols = Vec::with_capacity_in(args.len(), env.arena);
 
             for (_, arg_expr) in args.iter() {
-                if let roc_can::expr::Expr::Var(symbol) = arg_expr {
-                    arg_symbols.push(*symbol);
-                } else {
-                    arg_symbols.push(env.unique_symbol());
-                }
+                arg_symbols.push(possible_reuse_symbol(env, procs, &arg_expr));
             }
             let arg_symbols = arg_symbols.into_bump_slice();
 
@@ -1944,27 +2324,14 @@ pub fn with_hole<'a>(
                 .from_var(env.arena, ret_var, env.subs)
                 .unwrap_or_else(|err| todo!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-            let mut result = Stmt::Let(assigned, Expr::RunLowLevel(op, arg_symbols), layout, hole);
+            let result = Stmt::Let(assigned, Expr::RunLowLevel(op, arg_symbols), layout, hole);
 
-            for ((_arg_var, arg_expr), symbol) in
-                args.into_iter().rev().zip(arg_symbols.iter().rev())
-            {
-                // if this argument is already a symbol, we don't need to re-define it
-                if let roc_can::expr::Expr::Var(_) = arg_expr {
-                    continue;
-                }
-
-                result = with_hole(
-                    env,
-                    arg_expr,
-                    procs,
-                    layout_cache,
-                    *symbol,
-                    env.arena.alloc(result),
-                );
-            }
-
-            result
+            let iter = args
+                .into_iter()
+                .rev()
+                .map(|(a, b)| (a, Located::at_zero(b)))
+                .zip(arg_symbols.iter().rev());
+            assign_to_symbols(env, procs, layout_cache, iter, result)
         }
         RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
     }
@@ -1986,13 +2353,9 @@ pub fn from_can<'a>(
             loc_cond,
             branches,
         } => {
-            let cond_symbol = if let roc_can::expr::Expr::Var(symbol) = loc_cond.value {
-                symbol
-            } else {
-                env.unique_symbol()
-            };
+            let cond_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
 
-            let mut stmt = from_can_when(
+            let stmt = from_can_when(
                 env,
                 cond_var,
                 expr_var,
@@ -2005,20 +2368,15 @@ pub fn from_can<'a>(
             );
 
             // define the `when` condition
-            if let roc_can::expr::Expr::Var(_) = loc_cond.value {
-                // do nothing
-            } else {
-                stmt = with_hole(
-                    env,
-                    loc_cond.value,
-                    procs,
-                    layout_cache,
-                    cond_symbol,
-                    env.arena.alloc(stmt),
-                );
-            };
-
-            stmt
+            assign_to_symbol(
+                env,
+                procs,
+                layout_cache,
+                cond_var,
+                *loc_cond,
+                cond_symbol,
+                stmt,
+            )
         }
         If {
             cond_var,
@@ -2069,24 +2427,31 @@ pub fn from_can<'a>(
                     // Now that we know for sure it's a closure, get an owned
                     // version of these variant args so we can use them properly.
                     match def.loc_expr.value {
-                        Closure(ann, _, recursivity, loc_args, boxed_body) => {
+                        Closure {
+                            function_type,
+                            return_type,
+                            recursive,
+                            arguments,
+                            loc_body: boxed_body,
+                            ..
+                        } => {
                             // Extract Procs, but discard the resulting Expr::Load.
                             // That Load looks up the pointer, which we won't use here!
 
-                            let (loc_body, ret_var) = *boxed_body;
+                            let loc_body = *boxed_body;
 
-                            let is_tail_recursive =
-                                matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
+                            let is_self_recursive =
+                                !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
                             procs.insert_named(
                                 env,
                                 layout_cache,
                                 *symbol,
-                                ann,
-                                loc_args,
+                                function_type,
+                                arguments,
                                 loc_body,
-                                is_tail_recursive,
-                                ret_var,
+                                is_self_recursive,
+                                return_type,
                             );
 
                             continue;
@@ -2101,28 +2466,35 @@ pub fn from_can<'a>(
         }
         LetNonRec(def, cont, _, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
-                if let Closure(_, _, _, _, _) = &def.loc_expr.value {
+                if let Closure { .. } = &def.loc_expr.value {
                     // Now that we know for sure it's a closure, get an owned
                     // version of these variant args so we can use them properly.
                     match def.loc_expr.value {
-                        Closure(ann, _, recursivity, loc_args, boxed_body) => {
+                        Closure {
+                            function_type,
+                            return_type,
+                            recursive,
+                            arguments,
+                            loc_body: boxed_body,
+                            ..
+                        } => {
                             // Extract Procs, but discard the resulting Expr::Load.
                             // That Load looks up the pointer, which we won't use here!
 
-                            let (loc_body, ret_var) = *boxed_body;
+                            let loc_body = *boxed_body;
 
-                            let is_tail_recursive =
-                                matches!(recursivity, roc_can::expr::Recursive::TailRecursive);
+                            let is_self_recursive =
+                                !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
                             procs.insert_named(
                                 env,
                                 layout_cache,
                                 *symbol,
-                                ann,
-                                loc_args,
+                                function_type,
+                                arguments,
                                 loc_body,
-                                is_tail_recursive,
-                                ret_var,
+                                is_self_recursive,
+                                return_type,
                             );
 
                             return from_can(env, cont.value, procs, layout_cache);
@@ -2171,19 +2543,25 @@ pub fn from_can<'a>(
                 // convert the continuation
                 let mut stmt = from_can(env, cont.value, procs, layout_cache);
 
-                let outer_symbol = env.unique_symbol();
-                stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
-                    .unwrap();
+                if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
+                    store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
+                        .unwrap()
+                } else {
+                    let outer_symbol = env.unique_symbol();
+                    stmt =
+                        store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
+                            .unwrap();
 
-                // convert the def body, store in outer_symbol
-                with_hole(
-                    env,
-                    def.loc_expr.value,
-                    procs,
-                    layout_cache,
-                    outer_symbol,
-                    env.arena.alloc(stmt),
-                )
+                    // convert the def body, store in outer_symbol
+                    with_hole(
+                        env,
+                        def.loc_expr.value,
+                        procs,
+                        layout_cache,
+                        outer_symbol,
+                        env.arena.alloc(stmt),
+                    )
+                }
             }
         }
 
@@ -2569,7 +2947,8 @@ fn substitute_in_expr<'a>(
             call_type,
             args,
             arg_layouts,
-            layout,
+            ret_layout,
+            full_layout,
         } => {
             let opt_call_type = match call_type {
                 CallType::ByName(s) => substitute(subs, *s).map(CallType::ByName),
@@ -2597,7 +2976,8 @@ fn substitute_in_expr<'a>(
                     call_type,
                     args,
                     arg_layouts: *arg_layouts,
-                    layout: layout.clone(),
+                    ret_layout: ret_layout.clone(),
+                    full_layout: full_layout.clone(),
                 })
             } else {
                 None
@@ -2658,6 +3038,9 @@ fn substitute_in_expr<'a>(
                 None
             }
         }
+
+        Reuse { .. } | Reset(_) => unreachable!("reset/reuse have not been introduced yet"),
+
         Struct(args) => {
             let mut did_change = false;
             let new_args = Vec::from_iter_in(
@@ -2712,12 +3095,12 @@ fn substitute_in_expr<'a>(
             index,
             structure,
             field_layouts,
-            is_unwrapped,
+            wrapped,
         } => match substitute(subs, *structure) {
             Some(structure) => Some(AccessAtIndex {
                 index: *index,
                 field_layouts: *field_layouts,
-                is_unwrapped: *is_unwrapped,
+                wrapped: *wrapped,
                 structure,
             }),
             None => None,
@@ -2749,13 +3132,14 @@ fn store_pattern<'a>(
         | BitLiteral { .. }
         | StrLiteral(_) => {}
         AppliedTag {
-            union, arguments, ..
+            arguments, layout, ..
         } => {
-            let is_unwrapped = union.alternatives.len() == 1;
+            let wrapped = Wrapped::from_layout(layout);
+            let write_tag = wrapped == Wrapped::MultiTagUnion;
 
             let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
 
-            if !is_unwrapped {
+            if write_tag {
                 // add an element for the tag discriminant
                 arg_layouts.push(Layout::Builtin(Builtin::Int64));
             }
@@ -2765,9 +3149,11 @@ fn store_pattern<'a>(
             }
 
             for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
+                let index = if write_tag { index + 1 } else { index };
+
                 let load = Expr::AccessAtIndex {
-                    is_unwrapped,
-                    index: (!is_unwrapped as usize + index) as u64,
+                    wrapped,
+                    index: index as u64,
                     field_layouts: arg_layouts.clone().into_bump_slice(),
                     structure: outer_symbol,
                 };
@@ -2841,11 +3227,14 @@ fn store_record_destruct<'a>(
 ) -> Result<Stmt<'a>, &'a str> {
     use Pattern::*;
 
+    let wrapped = Wrapped::from_layout(&Layout::Struct(sorted_fields));
+
+    // TODO wrapped could be SingleElementRecord
     let load = Expr::AccessAtIndex {
         index,
         field_layouts: sorted_fields,
         structure: outer_symbol,
-        is_unwrapped: true,
+        wrapped,
     };
 
     match &destruct.typ {
@@ -2857,8 +3246,15 @@ fn store_record_destruct<'a>(
                 env.arena.alloc(stmt),
             );
         }
-        DestructType::Optional(_expr) => {
-            todo!("TODO monomorphize optional field destructure's default expr");
+        DestructType::Optional(expr) => {
+            stmt = with_hole(
+                env,
+                expr.clone(),
+                procs,
+                layout_cache,
+                destruct.symbol,
+                env.arena.alloc(stmt),
+            );
         }
         DestructType::Guard(guard_pattern) => match &guard_pattern {
             Identifier(symbol) => {
@@ -2901,6 +3297,88 @@ fn store_record_destruct<'a>(
     Ok(stmt)
 }
 
+/// We want to re-use symbols that are not function symbols
+/// for any other expression, we create a new symbol, and will
+/// later make sure it gets assigned the correct value.
+fn can_reuse_symbol<'a>(procs: &Procs<'a>, expr: &roc_can::expr::Expr) -> Option<Symbol> {
+    if let roc_can::expr::Expr::Var(symbol) = expr {
+        if procs.partial_procs.contains_key(&symbol) {
+            None
+        } else {
+            Some(*symbol)
+        }
+    } else {
+        None
+    }
+}
+
+fn possible_reuse_symbol<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &Procs<'a>,
+    expr: &roc_can::expr::Expr,
+) -> Symbol {
+    match can_reuse_symbol(procs, expr) {
+        Some(s) => s,
+        None => env.unique_symbol(),
+    }
+}
+
+fn assign_to_symbol<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    arg_var: Variable,
+    loc_arg: Located<roc_can::expr::Expr>,
+    symbol: Symbol,
+    result: Stmt<'a>,
+) -> Stmt<'a> {
+    // if this argument is already a symbol, we don't need to re-define it
+    if let roc_can::expr::Expr::Var(original) = loc_arg.value {
+        if procs.partial_procs.contains_key(&original) {
+            // this symbol is a function, that is used by-name (e.g. as an argument to another
+            // function). Register it with the current variable, then create a function pointer
+            // to it in the IR.
+            let layout = layout_cache
+                .from_var(env.arena, arg_var, env.subs)
+                .expect("creating layout does not fail");
+            procs.insert_passed_by_name(env, arg_var, original, layout.clone(), layout_cache);
+
+            return Stmt::Let(
+                symbol,
+                Expr::FunctionPointer(original, layout.clone()),
+                layout,
+                env.arena.alloc(result),
+            );
+        }
+        return result;
+    }
+    with_hole(
+        env,
+        loc_arg.value,
+        procs,
+        layout_cache,
+        symbol,
+        env.arena.alloc(result),
+    )
+}
+
+fn assign_to_symbols<'a, I>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    iter: I,
+    mut result: Stmt<'a>,
+) -> Stmt<'a>
+where
+    I: Iterator<Item = ((Variable, Located<roc_can::expr::Expr>), &'a Symbol)>,
+{
+    for ((arg_var, loc_arg), symbol) in iter {
+        result = assign_to_symbol(env, procs, layout_cache, arg_var, loc_arg, *symbol, result);
+    }
+
+    result
+}
+
 #[allow(clippy::too_many_arguments)]
 fn call_by_name<'a>(
     env: &mut Env<'a, '_>,
@@ -2920,16 +3398,13 @@ fn call_by_name<'a>(
             let arena = env.arena;
             let mut pattern_vars = Vec::with_capacity_in(loc_args.len(), arena);
 
-            let mut field_symbols = Vec::with_capacity_in(loc_args.len(), env.arena);
-
-            for (_, arg_expr) in loc_args.iter() {
-                if let roc_can::expr::Expr::Var(symbol) = arg_expr.value {
-                    field_symbols.push(symbol);
-                } else {
-                    field_symbols.push(env.unique_symbol());
-                }
-            }
-            let field_symbols = field_symbols.into_bump_slice();
+            let field_symbols = Vec::from_iter_in(
+                loc_args
+                    .iter()
+                    .map(|(_, arg_expr)| possible_reuse_symbol(env, procs, &arg_expr.value)),
+                arena,
+            )
+            .into_bump_slice();
 
             for (var, _) in &loc_args {
                 match layout_cache.from_var(&env.arena, *var, &env.subs) {
@@ -2944,43 +3419,33 @@ fn call_by_name<'a>(
                 }
             }
 
+            let full_layout = layout.clone();
+
             // TODO does this work?
             let empty = &[] as &[_];
-            let (arg_layouts, layout) = if let Layout::FunctionPointer(args, rlayout) = layout {
+            let (arg_layouts, ret_layout) = if let Layout::FunctionPointer(args, rlayout) = layout {
                 (args, rlayout)
             } else {
                 (empty, &layout)
             };
 
             // If we've already specialized this one, no further work is needed.
-            if procs.specialized.contains_key(&(proc_name, layout.clone())) {
+            if procs
+                .specialized
+                .contains_key(&(proc_name, full_layout.clone()))
+            {
                 let call = Expr::FunctionCall {
                     call_type: CallType::ByName(proc_name),
-                    layout: layout.clone(),
+                    ret_layout: ret_layout.clone(),
+                    full_layout: full_layout.clone(),
                     arg_layouts,
                     args: field_symbols,
                 };
 
-                let mut result = Stmt::Let(assigned, call, layout.clone(), hole);
+                let result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
 
-                for ((_, loc_arg), symbol) in
-                    loc_args.into_iter().rev().zip(field_symbols.iter().rev())
-                {
-                    // if this argument is already a symbol, we don't need to re-define it
-                    if let roc_can::expr::Expr::Var(_) = loc_arg.value {
-                        continue;
-                    }
-                    result = with_hole(
-                        env,
-                        loc_arg.value,
-                        procs,
-                        layout_cache,
-                        *symbol,
-                        env.arena.alloc(result),
-                    );
-                }
-
-                result
+                let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
+                assign_to_symbols(env, procs, layout_cache, iter, result)
             } else {
                 let pending = PendingSpecialization {
                     pattern_vars: pattern_vars.into_bump_slice(),
@@ -3002,35 +3467,25 @@ fn call_by_name<'a>(
                 match &mut procs.pending_specializations {
                     Some(pending_specializations) => {
                         // register the pending specialization, so this gets code genned later
-                        add_pending(pending_specializations, proc_name, layout.clone(), pending);
+                        add_pending(
+                            pending_specializations,
+                            proc_name,
+                            full_layout.clone(),
+                            pending,
+                        );
 
                         let call = Expr::FunctionCall {
                             call_type: CallType::ByName(proc_name),
-                            layout: layout.clone(),
+                            ret_layout: ret_layout.clone(),
+                            full_layout: full_layout.clone(),
                             arg_layouts,
                             args: field_symbols,
                         };
 
-                        let mut result = Stmt::Let(assigned, call, layout.clone(), hole);
+                        let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
 
-                        for ((_, loc_arg), symbol) in
-                            loc_args.into_iter().rev().zip(field_symbols.iter().rev())
-                        {
-                            // if this argument is already a symbol, we don't need to re-define it
-                            if let roc_can::expr::Expr::Var(_) = loc_arg.value {
-                                continue;
-                            }
-                            result = with_hole(
-                                env,
-                                loc_arg.value,
-                                procs,
-                                layout_cache,
-                                *symbol,
-                                env.arena.alloc(result),
-                            );
-                        }
-
-                        result
+                        let result = Stmt::Let(assigned, call, ret_layout.clone(), hole);
+                        assign_to_symbols(env, procs, layout_cache, iter, result)
                     }
                     None => {
                         let opt_partial_proc = procs.partial_procs.get(&proc_name);
@@ -3045,7 +3500,7 @@ fn call_by_name<'a>(
                                 // (We had a bug around this before this system existed!)
                                 procs
                                     .specialized
-                                    .insert((proc_name, layout.clone()), InProgress);
+                                    .insert((proc_name, full_layout.clone()), InProgress);
 
                                 match specialize(
                                     env,
@@ -3058,38 +3513,25 @@ fn call_by_name<'a>(
                                     Ok(proc) => {
                                         procs
                                             .specialized
-                                            .insert((proc_name, layout.clone()), Done(proc));
+                                            .insert((proc_name, full_layout.clone()), Done(proc));
 
                                         let call = Expr::FunctionCall {
                                             call_type: CallType::ByName(proc_name),
-                                            layout: layout.clone(),
+                                            ret_layout: ret_layout.clone(),
+                                            full_layout: full_layout.clone(),
                                             arg_layouts,
                                             args: field_symbols,
                                         };
 
-                                        let mut result =
-                                            Stmt::Let(assigned, call, layout.clone(), hole);
-
-                                        for ((_, loc_arg), symbol) in loc_args
+                                        let iter = loc_args
                                             .into_iter()
                                             .rev()
-                                            .zip(field_symbols.iter().rev())
-                                        {
-                                            // if this argument is already a symbol, we don't need to re-define it
-                                            if let roc_can::expr::Expr::Var(_) = loc_arg.value {
-                                                continue;
-                                            }
-                                            result = with_hole(
-                                                env,
-                                                loc_arg.value,
-                                                procs,
-                                                layout_cache,
-                                                *symbol,
-                                                env.arena.alloc(result),
-                                            );
-                                        }
+                                            .zip(field_symbols.iter().rev());
 
-                                        result
+                                        let result =
+                                            Stmt::Let(assigned, call, ret_layout.clone(), hole);
+
+                                        assign_to_symbols(env, procs, layout_cache, iter, result)
                                     }
                                     Err(error) => {
                                         let error_msg = env.arena.alloc(format!(
@@ -3107,7 +3549,9 @@ fn call_by_name<'a>(
                             None => {
                                 // This must have been a runtime error.
                                 match procs.runtime_errors.get(&proc_name) {
-                                    Some(error) => Stmt::RuntimeError(error),
+                                    Some(error) => {
+                                        Stmt::RuntimeError(env.arena.alloc(format!("{:?}", error)))
+                                    }
                                     None => unreachable!("Proc name {:?} is invalid", proc_name),
                                 }
                             }
@@ -3116,10 +3560,10 @@ fn call_by_name<'a>(
                 }
             }
         }
-        Err(_) => {
+        Err(e) => {
             // This function code gens to a runtime error,
             // so attempting to call it will immediately crash.
-            Stmt::RuntimeError("")
+            Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e)))
         }
     }
 }
@@ -3360,47 +3804,133 @@ pub fn from_can_pattern<'a>(
             destructs,
             ..
         } => {
+            // sorted fields based on the type
+            let sorted_fields = crate::layout::sort_record_fields(env.arena, *whole_var, env.subs);
+
+            // sorted fields based on the destruct
             let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
             let mut destructs = destructs.clone();
             destructs.sort_by(|a, b| a.value.label.cmp(&b.value.label));
 
-            let mut it = destructs.iter();
-            let mut opt_destruct = it.next();
-
-            let sorted_fields = crate::layout::sort_record_fields(env.arena, *whole_var, env.subs);
-
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 
-            for (label, field_layout) in sorted_fields.into_iter() {
-                if let Some(destruct) = opt_destruct {
-                    if destruct.value.label == label {
-                        opt_destruct = it.next();
+            // next we step through both sequences of fields. The outer loop is the sequence based
+            // on the type, since not all fields need to actually be destructured in the source
+            // language.
+            //
+            // However in mono patterns, we do destruct all patterns (but use Underscore) when
+            // in the source the field is not matche in the source language.
+            //
+            // Optional fields somewhat complicate the matter here
+            let mut it1 = sorted_fields.into_iter();
+            let mut opt_sorted = it1.next();
 
-                        mono_destructs.push(from_can_record_destruct(
-                            env,
-                            layout_cache,
-                            &destruct.value,
-                            field_layout.clone(),
-                        ));
-                    } else {
-                        // insert underscore pattern
+            let mut it2 = destructs.iter();
+            let mut opt_destruct = it2.next();
+
+            loop {
+                match (opt_sorted, opt_destruct) {
+                    (Some((label, Ok(field_layout))), Some(destruct)) => {
+                        if destruct.value.label == label {
+                            mono_destructs.push(from_can_record_destruct(
+                                env,
+                                layout_cache,
+                                &destruct.value,
+                                field_layout.clone(),
+                            ));
+
+                            opt_sorted = it1.next();
+                            opt_destruct = it2.next();
+                        } else {
+                            // insert underscore pattern
+                            mono_destructs.push(RecordDestruct {
+                                label: label.clone(),
+                                symbol: env.unique_symbol(),
+                                layout: field_layout.clone(),
+                                typ: DestructType::Guard(Pattern::Underscore),
+                            });
+
+                            opt_sorted = it1.next();
+                        }
+                        field_layouts.push(field_layout);
+                    }
+                    (Some((label, Err(field_layout))), Some(destruct)) => {
+                        if destruct.value.label == label {
+                            opt_destruct = it2.next();
+
+                            mono_destructs.push(RecordDestruct {
+                                label: destruct.value.label.clone(),
+                                symbol: destruct.value.symbol,
+                                layout: field_layout,
+                                typ: match &destruct.value.typ {
+                                    roc_can::pattern::DestructType::Optional(_, loc_expr) => {
+                                        // if we reach this stage, the optional field is not present
+                                        // so use the default
+                                        DestructType::Optional(loc_expr.value.clone())
+                                    }
+                                    _ => unreachable!(
+                                        "only optional destructs can be optional fields"
+                                    ),
+                                },
+                            });
+                        }
+                        opt_sorted = it1.next();
+                    }
+
+                    (Some((label, Err(field_layout))), None) => {
+                        // the remainder of the fields (from the type) is not matched on in
+                        // this pattern; to fill it out, we put underscores
                         mono_destructs.push(RecordDestruct {
                             label: label.clone(),
                             symbol: env.unique_symbol(),
                             layout: field_layout.clone(),
                             typ: DestructType::Guard(Pattern::Underscore),
                         });
+
+                        opt_sorted = it1.next();
                     }
-                } else {
-                    // insert underscore pattern
-                    mono_destructs.push(RecordDestruct {
-                        label: label.clone(),
-                        symbol: env.unique_symbol(),
-                        layout: field_layout.clone(),
-                        typ: DestructType::Guard(Pattern::Underscore),
-                    });
+
+                    (Some((label, Ok(field_layout))), None) => {
+                        // the remainder of the fields (from the type) is not matched on in
+                        // this pattern; to fill it out, we put underscores
+                        mono_destructs.push(RecordDestruct {
+                            label: label.clone(),
+                            symbol: env.unique_symbol(),
+                            layout: field_layout.clone(),
+                            typ: DestructType::Guard(Pattern::Underscore),
+                        });
+
+                        field_layouts.push(field_layout);
+                        opt_sorted = it1.next();
+                    }
+                    (None, Some(destruct)) => {
+                        // destruct is not in the type, but is in the pattern
+                        // it must be an optional field, and we will use the default
+                        match &destruct.value.typ {
+                            roc_can::pattern::DestructType::Optional(field_var, loc_expr) => {
+                                let field_layout = layout_cache
+                                    .from_var(env.arena, *field_var, env.subs)
+                                    .unwrap_or_else(|err| {
+                                        panic!("TODO turn fn_var into a RuntimeError {:?}", err)
+                                    });
+
+                                mono_destructs.push(RecordDestruct {
+                                    label: destruct.value.label.clone(),
+                                    symbol: destruct.value.symbol,
+                                    layout: field_layout,
+                                    typ: DestructType::Optional(loc_expr.value.clone()),
+                                })
+                            }
+                            _ => unreachable!("only optional destructs can be optional fields"),
+                        }
+
+                        opt_sorted = None;
+                        opt_destruct = it2.next();
+                    }
+                    (None, None) => {
+                        break;
+                    }
                 }
-                field_layouts.push(field_layout);
             }
 
             Pattern::RecordDestructure(
@@ -3423,8 +3953,10 @@ fn from_can_record_destruct<'a>(
         layout: field_layout,
         typ: match &can_rd.typ {
             roc_can::pattern::DestructType::Required => DestructType::Required,
-            roc_can::pattern::DestructType::Optional(_, loc_expr) => {
-                DestructType::Optional(loc_expr.value.clone())
+            roc_can::pattern::DestructType::Optional(_, _) => {
+                // if we reach this stage, the optional field is present
+                // DestructType::Optional(loc_expr.value.clone())
+                DestructType::Required
             }
             roc_can::pattern::DestructType::Guard(_, loc_pattern) => {
                 DestructType::Guard(from_can_pattern(env, layout_cache, &loc_pattern.value))

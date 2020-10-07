@@ -599,7 +599,7 @@ fn type_to_variable(
 
             register(subs, rank, pools, content)
         }
-        Function(args, ret_type) => {
+        Function(args, closure_type, ret_type) => {
             let mut arg_vars = Vec::with_capacity(args.len());
 
             for arg in args {
@@ -607,7 +607,8 @@ fn type_to_variable(
             }
 
             let ret_var = type_to_variable(subs, rank, pools, cached, ret_type);
-            let content = Content::Structure(FlatType::Func(arg_vars, ret_var));
+            let closure_var = type_to_variable(subs, rank, pools, cached, closure_type);
+            let content = Content::Structure(FlatType::Func(arg_vars, closure_var, ret_var));
 
             register(subs, rank, pools, content)
         }
@@ -1075,8 +1076,16 @@ fn adjust_rank_content(
                     rank
                 }
 
-                Func(arg_vars, ret_var) => {
+                Func(arg_vars, closure_var, ret_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, ret_var);
+
+                    rank = rank.max(adjust_rank(
+                        subs,
+                        young_mark,
+                        visit_mark,
+                        group_rank,
+                        closure_var,
+                    ));
 
                     for var in arg_vars {
                         rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
@@ -1239,14 +1248,15 @@ fn deep_copy_var_help(
                     Apply(symbol, args)
                 }
 
-                Func(arg_vars, ret_var) => {
+                Func(arg_vars, closure_var, ret_var) => {
                     let new_ret_var = deep_copy_var_help(subs, max_rank, pools, ret_var);
+                    let new_closure_var = deep_copy_var_help(subs, max_rank, pools, closure_var);
                     let arg_vars = arg_vars
                         .into_iter()
                         .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
                         .collect();
 
-                    Func(arg_vars, new_ret_var)
+                    Func(arg_vars, new_closure_var, new_ret_var)
                 }
 
                 same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
@@ -1295,6 +1305,8 @@ fn deep_copy_var_help(
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
                     let mut new_tags = MutMap::default();
 
+                    let new_rec_var = deep_copy_var_help(subs, max_rank, pools, rec_var);
+
                     for (tag, vars) in tags {
                         let new_vars: Vec<Variable> = vars
                             .into_iter()
@@ -1304,7 +1316,7 @@ fn deep_copy_var_help(
                     }
 
                     RecursiveTagUnion(
-                        deep_copy_var_help(subs, max_rank, pools, rec_var),
+                        new_rec_var,
                         new_tags,
                         deep_copy_var_help(subs, max_rank, pools, ext_var),
                     )
