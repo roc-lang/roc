@@ -105,6 +105,7 @@ enum Msg<'a> {
         layout_cache: LayoutCache<'a>,
         procs: Procs<'a>,
         problems: Vec<roc_mono::ir::MonoProblem>,
+        solved_subs: &'a mut Subs,
     },
     Specialized {
         specialization: (),
@@ -584,6 +585,7 @@ pub fn load(
                         msg_tx.clone(),
                         &injector,
                         worker_listeners,
+                        &arena,
                     )?;
                 }
             }
@@ -602,6 +604,7 @@ fn update<'a>(
     msg_tx: MsgSender<'a>,
     injector: &Injector<BuildTask<'a>>,
     worker_listeners: &'a [Sender<WorkerMsg>],
+    arena: &'a Bump,
 ) -> Result<State<'a>, LoadingProblem> {
     use self::Msg::*;
 
@@ -761,6 +764,7 @@ fn update<'a>(
                 solve_listeners,
                 ..
             } = &mut state;
+
             let waiting_for = waiting_for_solve.get_mut(&module_id).unwrap_or_else(|| {
                 panic!(
                     "Could not find module ID {:?} in waiting_for_solve",
@@ -832,9 +836,15 @@ fn update<'a>(
         } => {
             module_timing.end_time = SystemTime::now();
 
-            if true {
-                todo!("After getting this to work with Procs and combining all the things recursively (which will have bad asymptotics - need to keep iterating over the entire Procs every single time we get a new thing, to diff it and add all the new entries to the main list)...well, actually, is that true though? Or can we just clone Procs and give that to each module? No, that's the bare minimum - we have to do that, *and* we have to traverse it again afterwards to reabsorb. So we can improve on this by having two Procs (or something) which we pass to Expr::new - first, all_procs, and second, new_procs. Every time we want to look something up, first we check all_procs, then we check new_procs. That way, it's exactly 2 lookups every time in the Expr logic, but outside the expr, we don't have to re-traverse the entire massive list of Procs every time. Instead, we can just traverse new_procs and that's it!");
-            }
+            // After getting this to work with Procs and combining all the things recursively
+            // (which will have bad asymptotics - need to keep iterating over the entire Procs every single time we get a new thing,
+            // to diff it and add all the new entries to the main list)...well, actually, is that true though?
+            // Or can we just clone Procs and give that to each module?
+            // No, that's the bare minimum - we have to do that, *and* we have to traverse it again afterwards to reabsorb.
+            // So we can improve on this by having two Procs (or something) which we pass to Expr::new - first, all_procs, and second, new_procs.
+            // Every time we want to look something up, first we check all_procs, then we check new_procs.
+            // That way, it's exactly 2 lookups every time in the Expr logic, but outside the expr, we don't have to re-traverse the entire massive list of Procs every time.
+            // Instead, we can just traverse new_procs and that's it!");
 
             if module_id == state.root_id {
                 // If we don't need to specialize at this point, it's
@@ -852,6 +862,10 @@ fn update<'a>(
                             src,
                         })
                         .map_err(|_| LoadingProblem::MsgChannelDied)?;
+
+                    // bookkeeping
+                    state.declarations_by_id.insert(module_id, decls);
+                    state.constrained_ident_ids.insert(module_id, ident_ids);
 
                     // As far as type-checking goes, once we've solved
                     // the originally requested module, we're all done!
@@ -943,6 +957,10 @@ fn update<'a>(
                         decls,
                     },
                 )?;
+            } else {
+                // bookkeeping
+                state.declarations_by_id.insert(module_id, decls);
+                state.constrained_ident_ids.insert(module_id, ident_ids);
             }
 
             Ok(state)
@@ -950,9 +968,10 @@ fn update<'a>(
         PendingSpecializationsDone {
             module_id,
             mut ident_ids,
-            layout_cache,
+            mut layout_cache,
             problems,
             procs: new_procs,
+            solved_subs: root_subs,
         } => {
             state.mono_problems.extend(problems);
 
@@ -969,10 +988,6 @@ fn update<'a>(
                 state.pending_specializations_needed = false;
             }
 
-            // We're done with this layout cache, so return it to the pool.
-            // That way, other specialization processes can reuse it later.
-            state.layout_caches.push(layout_cache);
-
             // Absorb the contents of the new procs into our state's procs.
             state.procs.absorb(new_procs);
 
@@ -981,9 +996,9 @@ fn update<'a>(
             // If no remaining pending specializations are needed, we're done!
             if state.needs_specialization.is_empty() {
                 let mut mono_env = roc_mono::ir::Env {
-                    arena: root_arena,
+                    arena,
                     problems: &mut state.mono_problems,
-                    subs: state.root_subs.unwrap(),
+                    subs: root_subs,
                     home: state.root_id,
                     ident_ids: &mut ident_ids,
                 };
@@ -991,11 +1006,20 @@ fn update<'a>(
                 // TODO: for now this final specialization pass is sequential,
                 // with no parallelization at all. We should try to parallelize
                 // this, but doing so will require a redesign of Procs.
-                let mut procs =
+                let procs =
                     roc_mono::ir::specialize_all(&mut mono_env, state.procs, &mut layout_cache);
+
+                // We're done with this layout cache, so return it to the pool.
+                // That way, other specialization processes can reuse it later.
+                state.layout_caches.push(layout_cache);
 
                 todo!("We're finished! Send off the final Procs, ident_ids, etc.");
             } else {
+                // TODO is this required if we're done?
+                // We're done with this layout cache, so return it to the pool.
+                // That way, other specialization processes can reuse it later.
+                state.layout_caches.push(layout_cache);
+
                 // Notify all the listeners that this solved.
                 if let Some(listeners) = state.solve_listeners.remove(&module_id) {
                     for listener_id in listeners {
@@ -1046,6 +1070,9 @@ fn update<'a>(
             }
 
             todo!();
+        }
+        Msg::Specialized { .. } => {
+            unreachable!();
         }
         Msg::Finished { .. } => {
             unreachable!();
@@ -1690,10 +1717,11 @@ fn build_pending_specializations<'a>(
     // let mut layout_ids = LayoutIds::default();
     let mut procs = Procs::default();
     let mut mono_problems = std::vec::Vec::new();
+    let subs = arena.alloc(solved_subs.into_inner());
     let mut mono_env = roc_mono::ir::Env {
         arena,
         problems: &mut mono_problems,
-        subs: arena.alloc(solved_subs.into_inner()),
+        subs,
         home,
         ident_ids: &mut ident_ids,
     };
@@ -1753,12 +1781,15 @@ fn build_pending_specializations<'a>(
         }
     }
 
+    let problems = mono_env.problems.to_vec();
+    let solved_subs = mono_env.subs;
     Msg::PendingSpecializationsDone {
         module_id: home,
         ident_ids,
         layout_cache,
         procs,
-        problems: mono_env.problems.to_vec(),
+        problems,
+        solved_subs,
     }
 }
 
@@ -1813,7 +1844,7 @@ fn run_task<'a>(
             decls,
             module_timing,
             layout_cache,
-            mut solved_subs,
+            solved_subs,
         } => Ok(build_pending_specializations(
             arena,
             solved_subs,

@@ -88,6 +88,7 @@ mod test_load {
         assert_eq!(loaded_module.can_problems, Vec::new());
         assert_eq!(loaded_module.type_problems, Vec::new());
 
+        dbg!(&loaded_module.declarations_by_id);
         for decl in loaded_module.declarations_by_id.remove(&home).unwrap() {
             match decl {
                 Declare(def) => expect_def(
