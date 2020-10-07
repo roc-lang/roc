@@ -21,7 +21,7 @@ pub enum MonoProblem {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartialProc<'a> {
     pub annotation: Variable,
-    pub pattern_symbols: Vec<'a, Symbol>,
+    pub pattern_symbols: &'a [Symbol],
     pub body: roc_can::expr::Expr,
     pub is_tail_recursive: bool,
 }
@@ -172,6 +172,7 @@ impl<'a> Procs<'a> {
                 // context, we can't add pending specializations for them yet.
                 // (If we did, all named polymorphic functions would immediately error
                 // on trying to convert a flex var to a Layout.)
+                let pattern_symbols = pattern_symbols.into_bump_slice();
                 self.partial_procs.insert(
                     name,
                     PartialProc {
@@ -239,6 +240,7 @@ impl<'a> Procs<'a> {
                         pattern_vars: pattern_vars.into_bump_slice(),
                     };
 
+                    let pattern_symbols = pattern_symbols.into_bump_slice();
                     match &mut self.pending_specializations {
                         Some(pending_specializations) => {
                             // register the pending specialization, so this gets code genned later

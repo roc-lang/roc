@@ -13,7 +13,7 @@ use roc_constrain::module::{
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
-use roc_mono::expr::{MonoProblem, PartialProc, PendingSpecialization, Procs};
+use roc_mono::ir::{MonoProblem, PartialProc, PendingSpecialization, Procs};
 use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use roc_parse::module::module_defs;
@@ -101,8 +101,10 @@ enum Msg<'a> {
     },
     PendingSpecializationsDone {
         module_id: ModuleId,
+        ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
-        pending_specializations: MutMap<(Symbol, Layout<'a>), PendingSpecialization<'a>>,
+        procs: Procs<'a>,
+        problems: Vec<roc_mono::ir::MonoProblem>,
     },
     Specialized {
         specialization: (),
@@ -114,10 +116,10 @@ struct State<'a> {
     pub root_id: ModuleId,
     pub exposed_types: SubsByModule,
 
-    pub can_problems: Vec<roc_problem::can::Problem>,
-    pub mono_problems: Vec<MonoProblem>,
+    pub can_problems: std::vec::Vec<roc_problem::can::Problem>,
+    pub mono_problems: std::vec::Vec<MonoProblem>,
     pub headers_parsed: MutSet<ModuleId>,
-    pub type_problems: Vec<solve::TypeError>,
+    pub type_problems: std::vec::Vec<solve::TypeError>,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
     /// have completed for a given module.
@@ -176,7 +178,7 @@ struct State<'a> {
     // We don't bother trying to union them all together to maximize cache hits,
     // since the unioning process could potentially take longer than the savings.
     // (Granted, this has not been attempted or measured!)
-    pub layout_caches: Vec<LayoutCache<'a>>,
+    pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
 
     pub procs: Procs<'a>,
 }
@@ -460,8 +462,9 @@ pub fn load(
             exposed_types,
             headers_parsed,
             loading_started,
-            can_problems: Vec::new(),
-            type_problems: Vec::new(),
+            can_problems: std::vec::Vec::new(),
+            type_problems: std::vec::Vec::new(),
+            mono_problems: std::vec::Vec::new(),
             arc_modules,
             constrained_ident_ids: IdentIds::exposed_builtins(0),
             ident_ids_by_module,
@@ -478,7 +481,7 @@ pub fn load(
             all_pending_specializations: MutMap::default(),
             pending_specializations_needed,
             specializations_in_flight: 0,
-            layout_caches: Vec::with_capacity(num_cpus::get()),
+            layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
             procs: Procs::default(),
         };
 
@@ -946,6 +949,7 @@ fn update<'a>(
         }
         PendingSpecializationsDone {
             module_id,
+            mut ident_ids,
             layout_cache,
             problems,
             procs: new_procs,
@@ -976,19 +980,19 @@ fn update<'a>(
 
             // If no remaining pending specializations are needed, we're done!
             if state.needs_specialization.is_empty() {
-                let mut mono_env = roc_mono::expr::Env {
+                let mut mono_env = roc_mono::ir::Env {
                     arena: root_arena,
                     problems: &mut state.mono_problems,
                     subs: state.root_subs.unwrap(),
                     home: state.root_id,
-                    ident_ids: &mut state.ident_ids,
+                    ident_ids: &mut ident_ids,
                 };
 
                 // TODO: for now this final specialization pass is sequential,
                 // with no parallelization at all. We should try to parallelize
                 // this, but doing so will require a redesign of Procs.
                 let mut procs =
-                    roc_mono::expr::specialize_all(&mut mono_env, state.procs, &mut layout_cache);
+                    roc_mono::ir::specialize_all(&mut mono_env, state.procs, &mut layout_cache);
 
                 todo!("We're finished! Send off the final Procs, ident_ids, etc.");
             } else {
@@ -1686,7 +1690,7 @@ fn build_pending_specializations<'a>(
     // let mut layout_ids = LayoutIds::default();
     let mut procs = Procs::default();
     let mut mono_problems = std::vec::Vec::new();
-    let mut mono_env = roc_mono::expr::Env {
+    let mut mono_env = roc_mono::ir::Env {
         arena,
         problems: &mut mono_problems,
         subs: arena.alloc(solved_subs.into_inner()),
@@ -1707,6 +1711,9 @@ fn build_pending_specializations<'a>(
                         Closure(annotation, _, _, loc_args, boxed_body) => {
                             let (loc_body, ret_var) = *boxed_body;
 
+                            // this is a non-recursive declaration
+                            let is_tail_recursive = false;
+
                             procs.insert_named(
                                 &mut mono_env,
                                 &mut layout_cache,
@@ -1714,6 +1721,7 @@ fn build_pending_specializations<'a>(
                                 annotation,
                                 loc_args,
                                 loc_body,
+                                is_tail_recursive,
                                 ret_var,
                             );
                         }
@@ -1721,8 +1729,10 @@ fn build_pending_specializations<'a>(
                             let proc = PartialProc {
                                 annotation: def.expr_var,
                                 // This is a 0-arity thunk, so it has no arguments.
-                                pattern_symbols: bumpalo::collections::Vec::new_in(arena),
+                                pattern_symbols: &[],
                                 body,
+                                // This is a 0-arity thunk, so it cannot be recursive
+                                is_tail_recursive: false,
                             };
 
                             procs.partial_procs.insert(symbol, proc);
@@ -1743,7 +1753,13 @@ fn build_pending_specializations<'a>(
         }
     }
 
-    todo!("Make sure to return not only procs, but also ident_ids - we need that back!!");
+    Msg::PendingSpecializationsDone {
+        module_id: home,
+        ident_ids,
+        layout_cache,
+        procs,
+        problems: mono_env.problems.to_vec(),
+    }
 }
 
 fn run_task<'a>(
