@@ -105,11 +105,19 @@ enum Msg<'a> {
         layout_cache: LayoutCache<'a>,
         procs: Procs<'a>,
         problems: Vec<roc_mono::ir::MonoProblem>,
-        solved_subs: &'a mut Subs,
+        solved_subs: Solved<Subs>,
+        finished_info: FinishedInfo<'a>,
     },
     Specialized {
         specialization: (),
     },
+}
+
+#[derive(Debug)]
+struct FinishedInfo<'a> {
+    problems: Vec<solve::TypeError>,
+    exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    src: &'a str,
 }
 
 #[derive(Debug)]
@@ -280,6 +288,7 @@ enum BuildTask<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         decls: Vec<Declaration>,
+        finished_info: FinishedInfo<'a>,
     },
 }
 
@@ -872,7 +881,8 @@ fn update<'a>(
                     return Ok(state);
                 }
             } else {
-                state.type_problems.extend(solved_module.problems);
+                // TODO remove clone
+                state.type_problems.extend(solved_module.problems.clone());
 
                 // This was not the root module, but rather a dependency.
                 // Write it down and keep processing messages.
@@ -945,6 +955,15 @@ fn update<'a>(
                 // it may have useful entries in there!
                 let layout_cache = state.layout_caches.pop().unwrap_or_default();
 
+                let finished_info = FinishedInfo {
+                    problems: solved_module.problems,
+                    exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
+                    src,
+                };
+
+                // bookkeeping
+                state.declarations_by_id.insert(module_id, decls.clone());
+
                 enqueue_task(
                     injector,
                     worker_listeners,
@@ -955,6 +974,7 @@ fn update<'a>(
                         solved_subs,
                         ident_ids,
                         decls,
+                        finished_info,
                     },
                 )?;
             } else {
@@ -971,7 +991,8 @@ fn update<'a>(
             mut layout_cache,
             problems,
             procs: new_procs,
-            solved_subs: root_subs,
+            mut solved_subs,
+            finished_info,
         } => {
             state.mono_problems.extend(problems);
 
@@ -998,7 +1019,7 @@ fn update<'a>(
                 let mut mono_env = roc_mono::ir::Env {
                     arena,
                     problems: &mut state.mono_problems,
-                    subs: root_subs,
+                    subs: solved_subs.inner_mut(),
                     home: state.root_id,
                     ident_ids: &mut ident_ids,
                 };
@@ -1006,14 +1027,32 @@ fn update<'a>(
                 // TODO: for now this final specialization pass is sequential,
                 // with no parallelization at all. We should try to parallelize
                 // this, but doing so will require a redesign of Procs.
-                let procs =
+                state.procs =
                     roc_mono::ir::specialize_all(&mut mono_env, state.procs, &mut layout_cache);
+
+                let FinishedInfo {
+                    problems,
+                    src,
+                    exposed_vars_by_symbol,
+                } = finished_info;
+
+                msg_tx
+                    .send(Msg::Finished {
+                        solved_subs,
+                        problems,
+                        exposed_vars_by_symbol,
+                        src,
+                    })
+                    .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
                 // We're done with this layout cache, so return it to the pool.
                 // That way, other specialization processes can reuse it later.
                 state.layout_caches.push(layout_cache);
 
-                todo!("We're finished! Send off the final Procs, ident_ids, etc.");
+                // bookkeeping
+                state.constrained_ident_ids.insert(module_id, ident_ids);
+
+                return Ok(state);
             } else {
                 // TODO is this required if we're done?
                 // We're done with this layout cache, so return it to the pool.
@@ -1703,6 +1742,7 @@ fn build_pending_specializations<'a>(
     decls: Vec<Declaration>,
     module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
+    finished_info: FinishedInfo<'a>,
 ) -> Msg<'a> {
     // pub solved_types: MutMap<Symbol, SolvedType>,
     // pub aliases: MutMap<Symbol, Alias>,
@@ -1717,11 +1757,11 @@ fn build_pending_specializations<'a>(
     // let mut layout_ids = LayoutIds::default();
     let mut procs = Procs::default();
     let mut mono_problems = std::vec::Vec::new();
-    let subs = arena.alloc(solved_subs.into_inner());
+    let mut subs = solved_subs.into_inner();
     let mut mono_env = roc_mono::ir::Env {
         arena,
         problems: &mut mono_problems,
-        subs,
+        subs: &mut subs,
         home,
         ident_ids: &mut ident_ids,
     };
@@ -1782,14 +1822,15 @@ fn build_pending_specializations<'a>(
     }
 
     let problems = mono_env.problems.to_vec();
-    let solved_subs = mono_env.subs;
+
     Msg::PendingSpecializationsDone {
         module_id: home,
+        solved_subs: roc_types::solved_types::Solved(subs),
         ident_ids,
         layout_cache,
         procs,
         problems,
-        solved_subs,
+        finished_info,
     }
 }
 
@@ -1845,6 +1886,7 @@ fn run_task<'a>(
             module_timing,
             layout_cache,
             solved_subs,
+            finished_info,
         } => Ok(build_pending_specializations(
             arena,
             solved_subs,
@@ -1853,6 +1895,7 @@ fn run_task<'a>(
             decls,
             module_timing,
             layout_cache,
+            finished_info,
         )),
     }?;
 

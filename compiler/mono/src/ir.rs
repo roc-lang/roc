@@ -397,7 +397,7 @@ impl<'a> Specializations<'a> {
 
 pub struct Env<'a, 'i> {
     pub arena: &'a Bump,
-    pub subs: &'a mut Subs,
+    pub subs: &'i mut Subs,
     pub problems: &'i mut std::vec::Vec<MonoProblem>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
