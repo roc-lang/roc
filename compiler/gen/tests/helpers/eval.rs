@@ -14,7 +14,7 @@ pub fn helper_without_uniqueness<'a>(
     use crate::helpers::{can_expr, infer_expr, CanExprOut};
     use inkwell::OptimizationLevel;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
-    use roc_mono::layout::Layout;
+    use roc_mono::layout::{Layout, LayoutCache};
 
     let target = target_lexicon::Triple::host();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
@@ -102,7 +102,9 @@ pub fn helper_without_uniqueness<'a>(
         ident_ids: &mut ident_ids,
     };
 
-    let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
+    let mut layout_cache = LayoutCache::default();
+    let main_body =
+        roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
 
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
@@ -112,7 +114,6 @@ pub fn helper_without_uniqueness<'a>(
 
         Vec::with_capacity(num_headers)
     };
-    let mut layout_cache = roc_mono::layout::LayoutCache::default();
     let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
     assert_eq!(
@@ -194,7 +195,7 @@ pub fn helper_with_uniqueness<'a>(
     use crate::helpers::{infer_expr, uniq_expr};
     use inkwell::OptimizationLevel;
     use roc_gen::llvm::build::{build_proc, build_proc_header};
-    use roc_mono::layout::Layout;
+    use roc_mono::layout::{Layout, LayoutCache};
 
     let target = target_lexicon::Triple::host();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
@@ -271,7 +272,9 @@ pub fn helper_with_uniqueness<'a>(
         ident_ids: &mut ident_ids,
     };
 
-    let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
+    let mut layout_cache = LayoutCache::default();
+    let main_body =
+        roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
     let mut headers = {
         let num_headers = match &procs.pending_specializations {
             Some(map) => map.len(),
@@ -280,7 +283,6 @@ pub fn helper_with_uniqueness<'a>(
 
         Vec::with_capacity(num_headers)
     };
-    let mut layout_cache = roc_mono::layout::LayoutCache::default();
     let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
     assert_eq!(

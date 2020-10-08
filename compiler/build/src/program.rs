@@ -139,7 +139,7 @@ pub fn gen(
                                     procs.insert_exposed(
                                         symbol,
                                         layout,
-                                        pattern_vars, //: Vec<'a, Variable>,
+                                        pattern_vars.into_bump_slice(),
                                         annotation,
                                         ret_var,
                                     );
@@ -161,9 +161,7 @@ pub fn gen(
                                 let proc = PartialProc {
                                     annotation,
                                     // This is a 0-arity thunk, so it has no arguments.
-                                    pattern_symbols: bumpalo::collections::Vec::new_in(
-                                        mono_env.arena,
-                                    ),
+                                    pattern_symbols: &[],
                                     is_self_recursive: false,
                                     body,
                                 };
@@ -183,7 +181,7 @@ pub fn gen(
                                     procs.insert_exposed(
                                         symbol,
                                         layout,
-                                        pattern_vars,
+                                        pattern_vars.into_bump_slice(),
                                         // It seems brittle that we're passing
                                         // annotation twice - especially since
                                         // in both cases we're giving the

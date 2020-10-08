@@ -2351,6 +2351,7 @@ dependencies = [
  "roc_collections",
  "roc_constrain",
  "roc_module",
+ "roc_mono",
  "roc_parse",
  "roc_problem",
  "roc_region",
