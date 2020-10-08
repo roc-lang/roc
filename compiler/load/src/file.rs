@@ -108,7 +108,6 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         finished_info: FinishedInfo<'a>,
     },
-    // Specialized { specialization: (), },
 }
 
 #[derive(Debug)]
@@ -1739,17 +1738,6 @@ fn build_pending_specializations<'a>(
     mut layout_cache: LayoutCache<'a>,
     finished_info: FinishedInfo<'a>,
 ) -> Msg<'a> {
-    // pub solved_types: MutMap<Symbol, SolvedType>,
-    // pub aliases: MutMap<Symbol, Alias>,
-    // pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
-    // pub problems: Vec<solve::TypeError>,
-
-    // let mut decls_by_id = loaded.declarations_by_id;
-    // let home_decls = decls_by_id
-    //     .remove(&loaded.module_id)
-    //     .expect("Root module ID not found in loaded declarations_by_id");
-
-    // let mut layout_ids = LayoutIds::default();
     let mut procs = Procs::default();
     let mut mono_problems = std::vec::Vec::new();
     let mut subs = solved_subs.into_inner();
