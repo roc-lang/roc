@@ -51,7 +51,12 @@ pub enum Phase {
 }
 
 /// NOTE keep up to date manually, from ParseAndGenerateConstraints to the highest phase we support
-const PHASES: [Phase; 2] = [Phase::ParseAndGenerateConstraints, Phase::SolveTypes];
+const PHASES: [Phase; 4] = [
+    Phase::ParseAndGenerateConstraints,
+    Phase::SolveTypes,
+    Phase::FindSpecializations,
+    Phase::MakeSpecializations,
+];
 
 #[derive(Default, Debug)]
 struct Dependencies {
@@ -336,7 +341,7 @@ enum Msg<'a> {
         var_store: VarStore,
         module_timing: ModuleTiming,
     },
-    Solved {
+    SolvedTypes {
         src: &'a str,
         module_id: ModuleId,
         ident_ids: IdentIds,
@@ -345,13 +350,13 @@ enum Msg<'a> {
         decls: Vec<Declaration>,
         module_timing: ModuleTiming,
     },
-    Finished {
+    FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
         problems: Vec<solve::TypeError>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         src: &'a str,
     },
-    PendingSpecializationsDone {
+    FoundSpecializations {
         module_id: ModuleId,
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
@@ -360,6 +365,8 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         finished_info: FinishedInfo<'a>,
     },
+    MadeSpecializations {},
+    FinishedAllSpecialization {},
 }
 
 #[derive(Debug)]
@@ -789,7 +796,7 @@ pub fn load(
         // and processing those messages will in turn queue up more messages.
         for msg in msg_rx.iter() {
             match msg {
-                Msg::Finished {
+                Msg::FinishedAllTypeChecking {
                     solved_subs,
                     problems,
                     exposed_vars_by_symbol,
@@ -925,7 +932,7 @@ fn update<'a>(
 
             Ok(state)
         }
-        Solved {
+        SolvedTypes {
             src,
             module_id,
             ident_ids,
@@ -962,7 +969,7 @@ fn update<'a>(
                 state.timings.insert(module_id, module_timing);
 
                 msg_tx
-                    .send(Msg::Finished {
+                    .send(Msg::FinishedAllTypeChecking {
                         solved_subs,
                         problems: solved_module.problems,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
@@ -995,10 +1002,16 @@ fn update<'a>(
 
             Ok(state)
         }
-        PendingSpecializationsDone { .. } => {
+        FoundSpecializations { .. } => {
             todo!();
         }
-        Msg::Finished { .. } => {
+        MadeSpecializations { .. } => {
+            todo!();
+        }
+        Msg::FinishedAllTypeChecking { .. } => {
+            unreachable!();
+        }
+        Msg::FinishedAllSpecialization { .. } => {
             unreachable!();
         }
     }
@@ -1414,7 +1427,7 @@ fn run_solve<'a>(
     module_timing.solve = solve_end.duration_since(constrain_end).unwrap();
 
     // Send the subs to the main thread for processing,
-    Msg::Solved {
+    Msg::SolvedTypes {
         src,
         module_id,
         solved_subs,
@@ -1638,7 +1651,7 @@ fn build_pending_specializations<'a>(
 
     let problems = mono_env.problems.to_vec();
 
-    Msg::PendingSpecializationsDone {
+    Msg::FoundSpecializations {
         module_id: home,
         solved_subs: roc_types::solved_types::Solved(subs),
         ident_ids,
