@@ -13,7 +13,7 @@ use roc_constrain::module::{
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
-use roc_mono::ir::{MonoProblem, PartialProc, PendingSpecialization, Procs};
+use roc_mono::ir::{MonoProblem, PartialProc, PendingSpecialization, Proc, Procs};
 use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use roc_parse::module::module_defs;
@@ -328,6 +328,20 @@ struct ConstrainedModule<'a> {
 }
 
 #[derive(Debug)]
+pub struct MonomorphizedModule<'a> {
+    pub module_id: ModuleId,
+    pub interns: Interns,
+    pub subs: Subs,
+    pub can_problems: Vec<roc_problem::can::Problem>,
+    pub type_problems: Vec<solve::TypeError>,
+    pub mono_problems: Vec<roc_mono::ir::MonoProblem>,
+    pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub src: Box<str>,
+    pub timings: MutMap<ModuleId, ModuleTiming>,
+}
+
+#[derive(Debug)]
 enum Msg<'a> {
     Header(ModuleHeader<'a>),
     Constrained {
@@ -581,6 +595,55 @@ fn enqueue_task<'a>(
     Ok(())
 }
 
+pub fn load_and_typecheck(
+    arena: &Bump,
+    filename: PathBuf,
+    stdlib: StdLib,
+    src_dir: &Path,
+    exposed_types: SubsByModule,
+) -> Result<LoadedModule, LoadingProblem> {
+    use LoadResult::*;
+
+    match load(
+        arena,
+        filename,
+        stdlib,
+        src_dir,
+        exposed_types,
+        Phase::SolveTypes,
+    )? {
+        Monomorphized(_) => unreachable!(""),
+        TypeChecked(module) => Ok(module),
+    }
+}
+
+pub fn load_and_monomorphize<'a>(
+    arena: &'a Bump,
+    filename: PathBuf,
+    stdlib: StdLib,
+    src_dir: &Path,
+    exposed_types: SubsByModule,
+) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
+    use LoadResult::*;
+
+    match load(
+        arena,
+        filename,
+        stdlib,
+        src_dir,
+        exposed_types,
+        Phase::MakeSpecializations,
+    )? {
+        Monomorphized(module) => Ok(module),
+        TypeChecked(_) => unreachable!(""),
+    }
+}
+
+enum LoadResult<'a> {
+    TypeChecked(LoadedModule),
+    Monomorphized(MonomorphizedModule<'a>),
+}
+
 /// The loading process works like this, starting from the given filename (e.g. "main.roc"):
 ///
 /// 1. Open the file.
@@ -624,19 +687,14 @@ fn enqueue_task<'a>(
 ///     and then linking them together, and possibly caching them by the hash of their
 ///     specializations, so if none of their specializations changed, we don't even need
 ///     to rebuild the module and can link in the cached one directly.)
-pub fn load(
+fn load<'a>(
+    arena: &'a Bump,
     filename: PathBuf,
     stdlib: StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
     goal_phase: Phase,
-) -> Result<LoadedModule, LoadingProblem> {
-    // Initialize the need to specialize based on whether we're going all the
-    // way to that phase. This is mut because we switch it off after we're
-    // done specializing, and that indicates that all the pending specializations
-    // have been at least enqueued (even if they haven't all been specialized yet.)
-    let arena = Bump::new();
-
+) -> Result<LoadResult<'a>, LoadingProblem> {
     // Reserve one CPU for the main thread, and let all the others be eligible
     // to spawn workers.
     let num_workers = num_cpus::get() - 1;
@@ -812,13 +870,13 @@ pub fn load(
                             .map_err(|_| LoadingProblem::MsgChannelDied)?;
                     }
 
-                    return Ok(finish(
+                    return Ok(LoadResult::TypeChecked(finish(
                         state,
                         solved_subs,
                         problems,
                         exposed_vars_by_symbol,
                         src,
-                    ));
+                    )));
                 }
                 msg => {
                     // This is where most of the main thread's work gets done.
