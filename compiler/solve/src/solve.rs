@@ -567,6 +567,16 @@ fn type_to_var(
     type_to_variable(subs, rank, pools, cached, typ)
 }
 
+/// Abusing existing functions for our purposes
+/// this is to put a solved type back into subs
+pub fn insert_type_into_subs(subs: &mut Subs, typ: &Type) -> Variable {
+    let rank = Rank::NONE;
+    let mut pools = Pools::default();
+    let mut cached = MutMap::default();
+
+    type_to_variable(subs, rank, &mut pools, &mut cached, typ)
+}
+
 fn type_to_variable(
     subs: &mut Subs,
     rank: Rank,

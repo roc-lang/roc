@@ -174,7 +174,11 @@ pub struct FreeVars {
     pub wildcards: Vec<Variable>,
 }
 
-fn to_type(solved_type: &SolvedType, free_vars: &mut FreeVars, var_store: &mut VarStore) -> Type {
+pub fn to_type(
+    solved_type: &SolvedType,
+    free_vars: &mut FreeVars,
+    var_store: &mut VarStore,
+) -> Type {
     use roc_types::solved_types::SolvedType::*;
 
     match solved_type {

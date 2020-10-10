@@ -197,7 +197,7 @@ impl SolvedType {
         }
     }
 
-    fn from_var(subs: &Subs, var: Variable) -> Self {
+    pub fn from_var(subs: &Subs, var: Variable) -> Self {
         use crate::subs::Content::*;
 
         match subs.get_without_compacting(var).content {

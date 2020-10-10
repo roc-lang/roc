@@ -350,13 +350,6 @@ pub fn gen_from_mono_module(
 
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
-    let mut exposed_to_host =
-        HashSet::with_capacity_and_hasher(loaded.exposed_vars_by_symbol.len(), default_hasher());
-
-    for (symbol, _) in loaded.exposed_vars_by_symbol {
-        exposed_to_host.insert(symbol);
-    }
-
     // Compile and add all the Procs before adding main
     let env = roc_gen::llvm::build::Env {
         arena: &arena,
@@ -366,7 +359,7 @@ pub fn gen_from_mono_module(
         module,
         ptr_bytes,
         leak: false,
-        exposed_to_host,
+        exposed_to_host: loaded.exposed_to_host,
     };
 
     // Populate Procs further and get the low-level Expr from the canonical Expr
