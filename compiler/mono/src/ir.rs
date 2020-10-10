@@ -1208,30 +1208,44 @@ pub fn specialize_all<'a>(
     mut procs: Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
-    let mut pending_specializations = procs.pending_specializations.unwrap_or_default();
-
     // add the specializations that other modules require of us
     use roc_constrain::module::{to_type, FreeVars};
-    use roc_solve::solve::insert_type_into_subs;
-    for (name, solved_type) in procs.externals_others_need.drain() {
+    use roc_solve::solve::{insert_type_into_subs, unsafe_copy_var_help};
+    use roc_types::subs::VarStore;
+
+    let it = procs.externals_others_need.clone();
+    for (name, solved_type) in it.into_iter() {
+        let snapshot = env.subs.snapshot();
+
         let mut free_vars = FreeVars::default();
-        let mut var_store = ();
-        let normal_type = to_type(solved_type, &mut free_vars, &mut var_store);
+        let mut var_store = VarStore::new_from_subs(env.subs);
+
+        let normal_type = to_type(&solved_type, &mut free_vars, &mut var_store);
+        dbg!(name, &normal_type);
+
+        let next = var_store.fresh().index();
+        let variables_introduced = next as usize - (env.subs.len() - 1);
+
+        env.subs.extend_by(variables_introduced);
+
         let fn_var = insert_type_into_subs(env.subs, &normal_type);
 
         let layout = layout_cache
             .from_var(&env.arena, fn_var, env.subs)
             .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
-        let partial_proc = match procs.partial_procs.get(&name) {
+        let mut partial_proc = match procs.partial_procs.get(&name) {
             Some(v) => v.clone(),
             None => {
                 unreachable!("now this is an error");
             }
         };
 
+        partial_proc.annotation = unsafe_copy_var_help(env.subs, partial_proc.annotation);
+
         match specialize_external(env, &mut procs, name, layout_cache, fn_var, partial_proc) {
             Ok(proc) => {
+                dbg!(name, &layout);
                 procs.specialized.insert((name, layout), Done(proc));
             }
             Err(error) => {
@@ -1243,7 +1257,11 @@ pub fn specialize_all<'a>(
                 procs.runtime_errors.insert(name, error_msg);
             }
         }
+
+        env.subs.rollback_to(snapshot);
     }
+
+    let mut pending_specializations = procs.pending_specializations.unwrap_or_default();
 
     // When calling from_can, pending_specializations should be unavailable.
     // This must be a single pass, and we must not add any more entries to it!

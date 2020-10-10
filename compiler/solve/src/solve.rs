@@ -1191,6 +1191,13 @@ fn introduce(subs: &mut Subs, rank: Rank, pools: &mut Pools, vars: &[Variable]) 
     pool.extend(vars);
 }
 
+pub fn unsafe_copy_var_help(subs: &mut Subs, var: Variable) -> Variable {
+    let rank = Rank::NONE;
+    let mut pools = Pools::default();
+
+    deep_copy_var(subs, rank, &mut pools, var)
+}
+
 fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
     let copy = deep_copy_var_help(subs, rank, pools, var);
 

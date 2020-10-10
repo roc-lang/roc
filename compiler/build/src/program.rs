@@ -372,6 +372,7 @@ pub fn gen_from_mono_module(
 
     for ((symbol, layout), proc) in loaded.procedures {
         let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+        dbg!(&fn_val);
 
         headers.push((proc, fn_val));
     }
@@ -395,7 +396,7 @@ pub fn gen_from_mono_module(
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
+    env.module.print_to_stderr();
 
     mpm.run_on(module);
 
