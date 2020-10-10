@@ -180,6 +180,8 @@ struct ModuleCache<'a> {
     module_names: MutMap<ModuleId, ModuleName>,
     headers: MutMap<ModuleId, ModuleHeader<'a>>,
     constrained: MutMap<ModuleId, ConstrainedModule<'a>>,
+    typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
+    found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
 }
 
 fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> BuildTask<'a> {
@@ -280,6 +282,41 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 declarations,
             )
         }
+        Phase::FindSpecializations => {
+            let typechecked = state.module_cache.typechecked.remove(&module_id).unwrap();
+
+            let TypeCheckedModule {
+                layout_cache,
+                module_id,
+                module_timing,
+                solved_subs,
+                decls,
+                finished_info,
+                ident_ids,
+            } = typechecked;
+
+            BuildTask::BuildPendingSpecializations {
+                layout_cache,
+                module_id,
+                module_timing,
+                solved_subs,
+                decls,
+                finished_info,
+                ident_ids,
+            }
+        }
+        Phase::MakeSpecializations => {
+            // load
+            BuildTask::BuildSpecializations {
+                layout_cache,
+                module_id,
+                module_timing,
+                solved_subs,
+                decls,
+                finished_info,
+                ident_ids,
+            }
+        }
         _ => todo!(),
     }
 }
@@ -325,6 +362,23 @@ struct ConstrainedModule<'a> {
     ident_ids: IdentIds,
     var_store: VarStore,
     module_timing: ModuleTiming,
+}
+
+#[derive(Debug)]
+pub struct TypeCheckedModule<'a> {
+    module_id: ModuleId,
+    layout_cache: LayoutCache<'a>,
+    module_timing: ModuleTiming,
+    solved_subs: Solved<Subs>,
+    decls: Vec<Declaration>,
+    ident_ids: IdentIds,
+    finished_info: FinishedInfo<'a>,
+}
+
+#[derive(Debug)]
+pub struct FoundSpecializationsModule<'a> {
+    pub module_id: ModuleId,
+    pub procs: Procs<'a>,
 }
 
 #[derive(Debug)]
@@ -1001,23 +1055,6 @@ fn update<'a>(
         } => {
             module_timing.end_time = SystemTime::now();
 
-            state.constrained_ident_ids.insert(module_id, ident_ids);
-
-            //            let constrained_module = ConstrainedModule {
-            //                module,
-            //                constraint,
-            //                declarations,
-            //                ident_ids,
-            //                src,
-            //                module_timing,
-            //                var_store,
-            //                imported_modules,
-            //            };
-            //            state
-            //                .module_cache
-            //                .constrained
-            //                .insert(module_id, constrained_module);
-
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
             if module_id == state.root_id && state.goal_phase == Phase::SolveTypes {
@@ -1037,6 +1074,7 @@ fn update<'a>(
 
                 // bookkeeping
                 state.declarations_by_id.insert(module_id, decls);
+                state.constrained_ident_ids.insert(module_id, ident_ids);
 
                 // As far as type-checking goes, once we've solved
                 // the originally requested module, we're all done!
@@ -1051,6 +1089,34 @@ fn update<'a>(
                         ),
                     );
                 }
+
+                if state.goal_phase > Phase::SolveTypes {
+                    let layout_cache = state.layout_caches.pop().unwrap_or_default();
+
+                    let finished_info = FinishedInfo {
+                        src,
+                        exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
+                        problems: solved_module.problems,
+                    };
+
+                    let typechecked = TypeCheckedModule {
+                        module_id,
+                        decls,
+                        solved_subs,
+                        ident_ids,
+                        module_timing,
+                        layout_cache,
+                        finished_info,
+                    };
+
+                    state
+                        .module_cache
+                        .typechecked
+                        .insert(module_id, typechecked);
+                } else {
+                    state.constrained_ident_ids.insert(module_id, ident_ids);
+                }
+
                 for (module_id, phase) in work {
                     let task = start_phase(module_id, phase, &mut state);
 
@@ -1060,8 +1126,27 @@ fn update<'a>(
 
             Ok(state)
         }
-        FoundSpecializations { .. } => {
-            todo!();
+        FoundSpecializations {
+            module_id, procs, ..
+        } => {
+            let found_specializations_module = FoundSpecializationsModule { module_id, procs };
+
+            state
+                .module_cache
+                .found_specializations
+                .insert(module_id, found_specializations_module);
+
+            let work = state
+                .dependencies
+                .notify(module_id, Phase::FindSpecializations);
+
+            for (module_id, phase) in work {
+                let task = start_phase(module_id, phase, &mut state);
+
+                enqueue_task(&injector, worker_listeners, task)?
+            }
+
+            Ok(state)
         }
         MadeSpecializations { .. } => {
             todo!();
