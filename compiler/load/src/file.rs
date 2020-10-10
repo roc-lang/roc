@@ -82,6 +82,7 @@ impl Dependencies {
         }
 
         // add dependencies for self
+        // phase i + 1 of a file always depends on phase i being completed
         {
             let mut i = 0;
             while PHASES[i] < goal_phase {
@@ -168,6 +169,7 @@ impl Dependencies {
     }
 }
 
+/// Struct storing various intermediate stages by their ModuleId
 #[derive(Debug, Default)]
 struct ModuleCache<'a> {
     module_names: MutMap<ModuleId, ModuleName>,
@@ -176,7 +178,6 @@ struct ModuleCache<'a> {
 }
 
 fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> BuildTask<'a> {
-    println!("Starting phase {:?} for module {:?}", phase, module_id);
     // we blindly assume all dependencies are met
     match phase {
         Phase::LoadHeader => {
@@ -196,7 +197,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
         }
 
         Phase::ParseAndGenerateConstraints => {
-            // TODO remove clone?
             let header = state.module_cache.headers.remove(&module_id).unwrap();
             let module_id = header.module_id;
             let deps_by_name = &header.deps_by_name;
@@ -205,7 +205,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
 
             let State {
                 ident_ids_by_module,
-                exposed_types,
                 ..
             } = &state;
 
@@ -230,34 +229,16 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 }
             }
 
-            // Once this step has completed, the next thing we'll need
-            // is solving. Register the modules we'll need to have been
-            // solved before we can solve.
-            let mut solve_needed = HashSet::with_capacity_and_hasher(num_deps, default_hasher());
-
-            for dep_id in deps_by_name.values() {
-                if !exposed_types.contains_key(dep_id) {
-                    solve_needed.insert(*dep_id);
-                }
-            }
-
             let module_ids = Arc::clone(&state.arc_modules);
             let module_ids = {
                 (*module_ids).lock().expect("Failed to acquire lock for obtaining module IDs, presumably because a thread panicked.").clone()
             };
-
-            //                        let header = state
-            //                            .unparsed_modules
-            //                            .remove(&listener_id)
-            //                            .expect("Could not find listener ID in unparsed_modules");
 
             let exposed_symbols = state
                 .exposed_symbols_by_module
                 .remove(&module_id)
                 .expect("Could not find listener ID in exposed_symbols_by_module");
 
-            // Now that we have waiting_for_solve populated, continue parsing,
-            // canonicalizing, and constraining the module.
             BuildTask::ParseAndConstrain {
                 header,
                 mode: state.stdlib.mode,
@@ -420,8 +401,6 @@ struct State<'a> {
 
     pub exposed_symbols_by_module: MutMap<ModuleId, MutSet<Symbol>>,
 
-    pub unparsed_modules: MutMap<ModuleId, ModuleHeader<'a>>,
-
     pub unsolved_modules: MutMap<ModuleId, UnsolvedModule<'a>>,
 
     /// These are the modules which need to add their pending specializations to
@@ -459,7 +438,7 @@ struct UnsolvedModule<'a> {
     declarations: Vec<Declaration>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ModuleTiming {
     pub read_roc_file: Duration,
     pub parse_header: Duration,
@@ -787,7 +766,6 @@ pub fn load(
             ident_ids_by_module,
             declarations_by_id: MutMap::default(),
             exposed_symbols_by_module: MutMap::default(),
-            unparsed_modules: MutMap::default(),
             unsolved_modules: MutMap::default(),
             timings: MutMap::default(),
             needs_specialization: MutSet::default(),
@@ -918,7 +896,6 @@ fn update<'a>(
             module_timing,
         } => {
             let module_id = module.module_id;
-            println!("Constrained {:?}", module_id);
             state.can_problems.extend(problems);
 
             let constrained_module = ConstrainedModule {
@@ -957,7 +934,6 @@ fn update<'a>(
             decls,
             mut module_timing,
         } => {
-            println!("Solved {:?}", module_id);
             module_timing.end_time = SystemTime::now();
 
             state.constrained_ident_ids.insert(module_id, ident_ids);
@@ -979,7 +955,10 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
-            if work.is_empty() && state.dependencies.solved_all() && module_id == state.root_id {
+            if module_id == state.root_id && state.goal_phase == Phase::SolveTypes {
+                debug_assert!(work.is_empty());
+                debug_assert!(state.dependencies.solved_all());
+
                 state.timings.insert(module_id, module_timing);
 
                 msg_tx
