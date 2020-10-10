@@ -2635,7 +2635,7 @@ fn to_opt_branches<'a>(
                 env.problems.push(MonoProblem::PatternProblem(error))
             }
 
-            overlapping_branches.sort();
+            overlapping_branches.sort_unstable();
 
             for i in overlapping_branches.into_iter().rev() {
                 opt_branches.remove(i);

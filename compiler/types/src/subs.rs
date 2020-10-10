@@ -531,10 +531,10 @@ pub enum Content {
 impl Content {
     #[inline(always)]
     pub fn is_number(&self) -> bool {
-        match &self {
-            Content::Structure(FlatType::Apply(Symbol::NUM_NUM, _)) => true,
-            _ => false,
-        }
+        matches!(
+            &self,
+            Content::Structure(FlatType::Apply(Symbol::NUM_NUM, _))
+        )
     }
 
     pub fn is_unique(&self, subs: &Subs) -> bool {
