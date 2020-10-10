@@ -33,13 +33,13 @@ pub fn build_file(
         OptLevel::Normal => roc_builtins::std::standard_stdlib(),
         OptLevel::Optimize => roc_builtins::unique::uniq_stdlib(),
     };
-    let monomorphize = roc_load::file::Phases::Monomorphize;
+    let solve_types = roc_load::file::Phase::SolveTypes;
     let loaded = roc_load::file::load(
         filename.clone(),
-        &stdlib,
+        stdlib,
         src_dir.as_path(),
         subs_by_module,
-        monomorphize,
+        solve_types,
     )?;
     let dest_filename = filename.with_file_name("roc_app.o");
     let buf = &mut String::with_capacity(1024);

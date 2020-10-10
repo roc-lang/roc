@@ -20,11 +20,13 @@ mod test_uniq_load {
     use roc_can::def::Def;
     use roc_collections::all::MutMap;
     use roc_constrain::module::SubsByModule;
-    use roc_load::file::{load, LoadedModule, Phases};
+    use roc_load::file::{load, LoadedModule, Phase};
     use roc_module::symbol::{Interns, ModuleId};
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
     use roc_types::subs::Subs;
     use std::collections::HashMap;
+
+    const GOAL_PHASE: Phase = Phase::SolveTypes;
 
     // HELPERS
 
@@ -37,10 +39,10 @@ mod test_uniq_load {
         let filename = src_dir.join(format!("{}.roc", module_name));
         let loaded = load(
             filename,
-            &unique::uniq_stdlib(),
+            unique::uniq_stdlib(),
             src_dir.as_path(),
             subs_by_module,
-            Phases::TypeCheck,
+            GOAL_PHASE,
         );
         let loaded_module = loaded.expect("Test module failed to load");
 
@@ -132,10 +134,10 @@ mod test_uniq_load {
         let filename = src_dir.join("Primary.roc");
         let loaded = load(
             filename,
-            &roc_builtins::std::standard_stdlib(),
+            roc_builtins::std::standard_stdlib(),
             src_dir.as_path(),
             subs_by_module,
-            Phases::TypeCheck,
+            GOAL_PHASE,
         );
 
         let mut loaded_module = loaded.expect("Test module failed to load");

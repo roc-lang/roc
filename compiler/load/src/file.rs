@@ -39,6 +39,265 @@ const ROC_FILE_EXTENSION: &str = "roc";
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
 
+/// NOTE the order of definition of the phases is used by the ord instance
+/// make sure they are ordered from first to last!
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Debug)]
+pub enum Phase {
+    LoadHeader,
+    ParseAndGenerateConstraints,
+    SolveTypes,
+    FindSpecializations,
+    MakeSpecializations,
+}
+
+/// NOTE keep up to date manually, from ParseAndGenerateConstraints to the highest phase we support
+const PHASES: [Phase; 2] = [Phase::ParseAndGenerateConstraints, Phase::SolveTypes];
+
+#[derive(Default, Debug)]
+struct Dependencies {
+    waiting_for: MutMap<(ModuleId, Phase), MutSet<(ModuleId, Phase)>>,
+    notifies: MutMap<(ModuleId, Phase), MutSet<(ModuleId, Phase)>>,
+}
+
+impl Dependencies {
+    /// Add all the dependencies for a module, return (module, phase) pairs that can make progress
+    pub fn add_module(
+        &mut self,
+        module_id: ModuleId,
+        dependencies: &MutSet<ModuleId>,
+        goal_phase: Phase,
+    ) -> MutSet<(ModuleId, Phase)> {
+        use Phase::*;
+
+        for dep in dependencies.iter().copied() {
+            self.add_dependency(module_id, dep, Phase::SolveTypes);
+
+            if goal_phase >= FindSpecializations {
+                self.add_dependency(module_id, dep, Phase::FindSpecializations);
+            }
+
+            if goal_phase >= MakeSpecializations {
+                self.add_dependency(dep, module_id, Phase::MakeSpecializations);
+            }
+        }
+
+        // add dependencies for self
+        {
+            let mut i = 0;
+            while PHASES[i] < goal_phase {
+                self.add_dependency_help(module_id, module_id, PHASES[i + 1], PHASES[i]);
+                i += 1;
+            }
+        }
+
+        let mut output = MutSet::default();
+
+        // the added module can be parsed/constrained
+        output.insert((module_id, ParseAndGenerateConstraints));
+
+        // all the dependencies can be loaded
+        for dep in dependencies {
+            output.insert((*dep, LoadHeader));
+        }
+
+        output
+    }
+
+    /// Propagate a notification, return (module, phase) pairs that can make progress
+    pub fn notify(&mut self, module_id: ModuleId, phase: Phase) -> MutSet<(ModuleId, Phase)> {
+        let mut output = MutSet::default();
+
+        let key = (module_id, phase);
+        if let Some(to_notify) = self.notifies.get(&key) {
+            for notify_key in to_notify {
+                let mut is_empty = false;
+                if let Some(waiting_for_pairs) = self.waiting_for.get_mut(&notify_key) {
+                    waiting_for_pairs.remove(&key);
+                    is_empty = waiting_for_pairs.is_empty();
+                }
+
+                if is_empty {
+                    self.waiting_for.remove(notify_key);
+                    output.insert(*notify_key);
+                }
+            }
+        }
+
+        self.notifies.remove(&key);
+
+        output
+    }
+
+    /// A waits for B, and B will notify A when it completes the phase
+    fn add_dependency(&mut self, a: ModuleId, b: ModuleId, phase: Phase) {
+        self.add_dependency_help(a, b, phase, phase);
+    }
+
+    fn add_dependency_help(&mut self, a: ModuleId, b: ModuleId, phase_a: Phase, phase_b: Phase) {
+        let key = (a, phase_a);
+        let value = (b, phase_b);
+        match self.waiting_for.get_mut(&key) {
+            Some(existing) => {
+                existing.insert(value);
+            }
+            None => {
+                let mut set = MutSet::default();
+                set.insert(value);
+                self.waiting_for.insert(key, set);
+            }
+        }
+
+        let key = (b, phase_b);
+        let value = (a, phase_a);
+        match self.notifies.get_mut(&key) {
+            Some(existing) => {
+                existing.insert(value);
+            }
+            None => {
+                let mut set = MutSet::default();
+                set.insert(value);
+                self.notifies.insert(key, set);
+            }
+        }
+    }
+
+    fn solved_all(&self) -> bool {
+        debug_assert_eq!(self.notifies.is_empty(), self.waiting_for.is_empty());
+
+        self.notifies.is_empty()
+    }
+}
+
+#[derive(Debug, Default)]
+struct ModuleCache<'a> {
+    module_names: MutMap<ModuleId, ModuleName>,
+    headers: MutMap<ModuleId, ModuleHeader<'a>>,
+    constrained: MutMap<ModuleId, ConstrainedModule<'a>>,
+}
+
+fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> BuildTask<'a> {
+    println!("Starting phase {:?} for module {:?}", phase, module_id);
+    // we blindly assume all dependencies are met
+    match phase {
+        Phase::LoadHeader => {
+            let dep_name = state
+                .module_cache
+                .module_names
+                .remove(&module_id)
+                .expect("module id is present");
+
+            BuildTask::LoadModule {
+                module_name: dep_name,
+                // Provide mutexes of ModuleIds and IdentIds by module,
+                // so other modules can populate them as they load.
+                module_ids: Arc::clone(&state.arc_modules),
+                ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
+            }
+        }
+
+        Phase::ParseAndGenerateConstraints => {
+            // TODO remove clone?
+            let header = state.module_cache.headers.remove(&module_id).unwrap();
+            let module_id = header.module_id;
+            let deps_by_name = &header.deps_by_name;
+            let num_deps = deps_by_name.len();
+            let mut dep_idents: IdentIdsByModule = IdentIds::exposed_builtins(num_deps);
+
+            let State {
+                ident_ids_by_module,
+                exposed_types,
+                ..
+            } = &state;
+
+            {
+                let msg = "Failed to acquire lock for interning ident IDs, presumably because a thread panicked.";
+                let ident_ids_by_module = (*ident_ids_by_module).lock().expect(msg);
+
+                // Populate dep_idents with each of their IdentIds,
+                // which we'll need during canonicalization to translate
+                // identifier strings into IdentIds, which we need to build Symbols.
+                // We only include the modules we care about (the ones we import).
+                //
+                // At the end of this loop, dep_idents contains all the information to
+                // resolve a symbol from another module: if it's in here, that means
+                // we have both imported the module and the ident was exported by that mdoule.
+                for dep_id in header.deps_by_name.values() {
+                    // We already verified that these are all present,
+                    // so unwrapping should always succeed here.
+                    let idents = ident_ids_by_module.get(&dep_id).unwrap();
+
+                    dep_idents.insert(*dep_id, idents.clone());
+                }
+            }
+
+            // Once this step has completed, the next thing we'll need
+            // is solving. Register the modules we'll need to have been
+            // solved before we can solve.
+            let mut solve_needed = HashSet::with_capacity_and_hasher(num_deps, default_hasher());
+
+            for dep_id in deps_by_name.values() {
+                if !exposed_types.contains_key(dep_id) {
+                    solve_needed.insert(*dep_id);
+                }
+            }
+
+            let module_ids = Arc::clone(&state.arc_modules);
+            let module_ids = {
+                (*module_ids).lock().expect("Failed to acquire lock for obtaining module IDs, presumably because a thread panicked.").clone()
+            };
+
+            //                        let header = state
+            //                            .unparsed_modules
+            //                            .remove(&listener_id)
+            //                            .expect("Could not find listener ID in unparsed_modules");
+
+            let exposed_symbols = state
+                .exposed_symbols_by_module
+                .remove(&module_id)
+                .expect("Could not find listener ID in exposed_symbols_by_module");
+
+            // Now that we have waiting_for_solve populated, continue parsing,
+            // canonicalizing, and constraining the module.
+            BuildTask::ParseAndConstrain {
+                header,
+                mode: state.stdlib.mode,
+                module_ids,
+                dep_idents,
+                exposed_symbols,
+            }
+        }
+        Phase::SolveTypes => {
+            let constrained = state.module_cache.constrained.remove(&module_id).unwrap();
+
+            let ConstrainedModule {
+                module,
+                ident_ids,
+                module_timing,
+                src,
+                constraint,
+                var_store,
+                imported_modules,
+                declarations,
+                ..
+            } = constrained;
+
+            BuildTask::solve_module(
+                module,
+                ident_ids,
+                module_timing,
+                src,
+                constraint,
+                var_store,
+                imported_modules,
+                &mut state.exposed_types,
+                &state.stdlib,
+                declarations,
+            )
+        }
+        _ => todo!(),
+    }
+}
+
 #[derive(Debug)]
 pub struct LoadedModule {
     pub module_id: ModuleId,
@@ -67,6 +326,18 @@ struct ModuleHeader<'a> {
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     src: &'a [u8],
+    module_timing: ModuleTiming,
+}
+
+#[derive(Debug)]
+struct ConstrainedModule<'a> {
+    module: Module,
+    declarations: Vec<Declaration>,
+    imported_modules: MutSet<ModuleId>,
+    src: &'a str,
+    constraint: Constraint,
+    ident_ids: IdentIds,
+    var_store: VarStore,
     module_timing: ModuleTiming,
 }
 
@@ -120,12 +391,17 @@ struct FinishedInfo<'a> {
 #[derive(Debug)]
 struct State<'a> {
     pub root_id: ModuleId,
+    pub goal_phase: Phase,
+    pub stdlib: StdLib,
     pub exposed_types: SubsByModule,
 
     pub can_problems: std::vec::Vec<roc_problem::can::Problem>,
     pub mono_problems: std::vec::Vec<MonoProblem>,
     pub headers_parsed: MutSet<ModuleId>,
     pub type_problems: std::vec::Vec<solve::TypeError>,
+
+    pub module_cache: ModuleCache<'a>,
+    pub dependencies: Dependencies,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
     /// have completed for a given module.
@@ -144,23 +420,7 @@ struct State<'a> {
 
     pub exposed_symbols_by_module: MutMap<ModuleId, MutSet<Symbol>>,
 
-    /// Modules which are waiting for certain headers to be parsed
-    pub waiting_for_headers: MutMap<ModuleId, MutSet<ModuleId>>,
-
-    // When the key ModuleId gets solved, iterate through each of the given modules
-    // a,d remove that ModuleId from the appropriate waiting_for_headers entry.
-    // If the relevant module's waiting_for_headers entry is now empty, canonicalize the module.
-    pub header_listeners: MutMap<ModuleId, Vec<ModuleId>>,
-
     pub unparsed_modules: MutMap<ModuleId, ModuleHeader<'a>>,
-
-    // Modules which are waiting for certain deps to be solved
-    pub waiting_for_solve: MutMap<ModuleId, MutSet<ModuleId>>,
-
-    // When the key ModuleId gets solved, iterate through each of the given modules
-    // and remove that ModuleId from the appropriate waiting_for_solve entry.
-    // If the relevant module's waiting_for_solve entry is now empty, solve the module.
-    pub solve_listeners: MutMap<ModuleId, Vec<ModuleId>>,
 
     pub unsolved_modules: MutMap<ModuleId, UnsolvedModule<'a>>,
 
@@ -170,8 +430,6 @@ struct State<'a> {
     /// it gets an entry in here, and then immediately begins working on its
     /// pending specializations in the same thread.
     pub needs_specialization: MutSet<ModuleId>,
-
-    pub pending_specializations_needed: bool,
 
     pub all_pending_specializations: MutMap<(Symbol, Layout<'a>), PendingSpecialization<'a>>,
 
@@ -201,7 +459,7 @@ struct UnsolvedModule<'a> {
     declarations: Vec<Declaration>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ModuleTiming {
     pub read_roc_file: Duration,
     pub parse_header: Duration,
@@ -254,6 +512,7 @@ impl ModuleTiming {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 enum BuildTask<'a> {
     LoadModule {
         module_name: ModuleName,
@@ -379,22 +638,17 @@ fn enqueue_task<'a>(
 ///     and then linking them together, and possibly caching them by the hash of their
 ///     specializations, so if none of their specializations changed, we don't even need
 ///     to rebuild the module and can link in the cached one directly.)
-// #[allow(clippy::cognitive_complexity)]
 pub fn load(
     filename: PathBuf,
-    stdlib: &StdLib,
+    stdlib: StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
-    phases: Phases,
+    goal_phase: Phase,
 ) -> Result<LoadedModule, LoadingProblem> {
     // Initialize the need to specialize based on whether we're going all the
     // way to that phase. This is mut because we switch it off after we're
     // done specializing, and that indicates that all the pending specializations
     // have been at least enqueued (even if they haven't all been specialized yet.)
-    let pending_specializations_needed = match phases {
-        Phases::TypeCheck => false,
-        Phases::Monomorphize => true,
-    };
     let arena = Bump::new();
 
     // Reserve one CPU for the main thread, and let all the others be eligible
@@ -464,35 +718,9 @@ pub fn load(
         // we still shouldn't load it.
         loading_started.insert(root_id);
 
-        let mut state = State {
-            root_id,
-            exposed_types,
-            headers_parsed,
-            loading_started,
-            can_problems: std::vec::Vec::new(),
-            type_problems: std::vec::Vec::new(),
-            mono_problems: std::vec::Vec::new(),
-            arc_modules,
-            constrained_ident_ids: IdentIds::exposed_builtins(0),
-            ident_ids_by_module,
-            declarations_by_id: MutMap::default(),
-            exposed_symbols_by_module: MutMap::default(),
-            waiting_for_headers: MutMap::default(),
-            header_listeners: MutMap::default(),
-            unparsed_modules: MutMap::default(),
-            waiting_for_solve: MutMap::default(),
-            solve_listeners: MutMap::default(),
-            unsolved_modules: MutMap::default(),
-            timings: MutMap::default(),
-            needs_specialization: MutSet::default(),
-            all_pending_specializations: MutMap::default(),
-            pending_specializations_needed,
-            specializations_in_flight: 0,
-            layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
-            procs: Procs::default(),
-        };
-
         let mut worker_listeners = bumpalo::collections::Vec::with_capacity_in(num_workers, &arena);
+
+        let stdlib_mode = stdlib.mode;
 
         for worker_arena in worker_arenas.iter_mut() {
             let msg_tx = msg_tx.clone();
@@ -529,7 +757,7 @@ pub fn load(
                             // added. In that case, do nothing, and keep waiting
                             // until we receive a Shutdown message.
                             if let Some(task) = find_task(&worker, injector, stealers) {
-                                run_task(task, worker_arena, src_dir, msg_tx.clone(), stdlib)
+                                run_task(task, worker_arena, src_dir, msg_tx.clone(), stdlib_mode)
                                     .expect("Msg channel closed unexpectedly.");
                             }
                         }
@@ -541,6 +769,33 @@ pub fn load(
                 drop(worker_msg_rx);
             });
         }
+
+        let mut state = State {
+            root_id,
+            goal_phase,
+            stdlib,
+            module_cache: ModuleCache::default(),
+            dependencies: Dependencies::default(),
+            exposed_types,
+            headers_parsed,
+            loading_started,
+            can_problems: std::vec::Vec::new(),
+            type_problems: std::vec::Vec::new(),
+            mono_problems: std::vec::Vec::new(),
+            arc_modules,
+            constrained_ident_ids: IdentIds::exposed_builtins(0),
+            ident_ids_by_module,
+            declarations_by_id: MutMap::default(),
+            exposed_symbols_by_module: MutMap::default(),
+            unparsed_modules: MutMap::default(),
+            unsolved_modules: MutMap::default(),
+            timings: MutMap::default(),
+            needs_specialization: MutSet::default(),
+            all_pending_specializations: MutMap::default(),
+            specializations_in_flight: 0,
+            layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
+            procs: Procs::default(),
+        };
 
         // We've now distributed one worker queue to each thread.
         // There should be no queues left to distribute!
@@ -587,7 +842,6 @@ pub fn load(
                     state = update(
                         state,
                         msg,
-                        stdlib,
                         msg_tx.clone(),
                         &injector,
                         worker_listeners,
@@ -606,27 +860,20 @@ pub fn load(
 fn update<'a>(
     mut state: State<'a>,
     msg: Msg<'a>,
-    stdlib: &StdLib,
     msg_tx: MsgSender<'a>,
     injector: &Injector<BuildTask<'a>>,
     worker_listeners: &'a [Sender<WorkerMsg>],
-    arena: &'a Bump,
+    _arena: &'a Bump,
 ) -> Result<State<'a>, LoadingProblem> {
     use self::Msg::*;
 
     match msg {
         Header(header) => {
             let home = header.module_id;
-            let deps_by_name = &header.deps_by_name;
-            let mut headers_needed =
-                HashSet::with_capacity_and_hasher(deps_by_name.len(), default_hasher());
 
-            state.headers_parsed.insert(home);
-
-            for dep_id in deps_by_name.values() {
-                if !state.headers_parsed.contains(&dep_id) {
-                    headers_needed.insert(*dep_id);
-                }
+            // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
+            for (name, id) in header.deps_by_name.iter() {
+                state.module_cache.module_names.insert(*id, name.clone());
             }
 
             // This was a dependency. Write it down and keep processing messaages.
@@ -643,106 +890,18 @@ fn update<'a>(
                 .exposed_symbols_by_module
                 .insert(home, exposed_symbols);
 
-            // Notify all the listeners that headers are now available for this module.
-            if let Some(listeners) = state.header_listeners.remove(&home) {
-                for listener_id in listeners {
-                    // This listener is longer waiting for this module,
-                    // because this module's headers are now available!
-                    let waiting_for = state
-                        .waiting_for_headers
-                        .get_mut(&listener_id)
-                        .expect("Unable to find module ID in waiting_for_headers");
+            let work = state.dependencies.add_module(
+                header.module_id,
+                &header.imported_modules,
+                state.goal_phase,
+            );
 
-                    waiting_for.remove(&home);
+            state.module_cache.headers.insert(header.module_id, header);
 
-                    // If it's no longer waiting for anything else, solve it.
-                    if waiting_for.is_empty() {
-                        let header = state
-                            .unparsed_modules
-                            .remove(&listener_id)
-                            .expect("Could not find listener ID in unparsed_modules");
+            for (module_id, phase) in work {
+                let task = start_phase(module_id, phase, &mut state);
 
-                        let exposed_symbols = state
-                            .exposed_symbols_by_module
-                            .remove(&listener_id)
-                            .expect("Could not find listener ID in exposed_symbols_by_module");
-
-                        enqueue_task(
-                            injector,
-                            worker_listeners,
-                            BuildTask::parse_and_constrain(
-                                header,
-                                stdlib.mode,
-                                Arc::clone(&state.arc_modules),
-                                Arc::clone(&state.ident_ids_by_module),
-                                &state.exposed_types,
-                                exposed_symbols.clone(),
-                                &mut state.waiting_for_solve,
-                            ),
-                        )?;
-                    }
-                }
-            }
-
-            // If any of our deps weren't loaded before, start loading them.
-            for (dep_name, dep_id) in deps_by_name.iter() {
-                if !state.loading_started.contains(&dep_id) {
-                    // Record that we've started loading the module *before*
-                    // we actually start loading it.
-                    state.loading_started.insert(*dep_id);
-
-                    // Start loading this module in the background.
-                    enqueue_task(
-                        injector,
-                        worker_listeners,
-                        BuildTask::LoadModule {
-                            module_name: dep_name.clone(),
-                            // Provide mutexes of ModuleIds and IdentIds by module,
-                            // so other modules can populate them as they load.
-                            module_ids: Arc::clone(&state.arc_modules),
-                            ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
-                        },
-                    )?;
-                }
-            }
-
-            if headers_needed.is_empty() {
-                let exposed_symbols = state
-                    .exposed_symbols_by_module
-                    .remove(&home)
-                    .expect("Could not find listener ID in exposed_symbols_by_module");
-
-                enqueue_task(
-                    injector,
-                    worker_listeners,
-                    BuildTask::parse_and_constrain(
-                        header,
-                        stdlib.mode,
-                        Arc::clone(&state.arc_modules),
-                        Arc::clone(&state.ident_ids_by_module),
-                        &state.exposed_types,
-                        exposed_symbols,
-                        &mut state.waiting_for_solve,
-                    ),
-                )?;
-            } else {
-                // We will have to wait for our deps' headers to be parsed,
-                // so we can access their IdentId, which we need for canonicalization.
-                debug_assert!(!state.unparsed_modules.contains_key(&home));
-                state.unparsed_modules.insert(home, header);
-
-                // Register a listener with each of these.
-                for dep_id in headers_needed.iter() {
-                    let listeners = state
-                        .header_listeners
-                        .entry(*dep_id)
-                        .or_insert_with(|| Vec::with_capacity(1));
-
-                    (*listeners).push(home);
-                }
-
-                debug_assert!(!state.waiting_for_headers.contains_key(&home));
-                state.waiting_for_headers.insert(home, headers_needed);
+                enqueue_task(&injector, worker_listeners, task)?
             }
 
             Ok(state)
@@ -758,73 +917,33 @@ fn update<'a>(
             var_store,
             module_timing,
         } => {
+            let module_id = module.module_id;
+            println!("Constrained {:?}", module_id);
             state.can_problems.extend(problems);
 
-            let module_id = module.module_id;
-            let State {
-                waiting_for_solve,
-                exposed_types,
-                unsolved_modules,
-                solve_listeners,
-                ..
-            } = &mut state;
+            let constrained_module = ConstrainedModule {
+                module,
+                constraint,
+                declarations,
+                ident_ids,
+                src,
+                module_timing,
+                var_store,
+                imported_modules,
+            };
+            state
+                .module_cache
+                .constrained
+                .insert(module_id, constrained_module);
 
-            let waiting_for = waiting_for_solve.get_mut(&module_id).unwrap_or_else(|| {
-                panic!(
-                    "Could not find module ID {:?} in waiting_for_solve",
-                    module_id
-                )
-            });
+            let work = state
+                .dependencies
+                .notify(module_id, Phase::ParseAndGenerateConstraints);
 
-            // It's possible that some modules have been solved since
-            // we began waiting for them. Remove those from waiting_for,
-            // because we no longer need to wait for them!
-            waiting_for.retain(|id| !exposed_types.contains_key(id));
+            for (module_id, phase) in work {
+                let task = start_phase(module_id, phase, &mut state);
 
-            if waiting_for.is_empty() {
-                // All of our dependencies have already been solved. Great!
-                // That means we can proceed directly to solving.
-                enqueue_task(
-                    injector,
-                    worker_listeners,
-                    BuildTask::solve_module(
-                        module,
-                        ident_ids,
-                        module_timing,
-                        src,
-                        constraint,
-                        var_store,
-                        imported_modules,
-                        &mut state.exposed_types,
-                        stdlib,
-                        declarations,
-                    ),
-                )?;
-            } else {
-                // We will have to wait for our dependencies to be solved.
-                debug_assert!(!unsolved_modules.contains_key(&module_id));
-                unsolved_modules.insert(
-                    module_id,
-                    UnsolvedModule {
-                        module,
-                        src,
-                        ident_ids,
-                        imported_modules,
-                        constraint,
-                        var_store,
-                        module_timing,
-                        declarations,
-                    },
-                );
-
-                // Register a listener with each of these.
-                for dep_id in waiting_for.iter() {
-                    let listeners = solve_listeners
-                        .entry(*dep_id)
-                        .or_insert_with(|| Vec::with_capacity(1));
-
-                    (*listeners).push(module_id);
-                }
+                enqueue_task(&injector, worker_listeners, task)?
             }
 
             Ok(state)
@@ -838,271 +957,66 @@ fn update<'a>(
             decls,
             mut module_timing,
         } => {
+            println!("Solved {:?}", module_id);
             module_timing.end_time = SystemTime::now();
 
-            // After getting this to work with Procs and combining all the things recursively
-            // (which will have bad asymptotics - need to keep iterating over the entire Procs every single time we get a new thing,
-            // to diff it and add all the new entries to the main list)...well, actually, is that true though?
-            // Or can we just clone Procs and give that to each module?
-            // No, that's the bare minimum - we have to do that, *and* we have to traverse it again afterwards to reabsorb.
-            // So we can improve on this by having two Procs (or something) which we pass to Expr::new - first, all_procs, and second, new_procs.
-            // Every time we want to look something up, first we check all_procs, then we check new_procs.
-            // That way, it's exactly 2 lookups every time in the Expr logic, but outside the expr, we don't have to re-traverse the entire massive list of Procs every time.
-            // Instead, we can just traverse new_procs and that's it!");
+            state.constrained_ident_ids.insert(module_id, ident_ids);
 
-            if module_id == state.root_id {
-                // If we don't need to specialize at this point, it's
-                // because we aren't supposed to go past normal type-checking.
-                if !state.pending_specializations_needed {
-                    // We've finished recording all the timings for this module,
-                    // so add them to state.timings
-                    state.timings.insert(module_id, module_timing);
+            //            let constrained_module = ConstrainedModule {
+            //                module,
+            //                constraint,
+            //                declarations,
+            //                ident_ids,
+            //                src,
+            //                module_timing,
+            //                var_store,
+            //                imported_modules,
+            //            };
+            //            state
+            //                .module_cache
+            //                .constrained
+            //                .insert(module_id, constrained_module);
 
-                    msg_tx
-                        .send(Msg::Finished {
-                            solved_subs,
-                            problems: solved_module.problems,
-                            exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
-                            src,
-                        })
-                        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+            let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
-                    // bookkeeping
-                    state.declarations_by_id.insert(module_id, decls);
-                    state.constrained_ident_ids.insert(module_id, ident_ids);
-
-                    // As far as type-checking goes, once we've solved
-                    // the originally requested module, we're all done!
-                    return Ok(state);
-                }
-            } else {
-                // TODO remove clone
-                state.type_problems.extend(solved_module.problems.clone());
-
-                // This was not the root module, but rather a dependency.
-                // Write it down and keep processing messages.
-                debug_assert!(!state.exposed_types.contains_key(&module_id));
-                state.exposed_types.insert(
-                    module_id,
-                    ExposedModuleTypes::Valid(solved_module.solved_types, solved_module.aliases),
-                );
-            }
-
-            // If we're specializing, record that this module needs
-            // specialization. After we fire its listeners, we'll start
-            // working on assembling its pending specializations.
-            if state.pending_specializations_needed {
-                state.needs_specialization.insert(module_id);
-            }
-
-            // Notify all the listeners that this solved.
-            if let Some(listeners) = state.solve_listeners.remove(&module_id) {
-                for listener_id in listeners {
-                    // This listener is no longer waiting for this module,
-                    // because this module has now been solved!
-                    let waiting_for = state
-                        .waiting_for_solve
-                        .get_mut(&listener_id)
-                        .expect("Unable to find module ID in waiting_for_solve");
-
-                    waiting_for.remove(&module_id);
-
-                    // If it's no longer waiting for anything else, solve it.
-                    if waiting_for.is_empty() {
-                        let UnsolvedModule {
-                            module,
-                            src,
-                            imported_modules,
-                            ident_ids,
-                            constraint,
-                            var_store,
-                            module_timing,
-                            declarations,
-                        } = state
-                            .unsolved_modules
-                            .remove(&listener_id)
-                            .expect("Could not find listener ID in unsolved_modules");
-
-                        enqueue_task(
-                            injector,
-                            worker_listeners,
-                            BuildTask::solve_module(
-                                module,
-                                ident_ids,
-                                module_timing,
-                                src,
-                                constraint,
-                                var_store,
-                                imported_modules,
-                                &mut state.exposed_types,
-                                stdlib,
-                                declarations,
-                            ),
-                        )?;
-                    }
-                }
-            }
-
-            // If we're specializing, now we need to start building all the
-            // pending specializations
-            if state.pending_specializations_needed {
-                // Reuse an existing layout cache if possible, since
-                // it may have useful entries in there!
-                let layout_cache = state.layout_caches.pop().unwrap_or_default();
-
-                let finished_info = FinishedInfo {
-                    problems: solved_module.problems,
-                    exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
-                    src,
-                };
-
-                // bookkeeping
-                state.declarations_by_id.insert(module_id, decls.clone());
-
-                enqueue_task(
-                    injector,
-                    worker_listeners,
-                    BuildTask::BuildPendingSpecializations {
-                        module_timing,
-                        layout_cache,
-                        module_id,
-                        solved_subs,
-                        ident_ids,
-                        decls,
-                        finished_info,
-                    },
-                )?;
-            } else {
-                // bookkeeping
-                state.declarations_by_id.insert(module_id, decls);
-                state.constrained_ident_ids.insert(module_id, ident_ids);
-            }
-
-            Ok(state)
-        }
-        PendingSpecializationsDone {
-            module_id,
-            mut ident_ids,
-            mut layout_cache,
-            problems,
-            procs: new_procs,
-            mut solved_subs,
-            finished_info,
-        } => {
-            state.mono_problems.extend(problems);
-
-            if module_id == state.root_id {
-                // If we just finished pending specializations for the root,
-                // then these will be the last specializations that we need!
-                //
-                // This means once the current queue of specializations has
-                // been completely processed, we're all done, so change this
-                // flag so that when we get a Specialized message we know
-                // it's okay to stop - rather than continuing to wait for
-                // more specializations to come in (if, for example, we
-                // were still waiting on some other module to type-check).
-                state.pending_specializations_needed = false;
-            }
-
-            // Absorb the contents of the new procs into our state's procs.
-            state.procs.absorb(new_procs);
-
-            state.needs_specialization.remove(&module_id);
-
-            // If no remaining pending specializations are needed, we're done!
-            if state.needs_specialization.is_empty() {
-                let mut mono_env = roc_mono::ir::Env {
-                    arena,
-                    problems: &mut state.mono_problems,
-                    subs: solved_subs.inner_mut(),
-                    home: state.root_id,
-                    ident_ids: &mut ident_ids,
-                };
-
-                // TODO: for now this final specialization pass is sequential,
-                // with no parallelization at all. We should try to parallelize
-                // this, but doing so will require a redesign of Procs.
-                state.procs =
-                    roc_mono::ir::specialize_all(&mut mono_env, state.procs, &mut layout_cache);
-
-                let FinishedInfo {
-                    problems,
-                    src,
-                    exposed_vars_by_symbol,
-                } = finished_info;
+            if work.is_empty() && state.dependencies.solved_all() && module_id == state.root_id {
+                state.timings.insert(module_id, module_timing);
 
                 msg_tx
                     .send(Msg::Finished {
                         solved_subs,
-                        problems,
-                        exposed_vars_by_symbol,
+                        problems: solved_module.problems,
+                        exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
                         src,
                     })
                     .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
-                // We're done with this layout cache, so return it to the pool.
-                // That way, other specialization processes can reuse it later.
-                state.layout_caches.push(layout_cache);
-
                 // bookkeeping
-                state.constrained_ident_ids.insert(module_id, ident_ids);
+                state.declarations_by_id.insert(module_id, decls);
 
+                // As far as type-checking goes, once we've solved
+                // the originally requested module, we're all done!
                 return Ok(state);
             } else {
-                // TODO is this required if we're done?
-                // We're done with this layout cache, so return it to the pool.
-                // That way, other specialization processes can reuse it later.
-                state.layout_caches.push(layout_cache);
+                if module_id != state.root_id {
+                    state.exposed_types.insert(
+                        module_id,
+                        ExposedModuleTypes::Valid(
+                            solved_module.solved_types,
+                            solved_module.aliases,
+                        ),
+                    );
+                }
+                for (module_id, phase) in work {
+                    let task = start_phase(module_id, phase, &mut state);
 
-                // Notify all the listeners that this solved.
-                if let Some(listeners) = state.solve_listeners.remove(&module_id) {
-                    for listener_id in listeners {
-                        // This listener is no longer waiting for this module,
-                        // because this module has now been solved!
-                        let waiting_for = state
-                            .waiting_for_solve
-                            .get_mut(&listener_id)
-                            .expect("Unable to find module ID in waiting_for_solve");
-
-                        waiting_for.remove(&module_id);
-
-                        // If it's no longer waiting for anything else, solve it.
-                        if waiting_for.is_empty() {
-                            let UnsolvedModule {
-                                module,
-                                src,
-                                imported_modules,
-                                ident_ids,
-                                constraint,
-                                var_store,
-                                module_timing,
-                                declarations,
-                            } = state
-                                .unsolved_modules
-                                .remove(&listener_id)
-                                .expect("Could not find listener ID in unsolved_modules");
-
-                            enqueue_task(
-                                injector,
-                                worker_listeners,
-                                BuildTask::solve_module(
-                                    module,
-                                    ident_ids,
-                                    module_timing,
-                                    src,
-                                    constraint,
-                                    var_store,
-                                    imported_modules,
-                                    &mut state.exposed_types,
-                                    stdlib,
-                                    declarations,
-                                ),
-                            )?;
-                        }
-                    }
+                    enqueue_task(&injector, worker_listeners, task)?
                 }
             }
 
+            Ok(state)
+        }
+        PendingSpecializationsDone { .. } => {
             todo!();
         }
         Msg::Finished { .. } => {
@@ -1469,71 +1383,6 @@ impl<'a> BuildTask<'a> {
             module_timing,
         }
     }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn parse_and_constrain(
-        header: ModuleHeader<'a>,
-        mode: Mode,
-        module_ids: Arc<Mutex<ModuleIds>>,
-        ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
-        exposed_types: &SubsByModule,
-        exposed_symbols: MutSet<Symbol>,
-        waiting_for_solve: &mut MutMap<ModuleId, MutSet<ModuleId>>,
-    ) -> Self {
-        let module_id = header.module_id;
-        let deps_by_name = &header.deps_by_name;
-        let num_deps = deps_by_name.len();
-        let mut dep_idents: IdentIdsByModule = IdentIds::exposed_builtins(num_deps);
-
-        {
-            let ident_ids_by_module = (*ident_ids_by_module).lock().expect(
-            "Failed to acquire lock for interning ident IDs, presumably because a thread panicked.",
-        );
-
-            // Populate dep_idents with each of their IdentIds,
-            // which we'll need during canonicalization to translate
-            // identifier strings into IdentIds, which we need to build Symbols.
-            // We only include the modules we care about (the ones we import).
-            //
-            // At the end of this loop, dep_idents contains all the information to
-            // resolve a symbol from another module: if it's in here, that means
-            // we have both imported the module and the ident was exported by that mdoule.
-            for dep_id in header.deps_by_name.values() {
-                // We already verified that these are all present,
-                // so unwrapping should always succeed here.
-                let idents = ident_ids_by_module.get(&dep_id).unwrap();
-
-                dep_idents.insert(*dep_id, idents.clone());
-            }
-        }
-
-        // Once this step has completed, the next thing we'll need
-        // is solving. Register the modules we'll need to have been
-        // solved before we can solve.
-        let mut solve_needed = HashSet::with_capacity_and_hasher(num_deps, default_hasher());
-
-        for dep_id in deps_by_name.values() {
-            if !exposed_types.contains_key(dep_id) {
-                solve_needed.insert(*dep_id);
-            }
-        }
-
-        waiting_for_solve.insert(module_id, solve_needed);
-
-        let module_ids = {
-            (*module_ids).lock().expect("Failed to acquire lock for obtaining module IDs, presumably because a thread panicked.").clone()
-        };
-
-        // Now that we have waiting_for_solve populated, continue parsing,
-        // canonicalizing, and constraining the module.
-        Self::ParseAndConstrain {
-            header,
-            mode,
-            module_ids,
-            dep_idents,
-            exposed_symbols,
-        }
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1541,7 +1390,7 @@ fn run_solve<'a>(
     module: Module,
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
-    stdlib: &StdLib,
+    stdlib_mode: Mode,
     imported_symbols: Vec<Import>,
     imported_aliases: MutMap<Symbol, Alias>,
     constraint: Constraint,
@@ -1551,7 +1400,7 @@ fn run_solve<'a>(
 ) -> Msg<'a> {
     // Rebuild the aliases in this thread, so we don't have to clone all of
     // stdlib.aliases on the main thread.
-    let aliases = match stdlib.mode {
+    let aliases = match stdlib_mode {
         Mode::Standard => roc_builtins::std::aliases(),
         Mode::Uniqueness => roc_builtins::unique::aliases(),
     };
@@ -1826,7 +1675,7 @@ fn run_task<'a>(
     arena: &'a Bump,
     src_dir: &Path,
     msg_tx: MsgSender<'a>,
-    stdlib: &StdLib,
+    stdlib_mode: Mode,
 ) -> Result<(), LoadingProblem> {
     use BuildTask::*;
 
@@ -1858,7 +1707,7 @@ fn run_task<'a>(
             module,
             ident_ids,
             module_timing,
-            stdlib,
+            stdlib_mode,
             imported_symbols,
             imported_aliases,
             constraint,
