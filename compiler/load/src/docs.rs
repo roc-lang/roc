@@ -5,6 +5,7 @@ use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use inlinable_string::InlinableString;
+use parking_lot::Mutex;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
@@ -32,7 +33,7 @@ use std::io;
 use std::iter;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 /// Filename extension for normal Roc modules
@@ -878,8 +879,7 @@ fn finish<'a>(
 
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
-        .into_inner()
-        .expect("Unwrapping mutex for module_ids");
+        .into_inner();
 
     let interns = Interns {
         module_ids,
@@ -1079,10 +1079,8 @@ fn send_header<'a>(
 
     let ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
-        let mut module_ids = (*module_ids).lock().expect("Failed to acquire lock for interning module IDs, presumably because a thread panicked.");
-        let mut ident_ids_by_module = (*ident_ids_by_module).lock().expect(
-            "Failed to acquire lock for interning ident IDs, presumably because a thread panicked.",
-        );
+        let mut module_ids = (*module_ids).lock();
+        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
         home = module_ids.get_or_insert(&declared_name.as_inline_str());
 
@@ -1243,9 +1241,7 @@ impl<'a> BuildTask<'a> {
         let mut dep_idents: IdentIdsByModule = IdentIds::exposed_builtins(num_deps);
 
         {
-            let ident_ids_by_module = (*ident_ids_by_module).lock().expect(
-            "Failed to acquire lock for interning ident IDs, presumably because a thread panicked.",
-        );
+            let ident_ids_by_module = (*ident_ids_by_module).lock();
 
             // Populate dep_idents with each of their IdentIds,
             // which we'll need during canonicalization to translate
@@ -1277,9 +1273,11 @@ impl<'a> BuildTask<'a> {
 
         waiting_for_solve.insert(module_id, solve_needed);
 
-        let module_ids = {
-            (*module_ids).lock().expect("Failed to acquire lock for obtaining module IDs, presumably because a thread panicked.").clone()
-        };
+        // Clone the module_ids we'll need for canonicalization.
+        // This should be small, and cloning it should be quick.
+        // We release the lock as soon as we're done cloning, so we don't have
+        // to lock the global module_ids while canonicalizing any given module.
+        let module_ids = { (*module_ids).lock().clone() };
 
         // Now that we have waiting_for_solve populated, continue parsing,
         // canonicalizing, and constraining the module.

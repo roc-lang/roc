@@ -470,7 +470,7 @@ fn solve(
                         let final_mark = visit_mark.next();
 
                         debug_assert!({
-                            let offenders = next_pools
+                            next_pools
                                 .get(next_rank)
                                 .iter()
                                 .filter(|var| {
@@ -481,9 +481,8 @@ fn solve(
                                     .into_usize()
                                         > next_rank.into_usize()
                                 })
-                                .collect::<Vec<&roc_types::subs::Variable>>();
-
-                            offenders.is_empty()
+                                .count()
+                                == 0
                         });
 
                         // pop pool
@@ -764,10 +763,10 @@ fn check_for_infinite_type(
 ) {
     let var = loc_var.value;
 
-    let is_uniq_infer = match subs.get(var).content {
-        Content::Alias(Symbol::ATTR_ATTR, _, _) => true,
-        _ => false,
-    };
+    let is_uniq_infer = matches!(
+        subs.get(var).content,
+        Content::Alias(Symbol::ATTR_ATTR, _, _)
+    );
 
     while let Some((recursive, chain)) = subs.occurs(var) {
         let description = subs.get(recursive);
