@@ -203,7 +203,7 @@ impl fmt::Debug for Type {
                 }
 
                 // Sometimes it's useful to see the expansion of the alias
-                write!(f, "[ but actually {:?} ]", _actual)?;
+                // write!(f, "[ but actually {:?} ]", _actual)?;
 
                 Ok(())
             }

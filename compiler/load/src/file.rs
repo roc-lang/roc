@@ -24,7 +24,6 @@ use roc_region::all::{Located, Region};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_types::solved_types::Solved;
-use roc_types::solved_types::SolvedType;
 use roc_types::subs::{Subs, VarStore, Variable};
 use roc_types::types::Alias;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
@@ -308,7 +307,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 decls,
                 finished_info,
                 ident_ids,
-                pending_specializations: state.all_pending_specializations.clone(),
+                exposed_to_host: state.exposed_to_host.clone(),
             }
         }
         Phase::MakeSpecializations => {
@@ -647,8 +646,7 @@ enum BuildTask<'a> {
         ident_ids: IdentIds,
         decls: Vec<Declaration>,
         finished_info: FinishedInfo<'a>,
-        // TODO remove?
-        pending_specializations: MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization>>,
+        exposed_to_host: MutSet<Symbol>,
     },
     MakeSpecializations {
         module_id: ModuleId,
@@ -716,8 +714,6 @@ pub fn load_and_typecheck(
     exposed_types: SubsByModule,
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
-
-    // Reserve one CPU for the main thread, and let all the others be eligible
 
     match load(
         arena,
@@ -1980,7 +1976,7 @@ fn make_specializations<'a>(
     );
 
     let external_specializations_requested = procs.externals_we_need.clone();
-    let (procedures, _param_map) = procs.get_specialized_procs_help(mono_env.arena);
+    let procedures = procs.get_specialized_procs_without_rc(mono_env.arena);
 
     Msg::MadeSpecializations {
         module_id: home,
@@ -2005,7 +2001,7 @@ fn build_pending_specializations<'a>(
     _module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
     // TODO remove
-    _pending_specializations: MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization>>,
+    exposed_to_host: MutSet<Symbol>,
     finished_info: FinishedInfo<'a>,
 ) -> Msg<'a> {
     let mut procs = Procs::default();
@@ -2029,13 +2025,7 @@ fn build_pending_specializations<'a>(
         match decl {
             Declare(def) | Builtin(def) => match def.loc_pattern.value {
                 Identifier(symbol) => {
-                    let is_exposed = finished_info
-                        .exposed_vars_by_symbol
-                        .iter()
-                        .find(|(k, _)| *k == symbol)
-                        .is_some();
-
-                    let is_exposed = is_exposed && !(format!("{:?}", home) == "Utils");
+                    let is_exposed = exposed_to_host.contains(&symbol);
 
                     match def.loc_expr.value {
                         Closure {
@@ -2094,7 +2084,6 @@ fn build_pending_specializations<'a>(
                             // get specialized!
                             if is_exposed {
                                 let annotation = def.expr_var;
-                                let ret_var = def.expr_var;
                                 let layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
                                         todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
                                     );
@@ -2195,7 +2184,7 @@ fn run_task<'a>(
             layout_cache,
             solved_subs,
             finished_info,
-            pending_specializations,
+            exposed_to_host,
         } => Ok(build_pending_specializations(
             arena,
             solved_subs,
@@ -2204,7 +2193,7 @@ fn run_task<'a>(
             decls,
             module_timing,
             layout_cache,
-            pending_specializations,
+            exposed_to_host,
             finished_info,
         )),
         MakeSpecializations {

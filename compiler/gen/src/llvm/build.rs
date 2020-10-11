@@ -1511,16 +1511,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 increment_refcount_layout(env, parent, layout_ids, value, &layout);
             }
 
-            /*
-            match layout {
-                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
-                    increment_refcount_list(env, parent, value.into_struct_value());
-                    build_exp_stmt(env, layout_ids, scope, parent, cont)
-                }
-                _ => build_exp_stmt(env, layout_ids, scope, parent, cont),
-            }
-            */
-
             build_exp_stmt(env, layout_ids, scope, parent, cont)
         }
         Dec(symbol, cont) => {

@@ -72,10 +72,13 @@ impl SolvedBool {
         match boolean {
             Bool::Shared => SolvedBool::SolvedShared,
             Bool::Container(cvar, mvars) => {
-                debug_assert!(matches!(
-                    subs.get_without_compacting(*cvar).content,
-                    crate::subs::Content::FlexVar(_)
-                ));
+                match subs.get_without_compacting(*cvar).content {
+                    crate::subs::Content::FlexVar(_) => {}
+                    crate::subs::Content::Structure(FlatType::Boolean(Bool::Shared)) => {
+                        return SolvedBool::SolvedShared;
+                    }
+                    other => panic!("Container var is not flex but {:?}", other),
+                }
 
                 SolvedBool::SolvedContainer(
                     VarId::from_var(*cvar, subs),
