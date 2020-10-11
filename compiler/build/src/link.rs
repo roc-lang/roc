@@ -122,10 +122,17 @@ fn link_linux(
     host_input_path: &Path,
     dest_filename: &Path,
 ) -> io::Result<Child> {
-    let lib_path = if Path::new("/usr/lib/x86_64-linux-gnu").exists() {
+    let libcrt_path = if Path::new("/usr/lib/x86_64-linux-gnu").exists() {
         Path::new("/usr/lib/x86_64-linux-gnu")
     } else {
         Path::new("/usr/lib")
+    };
+    let libgcc_path = if Path::new("/lib/x86_64-linux-gnu/libgcc_s.so.1").exists() {
+        Path::new("/lib/x86_64-linux-gnu/libgcc_s.so.1")
+    } else if Path::new("/usr/lib/x86_64-linux-gnu/libgcc_s.so.1").exists() {
+        Path::new("/usr/lib/x86_64-linux-gnu/libgcc_s.so.1")
+    } else {
+        Path::new("/usr/lib/libgcc_s.so.1")
     };
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
@@ -135,9 +142,9 @@ fn link_linux(
         .args(&[
             "-arch",
             arch_str(target),
-            lib_path.join("crti.o").to_str().unwrap(),
-            lib_path.join("crtn.o").to_str().unwrap(),
-            lib_path.join("Scrt1.o").to_str().unwrap(),
+            libcrt_path.join("crti.o").to_str().unwrap(),
+            libcrt_path.join("crtn.o").to_str().unwrap(),
+            libcrt_path.join("Scrt1.o").to_str().unwrap(),
             "-dynamic-linker",
             "/lib64/ld-linux-x86-64.so.2",
             // Inputs
@@ -154,7 +161,7 @@ fn link_linux(
             "-lc_nonshared",
             "-lc++",
             "-lunwind",
-            "/usr/lib/libgcc_s.so.1",
+            libgcc_path.to_str().unwrap(),
             // Output
             "-o",
             binary_path.to_str().unwrap(), // app
