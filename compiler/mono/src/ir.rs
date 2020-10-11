@@ -82,7 +82,38 @@ impl<'a> Proc<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default)]
+pub struct ExternalSpecializations {
+    pub specs: MutMap<Symbol, MutSet<SolvedType>>,
+}
+
+impl ExternalSpecializations {
+    pub fn insert(&mut self, symbol: Symbol, typ: SolvedType) {
+        use std::collections::hash_map::Entry::{Occupied, Vacant};
+
+        let existing = match self.specs.entry(symbol) {
+            Vacant(entry) => entry.insert(MutSet::default()),
+            Occupied(entry) => entry.into_mut(),
+        };
+
+        existing.insert(typ);
+    }
+
+    pub fn extend(&mut self, other: Self) {
+        use std::collections::hash_map::Entry::{Occupied, Vacant};
+
+        for (symbol, solved_types) in other.specs {
+            let existing = match self.specs.entry(symbol) {
+                Vacant(entry) => entry.insert(MutSet::default()),
+                Occupied(entry) => entry.into_mut(),
+            };
+
+            existing.extend(solved_types);
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Procs<'a> {
     pub partial_procs: MutMap<Symbol, PartialProc<'a>>,
     pub module_thunks: MutSet<Symbol>,
@@ -90,8 +121,8 @@ pub struct Procs<'a> {
         Option<MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>>,
     pub specialized: MutMap<(Symbol, Layout<'a>), InProgressProc<'a>>,
     pub runtime_errors: MutMap<Symbol, &'a str>,
-    pub externals_others_need: MutMap<Symbol, SolvedType>,
-    pub externals_we_need: MutMap<ModuleId, MutMap<Symbol, SolvedType>>,
+    pub externals_others_need: ExternalSpecializations,
+    pub externals_we_need: MutMap<ModuleId, ExternalSpecializations>,
 }
 
 impl<'a> Default for Procs<'a> {
@@ -103,7 +134,7 @@ impl<'a> Default for Procs<'a> {
             specialized: MutMap::default(),
             runtime_errors: MutMap::default(),
             externals_we_need: MutMap::default(),
-            externals_others_need: MutMap::default(),
+            externals_others_need: ExternalSpecializations::default(),
         }
     }
 }
@@ -1213,7 +1244,11 @@ pub fn specialize_all<'a>(
     use roc_solve::solve::{insert_type_into_subs, unsafe_copy_var_help};
     use roc_types::subs::VarStore;
 
-    let it = procs.externals_others_need.clone();
+    let it = procs.externals_others_need.specs.clone();
+    let it = it
+        .into_iter()
+        .map(|(symbol, solved_types)| solved_types.into_iter().map(move |s| (symbol, s)))
+        .flatten();
     for (name, solved_type) in it.into_iter() {
         let snapshot = env.subs.snapshot();
 
@@ -3719,7 +3754,9 @@ fn call_by_name<'a>(
 
                                 let existing =
                                     match procs.externals_we_need.entry(proc_name.module_id()) {
-                                        Vacant(entry) => entry.insert(MutMap::default()),
+                                        Vacant(entry) => {
+                                            entry.insert(ExternalSpecializations::default())
+                                        }
                                         Occupied(entry) => entry.into_mut(),
                                     };
 

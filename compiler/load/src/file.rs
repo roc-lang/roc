@@ -13,7 +13,9 @@ use roc_constrain::module::{
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
-use roc_mono::ir::{MonoProblem, PartialProc, PendingSpecialization, Proc, Procs};
+use roc_mono::ir::{
+    ExternalSpecializations, MonoProblem, PartialProc, PendingSpecialization, Proc, Procs,
+};
 use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
 use roc_parse::module::module_defs;
@@ -184,7 +186,7 @@ struct ModuleCache<'a> {
     constrained: MutMap<ModuleId, ConstrainedModule<'a>>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
-    external_specializations_requested: MutMap<ModuleId, MutMap<Symbol, SolvedType>>,
+    external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
 }
 
 fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> BuildTask<'a> {
@@ -320,7 +322,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 .module_cache
                 .external_specializations_requested
                 .remove(&module_id)
-                .unwrap_or(MutMap::default());
+                .unwrap_or(ExternalSpecializations::default());
 
             let FoundSpecializationsModule {
                 module_id,
@@ -464,7 +466,7 @@ enum Msg<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
-        external_specializations_requested: MutMap<ModuleId, MutMap<Symbol, SolvedType>>,
+        external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
         procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         subs: Subs,
@@ -655,7 +657,7 @@ enum BuildTask<'a> {
         procs: Procs<'a>,
         layout_cache: LayoutCache<'a>,
         finished_info: FinishedInfo<'a>,
-        specializations_we_must_make: MutMap<Symbol, SolvedType>,
+        specializations_we_must_make: ExternalSpecializations,
     },
 }
 
@@ -1298,7 +1300,7 @@ fn update<'a>(
                     .external_specializations_requested
                     .entry(module_id)
                 {
-                    Vacant(entry) => entry.insert(MutMap::default()),
+                    Vacant(entry) => entry.insert(ExternalSpecializations::default()),
                     Occupied(entry) => entry.into_mut(),
                 };
 
@@ -1950,7 +1952,7 @@ fn make_specializations<'a>(
     mut subs: Subs,
     mut procs: Procs<'a>,
     mut layout_cache: LayoutCache<'a>,
-    specializations_we_must_make: MutMap<Symbol, SolvedType>,
+    specializations_we_must_make: ExternalSpecializations,
     finished_info: FinishedInfo<'a>,
 ) -> Msg<'a> {
     let mut mono_problems = Vec::new();

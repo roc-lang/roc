@@ -25,7 +25,7 @@ impl<T> Solved<T> {
 }
 
 /// This is a fully solved type, with no Variables remaining in it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SolvedType {
     /// A function. The types of its arguments, then the type of its return value.
     Func(Vec<SolvedType>, Box<SolvedType>, Box<SolvedType>),
@@ -59,7 +59,7 @@ pub enum SolvedType {
     Error,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SolvedBool {
     SolvedShared,
     SolvedContainer(VarId, Vec<VarId>),
