@@ -22,8 +22,8 @@ jobs:
           toolchain: stable
           override: true
 
-      # - name: Verify compiler/builtin/bitcode/regenerate.sh was run if necessary
-        # run: pushd compiler/builtins/bitcode && ./regenerate.sh && popd
+      - name: Re-generate builtin bitcode for the current target
+        run: pushd compiler/builtins/bitcode && ./regenerate.sh && popd
 
       - run: rustup component add rustfmt
 
