@@ -226,7 +226,7 @@ impl SolvedType {
             Apply(symbol, args) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in args {
+                for var in args.iter().copied() {
                     new_args.push(Self::from_var(subs, var));
                 }
 

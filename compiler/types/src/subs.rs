@@ -73,11 +73,14 @@ impl VarStore {
     }
 
     pub fn new_from_subs(subs: &Subs) -> Self {
-        // TODO why -2, are we not overwriting something here?
-        let next_var = (subs.utable.len() - 1) as u32;
+        let next_var = (subs.utable.len()) as u32;
         debug_assert!(next_var >= Variable::FIRST_USER_SPACE_VAR.0);
 
         VarStore { next: next_var }
+    }
+
+    pub fn peek(&mut self) -> u32 {
+        self.next
     }
 
     pub fn fresh(&mut self) -> Variable {
@@ -268,7 +271,7 @@ impl Subs {
     }
 
     pub fn extend_by(&mut self, entries: usize) {
-        for _ in self.len()..entries {
+        for _ in 0..entries {
             self.utable.new_key(flex_var_descriptor());
         }
     }

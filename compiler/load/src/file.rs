@@ -533,7 +533,7 @@ struct State<'a> {
     /// pending specializations in the same thread.
     pub needs_specialization: MutSet<ModuleId>,
 
-    pub all_pending_specializations: MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>,
+    pub all_pending_specializations: MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization>>,
 
     pub specializations_in_flight: u32,
 
@@ -648,7 +648,7 @@ enum BuildTask<'a> {
         decls: Vec<Declaration>,
         finished_info: FinishedInfo<'a>,
         // TODO remove?
-        pending_specializations: MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>,
+        pending_specializations: MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization>>,
     },
     MakeSpecializations {
         module_id: ModuleId,
@@ -856,7 +856,7 @@ where
     let mut worker_queues = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
     let mut stealers = bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
 
-    let mut it = worker_arenas.iter_mut();
+    let it = worker_arenas.iter_mut();
 
     {
         thread::scope(|thread_scope| {
@@ -1062,7 +1062,7 @@ fn update<'a>(
     msg_tx: MsgSender<'a>,
     injector: &Injector<BuildTask<'a>>,
     worker_listeners: &'a [Sender<WorkerMsg>],
-    _arena: &'a Bump,
+    arena: &'a Bump,
 ) -> Result<State<'a>, LoadingProblem> {
     use self::Msg::*;
 
@@ -1247,7 +1247,7 @@ fn update<'a>(
 
             if let Some(pending) = &procs.pending_specializations {
                 for (symbol, specs) in pending {
-                    let mut existing = match state.all_pending_specializations.entry(*symbol) {
+                    let existing = match state.all_pending_specializations.entry(*symbol) {
                         Vacant(entry) => entry.insert(MutMap::default()),
                         Occupied(entry) => entry.into_mut(),
                     };
@@ -1292,8 +1292,6 @@ fn update<'a>(
             external_specializations_requested,
             ..
         } => {
-            println!("done specializing {:?}", module_id);
-
             for (module_id, requested) in external_specializations_requested {
                 let existing = match state
                     .module_cache
@@ -1320,6 +1318,8 @@ fn update<'a>(
                 && state.goal_phase == Phase::MakeSpecializations
             {
                 // state.timings.insert(module_id, module_timing);
+
+                Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 msg_tx
                     .send(Msg::FinishedAllSpecialization {
@@ -2005,7 +2005,7 @@ fn build_pending_specializations<'a>(
     _module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
     // TODO remove
-    _pending_specializations: MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>,
+    _pending_specializations: MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization>>,
     finished_info: FinishedInfo<'a>,
 ) -> Msg<'a> {
     let mut procs = Procs::default();
@@ -2035,6 +2035,8 @@ fn build_pending_specializations<'a>(
                         .find(|(k, _)| *k == symbol)
                         .is_some();
 
+                    let is_exposed = is_exposed && !(format!("{:?}", home) == "Utils");
+
                     match def.loc_expr.value {
                         Closure {
                             function_type: annotation,
@@ -2059,17 +2061,19 @@ fn build_pending_specializations<'a>(
                                     pattern_vars.push(*var);
                                 }
 
-                                let layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
-                                        todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
-                                    );
-
-                                procs.insert_exposed(
-                                    symbol,
-                                    layout,
-                                    pattern_vars.into_bump_slice(),
+                                let layout = match layout_cache.from_var(
+                                    mono_env.arena,
                                     annotation,
-                                    ret_var,
-                                );
+                                    mono_env.subs,
+                                ) {
+                                    Ok(l) => l,
+                                    Err(err) => {
+                                        // a host-exposed function is not monomorphized
+                                        todo!("The host-exposed function {:?} does not have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", symbol, err)
+                                    }
+                                };
+
+                                procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
                             }
 
                             procs.insert_named(
@@ -2095,7 +2099,7 @@ fn build_pending_specializations<'a>(
                                         todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
                                     );
 
-                                procs.insert_exposed(symbol, layout, &[], annotation, ret_var);
+                                procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
                             }
 
                             let proc = PartialProc {

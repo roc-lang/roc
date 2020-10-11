@@ -136,13 +136,7 @@ pub fn gen(
                                         todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
                                     );
 
-                                    procs.insert_exposed(
-                                        symbol,
-                                        layout,
-                                        pattern_vars.into_bump_slice(),
-                                        annotation,
-                                        ret_var,
-                                    );
+                                    procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
                                 }
 
                                 procs.insert_named(
@@ -171,31 +165,13 @@ pub fn gen(
                                 // never gets called by Roc code, it will never
                                 // get specialized!
                                 if exposed_to_host.contains(&symbol) {
-                                    let pattern_vars = bumpalo::collections::Vec::new_in(arena);
                                     let ret_layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
                                         todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
                                     );
                                     let layout =
                                         Layout::FunctionPointer(&[], arena.alloc(ret_layout));
 
-                                    procs.insert_exposed(
-                                        symbol,
-                                        layout,
-                                        pattern_vars.into_bump_slice(),
-                                        // It seems brittle that we're passing
-                                        // annotation twice - especially since
-                                        // in both cases we're giving the
-                                        // annotation to the top-level value,
-                                        // not the thunk function it will code
-                                        // gen to. It seems to work, but that
-                                        // may only be because at present we
-                                        // only use the function annotation
-                                        // variable during specialization, and
-                                        // exposed values are never specialized
-                                        // because they must be monomorphic.
-                                        annotation,
-                                        annotation,
-                                    );
+                                    procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
                                 }
 
                                 procs.partial_procs.insert(symbol, proc);
@@ -307,7 +283,7 @@ pub fn gen(
 #[allow(clippy::cognitive_complexity)]
 pub fn gen_from_mono_module(
     arena: &Bump,
-    mut loaded: MonomorphizedModule,
+    loaded: MonomorphizedModule,
     filename: PathBuf,
     target: Triple,
     dest_filename: &Path,
@@ -372,7 +348,6 @@ pub fn gen_from_mono_module(
 
     for ((symbol, layout), proc) in loaded.procedures {
         let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
-        dbg!(&fn_val);
 
         headers.push((proc, fn_val));
     }
@@ -388,6 +363,8 @@ pub fn gen_from_mono_module(
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);
         } else {
+            // fn_val.print_to_stderr();
+            // env.module.print_to_stderr();
             // NOTE: If this fails, uncomment the above println to debug.
             panic!(
                 "Non-main function failed LLVM verification. Uncomment the above println to debug!"
@@ -396,7 +373,7 @@ pub fn gen_from_mono_module(
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
-    env.module.print_to_stderr();
+    // env.module.print_to_stderr();
 
     mpm.run_on(module);
 
