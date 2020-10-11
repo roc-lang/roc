@@ -1599,7 +1599,7 @@ fn run_solve<'a>(
 fn parse_and_constrain<'a>(
     header: ModuleHeader<'a>,
     mode: Mode,
-    module_ids: ModuleIds,
+    module_ids: &ModuleIds,
     dep_idents: IdentIdsByModule,
     exposed_symbols: MutSet<Symbol>,
 ) -> Result<Msg<'a>, LoadingProblem> {
@@ -1620,7 +1620,7 @@ fn parse_and_constrain<'a>(
         &arena,
         parsed_defs,
         module_id,
-        &module_ids,
+        module_ids,
         header.exposed_ident_ids,
         dep_idents,
         header.exposed_imports,
@@ -1841,7 +1841,7 @@ fn run_task<'a>(
             module_ids,
             dep_idents,
             exposed_symbols,
-        } => parse_and_constrain(header, mode, module_ids, dep_idents, exposed_symbols),
+        } => parse_and_constrain(header, mode, &module_ids, dep_idents, exposed_symbols),
         Solve {
             module,
             module_timing,
