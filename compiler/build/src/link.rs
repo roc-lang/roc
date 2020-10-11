@@ -122,6 +122,11 @@ fn link_linux(
     host_input_path: &Path,
     dest_filename: &Path,
 ) -> io::Result<Child> {
+    let lib_path = if Path::new("/usr/lib/x86_64-linux-gnu").exists() {
+        Path::new("/usr/lib/x86_64-linux-gnu")
+    } else {
+        Path::new("/usr/lib")
+    };
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
     Command::new("ld")
@@ -130,9 +135,9 @@ fn link_linux(
         .args(&[
             "-arch",
             arch_str(target),
-            "/usr/lib/x86_64-linux-gnu/crti.o",
-            "/usr/lib/x86_64-linux-gnu/crtn.o",
-            "/usr/lib/x86_64-linux-gnu/Scrt1.o",
+            lib_path.join("crti.o").to_str().unwrap(),
+            lib_path.join("crtn.o").to_str().unwrap(),
+            lib_path.join("Scrt1.o").to_str().unwrap(),
             "-dynamic-linker",
             "/lib64/ld-linux-x86-64.so.2",
             // Inputs
@@ -149,7 +154,7 @@ fn link_linux(
             "-lc_nonshared",
             "-lc++",
             "-lunwind",
-            // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
+            "/usr/lib/libgcc_s.so.1",
             // Output
             "-o",
             binary_path.to_str().unwrap(), // app
