@@ -2,6 +2,7 @@ use bumpalo::Bump;
 use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
+use parking_lot::Mutex;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
@@ -33,7 +34,7 @@ use std::io;
 use std::iter;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 /// Filename extension for normal Roc modules
@@ -41,6 +42,13 @@ const ROC_FILE_EXTENSION: &str = "roc";
 
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
+
+const SHOW_MESSAGE_LOG: bool = true;
+
+macro_rules! log {
+    () => (if SHOW_MESSAGE_LOG { println!()} else {});
+    ($($arg:tt)*) => (if SHOW_MESSAGE_LOG { println!($($arg)*); } else {})
+}
 
 /// NOTE the order of definition of the phases is used by the ord instance
 /// make sure they are ordered from first to last!
@@ -220,8 +228,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
             } = &state;
 
             {
-                let msg = "Failed to acquire lock for interning ident IDs, presumably because a thread panicked.";
-                let ident_ids_by_module = (*ident_ids_by_module).lock().expect(msg);
+                let ident_ids_by_module = (*ident_ids_by_module).lock();
 
                 // Populate dep_idents with each of their IdentIds,
                 // which we'll need during canonicalization to translate
@@ -240,10 +247,17 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 }
             }
 
+            // Clone the module_ids we'll need for canonicalization.
+            // This should be small, and cloning it should be quick.
+            // We release the lock as soon as we're done cloning, so we don't have
+            // to lock the global module_ids while canonicalizing any given module.
             let module_ids = Arc::clone(&state.arc_modules);
-            let module_ids = {
-                (*module_ids).lock().expect("Failed to acquire lock for obtaining module IDs, presumably because a thread panicked.").clone()
-            };
+            let module_ids = { (*module_ids).lock().clone() };
+
+            debug_assert!(header
+                .imported_modules
+                .iter()
+                .all(|id| module_ids.get_name(*id).is_some()));
 
             let exposed_symbols = state
                 .exposed_symbols_by_module
@@ -810,7 +824,7 @@ where
 {
     // Reserve one CPU for the main thread, and let all the others be eligible
     // to spawn workers.
-    let num_workers = num_cpus::get() - 1;
+    let num_workers = 1; // num_cpus::get() - 1;
     let worker_arenas = arena.alloc(bumpalo::collections::Vec::with_capacity_in(
         num_workers,
         arena,
@@ -1064,6 +1078,7 @@ fn update<'a>(
 
     match msg {
         Header(header) => {
+            log!("loaded header for {:?}", header.module_id);
             let home = header.module_id;
 
             // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
@@ -1112,6 +1127,7 @@ fn update<'a>(
             var_store,
             module_timing,
         } => {
+            log!("generated constraints for {:?}", module.module_id);
             let module_id = module.module_id;
             state.can_problems.extend(problems);
 
@@ -1151,6 +1167,7 @@ fn update<'a>(
             decls,
             mut module_timing,
         } => {
+            log!("solved types for {:?}", module_id);
             module_timing.end_time = SystemTime::now();
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
@@ -1239,6 +1256,7 @@ fn update<'a>(
             layout_cache,
             problems: _,
         } => {
+            log!("found specializations for {:?}", module_id);
             let subs = solved_subs.into_inner();
 
             if let Some(pending) = &procs.pending_specializations {
@@ -1288,6 +1306,7 @@ fn update<'a>(
             external_specializations_requested,
             ..
         } => {
+            log!("made specializations for {:?}", module_id);
             for (module_id, requested) in external_specializations_requested {
                 let existing = match state
                     .module_cache
@@ -1360,8 +1379,7 @@ fn finish_specialization<'a>(
 
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
-        .into_inner()
-        .expect("Unwrapping mutex for module_ids");
+        .into_inner();
 
     let interns = Interns {
         module_ids,
@@ -1401,8 +1419,7 @@ fn finish<'a>(
 
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
-        .into_inner()
-        .expect("Unwrapping mutex for module_ids");
+        .into_inner();
 
     let interns = Interns {
         module_ids,
@@ -1599,10 +1616,8 @@ fn send_header<'a>(
 
     let ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
-        let mut module_ids = (*module_ids).lock().expect("Failed to acquire lock for interning module IDs, presumably because a thread panicked.");
-        let mut ident_ids_by_module = (*ident_ids_by_module).lock().expect(
-            "Failed to acquire lock for interning ident IDs, presumably because a thread panicked.",
-        );
+        let mut module_ids = (*module_ids).lock();
+        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
         home = module_ids.get_or_insert(&declared_name.as_inline_str());
 
@@ -1727,11 +1742,13 @@ impl<'a> BuildTask<'a> {
             stdlib,
         );
 
-        for unused_import in unused_imports {
+        if !unused_imports.is_empty() {
             todo!(
-                "TODO gracefully handle unused import {:?} from module {:?}",
-                unused_import,
-                home
+                "TODO gracefully handle unused import {:?} from module {:?} {:#?} {}",
+                &unused_imports,
+                home,
+                &module,
+                src
             );
         }
 
@@ -1815,7 +1832,7 @@ fn run_solve<'a>(
 fn parse_and_constrain<'a>(
     header: ModuleHeader<'a>,
     mode: Mode,
-    module_ids: ModuleIds,
+    module_ids: &ModuleIds,
     dep_idents: IdentIdsByModule,
     exposed_symbols: MutSet<Symbol>,
 ) -> Result<Msg<'a>, LoadingProblem> {
@@ -1836,7 +1853,7 @@ fn parse_and_constrain<'a>(
         &arena,
         parsed_defs,
         module_id,
-        &module_ids,
+        module_ids,
         header.exposed_ident_ids,
         dep_idents,
         header.exposed_imports,
@@ -2153,7 +2170,7 @@ fn run_task<'a>(
             module_ids,
             dep_idents,
             exposed_symbols,
-        } => parse_and_constrain(header, mode, module_ids, dep_idents, exposed_symbols),
+        } => parse_and_constrain(header, mode, &module_ids, dep_idents, exposed_symbols),
         Solve {
             module,
             module_timing,
