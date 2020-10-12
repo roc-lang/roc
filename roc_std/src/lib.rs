@@ -71,7 +71,7 @@ impl<T> RocList<T> {
             let value = *self.get_storage_ptr();
 
             // NOTE doesn't work with elements of 16 or more bytes
-            match usize::cmp(&0, &value) {
+            match isize::cmp(&(value as isize), &0) {
                 Equal => Some(Storage::ReadOnly),
                 Less => Some(Storage::Refcounted(value)),
                 Greater => Some(Storage::Capacity(value)),
