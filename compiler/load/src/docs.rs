@@ -350,8 +350,14 @@ pub fn load(
     let arena = Bump::new();
 
     // Reserve one CPU for the main thread, and let all the others be eligible
-    // to spawn workers.
-    let num_workers = num_cpus::get() - 1;
+    // to spawn workers. We use .max(2) to enforce that we always
+    // end up with at least 1 worker - since (.max(2) - 1) will
+    // always return a number that's at least 1. Using
+    // .max(2) on the initial number of CPUs instead of
+    // doing .max(1) on the entire expression guards against
+    // num_cpus returning 0, while also avoiding wrapping
+    // unsigned subtraction overflow.
+    let num_workers = num_cpus::get().max(2) - 1;
 
     let mut worker_arenas = bumpalo::collections::Vec::with_capacity_in(num_workers, &arena);
 
