@@ -6,8 +6,8 @@
 
 mod libm;
 
-/// TODO replace this with a normal Inkwell build_cast call - this was just
-/// used as a proof of concept for getting bitcode importing working!
+/// TODO this is no longer used. Feel free to delete it the next time
+/// we need to rebuild builtins.bc!
 #[no_mangle]
 pub fn i64_to_f64_(num: i64) -> f64 {
     num as f64

@@ -2619,8 +2619,13 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             ))
         }
         NumToFloat => {
-            // TODO specialize this to be not just for i64!
-            call_bitcode_fn(NumToFloat, env, &[arg.into()], "i64_to_f64_")
+            // This is an Int, so we need to convert it.
+            bd.build_cast(
+                InstructionOpcode::SIToFP,
+                arg,
+                env.context.f64_type(),
+                "i64_to_f64",
+            )
         }
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
