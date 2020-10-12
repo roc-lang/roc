@@ -325,38 +325,39 @@ impl RocStr {
                     *target_ptr.offset(index) = *source_ptr.offset(index);
                 }
             }
-        }
+            rocstr
+        } else {
+            let ptr = slice.as_ptr();
+            let element_bytes = capacity;
 
-        let ptr = slice.as_ptr();
-        let element_bytes = capacity;
+            let num_bytes = core::mem::size_of::<usize>() + element_bytes;
 
-        let num_bytes = core::mem::size_of::<usize>() + element_bytes;
+            let elements = unsafe {
+                let raw_ptr = libc::malloc(num_bytes);
 
-        let elements = unsafe {
-            let raw_ptr = libc::malloc(num_bytes);
+                // write the capacity
+                let capacity_ptr = raw_ptr as *mut usize;
+                *capacity_ptr = capacity;
 
-            // write the capacity
-            let capacity_ptr = raw_ptr as *mut usize;
-            *capacity_ptr = capacity;
+                let raw_ptr = Self::get_element_ptr(raw_ptr as *mut u8);
 
-            let raw_ptr = Self::get_element_ptr(raw_ptr as *mut u8);
-
-            {
-                // NOTE: using a memcpy here causes weird issues
-                let target_ptr = raw_ptr as *mut u8;
-                let source_ptr = ptr as *const u8;
-                let length = slice.len() as isize;
-                for index in 0..length {
-                    *target_ptr.offset(index) = *source_ptr.offset(index);
+                {
+                    // NOTE: using a memcpy here causes weird issues
+                    let target_ptr = raw_ptr as *mut u8;
+                    let source_ptr = ptr as *const u8;
+                    let length = slice.len() as isize;
+                    for index in 0..length {
+                        *target_ptr.offset(index) = *source_ptr.offset(index);
+                    }
                 }
+
+                raw_ptr as *mut u8
+            };
+
+            RocStr {
+                length: slice.len(),
+                elements,
             }
-
-            raw_ptr as *mut u8
-        };
-
-        RocStr {
-            length: slice.len(),
-            elements,
         }
     }
 
