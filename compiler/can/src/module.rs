@@ -1,4 +1,3 @@
-use crate::builtins::builtin_defs;
 use crate::def::{canonicalize_defs, sort_can_defs, Declaration};
 use crate::env::Env;
 use crate::expr::Output;
@@ -115,7 +114,7 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let (mut defs, _scope, output, symbols_introduced) = canonicalize_defs(
+    let (defs, _scope, output, symbols_introduced) = canonicalize_defs(
         &mut env,
         Output::default(),
         var_store,
