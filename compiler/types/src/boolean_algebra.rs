@@ -52,10 +52,10 @@ pub enum Bool {
 }
 
 pub fn var_is_shared(subs: &Subs, var: Variable) -> bool {
-    match subs.get_without_compacting(var).content {
-        Content::Structure(FlatType::Boolean(Bool::Shared)) => true,
-        _ => false,
-    }
+    matches!(
+        subs.get_without_compacting(var).content,
+        Content::Structure(FlatType::Boolean(Bool::Shared))
+    )
 }
 
 /// Given the Subs
@@ -163,10 +163,7 @@ impl Bool {
     }
 
     pub fn is_unique(&self, subs: &Subs) -> bool {
-        match self.simplify(subs) {
-            Shared => false,
-            _ => true,
-        }
+        !matches!(self.simplify(subs), Shared)
     }
 
     pub fn variables(&self) -> SendSet<Variable> {

@@ -21,7 +21,7 @@ pub enum MonoProblem {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartialProc<'a> {
     pub annotation: Variable,
-    pub pattern_symbols: Vec<'a, Symbol>,
+    pub pattern_symbols: &'a [Symbol],
     pub body: roc_can::expr::Expr,
     pub is_self_recursive: bool,
 }
@@ -30,7 +30,7 @@ pub struct PartialProc<'a> {
 pub struct PendingSpecialization<'a> {
     pub fn_var: Variable,
     pub ret_var: Variable,
-    pub pattern_vars: Vec<'a, Variable>,
+    pub pattern_vars: &'a [Variable],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -110,6 +110,39 @@ pub enum InProgressProc<'a> {
 }
 
 impl<'a> Procs<'a> {
+    /// Absorb the contents of another Procs into this one.
+    pub fn absorb(&mut self, mut other: Procs<'a>) {
+        debug_assert!(self.pending_specializations.is_some());
+        debug_assert!(other.pending_specializations.is_some());
+
+        match self.pending_specializations {
+            Some(ref mut pending_specializations) => {
+                for (k, v) in other.pending_specializations.unwrap().drain() {
+                    pending_specializations.insert(k, v);
+                }
+            }
+            None => {
+                unreachable!();
+            }
+        }
+
+        for (k, v) in other.partial_procs.drain() {
+            self.partial_procs.insert(k, v);
+        }
+
+        for (k, v) in other.specialized.drain() {
+            self.specialized.insert(k, v);
+        }
+
+        for (k, v) in other.runtime_errors.drain() {
+            self.runtime_errors.insert(k, v);
+        }
+
+        for symbol in other.module_thunks.drain() {
+            self.module_thunks.insert(symbol);
+        }
+    }
+
     // TODO investigate make this an iterator?
     pub fn get_specialized_procs(self, arena: &'a Bump) -> MutMap<(Symbol, Layout<'a>), Proc<'a>> {
         let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
@@ -204,6 +237,7 @@ impl<'a> Procs<'a> {
                 // context, we can't add pending specializations for them yet.
                 // (If we did, all named polymorphic functions would immediately error
                 // on trying to convert a flex var to a Layout.)
+                let pattern_symbols = pattern_symbols.into_bump_slice();
                 self.partial_procs.insert(
                     name,
                     PartialProc {
@@ -268,9 +302,10 @@ impl<'a> Procs<'a> {
                     let pending = PendingSpecialization {
                         ret_var,
                         fn_var: annotation,
-                        pattern_vars,
+                        pattern_vars: pattern_vars.into_bump_slice(),
                     };
 
+                    let pattern_symbols = pattern_symbols.into_bump_slice();
                     match &mut self.pending_specializations {
                         Some(pending_specializations) => {
                             // register the pending specialization, so this gets code genned later
@@ -333,7 +368,7 @@ impl<'a> Procs<'a> {
         &mut self,
         name: Symbol,
         layout: Layout<'a>,
-        pattern_vars: Vec<'a, Variable>,
+        pattern_vars: &'a [Variable],
         fn_var: Variable,
         ret_var: Variable,
     ) {
@@ -385,7 +420,8 @@ impl<'a> Procs<'a> {
         // now we have to pull some tricks to extract the return var and pattern vars from Subs
         match get_args_ret_var(env.subs, fn_var) {
             Some((pattern_vars, ret_var)) => {
-                let pattern_vars = Vec::from_iter_in(pattern_vars.into_iter(), env.arena);
+                let pattern_vars =
+                    Vec::from_iter_in(pattern_vars.into_iter(), env.arena).into_bump_slice();
                 let pending = PendingSpecialization {
                     pattern_vars,
                     ret_var,
@@ -512,7 +548,7 @@ impl<'a> Specializations<'a> {
 
 pub struct Env<'a, 'i> {
     pub arena: &'a Bump,
-    pub subs: &'a mut Subs,
+    pub subs: &'i mut Subs,
     pub problems: &'i mut std::vec::Vec<MonoProblem>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
@@ -857,11 +893,11 @@ impl<'a> Stmt<'a> {
         env: &mut Env<'a, '_>,
         can_expr: roc_can::expr::Expr,
         procs: &mut Procs<'a>,
+        layout_cache: &mut LayoutCache<'a>,
     ) -> Self {
-        let mut layout_cache = LayoutCache::default();
-
-        from_can(env, can_expr, procs, &mut layout_cache)
+        from_can(env, can_expr, procs, layout_cache)
     }
+
     pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
@@ -2599,7 +2635,7 @@ fn to_opt_branches<'a>(
                 env.problems.push(MonoProblem::PatternProblem(error))
             }
 
-            overlapping_branches.sort();
+            overlapping_branches.sort_unstable();
 
             for i in overlapping_branches.into_iter().rev() {
                 opt_branches.remove(i);
@@ -3412,7 +3448,7 @@ fn call_by_name<'a>(
                 assign_to_symbols(env, procs, layout_cache, iter, result)
             } else {
                 let pending = PendingSpecialization {
-                    pattern_vars,
+                    pattern_vars: pattern_vars.into_bump_slice(),
                     ret_var,
                     fn_var,
                 };

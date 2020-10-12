@@ -1143,7 +1143,7 @@ fn test_to_equality<'a>(
 // TODO procs and layout are currently unused, but potentially required
 // for defining optional fields?
 // if not, do remove
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::needless_collect)]
 fn decide_to_branching<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
@@ -1256,6 +1256,9 @@ fn decide_to_branching<'a>(
 
             // TODO There must be some way to remove this iterator/loop
             let nr = (tests.len() as i64) - 1 + (guard.is_some() as i64);
+
+            let arena = env.arena;
+
             let accum_symbols = std::iter::once(true_symbol)
                 .chain((0..nr).map(|_| env.unique_symbol()))
                 .rev()
@@ -1268,15 +1271,14 @@ fn decide_to_branching<'a>(
                 let accum = accum_it.next().unwrap();
                 let test_symbol = env.unique_symbol();
 
-                let and_expr =
-                    Expr::RunLowLevel(LowLevel::And, env.arena.alloc([test_symbol, accum]));
+                let and_expr = Expr::RunLowLevel(LowLevel::And, arena.alloc([test_symbol, accum]));
 
                 // write to the branching symbol
                 cond = Stmt::Let(
                     current_symbol,
                     and_expr,
                     Layout::Builtin(Builtin::Int1),
-                    env.arena.alloc(cond),
+                    arena.alloc(cond),
                 );
 
                 // calculate the guard value
@@ -1287,9 +1289,9 @@ fn decide_to_branching<'a>(
                 };
                 cond = Stmt::Join {
                     id,
-                    parameters: env.arena.alloc([param]),
-                    remainder: env.arena.alloc(stmt),
-                    continuation: env.arena.alloc(cond),
+                    parameters: arena.alloc([param]),
+                    remainder: arena.alloc(stmt),
+                    continuation: arena.alloc(cond),
                 };
 
                 // load all the variables (the guard might need them);
@@ -1301,18 +1303,17 @@ fn decide_to_branching<'a>(
                 let test_symbol = env.unique_symbol();
                 let test = Expr::RunLowLevel(
                     LowLevel::Eq,
-                    bumpalo::vec![in env.arena; lhs, rhs].into_bump_slice(),
+                    bumpalo::vec![in arena; lhs, rhs].into_bump_slice(),
                 );
 
-                let and_expr =
-                    Expr::RunLowLevel(LowLevel::And, env.arena.alloc([test_symbol, accum]));
+                let and_expr = Expr::RunLowLevel(LowLevel::And, arena.alloc([test_symbol, accum]));
 
                 // write to the branching symbol
                 cond = Stmt::Let(
                     current_symbol,
                     and_expr,
                     Layout::Builtin(Builtin::Int1),
-                    env.arena.alloc(cond),
+                    arena.alloc(cond),
                 );
 
                 // write to the test symbol
@@ -1320,11 +1321,11 @@ fn decide_to_branching<'a>(
                     test_symbol,
                     test,
                     Layout::Builtin(Builtin::Int1),
-                    env.arena.alloc(cond),
+                    arena.alloc(cond),
                 );
 
                 for (symbol, layout, expr) in new_stores.into_iter() {
-                    cond = Stmt::Let(symbol, expr, layout, env.arena.alloc(cond));
+                    cond = Stmt::Let(symbol, expr, layout, arena.alloc(cond));
                 }
 
                 current_symbol = accum;
@@ -1334,7 +1335,7 @@ fn decide_to_branching<'a>(
                 true_symbol,
                 Expr::Literal(Literal::Bool(true)),
                 Layout::Builtin(Builtin::Int1),
-                env.arena.alloc(cond),
+                arena.alloc(cond),
             );
 
             cond

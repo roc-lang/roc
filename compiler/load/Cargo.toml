@@ -17,8 +17,10 @@ roc_problem = { path = "../problem" }
 roc_unify = { path = "../unify" }
 roc_parse = { path = "../parse" }
 roc_solve = { path = "../solve" }
+roc_mono = { path = "../mono" }
 bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1"
+parking_lot = { version = "0.11", features = ["deadlock_detection"] }
 crossbeam = "0.7"
 num_cpus = "1"
 

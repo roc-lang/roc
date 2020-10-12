@@ -246,7 +246,9 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             ident_ids: &mut ident_ids,
         };
 
-        let main_body = roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs);
+        let mut layout_cache = LayoutCache::default();
+        let main_body =
+            roc_mono::ir::Stmt::new(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
 
         let param_map = roc_mono::borrow::ParamMap::default();
         let main_body = roc_mono::inc_dec::visit_declaration(
@@ -262,7 +264,6 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
 
             Vec::with_capacity(num_headers)
         };
-        let mut layout_cache = LayoutCache::default();
         let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
 
         assert_eq!(

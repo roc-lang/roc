@@ -1,7 +1,7 @@
 # Building the Roc compiler from source
 
 
-## Installing LLVM, libunwind, and libc++abi
+## Installing LLVM, libunwind, and libc++-dev
 
 To build the compiler, you need these installed:
 
