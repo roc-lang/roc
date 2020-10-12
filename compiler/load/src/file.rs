@@ -335,7 +335,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 .module_cache
                 .external_specializations_requested
                 .remove(&module_id)
-                .unwrap_or(ExternalSpecializations::default());
+                .unwrap_or_default();
 
             let FoundSpecializationsModule {
                 module_id,
@@ -824,7 +824,7 @@ where
 {
     // Reserve one CPU for the main thread, and let all the others be eligible
     // to spawn workers.
-    let num_workers = 1; // num_cpus::get() - 1;
+    let num_workers = num_cpus::get() - 1;
     let worker_arenas = arena.alloc(bumpalo::collections::Vec::with_capacity_in(
         num_workers,
         arena,

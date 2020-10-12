@@ -1403,6 +1403,7 @@ fn specialize_external<'a>(
     Ok(proc)
 }
 
+#[allow(clippy::type_complexity)]
 fn build_specialized_proc_from_var<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
@@ -1429,6 +1430,7 @@ fn build_specialized_proc_from_var<'a>(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn build_specialized_proc<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
