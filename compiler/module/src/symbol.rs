@@ -15,7 +15,7 @@ pub struct Symbol(u64);
 // Set it to false if you want to see the raw ModuleId and IdentId ints,
 // but please set it back to true before checking in the result!
 #[cfg(debug_assertions)]
-const PRETTY_PRINT_DEBUG_SYMBOLS: bool = true;
+const PRETTY_PRINT_DEBUG_SYMBOLS: bool = false;
 
 /// In Debug builds only, Symbol has a name() method that lets
 /// you look up its name in a global intern table. This table is
@@ -288,14 +288,18 @@ impl fmt::Debug for ModuleId {
                 .lock()
                 .expect("Failed to acquire lock for Debug reading from DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
-        match names.get(&self.0) {
-            Some(str_ref) => write!(f, "{}", str_ref.clone()),
-            None => {
-                panic!(
-                    "Could not find a Debug name for module ID {} in {:?}",
-                    self.0, names,
-                );
+        if PRETTY_PRINT_DEBUG_SYMBOLS {
+            match names.get(&self.0) {
+                Some(str_ref) => write!(f, "{}", str_ref.clone()),
+                None => {
+                    panic!(
+                        "Could not find a Debug name for module ID {} in {:?}",
+                        self.0, names,
+                    );
+                }
             }
+        } else {
+            write!(f, "{}", self.0)
         }
     }
 

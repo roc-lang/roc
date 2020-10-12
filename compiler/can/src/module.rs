@@ -149,14 +149,13 @@ pub fn canonicalize_module_defs<'a>(
     }
 
     // Gather up all the symbols that were referenced from other modules.
-    for symbol in env.referenced_symbols.iter() {
+    for symbol in env.qualified_lookups.iter() {
         references.insert(*symbol);
     }
 
     // Add defs for any referenced builtins.
     for (symbol, def) in builtin_defs(var_store) {
-        if output.references.lookups.contains(&symbol) || output.references.calls.contains(&symbol)
-        {
+        if references.contains(&symbol) {
             defs.can_defs_by_symbol.insert(symbol, def);
         }
     }
@@ -248,6 +247,11 @@ pub fn canonicalize_module_defs<'a>(
             // Incorporate any remaining output.calls entries into references.
             for symbol in output.references.calls {
                 references.insert(symbol);
+            }
+
+            // Gather up all the symbols that were referenced from other modules.
+            for symbol in env.qualified_lookups.iter() {
+                references.insert(*symbol);
             }
 
             Ok(ModuleOutput {
