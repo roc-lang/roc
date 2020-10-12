@@ -153,12 +153,8 @@ pub fn canonicalize_module_defs<'a>(
         references.insert(*symbol);
     }
 
-    // Add defs for any referenced builtins.
-    for (symbol, def) in builtin_defs(var_store) {
-        if references.contains(&symbol) {
-            defs.can_defs_by_symbol.insert(symbol, def);
-        }
-    }
+    // NOTE previously we inserted builtin defs into the list of defs here
+    // this is now done later, in file.rs.
 
     match sort_can_defs(&mut env, defs, Output::default()) {
         (Ok(declarations), output) => {
