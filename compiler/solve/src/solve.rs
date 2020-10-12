@@ -1191,11 +1191,184 @@ fn introduce(subs: &mut Subs, rank: Rank, pools: &mut Pools, vars: &[Variable]) 
     pool.extend(vars);
 }
 
-pub fn unsafe_copy_var_help(subs: &mut Subs, var: Variable) -> Variable {
+/// Function that converts rigids variables to flex variables
+/// this is used during the monomorphization process
+pub fn instantiate_rigids(subs: &mut Subs, var: Variable) {
     let rank = Rank::NONE;
     let mut pools = Pools::default();
 
-    deep_copy_var(subs, rank, &mut pools, var)
+    instantiate_rigids_help(subs, rank, &mut pools, var);
+}
+
+fn instantiate_rigids_help(
+    subs: &mut Subs,
+    max_rank: Rank,
+    pools: &mut Pools,
+    var: Variable,
+) -> Variable {
+    use roc_types::subs::Content::*;
+    use roc_types::subs::FlatType::*;
+
+    let desc = subs.get_without_compacting(var);
+
+    if let Some(copy) = desc.copy.into_variable() {
+        return copy;
+    } else if desc.rank != Rank::NONE {
+        return var;
+    }
+
+    let make_descriptor = |content| Descriptor {
+        content,
+        rank: max_rank,
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    };
+
+    let content = desc.content;
+    let copy = var;
+
+    pools.get_mut(max_rank).push(copy);
+
+    // Link the original variable to the new variable. This lets us
+    // avoid making multiple copies of the variable we are instantiating.
+    //
+    // Need to do this before recursively copying to avoid looping.
+    subs.set(
+        var,
+        Descriptor {
+            content: content.clone(),
+            rank: desc.rank,
+            mark: Mark::NONE,
+            copy: copy.into(),
+        },
+    );
+
+    // Now we recursively copy the content of the variable.
+    // We have already marked the variable as copied, so we
+    // will not repeat this work or crawl this variable again.
+    match content {
+        Structure(flat_type) => {
+            let new_flat_type = match flat_type {
+                Apply(symbol, args) => {
+                    let args = args
+                        .into_iter()
+                        .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
+                        .collect();
+
+                    Apply(symbol, args)
+                }
+
+                Func(arg_vars, closure_var, ret_var) => {
+                    let new_ret_var = instantiate_rigids_help(subs, max_rank, pools, ret_var);
+                    let new_closure_var =
+                        instantiate_rigids_help(subs, max_rank, pools, closure_var);
+                    let arg_vars = arg_vars
+                        .into_iter()
+                        .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
+                        .collect();
+
+                    Func(arg_vars, new_closure_var, new_ret_var)
+                }
+
+                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+
+                Record(fields, ext_var) => {
+                    let mut new_fields = MutMap::default();
+
+                    for (label, field) in fields {
+                        use RecordField::*;
+
+                        let new_field = match field {
+                            Demanded(var) => {
+                                Demanded(instantiate_rigids_help(subs, max_rank, pools, var))
+                            }
+                            Required(var) => {
+                                Required(instantiate_rigids_help(subs, max_rank, pools, var))
+                            }
+                            Optional(var) => {
+                                Optional(instantiate_rigids_help(subs, max_rank, pools, var))
+                            }
+                        };
+
+                        new_fields.insert(label, new_field);
+                    }
+
+                    Record(
+                        new_fields,
+                        instantiate_rigids_help(subs, max_rank, pools, ext_var),
+                    )
+                }
+
+                TagUnion(tags, ext_var) => {
+                    let mut new_tags = MutMap::default();
+
+                    for (tag, vars) in tags {
+                        let new_vars: Vec<Variable> = vars
+                            .into_iter()
+                            .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
+                            .collect();
+                        new_tags.insert(tag, new_vars);
+                    }
+
+                    TagUnion(
+                        new_tags,
+                        instantiate_rigids_help(subs, max_rank, pools, ext_var),
+                    )
+                }
+
+                RecursiveTagUnion(rec_var, tags, ext_var) => {
+                    let mut new_tags = MutMap::default();
+
+                    let new_rec_var = instantiate_rigids_help(subs, max_rank, pools, rec_var);
+
+                    for (tag, vars) in tags {
+                        let new_vars: Vec<Variable> = vars
+                            .into_iter()
+                            .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
+                            .collect();
+                        new_tags.insert(tag, new_vars);
+                    }
+
+                    RecursiveTagUnion(
+                        new_rec_var,
+                        new_tags,
+                        instantiate_rigids_help(subs, max_rank, pools, ext_var),
+                    )
+                }
+
+                Boolean(b) => {
+                    let mut mapper = |var| instantiate_rigids_help(subs, max_rank, pools, var);
+
+                    Boolean(b.map_variables(&mut mapper))
+                }
+            };
+
+            subs.set(copy, make_descriptor(Structure(new_flat_type)));
+
+            copy
+        }
+
+        FlexVar(_) | Error => copy,
+
+        RigidVar(name) => {
+            subs.set(copy, make_descriptor(FlexVar(Some(name))));
+
+            copy
+        }
+
+        Alias(symbol, args, real_type_var) => {
+            let new_args = args
+                .into_iter()
+                .map(|(name, var)| (name, instantiate_rigids_help(subs, max_rank, pools, var)))
+                .collect();
+            let new_real_type_var = instantiate_rigids_help(subs, max_rank, pools, real_type_var);
+            let new_content = Alias(symbol, new_args, new_real_type_var);
+
+            subs.set(copy, make_descriptor(new_content));
+
+            copy
+        }
+    }
 }
 
 fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
