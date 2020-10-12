@@ -1326,12 +1326,8 @@ pub fn specialize_all<'a>(
                     pending.clone(),
                     partial_proc,
                 ) {
-                    Ok((proc, layout)) if outside_layout != layout => {
-                        println!("Layouts don't match for function {:?}", proc.name,);
-                        dbg!(outside_layout, layout, &pending.solved_type);
-                        panic!();
-                    }
                     Ok((proc, layout)) => {
+                        debug_assert_eq!(outside_layout, layout);
                         procs.specialized.remove(&(name, outside_layout));
                         procs.specialized.insert((name, layout), Done(proc));
                     }
@@ -1490,7 +1486,7 @@ fn specialize_solved_type<'a>(
 ) -> Result<(Proc<'a>, Layout<'a>), LayoutProblem> {
     // add the specializations that other modules require of us
     use roc_constrain::module::{to_type, FreeVars};
-    use roc_solve::solve::insert_type_into_subs;
+    use roc_solve::solve::{insert_type_into_subs, instantiate_rigids};
     use roc_types::subs::VarStore;
 
     let snapshot = env.subs.snapshot();
@@ -1508,6 +1504,9 @@ fn specialize_solved_type<'a>(
     env.subs.extend_by(variables_introduced as usize);
 
     let fn_var = insert_type_into_subs(env.subs, &normal_type);
+
+    // make sure rigid variables in the annotation are converted to flex variables
+    instantiate_rigids(env.subs, partial_proc.annotation);
 
     match specialize_external(env, procs, proc_name, layout_cache, fn_var, partial_proc) {
         Ok(proc) => {
@@ -2726,15 +2725,24 @@ pub fn from_can<'a>(
                         _ => unreachable!(),
                     }
                 }
-                let rest = from_can(env, cont.value, procs, layout_cache);
-                return with_hole(
-                    env,
-                    def.loc_expr.value,
-                    procs,
-                    layout_cache,
-                    *symbol,
-                    env.arena.alloc(rest),
-                );
+
+                let mut rest = from_can(env, cont.value, procs, layout_cache);
+
+                // a variable is aliased
+                if let roc_can::expr::Expr::Var(original) = def.loc_expr.value {
+                    substitute_in_exprs(env.arena, &mut rest, *symbol, original);
+
+                    return rest;
+                } else {
+                    return with_hole(
+                        env,
+                        def.loc_expr.value,
+                        procs,
+                        layout_cache,
+                        *symbol,
+                        env.arena.alloc(rest),
+                    );
+                }
             }
 
             // this may be a destructure pattern
@@ -2744,6 +2752,7 @@ pub fn from_can<'a>(
                 let hole = env
                     .arena
                     .alloc(from_can(env, cont.value, procs, layout_cache));
+
                 with_hole(env, def.loc_expr.value, procs, layout_cache, symbol, hole)
             } else {
                 let context = crate::exhaustive::Context::BadDestruct;
