@@ -15,7 +15,7 @@ pub struct Symbol(u64);
 // Set it to false if you want to see the raw ModuleId and IdentId ints,
 // but please set it back to true before checking in the result!
 #[cfg(debug_assertions)]
-const PRETTY_PRINT_DEBUG_SYMBOLS: bool = false;
+const PRETTY_PRINT_DEBUG_SYMBOLS: bool = true;
 
 /// In Debug builds only, Symbol has a name() method that lets
 /// you look up its name in a global intern table. This table is
@@ -380,7 +380,7 @@ pub struct IdentId(u32);
 ///
 /// Each module name is stored twice, for faster lookups.
 /// Since these are interned strings, this shouldn't result in many total allocations in practice.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdentIds {
     by_ident: MutMap<InlinableString, IdentId>,
 

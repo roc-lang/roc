@@ -62,7 +62,8 @@ pub enum Phase {
 }
 
 /// NOTE keep up to date manually, from ParseAndGenerateConstraints to the highest phase we support
-const PHASES: [Phase; 4] = [
+const PHASES: [Phase; 5] = [
+    Phase::LoadHeader,
     Phase::ParseAndGenerateConstraints,
     Phase::SolveTypes,
     Phase::FindSpecializations,
@@ -86,6 +87,15 @@ impl Dependencies {
         use Phase::*;
 
         for dep in dependencies.iter().copied() {
+            // to parse and generate constraints, the headers of all dependencies must be loaded!
+            // otherwise, we don't know whether an imported symbol is actually exposed
+            self.add_dependency_help(
+                module_id,
+                dep,
+                Phase::ParseAndGenerateConstraints,
+                Phase::LoadHeader,
+            );
+
             self.add_dependency(module_id, dep, Phase::SolveTypes);
 
             if goal_phase >= FindSpecializations {
@@ -108,9 +118,6 @@ impl Dependencies {
         }
 
         let mut output = MutSet::default();
-
-        // the added module can be parsed/constrained
-        output.insert((module_id, ParseAndGenerateConstraints));
 
         // all the dependencies can be loaded
         for dep in dependencies {
@@ -1121,6 +1128,14 @@ fn update<'a>(
                 enqueue_task(&injector, worker_listeners, task)?
             }
 
+            let work = state.dependencies.notify(home, Phase::LoadHeader);
+
+            for (module_id, phase) in work {
+                let task = start_phase(module_id, phase, &mut state);
+
+                enqueue_task(&injector, worker_listeners, task)?
+            }
+
             Ok(state)
         }
         Constrained {
@@ -1751,11 +1766,9 @@ impl<'a> BuildTask<'a> {
 
         if !unused_imports.is_empty() {
             todo!(
-                "TODO gracefully handle unused import {:?} from module {:?} {:#?} {}",
+                "TODO gracefully handle unused import {:?} from module {:?}",
                 &unused_imports,
                 home,
-                &module,
-                src
             );
         }
 
