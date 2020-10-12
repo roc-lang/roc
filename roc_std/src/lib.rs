@@ -314,11 +314,15 @@ impl RocStr {
         (self as *const RocStr).cast()
     }
 
+    fn get_small_str_ptr_mut(&mut self) -> *mut u8 {
+        (self as *mut RocStr).cast()
+    }
+
     pub fn from_slice_with_capacity(slice: &[u8], capacity: usize) -> RocStr {
         assert!(slice.len() <= capacity);
         if capacity < core::mem::size_of::<usize>() {
-            let rocstr = RocStr::empty();
-            let target_ptr = rocstr.get_small_str_ptr() as *mut u8;
+            let mut rocstr = RocStr::empty();
+            let target_ptr = rocstr.get_small_str_ptr_mut();
             let source_ptr = slice.as_ptr() as *const u8;
             for index in 0..(slice.len() as isize) {
                 unsafe {
@@ -376,38 +380,18 @@ impl RocStr {
 
 impl fmt::Debug for RocStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.is_small_str() {
-            // RocStr { is_small_str: true, elements: [ 1,2,3,4] }
-            f.debug_struct("RocStr")
-                .field("is_small_str", &true)
-                .field("elements", &self.as_slice())
-                .finish()
-        } else {
-            // RocStr { is_small_str: false, storage: Refcounted(3), elements: [ 1,2,3,4] }
-            f.debug_struct("RocStr")
-                .field("is_small_str", &false)
-                .field("storage", &self.storage())
-                .field("elements", &self.as_slice())
-                .finish()
-        }
+        // RocStr { is_small_str: false, storage: Refcounted(3), elements: [ 1,2,3,4] }
+        f.debug_struct("RocStr")
+            .field("is_small_str", &false)
+            .field("storage", &self.storage())
+            .field("elements", &self.as_slice())
+            .finish()
     }
 }
 
 impl PartialEq for RocStr {
     fn eq(&self, other: &Self) -> bool {
-        if self.length != other.length {
-            return false;
-        }
-
-        for i in 0..(self.length as isize) {
-            unsafe {
-                if *self.elements.offset(i) != *other.elements.offset(i) {
-                    return false;
-                }
-            }
-        }
-
-        true
+        self.as_slice() == other.as_slice()
     }
 }
 
