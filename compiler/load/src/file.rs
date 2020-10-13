@@ -2166,98 +2166,27 @@ fn build_pending_specializations<'a>(
     // Add modules' decls to Procs
     for decl in decls {
         use roc_can::def::Declaration::*;
-        use roc_can::expr::Expr::*;
-        use roc_can::pattern::Pattern::*;
 
         match decl {
-            Declare(def) | Builtin(def) => match def.loc_pattern.value {
-                Identifier(symbol) => {
-                    let is_exposed = exposed_to_host.contains(&symbol);
-
-                    match def.loc_expr.value {
-                        Closure {
-                            function_type: annotation,
-                            return_type: ret_var,
-                            arguments: loc_args,
-                            loc_body,
-                            ..
-                        } => {
-                            // this is a non-recursive declaration
-                            let is_tail_recursive = false;
-                            // If this is an exposed symbol, we need to
-                            // register it as such. Otherwise, since it
-                            // never gets called by Roc code, it will never
-                            // get specialized!
-                            if is_exposed {
-                                let mut pattern_vars = bumpalo::collections::Vec::with_capacity_in(
-                                    loc_args.len(),
-                                    arena,
-                                );
-
-                                for (var, _) in loc_args.iter() {
-                                    pattern_vars.push(*var);
-                                }
-
-                                let layout = match layout_cache.from_var(
-                                    mono_env.arena,
-                                    annotation,
-                                    mono_env.subs,
-                                ) {
-                                    Ok(l) => l,
-                                    Err(err) => {
-                                        // a host-exposed function is not monomorphized
-                                        todo!("The host-exposed function {:?} does not have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", symbol, err)
-                                    }
-                                };
-
-                                procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
-                            }
-
-                            procs.insert_named(
-                                &mut mono_env,
-                                &mut layout_cache,
-                                symbol,
-                                annotation,
-                                loc_args,
-                                *loc_body,
-                                is_tail_recursive,
-                                ret_var,
-                            );
-                        }
-                        body => {
-                            // If this is an exposed symbol, we need to
-                            // register it as such. Otherwise, since it
-                            // never gets called by Roc code, it will never
-                            // get specialized!
-                            if is_exposed {
-                                let annotation = def.expr_var;
-                                let layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
-                                        todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
-                                    );
-
-                                procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
-                            }
-
-                            let proc = PartialProc {
-                                annotation: def.expr_var,
-                                // This is a 0-arity thunk, so it has no arguments.
-                                pattern_symbols: &[],
-                                body,
-                                // This is a 0-arity thunk, so it cannot be recursive
-                                is_self_recursive: false,
-                            };
-
-                            procs.partial_procs.insert(symbol, proc);
-                            procs.module_thunks.insert(symbol);
-                        }
-                    };
+            Declare(def) | Builtin(def) => add_def_to_module(
+                &mut layout_cache,
+                &mut procs,
+                &mut mono_env,
+                def,
+                &exposed_to_host,
+                false,
+            ),
+            DeclareRec(defs) => {
+                for def in defs {
+                    add_def_to_module(
+                        &mut layout_cache,
+                        &mut procs,
+                        &mut mono_env,
+                        def,
+                        &exposed_to_host,
+                        true,
+                    )
                 }
-                other => {
-                    todo!("TODO gracefully handle Declare({:?})", other);
-                }
-            },
-            DeclareRec(_defs) => {
-                todo!("TODO support DeclareRec");
             }
             InvalidCycle(_loc_idents, _regions) => {
                 todo!("TODO handle InvalidCycle");
@@ -2275,6 +2204,103 @@ fn build_pending_specializations<'a>(
         procs,
         problems,
         finished_info,
+    }
+}
+
+fn add_def_to_module<'a>(
+    layout_cache: &mut LayoutCache<'a>,
+    procs: &mut Procs<'a>,
+    mono_env: &mut roc_mono::ir::Env<'a, '_>,
+    def: roc_can::def::Def,
+    exposed_to_host: &MutSet<Symbol>,
+    is_recursive: bool,
+) {
+    use roc_can::expr::Expr::*;
+    use roc_can::pattern::Pattern::*;
+
+    match def.loc_pattern.value {
+        Identifier(symbol) => {
+            let is_exposed = exposed_to_host.contains(&symbol);
+
+            match def.loc_expr.value {
+                Closure {
+                    function_type: annotation,
+                    return_type: ret_var,
+                    arguments: loc_args,
+                    loc_body,
+                    ..
+                } => {
+                    // If this is an exposed symbol, we need to
+                    // register it as such. Otherwise, since it
+                    // never gets called by Roc code, it will never
+                    // get specialized!
+                    if is_exposed {
+                        let mut pattern_vars = bumpalo::collections::Vec::with_capacity_in(
+                            loc_args.len(),
+                            mono_env.arena,
+                        );
+
+                        for (var, _) in loc_args.iter() {
+                            pattern_vars.push(*var);
+                        }
+
+                        let layout = match layout_cache.from_var(
+                            mono_env.arena,
+                            annotation,
+                            mono_env.subs,
+                        ) {
+                            Ok(l) => l,
+                            Err(err) => {
+                                // a host-exposed function is not monomorphized
+                                todo!("The host-exposed function {:?} does not have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", symbol, err)
+                            }
+                        };
+
+                        procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
+                    }
+
+                    procs.insert_named(
+                        mono_env,
+                        layout_cache,
+                        symbol,
+                        annotation,
+                        loc_args,
+                        *loc_body,
+                        is_recursive,
+                        ret_var,
+                    );
+                }
+                body => {
+                    // If this is an exposed symbol, we need to
+                    // register it as such. Otherwise, since it
+                    // never gets called by Roc code, it will never
+                    // get specialized!
+                    if is_exposed {
+                        let annotation = def.expr_var;
+                        let layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
+                                        todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
+                                    );
+
+                        procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
+                    }
+
+                    let proc = PartialProc {
+                        annotation: def.expr_var,
+                        // This is a 0-arity thunk, so it has no arguments.
+                        pattern_symbols: &[],
+                        body,
+                        // This is a 0-arity thunk, so it cannot be recursive
+                        is_self_recursive: false,
+                    };
+
+                    procs.partial_procs.insert(symbol, proc);
+                    procs.module_thunks.insert(symbol);
+                }
+            };
+        }
+        other => {
+            todo!("TODO gracefully handle Declare({:?})", other);
+        }
     }
 }
 
