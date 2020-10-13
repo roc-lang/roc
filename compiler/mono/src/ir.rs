@@ -1490,6 +1490,7 @@ fn specialize_solved_type<'a>(
     use roc_types::subs::VarStore;
 
     let snapshot = env.subs.snapshot();
+    let cache_snapshot = layout_cache.snapshot();
 
     let mut free_vars = FreeVars::default();
     let mut var_store = VarStore::new_from_subs(env.subs);
@@ -1514,10 +1515,12 @@ fn specialize_solved_type<'a>(
                 .from_var(&env.arena, fn_var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
             env.subs.rollback_to(snapshot);
+            layout_cache.rollback_to(cache_snapshot);
             Ok((proc, layout))
         }
         Err(error) => {
             env.subs.rollback_to(snapshot);
+            layout_cache.rollback_to(cache_snapshot);
             Err(error)
         }
     }

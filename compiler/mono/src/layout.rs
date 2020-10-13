@@ -226,9 +226,51 @@ impl<'a> Layout<'a> {
 }
 
 /// Avoid recomputing Layout from Variable multiple times.
+/// We use `ena` for easy snapshots and rollbacks of the cache.
+/// During specialization, a type variable `a` can be specialized to different layouts,
+/// e.g. `identity : a -> a` could be specialized to `Bool -> Bool` or `Str -> Str`.
+/// Therefore in general it's invalid to store a map from variables to layouts
+/// But if we're careful when to invalidate certain keys, we still get some benefit
 #[derive(Default, Debug)]
 pub struct LayoutCache<'a> {
-    layouts: MutMap<Variable, Result<Layout<'a>, LayoutProblem>>,
+    layouts: ven_ena::unify::UnificationTable<ven_ena::unify::InPlace<CachedVariable<'a>>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum CachedLayout<'a> {
+    Cached(Layout<'a>),
+    NotCached,
+    Problem(LayoutProblem),
+}
+
+/// Must wrap so we can define a specific UnifyKey instance
+/// PhantomData so we can store the 'a lifetime, which is needed to implement the UnifyKey trait,
+/// specifically so we can use `type Value = CachedLayout<'a>`
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct CachedVariable<'a>(Variable, std::marker::PhantomData<&'a ()>);
+
+impl<'a> CachedVariable<'a> {
+    fn new(var: Variable) -> Self {
+        CachedVariable(var, std::marker::PhantomData)
+    }
+}
+
+// use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
+
+impl<'a> ven_ena::unify::UnifyKey for CachedVariable<'a> {
+    type Value = CachedLayout<'a>;
+
+    fn index(&self) -> u32 {
+        self.0.index()
+    }
+
+    fn from_index(index: u32) -> Self {
+        CachedVariable(Variable::from_index(index), std::marker::PhantomData)
+    }
+
+    fn tag() -> &'static str {
+        "CachedVariable"
+    }
 }
 
 impl<'a> LayoutCache<'a> {
@@ -244,19 +286,60 @@ impl<'a> LayoutCache<'a> {
         // Store things according to the root Variable, to avoid duplicate work.
         let var = subs.get_root_key_without_compacting(var);
 
-        let mut env = Env {
-            arena,
-            subs,
-            seen: MutSet::default(),
-        };
+        let cached_var = CachedVariable::new(var);
 
-        /*
-        self.layouts
-            .entry(var)
-            .or_insert_with(|| Layout::from_var(&mut env, var))
-            .clone()
-        */
-        Layout::from_var(&mut env, var)
+        self.expand_to_fit(cached_var);
+
+        use CachedLayout::*;
+        match self.layouts.probe_value(cached_var) {
+            Cached(result) => Ok(result),
+            Problem(problem) => Err(problem),
+            NotCached => {
+                let mut env = Env {
+                    arena,
+                    subs,
+                    seen: MutSet::default(),
+                };
+
+                let result = Layout::from_var(&mut env, var);
+
+                let cached_layout = match &result {
+                    Ok(layout) => Cached(layout.clone()),
+                    Err(problem) => Problem(problem.clone()),
+                };
+
+                self.layouts
+                    .update_value(cached_var, |existing| existing.value = cached_layout);
+
+                result
+            }
+        }
+    }
+
+    fn expand_to_fit(&mut self, var: CachedVariable<'a>) {
+        use ven_ena::unify::UnifyKey;
+
+        let required = (var.index() as isize) - (self.layouts.len() as isize) + 1;
+        if required > 0 {
+            self.layouts.reserve(required as usize);
+
+            for _ in 0..required {
+                self.layouts.new_key(CachedLayout::NotCached);
+            }
+        }
+    }
+
+    pub fn snapshot(
+        &mut self,
+    ) -> ven_ena::unify::Snapshot<ven_ena::unify::InPlace<CachedVariable<'a>>> {
+        self.layouts.snapshot()
+    }
+
+    pub fn rollback_to(
+        &mut self,
+        snapshot: ven_ena::unify::Snapshot<ven_ena::unify::InPlace<CachedVariable<'a>>>,
+    ) {
+        self.layouts.rollback_to(snapshot)
     }
 }
 
