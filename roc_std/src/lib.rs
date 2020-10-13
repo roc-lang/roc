@@ -320,7 +320,7 @@ impl RocStr {
 
     pub fn from_slice_with_capacity(slice: &[u8], capacity: usize) -> RocStr {
         assert!(slice.len() <= capacity);
-        if capacity < core::mem::size_of::<usize>() {
+        if capacity < core::mem::size_of::<RocStr>() {
             let mut rocstr = RocStr::empty();
             let target_ptr = rocstr.get_small_str_ptr_mut();
             let source_ptr = slice.as_ptr() as *const u8;
