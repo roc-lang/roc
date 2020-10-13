@@ -72,6 +72,17 @@ impl VarStore {
         VarStore { next: next_var.0 }
     }
 
+    pub fn new_from_subs(subs: &Subs) -> Self {
+        let next_var = (subs.utable.len()) as u32;
+        debug_assert!(next_var >= Variable::FIRST_USER_SPACE_VAR.0);
+
+        VarStore { next: next_var }
+    }
+
+    pub fn peek(&mut self) -> u32 {
+        self.next
+    }
+
     pub fn fresh(&mut self) -> Variable {
         // Increment the counter and return the value it had before it was incremented.
         let answer = self.next;
@@ -163,6 +174,10 @@ impl Variable {
     pub unsafe fn unsafe_test_debug_variable(v: u32) -> Self {
         Variable(v)
     }
+
+    pub fn index(&self) -> u32 {
+        self.0
+    }
 }
 
 impl Into<OptVariable> for Variable {
@@ -253,6 +268,12 @@ impl Subs {
         });
 
         subs
+    }
+
+    pub fn extend_by(&mut self, entries: usize) {
+        for _ in 0..entries {
+            self.utable.new_key(flex_var_descriptor());
+        }
     }
 
     pub fn fresh(&mut self, value: Descriptor) -> Variable {

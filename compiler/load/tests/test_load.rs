@@ -14,12 +14,13 @@ mod helpers;
 #[cfg(test)]
 mod test_load {
     use crate::helpers::fixtures_dir;
+    use bumpalo::Bump;
     use inlinable_string::InlinableString;
     use roc_can::def::Declaration::*;
     use roc_can::def::Def;
     use roc_collections::all::MutMap;
     use roc_constrain::module::SubsByModule;
-    use roc_load::file::{load, LoadedModule, Phases};
+    use roc_load::file::LoadedModule;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
     use roc_types::subs::Subs;
@@ -34,12 +35,13 @@ mod test_load {
     ) -> LoadedModule {
         let src_dir = fixtures_dir().join(dir_name);
         let filename = src_dir.join(format!("{}.roc", module_name));
-        let loaded = load(
+        let arena = Bump::new();
+        let loaded = roc_load::file::load_and_typecheck(
+            &arena,
             filename,
-            &roc_builtins::std::standard_stdlib(),
+            roc_builtins::std::standard_stdlib(),
             src_dir.as_path(),
             subs_by_module,
-            Phases::TypeCheck,
         );
         let loaded_module = loaded.expect("Test module failed to load");
 
@@ -88,7 +90,6 @@ mod test_load {
         assert_eq!(loaded_module.can_problems, Vec::new());
         assert_eq!(loaded_module.type_problems, Vec::new());
 
-        dbg!(&loaded_module.declarations_by_id);
         for decl in loaded_module.declarations_by_id.remove(&home).unwrap() {
             match decl {
                 Declare(def) => expect_def(
@@ -130,12 +131,13 @@ mod test_load {
         let subs_by_module = MutMap::default();
         let src_dir = fixtures_dir().join("interface_with_deps");
         let filename = src_dir.join("Primary.roc");
-        let loaded = load(
+        let arena = Bump::new();
+        let loaded = roc_load::file::load_and_typecheck(
+            &arena,
             filename,
-            &roc_builtins::std::standard_stdlib(),
+            roc_builtins::std::standard_stdlib(),
             src_dir.as_path(),
             subs_by_module,
-            Phases::TypeCheck,
         );
 
         let mut loaded_module = loaded.expect("Test module failed to load");

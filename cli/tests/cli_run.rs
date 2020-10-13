@@ -43,4 +43,23 @@ mod cli_run {
             .ends_with("[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]\n"));
         assert!(out.status.success());
     }
+
+    #[test]
+    fn run_multi_module() {
+        let out = run_roc(&[
+            "run",
+            example_file("multi-module", "Quicksort.roc")
+                .to_str()
+                .unwrap(),
+            "--optimize",
+        ]);
+
+        if !out.stderr.is_empty() {
+            panic!(out.stderr);
+        }
+        assert!(&out
+            .stdout
+            .ends_with("[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]\n"));
+        assert!(out.status.success());
+    }
 }

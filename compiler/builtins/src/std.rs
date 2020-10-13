@@ -12,6 +12,7 @@ pub enum Mode {
     Uniqueness,
 }
 
+#[derive(Debug, Clone)]
 pub struct StdLib {
     pub mode: Mode,
     pub types: MutMap<Symbol, (SolvedType, Region)>,
