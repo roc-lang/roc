@@ -67,6 +67,7 @@ pub fn constrain_decls(
 
     // perform usage analysis on the whole file
     let mut var_usage = VarUsage::default();
+
     for decl in decls.iter().rev() {
         // NOTE: rigids are empty because they are not shared between top-level definitions
         match decl {

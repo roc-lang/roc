@@ -250,10 +250,13 @@ impl<'a> LayoutCache<'a> {
             seen: MutSet::default(),
         };
 
+        /*
         self.layouts
             .entry(var)
             .or_insert_with(|| Layout::from_var(&mut env, var))
             .clone()
+        */
+        Layout::from_var(&mut env, var)
     }
 }
 
@@ -370,7 +373,7 @@ fn layout_from_flat_type<'a>(
 
                     // correct the memory mode of unique lists
                     match Layout::from_var(env, wrapped_var)? {
-                        Layout::Builtin(Builtin::List(_, elem_layout)) => {
+                        Layout::Builtin(Builtin::List(_ignored, elem_layout)) => {
                             let uniqueness_var = args[0];
                             let uniqueness_content =
                                 subs.get_without_compacting(uniqueness_var).content;

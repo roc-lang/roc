@@ -1511,16 +1511,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 increment_refcount_layout(env, parent, layout_ids, value, &layout);
             }
 
-            /*
-            match layout {
-                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
-                    increment_refcount_list(env, parent, value.into_struct_value());
-                    build_exp_stmt(env, layout_ids, scope, parent, cont)
-                }
-                _ => build_exp_stmt(env, layout_ids, scope, parent, cont),
-            }
-            */
-
             build_exp_stmt(env, layout_ids, scope, parent, cont)
         }
         Dec(symbol, cont) => {
@@ -1899,17 +1889,18 @@ fn call_with_args<'a, 'ctx, 'env>(
     let fn_name = layout_ids
         .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
+    let fn_name = fn_name.as_str();
 
-    let fn_val = env
-        .module
-        .get_function(fn_name.as_str())
-        .unwrap_or_else(|| {
-            if symbol.is_builtin() {
-                panic!("Unrecognized builtin function: {:?}", symbol)
-            } else {
-                panic!("Unrecognized non-builtin function: {:?}", symbol)
-            }
-        });
+    let fn_val = env.module.get_function(fn_name).unwrap_or_else(|| {
+        if symbol.is_builtin() {
+            panic!("Unrecognized builtin function: {:?}", fn_name)
+        } else {
+            panic!(
+                "Unrecognized non-builtin function: {:?} {:?}",
+                fn_name, layout
+            )
+        }
+    });
 
     let call = env.builder.build_call(fn_val, args, "call");
 
