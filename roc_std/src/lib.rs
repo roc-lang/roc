@@ -243,7 +243,7 @@ impl RocStr {
     pub fn empty() -> Self {
         RocStr {
             // The first bit of length is 1 to specify small str.
-            length: isize::MIN as usize,
+            length: 0,
             elements: core::ptr::null_mut(),
         }
     }
@@ -329,6 +329,10 @@ impl RocStr {
                     *target_ptr.offset(index) = *source_ptr.offset(index);
                 }
             }
+            // Write length and small string bit to last byte of length.
+            let mut bytes = rocstr.length.to_ne_bytes();
+            bytes[bytes.len() - 1] = capacity as u8 ^ 0b1000_0000;
+            rocstr.length = usize::from_ne_bytes(bytes);
             rocstr
         } else {
             let ptr = slice.as_ptr();
@@ -382,7 +386,7 @@ impl fmt::Debug for RocStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // RocStr { is_small_str: false, storage: Refcounted(3), elements: [ 1,2,3,4] }
         f.debug_struct("RocStr")
-            .field("is_small_str", &false)
+            .field("is_small_str", &self.is_small_str())
             .field("storage", &self.storage())
             .field("elements", &self.as_slice())
             .finish()
