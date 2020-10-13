@@ -25,7 +25,7 @@ impl<T> Solved<T> {
 }
 
 /// This is a fully solved type, with no Variables remaining in it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SolvedType {
     /// A function. The types of its arguments, then the type of its return value.
     Func(Vec<SolvedType>, Box<SolvedType>, Box<SolvedType>),
@@ -59,7 +59,7 @@ pub enum SolvedType {
     Error,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SolvedBool {
     SolvedShared,
     SolvedContainer(VarId, Vec<VarId>),
@@ -72,10 +72,13 @@ impl SolvedBool {
         match boolean {
             Bool::Shared => SolvedBool::SolvedShared,
             Bool::Container(cvar, mvars) => {
-                debug_assert!(matches!(
-                    subs.get_without_compacting(*cvar).content,
-                    crate::subs::Content::FlexVar(_)
-                ));
+                match subs.get_without_compacting(*cvar).content {
+                    crate::subs::Content::FlexVar(_) => {}
+                    crate::subs::Content::Structure(FlatType::Boolean(Bool::Shared)) => {
+                        return SolvedBool::SolvedShared;
+                    }
+                    other => panic!("Container var is not flex but {:?}", other),
+                }
 
                 SolvedBool::SolvedContainer(
                     VarId::from_var(*cvar, subs),
@@ -197,7 +200,7 @@ impl SolvedType {
         }
     }
 
-    fn from_var(subs: &Subs, var: Variable) -> Self {
+    pub fn from_var(subs: &Subs, var: Variable) -> Self {
         use crate::subs::Content::*;
 
         match subs.get_without_compacting(var).content {
@@ -226,7 +229,7 @@ impl SolvedType {
             Apply(symbol, args) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in args {
+                for var in args.iter().copied() {
                     new_args.push(Self::from_var(subs, var));
                 }
 

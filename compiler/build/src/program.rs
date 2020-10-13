@@ -6,7 +6,7 @@ use inkwell::OptimizationLevel;
 use roc_collections::all::default_hasher;
 use roc_gen::layout_id::LayoutIds;
 use roc_gen::llvm::build::{build_proc, build_proc_header, module_from_builtins, OptLevel};
-use roc_load::file::LoadedModule;
+use roc_load::file::{LoadedModule, MonomorphizedModule};
 use roc_mono::ir::{Env, PartialProc, Procs};
 use roc_mono::layout::{Layout, LayoutCache};
 use std::collections::HashSet;
@@ -136,13 +136,7 @@ pub fn gen(
                                         todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
                                     );
 
-                                    procs.insert_exposed(
-                                        symbol,
-                                        layout,
-                                        pattern_vars.into_bump_slice(),
-                                        annotation,
-                                        ret_var,
-                                    );
+                                    procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
                                 }
 
                                 procs.insert_named(
@@ -171,31 +165,13 @@ pub fn gen(
                                 // never gets called by Roc code, it will never
                                 // get specialized!
                                 if exposed_to_host.contains(&symbol) {
-                                    let pattern_vars = bumpalo::collections::Vec::new_in(arena);
                                     let ret_layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
                                         todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
                                     );
                                     let layout =
                                         Layout::FunctionPointer(&[], arena.alloc(ret_layout));
 
-                                    procs.insert_exposed(
-                                        symbol,
-                                        layout,
-                                        pattern_vars.into_bump_slice(),
-                                        // It seems brittle that we're passing
-                                        // annotation twice - especially since
-                                        // in both cases we're giving the
-                                        // annotation to the top-level value,
-                                        // not the thunk function it will code
-                                        // gen to. It seems to work, but that
-                                        // may only be because at present we
-                                        // only use the function annotation
-                                        // variable during specialization, and
-                                        // exposed values are never specialized
-                                        // because they must be monomorphic.
-                                        annotation,
-                                        annotation,
-                                    );
+                                    procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
                                 }
 
                                 procs.partial_procs.insert(symbol, proc);
@@ -270,6 +246,125 @@ pub fn gen(
         if fn_val.verify(true) {
             fpm.run_on(&fn_val);
         } else {
+            // NOTE: If this fails, uncomment the above println to debug.
+            panic!(
+                "Non-main function failed LLVM verification. Uncomment the above println to debug!"
+            );
+        }
+    }
+
+    // Uncomment this to see the module's optimized LLVM instruction output:
+    // env.module.print_to_stderr();
+
+    mpm.run_on(module);
+
+    // Verify the module
+    if let Err(errors) = env.module.verify() {
+        panic!("😱 LLVM errors when defining module: {:?}", errors);
+    }
+
+    // Uncomment this to see the module's optimized LLVM instruction output:
+    // env.module.print_to_stderr();
+
+    // Emit the .o file
+
+    let opt = OptimizationLevel::Aggressive;
+    let reloc = RelocMode::Default;
+    let model = CodeModel::Default;
+    let target_machine = target::target_machine(&target, opt, reloc, model).unwrap();
+
+    target_machine
+        .write_to_file(&env.module, FileType::Object, &dest_filename)
+        .expect("Writing .o file failed");
+
+    println!("\nSuccess! 🎉\n\n\t➡ {}\n", dest_filename.display());
+}
+
+#[allow(clippy::cognitive_complexity)]
+pub fn gen_from_mono_module(
+    arena: &Bump,
+    loaded: MonomorphizedModule,
+    filename: PathBuf,
+    target: Triple,
+    dest_filename: &Path,
+    opt_level: OptLevel,
+) {
+    use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
+
+    let src = loaded.src;
+    let home = loaded.module_id;
+    let src_lines: Vec<&str> = src.split('\n').collect();
+    let palette = DEFAULT_PALETTE;
+
+    // Report parsing and canonicalization problems
+    let alloc = RocDocAllocator::new(&src_lines, home, &loaded.interns);
+
+    for problem in loaded.can_problems.into_iter() {
+        let report = can_problem(&alloc, filename.clone(), problem);
+        let mut buf = String::new();
+
+        report.render_color_terminal(&mut buf, &alloc, &palette);
+
+        println!("\n{}\n", buf);
+    }
+
+    for problem in loaded.type_problems.into_iter() {
+        let report = type_problem(&alloc, filename.clone(), problem);
+        let mut buf = String::new();
+
+        report.render_color_terminal(&mut buf, &alloc, &palette);
+
+        println!("\n{}\n", buf);
+    }
+
+    // Generate the binary
+
+    let context = Context::create();
+    let module = arena.alloc(module_from_builtins(&context, "app"));
+    let builder = context.create_builder();
+    let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
+
+    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+
+    // Compile and add all the Procs before adding main
+    let env = roc_gen::llvm::build::Env {
+        arena: &arena,
+        builder: &builder,
+        context: &context,
+        interns: loaded.interns,
+        module,
+        ptr_bytes,
+        leak: false,
+        exposed_to_host: loaded.exposed_to_host,
+    };
+
+    // Populate Procs further and get the low-level Expr from the canonical Expr
+    let mut headers = Vec::with_capacity(loaded.procedures.len());
+
+    // Add all the Proc headers to the module.
+    // We have to do this in a separate pass first,
+    // because their bodies may reference each other.
+    let mut layout_ids = LayoutIds::default();
+
+    for ((symbol, layout), proc) in loaded.procedures {
+        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+
+        headers.push((proc, fn_val));
+    }
+
+    // Build each proc using its header info.
+    for (proc, fn_val) in headers {
+        // NOTE: This is here to be uncommented in case verification fails.
+        // (This approach means we don't have to defensively clone name here.)
+        //
+        // println!("\n\nBuilding and then verifying function {:?}\n\n", proc);
+        build_proc(&env, &mut layout_ids, proc, fn_val);
+
+        if fn_val.verify(true) {
+            fpm.run_on(&fn_val);
+        } else {
+            // fn_val.print_to_stderr();
+            // env.module.print_to_stderr();
             // NOTE: If this fails, uncomment the above println to debug.
             panic!(
                 "Non-main function failed LLVM verification. Uncomment the above println to debug!"
