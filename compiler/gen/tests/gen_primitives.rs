@@ -402,9 +402,9 @@ mod gen_primitives {
             i64
         );
     }
+
     #[test]
-    #[ignore]
-    fn gen_nested_defs() {
+    fn gen_nested_defs_old() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -435,6 +435,28 @@ mod gen_primitives {
                         nested
 
                     y = 12.4
+
+                    answer
+                "#
+            ),
+            1337,
+            i64
+        );
+    }
+
+    #[test]
+    fn let_x_in_x() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x = 5
+
+                    answer =
+                        1337
+
+                    unused =
+                        nested = 17
+                        nested
 
                     answer
                 "#
