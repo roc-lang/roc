@@ -455,12 +455,12 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                main = \{} -> 
+                wrapper = \{} -> 
                     when 2 is
                         2 if False -> 0
                         _ -> 42
 
-                main {}
+                wrapper {}
                 "#
             ),
             42,
@@ -473,12 +473,12 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                main = \{} -> 
+                wrapper = \{} -> 
                     when 2 is
                         2 if True -> 42
                         _ -> 0
 
-                main {}
+                wrapper {}
                 "#
             ),
             42,
@@ -491,12 +491,12 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                main = \{} -> 
+                wrapper = \{} -> 
                     when 2 is
                         _ if False -> 0
                         _ -> 42
 
-                main {}
+                wrapper {}
                 "#
             ),
             42,
@@ -674,7 +674,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-            main = \{} -> 
+            wrapper = \{} -> 
                 x : [ Red, White, Blue ]
                 x = Blue
 
@@ -686,7 +686,7 @@ mod gen_tags {
 
                 y
 
-            main {}
+            wrapper {}
             "#
             ),
             3.1,
@@ -699,7 +699,7 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                main = \{} -> 
+                wrapper = \{} -> 
                     y = 
                         when 1 + 2 is
                             3 -> 3
@@ -708,7 +708,7 @@ mod gen_tags {
 
                     y
 
-                main {}
+                wrapper {}
             "#
             ),
             3,

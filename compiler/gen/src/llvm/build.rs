@@ -416,26 +416,47 @@ pub fn build_roc_main<'a, 'ctx, 'env>(
     env.arena.alloc(roc_main_fn)
 }
 
+pub fn promote_to_main_function<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    symbol: Symbol,
+    layout: &Layout<'a>,
+) -> (&'static str, &'a FunctionValue<'ctx>) {
+    let fn_name = layout_ids
+        .get(symbol, layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let wrapped = env.module.get_function(&fn_name).unwrap();
+
+    make_main_function_help(env, layout, wrapped)
+}
+
 pub fn make_main_function<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
     main_body: &roc_mono::ir::Stmt<'a>,
 ) -> (&'static str, &'a FunctionValue<'ctx>) {
+    // internal main function
+    let roc_main_fn = *build_roc_main(env, layout_ids, layout, main_body);
+
+    make_main_function_help(env, layout, roc_main_fn)
+}
+
+fn make_main_function_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
+    roc_main_fn: FunctionValue<'ctx>,
+) -> (&'static str, &'a FunctionValue<'ctx>) {
+    // build the C calling convention wrapper
     use inkwell::types::BasicType;
     use PassVia::*;
 
     let context = env.context;
     let builder = env.builder;
 
-    let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
-
-    // internal main function
-    let roc_main_fn = *build_roc_main(env, layout_ids, layout, main_body);
-
-    // build the C calling convention wrapper
-
     let main_fn_name = "$Test.main";
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
     let fields = [Layout::Builtin(Builtin::Int64), layout.clone()];
     let main_return_layout = Layout::Struct(&fields);

@@ -43,7 +43,7 @@ const ROC_FILE_EXTENSION: &str = "roc";
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
 
-const SHOW_MESSAGE_LOG: bool = true;
+const SHOW_MESSAGE_LOG: bool = false;
 
 macro_rules! log {
     () => (if SHOW_MESSAGE_LOG { println!()} else {});
@@ -736,9 +736,11 @@ pub fn load_and_typecheck(
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
 
+    let load_start = LoadStart::from_path(arena, filename)?;
+
     match load(
         arena,
-        filename,
+        load_start,
         stdlib,
         src_dir,
         exposed_types,
@@ -758,9 +760,11 @@ pub fn load_and_monomorphize<'a>(
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
     use LoadResult::*;
 
+    let load_start = LoadStart::from_path(arena, filename)?;
+
     match load(
         arena,
-        filename,
+        load_start,
         stdlib,
         src_dir,
         exposed_types,
@@ -768,6 +772,97 @@ pub fn load_and_monomorphize<'a>(
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
+    }
+}
+
+pub fn load_and_monomorphize_from_str<'a>(
+    arena: &'a Bump,
+    filename: PathBuf,
+    src: &'a str,
+    stdlib: StdLib,
+    src_dir: &Path,
+    exposed_types: SubsByModule,
+) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
+    use LoadResult::*;
+
+    let load_start = LoadStart::from_str(arena, filename, src)?;
+
+    match load(
+        arena,
+        load_start,
+        stdlib,
+        src_dir,
+        exposed_types,
+        Phase::MakeSpecializations,
+    )? {
+        Monomorphized(module) => Ok(module),
+        TypeChecked(_) => unreachable!(""),
+    }
+}
+
+struct LoadStart<'a> {
+    pub arc_modules: Arc<Mutex<ModuleIds>>,
+    pub ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    pub root_id: ModuleId,
+    pub root_msg: Msg<'a>,
+}
+
+impl<'a> LoadStart<'a> {
+    pub fn from_path(arena: &'a Bump, filename: PathBuf) -> Result<Self, LoadingProblem> {
+        let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
+        let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+        let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
+
+        // Load the root module synchronously; we can't proceed until we have its id.
+        let (root_id, root_msg) = {
+            let root_start_time = SystemTime::now();
+
+            load_filename(
+                arena,
+                filename,
+                Arc::clone(&arc_modules),
+                Arc::clone(&ident_ids_by_module),
+                root_start_time,
+            )?
+        };
+
+        Ok(LoadStart {
+            arc_modules,
+            ident_ids_by_module,
+            root_id,
+            root_msg,
+        })
+    }
+
+    pub fn from_str(
+        arena: &'a Bump,
+        filename: PathBuf,
+        src: &'a str,
+    ) -> Result<Self, LoadingProblem> {
+        let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
+        let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+        let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
+
+        // Load the root module synchronously; we can't proceed until we have its id.
+        let (root_id, root_msg) = {
+            let root_start_time = SystemTime::now();
+
+            load_from_str(
+                arena,
+                filename,
+                src,
+                Arc::clone(&arc_modules),
+                Arc::clone(&ident_ids_by_module),
+                root_start_time,
+            )?
+        };
+
+        Ok(LoadStart {
+            arc_modules,
+            ident_ids_by_module,
+            root_id,
+            root_msg,
+        })
     }
 }
 
@@ -821,7 +916,8 @@ enum LoadResult<'a> {
 ///     to rebuild the module and can link in the cached one directly.)
 fn load<'a>(
     arena: &'a Bump,
-    filename: PathBuf,
+    //filename: PathBuf,
+    load_start: LoadStart<'a>,
     stdlib: StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
@@ -829,6 +925,18 @@ fn load<'a>(
 ) -> Result<LoadResult<'a>, LoadingProblem>
 where
 {
+    let LoadStart {
+        arc_modules,
+        ident_ids_by_module,
+        root_id,
+        root_msg,
+    } = load_start;
+
+    let (msg_tx, msg_rx) = bounded(1024);
+    msg_tx
+        .send(root_msg)
+        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+
     // Reserve one CPU for the main thread, and let all the others be eligible
     // to spawn workers. We use .max(2) to enforce that we always
     // end up with at least 1 worker - since (.max(2) - 1) will
@@ -847,28 +955,6 @@ where
     for _ in 0..num_workers {
         worker_arenas.push(Bump::new());
     }
-
-    let (msg_tx, msg_rx) = bounded(1024);
-    let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
-    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-    let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
-
-    // Load the root module synchronously; we can't proceed until we have its id.
-    let (root_id, root_msg) = {
-        let root_start_time = SystemTime::now();
-
-        load_filename(
-            arena,
-            filename,
-            Arc::clone(&arc_modules),
-            Arc::clone(&ident_ids_by_module),
-            root_start_time,
-        )?
-    };
-
-    msg_tx
-        .send(root_msg)
-        .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
     // We'll add tasks to this, and then worker threads will take tasks from it.
     let injector = Injector::new();
@@ -1596,6 +1682,30 @@ fn load_filename<'a>(
             error: err.kind(),
         }),
     }
+}
+
+/// Load a module from a str
+/// the `filename` is never read, but used for the module name
+fn load_from_str<'a>(
+    arena: &'a Bump,
+    filename: PathBuf,
+    src: &'a str,
+    module_ids: Arc<Mutex<ModuleIds>>,
+    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    module_start_time: SystemTime,
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
+    let file_io_start = SystemTime::now();
+    let file_io_duration = file_io_start.elapsed().unwrap();
+
+    parse_header(
+        arena,
+        file_io_duration,
+        filename,
+        module_ids,
+        ident_ids_by_module,
+        src.as_bytes(),
+        module_start_time,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
