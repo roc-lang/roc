@@ -534,18 +534,21 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                    LinkedList a : [ Nil, Cons a (LinkedList a) ]
+                app LinkedListLen0 provides [ main ] imports []
 
-                    nil : LinkedList Int
-                    nil = Nil
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                    length : LinkedList a -> Int
-                    length = \list ->
-                        when list is
-                            Nil -> 0
-                            Cons _ rest -> 1 + length rest
+                nil : LinkedList Int
+                nil = Nil
+
+                length : LinkedList a -> Int
+                length = \list ->
+                    when list is
+                        Nil -> 0
+                        Cons _ rest -> 1 + length rest
 
 
+                main =
                     length nil
                     "#
             ),

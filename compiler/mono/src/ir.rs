@@ -3,7 +3,7 @@ use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{Builtin, Layout, LayoutCache, LayoutProblem};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
+use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};

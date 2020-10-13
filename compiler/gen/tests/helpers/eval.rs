@@ -1,7 +1,7 @@
 use roc_collections::all::{MutMap, MutSet};
 
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer = String::from("app Quicksort provides [ main ] imports []\n\nmain =\n");
+    let mut buffer = String::from("app Test provides [ main ] imports []\n\nmain =\n");
 
     for line in src.lines() {
         // indent the body!
@@ -282,7 +282,7 @@ macro_rules! assert_evals_to {
         // parsing the source, so that there's no chance their passing
         // or failing depends on leftover state from the previous one.
         {
-            assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak);
+            //assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak);
         }
         {
             assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
