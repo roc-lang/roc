@@ -286,8 +286,15 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
+        let mut scope = roc_gen::llvm::build::Scope::default();
         for ((symbol, layout), proc) in procs.drain() {
             let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+
+            if proc.args.is_empty() {
+                // this is a 0-argument thunk, i.e. a top-level constant definition
+                // it must be in-scope everywhere in the module!
+                scope.insert_top_level_thunk(symbol, layout, fn_val);
+            }
 
             headers.push((proc, fn_val));
         }
@@ -298,7 +305,7 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             // (This approach means we don't have to defensively clone name here.)
             //
             // println!("\n\nBuilding and then verifying function {}\n\n", name);
-            build_proc(&env, &mut layout_ids, proc, fn_val);
+            build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
 
             if fn_val.verify(true) {
                 function_pass.run_on(&fn_val);
