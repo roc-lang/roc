@@ -469,7 +469,6 @@ enum Msg<'a> {
     },
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
-        problems: Vec<solve::TypeError>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         src: &'a str,
     },
@@ -497,7 +496,6 @@ enum Msg<'a> {
     /// all modules are now monomorphized, we are done
     FinishedAllSpecialization {
         subs: Subs,
-        problems: Vec<MonoProblem>,
         exposed_to_host: MutMap<Symbol, Variable>,
         src: &'a str,
     },
@@ -505,7 +503,6 @@ enum Msg<'a> {
 
 #[derive(Debug)]
 pub struct FinishedInfo<'a> {
-    problems: Vec<solve::TypeError>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     src: &'a str,
 }
@@ -1097,7 +1094,6 @@ where
                 match msg {
                     Msg::FinishedAllTypeChecking {
                         solved_subs,
-                        problems,
                         exposed_vars_by_symbol,
                         src,
                     } => {
@@ -1114,14 +1110,12 @@ where
                         return Ok(LoadResult::TypeChecked(finish(
                             state,
                             solved_subs,
-                            problems,
                             exposed_vars_by_symbol,
                             src,
                         )));
                     }
                     Msg::FinishedAllSpecialization {
                         subs,
-                        problems,
                         exposed_to_host,
                         src,
                     } => {
@@ -1138,7 +1132,6 @@ where
                         return Ok(LoadResult::Monomorphized(finish_specialization(
                             state,
                             subs,
-                            problems,
                             exposed_to_host,
                             src,
                         )));
@@ -1278,6 +1271,8 @@ fn update<'a>(
             log!("solved types for {:?}", module_id);
             module_timing.end_time = SystemTime::now();
 
+            state.type_problems.extend(solved_module.problems);
+
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
             if module_id == state.root_id {
@@ -1295,7 +1290,6 @@ fn update<'a>(
                 msg_tx
                     .send(Msg::FinishedAllTypeChecking {
                         solved_subs,
-                        problems: solved_module.problems,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
                         src,
                     })
@@ -1325,7 +1319,6 @@ fn update<'a>(
                     let finished_info = FinishedInfo {
                         src,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
-                        problems: solved_module.problems,
                     };
 
                     let typechecked = TypeCheckedModule {
@@ -1412,9 +1405,13 @@ fn update<'a>(
             finished_info,
             procedures,
             external_specializations_requested,
+            problems,
             ..
         } => {
             log!("made specializations for {:?}", module_id);
+
+            state.mono_problems.extend(problems);
+
             for (module_id, requested) in external_specializations_requested {
                 let existing = match state
                     .module_cache
@@ -1448,7 +1445,6 @@ fn update<'a>(
                     .send(Msg::FinishedAllSpecialization {
                         subs,
                         // TODO thread through mono problems
-                        problems: vec![],
                         exposed_to_host: state.exposed_to_host.clone(),
                         src: finished_info.src,
                     })
@@ -1477,14 +1473,11 @@ fn update<'a>(
 }
 
 fn finish_specialization<'a>(
-    mut state: State<'a>,
+    state: State<'a>,
     subs: Subs,
-    problems: Vec<MonoProblem>,
     exposed_to_host: MutMap<Symbol, Variable>,
     src: &'a str,
 ) -> MonomorphizedModule<'a> {
-    state.mono_problems.extend(problems);
-
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
         .into_inner();
@@ -1517,14 +1510,11 @@ fn finish_specialization<'a>(
 }
 
 fn finish<'a>(
-    mut state: State<'a>,
+    state: State<'a>,
     solved: Solved<Subs>,
-    problems: Vec<solve::TypeError>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     src: &'a str,
 ) -> LoadedModule {
-    state.type_problems.extend(problems);
-
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
         .into_inner();

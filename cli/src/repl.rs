@@ -1,6 +1,5 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
-use inkwell::execution_engine::ExecutionEngine;
 use inkwell::OptimizationLevel;
 use roc_builtins::unique::uniq_stdlib;
 use roc_can::constraint::Constraint;
@@ -12,12 +11,9 @@ use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap, SendSet};
 use roc_constrain::expr::constrain_expr;
 use roc_constrain::module::{constrain_imported_values, load_builtin_aliases, Import};
 use roc_fmt::annotation::{Formattable, Newlines, Parens};
-use roc_gen::layout_id::LayoutIds;
 use roc_gen::llvm::build::{build_proc, build_proc_header, OptLevel};
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
-use roc_mono::ir::Procs;
-use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;
 use roc_parse::parser::{loc, Fail, FailReason, Parser, State};
@@ -172,7 +168,9 @@ fn promote_expr_to_module(src: &str) -> String {
 }
 
 fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fail> {
-    use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
+    use roc_reporting::report::{
+        can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
+    };
 
     let arena = Bump::new();
 
@@ -215,7 +213,7 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
 
     if error_count > 0 {
         // There were problems; report them and return.
-        let src_lines: Vec<&str> = src_str.split('\n').collect();
+        let src_lines: Vec<&str> = module_src.split('\n').collect();
 
         // Used for reporting where an error came from.
         //
@@ -248,6 +246,15 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             lines.push(buf);
         }
 
+        for problem in mono_problems.into_iter() {
+            let report = mono_problem(&alloc, path.clone(), problem);
+            let mut buf = String::new();
+
+            report.render_color_terminal(&mut buf, &alloc, &palette);
+
+            lines.push(buf);
+        }
+
         Ok(ReplOutput::Problems(lines))
     } else {
         let context = Context::create();
@@ -270,14 +277,7 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             .unwrap()
             .clone();
 
-        let target = target_lexicon::Triple::host();
         let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
-
-        let opt_level = if cfg!(debug_assertions) {
-            roc_gen::llvm::build::OptLevel::Normal
-        } else {
-            roc_gen::llvm::build::OptLevel::Optimize
-        };
 
         let module = arena.alloc(module);
         let (module_pass, function_pass) =
