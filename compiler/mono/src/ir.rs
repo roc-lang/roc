@@ -203,22 +203,20 @@ impl<'a> Procs<'a> {
         for (key, in_prog_proc) in self.specialized.into_iter() {
             match in_prog_proc {
                 InProgress => unreachable!("The procedure {:?} should have be done by now", key),
-                Done(proc) => {
+                Done(mut proc) => {
+                    use self::SelfRecursive::*;
+                    if let SelfRecursive(id) = proc.is_self_recursive {
+                        proc.body = crate::tail_recursion::make_tail_recursive(
+                            arena,
+                            id,
+                            proc.name,
+                            proc.body.clone(),
+                            proc.args,
+                        );
+                    }
+
                     result.insert(key, proc);
                 }
-            }
-        }
-
-        for (_, proc) in result.iter_mut() {
-            use self::SelfRecursive::*;
-            if let SelfRecursive(id) = proc.is_self_recursive {
-                proc.body = crate::tail_recursion::make_tail_recursive(
-                    arena,
-                    id,
-                    proc.name,
-                    proc.body.clone(),
-                    proc.args,
-                );
             }
         }
 

@@ -31,7 +31,7 @@ use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
 use roc_collections::all::{ImMap, MutSet};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{Interns, Symbol};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{JoinPointId, Wrapped};
 use roc_mono::layout::{Builtin, Layout, MemoryMode};
 use target_lexicon::CallingConvention;
@@ -53,6 +53,7 @@ pub enum OptLevel {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>,
+    pub top_level_thunks: ImMap<Symbol, (Layout<'a>, FunctionValue<'ctx>)>,
     join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, &'a [PointerValue<'ctx>])>,
 }
 
@@ -63,23 +64,23 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
     pub fn insert(&mut self, symbol: Symbol, value: (Layout<'a>, PointerValue<'ctx>)) {
         self.symbols.insert(symbol, value);
     }
+    pub fn insert_top_level_thunk(
+        &mut self,
+        symbol: Symbol,
+        layout: Layout<'a>,
+        function_value: FunctionValue<'ctx>,
+    ) {
+        self.top_level_thunks
+            .insert(symbol, (layout, function_value));
+    }
     fn remove(&mut self, symbol: &Symbol) {
         self.symbols.remove(symbol);
     }
-    /*
-    fn get_join_point(&self, symbol: &JoinPointId) -> Option<&PhiValue<'ctx>> {
-        self.join_points.get(symbol)
+
+    pub fn retain_top_level_thunks_for_module(&mut self, module_id: ModuleId) {
+        self.top_level_thunks
+            .retain(|s, _| s.module_id() == module_id);
     }
-    fn remove_join_point(&mut self, symbol: &JoinPointId) {
-        self.join_points.remove(symbol);
-    }
-    fn get_mut_join_point(&mut self, symbol: &JoinPointId) -> Option<&mut PhiValue<'ctx>> {
-        self.join_points.get_mut(symbol)
-    }
-    fn insert_join_point(&mut self, symbol: JoinPointId, value: PhiValue<'ctx>) {
-        self.join_points.insert(symbol, value);
-    }
-    */
 }
 
 pub struct Env<'a, 'ctx, 'env> {
@@ -1157,17 +1158,34 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             list_literal(env, inplace, scope, elem_layout, elems)
         }
         FunctionPointer(symbol, layout) => {
-            let fn_name = layout_ids
-                .get(*symbol, layout)
-                .to_symbol_string(*symbol, &env.interns);
-            let ptr = env
-                .module
-                .get_function(fn_name.as_str())
-                .unwrap_or_else(|| panic!("Could not get pointer to unknown function {:?}", symbol))
-                .as_global_value()
-                .as_pointer_value();
+            match scope.top_level_thunks.get(symbol) {
+                Some((_layout, function_value)) => {
+                    // this is a 0-argument thunk, evaluate it!
+                    let call = env.builder.build_call(
+                        function_value.clone(),
+                        &[],
+                        "evaluate_top_level_thunk",
+                    );
 
-            BasicValueEnum::PointerValue(ptr)
+                    call.try_as_basic_value().left().unwrap()
+                }
+                None => {
+                    // this is a function pointer, store it
+                    let fn_name = layout_ids
+                        .get(*symbol, layout)
+                        .to_symbol_string(*symbol, &env.interns);
+                    let ptr = env
+                        .module
+                        .get_function(fn_name.as_str())
+                        .unwrap_or_else(|| {
+                            panic!("Could not get pointer to unknown function {:?}", symbol)
+                        })
+                        .as_global_value()
+                        .as_pointer_value();
+
+                    BasicValueEnum::PointerValue(ptr)
+                }
+            }
         }
         RuntimeErrorFunction(_) => todo!(),
     }
@@ -1847,6 +1865,7 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
 pub fn build_proc<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    mut scope: Scope<'a, 'ctx>,
     proc: roc_mono::ir::Proc<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
@@ -1858,8 +1877,6 @@ pub fn build_proc<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     builder.position_at_end(entry);
-
-    let mut scope = Scope::default();
 
     // Add args to scope
     for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {

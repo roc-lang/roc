@@ -529,7 +529,6 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn top_level_constant() {
         assert_evals_to!(
             indoc!(

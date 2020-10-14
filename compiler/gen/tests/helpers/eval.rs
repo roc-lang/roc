@@ -25,7 +25,7 @@ pub fn helper<'a>(
     inkwell::execution_engine::ExecutionEngine<'a>,
 ) {
     use inkwell::OptimizationLevel;
-    use roc_gen::llvm::build::{build_proc, build_proc_header};
+    use roc_gen::llvm::build::{build_proc, build_proc_header, Scope};
     use std::path::{Path, PathBuf};
 
     let stdlib_mode = stdlib.mode;
@@ -141,15 +141,29 @@ pub fn helper<'a>(
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
+    let mut scope = Scope::default();
     for ((symbol, layout), proc) in procedures.drain() {
         let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+
+        if proc.args.is_empty() {
+            // this is a 0-argument thunk, i.e. a top-level constant definition
+            // it must be in-scope everywhere in the module!
+            scope.insert_top_level_thunk(symbol, layout, fn_val);
+        }
 
         headers.push((proc, fn_val));
     }
 
     // Build each proc using its header info.
     for (proc, fn_val) in headers {
-        build_proc(&env, &mut layout_ids, proc, fn_val);
+        let mut current_scope = scope.clone();
+
+        // only have top-level thunks for this proc's module in scope
+        // this retain is not needed for correctness, but will cause less confusion when debugging
+        let home = proc.name.module_id();
+        current_scope.retain_top_level_thunks_for_module(home);
+
+        build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
 
         if fn_val.verify(true) {
             function_pass.run_on(&fn_val);
