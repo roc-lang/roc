@@ -13,8 +13,8 @@ jobs:
       - name: Verify compiler/builtin/bitcode/regenerate.sh was run if necessary
         run: pushd compiler/builtins/bitcode && ./regenerate.sh && git diff --exit-code ../../gen/src/llvm/builtins.bc && popd
 
-      - name: Install LLVM
-        run: sudo ./ci/install-llvm.sh 10
+      - name: Install CI Libraries
+        run: sudo ./ci/install-ci-libraries.sh 10
 
       - name: Enable LLD
         run: sudo ./ci/enable-lld.sh

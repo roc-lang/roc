@@ -1,13 +1,17 @@
 # Building the Roc compiler from source
 
 
-## Installing LLVM, libunwind, and libc++-dev
+## Installing LLVM, valgrind, libunwind, and libc++-dev
 
 To build the compiler, you need these installed:
 
 * `libunwind` (macOS should already have this one installed)
 * `libc++-dev`
-* a particular version of LLVM 
+* a particular version of LLVM
+
+To run the test suite (via `cargo test`), you additionally need to install:
+
+* [`valgrind`](https://www.valgrind.org/)
 
 Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev`.) macOS systems
 should already have `libunwind`, but other systems will need to install it
