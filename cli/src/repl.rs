@@ -179,22 +179,46 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
     let mut type_problems = Vec::new();
     let (content, mut subs) = infer_expr(subs, &mut type_problems, &constraint, var);
 
-    // SAFETY: we've already verified that this is valid UTF-8 during parsing.
-    let src_lines: Vec<&str> = unsafe { from_utf8_unchecked(src).split('\n').collect() };
-
-    // Report problems
-    let palette = DEFAULT_PALETTE;
-
-    // Report parsing and canonicalization problems
-    let alloc = RocDocAllocator::new(&src_lines, home, &interns);
-
-    // Used for reporting where an error came from.
-    //
-    // TODO: maybe Reporting should have this be an Option?
-    let path = PathBuf::new();
     let total_problems = can_problems.len() + type_problems.len();
 
-    if total_problems == 0 {
+    if total_problems > 0 {
+        // There were problems; report them and return.
+        // SAFETY: we've already verified that this is valid UTF-8 during parsing.
+        let src_lines: Vec<&str> = unsafe { from_utf8_unchecked(src).split('\n').collect() };
+
+        // Used for reporting where an error came from.
+        //
+        // TODO: maybe Reporting should have this be an Option?
+        let path = PathBuf::new();
+
+        // Report problems
+        let palette = DEFAULT_PALETTE;
+
+        // Report parsing and canonicalization problems
+        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+        let mut lines = Vec::with_capacity(total_problems);
+
+        for problem in can_problems.into_iter() {
+            let report = can_problem(&alloc, path.clone(), problem);
+            let mut buf = String::new();
+
+            report.render_color_terminal(&mut buf, &alloc, &palette);
+
+            lines.push(buf);
+        }
+
+        for problem in type_problems.into_iter() {
+            let report = type_problem(&alloc, path.clone(), problem);
+            let mut buf = String::new();
+
+            report.render_color_terminal(&mut buf, &alloc, &palette);
+
+            lines.push(buf);
+        }
+
+        Ok(ReplOutput::Problems(lines))
+    } else {
         let context = Context::create();
         let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, "app"));
         let builder = context.create_builder();
@@ -371,29 +395,6 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             expr: expr.into_bump_str().to_string(),
             expr_type: expr_type_str,
         })
-    } else {
-        // There were problems; report them and return.
-        let mut lines = Vec::with_capacity(total_problems);
-
-        for problem in can_problems.into_iter() {
-            let report = can_problem(&alloc, path.clone(), problem);
-            let mut buf = String::new();
-
-            report.render_color_terminal(&mut buf, &alloc, &palette);
-
-            lines.push(buf);
-        }
-
-        for problem in type_problems.into_iter() {
-            let report = type_problem(&alloc, path.clone(), problem);
-            let mut buf = String::new();
-
-            report.render_color_terminal(&mut buf, &alloc, &palette);
-
-            lines.push(buf);
-        }
-
-        Ok(ReplOutput::Problems(lines))
     }
 }
 
