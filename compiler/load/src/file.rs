@@ -439,7 +439,7 @@ pub struct MonomorphizedModule<'a> {
     pub type_problems: Vec<solve::TypeError>,
     pub mono_problems: Vec<roc_mono::ir::MonoProblem>,
     pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
-    pub exposed_to_host: MutSet<Symbol>,
+    pub exposed_to_host: MutMap<Symbol, Variable>,
     pub src: Box<str>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
 }
@@ -498,7 +498,7 @@ enum Msg<'a> {
     FinishedAllSpecialization {
         subs: Subs,
         problems: Vec<MonoProblem>,
-        exposed_to_host: MutSet<Symbol>,
+        exposed_to_host: MutMap<Symbol, Variable>,
         src: &'a str,
     },
 }
@@ -525,7 +525,7 @@ struct State<'a> {
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies,
     pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
-    pub exposed_to_host: MutSet<Symbol>,
+    pub exposed_to_host: MutMap<Symbol, Variable>,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
     /// have completed for a given module.
@@ -667,7 +667,7 @@ enum BuildTask<'a> {
         ident_ids: IdentIds,
         decls: Vec<Declaration>,
         finished_info: FinishedInfo<'a>,
-        exposed_to_host: MutSet<Symbol>,
+        exposed_to_host: MutMap<Symbol, Variable>,
     },
     MakeSpecializations {
         module_id: ModuleId,
@@ -1060,7 +1060,7 @@ where
                 module_cache: ModuleCache::default(),
                 dependencies: Dependencies::default(),
                 procedures: MutMap::default(),
-                exposed_to_host: MutSet::default(),
+                exposed_to_host: MutMap::default(),
                 exposed_types,
                 headers_parsed,
                 loading_started,
@@ -1283,7 +1283,7 @@ fn update<'a>(
             if module_id == state.root_id {
                 state
                     .exposed_to_host
-                    .extend(solved_module.exposed_vars_by_symbol.iter().map(|x| x.0));
+                    .extend(solved_module.exposed_vars_by_symbol.iter().copied());
             }
 
             if module_id == state.root_id && state.goal_phase == Phase::SolveTypes {
@@ -1480,7 +1480,7 @@ fn finish_specialization<'a>(
     mut state: State<'a>,
     subs: Subs,
     problems: Vec<MonoProblem>,
-    exposed_to_host: MutSet<Symbol>,
+    exposed_to_host: MutMap<Symbol, Variable>,
     src: &'a str,
 ) -> MonomorphizedModule<'a> {
     state.mono_problems.extend(problems);
@@ -2148,7 +2148,7 @@ fn build_pending_specializations<'a>(
     _module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
     // TODO remove
-    exposed_to_host: MutSet<Symbol>,
+    exposed_to_host: MutMap<Symbol, Variable>,
     finished_info: FinishedInfo<'a>,
 ) -> Msg<'a> {
     let mut procs = Procs::default();
@@ -2212,7 +2212,7 @@ fn add_def_to_module<'a>(
     procs: &mut Procs<'a>,
     mono_env: &mut roc_mono::ir::Env<'a, '_>,
     def: roc_can::def::Def,
-    exposed_to_host: &MutSet<Symbol>,
+    exposed_to_host: &MutMap<Symbol, Variable>,
     is_recursive: bool,
 ) {
     use roc_can::expr::Expr::*;
@@ -2220,7 +2220,7 @@ fn add_def_to_module<'a>(
 
     match def.loc_pattern.value {
         Identifier(symbol) => {
-            let is_exposed = exposed_to_host.contains(&symbol);
+            let is_exposed = exposed_to_host.contains_key(&symbol);
 
             match def.loc_expr.value {
                 Closure {

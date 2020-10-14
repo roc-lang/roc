@@ -67,7 +67,7 @@ pub fn gen_from_mono_module(
         module,
         ptr_bytes,
         leak: false,
-        exposed_to_host: loaded.exposed_to_host,
+        exposed_to_host: loaded.exposed_to_host.keys().copied().collect(),
     };
 
     // Populate Procs further and get the low-level Expr from the canonical Expr
