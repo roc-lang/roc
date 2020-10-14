@@ -322,6 +322,7 @@ pub fn construct_optimization_passes<'a>(
             pmb.set_optimization_level(OptimizationLevel::None);
         }
         OptLevel::Optimize => {
+            pmb.set_optimization_level(OptimizationLevel::Aggressive);
             // this threshold seems to do what we want
             pmb.set_inliner_with_threshold(275);
 
@@ -1164,6 +1165,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     let call =
                         env.builder
                             .build_call(*function_value, &[], "evaluate_top_level_thunk");
+
+                    call.set_call_convention(FAST_CALL_CONV);
 
                     call.try_as_basic_value().left().unwrap()
                 }
