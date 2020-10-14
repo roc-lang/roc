@@ -1372,15 +1372,12 @@ fn specialize_external<'a>(
 
     let specialized_body = from_can(env, body, procs, layout_cache);
 
-    let (proc_args, ret_layout) =
+    let (proc_args, closes_over, ret_layout) =
         build_specialized_proc_from_var(env, layout_cache, pattern_symbols, fn_var)?;
 
     // reset subs, so we don't get type errors when specializing for a different signature
     layout_cache.rollback_to(cache_snapshot);
     env.subs.rollback_to(snapshot);
-
-    // TODO WRONG
-    let closes_over_layout = Layout::Struct(&[]);
 
     let recursivity = if is_self_recursive {
         SelfRecursive::SelfRecursive(JoinPointId(env.unique_symbol()))
@@ -1392,7 +1389,7 @@ fn specialize_external<'a>(
         name: proc_name,
         args: proc_args,
         body: specialized_body,
-        closes_over: closes_over_layout,
+        closes_over,
         ret_layout,
         is_self_recursive: recursivity,
     };
@@ -1406,10 +1403,17 @@ fn build_specialized_proc_from_var<'a>(
     layout_cache: &mut LayoutCache<'a>,
     pattern_symbols: &[Symbol],
     fn_var: Variable,
-) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
+) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>, Layout<'a>), LayoutProblem> {
     match env.subs.get_without_compacting(fn_var).content {
-        Content::Structure(FlatType::Func(pattern_vars, _closure_var, ret_var)) => {
-            build_specialized_proc(env, layout_cache, pattern_symbols, &pattern_vars, ret_var)
+        Content::Structure(FlatType::Func(pattern_vars, closure_var, ret_var)) => {
+            build_specialized_proc(
+                env,
+                layout_cache,
+                pattern_symbols,
+                &pattern_vars,
+                Some(closure_var),
+                ret_var,
+            )
         }
         Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args))
             if !pattern_symbols.is_empty() =>
@@ -1421,8 +1425,7 @@ fn build_specialized_proc_from_var<'a>(
         }
         _ => {
             // a top-level constant 0-argument thunk
-
-            build_specialized_proc(env, layout_cache, pattern_symbols, &[], fn_var)
+            build_specialized_proc(env, layout_cache, pattern_symbols, &[], None, fn_var)
         }
     }
 }
@@ -1433,8 +1436,9 @@ fn build_specialized_proc<'a>(
     layout_cache: &mut LayoutCache<'a>,
     pattern_symbols: &[Symbol],
     pattern_vars: &[Variable],
+    closure_var: Option<Variable>,
     ret_var: Variable,
-) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
+) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>, Layout<'a>), LayoutProblem> {
     let mut proc_args = Vec::with_capacity_in(pattern_vars.len(), &env.arena);
 
     debug_assert_eq!(
@@ -1451,11 +1455,18 @@ fn build_specialized_proc<'a>(
 
     let proc_args = proc_args.into_bump_slice();
 
+    let closes_over = match closure_var {
+        Some(cvar) => layout_cache
+            .from_var(&env.arena, cvar, env.subs)
+            .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err)),
+        None => Layout::Struct(&[]),
+    };
+
     let ret_layout = layout_cache
         .from_var(&env.arena, ret_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
-    Ok((proc_args, ret_layout))
+    Ok((proc_args, closes_over, ret_layout))
 }
 
 fn specialize<'a>(
