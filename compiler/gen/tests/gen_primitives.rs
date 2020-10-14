@@ -692,11 +692,9 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                # three : LinkedList Int
-                # three = Cons 3 (Cons 2 (Cons 1 Nil))
+                three : LinkedList Int
+                three = Cons 3 (Cons 2 (Cons 1 Nil))
 
-                zero : LinkedList Int
-                zero = Nil 
 
                 sum : LinkedList (Num a) -> Num a
                 sum = \list ->
@@ -705,11 +703,10 @@ mod gen_primitives {
                         Cons x rest -> x + sum rest
 
                 main =
-                    sum zero
+                    sum three
                 "#
             ),
-            // 3 + 2 + 1,
-            0,
+            3 + 2 + 1,
             i64
         )
     }
