@@ -23,8 +23,14 @@ mod cli_run {
 
             let valgrind_out =
                 run_with_valgrind(&[example_file("hello-world", "app").to_str().unwrap()]);
-            assert!(&valgrind_out.stdout.ends_with("Hello, World!!!!!!!!!!!!!\n"));
             assert!(valgrind_out.status.success());
+            let ending = "Hello, World!!!!!!!!!!!!!\n";
+            if !&valgrind_out.stdout.ends_with(ending) {
+                panic!(
+                    "expected output to end with {:?} but instead got {:?}",
+                    ending, &valgrind_out.stdout
+                );
+            }
             let memory_errors = extract_valgrind_errors(&valgrind_out.stderr);
             if !memory_errors.is_empty() {
                 panic!("{:?}", memory_errors);
@@ -51,10 +57,14 @@ mod cli_run {
 
             let valgrind_out =
                 run_with_valgrind(&[example_file("quicksort", "app").to_str().unwrap()]);
-            assert!(&valgrind_out
-                .stdout
-                .ends_with("[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]\n"));
             assert!(valgrind_out.status.success());
+            let ending = "[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]\n";
+            if !&valgrind_out.stdout.ends_with(ending) {
+                panic!(
+                    "expected output to end with {:?} but instead got {:?}",
+                    ending, &valgrind_out.stdout
+                );
+            }
             let memory_errors = extract_valgrind_errors(&valgrind_out.stderr);
             if !memory_errors.is_empty() {
                 panic!("{:?}", memory_errors);
@@ -85,10 +95,14 @@ mod cli_run {
 
             let valgrind_out =
                 run_with_valgrind(&[example_file("multi-module", "app").to_str().unwrap()]);
-            assert!(&valgrind_out
-                .stdout
-                .ends_with("[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]\n"));
             assert!(valgrind_out.status.success());
+            let ending = "[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]\n";
+            if !&valgrind_out.stdout.ends_with(ending) {
+                panic!(
+                    "expected output to end with {:?} but instead got {:?}",
+                    ending, &valgrind_out.stdout
+                );
+            }
             let memory_errors = extract_valgrind_errors(&valgrind_out.stderr);
             if !memory_errors.is_empty() {
                 panic!("{:?}", memory_errors);

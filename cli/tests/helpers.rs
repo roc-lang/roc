@@ -122,6 +122,7 @@ pub struct ValgrindErrorXWhat {
     leakedblocks: Option<isize>,
 }
 
+#[allow(dead_code)]
 pub fn extract_valgrind_errors(xml: &str) -> Vec<ValgrindError> {
     let parsed_xml: ValgrindOutput =
         from_str(xml).expect("failed to parse the `valgrind` xml output");
