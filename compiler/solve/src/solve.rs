@@ -469,21 +469,35 @@ fn solve(
                         let visit_mark = young_mark.next();
                         let final_mark = visit_mark.next();
 
-                        debug_assert!({
-                            next_pools
-                                .get(next_rank)
-                                .iter()
-                                .filter(|var| {
-                                    subs.get_without_compacting(roc_types::subs::Variable::clone(
-                                        var,
-                                    ))
-                                    .rank
-                                    .into_usize()
-                                        > next_rank.into_usize()
-                                })
-                                .count()
-                                == 0
-                        });
+                        debug_assert_eq!(
+                            {
+                                let offenders = next_pools
+                                    .get(next_rank)
+                                    .iter()
+                                    .filter(|var| {
+                                        let current = subs.get_without_compacting(
+                                            roc_types::subs::Variable::clone(var),
+                                        );
+
+                                        current.rank.into_usize() > next_rank.into_usize()
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                let result = offenders.len();
+
+                                if result > 0 {
+                                    dbg!(
+                                        &subs,
+                                        &offenders,
+                                        &let_con.def_types,
+                                        &let_con.def_aliases
+                                    );
+                                }
+
+                                result
+                            },
+                            0
+                        );
 
                         // pop pool
                         generalize(subs, young_mark, visit_mark, next_rank, next_pools);
@@ -1213,8 +1227,6 @@ fn instantiate_rigids_help(
 
     if let Some(copy) = desc.copy.into_variable() {
         return copy;
-    } else if desc.rank != Rank::NONE {
-        return var;
     }
 
     let make_descriptor = |content| Descriptor {

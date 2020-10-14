@@ -2435,6 +2435,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_load",
  "roc_module",
  "roc_mono",
  "roc_parse",
@@ -2512,6 +2513,7 @@ dependencies = [
  "roc_solve",
  "roc_types",
  "roc_unify",
+ "ven_ena",
  "ven_pretty",
 ]
 

@@ -1019,8 +1019,7 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                main = \shared -> 
-
+                wrapper = \shared ->
                     # This should not mutate the original
                     x =
                         when List.get (List.set shared 1 7.7) 1 is
@@ -1034,7 +1033,7 @@ mod gen_list {
 
                     { x, y }
 
-                main [ 2.1, 4.3 ]
+                wrapper [ 2.1, 4.3 ]
                 "#
             ),
             (7.7, 4.3),
@@ -1047,23 +1046,20 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                main = \{} -> 
-                    shared = [ 2, 4 ]
+                shared = [ 2, 4 ]
 
-                    # This List.set is out of bounds, and should have no effect
-                    x =
-                        when List.get (List.set shared 422 0) 1 is
-                            Ok num -> num
-                            Err _ -> 0
+                # This List.set is out of bounds, and should have no effect
+                x =
+                    when List.get (List.set shared 422 0) 1 is
+                        Ok num -> num
+                        Err _ -> 0
 
-                    y =
-                        when List.get shared 1 is
-                            Ok num -> num
-                            Err _ -> 0
+                y =
+                    when List.get shared 1 is
+                        Ok num -> num
+                        Err _ -> 0
 
-                    { x, y }
-
-                main {}
+                { x, y }
                 "#
             ),
             (4, 4),
@@ -1149,16 +1145,21 @@ mod gen_list {
         assert_evals_to!(
             indoc!(
                 r#"
-                    swap : Int, Int, List a -> List a
-                    swap = \i, j, list ->
-                        when Pair (List.get list i) (List.get list j) is
-                            Pair (Ok atI) (Ok atJ) ->
-                                list
-                                    |> List.set i atJ
-                                    |> List.set j atI
+                app Quicksort provides [ main ] imports []
 
-                            _ ->
-                                []
+
+                swap : Int, Int, List a -> List a
+                swap = \i, j, list ->
+                    when Pair (List.get list i) (List.get list j) is
+                        Pair (Ok atI) (Ok atJ) ->
+                            list
+                                |> List.set i atJ
+                                |> List.set j atI
+
+                        _ ->
+                            []
+
+                main = 
                     swap 0 1 [ 1, 2 ]
                 "#
             ),

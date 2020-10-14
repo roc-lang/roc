@@ -43,7 +43,7 @@ const ROC_FILE_EXTENSION: &str = "roc";
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
 
-const SHOW_MESSAGE_LOG: bool = true;
+const SHOW_MESSAGE_LOG: bool = false;
 
 macro_rules! log {
     () => (if SHOW_MESSAGE_LOG { println!()} else {});
@@ -736,9 +736,11 @@ pub fn load_and_typecheck(
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
 
+    let load_start = LoadStart::from_path(arena, filename)?;
+
     match load(
         arena,
-        filename,
+        load_start,
         stdlib,
         src_dir,
         exposed_types,
@@ -758,9 +760,11 @@ pub fn load_and_monomorphize<'a>(
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
     use LoadResult::*;
 
+    let load_start = LoadStart::from_path(arena, filename)?;
+
     match load(
         arena,
-        filename,
+        load_start,
         stdlib,
         src_dir,
         exposed_types,
@@ -768,6 +772,97 @@ pub fn load_and_monomorphize<'a>(
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
+    }
+}
+
+pub fn load_and_monomorphize_from_str<'a>(
+    arena: &'a Bump,
+    filename: PathBuf,
+    src: &'a str,
+    stdlib: StdLib,
+    src_dir: &Path,
+    exposed_types: SubsByModule,
+) -> Result<MonomorphizedModule<'a>, LoadingProblem> {
+    use LoadResult::*;
+
+    let load_start = LoadStart::from_str(arena, filename, src)?;
+
+    match load(
+        arena,
+        load_start,
+        stdlib,
+        src_dir,
+        exposed_types,
+        Phase::MakeSpecializations,
+    )? {
+        Monomorphized(module) => Ok(module),
+        TypeChecked(_) => unreachable!(""),
+    }
+}
+
+struct LoadStart<'a> {
+    pub arc_modules: Arc<Mutex<ModuleIds>>,
+    pub ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    pub root_id: ModuleId,
+    pub root_msg: Msg<'a>,
+}
+
+impl<'a> LoadStart<'a> {
+    pub fn from_path(arena: &'a Bump, filename: PathBuf) -> Result<Self, LoadingProblem> {
+        let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
+        let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+        let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
+
+        // Load the root module synchronously; we can't proceed until we have its id.
+        let (root_id, root_msg) = {
+            let root_start_time = SystemTime::now();
+
+            load_filename(
+                arena,
+                filename,
+                Arc::clone(&arc_modules),
+                Arc::clone(&ident_ids_by_module),
+                root_start_time,
+            )?
+        };
+
+        Ok(LoadStart {
+            arc_modules,
+            ident_ids_by_module,
+            root_id,
+            root_msg,
+        })
+    }
+
+    pub fn from_str(
+        arena: &'a Bump,
+        filename: PathBuf,
+        src: &'a str,
+    ) -> Result<Self, LoadingProblem> {
+        let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
+        let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+        let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
+
+        // Load the root module synchronously; we can't proceed until we have its id.
+        let (root_id, root_msg) = {
+            let root_start_time = SystemTime::now();
+
+            load_from_str(
+                arena,
+                filename,
+                src,
+                Arc::clone(&arc_modules),
+                Arc::clone(&ident_ids_by_module),
+                root_start_time,
+            )?
+        };
+
+        Ok(LoadStart {
+            arc_modules,
+            ident_ids_by_module,
+            root_id,
+            root_msg,
+        })
     }
 }
 
@@ -821,7 +916,8 @@ enum LoadResult<'a> {
 ///     to rebuild the module and can link in the cached one directly.)
 fn load<'a>(
     arena: &'a Bump,
-    filename: PathBuf,
+    //filename: PathBuf,
+    load_start: LoadStart<'a>,
     stdlib: StdLib,
     src_dir: &Path,
     exposed_types: SubsByModule,
@@ -829,6 +925,18 @@ fn load<'a>(
 ) -> Result<LoadResult<'a>, LoadingProblem>
 where
 {
+    let LoadStart {
+        arc_modules,
+        ident_ids_by_module,
+        root_id,
+        root_msg,
+    } = load_start;
+
+    let (msg_tx, msg_rx) = bounded(1024);
+    msg_tx
+        .send(root_msg)
+        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+
     // Reserve one CPU for the main thread, and let all the others be eligible
     // to spawn workers. We use .max(2) to enforce that we always
     // end up with at least 1 worker - since (.max(2) - 1) will
@@ -847,28 +955,6 @@ where
     for _ in 0..num_workers {
         worker_arenas.push(Bump::new());
     }
-
-    let (msg_tx, msg_rx) = bounded(1024);
-    let arc_modules = Arc::new(Mutex::new(ModuleIds::default()));
-    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-    let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
-
-    // Load the root module synchronously; we can't proceed until we have its id.
-    let (root_id, root_msg) = {
-        let root_start_time = SystemTime::now();
-
-        load_filename(
-            arena,
-            filename,
-            Arc::clone(&arc_modules),
-            Arc::clone(&ident_ids_by_module),
-            root_start_time,
-        )?
-    };
-
-    msg_tx
-        .send(root_msg)
-        .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
     // We'll add tasks to this, and then worker threads will take tasks from it.
     let injector = Injector::new();
@@ -1598,6 +1684,30 @@ fn load_filename<'a>(
     }
 }
 
+/// Load a module from a str
+/// the `filename` is never read, but used for the module name
+fn load_from_str<'a>(
+    arena: &'a Bump,
+    filename: PathBuf,
+    src: &'a str,
+    module_ids: Arc<Mutex<ModuleIds>>,
+    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    module_start_time: SystemTime,
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
+    let file_io_start = SystemTime::now();
+    let file_io_duration = file_io_start.elapsed().unwrap();
+
+    parse_header(
+        arena,
+        file_io_duration,
+        filename,
+        module_ids,
+        ident_ids_by_module,
+        src.as_bytes(),
+        module_start_time,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn send_header<'a>(
     name: Located<roc_parse::header::ModuleName<'a>>,
@@ -2056,98 +2166,27 @@ fn build_pending_specializations<'a>(
     // Add modules' decls to Procs
     for decl in decls {
         use roc_can::def::Declaration::*;
-        use roc_can::expr::Expr::*;
-        use roc_can::pattern::Pattern::*;
 
         match decl {
-            Declare(def) | Builtin(def) => match def.loc_pattern.value {
-                Identifier(symbol) => {
-                    let is_exposed = exposed_to_host.contains(&symbol);
-
-                    match def.loc_expr.value {
-                        Closure {
-                            function_type: annotation,
-                            return_type: ret_var,
-                            arguments: loc_args,
-                            loc_body,
-                            ..
-                        } => {
-                            // this is a non-recursive declaration
-                            let is_tail_recursive = false;
-                            // If this is an exposed symbol, we need to
-                            // register it as such. Otherwise, since it
-                            // never gets called by Roc code, it will never
-                            // get specialized!
-                            if is_exposed {
-                                let mut pattern_vars = bumpalo::collections::Vec::with_capacity_in(
-                                    loc_args.len(),
-                                    arena,
-                                );
-
-                                for (var, _) in loc_args.iter() {
-                                    pattern_vars.push(*var);
-                                }
-
-                                let layout = match layout_cache.from_var(
-                                    mono_env.arena,
-                                    annotation,
-                                    mono_env.subs,
-                                ) {
-                                    Ok(l) => l,
-                                    Err(err) => {
-                                        // a host-exposed function is not monomorphized
-                                        todo!("The host-exposed function {:?} does not have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", symbol, err)
-                                    }
-                                };
-
-                                procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
-                            }
-
-                            procs.insert_named(
-                                &mut mono_env,
-                                &mut layout_cache,
-                                symbol,
-                                annotation,
-                                loc_args,
-                                *loc_body,
-                                is_tail_recursive,
-                                ret_var,
-                            );
-                        }
-                        body => {
-                            // If this is an exposed symbol, we need to
-                            // register it as such. Otherwise, since it
-                            // never gets called by Roc code, it will never
-                            // get specialized!
-                            if is_exposed {
-                                let annotation = def.expr_var;
-                                let layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
-                                        todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
-                                    );
-
-                                procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
-                            }
-
-                            let proc = PartialProc {
-                                annotation: def.expr_var,
-                                // This is a 0-arity thunk, so it has no arguments.
-                                pattern_symbols: &[],
-                                body,
-                                // This is a 0-arity thunk, so it cannot be recursive
-                                is_self_recursive: false,
-                            };
-
-                            procs.partial_procs.insert(symbol, proc);
-                            procs.module_thunks.insert(symbol);
-                        }
-                    };
+            Declare(def) | Builtin(def) => add_def_to_module(
+                &mut layout_cache,
+                &mut procs,
+                &mut mono_env,
+                def,
+                &exposed_to_host,
+                false,
+            ),
+            DeclareRec(defs) => {
+                for def in defs {
+                    add_def_to_module(
+                        &mut layout_cache,
+                        &mut procs,
+                        &mut mono_env,
+                        def,
+                        &exposed_to_host,
+                        true,
+                    )
                 }
-                other => {
-                    todo!("TODO gracefully handle Declare({:?})", other);
-                }
-            },
-            DeclareRec(_defs) => {
-                todo!("TODO support DeclareRec");
             }
             InvalidCycle(_loc_idents, _regions) => {
                 todo!("TODO handle InvalidCycle");
@@ -2165,6 +2204,103 @@ fn build_pending_specializations<'a>(
         procs,
         problems,
         finished_info,
+    }
+}
+
+fn add_def_to_module<'a>(
+    layout_cache: &mut LayoutCache<'a>,
+    procs: &mut Procs<'a>,
+    mono_env: &mut roc_mono::ir::Env<'a, '_>,
+    def: roc_can::def::Def,
+    exposed_to_host: &MutSet<Symbol>,
+    is_recursive: bool,
+) {
+    use roc_can::expr::Expr::*;
+    use roc_can::pattern::Pattern::*;
+
+    match def.loc_pattern.value {
+        Identifier(symbol) => {
+            let is_exposed = exposed_to_host.contains(&symbol);
+
+            match def.loc_expr.value {
+                Closure {
+                    function_type: annotation,
+                    return_type: ret_var,
+                    arguments: loc_args,
+                    loc_body,
+                    ..
+                } => {
+                    // If this is an exposed symbol, we need to
+                    // register it as such. Otherwise, since it
+                    // never gets called by Roc code, it will never
+                    // get specialized!
+                    if is_exposed {
+                        let mut pattern_vars = bumpalo::collections::Vec::with_capacity_in(
+                            loc_args.len(),
+                            mono_env.arena,
+                        );
+
+                        for (var, _) in loc_args.iter() {
+                            pattern_vars.push(*var);
+                        }
+
+                        let layout = match layout_cache.from_var(
+                            mono_env.arena,
+                            annotation,
+                            mono_env.subs,
+                        ) {
+                            Ok(l) => l,
+                            Err(err) => {
+                                // a host-exposed function is not monomorphized
+                                todo!("The host-exposed function {:?} does not have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", symbol, err)
+                            }
+                        };
+
+                        procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
+                    }
+
+                    procs.insert_named(
+                        mono_env,
+                        layout_cache,
+                        symbol,
+                        annotation,
+                        loc_args,
+                        *loc_body,
+                        is_recursive,
+                        ret_var,
+                    );
+                }
+                body => {
+                    // If this is an exposed symbol, we need to
+                    // register it as such. Otherwise, since it
+                    // never gets called by Roc code, it will never
+                    // get specialized!
+                    if is_exposed {
+                        let annotation = def.expr_var;
+                        let layout = layout_cache.from_var(mono_env.arena, annotation, mono_env.subs).unwrap_or_else(|err|
+                                        todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
+                                    );
+
+                        procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
+                    }
+
+                    let proc = PartialProc {
+                        annotation: def.expr_var,
+                        // This is a 0-arity thunk, so it has no arguments.
+                        pattern_symbols: &[],
+                        body,
+                        // This is a 0-arity thunk, so it cannot be recursive
+                        is_self_recursive: false,
+                    };
+
+                    procs.partial_procs.insert(symbol, proc);
+                    procs.module_thunks.insert(symbol);
+                }
+            };
+        }
+        other => {
+            todo!("TODO gracefully handle Declare({:?})", other);
+        }
     }
 }
 
