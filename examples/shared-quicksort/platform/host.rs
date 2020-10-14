@@ -8,7 +8,7 @@ extern "C" {
     fn quicksort(list: Box<[i64]>) -> Box<[i64]>;
 }
 
-const NUM_NUMS: usize = 1_000_000;
+const NUM_NUMS: usize = 10_000;
 
 #[no_mangle]
 pub fn rust_main() -> isize {
@@ -16,7 +16,7 @@ pub fn rust_main() -> isize {
         let mut nums = Vec::with_capacity(NUM_NUMS);
 
         for index in 0..nums.capacity() {
-            let num = index as i64 % 12345;
+            let num = index as i64 % 123;
 
             nums.push(num);
         }
