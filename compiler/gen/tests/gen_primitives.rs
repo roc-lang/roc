@@ -684,8 +684,7 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
-    fn linked_list_sum() {
+    fn linked_list_sum_num_a() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -693,26 +692,57 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                three : LinkedList Int
-                three = Cons 3 (Cons 2 (Cons 1 Nil))
+                # three : LinkedList Int
+                # three = Cons 3 (Cons 2 (Cons 1 Nil))
 
-                sum : LinkedList a -> Int
+                zero : LinkedList Int
+                zero = Nil 
+
+                sum : LinkedList (Num a) -> Num a
                 sum = \list ->
                     when list is
                         Nil -> 0
                         Cons x rest -> x + sum rest
 
                 main =
-                    sum three
+                    sum zero
                 "#
             ),
-            3 + 2 + 1,
+            // 3 + 2 + 1,
+            0,
             i64
-        );
+        )
     }
 
     #[test]
     #[ignore]
+    fn linked_list_sum_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+
+                zero : LinkedList Int
+                zero = Nil 
+
+                sum : LinkedList Int -> Int
+                sum = \list ->
+                    when list is
+                        Nil -> 0
+                        Cons x rest -> x + sum rest
+
+                main =
+                    sum zero
+                "#
+            ),
+            0,
+            i64
+        )
+    }
+
+    #[test]
     fn linked_list_map() {
         assert_evals_to!(
             indoc!(
@@ -724,7 +754,7 @@ mod gen_primitives {
                 three : LinkedList Int
                 three = Cons 3 (Cons 2 (Cons 1 Nil))
 
-                sum : LinkedList a -> Int
+                sum : LinkedList (Num a) -> Num a
                 sum = \list ->
                     when list is
                         Nil -> 0

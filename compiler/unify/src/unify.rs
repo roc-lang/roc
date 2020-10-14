@@ -31,21 +31,11 @@ macro_rules! mismatch {
             println!("");
         }
 
+
         vec![Mismatch::TypeMismatch]
     }};
     ($msg:expr,) => {{
-        if cfg!(debug_assertions) {
-            println!(
-                "Mismatch in {} Line {} Column {}",
-                file!(),
-                line!(),
-                column!()
-            );
-            println!($msg);
-            println!("");
-        }
-
-        vec![Mismatch::TypeMismatch]
+        mismatch!($msg)
     }};
     ($msg:expr, $($arg:tt)*) => {{
         if cfg!(debug_assertions) {
