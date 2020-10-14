@@ -13,7 +13,7 @@ jobs:
         run: pushd compiler/builtins/bitcode && ./regenerate.sh && git diff --exit-code ../../gen/src/llvm/builtins.bc && popd
 
       - name: Install LLVM
-        run: sudo ./ci/install-llvm.sh 10
+        run: sudo ./ci/install-ci-libraries.sh 10
 
       - name: Enable LLD
         run: sudo ./ci/enable-lld.sh
