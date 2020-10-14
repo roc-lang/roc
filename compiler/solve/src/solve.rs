@@ -1227,8 +1227,6 @@ fn instantiate_rigids_help(
 
     if let Some(copy) = desc.copy.into_variable() {
         return copy;
-    } else if desc.rank != Rank::NONE {
-        return var;
     }
 
     let make_descriptor = |content| Descriptor {

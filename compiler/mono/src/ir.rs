@@ -1365,10 +1365,12 @@ fn specialize_external<'a>(
 
     // unify the called function with the specialized signature, then specialize the function body
     let snapshot = env.subs.snapshot();
+    let cache_snapshot = layout_cache.snapshot();
 
     let unified = roc_unify::unify::unify(env.subs, annotation, fn_var);
 
-    debug_assert!(matches!(unified, roc_unify::unify::Unified::Success(_)));
+    let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
+    debug_assert!(is_valid);
 
     let specialized_body = from_can(env, body, procs, layout_cache);
 
@@ -1376,6 +1378,7 @@ fn specialize_external<'a>(
         build_specialized_proc_from_var(env, layout_cache, pattern_symbols, fn_var)?;
 
     // reset subs, so we don't get type errors when specializing for a different signature
+    layout_cache.rollback_to(cache_snapshot);
     env.subs.rollback_to(snapshot);
 
     // TODO WRONG

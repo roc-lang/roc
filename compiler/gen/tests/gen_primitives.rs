@@ -530,6 +530,24 @@ mod gen_primitives {
 
     #[test]
     #[ignore]
+    fn top_level_constant() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app LinkedListLen0 provides [ main ] imports []
+
+                pi = 3.1415
+
+                main =
+                    pi + pi
+                    "#
+            ),
+            3.1415 + 3.1415,
+            f64
+        );
+    }
+
+    #[test]
     fn linked_list_len_0() {
         assert_evals_to!(
             indoc!(
@@ -538,8 +556,8 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                nil : LinkedList Int
-                nil = Nil
+                nil : {} -> LinkedList Int
+                nil = \_ -> Nil
 
                 length : LinkedList a -> Int
                 length = \list ->
@@ -549,7 +567,7 @@ mod gen_primitives {
 
 
                 main =
-                    length nil
+                    length (nil {})
                     "#
             ),
             0,

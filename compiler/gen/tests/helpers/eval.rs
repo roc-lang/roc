@@ -282,7 +282,7 @@ macro_rules! assert_evals_to {
         // parsing the source, so that there's no chance their passing
         // or failing depends on leftover state from the previous one.
         {
-            //assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak);
+            assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak);
         }
         {
             assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
