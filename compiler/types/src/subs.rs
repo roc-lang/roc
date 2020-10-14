@@ -73,11 +73,14 @@ impl VarStore {
     }
 
     pub fn new_from_subs(subs: &Subs) -> Self {
-        // TODO why -2, are we not overwriting something here?
-        let next_var = (subs.utable.len() - 1) as u32;
+        let next_var = (subs.utable.len()) as u32;
         debug_assert!(next_var >= Variable::FIRST_USER_SPACE_VAR.0);
 
         VarStore { next: next_var }
+    }
+
+    pub fn peek(&mut self) -> u32 {
+        self.next
     }
 
     pub fn fresh(&mut self) -> Variable {
@@ -549,10 +552,10 @@ pub enum Content {
 impl Content {
     #[inline(always)]
     pub fn is_number(&self) -> bool {
-        match &self {
-            Content::Structure(FlatType::Apply(Symbol::NUM_NUM, _)) => true,
-            _ => false,
-        }
+        matches!(
+            &self,
+            Content::Structure(FlatType::Apply(Symbol::NUM_NUM, _))
+        )
     }
 
     pub fn is_unique(&self, subs: &Subs) -> bool {

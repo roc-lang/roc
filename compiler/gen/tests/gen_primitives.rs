@@ -276,10 +276,10 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                main = \{} -> 
+                wrapper = \{} ->
                     (\a -> a) 5
 
-                main {}
+                wrapper {}
                 "#
             ),
             5,
@@ -292,14 +292,14 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                main = \{} -> 
+                wrapper = \{} ->
                     alwaysFloatIdentity : Int -> (Float -> Float)
                     alwaysFloatIdentity = \num ->
                         (\a -> a)
 
                     (alwaysFloatIdentity 2) 3.14
 
-                main {}
+                wrapper {}
                 "#
             ),
             3.14,
@@ -402,8 +402,9 @@ mod gen_primitives {
             i64
         );
     }
+
     #[test]
-    fn gen_nested_defs() {
+    fn gen_nested_defs_old() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -444,6 +445,28 @@ mod gen_primitives {
     }
 
     #[test]
+    fn let_x_in_x() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x = 5
+
+                    answer =
+                        1337
+
+                    unused =
+                        nested = 17
+                        nested
+
+                    answer
+                "#
+            ),
+            1337,
+            i64
+        );
+    }
+
+    #[test]
     fn factorial() {
         assert_evals_to!(
             indoc!(
@@ -469,15 +492,15 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                Peano : [ S Peano, Z ]
+                    Peano : [ S Peano, Z ]
 
-                three : Peano
-                three = S (S (S Z))
+                    three : Peano
+                    three = S (S (S Z))
 
-                when three is
-                    Z -> 2
-                    S _ -> 1
-                "#
+                    when three is
+                        Z -> 2
+                        S _ -> 1
+                    "#
             ),
             1,
             i64
@@ -489,19 +512,37 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                Peano : [ S Peano, Z ]
+                    Peano : [ S Peano, Z ]
 
-                three : Peano
-                three = S (S (S Z))
+                    three : Peano
+                    three = S (S (S Z))
 
-                when three is
-                    S (S _) -> 1
-                    S (_) -> 0
-                    Z -> 0
-                "#
+                    when three is
+                        S (S _) -> 1
+                        S (_) -> 0
+                        Z -> 0
+                    "#
             ),
             1,
             i64
+        );
+    }
+
+    #[test]
+    fn top_level_constant() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app LinkedListLen0 provides [ main ] imports []
+
+                pi = 3.1415
+
+                main =
+                    pi + pi
+                    "#
+            ),
+            3.1415 + 3.1415,
+            f64
         );
     }
 
@@ -510,10 +551,12 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
+                app LinkedListLen0 provides [ main ] imports []
+
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
                 nil : LinkedList Int
-                nil = Nil 
+                nil = Nil
 
                 length : LinkedList a -> Int
                 length = \list ->
@@ -522,13 +565,12 @@ mod gen_primitives {
                         Cons _ rest -> 1 + length rest
 
 
-                length nil
+                main =
+                    length nil
                 "#
             ),
             0,
-            i64,
-            |x| x,
-            false
+            i64
         );
     }
 
@@ -537,10 +579,12 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
+                app LinkedListLenTwice0 provides [ main ] imports []
+
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
                 nil : LinkedList Int
-                nil = Nil 
+                nil = Nil
 
                 length : LinkedList a -> Int
                 length = \list ->
@@ -548,13 +592,12 @@ mod gen_primitives {
                         Nil -> 0
                         Cons _ rest -> 1 + length rest
 
-                length nil + length nil
+                main =
+                    length nil + length nil
                 "#
             ),
             0,
-            i64,
-            |x| x,
-            false
+            i64
         );
     }
 
@@ -563,10 +606,12 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
+                app Test provides [ main ] imports []
+
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
                 one : LinkedList Int
-                one = Cons 1 Nil 
+                one = Cons 1 Nil
 
                 length : LinkedList a -> Int
                 length = \list ->
@@ -574,14 +619,12 @@ mod gen_primitives {
                         Nil -> 0
                         Cons _ rest -> 1 + length rest
 
-
-                length one
+                main =
+                    length one
                 "#
             ),
             1,
-            i64,
-            |x| x,
-            false
+            i64
         );
     }
 
@@ -590,10 +633,12 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
+                app Test provides [ main ] imports []
+
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
                 one : LinkedList Int
-                one = Cons 1 Nil 
+                one = Cons 1 Nil
 
                 length : LinkedList a -> Int
                 length = \list ->
@@ -601,14 +646,12 @@ mod gen_primitives {
                         Nil -> 0
                         Cons _ rest -> 1 + length rest
 
-
-                length one + length one
-                "#
+                main =
+                    length one + length one
+                    "#
             ),
             2,
-            i64,
-            |x| x,
-            false
+            i64
         );
     }
 
@@ -617,10 +660,12 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
+                app Test provides [ main ] imports []
+
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
                 three : LinkedList Int
-                three = Cons 3 (Cons 2 (Cons 1 Nil)) 
+                three = Cons 3 (Cons 2 (Cons 1 Nil))
 
                 length : LinkedList a -> Int
                 length = \list ->
@@ -629,52 +674,83 @@ mod gen_primitives {
                         Cons _ rest -> 1 + length rest
 
 
-                length three
+                main = 
+                    length three
                 "#
             ),
             3,
-            i64,
-            |x| x,
-            false
-        );
-    }
-
-    #[test]
-    fn linked_list_sum() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                LinkedList a : [ Nil, Cons a (LinkedList a) ]
-
-                three : LinkedList Int
-                three = Cons 3 (Cons 2 (Cons 1 Nil)) 
-
-                sum : LinkedList a -> Int
-                sum = \list ->
-                    when list is
-                        Nil -> 0
-                        Cons x rest -> x + sum rest
-
-                sum three
-                "#
-            ),
-            3 + 2 + 1,
             i64
         );
     }
 
     #[test]
-    fn linked_list_map() {
-        // `f` is not actually a function, so the call to it fails currently
+    fn linked_list_sum_num_a() {
         assert_evals_to!(
             indoc!(
                 r#"
+                app Test provides [ main ] imports []
+
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
                 three : LinkedList Int
-                three = Cons 3 (Cons 2 (Cons 1 Nil)) 
+                three = Cons 3 (Cons 2 (Cons 1 Nil))
 
-                sum : LinkedList a -> Int
+
+                sum : LinkedList (Num a) -> Num a
+                sum = \list ->
+                    when list is
+                        Nil -> 0
+                        Cons x rest -> x + sum rest
+
+                main =
+                    sum three
+                "#
+            ),
+            3 + 2 + 1,
+            i64
+        )
+    }
+
+    #[test]
+    fn linked_list_sum_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+
+                zero : LinkedList Int
+                zero = Nil 
+
+                sum : LinkedList Int -> Int
+                sum = \list ->
+                    when list is
+                        Nil -> 0
+                        Cons x rest -> x + sum rest
+
+                main =
+                    sum zero
+                "#
+            ),
+            0,
+            i64
+        )
+    }
+
+    #[test]
+    fn linked_list_map() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                LinkedList a : [ Nil, Cons a (LinkedList a) ]
+
+                three : LinkedList Int
+                three = Cons 3 (Cons 2 (Cons 1 Nil))
+
+                sum : LinkedList (Num a) -> Num a
                 sum = \list ->
                     when list is
                         Nil -> 0
@@ -686,7 +762,8 @@ mod gen_primitives {
                         Nil -> Nil
                         Cons x rest -> Cons (f x) (map f rest)
 
-                sum (map (\_ -> 1) three)
+                main =
+                    sum (map (\_ -> 1) three)
                 "#
             ),
             3,
@@ -699,15 +776,15 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-            Maybe a : [ Nothing, Just a ]
+                Maybe a : [ Nothing, Just a ]
 
-            x : Maybe (Maybe Int)
-            x = Just (Just 41)
+                x : Maybe (Maybe Int)
+                x = Just (Just 41)
 
-            when x is
-                Just (Just v) -> v + 0x1
-                _ -> 0x1
-                "#
+                when x is
+                    Just (Just v) -> v + 0x1
+                    _ -> 0x1
+                    "#
             ),
             42,
             i64
@@ -716,16 +793,16 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-            Maybe a : [ Nothing, Just a ]
+                Maybe a : [ Nothing, Just a ]
 
-            x : Maybe (Maybe Int)
-            x = Just Nothing 
+                x : Maybe (Maybe Int)
+                x = Just Nothing
 
-            when x is
-                Just (Just v) -> v + 0x1
-                Just Nothing -> 0x2
-                Nothing -> 0x1
-                "#
+                when x is
+                    Just (Just v) -> v + 0x1
+                    Just Nothing -> 0x2
+                    Nothing -> 0x1
+                    "#
             ),
             2,
             i64
@@ -734,16 +811,16 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-            Maybe a : [ Nothing, Just a ]
+                Maybe a : [ Nothing, Just a ]
 
-            x : Maybe (Maybe Int)
-            x = Nothing 
+                x : Maybe (Maybe Int)
+                x = Nothing
 
-            when x is
-                Just (Just v) -> v + 0x1
-                Just Nothing -> 0x2
-                Nothing -> 0x1
-                "#
+                when x is
+                    Just (Just v) -> v + 0x1
+                    Just Nothing -> 0x2
+                    Nothing -> 0x1
+                    "#
             ),
             1,
             i64
@@ -755,16 +832,16 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                Peano : [ S Peano, Z ]
+                    Peano : [ S Peano, Z ]
 
-                three : Peano
-                three = S (S (S Z))
+                    three : Peano
+                    three = S (S (S Z))
 
-                when three is
-                    S (S _) -> 1
-                    S (_) -> 2
-                    Z -> 3
-                "#
+                    when three is
+                        S (S _) -> 1
+                        S (_) -> 2
+                        Z -> 3
+                    "#
             ),
             1,
             i64
@@ -773,16 +850,16 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                Peano : [ S Peano, Z ]
+                    Peano : [ S Peano, Z ]
 
-                three : Peano
-                three = S Z
+                    three : Peano
+                    three = S Z
 
-                when three is
-                    S (S _) -> 1
-                    S (_) -> 2
-                    Z -> 3
-                "#
+                    when three is
+                        S (S _) -> 1
+                        S (_) -> 2
+                        Z -> 3
+                    "#
             ),
             2,
             i64
@@ -791,16 +868,16 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                Peano : [ S Peano, Z ]
+                    Peano : [ S Peano, Z ]
 
-                three : Peano
-                three = Z
+                    three : Peano
+                    three = Z
 
-                when three is
-                    S (S _) -> 1
-                    S (_) -> 2
-                    Z -> 3
-                "#
+                    when three is
+                        S (S _) -> 1
+                        S (_) -> 2
+                        Z -> 3
+                    "#
             ),
             3,
             i64
@@ -813,11 +890,11 @@ mod gen_primitives {
         assert_evals_to!(
             indoc!(
                 r#"
-                if True then
-                    x + z
-                else
-                    y + z
-                "#
+                    if True then
+                        x + z
+                    else
+                        y + z
+                    "#
             ),
             3,
             i64

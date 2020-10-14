@@ -675,6 +675,7 @@ pub fn constrain_expr(
             )
         }
         Accessor {
+            function_var,
             field,
             record_var,
             closure_var,
@@ -701,16 +702,19 @@ pub fn constrain_expr(
                 region,
             );
 
+            let function_type = Type::Function(
+                vec![record_type],
+                Box::new(Type::Variable(*closure_var)),
+                Box::new(field_type),
+            );
+
             exists(
-                vec![*record_var, *closure_var, field_var, ext_var],
+                vec![*record_var, *function_var, *closure_var, field_var, ext_var],
                 And(vec![
+                    Eq(function_type.clone(), expected, category.clone(), region),
                     Eq(
-                        Type::Function(
-                            vec![record_type],
-                            Box::new(Type::Variable(*closure_var)),
-                            Box::new(field_type),
-                        ),
-                        expected,
+                        function_type,
+                        NoExpectation(Variable(*function_var)),
                         category,
                         region,
                     ),

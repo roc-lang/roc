@@ -22,7 +22,7 @@ pub const TYPE_FLOATINGPOINT: &str = "FloatingPoint";
 ///     Can unify with Optional and Demanded
 /// - Optional: introduced by pattern matches and annotations.
 ///     Can unify with Required, but not with Demanded
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Hash)]
 pub enum RecordField<T> {
     Optional(T),
     Required(T),
@@ -989,7 +989,7 @@ pub struct Alias {
     pub typ: Type,
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub enum Problem {
     CanonicalizationProblem,
     CircularType(Symbol, ErrorType, Region),
@@ -1015,7 +1015,7 @@ pub enum Mismatch {
     CanonicalizationProblem,
 }
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Hash)]
 pub enum ErrorType {
     Infinite,
     Type(Symbol, Vec<ErrorType>),
@@ -1360,7 +1360,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub enum TypeExt {
     Closed,
     FlexOpen(Lowercase),

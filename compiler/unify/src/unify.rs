@@ -31,21 +31,11 @@ macro_rules! mismatch {
             println!("");
         }
 
+
         vec![Mismatch::TypeMismatch]
     }};
     ($msg:expr,) => {{
-        if cfg!(debug_assertions) {
-            println!(
-                "Mismatch in {} Line {} Column {}",
-                file!(),
-                line!(),
-                column!()
-            );
-            println!($msg);
-            println!("");
-        }
-
-        vec![Mismatch::TypeMismatch]
+        mismatch!($msg)
     }};
     ($msg:expr, $($arg:tt)*) => {{
         if cfg!(debug_assertions) {
@@ -681,7 +671,7 @@ fn unify_shared_tags(
 
         merge(subs, ctx, Structure(flat_type))
     } else {
-        mismatch!()
+        mismatch!("Problem with Tag Union")
     }
 }
 
@@ -911,7 +901,7 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
         RigidVar(_) | Structure(_) | Alias(_, _, _) => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
-            mismatch!()
+            mismatch!("Rigid with {:?}", &other)
         }
         Error => {
             // Error propagates.

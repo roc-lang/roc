@@ -17,6 +17,7 @@ roc_solve = { path = "../solve" }
 roc_problem = { path = "../problem" }
 ven_pretty = { path = "../../vendor/pretty" }
 bumpalo = { version = "3.2", features = ["collections"] }
+ven_ena = { path = "../../vendor/ena" }
 
 [dev-dependencies]
 roc_constrain = { path = "../constrain" }

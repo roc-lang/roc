@@ -5,6 +5,8 @@ extern crate roc_load;
 extern crate roc_module;
 
 use roc_cli::repl::{INSTRUCTIONS, PROMPT, WELCOME_MESSAGE};
+use serde::Deserialize;
+use serde_xml_rs::from_str;
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
@@ -52,6 +54,86 @@ pub fn run_roc(args: &[&str]) -> Out {
         stderr: String::from_utf8(output.stderr).unwrap(),
         status: output.status,
     }
+}
+
+#[allow(dead_code)]
+pub fn run_with_valgrind(args: &[&str]) -> Out {
+    //TODO: figure out if there is a better way to get the valgrind executable.
+    let mut cmd = Command::new("valgrind");
+
+    cmd.arg("--tool=memcheck");
+    cmd.arg("--xml=yes");
+    cmd.arg("--xml-fd=2");
+    for arg in args {
+        cmd.arg(arg);
+    }
+
+    let output = cmd
+        .output()
+        .expect("failed to execute compiled `valgrind` binary in CLI test");
+
+    Out {
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8(output.stderr).unwrap(),
+        status: output.status,
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ValgrindOutput {
+    #[serde(rename = "$value")]
+    pub fields: Vec<ValgrindField>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+enum ValgrindField {
+    ProtocolVersion(isize),
+    ProtocolTool(String),
+    Preamble(ValgrindDummyStruct),
+    Pid(isize),
+    PPid(isize),
+    Tool(String),
+    Args(ValgrindDummyStruct),
+    Error(ValgrindError),
+    Status(ValgrindDummyStruct),
+    ErrorCounts(ValgrindDummyStruct),
+    SuppCounts(ValgrindDummyStruct),
+}
+
+#[derive(Debug, Deserialize)]
+struct ValgrindDummyStruct {}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ValgrindError {
+    kind: String,
+    #[serde(default)]
+    what: Option<String>,
+    #[serde(default)]
+    xwhat: Option<ValgrindErrorXWhat>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ValgrindErrorXWhat {
+    text: String,
+    #[serde(default)]
+    leakedbytes: Option<isize>,
+    #[serde(default)]
+    leakedblocks: Option<isize>,
+}
+
+#[allow(dead_code)]
+pub fn extract_valgrind_errors(xml: &str) -> Vec<ValgrindError> {
+    let parsed_xml: ValgrindOutput =
+        from_str(xml).expect("failed to parse the `valgrind` xml output");
+    parsed_xml
+        .fields
+        .iter()
+        .filter_map(|field| match field {
+            ValgrindField::Error(err) => Some(err.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 #[allow(dead_code)]

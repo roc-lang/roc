@@ -31,7 +31,7 @@ use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
 use roc_collections::all::{ImMap, MutSet};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{Interns, Symbol};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{JoinPointId, Wrapped};
 use roc_mono::layout::{Builtin, Layout, MemoryMode};
 use target_lexicon::CallingConvention;
@@ -53,6 +53,7 @@ pub enum OptLevel {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>,
+    pub top_level_thunks: ImMap<Symbol, (Layout<'a>, FunctionValue<'ctx>)>,
     join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, &'a [PointerValue<'ctx>])>,
 }
 
@@ -63,23 +64,23 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
     pub fn insert(&mut self, symbol: Symbol, value: (Layout<'a>, PointerValue<'ctx>)) {
         self.symbols.insert(symbol, value);
     }
+    pub fn insert_top_level_thunk(
+        &mut self,
+        symbol: Symbol,
+        layout: Layout<'a>,
+        function_value: FunctionValue<'ctx>,
+    ) {
+        self.top_level_thunks
+            .insert(symbol, (layout, function_value));
+    }
     fn remove(&mut self, symbol: &Symbol) {
         self.symbols.remove(symbol);
     }
-    /*
-    fn get_join_point(&self, symbol: &JoinPointId) -> Option<&PhiValue<'ctx>> {
-        self.join_points.get(symbol)
+
+    pub fn retain_top_level_thunks_for_module(&mut self, module_id: ModuleId) {
+        self.top_level_thunks
+            .retain(|s, _| s.module_id() == module_id);
     }
-    fn remove_join_point(&mut self, symbol: &JoinPointId) {
-        self.join_points.remove(symbol);
-    }
-    fn get_mut_join_point(&mut self, symbol: &JoinPointId) -> Option<&mut PhiValue<'ctx>> {
-        self.join_points.get_mut(symbol)
-    }
-    fn insert_join_point(&mut self, symbol: JoinPointId, value: PhiValue<'ctx>) {
-        self.join_points.insert(symbol, value);
-    }
-    */
 }
 
 pub struct Env<'a, 'ctx, 'env> {
@@ -416,26 +417,47 @@ pub fn build_roc_main<'a, 'ctx, 'env>(
     env.arena.alloc(roc_main_fn)
 }
 
+pub fn promote_to_main_function<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    symbol: Symbol,
+    layout: &Layout<'a>,
+) -> (&'static str, &'a FunctionValue<'ctx>) {
+    let fn_name = layout_ids
+        .get(symbol, layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    let wrapped = env.module.get_function(&fn_name).unwrap();
+
+    make_main_function_help(env, layout, wrapped)
+}
+
 pub fn make_main_function<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
     main_body: &roc_mono::ir::Stmt<'a>,
 ) -> (&'static str, &'a FunctionValue<'ctx>) {
+    // internal main function
+    let roc_main_fn = *build_roc_main(env, layout_ids, layout, main_body);
+
+    make_main_function_help(env, layout, roc_main_fn)
+}
+
+fn make_main_function_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
+    roc_main_fn: FunctionValue<'ctx>,
+) -> (&'static str, &'a FunctionValue<'ctx>) {
+    // build the C calling convention wrapper
     use inkwell::types::BasicType;
     use PassVia::*;
 
     let context = env.context;
     let builder = env.builder;
 
-    let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
-
-    // internal main function
-    let roc_main_fn = *build_roc_main(env, layout_ids, layout, main_body);
-
-    // build the C calling convention wrapper
-
     let main_fn_name = "$Test.main";
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
     let fields = [Layout::Builtin(Builtin::Int64), layout.clone()];
     let main_return_layout = Layout::Struct(&fields);
@@ -1136,17 +1158,32 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             list_literal(env, inplace, scope, elem_layout, elems)
         }
         FunctionPointer(symbol, layout) => {
-            let fn_name = layout_ids
-                .get(*symbol, layout)
-                .to_symbol_string(*symbol, &env.interns);
-            let ptr = env
-                .module
-                .get_function(fn_name.as_str())
-                .unwrap_or_else(|| panic!("Could not get pointer to unknown function {:?}", symbol))
-                .as_global_value()
-                .as_pointer_value();
+            match scope.top_level_thunks.get(symbol) {
+                Some((_layout, function_value)) => {
+                    // this is a 0-argument thunk, evaluate it!
+                    let call =
+                        env.builder
+                            .build_call(*function_value, &[], "evaluate_top_level_thunk");
 
-            BasicValueEnum::PointerValue(ptr)
+                    call.try_as_basic_value().left().unwrap()
+                }
+                None => {
+                    // this is a function pointer, store it
+                    let fn_name = layout_ids
+                        .get(*symbol, layout)
+                        .to_symbol_string(*symbol, &env.interns);
+                    let ptr = env
+                        .module
+                        .get_function(fn_name.as_str())
+                        .unwrap_or_else(|| {
+                            panic!("Could not get pointer to unknown function {:?}", symbol)
+                        })
+                        .as_global_value()
+                        .as_pointer_value();
+
+                    BasicValueEnum::PointerValue(ptr)
+                }
+            }
         }
         RuntimeErrorFunction(_) => todo!(),
     }
@@ -1511,16 +1548,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 increment_refcount_layout(env, parent, layout_ids, value, &layout);
             }
 
-            /*
-            match layout {
-                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
-                    increment_refcount_list(env, parent, value.into_struct_value());
-                    build_exp_stmt(env, layout_ids, scope, parent, cont)
-                }
-                _ => build_exp_stmt(env, layout_ids, scope, parent, cont),
-            }
-            */
-
             build_exp_stmt(env, layout_ids, scope, parent, cont)
         }
         Dec(symbol, cont) => {
@@ -1836,6 +1863,7 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
 pub fn build_proc<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    mut scope: Scope<'a, 'ctx>,
     proc: roc_mono::ir::Proc<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
@@ -1847,8 +1875,6 @@ pub fn build_proc<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     builder.position_at_end(entry);
-
-    let mut scope = Scope::default();
 
     // Add args to scope
     for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {
@@ -1899,17 +1925,18 @@ fn call_with_args<'a, 'ctx, 'env>(
     let fn_name = layout_ids
         .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
+    let fn_name = fn_name.as_str();
 
-    let fn_val = env
-        .module
-        .get_function(fn_name.as_str())
-        .unwrap_or_else(|| {
-            if symbol.is_builtin() {
-                panic!("Unrecognized builtin function: {:?}", symbol)
-            } else {
-                panic!("Unrecognized non-builtin function: {:?}", symbol)
-            }
-        });
+    let fn_val = env.module.get_function(fn_name).unwrap_or_else(|| {
+        if symbol.is_builtin() {
+            panic!("Unrecognized builtin function: {:?}", fn_name)
+        } else {
+            panic!(
+                "Unrecognized non-builtin function: {:?} {:?}",
+                fn_name, layout
+            )
+        }
+    });
 
     let call = env.builder.build_call(fn_val, args, "call");
 
@@ -2619,8 +2646,13 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             ))
         }
         NumToFloat => {
-            // TODO specialize this to be not just for i64!
-            call_bitcode_fn(NumToFloat, env, &[arg.into()], "i64_to_f64_")
+            // This is an Int, so we need to convert it.
+            bd.build_cast(
+                InstructionOpcode::SIToFP,
+                arg,
+                env.context.f64_type(),
+                "i64_to_f64",
+            )
         }
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);

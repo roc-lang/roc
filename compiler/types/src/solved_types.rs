@@ -1,6 +1,7 @@
 use crate::boolean_algebra;
 use crate::subs::{FlatType, Subs, VarId, Variable};
 use crate::types::{Problem, RecordField, Type};
+use roc_collections::all::MutSet;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
@@ -15,13 +16,17 @@ impl<T> Solved<T> {
         &self.0
     }
 
+    pub fn inner_mut(&mut self) -> &'_ mut T {
+        &mut self.0
+    }
+
     pub fn into_inner(self) -> T {
         self.0
     }
 }
 
 /// This is a fully solved type, with no Variables remaining in it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SolvedType {
     /// A function. The types of its arguments, then the type of its return value.
     Func(Vec<SolvedType>, Box<SolvedType>, Box<SolvedType>),
@@ -55,7 +60,7 @@ pub enum SolvedType {
     Error,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SolvedBool {
     SolvedShared,
     SolvedContainer(VarId, Vec<VarId>),
@@ -68,10 +73,13 @@ impl SolvedBool {
         match boolean {
             Bool::Shared => SolvedBool::SolvedShared,
             Bool::Container(cvar, mvars) => {
-                debug_assert!(matches!(
-                    subs.get_without_compacting(*cvar).content,
-                    crate::subs::Content::FlexVar(_)
-                ));
+                match subs.get_without_compacting(*cvar).content {
+                    crate::subs::Content::FlexVar(_) => {}
+                    crate::subs::Content::Structure(FlatType::Boolean(Bool::Shared)) => {
+                        return SolvedBool::SolvedShared;
+                    }
+                    other => panic!("Container var is not flex but {:?}", other),
+                }
 
                 SolvedBool::SolvedContainer(
                     VarId::from_var(*cvar, subs),
@@ -193,21 +201,32 @@ impl SolvedType {
         }
     }
 
-    fn from_var(subs: &Subs, var: Variable) -> Self {
+    pub fn from_var(subs: &Subs, var: Variable) -> Self {
+        let mut seen = RecursionVars::default();
+        Self::from_var_help(subs, &mut seen, var)
+    }
+
+    fn from_var_help(subs: &Subs, recursion_vars: &mut RecursionVars, var: Variable) -> Self {
         use crate::subs::Content::*;
+
+        // if this is a recursion var we've seen before, just generate a Flex
+        // (not doing so would have this function loop forever)
+        if recursion_vars.contains(subs, var) {
+            return SolvedType::Flex(VarId::from_var(var, subs));
+        }
 
         match subs.get_without_compacting(var).content {
             FlexVar(_) => SolvedType::Flex(VarId::from_var(var, subs)),
             RigidVar(name) => SolvedType::Rigid(name),
-            Structure(flat_type) => Self::from_flat_type(subs, flat_type),
+            Structure(flat_type) => Self::from_flat_type(subs, recursion_vars, flat_type),
             Alias(symbol, args, actual_var) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
                 for (arg_name, arg_var) in args {
-                    new_args.push((arg_name, Self::from_var(subs, arg_var)));
+                    new_args.push((arg_name, Self::from_var_help(subs, recursion_vars, arg_var)));
                 }
 
-                let aliased_to = Self::from_var(subs, actual_var);
+                let aliased_to = Self::from_var_help(subs, recursion_vars, actual_var);
 
                 SolvedType::Alias(symbol, new_args, Box::new(aliased_to))
             }
@@ -215,15 +234,19 @@ impl SolvedType {
         }
     }
 
-    fn from_flat_type(subs: &Subs, flat_type: FlatType) -> Self {
+    fn from_flat_type(
+        subs: &Subs,
+        recursion_vars: &mut RecursionVars,
+        flat_type: FlatType,
+    ) -> Self {
         use crate::subs::FlatType::*;
 
         match flat_type {
             Apply(symbol, args) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in args {
-                    new_args.push(Self::from_var(subs, var));
+                for var in args.iter().copied() {
+                    new_args.push(Self::from_var_help(subs, recursion_vars, var));
                 }
 
                 SolvedType::Apply(symbol, new_args)
@@ -232,11 +255,11 @@ impl SolvedType {
                 let mut new_args = Vec::with_capacity(args.len());
 
                 for var in args {
-                    new_args.push(Self::from_var(subs, var));
+                    new_args.push(Self::from_var_help(subs, recursion_vars, var));
                 }
 
-                let ret = Self::from_var(subs, ret);
-                let closure = Self::from_var(subs, closure);
+                let ret = Self::from_var_help(subs, recursion_vars, ret);
+                let closure = Self::from_var_help(subs, recursion_vars, closure);
 
                 SolvedType::Func(new_args, Box::new(closure), Box::new(ret))
             }
@@ -247,15 +270,15 @@ impl SolvedType {
                     use RecordField::*;
 
                     let solved_type = match field {
-                        Optional(var) => Optional(Self::from_var(subs, var)),
-                        Required(var) => Required(Self::from_var(subs, var)),
-                        Demanded(var) => Demanded(Self::from_var(subs, var)),
+                        Optional(var) => Optional(Self::from_var_help(subs, recursion_vars, var)),
+                        Required(var) => Required(Self::from_var_help(subs, recursion_vars, var)),
+                        Demanded(var) => Demanded(Self::from_var_help(subs, recursion_vars, var)),
                     };
 
                     new_fields.push((label, solved_type));
                 }
 
-                let ext = Self::from_var(subs, ext_var);
+                let ext = Self::from_var_help(subs, recursion_vars, ext_var);
 
                 SolvedType::Record {
                     fields: new_fields,
@@ -269,30 +292,32 @@ impl SolvedType {
                     let mut new_args = Vec::with_capacity(args.len());
 
                     for var in args {
-                        new_args.push(Self::from_var(subs, var));
+                        new_args.push(Self::from_var_help(subs, recursion_vars, var));
                     }
 
                     new_tags.push((tag_name, new_args));
                 }
 
-                let ext = Self::from_var(subs, ext_var);
+                let ext = Self::from_var_help(subs, recursion_vars, ext_var);
 
                 SolvedType::TagUnion(new_tags, Box::new(ext))
             }
             RecursiveTagUnion(rec_var, tags, ext_var) => {
+                recursion_vars.insert(subs, rec_var);
+
                 let mut new_tags = Vec::with_capacity(tags.len());
 
                 for (tag_name, args) in tags {
                     let mut new_args = Vec::with_capacity(args.len());
 
                     for var in args {
-                        new_args.push(Self::from_var(subs, var));
+                        new_args.push(Self::from_var_help(subs, recursion_vars, var));
                     }
 
                     new_tags.push((tag_name, new_args));
                 }
 
-                let ext = Self::from_var(subs, ext_var);
+                let ext = Self::from_var_help(subs, recursion_vars, ext_var);
 
                 SolvedType::RecursiveTagUnion(
                     VarId::from_var(rec_var, subs),
@@ -313,4 +338,21 @@ pub struct BuiltinAlias {
     pub region: Region,
     pub vars: Vec<Located<Lowercase>>,
     pub typ: SolvedType,
+}
+
+#[derive(Default)]
+struct RecursionVars(MutSet<Variable>);
+
+impl RecursionVars {
+    fn contains(&self, subs: &Subs, var: Variable) -> bool {
+        let var = subs.get_root_key_without_compacting(var);
+
+        self.0.contains(&var)
+    }
+
+    fn insert(&mut self, subs: &Subs, var: Variable) {
+        let var = subs.get_root_key_without_compacting(var);
+
+        self.0.insert(var);
+    }
 }
