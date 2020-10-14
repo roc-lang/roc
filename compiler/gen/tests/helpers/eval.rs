@@ -67,7 +67,7 @@ pub fn helper<'a>(
     } = loaded;
 
     debug_assert_eq!(exposed_to_host.len(), 1);
-    let main_fn_symbol = exposed_to_host.iter().copied().nth(0).unwrap();
+    let main_fn_symbol = exposed_to_host.keys().copied().nth(0).unwrap();
 
     let (_, main_fn_layout) = procedures
         .keys()
