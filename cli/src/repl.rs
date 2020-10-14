@@ -263,7 +263,7 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         let builder = context.create_builder();
 
         debug_assert_eq!(exposed_to_host.len(), 1);
-        let (main_fn_symbol, main_fn_var) = exposed_to_host.iter().nth(0).unwrap();
+        let (main_fn_symbol, main_fn_var) = exposed_to_host.iter().next().unwrap();
         let main_fn_symbol = *main_fn_symbol;
         let main_fn_var = *main_fn_var;
 

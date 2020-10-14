@@ -202,7 +202,6 @@ impl SolvedType {
     }
 
     pub fn from_var(subs: &Subs, var: Variable) -> Self {
-        // seen: MutSet<Variable>,
         let mut seen = RecursionVars::default();
         Self::from_var_help(subs, &mut seen, var)
     }

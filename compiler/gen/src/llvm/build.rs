@@ -1161,11 +1161,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             match scope.top_level_thunks.get(symbol) {
                 Some((_layout, function_value)) => {
                     // this is a 0-argument thunk, evaluate it!
-                    let call = env.builder.build_call(
-                        function_value.clone(),
-                        &[],
-                        "evaluate_top_level_thunk",
-                    );
+                    let call =
+                        env.builder
+                            .build_call(*function_value, &[], "evaluate_top_level_thunk");
 
                     call.try_as_basic_value().left().unwrap()
                 }
