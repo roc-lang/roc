@@ -1926,8 +1926,49 @@ fn run_solve<'a>(
     let constrain_end = SystemTime::now();
 
     let module_id = module.module_id;
-    let (solved_subs, solved_module) =
-        roc_solve::module::solve_module(module, constraint, var_store);
+
+    let Module {
+        exposed_vars_by_symbol,
+        aliases,
+        rigid_variables,
+        ..
+    } = module;
+
+    let (mut solved_subs, solved_env, problems) =
+        roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
+
+    // determine the size of closures BEFORE converting to solved types
+    // this is separate from type inference so we can maybe do optimizations between type inference
+    // and closure size inference (those optimizations could shrink the closure size)
+    use Declaration::*;
+    let subs = solved_subs.inner_mut();
+    for decl in decls.iter() {
+        match decl {
+            Declare(def) => {
+                roc_mono::closures::infer_closure_size(def, subs, &solved_env);
+            }
+            Builtin(_) => {
+                // builtins should never have anything in their closure, so not determining their
+                // size _should_ be OK. We'll need to verify this in practice though
+            }
+            InvalidCycle(_, _) => {}
+            DeclareRec(defs) => {
+                for def in defs {
+                    roc_mono::closures::infer_closure_size(def, subs, &solved_env);
+                }
+            }
+        }
+    }
+
+    let solved_types =
+        roc_solve::module::make_solved_types(&solved_env, &solved_subs, &exposed_vars_by_symbol);
+
+    let solved_module = SolvedModule {
+        exposed_vars_by_symbol,
+        solved_types,
+        problems,
+        aliases: solved_env.aliases,
+    };
 
     // Record the final timings
     let solve_end = SystemTime::now();

@@ -287,9 +287,9 @@ mod gen_list {
             indoc!(
                 r#"
                 alwaysTrue : Int -> Bool
-                alwaysTrue = \_ -> 
+                alwaysTrue = \_ ->
                     True
-                    
+
 
                 List.keepIf [] alwaysTrue
                 "#
@@ -307,11 +307,11 @@ mod gen_list {
                 alwaysTrue : Int -> Bool
                 alwaysTrue = \i ->
                     True
-                    
+
                 oneThroughEight : List Int
                 oneThroughEight =
                     [1,2,3,4,5,6,7,8]
-                    
+
                 List.keepIf oneThroughEight alwaysTrue
                 "#
             ),
@@ -328,7 +328,7 @@ mod gen_list {
                 alwaysFalse : Int -> Bool
                 alwaysFalse = \i ->
                     False
-                    
+
                 List.keepIf [1,2,3,4,5,6,7,8] alwaysFalse
                 "#
             ),
@@ -345,8 +345,8 @@ mod gen_list {
                 intIsLessThanThree : Int -> Bool
                 intIsLessThanThree = \i ->
                     i < 3
-                    
-                List.keepIf [1,2,3,4,5,6,7,8] intIsLessThanThree 
+
+                List.keepIf [1,2,3,4,5,6,7,8] intIsLessThanThree
                 "#
             ),
             RocList::from_slice(&[1, 2]),
@@ -433,7 +433,7 @@ mod gen_list {
                 nonEmpty : List Int
                 nonEmpty =
                     [ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 ]
-    
+
                 List.map nonEmpty (\x -> x * 2)
                 "#
             ),
@@ -453,7 +453,7 @@ mod gen_list {
                 nonEmpty =
                     [ 1, 1, -4, 1, 2 ]
 
-    
+
                 List.map nonEmpty (\x -> x > 0)
                 "#
             ),
@@ -1159,7 +1159,7 @@ mod gen_list {
                         _ ->
                             []
 
-                main = 
+                main =
                     swap 0 1 [ 1, 2 ]
                 "#
             ),
@@ -1339,8 +1339,8 @@ mod gen_list {
                        quicksort : List (Num a) -> List (Num a)
                        quicksort = \list ->
                            quicksortHelp list 0 (List.len list - 1)
-    
-    
+
+
                        quicksortHelp : List (Num a), Int, Int -> List (Num a)
                        quicksortHelp = \list, low, high ->
                            if low < high then
@@ -1351,8 +1351,8 @@ mod gen_list {
                                            |> quicksortHelp (partitionIndex + 1) high
                            else
                                list
-    
-    
+
+
                        swap : Int, Int, List a -> List a
                        swap = \i, j, list ->
                            when Pair (List.get list i) (List.get list j) is
@@ -1360,10 +1360,10 @@ mod gen_list {
                                    list
                                        |> List.set i atJ
                                        |> List.set j atI
-    
+
                                _ ->
                                    []
-    
+
                        partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
                        partition = \low, high, initialList ->
                            when List.get initialList high is
@@ -1371,11 +1371,11 @@ mod gen_list {
                                    when partitionHelp (low - 1) low initialList high pivot is
                                        Pair newI newList ->
                                            Pair (newI + 1) (swap (newI + 1) high newList)
-    
+
                                Err _ ->
                                    Pair (low - 1) initialList
-    
-    
+
+
                        partitionHelp : Int, Int, List (Num a), Int, Int -> [ Pair Int (List (Num a)) ]
                        partitionHelp = \i, j, list, high, pivot ->
                            # if j < high then
@@ -1386,14 +1386,14 @@ mod gen_list {
                                            partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
                                        else
                                            partitionHelp i (j + 1) list high pivot
-    
+
                                    Err _ ->
                                        Pair i list
                            else
                                Pair i list
-    
-    
-    
+
+
+
                        quicksort [ 7, 4, 21, 19 ]
                    "#
                 ),
@@ -1412,8 +1412,8 @@ mod gen_list {
                        quicksort : List (Num a) -> List (Num a)
                        quicksort = \list ->
                            quicksortHelp list 0 (List.len list - 1)
-    
-    
+
+
                        quicksortHelp : List (Num a), Int, Int -> List (Num a)
                        quicksortHelp = \list, low, high ->
                            if low < high then
@@ -1424,8 +1424,8 @@ mod gen_list {
                                            |> quicksortHelp (partitionIndex + 1) high
                            else
                                list
-    
-    
+
+
                        swap : Int, Int, List a -> List a
                        swap = \i, j, list ->
                            when Pair (List.get list i) (List.get list j) is
@@ -1433,10 +1433,10 @@ mod gen_list {
                                    list
                                        |> List.set i atJ
                                        |> List.set j atI
-    
+
                                _ ->
                                    []
-    
+
                        partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
                        partition = \low, high, initialList ->
                            when List.get initialList high is
@@ -1444,11 +1444,11 @@ mod gen_list {
                                    when partitionHelp (low - 1) low initialList high pivot is
                                        Pair newI newList ->
                                            Pair (newI + 1) (swap (newI + 1) high newList)
-    
+
                                Err _ ->
                                    Pair (low - 1) initialList
-    
-    
+
+
                        partitionHelp : Int, Int, List (Num a), Int, Int -> [ Pair Int (List (Num a)) ]
                        partitionHelp = \i, j, list, high, pivot ->
                            if j < high then
@@ -1458,14 +1458,14 @@ mod gen_list {
                                            partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
                                        else
                                            partitionHelp i (j + 1) list high pivot
-    
+
                                    Err _ ->
                                        Pair i list
                            else
                                Pair i list
-    
-    
-    
+
+
+
                        when List.first (quicksort [0x1]) is
                            _ -> 4
                    "#

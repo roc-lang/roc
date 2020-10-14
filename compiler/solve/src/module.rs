@@ -70,7 +70,7 @@ pub fn run_solve(
     (solved_subs, solved_env, problems)
 }
 
-fn make_solved_types(
+pub fn make_solved_types(
     solved_env: &solve::Env,
     solved_subs: &Solved<Subs>,
     exposed_vars_by_symbol: &[(Symbol, Variable)],

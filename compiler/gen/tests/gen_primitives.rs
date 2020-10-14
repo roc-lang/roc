@@ -900,4 +900,45 @@ mod gen_primitives {
             i64
         );
     }
+
+    #[test]
+    fn closure() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                x = 42
+
+                f = \{} -> x
+
+
+                main =
+                    f {}
+                "#
+            ),
+            42,
+            i64
+        );
+    }
+
+    #[test]
+    fn nested_closure() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                x = 42
+
+                main =
+                    f = \{} -> x
+
+                    f {}
+                "#
+            ),
+            42,
+            i64
+        );
+    }
 }

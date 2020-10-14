@@ -1,4 +1,5 @@
 use roc_can::constraint::Constraint;
+use roc_can::def::Def;
 use roc_can::expected::Expected;
 use roc_can::expr::Expr;
 use roc_can::pattern::symbols_from_pattern;
@@ -10,7 +11,12 @@ use roc_solve::solve;
 use roc_types::subs::{Subs, VarStore};
 use roc_types::types::{Category, Type};
 
-pub fn infer_closure_size(expr: &Expr, subs: &mut Subs, solve_env: &solve::Env) {
+pub fn infer_closure_size(def: &Def, subs: &mut Subs, solve_env: &solve::Env) {
+    infer_closure_size_expr(&def.loc_expr.value, subs, solve_env);
+}
+
+/// NOTE this is only safe to run on a top-level definition
+fn infer_closure_size_expr(expr: &Expr, subs: &mut Subs, solve_env: &solve::Env) {
     let mut var_store = VarStore::new_from_subs(subs);
 
     let mut problems = Vec::new();
@@ -153,7 +159,7 @@ pub fn free_variables(expr: &Expr) -> MutSet<Symbol> {
     used
 }
 
-pub fn generate_constraint(expr: &Expr, var_store: &mut VarStore) -> Constraint {
+fn generate_constraint(expr: &Expr, var_store: &mut VarStore) -> Constraint {
     let mut constraints = Vec::new();
     generate_constraints_help(expr, var_store, &mut constraints);
     Constraint::And(constraints)
