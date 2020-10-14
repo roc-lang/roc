@@ -14,7 +14,7 @@ use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum MonoProblem {
     PatternProblem(crate::exhaustive::Error),
 }
@@ -1365,10 +1365,12 @@ fn specialize_external<'a>(
 
     // unify the called function with the specialized signature, then specialize the function body
     let snapshot = env.subs.snapshot();
+    let cache_snapshot = layout_cache.snapshot();
 
     let unified = roc_unify::unify::unify(env.subs, annotation, fn_var);
 
-    debug_assert!(matches!(unified, roc_unify::unify::Unified::Success(_)));
+    let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
+    debug_assert!(is_valid);
 
     let specialized_body = from_can(env, body, procs, layout_cache);
 
@@ -1376,6 +1378,7 @@ fn specialize_external<'a>(
         build_specialized_proc_from_var(env, layout_cache, pattern_symbols, fn_var)?;
 
     // reset subs, so we don't get type errors when specializing for a different signature
+    layout_cache.rollback_to(cache_snapshot);
     env.subs.rollback_to(snapshot);
 
     // TODO WRONG
@@ -1490,6 +1493,7 @@ fn specialize_solved_type<'a>(
     use roc_types::subs::VarStore;
 
     let snapshot = env.subs.snapshot();
+    let cache_snapshot = layout_cache.snapshot();
 
     let mut free_vars = FreeVars::default();
     let mut var_store = VarStore::new_from_subs(env.subs);
@@ -1514,10 +1518,12 @@ fn specialize_solved_type<'a>(
                 .from_var(&env.arena, fn_var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
             env.subs.rollback_to(snapshot);
+            layout_cache.rollback_to(cache_snapshot);
             Ok((proc, layout))
         }
         Err(error) => {
             env.subs.rollback_to(snapshot);
+            layout_cache.rollback_to(cache_snapshot);
             Err(error)
         }
     }
@@ -1630,21 +1636,40 @@ pub fn with_hole<'a>(
             }
 
             if let roc_can::pattern::Pattern::Identifier(symbol) = def.loc_pattern.value {
-                let mut stmt = with_hole(env, cont.value, procs, layout_cache, assigned, hole);
-
-                // this is an alias of a variable
-                if let roc_can::expr::Expr::Var(original) = def.loc_expr.value {
-                    substitute_in_exprs(env.arena, &mut stmt, symbol, original);
+                // special-case the form `let x = E in x`
+                // not doing so will drop the `hole`
+                match &cont.value {
+                    roc_can::expr::Expr::Var(original) if *original == symbol => {
+                        return with_hole(
+                            env,
+                            def.loc_expr.value,
+                            procs,
+                            layout_cache,
+                            assigned,
+                            hole,
+                        );
+                    }
+                    _ => {}
                 }
 
-                with_hole(
-                    env,
-                    def.loc_expr.value,
-                    procs,
-                    layout_cache,
-                    symbol,
-                    env.arena.alloc(stmt),
-                )
+                // continue with the default path
+                let mut stmt = with_hole(env, cont.value, procs, layout_cache, assigned, hole);
+
+                // a variable is aliased
+                if let roc_can::expr::Expr::Var(original) = def.loc_expr.value {
+                    substitute_in_exprs(env.arena, &mut stmt, symbol, original);
+
+                    stmt
+                } else {
+                    with_hole(
+                        env,
+                        def.loc_expr.value,
+                        procs,
+                        layout_cache,
+                        symbol,
+                        env.arena.alloc(stmt),
+                    )
+                }
             } else {
                 // this may be a destructure pattern
                 let mono_pattern = from_can_pattern(env, layout_cache, &def.loc_pattern.value);
@@ -2687,7 +2712,7 @@ pub fn from_can<'a>(
 
             from_can(env, cont.value, procs, layout_cache)
         }
-        LetNonRec(def, cont, _, _) => {
+        LetNonRec(def, cont, outer_pattern_vars, outer_annotation) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
                 if let Closure { .. } = &def.loc_expr.value {
                     // Now that we know for sure it's a closure, get an owned
@@ -2726,22 +2751,129 @@ pub fn from_can<'a>(
                     }
                 }
 
-                let mut rest = from_can(env, cont.value, procs, layout_cache);
+                match def.loc_expr.value {
+                    roc_can::expr::Expr::Var(original) => {
+                        let mut rest = from_can(env, cont.value, procs, layout_cache);
+                        // a variable is aliased
+                        substitute_in_exprs(env.arena, &mut rest, *symbol, original);
 
-                // a variable is aliased
-                if let roc_can::expr::Expr::Var(original) = def.loc_expr.value {
-                    substitute_in_exprs(env.arena, &mut rest, *symbol, original);
+                        return rest;
+                    }
+                    roc_can::expr::Expr::LetNonRec(
+                        nested_def,
+                        nested_cont,
+                        nested_pattern_vars,
+                        nested_annotation,
+                    ) => {
+                        use roc_can::expr::Expr::*;
+                        // We must transform
+                        //
+                        //      let answer = 1337
+                        //      in
+                        //          let unused =
+                        //                  let nested = 17
+                        //                  in
+                        //                      nested
+                        //          in
+                        //              answer
+                        //
+                        // into
+                        //
+                        //      let answer = 1337
+                        //      in
+                        //          let nested = 17
+                        //          in
+                        //              let unused = nested
+                        //              in
+                        //                  answer
 
-                    return rest;
-                } else {
-                    return with_hole(
-                        env,
-                        def.loc_expr.value,
-                        procs,
-                        layout_cache,
-                        *symbol,
-                        env.arena.alloc(rest),
-                    );
+                        let new_def = roc_can::def::Def {
+                            loc_pattern: def.loc_pattern,
+                            loc_expr: *nested_cont,
+                            pattern_vars: def.pattern_vars,
+                            annotation: def.annotation,
+                            expr_var: def.expr_var,
+                        };
+
+                        let new_inner = LetNonRec(
+                            Box::new(new_def),
+                            cont,
+                            outer_pattern_vars,
+                            outer_annotation,
+                        );
+
+                        let new_outer = LetNonRec(
+                            nested_def,
+                            Box::new(Located::at_zero(new_inner)),
+                            nested_pattern_vars,
+                            nested_annotation,
+                        );
+
+                        return from_can(env, new_outer, procs, layout_cache);
+                    }
+                    roc_can::expr::Expr::LetRec(
+                        nested_defs,
+                        nested_cont,
+                        nested_pattern_vars,
+                        nested_annotation,
+                    ) => {
+                        use roc_can::expr::Expr::*;
+                        // We must transform
+                        //
+                        //      let answer = 1337
+                        //      in
+                        //          let unused =
+                        //                  let nested = \{} -> nested {}
+                        //                  in
+                        //                      nested
+                        //          in
+                        //              answer
+                        //
+                        // into
+                        //
+                        //      let answer = 1337
+                        //      in
+                        //          let nested = \{} -> nested {}
+                        //          in
+                        //              let unused = nested
+                        //              in
+                        //                  answer
+
+                        let new_def = roc_can::def::Def {
+                            loc_pattern: def.loc_pattern,
+                            loc_expr: *nested_cont,
+                            pattern_vars: def.pattern_vars,
+                            annotation: def.annotation,
+                            expr_var: def.expr_var,
+                        };
+
+                        let new_inner = LetNonRec(
+                            Box::new(new_def),
+                            cont,
+                            outer_pattern_vars,
+                            outer_annotation,
+                        );
+
+                        let new_outer = LetRec(
+                            nested_defs,
+                            Box::new(Located::at_zero(new_inner)),
+                            nested_pattern_vars,
+                            nested_annotation,
+                        );
+
+                        return from_can(env, new_outer, procs, layout_cache);
+                    }
+                    _ => {
+                        let rest = from_can(env, cont.value, procs, layout_cache);
+                        return with_hole(
+                            env,
+                            def.loc_expr.value,
+                            procs,
+                            layout_cache,
+                            *symbol,
+                            env.arena.alloc(rest),
+                        );
+                    }
                 }
             }
 

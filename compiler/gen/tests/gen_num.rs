@@ -482,12 +482,12 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                main = \{} -> 
+                wrapper = \{} -> 
                     when 10 is
                         x if x == 5 -> 0
                         _ -> 42
 
-                main {}
+                wrapper {}
                 "#
             ),
             42,
@@ -500,12 +500,12 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                main = \{} -> 
+                wrapper = \{} -> 
                     when 10 is
                         x if x == 10 -> 42
                         _ -> 0
 
-                main {}
+                wrapper {}
                 "#
             ),
             42,

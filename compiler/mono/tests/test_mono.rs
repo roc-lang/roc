@@ -2006,4 +2006,64 @@ mod test_mono {
             ),
         )
     }
+
+    #[test]
+    fn let_x_in_x() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                x = 5
+
+                answer =
+                    1337
+
+                unused =
+                    nested = 17
+                    nested
+
+                answer
+                "#
+            ),
+            indoc!(
+                r#"
+                let Test.1 = 1337i64;
+                let Test.0 = 5i64;
+                let Test.3 = 17i64;
+                ret Test.1;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn let_x_in_x_indirect() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                x = 5
+
+                answer =
+                    1337
+
+                unused =
+                    nested = 17
+
+                    i = 1
+
+                    nested
+
+                answer
+                "#
+            ),
+            indoc!(
+                r#"
+                let Test.1 = 1337i64;
+                let Test.0 = 5i64;
+                let Test.3 = 17i64;
+                let Test.4 = 1i64;
+                ret Test.1;
+                "#
+            ),
+        )
+    }
 }

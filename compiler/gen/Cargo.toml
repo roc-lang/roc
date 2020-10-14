@@ -44,6 +44,7 @@ target-lexicon = "0.10"
 [dev-dependencies]
 roc_can = { path = "../can" }
 roc_parse = { path = "../parse" }
+roc_load = { path = "../load" }
 pretty_assertions = "0.5.1"
 maplit = "1.0.1"
 indoc = "0.3.3"
