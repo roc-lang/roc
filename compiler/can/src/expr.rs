@@ -102,6 +102,7 @@ pub enum Expr {
         closure_type: Variable,
         return_type: Variable,
         name: Symbol,
+        captured_symbols: MutSet<Symbol>,
         recursive: Recursive,
         arguments: Vec<(Variable, Located<Pattern>)>,
         loc_body: Box<Located<Expr>>,
@@ -490,6 +491,7 @@ pub fn canonicalize_expr<'a>(
                     closure_type: var_store.fresh(),
                     return_type: var_store.fresh(),
                     name: symbol,
+                    captured_symbols: MutSet::default(),
                     recursive: Recursive::NotRecursive,
                     arguments: can_args,
                     loc_body: Box::new(loc_body_expr),
@@ -1217,6 +1219,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             return_type,
             recursive,
             name,
+            captured_symbols,
             arguments,
             loc_body,
         } => {
@@ -1232,6 +1235,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 return_type,
                 recursive,
                 name,
+                captured_symbols,
                 arguments,
                 loc_body: Box::new(loc_expr),
             }
