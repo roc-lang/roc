@@ -504,6 +504,13 @@ fn layout_from_flat_type<'a>(
                     arena.alloc([Layout::Builtin(builtin.clone())]),
                     arena.alloc(ret),
                 )),
+                Ok(Layout::Struct(&[])) => {
+                    //  TODO check for stack size of 0, rather than empty record specifically
+                    Ok(Layout::FunctionPointer(
+                        fn_args.into_bump_slice(),
+                        arena.alloc(ret),
+                    ))
+                }
                 Ok(Layout::Struct(closure_layouts)) => Ok(Layout::Closure(
                     fn_args.into_bump_slice(),
                     closure_layouts,

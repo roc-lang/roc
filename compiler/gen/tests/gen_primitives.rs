@@ -902,6 +902,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn closure() {
         assert_evals_to!(
             indoc!(
@@ -923,6 +924,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn nested_closure() {
         assert_evals_to!(
             indoc!(

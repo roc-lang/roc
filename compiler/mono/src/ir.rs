@@ -1248,7 +1248,6 @@ pub fn specialize_all<'a>(
     mut procs: Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
-    dbg!(&procs);
     let it = procs.externals_others_need.specs.clone();
     let it = it
         .into_iter()
@@ -1465,8 +1464,6 @@ fn build_specialized_proc<'a>(
         None => Layout::Struct(&[]),
     };
 
-    dbg!(&closes_over);
-
     let ret_layout = layout_cache
         .from_var(&env.arena, ret_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
@@ -1626,7 +1623,6 @@ pub fn with_hole<'a>(
                     ..
                 } = def.loc_expr.value
                 {
-                    dbg!(symbol);
                     // Extract Procs, but discard the resulting Expr::Load.
                     // That Load looks up the pointer, which we won't use here!
 
@@ -1738,7 +1734,6 @@ pub fn with_hole<'a>(
                         ..
                     } = def.loc_expr.value
                     {
-                        dbg!(symbol);
                         // Extract Procs, but discard the resulting Expr::Load.
                         // That Load looks up the pointer, which we won't use here!
 
@@ -2430,7 +2425,6 @@ pub fn with_hole<'a>(
             loc_body: boxed_body,
             ..
         } => {
-            dbg!(name);
             let loc_body = *boxed_body;
 
             match procs.insert_anonymous(

@@ -233,26 +233,15 @@ pub fn generate_constraints_help(
         }
 
         Closure {
-            arguments,
-            name,
             closure_type: closure_var,
             loc_body: boxed_body,
+            captured_symbols,
             ..
         } => {
             let mut cons = Vec::new();
             let mut variables = Vec::new();
 
-            let bound_by_closure = arguments
-                .iter()
-                .map(|(_, pattern)| symbols_from_pattern(&pattern.value))
-                .flatten()
-                .collect::<MutSet<_>>();
-
-            // let closed_over_symbols = MutSet::default();
-            let closed_over_symbols = free_variables(expr)
-                .into_iter()
-                .filter(|x| !x.is_builtin() && !bound_by_closure.contains(&x) && !(x == name))
-                .collect::<MutSet<_>>();
+            let closed_over_symbols = captured_symbols;
 
             let closure_ext_var = var_store.fresh();
             let closure_var = *closure_var;
@@ -269,7 +258,7 @@ pub fn generate_constraints_help(
 
                 let region = Region::zero();
                 let expected = Expected::NoExpectation(Type::Variable(var));
-                let lookup = Constraint::Lookup(symbol, expected, region);
+                let lookup = Constraint::Lookup(*symbol, expected, region);
                 cons.push(lookup);
             }
 
