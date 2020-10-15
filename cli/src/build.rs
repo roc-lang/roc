@@ -48,7 +48,7 @@ pub fn build_file(
 
         buf.push_str("    ");
         buf.push_str(module_name);
-        buf.push_str("\n");
+        buf.push('\n');
 
         report_timing(buf, "Read .roc file from disk", module_timing.read_roc_file);
         report_timing(buf, "Parse header", module_timing.parse_header);

@@ -676,7 +676,7 @@ fn write_boolean(env: &Env, boolean: Bool, subs: &Subs, buf: &mut String, parens
 
             let combined = buffers.join(" | ");
 
-            buf.push_str("(");
+            buf.push('(');
             write_content(
                 env,
                 subs.get_without_compacting(cvar).content,
@@ -686,7 +686,7 @@ fn write_boolean(env: &Env, boolean: Bool, subs: &Subs, buf: &mut String, parens
             );
             buf.push_str(" | ");
             buf.push_str(&combined);
-            buf.push_str(")");
+            buf.push(')');
         }
     }
 }
@@ -716,7 +716,7 @@ fn write_apply(
 
             let mut default_case = |subs, content| {
                 if write_parens {
-                    buf.push_str("(");
+                    buf.push('(');
                 }
 
                 write_content(env, content, subs, &mut arg_param, Parens::InTypeParam);
@@ -724,7 +724,7 @@ fn write_apply(
                 buf.push_str(&arg_param);
 
                 if write_parens {
-                    buf.push_str(")");
+                    buf.push(')');
                 }
             };
 
@@ -762,13 +762,13 @@ fn write_apply(
         }
         _ => {
             if write_parens {
-                buf.push_str("(");
+                buf.push('(');
             }
 
             write_symbol(env, symbol, buf);
 
             for arg in args {
-                buf.push_str(" ");
+                buf.push(' ');
                 write_content(
                     env,
                     subs.get_without_compacting(arg).content,
@@ -779,7 +779,7 @@ fn write_apply(
             }
 
             if write_parens {
-                buf.push_str(")");
+                buf.push(')');
             }
         }
     }
@@ -797,7 +797,7 @@ fn write_fn(
     let use_parens = parens != Parens::Unnecessary;
 
     if use_parens {
-        buf.push_str("(");
+        buf.push('(');
     }
 
     for arg in args {
@@ -826,7 +826,7 @@ fn write_fn(
     );
 
     if use_parens {
-        buf.push_str(")");
+        buf.push(')');
     }
 }
 
