@@ -2,7 +2,7 @@ use crate::def::Def;
 use crate::expr::Expr::*;
 use crate::expr::{Expr, Recursive};
 use crate::pattern::Pattern;
-use roc_collections::all::{MutMap, MutSet, SendMap};
+use roc_collections::all::{MutMap, SendMap};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;

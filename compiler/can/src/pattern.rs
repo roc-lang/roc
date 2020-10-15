@@ -418,14 +418,14 @@ fn malformed_pattern<'a>(
     Pattern::MalformedPattern(problem, region)
 }
 
-pub fn bindings_from_patterns<'a, I>(loc_patterns: I, scope: &Scope) -> Vec<(Symbol, Region)>
+pub fn bindings_from_patterns<'a, I>(loc_patterns: I) -> Vec<(Symbol, Region)>
 where
     I: Iterator<Item = &'a Located<Pattern>>,
 {
     let mut answer = Vec::new();
 
     for loc_pattern in loc_patterns {
-        add_bindings_from_patterns(&loc_pattern.region, &loc_pattern.value, scope, &mut answer);
+        add_bindings_from_patterns(&loc_pattern.region, &loc_pattern.value, &mut answer);
     }
 
     answer
@@ -435,7 +435,6 @@ where
 fn add_bindings_from_patterns(
     region: &Region,
     pattern: &Pattern,
-    scope: &Scope,
     answer: &mut Vec<(Symbol, Region)>,
 ) {
     use Pattern::*;
@@ -449,7 +448,7 @@ fn add_bindings_from_patterns(
             ..
         } => {
             for (_, loc_arg) in loc_args {
-                add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, scope, answer);
+                add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
             }
         }
         RecordDestructure { destructs, .. } => {

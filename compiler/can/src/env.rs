@@ -27,6 +27,8 @@ pub struct Env<'a> {
     /// Symbols which were referenced by qualified lookups.
     pub qualified_lookups: MutSet<Symbol>,
 
+    pub top_level_symbols: MutSet<Symbol>,
+
     pub ident_ids: IdentIds,
     pub exposed_ident_ids: IdentIds,
 }
@@ -48,6 +50,7 @@ impl<'a> Env<'a> {
             closures: MutMap::default(),
             qualified_lookups: MutSet::default(),
             tailcallable_symbol: None,
+            top_level_symbols: MutSet::default(),
         }
     }
 

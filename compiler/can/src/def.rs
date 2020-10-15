@@ -191,6 +191,20 @@ pub fn canonicalize_defs<'a>(
 
         output.union(new_output);
 
+        // store the top-level defs, used to ensure that closures won't capture them
+        if let PatternType::TopLevelDef = pattern_type {
+            match &pending_def {
+                PendingDef::AnnotationOnly(_, loc_can_pattern, _)
+                | PendingDef::Body(_, loc_can_pattern, _)
+                | PendingDef::TypedBody(_, loc_can_pattern, _, _) => env.top_level_symbols.extend(
+                    bindings_from_patterns(std::iter::once(loc_can_pattern))
+                        .iter()
+                        .map(|t| t.0),
+                ),
+                PendingDef::Alias { .. } | PendingDef::InvalidAlias => {}
+            }
+        }
+
         // Record the ast::Expr for later. We'll do another pass through these
         // once we have the entire scope assembled. If we were to canonicalize
         // the exprs right now, they wouldn't have symbols in scope from defs
@@ -1164,9 +1178,7 @@ fn canonicalize_pending_def<'a>(
 
             // Store the referenced locals in the refs_by_symbol map, so we can later figure out
             // which defined names reference each other.
-            for (symbol, region) in
-                bindings_from_patterns(std::iter::once(&loc_can_pattern), &scope)
-            {
+            for (symbol, region) in bindings_from_patterns(std::iter::once(&loc_can_pattern)) {
                 let refs =
                     // Functions' references don't count in defs.
                     // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its

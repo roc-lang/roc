@@ -3049,7 +3049,6 @@ pub fn from_can<'a>(
                                     closure_data_layout.clone(),
                                     env.arena.alloc(stmt),
                                 );
-                                dbg!(&stmt);
 
                                 let expr =
                                     Expr::FunctionPointer(*symbol, function_ptr_layout.clone());

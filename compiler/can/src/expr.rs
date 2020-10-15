@@ -481,9 +481,15 @@ pub fn canonicalize_expr<'a>(
             captured_symbols.retain(|s| !new_output.references.bound_symbols.contains(s));
             captured_symbols.retain(|s| !bound_by_argument_patterns.contains(s));
 
-            // TODO filter out top-level symbols, and imported symbols
+            // filter out top-level symbols
             // those will be globally available, and don't need to be captured
-            captured_symbols.retain(|s| !s.is_builtin());
+            captured_symbols.retain(|s| !env.top_level_symbols.contains(s));
+
+            // filter out imported symbols
+            // those will be globally available, and don't need to be captured
+            captured_symbols.retain(|s| s.module_id() == env.home);
+
+            // TODO any Closure that has an empty `captured_symbols` list could be excluded!
 
             output.union(new_output);
 
