@@ -10,7 +10,7 @@ impl LayoutId {
     // Returns something like "foo#1" when given a symbol that interns to "foo"
     // and a LayoutId of 1.
     pub fn to_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
-        format!("{}#{}", symbol.ident_string(interns), self.0)
+        format!("{}_{}", symbol.ident_string(interns), self.0)
     }
 }
 

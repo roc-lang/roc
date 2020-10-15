@@ -226,9 +226,51 @@ impl<'a> Layout<'a> {
 }
 
 /// Avoid recomputing Layout from Variable multiple times.
-#[derive(Default)]
+/// We use `ena` for easy snapshots and rollbacks of the cache.
+/// During specialization, a type variable `a` can be specialized to different layouts,
+/// e.g. `identity : a -> a` could be specialized to `Bool -> Bool` or `Str -> Str`.
+/// Therefore in general it's invalid to store a map from variables to layouts
+/// But if we're careful when to invalidate certain keys, we still get some benefit
+#[derive(Default, Debug)]
 pub struct LayoutCache<'a> {
-    layouts: MutMap<Variable, Result<Layout<'a>, LayoutProblem>>,
+    layouts: ven_ena::unify::UnificationTable<ven_ena::unify::InPlace<CachedVariable<'a>>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum CachedLayout<'a> {
+    Cached(Layout<'a>),
+    NotCached,
+    Problem(LayoutProblem),
+}
+
+/// Must wrap so we can define a specific UnifyKey instance
+/// PhantomData so we can store the 'a lifetime, which is needed to implement the UnifyKey trait,
+/// specifically so we can use `type Value = CachedLayout<'a>`
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct CachedVariable<'a>(Variable, std::marker::PhantomData<&'a ()>);
+
+impl<'a> CachedVariable<'a> {
+    fn new(var: Variable) -> Self {
+        CachedVariable(var, std::marker::PhantomData)
+    }
+}
+
+// use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
+
+impl<'a> ven_ena::unify::UnifyKey for CachedVariable<'a> {
+    type Value = CachedLayout<'a>;
+
+    fn index(&self) -> u32 {
+        self.0.index()
+    }
+
+    fn from_index(index: u32) -> Self {
+        CachedVariable(Variable::from_index(index), std::marker::PhantomData)
+    }
+
+    fn tag() -> &'static str {
+        "CachedVariable"
+    }
 }
 
 impl<'a> LayoutCache<'a> {
@@ -244,16 +286,60 @@ impl<'a> LayoutCache<'a> {
         // Store things according to the root Variable, to avoid duplicate work.
         let var = subs.get_root_key_without_compacting(var);
 
-        let mut env = Env {
-            arena,
-            subs,
-            seen: MutSet::default(),
-        };
+        let cached_var = CachedVariable::new(var);
 
-        self.layouts
-            .entry(var)
-            .or_insert_with(|| Layout::from_var(&mut env, var))
-            .clone()
+        self.expand_to_fit(cached_var);
+
+        use CachedLayout::*;
+        match self.layouts.probe_value(cached_var) {
+            Cached(result) => Ok(result),
+            Problem(problem) => Err(problem),
+            NotCached => {
+                let mut env = Env {
+                    arena,
+                    subs,
+                    seen: MutSet::default(),
+                };
+
+                let result = Layout::from_var(&mut env, var);
+
+                let cached_layout = match &result {
+                    Ok(layout) => Cached(layout.clone()),
+                    Err(problem) => Problem(problem.clone()),
+                };
+
+                self.layouts
+                    .update_value(cached_var, |existing| existing.value = cached_layout);
+
+                result
+            }
+        }
+    }
+
+    fn expand_to_fit(&mut self, var: CachedVariable<'a>) {
+        use ven_ena::unify::UnifyKey;
+
+        let required = (var.index() as isize) - (self.layouts.len() as isize) + 1;
+        if required > 0 {
+            self.layouts.reserve(required as usize);
+
+            for _ in 0..required {
+                self.layouts.new_key(CachedLayout::NotCached);
+            }
+        }
+    }
+
+    pub fn snapshot(
+        &mut self,
+    ) -> ven_ena::unify::Snapshot<ven_ena::unify::InPlace<CachedVariable<'a>>> {
+        self.layouts.snapshot()
+    }
+
+    pub fn rollback_to(
+        &mut self,
+        snapshot: ven_ena::unify::Snapshot<ven_ena::unify::InPlace<CachedVariable<'a>>>,
+    ) {
+        self.layouts.rollback_to(snapshot)
     }
 }
 
@@ -370,7 +456,7 @@ fn layout_from_flat_type<'a>(
 
                     // correct the memory mode of unique lists
                     match Layout::from_var(env, wrapped_var)? {
-                        Layout::Builtin(Builtin::List(_, elem_layout)) => {
+                        Layout::Builtin(Builtin::List(_ignored, elem_layout)) => {
                             let uniqueness_var = args[0];
                             let uniqueness_content =
                                 subs.get_without_compacting(uniqueness_var).content;
@@ -406,14 +492,18 @@ fn layout_from_flat_type<'a>(
             ))
         }
         Record(fields, ext_var) => {
-            debug_assert!(ext_var_is_empty_record(subs, ext_var));
-
             // Sort the fields by label
             let mut sorted_fields = Vec::with_capacity_in(fields.len(), arena);
+            sorted_fields.extend(fields.into_iter());
 
-            for tuple in fields {
-                sorted_fields.push(tuple);
+            // extract any values from the ext_var
+            let mut fields_map = MutMap::default();
+            match roc_types::pretty_print::chase_ext_record(subs, ext_var, &mut fields_map) {
+                Ok(()) | Err((_, Content::FlexVar(_))) => {}
+                Err(_) => unreachable!("this would have been a type error"),
             }
+
+            sorted_fields.extend(fields_map.into_iter());
 
             sorted_fields.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
 
@@ -777,22 +867,6 @@ fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
 
 #[cfg(not(debug_assertions))]
 fn ext_var_is_empty_tag_union(_: &Subs, _: Variable) -> bool {
-    // This should only ever be used in debug_assert! macros
-    unreachable!();
-}
-
-#[cfg(debug_assertions)]
-fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
-    // the ext_var is empty
-    let mut ext_fields = MutMap::default();
-    match roc_types::pretty_print::chase_ext_record(subs, ext_var, &mut ext_fields) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => ext_fields.is_empty(),
-        Err((_, content)) => panic!("invalid content in ext_var: {:?}", content),
-    }
-}
-
-#[cfg(not(debug_assertions))]
-fn ext_var_is_empty_record(_: &Subs, _: Variable) -> bool {
     // This should only ever be used in debug_assert! macros
     unreachable!();
 }

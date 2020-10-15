@@ -875,7 +875,8 @@ mod test_mono {
             indoc!(
                 r#"
                 let Test.0 = 5i64;
-                ret Test.0;
+                let Test.2 = 3i64;
+                ret Test.2;
                 "#
             ),
         );
@@ -1751,14 +1752,14 @@ mod test_mono {
                     nonEmpty : List Int
                     nonEmpty =
                         [ 1, 1, -4, 1, 2 ]
-    
-        
+
+
                     greaterThanOne : Int -> Bool
                     greaterThanOne = \i ->
                          i > 0
-    
+
                     List.map nonEmpty greaterThanOne
-                
+
                 main {}
                 "#
             ),
@@ -1916,6 +1917,151 @@ mod test_mono {
                 let Test.8 = CallByName Test.2 Test.1;
                 let Test.6 = CallByName Num.14 Test.7 Test.8;
                 ret Test.6;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn rigids() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                swap : Int, Int, List a -> List a
+                swap = \i, j, list ->
+                    when Pair (List.get list i) (List.get list j) is
+                        Pair (Ok atI) (Ok atJ) ->
+                            foo = atJ
+
+                            list
+                                |> List.set i foo
+                                |> List.set j atI
+
+                        _ ->
+                            []
+
+                swap 0 0 [0x1]
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure List.3 (#Attr.2, #Attr.3):
+                    let Test.43 = lowlevel ListLen #Attr.2;
+                    let Test.39 = lowlevel NumLt #Attr.3 Test.43;
+                    if Test.39 then
+                        let Test.41 = 1i64;
+                        let Test.42 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+                        let Test.40 = Ok Test.41 Test.42;
+                        ret Test.40;
+                    else
+                        let Test.37 = 0i64;
+                        let Test.38 = Struct {};
+                        let Test.36 = Err Test.37 Test.38;
+                        ret Test.36;
+
+                procedure List.4 (#Attr.2, #Attr.3, #Attr.4):
+                    let Test.19 = lowlevel ListLen #Attr.2;
+                    let Test.17 = lowlevel NumLt #Attr.3 Test.19;
+                    if Test.17 then
+                        let Test.18 = lowlevel ListSet #Attr.2 #Attr.3 #Attr.4;
+                        ret Test.18;
+                    else
+                        ret #Attr.2;
+
+                procedure Test.0 (Test.2, Test.3, Test.4):
+                    let Test.34 = CallByName List.3 Test.4 Test.2;
+                    let Test.35 = CallByName List.3 Test.4 Test.3;
+                    let Test.13 = Struct {Test.34, Test.35};
+                    let Test.24 = true;
+                    let Test.26 = 1i64;
+                    let Test.25 = Index 0 Test.13;
+                    let Test.27 = Index 0 Test.25;
+                    let Test.33 = lowlevel Eq Test.26 Test.27;
+                    let Test.31 = lowlevel And Test.33 Test.24;
+                    let Test.29 = 1i64;
+                    let Test.28 = Index 1 Test.13;
+                    let Test.30 = Index 0 Test.28;
+                    let Test.32 = lowlevel Eq Test.29 Test.30;
+                    let Test.23 = lowlevel And Test.32 Test.31;
+                    if Test.23 then
+                        let Test.21 = Index 0 Test.13;
+                        let Test.5 = Index 1 Test.21;
+                        let Test.20 = Index 1 Test.13;
+                        let Test.6 = Index 1 Test.20;
+                        let Test.15 = CallByName List.4 Test.4 Test.2 Test.6;
+                        let Test.14 = CallByName List.4 Test.15 Test.3 Test.5;
+                        ret Test.14;
+                    else
+                        dec Test.4;
+                        let Test.22 = Array [];
+                        ret Test.22;
+
+                let Test.9 = 0i64;
+                let Test.10 = 0i64;
+                let Test.12 = 1i64;
+                let Test.11 = Array [Test.12];
+                let Test.8 = CallByName Test.0 Test.9 Test.10 Test.11;
+                ret Test.8;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn let_x_in_x() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                x = 5
+
+                answer =
+                    1337
+
+                unused =
+                    nested = 17
+                    nested
+
+                answer
+                "#
+            ),
+            indoc!(
+                r#"
+                let Test.1 = 1337i64;
+                let Test.0 = 5i64;
+                let Test.3 = 17i64;
+                ret Test.1;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn let_x_in_x_indirect() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                x = 5
+
+                answer =
+                    1337
+
+                unused =
+                    nested = 17
+
+                    i = 1
+
+                    nested
+
+                answer
+                "#
+            ),
+            indoc!(
+                r#"
+                let Test.1 = 1337i64;
+                let Test.0 = 5i64;
+                let Test.3 = 17i64;
+                let Test.4 = 1i64;
+                ret Test.1;
                 "#
             ),
         )

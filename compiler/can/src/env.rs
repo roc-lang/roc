@@ -25,7 +25,7 @@ pub struct Env<'a> {
     pub tailcallable_symbol: Option<Symbol>,
 
     /// Symbols which were referenced by qualified lookups.
-    pub referenced_symbols: MutSet<Symbol>,
+    pub qualified_lookups: MutSet<Symbol>,
 
     pub ident_ids: IdentIds,
     pub exposed_ident_ids: IdentIds,
@@ -46,7 +46,7 @@ impl<'a> Env<'a> {
             exposed_ident_ids,
             problems: Vec::new(),
             closures: MutMap::default(),
-            referenced_symbols: MutSet::default(),
+            qualified_lookups: MutSet::default(),
             tailcallable_symbol: None,
         }
     }
@@ -77,7 +77,7 @@ impl<'a> Env<'a> {
                         Some(ident_id) => {
                             let symbol = Symbol::new(module_id, *ident_id);
 
-                            self.referenced_symbols.insert(symbol);
+                            self.qualified_lookups.insert(symbol);
 
                             Ok(symbol)
                         }
@@ -101,7 +101,7 @@ impl<'a> Env<'a> {
                         Some(ident_id) => {
                             let symbol = Symbol::new(module_id, *ident_id);
 
-                            self.referenced_symbols.insert(symbol);
+                            self.qualified_lookups.insert(symbol);
 
                             Ok(symbol)
                         }

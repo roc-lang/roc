@@ -89,13 +89,7 @@ impl Default for Pools {
 
 impl Pools {
     pub fn new(num_pools: usize) -> Self {
-        let mut pools = Vec::with_capacity(num_pools);
-
-        for _ in 0..num_pools {
-            pools.push(Vec::new());
-        }
-
-        Pools(pools)
+        Pools(vec![Vec::new(); num_pools])
     }
 
     pub fn len(&self) -> usize {
@@ -469,22 +463,35 @@ fn solve(
                         let visit_mark = young_mark.next();
                         let final_mark = visit_mark.next();
 
-                        debug_assert!({
-                            let offenders = next_pools
-                                .get(next_rank)
-                                .iter()
-                                .filter(|var| {
-                                    subs.get_without_compacting(roc_types::subs::Variable::clone(
-                                        var,
-                                    ))
-                                    .rank
-                                    .into_usize()
-                                        > next_rank.into_usize()
-                                })
-                                .collect::<Vec<&roc_types::subs::Variable>>();
+                        debug_assert_eq!(
+                            {
+                                let offenders = next_pools
+                                    .get(next_rank)
+                                    .iter()
+                                    .filter(|var| {
+                                        let current = subs.get_without_compacting(
+                                            roc_types::subs::Variable::clone(var),
+                                        );
 
-                            offenders.is_empty()
-                        });
+                                        current.rank.into_usize() > next_rank.into_usize()
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                let result = offenders.len();
+
+                                if result > 0 {
+                                    dbg!(
+                                        &subs,
+                                        &offenders,
+                                        &let_con.def_types,
+                                        &let_con.def_aliases
+                                    );
+                                }
+
+                                result
+                            },
+                            0
+                        );
 
                         // pop pool
                         generalize(subs, young_mark, visit_mark, next_rank, next_pools);
@@ -566,6 +573,16 @@ fn type_to_var(
     typ: &Type,
 ) -> Variable {
     type_to_variable(subs, rank, pools, cached, typ)
+}
+
+/// Abusing existing functions for our purposes
+/// this is to put a solved type back into subs
+pub fn insert_type_into_subs(subs: &mut Subs, typ: &Type) -> Variable {
+    let rank = Rank::NONE;
+    let mut pools = Pools::default();
+    let mut cached = MutMap::default();
+
+    type_to_variable(subs, rank, &mut pools, &mut cached, typ)
 }
 
 fn type_to_variable(
@@ -764,10 +781,10 @@ fn check_for_infinite_type(
 ) {
     let var = loc_var.value;
 
-    let is_uniq_infer = match subs.get(var).content {
-        Content::Alias(Symbol::ATTR_ATTR, _, _) => true,
-        _ => false,
-    };
+    let is_uniq_infer = matches!(
+        subs.get(var).content,
+        Content::Alias(Symbol::ATTR_ATTR, _, _)
+    );
 
     while let Some((recursive, chain)) = subs.occurs(var) {
         let description = subs.get(recursive);
@@ -1180,6 +1197,184 @@ fn introduce(subs: &mut Subs, rank: Rank, pools: &mut Pools, vars: &[Variable]) 
     }
 
     pool.extend(vars);
+}
+
+/// Function that converts rigids variables to flex variables
+/// this is used during the monomorphization process
+pub fn instantiate_rigids(subs: &mut Subs, var: Variable) {
+    let rank = Rank::NONE;
+    let mut pools = Pools::default();
+
+    instantiate_rigids_help(subs, rank, &mut pools, var);
+}
+
+fn instantiate_rigids_help(
+    subs: &mut Subs,
+    max_rank: Rank,
+    pools: &mut Pools,
+    var: Variable,
+) -> Variable {
+    use roc_types::subs::Content::*;
+    use roc_types::subs::FlatType::*;
+
+    let desc = subs.get_without_compacting(var);
+
+    if let Some(copy) = desc.copy.into_variable() {
+        return copy;
+    }
+
+    let make_descriptor = |content| Descriptor {
+        content,
+        rank: max_rank,
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    };
+
+    let content = desc.content;
+    let copy = var;
+
+    pools.get_mut(max_rank).push(copy);
+
+    // Link the original variable to the new variable. This lets us
+    // avoid making multiple copies of the variable we are instantiating.
+    //
+    // Need to do this before recursively copying to avoid looping.
+    subs.set(
+        var,
+        Descriptor {
+            content: content.clone(),
+            rank: desc.rank,
+            mark: Mark::NONE,
+            copy: copy.into(),
+        },
+    );
+
+    // Now we recursively copy the content of the variable.
+    // We have already marked the variable as copied, so we
+    // will not repeat this work or crawl this variable again.
+    match content {
+        Structure(flat_type) => {
+            let new_flat_type = match flat_type {
+                Apply(symbol, args) => {
+                    let args = args
+                        .into_iter()
+                        .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
+                        .collect();
+
+                    Apply(symbol, args)
+                }
+
+                Func(arg_vars, closure_var, ret_var) => {
+                    let new_ret_var = instantiate_rigids_help(subs, max_rank, pools, ret_var);
+                    let new_closure_var =
+                        instantiate_rigids_help(subs, max_rank, pools, closure_var);
+                    let arg_vars = arg_vars
+                        .into_iter()
+                        .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
+                        .collect();
+
+                    Func(arg_vars, new_closure_var, new_ret_var)
+                }
+
+                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+
+                Record(fields, ext_var) => {
+                    let mut new_fields = MutMap::default();
+
+                    for (label, field) in fields {
+                        use RecordField::*;
+
+                        let new_field = match field {
+                            Demanded(var) => {
+                                Demanded(instantiate_rigids_help(subs, max_rank, pools, var))
+                            }
+                            Required(var) => {
+                                Required(instantiate_rigids_help(subs, max_rank, pools, var))
+                            }
+                            Optional(var) => {
+                                Optional(instantiate_rigids_help(subs, max_rank, pools, var))
+                            }
+                        };
+
+                        new_fields.insert(label, new_field);
+                    }
+
+                    Record(
+                        new_fields,
+                        instantiate_rigids_help(subs, max_rank, pools, ext_var),
+                    )
+                }
+
+                TagUnion(tags, ext_var) => {
+                    let mut new_tags = MutMap::default();
+
+                    for (tag, vars) in tags {
+                        let new_vars: Vec<Variable> = vars
+                            .into_iter()
+                            .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
+                            .collect();
+                        new_tags.insert(tag, new_vars);
+                    }
+
+                    TagUnion(
+                        new_tags,
+                        instantiate_rigids_help(subs, max_rank, pools, ext_var),
+                    )
+                }
+
+                RecursiveTagUnion(rec_var, tags, ext_var) => {
+                    let mut new_tags = MutMap::default();
+
+                    let new_rec_var = instantiate_rigids_help(subs, max_rank, pools, rec_var);
+
+                    for (tag, vars) in tags {
+                        let new_vars: Vec<Variable> = vars
+                            .into_iter()
+                            .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
+                            .collect();
+                        new_tags.insert(tag, new_vars);
+                    }
+
+                    RecursiveTagUnion(
+                        new_rec_var,
+                        new_tags,
+                        instantiate_rigids_help(subs, max_rank, pools, ext_var),
+                    )
+                }
+
+                Boolean(b) => {
+                    let mut mapper = |var| instantiate_rigids_help(subs, max_rank, pools, var);
+
+                    Boolean(b.map_variables(&mut mapper))
+                }
+            };
+
+            subs.set(copy, make_descriptor(Structure(new_flat_type)));
+
+            copy
+        }
+
+        FlexVar(_) | Error => copy,
+
+        RigidVar(name) => {
+            subs.set(copy, make_descriptor(FlexVar(Some(name))));
+
+            copy
+        }
+
+        Alias(symbol, args, real_type_var) => {
+            let new_args = args
+                .into_iter()
+                .map(|(name, var)| (name, instantiate_rigids_help(subs, max_rank, pools, var)))
+                .collect();
+            let new_real_type_var = instantiate_rigids_help(subs, max_rank, pools, real_type_var);
+            let new_content = Alias(symbol, new_args, new_real_type_var);
+
+            subs.set(copy, make_descriptor(new_content));
+
+            copy
+        }
+    }
 }
 
 fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {

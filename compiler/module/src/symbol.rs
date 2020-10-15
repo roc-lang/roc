@@ -288,14 +288,18 @@ impl fmt::Debug for ModuleId {
                 .lock()
                 .expect("Failed to acquire lock for Debug reading from DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
-        match names.get(&self.0) {
-            Some(str_ref) => write!(f, "{}", str_ref.clone()),
-            None => {
-                panic!(
-                    "Could not find a Debug name for module ID {} in {:?}",
-                    self.0, names,
-                );
+        if PRETTY_PRINT_DEBUG_SYMBOLS {
+            match names.get(&self.0) {
+                Some(str_ref) => write!(f, "{}", str_ref.clone()),
+                None => {
+                    panic!(
+                        "Could not find a Debug name for module ID {} in {:?}",
+                        self.0, names,
+                    );
+                }
             }
+        } else {
+            write!(f, "{}", self.0)
         }
     }
 
@@ -376,7 +380,7 @@ pub struct IdentId(u32);
 ///
 /// Each module name is stored twice, for faster lookups.
 /// Since these are interned strings, this shouldn't result in many total allocations in practice.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdentIds {
     by_ident: MutMap<InlinableString, IdentId>,
 

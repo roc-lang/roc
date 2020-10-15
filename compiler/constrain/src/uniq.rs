@@ -67,6 +67,7 @@ pub fn constrain_decls(
 
     // perform usage analysis on the whole file
     let mut var_usage = VarUsage::default();
+
     for decl in decls.iter().rev() {
         // NOTE: rigids are empty because they are not shared between top-level definitions
         match decl {
@@ -1445,6 +1446,7 @@ pub fn constrain_expr(
         }
 
         Accessor {
+            function_var,
             field,
             record_var,
             closure_var,
@@ -1490,6 +1492,7 @@ pub fn constrain_expr(
             exists(
                 vec![
                     *record_var,
+                    *function_var,
                     *closure_var,
                     *field_var,
                     *ext_var,
@@ -1497,7 +1500,16 @@ pub fn constrain_expr(
                     field_uniq_var,
                     record_uniq_var,
                 ],
-                And(vec![Eq(fn_type, expected, category, region), record_con]),
+                And(vec![
+                    Eq(fn_type.clone(), expected, category.clone(), region),
+                    Eq(
+                        fn_type,
+                        Expected::NoExpectation(Variable(*function_var)),
+                        category,
+                        region,
+                    ),
+                    record_con,
+                ]),
             )
         }
         RuntimeError(_) => True,

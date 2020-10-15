@@ -22,7 +22,7 @@ pub const TYPE_FLOATINGPOINT: &str = "FloatingPoint";
 ///     Can unify with Optional and Demanded
 /// - Optional: introduced by pattern matches and annotations.
 ///     Can unify with Required, but not with Demanded
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Hash)]
 pub enum RecordField<T> {
     Optional(T),
     Required(T),
@@ -988,7 +988,7 @@ pub struct Alias {
     pub typ: Type,
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub enum Problem {
     CanonicalizationProblem,
     CircularType(Symbol, ErrorType, Region),
@@ -1014,7 +1014,7 @@ pub enum Mismatch {
     CanonicalizationProblem,
 }
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Hash)]
 pub enum ErrorType {
     Infinite,
     Type(Symbol, Vec<ErrorType>),
@@ -1063,7 +1063,7 @@ fn write_error_type_help(
 
     match error_type {
         Infinite => buf.push_str("∞"),
-        Error => buf.push_str("?"),
+        Error => buf.push('?'),
         FlexVar(name) => buf.push_str(name.as_str()),
         RigidVar(name) => buf.push_str(name.as_str()),
         Type(symbol, arguments) => {
@@ -1181,7 +1181,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
 
     match error_type {
         Infinite => buf.push_str("∞"),
-        Error => buf.push_str("?"),
+        Error => buf.push('?'),
         FlexVar(name) => buf.push_str(name.as_str()),
         RigidVar(name) => buf.push_str(name.as_str()),
         Type(symbol, arguments) => {
@@ -1316,7 +1316,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             while let Some((tag, args)) = it.next() {
                 buf.push_str(&format!("{:?}", tag));
                 for arg in args {
-                    buf.push_str(" ");
+                    buf.push(' ');
                     write_debug_error_type_help(arg, buf, Parens::InTypeParam);
                 }
 
@@ -1335,7 +1335,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             while let Some((tag, args)) = it.next() {
                 buf.push_str(&format!("{:?}", tag));
                 for arg in args {
-                    buf.push_str(" ");
+                    buf.push(' ');
                     write_debug_error_type_help(arg, buf, Parens::Unnecessary);
                 }
 
@@ -1359,7 +1359,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub enum TypeExt {
     Closed,
     FlexOpen(Lowercase),
