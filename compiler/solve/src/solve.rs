@@ -89,13 +89,7 @@ impl Default for Pools {
 
 impl Pools {
     pub fn new(num_pools: usize) -> Self {
-        let mut pools = Vec::with_capacity(num_pools);
-
-        for _ in 0..num_pools {
-            pools.push(Vec::new());
-        }
-
-        Pools(pools)
+        Pools(vec![Vec::new(); num_pools])
     }
 
     pub fn len(&self) -> usize {
