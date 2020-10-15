@@ -1064,7 +1064,7 @@ fn write_error_type_help(
 
     match error_type {
         Infinite => buf.push_str("∞"),
-        Error => buf.push_str("?"),
+        Error => buf.push('?'),
         FlexVar(name) => buf.push_str(name.as_str()),
         RigidVar(name) => buf.push_str(name.as_str()),
         Type(symbol, arguments) => {
@@ -1182,7 +1182,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
 
     match error_type {
         Infinite => buf.push_str("∞"),
-        Error => buf.push_str("?"),
+        Error => buf.push('?'),
         FlexVar(name) => buf.push_str(name.as_str()),
         RigidVar(name) => buf.push_str(name.as_str()),
         Type(symbol, arguments) => {
@@ -1317,7 +1317,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             while let Some((tag, args)) = it.next() {
                 buf.push_str(&format!("{:?}", tag));
                 for arg in args {
-                    buf.push_str(" ");
+                    buf.push(' ');
                     write_debug_error_type_help(arg, buf, Parens::InTypeParam);
                 }
 
@@ -1336,7 +1336,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             while let Some((tag, args)) = it.next() {
                 buf.push_str(&format!("{:?}", tag));
                 for arg in args {
-                    buf.push_str(" ");
+                    buf.push(' ');
                     write_debug_error_type_help(arg, buf, Parens::Unnecessary);
                 }
 
