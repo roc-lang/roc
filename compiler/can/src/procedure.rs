@@ -40,25 +40,24 @@ impl Procedure {
 }
 
 /// These are all ordered sets because they end up getting traversed in a graph search
-/// to determine how defs shuold be ordered. We want builds to be reproducible,
+/// to determine how defs should be ordered. We want builds to be reproducible,
 /// so it's important that building the same code gives the same order every time!
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct References {
+    pub bound_symbols: ImSet<Symbol>,
     pub lookups: ImSet<Symbol>,
     pub calls: ImSet<Symbol>,
 }
 
 impl References {
     pub fn new() -> References {
-        References {
-            lookups: ImSet::default(),
-            calls: ImSet::default(),
-        }
+        Self::default()
     }
 
     pub fn union(mut self, other: References) -> Self {
         self.lookups = self.lookups.union(other.lookups);
         self.calls = self.calls.union(other.calls);
+        self.bound_symbols = self.bound_symbols.union(other.bound_symbols);
 
         self
     }
@@ -66,6 +65,7 @@ impl References {
     pub fn union_mut(&mut self, other: References) {
         self.lookups.extend(other.lookups);
         self.calls.extend(other.calls);
+        self.bound_symbols.extend(other.bound_symbols);
     }
 
     pub fn has_lookup(&self, symbol: Symbol) -> bool {

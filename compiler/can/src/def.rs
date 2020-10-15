@@ -812,9 +812,10 @@ fn canonicalize_pending_def<'a>(
                     value: Closure {
                         function_type: var_store.fresh(),
                         closure_type: var_store.fresh(),
+                        closure_ext_var: var_store.fresh(),
                         return_type: var_store.fresh(),
                         name: symbol,
-                        captured_symbols: MutSet::default(),
+                        captured_symbols: Vec::new(),
                         recursive: Recursive::NotRecursive,
                         arguments: underscores,
                         loc_body: Box::new(body_expr),
@@ -966,10 +967,12 @@ fn canonicalize_pending_def<'a>(
                 &Closure {
                     function_type,
                     closure_type,
+                    closure_ext_var,
                     return_type,
                     name: ref symbol,
                     ref arguments,
                     loc_body: ref body,
+                    ref captured_symbols,
                     ..
                 },
             ) = (
@@ -1012,9 +1015,10 @@ fn canonicalize_pending_def<'a>(
                 loc_can_expr.value = Closure {
                     function_type,
                     closure_type,
+                    closure_ext_var,
                     return_type,
                     name: *defined_symbol,
-                    captured_symbols: MutSet::default(),
+                    captured_symbols: captured_symbols.clone(),
                     recursive: is_recursive,
                     arguments: arguments.clone(),
                     loc_body: body.clone(),
@@ -1101,10 +1105,12 @@ fn canonicalize_pending_def<'a>(
                 &Closure {
                     function_type,
                     closure_type,
+                    closure_ext_var,
                     return_type,
                     name: ref symbol,
                     ref arguments,
                     loc_body: ref body,
+                    ref captured_symbols,
                     ..
                 },
             ) = (
@@ -1146,9 +1152,10 @@ fn canonicalize_pending_def<'a>(
                 loc_can_expr.value = Closure {
                     function_type,
                     closure_type,
+                    closure_ext_var,
                     return_type,
                     name: *defined_symbol,
-                    captured_symbols: MutSet::default(),
+                    captured_symbols: captured_symbols.clone(),
                     recursive: is_recursive,
                     arguments: arguments.clone(),
                     loc_body: body.clone(),

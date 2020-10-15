@@ -100,9 +100,10 @@ pub enum Expr {
     Closure {
         function_type: Variable,
         closure_type: Variable,
+        closure_ext_var: Variable,
         return_type: Variable,
         name: Symbol,
-        captured_symbols: MutSet<Symbol>,
+        captured_symbols: Vec<(Symbol, Variable)>,
         recursive: Recursive,
         arguments: Vec<(Variable, Located<Pattern>)>,
         loc_body: Box<Located<Expr>>,
@@ -442,6 +443,8 @@ pub fn canonicalize_expr<'a>(
             let mut can_args = Vec::with_capacity(loc_arg_patterns.len());
             let mut output = Output::default();
 
+            let mut bound_by_argument_patterns = MutSet::default();
+
             for loc_pattern in loc_arg_patterns.into_iter() {
                 let (new_output, can_arg) = canonicalize_pattern(
                     env,
@@ -451,6 +454,9 @@ pub fn canonicalize_expr<'a>(
                     &loc_pattern.value,
                     loc_pattern.region,
                 );
+
+                bound_by_argument_patterns
+                    .extend(new_output.references.bound_symbols.iter().copied());
 
                 output.union(new_output);
 
@@ -464,6 +470,20 @@ pub fn canonicalize_expr<'a>(
                 loc_body_expr.region,
                 &loc_body_expr.value,
             );
+
+            let mut captured_symbols: MutSet<Symbol> =
+                new_output.references.lookups.iter().copied().collect();
+
+            // filter out the closure's name itself
+            captured_symbols.remove(&symbol);
+
+            // symbols bound either in this pattern or deeper down are not captured!
+            captured_symbols.retain(|s| !new_output.references.bound_symbols.contains(s));
+            captured_symbols.retain(|s| !bound_by_argument_patterns.contains(s));
+
+            // TODO filter out top-level symbols, and imported symbols
+            // those will be globally available, and don't need to be captured
+            captured_symbols.retain(|s| !s.is_builtin());
 
             output.union(new_output);
 
@@ -485,13 +505,22 @@ pub fn canonicalize_expr<'a>(
 
             env.register_closure(symbol, output.references.clone());
 
+            let mut captured_symbols: Vec<_> = captured_symbols
+                .into_iter()
+                .map(|s| (s, var_store.fresh()))
+                .collect();
+
+            // sort symbols, so we know the order in which they're stored in the closure record
+            captured_symbols.sort();
+
             (
                 Closure {
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
+                    closure_ext_var: var_store.fresh(),
                     return_type: var_store.fresh(),
                     name: symbol,
-                    captured_symbols: MutSet::default(),
+                    captured_symbols,
                     recursive: Recursive::NotRecursive,
                     arguments: can_args,
                     loc_body: Box::new(loc_body_expr),
@@ -1216,6 +1245,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         Closure {
             function_type,
             closure_type,
+            closure_ext_var,
             return_type,
             recursive,
             name,
@@ -1232,6 +1262,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             Closure {
                 function_type,
                 closure_type,
+                closure_ext_var,
                 return_type,
                 recursive,
                 name,

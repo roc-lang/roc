@@ -21,6 +21,7 @@ ven_ena = { path = "../../vendor/ena" }
 
 [dev-dependencies]
 roc_constrain = { path = "../constrain" }
+roc_load= { path = "../load" }
 roc_builtins = { path = "../builtins" }
 roc_parse = { path = "../parse" }
 roc_solve = { path = "../solve" }

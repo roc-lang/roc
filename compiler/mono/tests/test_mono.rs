@@ -12,6 +12,21 @@ mod helpers;
 // Test monomorphization
 #[cfg(test)]
 mod test_mono {
+    use roc_collections::all::MutMap;
+
+    fn promote_expr_to_module(src: &str) -> String {
+        let mut buffer = String::from("app Test provides [ main ] imports []\n\nmain =\n");
+
+        for line in src.lines() {
+            // indent the body!
+            buffer.push_str("    ");
+            buffer.push_str(line);
+            buffer.push('\n');
+        }
+
+        buffer
+    }
+
     // NOTE because the Show instance of module names is different in --release mode,
     // these tests would all fail. In the future, when we do interesting optimizations,
     // we'll likely want some tests for --release too.
@@ -22,68 +37,70 @@ mod test_mono {
 
     #[cfg(debug_assertions)]
     fn compiles_to_ir(src: &str, expected: &str) {
-        use crate::helpers::{can_expr, infer_expr, CanExprOut};
         use bumpalo::Bump;
-        use roc_mono::layout::LayoutCache;
-        use roc_types::subs::Subs;
+        use std::path::{Path, PathBuf};
 
-        let arena = Bump::new();
-        let CanExprOut {
-            loc_expr,
-            var_store,
-            var,
-            constraint,
-            home,
-            mut interns,
-            ..
-        } = can_expr(src);
+        let arena = &Bump::new();
 
-        let subs = Subs::new(var_store.into());
-        let mut unify_problems = Vec::new();
-        let (_content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+        // let stdlib = roc_builtins::unique::uniq_stdlib();
+        let stdlib = roc_builtins::std::standard_stdlib();
+        let filename = PathBuf::from("Test.roc");
+        let src_dir = Path::new("fake/test/path");
 
-        // Compile and add all the Procs before adding main
-        let mut procs = roc_mono::ir::Procs::default();
-        let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
+        let module_src;
+        let temp;
+        if src.starts_with("app") {
+            // this is already a module
+            module_src = src;
+        } else {
+            // this is an expression, promote it to a module
+            temp = promote_expr_to_module(src);
+            module_src = &temp;
+        }
 
-        // Put this module's ident_ids back in the interns
-        interns.all_ident_ids.insert(home, ident_ids.clone());
-
-        // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-        let mut mono_problems = Vec::new();
-        let mut mono_env = roc_mono::ir::Env {
-            arena: &arena,
-            subs: &mut subs,
-            problems: &mut mono_problems,
-            home,
-            ident_ids: &mut ident_ids,
-        };
-
-        let mut layout_cache = LayoutCache::default();
-        let ir_expr =
-            roc_mono::ir::from_can(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
-
-        // let mono_expr = Expr::new(&mut mono_env, loc_expr.value, &mut procs);
-        let procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut LayoutCache::default());
-
-        assert_eq!(
-            procs.runtime_errors,
-            roc_collections::all::MutMap::default()
+        let exposed_types = MutMap::default();
+        let loaded = roc_load::file::load_and_monomorphize_from_str(
+            arena,
+            filename,
+            &module_src,
+            stdlib,
+            src_dir,
+            exposed_types,
         );
 
-        let (procs, param_map) = procs.get_specialized_procs_help(mono_env.arena);
+        let loaded = loaded.expect("failed to load module");
 
-        // apply inc/dec
-        let stmt = mono_env.arena.alloc(ir_expr);
-        let ir_expr = roc_mono::inc_dec::visit_declaration(mono_env.arena, param_map, stmt);
+        use roc_load::file::MonomorphizedModule;
+        let MonomorphizedModule {
+            can_problems,
+            type_problems,
+            mono_problems,
+            procedures,
+            exposed_to_host,
+            ..
+        } = loaded;
 
-        let mut procs_string = procs
+        assert!(can_problems.is_empty());
+        assert!(type_problems.is_empty());
+        assert!(mono_problems.is_empty());
+
+        debug_assert_eq!(exposed_to_host.len(), 1);
+        let main_fn_symbol = exposed_to_host.keys().copied().nth(0).unwrap();
+
+        let index = procedures
+            .keys()
+            .position(|(s, _)| *s == main_fn_symbol)
+            .unwrap();
+
+        let mut procs_string = procedures
             .values()
             .map(|proc| proc.to_pretty(200))
             .collect::<Vec<_>>();
 
+        let main_fn = procs_string.swap_remove(index);
+
         procs_string.sort();
-        procs_string.push(ir_expr.to_pretty(200));
+        procs_string.push(main_fn);
 
         let result = procs_string.join("\n");
 
@@ -383,12 +400,12 @@ mod test_mono {
     fn guard_pattern_true() {
         compiles_to_ir(
             r#"
-            main = \{} ->
+            wrapper = \{} ->
                 when 2 is
                     2 if False -> 42
                     _ -> 0
 
-            main {}
+            wrapper {}
             "#,
             indoc!(
                 r#"
@@ -625,7 +642,7 @@ mod test_mono {
     fn when_joinpoint() {
         compiles_to_ir(
             r#"
-            main = \{} ->
+            wrapper = \{} ->
                 x : [ Red, White, Blue ]
                 x = Blue
 
@@ -637,7 +654,7 @@ mod test_mono {
 
                 y
 
-            main {}
+            wrapper {}
             "#,
             indoc!(
                 r#"
@@ -724,7 +741,7 @@ mod test_mono {
     fn when_on_result() {
         compiles_to_ir(
             r#"
-            main = \{} ->
+            wrapper = \{} ->
                 x : Result Int Int
                 x = Ok 2
 
@@ -735,7 +752,7 @@ mod test_mono {
                         Err _ -> 3
                 y
 
-            main {}
+            wrapper {}
             "#,
             indoc!(
                 r#"
@@ -824,12 +841,12 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                main = \{} ->
+                wrapper = \{} ->
                     when 10 is
                         x if x == 5 -> 0
                         _ -> 42
 
-                main {}
+                wrapper {}
                 "#
             ),
             indoc!(
@@ -1564,10 +1581,10 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                main = \{} ->
+                wrapper = \{} ->
                     List.get [1,2,3] 0
 
-                main {}
+                wrapper {}
                 "#
             ),
             indoc!(
@@ -1748,7 +1765,7 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
-                main = \{} ->
+                wrapper = \{} ->
                     nonEmpty : List Int
                     nonEmpty =
                         [ 1, 1, -4, 1, 2 ]
@@ -1760,7 +1777,7 @@ mod test_mono {
 
                     List.map nonEmpty greaterThanOne
 
-                main {}
+                wrapper {}
                 "#
             ),
             indoc!(
@@ -2062,6 +2079,47 @@ mod test_mono {
                 let Test.3 = 17i64;
                 let Test.4 = 1i64;
                 ret Test.1;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn nested_closure() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                foo = \{} ->
+                    x = 42
+                    f = \{} -> x
+                    f
+
+                main = 
+                    f = foo {}
+                    f {}
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure Test.1 (Test.7):
+                    let Test.3 = 42i64;
+                    let Test.14 = FunctionPointer Test.4;
+                    let Test.15 = Struct {Test.3};
+                    let Test.4 = Struct {Test.14, Test.15};
+                    ret Test.4;
+
+                procedure Test.4 (Test.11, #Attr.12):
+                    let Test.3 = Index 0 #Attr.12;
+                    ret Test.3;
+
+                procedure Test.0 ():
+                    let Test.10 = Struct {};
+                    let Test.6 = CallByName Test.1 Test.10;
+                    let Test.9 = Struct {};
+                    let Test.8 = CallByPointer Test.6 Test.9;
+                    ret Test.8;
                 "#
             ),
         )

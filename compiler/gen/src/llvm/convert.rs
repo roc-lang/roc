@@ -106,6 +106,12 @@ pub fn basic_type_from_layout<'ctx>(
             basic_type_from_function_layout(arena, context, args, ret_layout, ptr_bytes)
         }
         Closure(args, closure_layout, ret_layout) => {
+            let args = {
+                let mut temp = Vec::from_iter_in(args.iter().cloned(), arena);
+                temp.push(Layout::Struct(closure_layout));
+                temp.into_bump_slice()
+            };
+
             let function_pointer =
                 basic_type_from_function_layout(arena, context, args, ret_layout, ptr_bytes);
 

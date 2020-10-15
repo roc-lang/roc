@@ -924,19 +924,19 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn nested_closure() {
         assert_evals_to!(
             indoc!(
                 r#"
                 app Test provides [ main ] imports []
 
-                foo = \{} -> 
+                foo = \{} ->
                     x = 42
-                    f = \{} -> x
+                    y = 2
+                    f = \{} -> x + y
                     f
 
-                main =
+                main = 
                     f = foo {}
                     f {}
                 "#

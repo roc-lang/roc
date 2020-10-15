@@ -317,9 +317,11 @@ pub fn constrain_expr(
         Closure {
             function_type: fn_var,
             closure_type: closure_var,
+            closure_ext_var,
             return_type: ret_var,
             arguments,
             loc_body: boxed,
+            captured_symbols,
             ..
         } => {
             let loc_body_expr = &**boxed;
@@ -332,11 +334,12 @@ pub fn constrain_expr(
             let mut pattern_types = Vec::with_capacity(state.vars.capacity());
             let ret_var = *ret_var;
             let closure_var = *closure_var;
+            let closure_ext_var = *closure_ext_var;
             let ret_type = Type::Variable(ret_var);
-            let closure_type = Type::Variable(closure_var);
 
             vars.push(ret_var);
             vars.push(closure_var);
+            vars.push(closure_ext_var);
 
             for (pattern_var, loc_pattern) in arguments {
                 let pattern_type = Type::Variable(*pattern_var);
@@ -355,17 +358,50 @@ pub fn constrain_expr(
                 vars.push(*pattern_var);
             }
 
-            let fn_type = Type::Function(
-                pattern_types,
-                Box::new(closure_type),
-                Box::new(ret_type.clone()),
-            );
-            let body_type = NoExpectation(ret_type);
+            let body_type = NoExpectation(ret_type.clone());
             let ret_constraint =
                 constrain_expr(env, loc_body_expr.region, &loc_body_expr.value, body_type);
 
             vars.push(*fn_var);
             let defs_constraint = And(state.constraints);
+
+            // make sure the captured symbols are sorted!
+            debug_assert_eq!(captured_symbols.clone(), {
+                let mut copy = captured_symbols.clone();
+                copy.sort();
+                copy
+            });
+
+            let closed_over_symbols = captured_symbols;
+
+            dbg!(&closed_over_symbols);
+
+            let mut tag_arguments = Vec::with_capacity(closed_over_symbols.len());
+            let mut captured_symbols_constraints = Vec::with_capacity(captured_symbols.len());
+
+            for (symbol, var) in closed_over_symbols {
+                // make sure the variable is registered
+                vars.push(*var);
+
+                // this symbol is captured, so it must be part of the closure type
+                tag_arguments.push(Type::Variable(*var));
+
+                // make the variable equal to the looked-up type of symbol
+                captured_symbols_constraints.push(Constraint::Lookup(
+                    *symbol,
+                    Expected::NoExpectation(Type::Variable(*var)),
+                    Region::zero(),
+                ));
+            }
+
+            let tag_name_string = format!("Closure_{}", closure_var.index());
+            let tag_name = roc_module::ident::TagName::Global(tag_name_string.into());
+            let closure_type = Type::TagUnion(
+                vec![(tag_name, tag_arguments)],
+                Box::new(Type::Variable(closure_ext_var)),
+            );
+
+            let fn_type = Type::Function(pattern_types, Box::new(closure_type), Box::new(ret_type));
 
             exists(
                 vars,
@@ -387,6 +423,7 @@ pub fn constrain_expr(
                         Category::Storage,
                         region,
                     ),
+                    Constraint::And(captured_symbols_constraints),
                 ]),
             )
         }

@@ -15,7 +15,8 @@ use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::ir::{
-    ExternalSpecializations, MonoProblem, PartialProc, PendingSpecialization, Proc, Procs,
+    CapturedSymbols, ExternalSpecializations, MonoProblem, PartialProc, PendingSpecialization,
+    Proc, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
@@ -1439,7 +1440,7 @@ fn update<'a>(
             {
                 // state.timings.insert(module_id, module_timing);
 
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
+                // Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 msg_tx
                     .send(Msg::FinishedAllSpecialization {
@@ -1937,16 +1938,17 @@ fn run_solve<'a>(
     let (mut solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
 
+    /*
     // determine the size of closures BEFORE converting to solved types
     // this is separate from type inference so we can maybe do optimizations between type inference
     // and closure size inference (those optimizations could shrink the closure size)
     use Declaration::*;
     let subs = solved_subs.inner_mut();
+
+    let mut definitions = Vec::new();
     for decl in decls.iter() {
         match decl {
-            Declare(def) => {
-                roc_mono::closures::infer_closure_size(def, subs, &solved_env);
-            }
+            Declare(def) => definitions.push(def.clone()),
             Builtin(_) => {
                 // builtins should never have anything in their closure, so not determining their
                 // size _should_ be OK. We'll need to verify this in practice though
@@ -1954,11 +1956,16 @@ fn run_solve<'a>(
             InvalidCycle(_, _) => {}
             DeclareRec(defs) => {
                 for def in defs {
-                    roc_mono::closures::infer_closure_size(def, subs, &solved_env);
+                    definitions.push(def.clone())
                 }
             }
         }
     }
+
+    roc_mono::closures::infer_closure_size(&definitions, subs, &solved_env);
+    dbg!(&subs, &solved_env);
+    panic!();
+    */
 
     let solved_types =
         roc_solve::module::make_solved_types(&solved_env, &solved_subs, &exposed_vars_by_symbol);
@@ -2297,6 +2304,7 @@ fn add_def_to_module<'a>(
                         annotation,
                         loc_args,
                         *loc_body,
+                        CapturedSymbols::None,
                         is_recursive,
                         ret_var,
                     );
@@ -2319,6 +2327,8 @@ fn add_def_to_module<'a>(
                         annotation: def.expr_var,
                         // This is a 0-arity thunk, so it has no arguments.
                         pattern_symbols: &[],
+                        // This is a top-level definition, so it cannot capture anything
+                        captured_symbols: CapturedSymbols::None,
                         body,
                         // This is a 0-arity thunk, so it cannot be recursive
                         is_self_recursive: false,
