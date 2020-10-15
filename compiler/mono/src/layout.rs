@@ -871,12 +871,6 @@ fn ext_var_is_empty_tag_union(_: &Subs, _: Variable) -> bool {
     unreachable!();
 }
 
-#[cfg(not(debug_assertions))]
-fn ext_var_is_empty_record(_: &Subs, _: Variable) -> bool {
-    // This should only ever be used in debug_assert! macros
-    unreachable!();
-}
-
 fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutProblem> {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;

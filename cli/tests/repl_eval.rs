@@ -1,11 +1,16 @@
 #[macro_use]
 extern crate pretty_assertions;
 
+#[macro_use]
+extern crate indoc;
+
 mod helpers;
 
 #[cfg(test)]
 mod repl_eval {
     use crate::helpers;
+
+    const ERROR_MESSAGE_START: char = '─';
 
     fn expect_success(input: &str, expected: &str) {
         let out = helpers::repl_eval(input);
@@ -13,6 +18,28 @@ mod repl_eval {
         assert_eq!(&out.stderr, "");
         assert_eq!(&out.stdout, expected);
         assert!(out.status.success());
+    }
+
+    fn expect_failure(input: &str, expected: &str) {
+        let out = helpers::repl_eval(input);
+
+        // there may be some other stuff printed (e.g. unification errors)
+        // so skip till the header of the first error
+        match out.stdout.find(ERROR_MESSAGE_START) {
+            Some(index) => {
+                assert_eq!(&out.stderr, "");
+                assert_eq!(&out.stdout[index..], expected);
+                assert!(out.status.success());
+            }
+            None => {
+                assert_eq!(&out.stderr, "");
+                assert!(out.status.success());
+                panic!(
+                    "I expected a failure, but there is no error message in stdout:\n\n{}",
+                    &out.stdout
+                );
+            }
+        }
     }
 
     #[test]
@@ -256,13 +283,46 @@ mod repl_eval {
     //     expect_success(r#""\n\nhi!\n\n""#, "\"\"\"\n\nhi!\n\n\"\"\"");
     // }
 
-    // TODO uncomment this once https://github.com/rtfeldman/roc/issues/295 is done
+    #[test]
+    fn list_of_3_field_records() {
+        expect_success(
+            "[ { foo: 4.1, bar: 2, baz: 0x3 } ]",
+            "[ { bar: 2, baz: 3, foo: 4.1 } ] : List { bar : Num *, baz : Int, foo : Float }",
+        );
+    }
+
+    #[test]
+    fn type_problem() {
+        expect_failure(
+            "1 + \"\"",
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to add is not what I expect:
+
+                4│      1 + ""
+                            ^^
+
+                This argument is a string of type:
+
+                    Str
+
+                But add needs the 2nd argument to be:
+
+                    Num a
+                "#
+            ),
+        );
+    }
+
+    //    #[test]
+    //    fn parse_problem() {
+    //        // can't find something that won't parse currently
+    //    }
     //
-    // #[test]
-    // fn list_of_3_field_records() {
-    //     expect_success(
-    //         "[ { foo: 4.1, bar: 2, baz: 0x3 } ]",
-    //         "[ { foo: 4.1, bar: 2, baz: 0x3 } ] : List { foo : Float, bar : Num *, baz : Int }",
-    //     );
-    // }
+    //    #[test]
+    //    fn mono_problem() {
+    //        // can't produce a mono error (non-exhaustive pattern) yet
+    //    }
 }
