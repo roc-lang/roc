@@ -1248,6 +1248,7 @@ pub fn specialize_all<'a>(
     mut procs: Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
+    dbg!(&procs);
     let it = procs.externals_others_need.specs.clone();
     let it = it
         .into_iter()
@@ -1456,11 +1457,15 @@ fn build_specialized_proc<'a>(
     let proc_args = proc_args.into_bump_slice();
 
     let closes_over = match closure_var {
-        Some(cvar) => layout_cache
-            .from_var(&env.arena, cvar, env.subs)
-            .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err)),
+        Some(cvar) => match layout_cache.from_var(&env.arena, cvar, env.subs) {
+            Ok(layout) => layout,
+            Err(LayoutProblem::UnresolvedTypeVar) => Layout::Struct(&[]),
+            Err(err) => panic!("TODO handle invalid function {:?}", err),
+        },
         None => Layout::Struct(&[]),
     };
+
+    dbg!(&closes_over);
 
     let ret_layout = layout_cache
         .from_var(&env.arena, ret_var, env.subs)
@@ -1621,6 +1626,7 @@ pub fn with_hole<'a>(
                     ..
                 } = def.loc_expr.value
                 {
+                    dbg!(symbol);
                     // Extract Procs, but discard the resulting Expr::Load.
                     // That Load looks up the pointer, which we won't use here!
 
@@ -1732,6 +1738,7 @@ pub fn with_hole<'a>(
                         ..
                     } = def.loc_expr.value
                     {
+                        dbg!(symbol);
                         // Extract Procs, but discard the resulting Expr::Load.
                         // That Load looks up the pointer, which we won't use here!
 
@@ -2423,6 +2430,7 @@ pub fn with_hole<'a>(
             loc_body: boxed_body,
             ..
         } => {
+            dbg!(name);
             let loc_body = *boxed_body;
 
             match procs.insert_anonymous(
@@ -2754,7 +2762,142 @@ pub fn from_can<'a>(
                                 return_type,
                             );
 
-                            return from_can(env, cont.value, procs, layout_cache);
+                            // does this function capture any local values?
+                            let function_layout =
+                                layout_cache.from_var(env.arena, function_type, env.subs);
+                            let is_closure =
+                                matches!(&function_layout, Ok(Layout::Closure(_, _, _)));
+
+                            if is_closure {
+                                let function_layout = function_layout.unwrap();
+                                let full_layout = function_layout.clone();
+                                let fn_var = function_type;
+                                let proc_name = *symbol;
+                                let pending = PendingSpecialization::from_var(env.subs, fn_var);
+
+                                // When requested (that is, when procs.pending_specializations is `Some`),
+                                // store a pending specialization rather than specializing immediately.
+                                //
+                                // We do this so that we can do specialization in two passes: first,
+                                // build the mono_expr with all the specialized calls in place (but
+                                // no specializations performed yet), and then second, *after*
+                                // de-duplicating requested specializations (since multiple modules
+                                // which could be getting monomorphized in parallel might request
+                                // the same specialization independently), we work through the
+                                // queue of pending specializations to complete each specialization
+                                // exactly once.
+                                match &mut procs.pending_specializations {
+                                    Some(pending_specializations) => {
+                                        // register the pending specialization, so this gets code genned later
+                                        add_pending(
+                                            pending_specializations,
+                                            proc_name,
+                                            full_layout.clone(),
+                                            pending,
+                                        );
+                                    }
+                                    None => {
+                                        let opt_partial_proc = procs.partial_procs.get(&proc_name);
+
+                                        match opt_partial_proc {
+                                            None => panic!("invalid proc"),
+                                            Some(partial_proc) => {
+                                                // TODO should pending_procs hold a Rc<Proc> to avoid this .clone()?
+                                                let partial_proc = partial_proc.clone();
+
+                                                // Mark this proc as in-progress, so if we're dealing with
+                                                // mutually recursive functions, we don't loop forever.
+                                                // (We had a bug around this before this system existed!)
+                                                procs.specialized.insert(
+                                                    (proc_name, full_layout.clone()),
+                                                    InProgress,
+                                                );
+
+                                                match specialize(
+                                                    env,
+                                                    procs,
+                                                    proc_name,
+                                                    layout_cache,
+                                                    pending,
+                                                    partial_proc,
+                                                ) {
+                                                    Ok((proc, layout)) => {
+                                                        debug_assert_eq!(full_layout, layout);
+                                                        let function_layout =
+                                                            FunctionLayouts::from_layout(layout);
+
+                                                        procs
+                                                            .specialized
+                                                            .remove(&(proc_name, full_layout));
+
+                                                        procs.specialized.insert(
+                                                            (
+                                                                proc_name,
+                                                                function_layout.full.clone(),
+                                                            ),
+                                                            Done(proc),
+                                                        );
+                                                    }
+                                                    Err(error) => {
+                                                        let error_msg = env.arena.alloc(format!(
+                                                            "TODO generate a RuntimeError message for {:?}",
+                                                            error
+                                                        ));
+
+                                                        procs
+                                                            .runtime_errors
+                                                            .insert(proc_name, error_msg);
+
+                                                        panic!();
+                                                        // Stmt::RuntimeError(error_msg)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                let mut stmt = from_can(env, cont.value, procs, layout_cache);
+
+                                let function_pointer = env.unique_symbol();
+                                let closure_data = env.unique_symbol();
+
+                                // define the closure
+                                let expr =
+                                    Expr::Struct(env.arena.alloc([function_pointer, closure_data]));
+
+                                stmt = Stmt::Let(
+                                    *symbol,
+                                    expr,
+                                    function_layout.clone(),
+                                    env.arena.alloc(stmt),
+                                );
+
+                                // define the closure data
+                                let expr = Expr::Struct(&[]);
+                                let closure_data_layout = Layout::Struct(&[]);
+
+                                stmt = Stmt::Let(
+                                    closure_data,
+                                    expr,
+                                    closure_data_layout,
+                                    env.arena.alloc(stmt),
+                                );
+
+                                // define the function pointer
+                                let expr = Expr::FunctionPointer(*symbol, function_layout.clone());
+
+                                stmt = Stmt::Let(
+                                    function_pointer,
+                                    expr,
+                                    function_layout,
+                                    env.arena.alloc(stmt),
+                                );
+
+                                return stmt;
+                            } else {
+                                return from_can(env, cont.value, procs, layout_cache);
+                            }
                         }
                         _ => unreachable!(),
                     }

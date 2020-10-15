@@ -929,11 +929,13 @@ mod gen_primitives {
                 r#"
                 app Test provides [ main ] imports []
 
-                x = 42
+                foo = \{} -> 
+                    x = 42
+                    f = \{} -> x
+                    f
 
                 main =
-                    f = \{} -> x
-
+                    f = foo {}
                     f {}
                 "#
             ),

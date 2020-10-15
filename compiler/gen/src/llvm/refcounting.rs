@@ -29,6 +29,27 @@ pub fn refcount_1(ctx: &Context, ptr_bytes: u32) -> IntValue<'_> {
     }
 }
 
+pub fn decrement_refcount_struct<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    layout_ids: &mut LayoutIds<'a>,
+    value: BasicValueEnum<'ctx>,
+    layouts: &[Layout<'a>],
+) {
+    let wrapper_struct = value.into_struct_value();
+
+    for (i, field_layout) in layouts.iter().enumerate() {
+        if field_layout.contains_refcounted() {
+            let field_ptr = env
+                .builder
+                .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
+                .unwrap();
+
+            decrement_refcount_layout(env, parent, layout_ids, field_ptr, field_layout)
+        }
+    }
+}
+
 pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
@@ -42,19 +63,20 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
         Builtin(builtin) => {
             decrement_refcount_builtin(env, parent, layout_ids, value, layout, builtin)
         }
-        Struct(layouts) => {
-            let wrapper_struct = value.into_struct_value();
+        Closure(_, closure_layout, _) => {
+            if closure_layout.iter().any(|f| f.contains_refcounted()) {
+                let wrapper_struct = value.into_struct_value();
 
-            for (i, field_layout) in layouts.iter().enumerate() {
-                if field_layout.contains_refcounted() {
-                    let field_ptr = env
-                        .builder
-                        .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
-                        .unwrap();
+                let field_ptr = env
+                    .builder
+                    .build_extract_value(wrapper_struct, 1, "decrement_closure_data")
+                    .unwrap();
 
-                    decrement_refcount_layout(env, parent, layout_ids, field_ptr, field_layout)
-                }
+                decrement_refcount_struct(env, parent, layout_ids, field_ptr, closure_layout)
             }
+        }
+        Struct(layouts) => {
+            decrement_refcount_struct(env, parent, layout_ids, value, layouts);
         }
         RecursivePointer => todo!("TODO implement decrement layout of recursive tag union"),
 

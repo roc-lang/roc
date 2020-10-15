@@ -48,6 +48,50 @@ pub fn get_array_type<'ctx>(bt_enum: &BasicTypeEnum<'ctx>, size: u32) -> ArrayTy
     }
 }
 
+fn basic_type_from_function_layout<'ctx>(
+    arena: &Bump,
+    context: &'ctx Context,
+    args: &[Layout<'_>],
+    ret_layout: &Layout<'_>,
+    ptr_bytes: u32,
+) -> BasicTypeEnum<'ctx> {
+    let ret_type = basic_type_from_layout(arena, context, &ret_layout, ptr_bytes);
+    let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
+
+    for arg_layout in args.iter() {
+        arg_basic_types.push(basic_type_from_layout(
+            arena, context, arg_layout, ptr_bytes,
+        ));
+    }
+
+    let fn_type = get_fn_type(&ret_type, arg_basic_types.into_bump_slice());
+    let ptr_type = fn_type.ptr_type(AddressSpace::Generic);
+
+    ptr_type.as_basic_type_enum()
+}
+
+fn basic_type_from_record<'ctx>(
+    arena: &Bump,
+    context: &'ctx Context,
+    fields: &[Layout<'_>],
+    ptr_bytes: u32,
+) -> BasicTypeEnum<'ctx> {
+    let mut field_types = Vec::with_capacity_in(fields.len(), arena);
+
+    for field_layout in fields.iter() {
+        field_types.push(basic_type_from_layout(
+            arena,
+            context,
+            field_layout,
+            ptr_bytes,
+        ));
+    }
+
+    context
+        .struct_type(field_types.into_bump_slice(), false)
+        .as_basic_type_enum()
+}
+
 pub fn basic_type_from_layout<'ctx>(
     arena: &Bump,
     context: &'ctx Context,
@@ -59,53 +103,26 @@ pub fn basic_type_from_layout<'ctx>(
 
     match layout {
         FunctionPointer(args, ret_layout) => {
-            let ret_type = basic_type_from_layout(arena, context, &ret_layout, ptr_bytes);
-            let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
+            basic_type_from_function_layout(arena, context, args, ret_layout, ptr_bytes)
+        }
+        Closure(args, closure_layout, ret_layout) => {
+            let function_pointer =
+                basic_type_from_function_layout(arena, context, args, ret_layout, ptr_bytes);
 
-            for arg_layout in args.iter() {
-                arg_basic_types.push(basic_type_from_layout(
-                    arena, context, arg_layout, ptr_bytes,
-                ));
-            }
+            let closure_data = basic_type_from_record(arena, context, closure_layout, ptr_bytes);
 
-            let fn_type = get_fn_type(&ret_type, arg_basic_types.into_bump_slice());
-            let ptr_type = fn_type.ptr_type(AddressSpace::Generic);
-
-            ptr_type.as_basic_type_enum()
+            context
+                .struct_type(&[function_pointer, closure_data], false)
+                .as_basic_type_enum()
         }
         Pointer(layout) => basic_type_from_layout(arena, context, &layout, ptr_bytes)
             .ptr_type(AddressSpace::Generic)
             .into(),
-        Struct(sorted_fields) => {
-            // Determine types
-            let mut field_types = Vec::with_capacity_in(sorted_fields.len(), arena);
-
-            for field_layout in sorted_fields.iter() {
-                field_types.push(basic_type_from_layout(
-                    arena,
-                    context,
-                    field_layout,
-                    ptr_bytes,
-                ));
-            }
-
-            context
-                .struct_type(field_types.into_bump_slice(), false)
-                .as_basic_type_enum()
-        }
+        Struct(sorted_fields) => basic_type_from_record(arena, context, sorted_fields, ptr_bytes),
         Union(tags) if tags.len() == 1 => {
-            let layouts = tags.iter().next().unwrap();
+            let sorted_fields = tags.iter().next().unwrap();
 
-            // Determine types
-            let mut field_types = Vec::with_capacity_in(layouts.len(), arena);
-
-            for layout in layouts.iter() {
-                field_types.push(basic_type_from_layout(arena, context, layout, ptr_bytes));
-            }
-
-            context
-                .struct_type(field_types.into_bump_slice(), false)
-                .as_basic_type_enum()
+            basic_type_from_record(arena, context, sorted_fields, ptr_bytes)
         }
         RecursiveUnion(_) | Union(_) => block_of_memory(context, layout, ptr_bytes),
         RecursivePointer => {
