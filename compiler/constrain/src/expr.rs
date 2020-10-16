@@ -1000,7 +1000,6 @@ pub fn constrain_decls(
                     Vec::new(),
                     constrain_def(&env, def, constraint),
                 );
-                debug_assert!(format!("{:?}", &constraint).contains("SaveTheEnvironment"));
             }
             Declaration::DeclareRec(defs) => {
                 constraint = exists_with_aliases(
@@ -1008,7 +1007,6 @@ pub fn constrain_decls(
                     Vec::new(),
                     constrain_recursive_defs(&env, defs, constraint),
                 );
-                debug_assert!(format!("{:?}", &constraint).contains("SaveTheEnvironment"));
             }
             Declaration::InvalidCycle(_, _) => {
                 // invalid cycles give a canonicalization error. we skip them here.
@@ -1017,7 +1015,9 @@ pub fn constrain_decls(
         }
     }
 
+    // this assert make the "root" of the constraint wasn't dropped
     debug_assert!(format!("{:?}", &constraint).contains("SaveTheEnvironment"));
+
     constraint
 }
 
