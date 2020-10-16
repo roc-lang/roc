@@ -30,6 +30,7 @@ pub struct Output {
     pub tail_call: Option<Symbol>,
     pub introduced_variables: IntroducedVariables,
     pub aliases: SendMap<Symbol, Alias>,
+    pub non_closures: MutSet<Symbol>,
 }
 
 impl Output {
@@ -42,6 +43,7 @@ impl Output {
 
         self.introduced_variables.union(&other.introduced_variables);
         self.aliases.extend(other.aliases);
+        self.non_closures.extend(other.non_closures);
     }
 }
 
@@ -433,7 +435,10 @@ pub fn canonicalize_expr<'a>(
             // into a top-level procedure for code gen.
             //
             // In the Foo module, this will look something like Foo.$1 or Foo.$2.
-            let symbol = env.gen_unique_symbol();
+            let symbol = env
+                .closure_name_symbol
+                .unwrap_or_else(|| env.gen_unique_symbol());
+            env.closure_name_symbol = None;
 
             // The body expression gets a new scope for canonicalization.
             // Shadow `scope` to make sure we don't accidentally use the original one for the
@@ -493,6 +498,14 @@ pub fn canonicalize_expr<'a>(
 
             output.union(new_output);
 
+            // filter out aliases
+            captured_symbols.retain(|s| !output.references.referenced_aliases.contains(s));
+
+            // filter out functions that don't close over anything
+            captured_symbols.retain(|s| !output.non_closures.contains(s));
+
+            dbg!(&captured_symbols, symbol);
+
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
             for (sub_symbol, region) in scope.symbols() {
@@ -518,6 +531,12 @@ pub fn canonicalize_expr<'a>(
 
             // sort symbols, so we know the order in which they're stored in the closure record
             captured_symbols.sort();
+
+            // store that this function doesn't capture anything. It will be promoted to a
+            // top-level function, and does not need to be captured by other surrounding functions.
+            if captured_symbols.is_empty() {
+                output.non_closures.insert(symbol);
+            }
 
             (
                 Closure {

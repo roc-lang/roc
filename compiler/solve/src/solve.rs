@@ -202,7 +202,6 @@ fn solve(
 ) -> State {
     match constraint {
         True => {
-            dbg!(&env.vars_by_symbol);
             state
                 .vars_by_symbol
                 .extend(env.vars_by_symbol.iter().map(|(x, y)| (*x, *y)));
@@ -537,12 +536,14 @@ fn solve(
                                 let result = offenders.len();
 
                                 if result > 0 {
+                                    /*
                                     dbg!(
                                         &subs,
                                         &offenders,
                                         &let_con.def_types,
                                         &let_con.def_aliases
                                     );
+                                    */
                                 }
 
                                 result

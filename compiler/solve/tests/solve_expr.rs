@@ -12,6 +12,7 @@ mod solve_expr {
     use crate::helpers::{
         assert_correct_variable_usage, can_expr, infer_expr, with_larger_debug_stack, CanExprOut,
     };
+    use roc_collections::all::MutMap;
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
     use roc_types::subs::Subs;
 
@@ -19,33 +20,100 @@ mod solve_expr {
 
     fn infer_eq_help(
         src: &str,
-    ) -> (
-        Vec<roc_solve::solve::TypeError>,
-        Vec<roc_problem::can::Problem>,
-        String,
-    ) {
-        let CanExprOut {
-            output,
-            var_store,
-            var,
-            constraint,
-            home,
-            interns,
-            problems: mut can_problems,
-            ..
-        } = can_expr(src);
-        let mut subs = Subs::new(var_store.into());
+    ) -> Result<
+        (
+            Vec<roc_solve::solve::TypeError>,
+            Vec<roc_problem::can::Problem>,
+            String,
+        ),
+        std::io::Error,
+    > {
+        use bumpalo::Bump;
+        use std::fs::File;
+        use std::io::{self, Write};
+        use std::path::{Path, PathBuf};
+        use tempfile::tempdir;
 
-        assert_correct_variable_usage(&constraint);
+        let arena = &Bump::new();
 
-        for (var, name) in output.introduced_variables.name_by_var {
-            subs.rigid_var(var, name);
+        // let stdlib = roc_builtins::unique::uniq_stdlib();
+        let stdlib = roc_builtins::std::standard_stdlib();
+
+        let module_src;
+        let temp;
+        if src.starts_with("app") {
+            // this is already a module
+            module_src = src;
+        } else {
+            // this is an expression, promote it to a module
+            temp = promote_expr_to_module(src);
+            module_src = &temp;
         }
 
-        let mut unify_problems = Vec::new();
-        let (content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
+        let exposed_types = MutMap::default();
+        let loaded = {
+            let dir = tempdir()?;
+            let filename = PathBuf::from("Test.roc");
+            let file_path = dir.path().join(filename.clone());
+            let full_file_path = PathBuf::from(file_path.clone());
+            let mut file = File::create(file_path)?;
+            writeln!(file, "{}", module_src)?;
+            drop(file);
+            let result = roc_load::file::load_and_typecheck(
+                arena,
+                full_file_path,
+                stdlib,
+                dir.path(),
+                exposed_types,
+            );
 
-        name_all_type_vars(var, &mut subs);
+            dir.close()?;
+
+            result
+        };
+
+        let loaded = loaded.expect("failed to load module");
+
+        use roc_load::file::LoadedModule;
+        let LoadedModule {
+            module_id: home,
+            mut can_problems,
+            type_problems,
+            interns,
+            mut solved,
+            exposed_to_host,
+            ..
+        } = loaded;
+
+        let mut subs = solved.inner_mut();
+
+        //        assert!(can_problems.is_empty());
+        //        assert!(type_problems.is_empty());
+        //        let CanExprOut {
+        //            output,
+        //            var_store,
+        //            var,
+        //            constraint,
+        //            home,
+        //            interns,
+        //            problems: mut can_problems,
+        //            ..
+        //        } = can_expr(src);
+        //        let mut subs = Subs::new(var_store.into());
+
+        // TODO fix this
+        // assert_correct_variable_usage(&constraint);
+
+        // name type vars
+        for var in exposed_to_host.values() {
+            name_all_type_vars(*var, &mut subs);
+        }
+
+        let content = {
+            debug_assert!(exposed_to_host.len() == 1);
+            let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
+            subs.get(variable).content
+        };
 
         let actual_str = content_to_string(content, &mut subs, home, &interns);
 
@@ -56,11 +124,24 @@ mod solve_expr {
             _ => true,
         });
 
-        (unify_problems, can_problems, actual_str)
+        Ok((type_problems, can_problems, actual_str))
+    }
+
+    fn promote_expr_to_module(src: &str) -> String {
+        let mut buffer = String::from("app Test provides [ main ] imports []\n\nmain =\n");
+
+        for line in src.lines() {
+            // indent the body!
+            buffer.push_str("    ");
+            buffer.push_str(line);
+            buffer.push('\n');
+        }
+
+        buffer
     }
 
     fn infer_eq(src: &str, expected: &str) {
-        let (_, can_problems, actual) = infer_eq_help(src);
+        let (_, can_problems, actual) = infer_eq_help(src).unwrap();
 
         assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
 
@@ -68,7 +149,7 @@ mod solve_expr {
     }
 
     fn infer_eq_without_problem(src: &str, expected: &str) {
-        let (type_problems, can_problems, actual) = infer_eq_help(src);
+        let (type_problems, can_problems, actual) = infer_eq_help(src).unwrap();
 
         assert_eq!(can_problems, Vec::new(), "Canonicalization problems: ");
 
@@ -715,10 +796,10 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    apply = \f, x -> f x
-                    identity = \a -> a
+                identity = \a -> a
+                apply = \f, x -> f x
 
-                    apply identity 5
+                apply identity 5
                 "#
             ),
             "Num *",
@@ -2017,7 +2098,9 @@ mod solve_expr {
     }
 
     #[test]
-    fn rigid_in_letrec() {
+    #[ignore]
+    fn rigid_in_letrec_ignored() {
+        // re-enable when we don't capture local things that don't need to be!
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -2030,6 +2113,30 @@ mod solve_expr {
 
                         toEmpty result
 
+                    toEmpty
+                "#
+            ),
+            "ConsList a -> ConsList a",
+        );
+    }
+
+    #[test]
+    fn rigid_in_letrec() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                ConsList a : [ Cons a (ConsList a), Nil ]
+
+                toEmpty : ConsList a -> ConsList a
+                toEmpty = \_ ->
+                    result : ConsList a
+                    result = Nil
+
+                    toEmpty result
+
+                main =
                     toEmpty
                 "#
             ),
@@ -2071,6 +2178,28 @@ mod solve_expr {
 
     #[test]
     fn peano_map_infer() {
+        infer_eq(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                map = 
+                    \peano ->
+                        when peano is
+                            Z -> Z
+                            S rest -> map rest |> S
+
+
+                main =
+                    map
+                "#
+            ),
+            "[ S a, Z ]* as a -> [ S b, Z ]* as b",
+        );
+    }
+
+    #[test]
+    fn peano_map_infer_nested() {
         infer_eq(
             indoc!(
                 r#"
@@ -2488,6 +2617,8 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
+                app Test provides [ main ] imports []
+
                 boom = \_ -> boom {}
 
                 Model position : { openSet : Set position }
@@ -2510,7 +2641,8 @@ mod solve_expr {
                 astar : Model position -> Result position [ KeyNotFound ]*
                 astar = \model -> cheapestOpen model
 
-                astar
+                main =
+                    astar
                 "#
             ),
             "Model position -> Result position [ KeyNotFound ]*",
@@ -2535,6 +2667,7 @@ mod solve_expr {
     }
 
     #[test]
+    #[ignore]
     fn sorting() {
         // based on https://github.com/elm/compiler/issues/2057
         // Roc seems to do this correctly, tracking to make sure it stays that way
@@ -2616,18 +2749,18 @@ mod solve_expr {
 
     #[test]
     fn rigids() {
-        // I was slightly surprised this works
         infer_eq_without_problem(
             indoc!(
                 r#"
                 f : List a -> List a
                 f = \input ->
+                    # let-polymorphism at work
                     x : List b
                     x = []
 
                     when List.get input 0 is
                         Ok val -> List.append x val
-                        Err _ -> f input
+                        Err _ -> input
                 f
                 "#
             ),
@@ -2803,6 +2936,45 @@ mod solve_expr {
                 "#
             ),
             "Int",
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn function_that_captures_nothing_is_not_captured() {
+        // we should make sure that a function that doesn't capture anything it not itself captured
+        // such functions will be lifted to the top-level, and are thus globally available!
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f = \x -> x + 1
+
+                g = \y -> f y
+
+                g
+                "#
+            ),
+            "Int",
+        );
+    }
+
+    #[test]
+    fn double_named_rigids() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+
+                main : List x
+                main =
+                    empty : List x
+                    empty = []
+
+                    empty
+                "#
+            ),
+            "List x",
         );
     }
 }

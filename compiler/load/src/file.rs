@@ -375,7 +375,7 @@ pub struct LoadedModule {
     pub can_problems: Vec<roc_problem::can::Problem>,
     pub type_problems: Vec<solve::TypeError>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
-    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub exposed_to_host: MutMap<Symbol, Variable>,
     pub src: Box<str>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
 }
@@ -1532,7 +1532,7 @@ fn finish<'a>(
         can_problems: state.can_problems,
         type_problems: state.type_problems,
         declarations_by_id: state.declarations_by_id,
-        exposed_vars_by_symbol,
+        exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
         src: src.into(),
         timings: state.timings,
     }

@@ -2597,6 +2597,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_load",
  "roc_module",
  "roc_parse",
  "roc_problem",
@@ -2604,6 +2605,7 @@ dependencies = [
  "roc_solve",
  "roc_types",
  "roc_unify",
+ "tempfile",
 ]
 
 [[package]]

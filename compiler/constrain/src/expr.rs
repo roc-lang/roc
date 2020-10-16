@@ -374,8 +374,6 @@ pub fn constrain_expr(
 
             let closed_over_symbols = captured_symbols;
 
-            dbg!(&closed_over_symbols);
-
             let mut tag_arguments = Vec::with_capacity(closed_over_symbols.len());
             let mut captured_symbols_constraints = Vec::with_capacity(captured_symbols.len());
 

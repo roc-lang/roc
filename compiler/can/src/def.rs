@@ -226,6 +226,18 @@ pub fn canonicalize_defs<'a>(
                 let mut can_ann =
                     canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
 
+                // all referenced symbols in an alias must be symbols
+                output
+                    .references
+                    .referenced_aliases
+                    .extend(can_ann.aliases.keys().copied());
+
+                // if an alias definition uses an alias, the used alias is referenced
+                output
+                    .references
+                    .lookups
+                    .extend(can_ann.aliases.keys().copied());
+
                 let mut can_vars: Vec<Located<(Lowercase, Variable)>> =
                     Vec::with_capacity(vars.len());
                 let mut is_phantom = false;
@@ -775,15 +787,13 @@ fn canonicalize_pending_def<'a>(
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
 
             // Record all the annotation's references in output.references.lookups
-            let lookups = &mut output.references.lookups;
 
             for symbol in ann.references {
-                lookups.insert(symbol);
+                output.references.lookups.insert(symbol);
+                output.references.referenced_aliases.insert(symbol);
             }
 
-            for (symbol, alias) in ann.aliases.clone() {
-                aliases.insert(symbol, alias);
-            }
+            aliases.extend(ann.aliases.iter().cloned());
 
             output.introduced_variables.union(&ann.introduced_variables);
 
@@ -873,10 +883,10 @@ fn canonicalize_pending_def<'a>(
             let can_ann = canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
 
             // Record all the annotation's references in output.references.lookups
-            let lookups = &mut output.references.lookups;
 
             for symbol in can_ann.references {
-                lookups.insert(symbol);
+                output.references.lookups.insert(symbol);
+                output.references.referenced_aliases.insert(symbol);
             }
 
             let mut can_vars: Vec<Located<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
@@ -934,10 +944,9 @@ fn canonicalize_pending_def<'a>(
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
 
             // Record all the annotation's references in output.references.lookups
-            let lookups = &mut output.references.lookups;
-
             for symbol in ann.references {
-                lookups.insert(symbol);
+                output.references.lookups.insert(symbol);
+                output.references.referenced_aliases.insert(symbol);
             }
 
             let typ = ann.typ;
@@ -954,6 +963,13 @@ fn canonicalize_pending_def<'a>(
 
             if let Pattern::Identifier(ref defined_symbol) = &loc_can_pattern.value {
                 env.tailcallable_symbol = Some(*defined_symbol);
+            };
+
+            // regiser the name of this closure, to make sure the closure won't capture it's own name
+            if let (Pattern::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
+                (&loc_can_pattern.value, &loc_expr.value)
+            {
+                env.closure_name_symbol = Some(*defined_symbol);
             };
 
             pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
@@ -1098,6 +1114,13 @@ fn canonicalize_pending_def<'a>(
                 vars_by_symbol.insert(*defined_symbol, expr_var);
             };
 
+            // regiser the name of this closure, to make sure the closure won't capture it's own name
+            if let (Pattern::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
+                (&loc_can_pattern.value, &loc_expr.value)
+            {
+                env.closure_name_symbol = Some(*defined_symbol);
+            };
+
             let (mut loc_can_expr, can_output) =
                 canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
 
@@ -1208,7 +1231,7 @@ fn canonicalize_pending_def<'a>(
                 );
             }
 
-            output.references = output.references.union(can_output.references);
+            output.union(can_output);
         }
     };
 
