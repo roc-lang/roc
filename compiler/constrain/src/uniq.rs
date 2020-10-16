@@ -733,7 +733,6 @@ pub fn constrain_expr(
             let ret_type = Type::Variable(ret_var);
             let closure_var = *closure_var;
             let closure_ext_var = *closure_ext_var;
-            let closure_type = Type::Variable(closure_var);
 
             vars.push(ret_var);
             vars.push(closure_var);

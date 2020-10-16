@@ -256,8 +256,6 @@ pub fn canonicalize_module_defs<'a>(
                         fix_values_captured_in_closure_defs(defs, &mut MutSet::default())
                     }
                     InvalidCycle(_, _) | Builtin(_) => {}
-
-                    _ => todo!(),
                 }
             }
 
@@ -297,11 +295,45 @@ fn fix_values_captured_in_closure_defs(
 }
 
 fn fix_values_captured_in_closure_pattern(
-    expr: &mut crate::pattern::Pattern,
+    pattern: &mut crate::pattern::Pattern,
     no_capture_symbols: &mut MutSet<Symbol>,
 ) {
-    // TODO
-    return ();
+    use crate::pattern::Pattern::*;
+
+    match pattern {
+        AppliedTag {
+            arguments: loc_args,
+            ..
+        } => {
+            for (_, loc_arg) in loc_args.iter_mut() {
+                fix_values_captured_in_closure_pattern(&mut loc_arg.value, no_capture_symbols);
+            }
+        }
+        RecordDestructure { destructs, .. } => {
+            for loc_destruct in destructs.iter_mut() {
+                use crate::pattern::DestructType::*;
+                match &mut loc_destruct.value.typ {
+                    Required => {}
+                    Optional(_, loc_expr) => {
+                        fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols)
+                    }
+                    Guard(_, loc_pattern) => fix_values_captured_in_closure_pattern(
+                        &mut loc_pattern.value,
+                        no_capture_symbols,
+                    ),
+                }
+            }
+        }
+        Identifier(_)
+        | NumLiteral(_, _)
+        | IntLiteral(_)
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | Underscore
+        | Shadowed(_, _)
+        | MalformedPattern(_, _)
+        | UnsupportedPattern(_) => (),
+    }
 }
 
 fn fix_values_captured_in_closure_expr(

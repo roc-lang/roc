@@ -1935,7 +1935,7 @@ fn run_solve<'a>(
         ..
     } = module;
 
-    let (mut solved_subs, solved_env, problems) =
+    let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
 
     /*

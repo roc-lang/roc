@@ -12,7 +12,6 @@
 #![allow(clippy::large_enum_variant)]
 
 pub mod borrow;
-pub mod closures;
 pub mod inc_dec;
 pub mod ir;
 pub mod layout;

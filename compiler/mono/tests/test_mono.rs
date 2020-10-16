@@ -112,8 +112,8 @@ mod test_mono {
             let expected_lines = expected.split("\n").collect::<Vec<&str>>();
             let result_lines = result.split("\n").collect::<Vec<&str>>();
 
-            assert_eq!(expected_lines, result_lines);
-            //assert_eq!(0, 1);
+            // assert_eq!(expected_lines, result_lines);
+            assert_eq!(0, 1);
         }
     }
 
@@ -2103,23 +2103,25 @@ mod test_mono {
             ),
             indoc!(
                 r#"
-                procedure Test.1 (Test.7):
-                    let Test.3 = 42i64;
-                    let Test.14 = FunctionPointer Test.4;
-                    let Test.15 = Struct {Test.3};
-                    let Test.4 = Struct {Test.14, Test.15};
-                    ret Test.4;
-
-                procedure Test.4 (Test.11, #Attr.12):
-                    let Test.3 = Index 0 #Attr.12;
+                procedure Test.1 (Test.5):
+                    let Test.2 = 42i64;
+                    let Test.14 = FunctionPointer Test.3;
+                    let Test.15 = Struct {Test.2};
+                    let Test.3 = Struct {Test.14, Test.15};
                     ret Test.3;
+
+                procedure Test.3 (Test.11, #Attr.12):
+                    let Test.2 = Index 0 #Attr.12;
+                    ret Test.2;
 
                 procedure Test.0 ():
                     let Test.10 = Struct {};
-                    let Test.6 = CallByName Test.1 Test.10;
-                    let Test.9 = Struct {};
-                    let Test.8 = CallByPointer Test.6 Test.9;
-                    ret Test.8;
+                    let Test.4 = CallByName Test.1 Test.10;
+                    let Test.7 = Struct {};
+                    let Test.8 = Index 1 Test.4;
+                    let Test.9 = Index 0 Test.4;
+                    let Test.6 = CallByPointer Test.9 Test.7 Test.8;
+                    ret Test.6;
                 "#
             ),
         )
