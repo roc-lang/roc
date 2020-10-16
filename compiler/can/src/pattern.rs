@@ -326,6 +326,9 @@ pub fn canonicalize_pattern<'a>(
                                     &loc_default.value,
                                 );
 
+                                // an optional field binds the symbol!
+                                output.references.bound_symbols.insert(symbol);
+
                                 output.union(expr_output);
 
                                 destructs.push(Located {

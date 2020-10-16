@@ -201,8 +201,8 @@ fn solve(
     constraint: &Constraint,
 ) -> State {
     match constraint {
-        // True =>  state,
         True => {
+            dbg!(&env.vars_by_symbol);
             state
                 .vars_by_symbol
                 .extend(env.vars_by_symbol.iter().map(|(x, y)| (*x, *y)));
