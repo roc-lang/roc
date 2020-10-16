@@ -504,8 +504,6 @@ pub fn canonicalize_expr<'a>(
             // filter out functions that don't close over anything
             captured_symbols.retain(|s| !output.non_closures.contains(s));
 
-            dbg!(&captured_symbols, symbol);
-
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
             for (sub_symbol, region) in scope.symbols() {

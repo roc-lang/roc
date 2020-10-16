@@ -57,6 +57,7 @@ pub fn helper<'a>(
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
+        module_id: home,
         can_problems,
         type_problems,
         mono_problems,
@@ -92,19 +93,66 @@ pub fn helper<'a>(
         })
         .collect::<Vec<roc_problem::can::Problem>>();
 
-    assert_eq!(
-        type_problems,
-        Vec::new(),
-        "Encountered type mismatches: {:?}",
-        type_problems,
-    );
+    use roc_reporting::report::{
+        can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
+    };
 
-    assert_eq!(
-        mono_problems,
-        Vec::new(),
-        "Encountered monomorphization errors: {:?}",
-        mono_problems,
-    );
+    let error_count = errors.len() + type_problems.len() + mono_problems.len();
+    let fatal_error_count = type_problems.len() + mono_problems.len();
+
+    if error_count > 0 {
+        // There were problems; report them and return.
+        let src_lines: Vec<&str> = module_src.split('\n').collect();
+
+        // Used for reporting where an error came from.
+        //
+        // TODO: maybe Reporting should have this be an Option?
+        let path = PathBuf::new();
+
+        // Report problems
+        let palette = DEFAULT_PALETTE;
+
+        // Report parsing and canonicalization problems
+        let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+        let mut lines = Vec::with_capacity(error_count);
+
+        let can_problems = errors.clone();
+        for problem in can_problems.into_iter() {
+            let report = can_problem(&alloc, path.clone(), problem);
+            let mut buf = String::new();
+
+            report.render_color_terminal(&mut buf, &alloc, &palette);
+
+            lines.push(buf);
+        }
+
+        for problem in type_problems.into_iter() {
+            let report = type_problem(&alloc, path.clone(), problem);
+            let mut buf = String::new();
+
+            report.render_color_terminal(&mut buf, &alloc, &palette);
+
+            lines.push(buf);
+        }
+
+        for problem in mono_problems.into_iter() {
+            let report = mono_problem(&alloc, path.clone(), problem);
+            let mut buf = String::new();
+
+            report.render_color_terminal(&mut buf, &alloc, &palette);
+
+            lines.push(buf);
+        }
+
+        println!("{}", (&lines).join("\n"));
+
+        // we want to continue onward only for canonical problems at the moment,
+        // to check that they codegen into runtime exceptions
+        if fatal_error_count > 0 {
+            assert_eq!(0, 1, "problems occured");
+        }
+    }
 
     let module = roc_gen::llvm::build::module_from_builtins(context, "app");
     let builder = context.create_builder();

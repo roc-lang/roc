@@ -1260,7 +1260,6 @@ mod gen_list {
     //    }
 
     #[test]
-    #[ignore]
     fn gen_quicksort() {
         with_larger_debug_stack(|| {
             assert_evals_to!(
@@ -1332,7 +1331,6 @@ mod gen_list {
     }
 
     #[test]
-    #[ignore]
     fn foobar2() {
         with_larger_debug_stack(|| {
             assert_evals_to!(
@@ -1378,7 +1376,7 @@ mod gen_list {
                                    Pair (low - 1) initialList
 
 
-                       partitionHelp : Int, Int, List (Num a), Int, Int -> [ Pair Int (List (Num a)) ]
+                       partitionHelp : Int, Int, List (Num a), Int, Num a -> [ Pair Int (List (Num a)) ]
                        partitionHelp = \i, j, list, high, pivot ->
                            # if j < high then
                            if False then
@@ -1406,7 +1404,6 @@ mod gen_list {
     }
 
     #[test]
-    #[ignore]
     fn foobar() {
         with_larger_debug_stack(|| {
             assert_evals_to!(
@@ -1452,7 +1449,7 @@ mod gen_list {
                                    Pair (low - 1) initialList
 
 
-                       partitionHelp : Int, Int, List (Num a), Int, Int -> [ Pair Int (List (Num a)) ]
+                       partitionHelp : Int, Int, List (Num a), Int, Num a -> [ Pair Int (List (Num a)) ]
                        partitionHelp = \i, j, list, high, pivot ->
                            if j < high then
                                when List.get list j is
