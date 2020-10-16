@@ -64,7 +64,7 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
             decrement_refcount_builtin(env, parent, layout_ids, value, layout, builtin)
         }
         Closure(_, closure_layout, _) => {
-            if closure_layout.iter().any(|f| f.contains_refcounted()) {
+            if closure_layout.contains_refcounted() {
                 let wrapper_struct = value.into_struct_value();
 
                 let field_ptr = env
@@ -72,7 +72,13 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
                     .build_extract_value(wrapper_struct, 1, "decrement_closure_data")
                     .unwrap();
 
-                decrement_refcount_struct(env, parent, layout_ids, field_ptr, closure_layout)
+                decrement_refcount_layout(
+                    env,
+                    parent,
+                    layout_ids,
+                    field_ptr,
+                    &closure_layout.into_layout(),
+                )
             }
         }
         Struct(layouts) => {

@@ -26,8 +26,52 @@ pub enum Layout<'a> {
     RecursivePointer,
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
-    Closure(&'a [Layout<'a>], &'a [Layout<'a>], &'a Layout<'a>),
+    Closure(&'a [Layout<'a>], ClosureLayout<'a>, &'a Layout<'a>),
     Pointer(&'a Layout<'a>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ClosureLayout<'a> {
+    /// the layout that this specific closure captures
+    captured: &'a [Layout<'a>],
+
+    /// the layout that represents the maximum size the closure layout can have
+    max_size: &'a [Layout<'a>],
+}
+
+impl<'a> ClosureLayout<'a> {
+    fn from_unwrapped(layouts: &'a [Layout<'a>]) -> Self {
+        debug_assert!(layouts.len() > 0);
+        ClosureLayout {
+            captured: layouts,
+            max_size: layouts,
+        }
+    }
+
+    pub fn stack_size(&self, pointer_size: u32) -> u32 {
+        self.max_size
+            .iter()
+            .map(|l| l.stack_size(pointer_size))
+            .sum()
+    }
+    pub fn contains_refcounted(&self) -> bool {
+        self.captured.iter().any(|l| l.contains_refcounted())
+    }
+    pub fn safe_to_memcpy(&self) -> bool {
+        self.captured.iter().all(|l| l.safe_to_memcpy())
+    }
+
+    pub fn into_layout(&self) -> Layout<'a> {
+        if self.captured.len() == 1 {
+            self.captured[0].clone()
+        } else {
+            Layout::Struct(self.captured)
+        }
+    }
+
+    pub fn into_block_of_memory_layout(&self) -> Layout<'a> {
+        Layout::Struct(self.max_size)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
@@ -140,9 +184,7 @@ impl<'a> Layout<'a> {
                 // Function pointers are immutable and can always be safely copied
                 true
             }
-            Closure(_, closure_layout, _) => {
-                closure_layout.iter().all(|field| field.safe_to_memcpy())
-            }
+            Closure(_, closure_layout, _) => closure_layout.safe_to_memcpy(),
             Pointer(_) => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
@@ -195,13 +237,7 @@ impl<'a> Layout<'a> {
                 })
                 .max()
                 .unwrap_or_default(),
-            Closure(_, closure_layout, _) => {
-                pointer_size
-                    + closure_layout
-                        .iter()
-                        .map(|x| x.stack_size(pointer_size))
-                        .sum::<u32>()
-            }
+            Closure(_, closure_layout, _) => pointer_size + closure_layout.stack_size(pointer_size),
             FunctionPointer(_, _) => pointer_size,
             RecursivePointer => pointer_size,
             Pointer(_) => pointer_size,
@@ -231,7 +267,7 @@ impl<'a> Layout<'a> {
                 .flatten()
                 .any(|f| f.is_refcounted()),
             RecursiveUnion(_) => true,
-            Closure(_, closure_layout, _) => closure_layout.iter().any(|f| f.contains_refcounted()),
+            Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
             FunctionPointer(_, _) | RecursivePointer | Pointer(_) => false,
         }
     }
@@ -498,36 +534,44 @@ fn layout_from_flat_type<'a>(
 
             let ret = Layout::from_var(env, ret_var)?;
 
-            match Layout::from_var(env, closure_var) {
-                Ok(Layout::Builtin(builtin)) => Ok(Layout::Closure(
-                    fn_args.into_bump_slice(),
-                    arena.alloc([Layout::Builtin(builtin.clone())]),
-                    arena.alloc(ret),
-                )),
-                Ok(Layout::Struct(&[])) => {
-                    //  TODO check for stack size of 0, rather than empty record specifically
+            let mut tags = std::vec::Vec::new();
+            match roc_types::pretty_print::chase_ext_tag_union(env.subs, closure_var, &mut tags) {
+                Ok(()) | Err((_, Content::FlexVar(_))) if !tags.is_empty() => {
+                    // this is a closure
+                    let variant = union_sorted_tags_help(env.arena, tags, None, env.subs);
+
+                    let fn_args = fn_args.into_bump_slice();
+                    let ret = arena.alloc(ret);
+
+                    use UnionVariant::*;
+                    match variant {
+                        Never | Unit => {
+                            // a max closure size of 0 means this is a standart top-level function
+                            Ok(Layout::FunctionPointer(fn_args, ret))
+                        }
+                        BoolUnion {
+                            ttrue: _,
+                            ffalse: _,
+                        } => todo!(),
+                        ByteUnion(_tagnames) => todo!(),
+                        Unwrapped(layouts) => {
+                            let closure_layout =
+                                ClosureLayout::from_unwrapped(layouts.into_bump_slice());
+
+                            Ok(Layout::Closure(fn_args, closure_layout, ret))
+                        }
+                        Wrapped(_tags) => todo!(),
+                    }
+                }
+
+                Ok(()) | Err((_, Content::FlexVar(_))) => {
+                    // a max closure size of 0 means this is a standart top-level function
                     Ok(Layout::FunctionPointer(
                         fn_args.into_bump_slice(),
                         arena.alloc(ret),
                     ))
                 }
-                Ok(Layout::Struct(closure_layouts)) => Ok(Layout::Closure(
-                    fn_args.into_bump_slice(),
-                    closure_layouts,
-                    arena.alloc(ret),
-                )),
-                Ok(closure_layout) => {
-                    // the closure parameter can be a tag union if there are multiple sizes
-                    // we must make sure we can distinguish between that tag union,
-                    // and the closure containing just one element, that happens to be a tag union.
-                    todo!("TODO closure layout {:?}", &closure_layout)
-                }
-                Err(LayoutProblem::UnresolvedTypeVar) => Ok(Layout::FunctionPointer(
-                    fn_args.into_bump_slice(),
-                    arena.alloc(ret),
-                )),
-
-                error => error,
+                Err(_) => todo!(),
             }
         }
         Record(fields, ext_var) => {

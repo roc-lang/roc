@@ -52,6 +52,7 @@ fn basic_type_from_function_layout<'ctx>(
     arena: &Bump,
     context: &'ctx Context,
     args: &[Layout<'_>],
+    closure_type: Option<BasicTypeEnum<'ctx>>,
     ret_layout: &Layout<'_>,
     ptr_bytes: u32,
 ) -> BasicTypeEnum<'ctx> {
@@ -62,6 +63,10 @@ fn basic_type_from_function_layout<'ctx>(
         arg_basic_types.push(basic_type_from_layout(
             arena, context, arg_layout, ptr_bytes,
         ));
+    }
+
+    if let Some(closure) = closure_type {
+        arg_basic_types.push(closure);
     }
 
     let fn_type = get_fn_type(&ret_type, arg_basic_types.into_bump_slice());
@@ -103,19 +108,27 @@ pub fn basic_type_from_layout<'ctx>(
 
     match layout {
         FunctionPointer(args, ret_layout) => {
-            basic_type_from_function_layout(arena, context, args, ret_layout, ptr_bytes)
+            basic_type_from_function_layout(arena, context, args, None, ret_layout, ptr_bytes)
         }
         Closure(args, closure_layout, ret_layout) => {
-            let args = {
-                let mut temp = Vec::from_iter_in(args.iter().cloned(), arena);
-                temp.push(Layout::Struct(closure_layout));
-                temp.into_bump_slice()
-            };
+            //            let closure_data = block_of_memory(
+            //                context,
+            //                // &closure_layout.into_block_of_memory_layout(),
+            //                &closure_layout.into_layout(),
+            //                ptr_bytes,
+            //            );
 
-            let function_pointer =
-                basic_type_from_function_layout(arena, context, args, ret_layout, ptr_bytes);
+            let closure_data =
+                basic_type_from_layout(arena, context, &closure_layout.into_layout(), ptr_bytes);
 
-            let closure_data = basic_type_from_record(arena, context, closure_layout, ptr_bytes);
+            let function_pointer = basic_type_from_function_layout(
+                arena,
+                context,
+                args,
+                Some(closure_data),
+                ret_layout,
+                ptr_bytes,
+            );
 
             context
                 .struct_type(&[function_pointer, closure_data], false)

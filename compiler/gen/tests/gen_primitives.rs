@@ -902,7 +902,6 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn closure() {
         assert_evals_to!(
             indoc!(
@@ -942,6 +941,34 @@ mod gen_primitives {
                 "#
             ),
             42,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn specialize_closure() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                foo = \{} ->
+                    x = 41
+                    y = 1
+
+                    f = \{} -> x
+                    g = \{} -> x + y
+
+                    [ f, g ]
+
+                main = 
+                    items = foo {}
+
+                    List.len items
+                "#
+            ),
+            2,
             i64
         );
     }
