@@ -1260,6 +1260,7 @@ mod gen_list {
     //    }
 
     #[test]
+    #[ignore]
     fn gen_quicksort() {
         with_larger_debug_stack(|| {
             assert_evals_to!(
@@ -1331,6 +1332,7 @@ mod gen_list {
     }
 
     #[test]
+    #[ignore]
     fn foobar2() {
         with_larger_debug_stack(|| {
             assert_evals_to!(
@@ -1404,6 +1406,7 @@ mod gen_list {
     }
 
     #[test]
+    #[ignore]
     fn foobar() {
         with_larger_debug_stack(|| {
             assert_evals_to!(

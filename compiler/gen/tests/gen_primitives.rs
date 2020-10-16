@@ -931,8 +931,8 @@ mod gen_primitives {
                 app Test provides [ main ] imports []
 
                 foo = \{} ->
-                    x = 42
-                    y = 2
+                    x = 41
+                    y = 1
                     f = \{} -> x + y
                     f
 
