@@ -40,6 +40,22 @@ pub struct ClosureLayout<'a> {
 }
 
 impl<'a> ClosureLayout<'a> {
+    fn from_bool(arena: &'a Bump) -> Self {
+        let layout = Layout::Builtin(Builtin::Int1);
+        let layouts = arena.alloc([layout]);
+        ClosureLayout {
+            captured: layouts,
+            max_size: layouts,
+        }
+    }
+    fn from_byte(arena: &'a Bump) -> Self {
+        let layout = Layout::Builtin(Builtin::Int8);
+        let layouts = arena.alloc([layout]);
+        ClosureLayout {
+            captured: layouts,
+            max_size: layouts,
+        }
+    }
     fn from_unwrapped(layouts: &'a [Layout<'a>]) -> Self {
         debug_assert!(layouts.len() > 0);
         ClosureLayout {
@@ -566,11 +582,16 @@ fn layout_from_flat_type<'a>(
                             // a max closure size of 0 means this is a standart top-level function
                             Ok(Layout::FunctionPointer(fn_args, ret))
                         }
-                        BoolUnion {
-                            ttrue: _,
-                            ffalse: _,
-                        } => todo!(),
-                        ByteUnion(_tagnames) => todo!(),
+                        BoolUnion { .. } => {
+                            let closure_layout = ClosureLayout::from_bool(env.arena);
+
+                            Ok(Layout::Closure(fn_args, closure_layout, ret))
+                        }
+                        ByteUnion(_) => {
+                            let closure_layout = ClosureLayout::from_byte(env.arena);
+
+                            Ok(Layout::Closure(fn_args, closure_layout, ret))
+                        }
                         Unwrapped(layouts) => {
                             let closure_layout =
                                 ClosureLayout::from_unwrapped(layouts.into_bump_slice());
