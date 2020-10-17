@@ -123,7 +123,6 @@ impl Pools {
 struct State {
     env: Env,
     mark: Mark,
-    vars_by_symbol: MutMap<Symbol, Variable>,
 }
 
 pub fn run(
@@ -136,10 +135,9 @@ pub fn run(
     let state = State {
         env: env.clone(),
         mark: Mark::NONE.next(),
-        vars_by_symbol: MutMap::default(),
     };
     let rank = Rank::toplevel();
-    let mut state = solve(
+    let state = solve(
         env,
         state,
         rank,
@@ -149,10 +147,6 @@ pub fn run(
         &mut subs,
         constraint,
     );
-
-    // by default, state.vars_by_symbol only gives back top-level symbols and their variable
-    // for closure size inference, we need all of the symbols, we do that here
-    state.env.vars_by_symbol.extend(state.vars_by_symbol);
 
     (Solved(subs), state.env)
 }
@@ -168,10 +162,9 @@ pub fn run_in_place(
     let state = State {
         env: env.clone(),
         mark: Mark::NONE.next(),
-        vars_by_symbol: MutMap::default(),
     };
     let rank = Rank::toplevel();
-    let mut state = solve(
+    let state = solve(
         env,
         state,
         rank,
@@ -182,17 +175,13 @@ pub fn run_in_place(
         constraint,
     );
 
-    // by default, state.vars_by_symbol only gives back top-level symbols and their variable
-    // for closure size inference, we need all of the symbols, we do that here
-    state.env.vars_by_symbol.extend(state.vars_by_symbol);
-
     state.env
 }
 
 #[allow(clippy::too_many_arguments)]
 fn solve(
     env: &Env,
-    mut state: State,
+    state: State,
     rank: Rank,
     pools: &mut Pools,
     problems: &mut Vec<TypeError>,
@@ -201,21 +190,12 @@ fn solve(
     constraint: &Constraint,
 ) -> State {
     match constraint {
-        True => {
-            state
-                .vars_by_symbol
-                .extend(env.vars_by_symbol.iter().map(|(x, y)| (*x, *y)));
-
-            state
-        }
+        True => state,
         SaveTheEnvironment => {
             // NOTE deviation: elm only copies the env into the state on SaveTheEnvironment
             let mut copy = state;
 
             copy.env = env.clone();
-
-            copy.vars_by_symbol
-                .extend(env.vars_by_symbol.iter().map(|(x, y)| (*x, *y)));
 
             copy
         }
@@ -403,7 +383,7 @@ fn solve(
                     )
                 }
                 ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
-                    let mut state = solve(
+                    let state = solve(
                         env,
                         state,
                         rank,
@@ -435,10 +415,6 @@ fn solve(
                             new_env.vars_by_symbol.insert(*symbol, loc_var.value);
                         }
                     }
-
-                    state
-                        .vars_by_symbol
-                        .extend(new_env.vars_by_symbol.iter().map(|(x, y)| (*x, *y)));
 
                     let new_state = solve(
                         &new_env,
@@ -497,10 +473,6 @@ fn solve(
                                 },
                             );
                         }
-
-                        state
-                            .vars_by_symbol
-                            .extend(new_env.vars_by_symbol.iter().map(|(x, y)| (*x, *y)));
 
                         // run solver in next pool
 
@@ -589,7 +561,6 @@ fn solve(
                         let temp_state = State {
                             env: new_state.env,
                             mark: final_mark,
-                            vars_by_symbol: new_state.vars_by_symbol,
                         };
 
                         // Now solve the body, using the new vars_by_symbol which includes
