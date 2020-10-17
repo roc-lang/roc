@@ -9,12 +9,9 @@ mod helpers;
 
 #[cfg(test)]
 mod solve_expr {
-    use crate::helpers::{
-        assert_correct_variable_usage, can_expr, infer_expr, with_larger_debug_stack, CanExprOut,
-    };
+    use crate::helpers::with_larger_debug_stack;
     use roc_collections::all::MutMap;
     use roc_types::pretty_print::{content_to_string, name_all_type_vars};
-    use roc_types::subs::Subs;
 
     // HELPERS
 
@@ -30,8 +27,8 @@ mod solve_expr {
     > {
         use bumpalo::Bump;
         use std::fs::File;
-        use std::io::{self, Write};
-        use std::path::{Path, PathBuf};
+        use std::io::Write;
+        use std::path::PathBuf;
         use tempfile::tempdir;
 
         let arena = &Bump::new();

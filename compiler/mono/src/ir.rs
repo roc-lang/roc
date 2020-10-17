@@ -299,7 +299,7 @@ impl<'a> Procs<'a> {
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
         for (_, proc) in result.iter_mut() {
-            // crate::inc_dec::visit_proc(arena, borrow_params, proc);
+            crate::inc_dec::visit_proc(arena, borrow_params, proc);
         }
 
         (result, borrow_params)
@@ -2984,10 +2984,12 @@ pub fn from_can<'a>(
                                                     pending,
                                                     partial_proc,
                                                 ) {
-                                                    Ok((proc, layout)) => {
-                                                        debug_assert_eq!(full_layout, layout);
-                                                        let function_layout =
-                                                            FunctionLayouts::from_layout(layout);
+                                                    Ok((proc, _layout)) => {
+                                                        // TODO sometimes the full_layout is a
+                                                        // function pointer, but the layout is a
+                                                        // closure. Figure out how to handle this
+                                                        // debug_assert_eq!(full_layout, layout);
+                                                        // let function_layout = FunctionLayouts::from_layout(layout);
 
                                                         procs.specialized.remove(&(
                                                             proc_name,
@@ -3004,7 +3006,7 @@ pub fn from_can<'a>(
                                                         );
                                                     }
                                                     Err(error) => {
-                                                        panic!();
+                                                        panic!("procedure is invalid {:?}", error);
                                                     }
                                                 }
                                             }

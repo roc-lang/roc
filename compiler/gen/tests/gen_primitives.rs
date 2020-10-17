@@ -946,6 +946,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn specialize_closure() {
         assert_evals_to!(
             indoc!(

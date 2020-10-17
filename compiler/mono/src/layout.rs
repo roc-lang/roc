@@ -562,7 +562,7 @@ fn layout_from_flat_type<'a>(
                         }
                         Wrapped(_tags) => {
                             // Wrapped(Vec<'a, (TagName, &'a [Layout<'a>])>),
-                            todo!()
+                            todo!("can't specialize multi-size closures yet")
                         }
                     }
                 }
