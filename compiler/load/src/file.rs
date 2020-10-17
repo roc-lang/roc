@@ -1938,35 +1938,6 @@ fn run_solve<'a>(
     let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
 
-    /*
-    // determine the size of closures BEFORE converting to solved types
-    // this is separate from type inference so we can maybe do optimizations between type inference
-    // and closure size inference (those optimizations could shrink the closure size)
-    use Declaration::*;
-    let subs = solved_subs.inner_mut();
-
-    let mut definitions = Vec::new();
-    for decl in decls.iter() {
-        match decl {
-            Declare(def) => definitions.push(def.clone()),
-            Builtin(_) => {
-                // builtins should never have anything in their closure, so not determining their
-                // size _should_ be OK. We'll need to verify this in practice though
-            }
-            InvalidCycle(_, _) => {}
-            DeclareRec(defs) => {
-                for def in defs {
-                    definitions.push(def.clone())
-                }
-            }
-        }
-    }
-
-    roc_mono::closures::infer_closure_size(&definitions, subs, &solved_env);
-    dbg!(&subs, &solved_env);
-    panic!();
-    */
-
     let solved_types =
         roc_solve::module::make_solved_types(&solved_env, &solved_subs, &exposed_vars_by_symbol);
 
