@@ -57,7 +57,7 @@ impl<'a> ClosureLayout<'a> {
         }
     }
     fn from_unwrapped(layouts: &'a [Layout<'a>]) -> Self {
-        debug_assert!(layouts.len() > 0);
+        debug_assert!(!layouts.is_empty());
         ClosureLayout {
             captured: layouts,
             max_size: layouts,
@@ -102,7 +102,7 @@ impl<'a> ClosureLayout<'a> {
         }
     }
 
-    pub fn into_block_of_memory_layout(&self) -> Layout<'a> {
+    pub fn as_block_of_memory_layout(&self) -> Layout<'a> {
         Layout::Struct(self.max_size)
     }
 }

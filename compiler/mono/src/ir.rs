@@ -3016,10 +3016,7 @@ pub fn from_can<'a>(
                                         env.arena,
                                     );
                                     temp.push(closure_data_layout.clone());
-                                    Layout::FunctionPointer(
-                                        temp.into_bump_slice(),
-                                        ret_layout.clone(),
-                                    )
+                                    Layout::FunctionPointer(temp.into_bump_slice(), ret_layout)
                                 };
 
                                 let full_layout = function_ptr_layout.clone();
