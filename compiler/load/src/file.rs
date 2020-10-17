@@ -1642,6 +1642,13 @@ fn parse_header<'a>(
             ident_ids_by_module,
             module_timing,
         )),
+        Ok((ast::Module::Platform { header }, parse_state)) => {
+            todo!(
+                "TODO load a platform with {:?} and {:?}",
+                header,
+                parse_state
+            );
+        }
         Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
     }
 }

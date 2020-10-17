@@ -1,4 +1,4 @@
-use crate::header::ModuleName;
+use crate::header::{ModuleName, PackageName};
 use crate::ident::Ident;
 use bumpalo::collections::String;
 use bumpalo::collections::Vec;
@@ -10,6 +10,7 @@ use roc_region::all::{Loc, Region};
 pub enum Module<'a> {
     Interface { header: InterfaceHeader<'a> },
     App { header: AppHeader<'a> },
+    Platform { header: PlatformHeader<'a> },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -19,7 +20,7 @@ pub struct InterfaceHeader<'a> {
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
 
     // Potential comments and newlines - these will typically all be empty.
-    pub after_interface: &'a [CommentOrNewline<'a>],
+    pub after_interface_keyword: &'a [CommentOrNewline<'a>],
     pub before_exposes: &'a [CommentOrNewline<'a>],
     pub after_exposes: &'a [CommentOrNewline<'a>],
     pub before_imports: &'a [CommentOrNewline<'a>],
@@ -40,11 +41,46 @@ pub struct AppHeader<'a> {
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
 
     // Potential comments and newlines - these will typically all be empty.
-    pub after_interface: &'a [CommentOrNewline<'a>],
+    pub after_app_keyword: &'a [CommentOrNewline<'a>],
     pub before_provides: &'a [CommentOrNewline<'a>],
     pub after_provides: &'a [CommentOrNewline<'a>],
     pub before_imports: &'a [CommentOrNewline<'a>],
     pub after_imports: &'a [CommentOrNewline<'a>],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlatformHeader<'a> {
+    pub name: Loc<PackageName<'a>>,
+    pub provides: Vec<'a, Loc<ExposesEntry<'a>>>,
+    pub requires: Vec<'a, Loc<ExposesEntry<'a>>>,
+    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
+    pub effects: Vec<'a, Loc<EffectsEntry<'a>>>,
+
+    // Potential comments and newlines - these will typically all be empty.
+    pub after_platform_keyword: &'a [CommentOrNewline<'a>],
+    pub before_provides: &'a [CommentOrNewline<'a>],
+    pub after_provides: &'a [CommentOrNewline<'a>],
+    pub before_requires: &'a [CommentOrNewline<'a>],
+    pub after_requires: &'a [CommentOrNewline<'a>],
+    pub before_imports: &'a [CommentOrNewline<'a>],
+    pub after_imports: &'a [CommentOrNewline<'a>],
+    pub before_effects: &'a [CommentOrNewline<'a>],
+    pub after_effects: &'a [CommentOrNewline<'a>],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum EffectsEntry<'a> {
+    /// e.g.
+    ///
+    /// printLine : Str -> Effect {}
+    Effect {
+        ident: Loc<&'a str>,
+        ann: Loc<TypeAnnotation<'a>>,
+    },
+
+    // Spaces
+    SpaceBefore(&'a EffectsEntry<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a EffectsEntry<'a>, &'a [CommentOrNewline<'a>]),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -579,6 +615,15 @@ impl<'a> Spaceable<'a> for ImportsEntry<'a> {
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         ImportsEntry::SpaceAfter(self, spaces)
+    }
+}
+
+impl<'a> Spaceable<'a> for EffectsEntry<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        EffectsEntry::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        EffectsEntry::SpaceAfter(self, spaces)
     }
 }
 
