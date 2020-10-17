@@ -2194,6 +2194,7 @@ mod test_reporting {
     }
 
     #[test]
+    #[ignore]
     fn open_tag_union_can_grow() {
         report_problem_as(
             indoc!(
