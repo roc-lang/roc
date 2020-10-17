@@ -6,7 +6,7 @@ use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
     int_expr_from_result, num_expr_from_result,
 };
-use crate::pattern::{canonicalize_pattern, symbols_from_pattern, Pattern};
+use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
 use inlinable_string::InlinableString;

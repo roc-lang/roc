@@ -2876,7 +2876,6 @@ pub fn from_can<'a>(
                     match def.loc_expr.value {
                         Closure {
                             function_type,
-                            closure_type,
                             return_type,
                             recursive,
                             arguments,
@@ -2895,8 +2894,6 @@ pub fn from_can<'a>(
                             // does this function capture any local values?
                             let function_layout =
                                 layout_cache.from_var(env.arena, function_type, env.subs);
-                            let is_closure =
-                                matches!(&function_layout, Ok(Layout::Closure(_, _, _)));
 
                             if let Ok(Layout::Closure(
                                 argument_layouts,
@@ -2988,7 +2985,7 @@ pub fn from_can<'a>(
                                                     partial_proc,
                                                 ) {
                                                     Ok((proc, layout)) => {
-                                                        // debug_assert_eq!(full_layout, layout);
+                                                        debug_assert_eq!(full_layout, layout);
                                                         let function_layout =
                                                             FunctionLayouts::from_layout(layout);
 
