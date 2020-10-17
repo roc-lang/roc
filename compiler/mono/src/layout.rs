@@ -560,7 +560,10 @@ fn layout_from_flat_type<'a>(
 
                             Ok(Layout::Closure(fn_args, closure_layout, ret))
                         }
-                        Wrapped(_tags) => todo!(),
+                        Wrapped(_tags) => {
+                            // Wrapped(Vec<'a, (TagName, &'a [Layout<'a>])>),
+                            todo!()
+                        }
                     }
                 }
 
