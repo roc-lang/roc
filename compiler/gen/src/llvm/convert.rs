@@ -112,7 +112,7 @@ pub fn basic_type_from_layout<'ctx>(
         }
         Closure(args, closure_layout, ret_layout) => {
             let closure_data =
-                basic_type_from_layout(arena, context, &closure_layout.into_layout(), ptr_bytes);
+                basic_type_from_layout(arena, context, &closure_layout.as_layout(), ptr_bytes);
 
             let function_pointer = basic_type_from_function_layout(
                 arena,

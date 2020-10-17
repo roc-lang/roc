@@ -120,7 +120,7 @@ impl SolvedType {
                 let solved_closure = Self::from_type(solved_subs, box_closure);
                 let mut solved_args = Vec::with_capacity(args.len());
 
-                for arg in args.into_iter() {
+                for arg in args {
                     let solved_arg = Self::from_type(solved_subs, arg);
 
                     solved_args.push(solved_arg);

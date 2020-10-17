@@ -70,7 +70,7 @@ impl<'a> ClosureLayout<'a> {
         closure_layout: Self,
         ret_layout: &'a Layout<'a>,
     ) -> Layout<'a> {
-        let closure_data_layout = closure_layout.into_layout();
+        let closure_data_layout = closure_layout.as_layout();
         // define the function pointer
         let function_ptr_layout = {
             let mut temp = Vec::from_iter_in(argument_layouts.iter().cloned(), arena);
@@ -94,7 +94,7 @@ impl<'a> ClosureLayout<'a> {
         self.captured.iter().all(|l| l.safe_to_memcpy())
     }
 
-    pub fn into_layout(&self) -> Layout<'a> {
+    pub fn as_layout(&self) -> Layout<'a> {
         if self.captured.len() == 1 {
             self.captured[0].clone()
         } else {

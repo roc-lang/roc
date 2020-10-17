@@ -2526,7 +2526,7 @@ pub fn with_hole<'a>(
                         )
                         .unwrap();
 
-                    let closure_data_layout = closure_layout.into_layout();
+                    let closure_data_layout = closure_layout.as_layout();
                     // define the function pointer
                     let function_ptr_layout = {
                         let mut temp =
@@ -2686,7 +2686,7 @@ pub fn with_hole<'a>(
                                 let closure_symbol = function_symbol;
 
                                 // layout of the closure record
-                                let closure_record_layout = closure_fields.into_layout();
+                                let closure_record_layout = closure_fields.as_layout();
 
                                 let arg_symbols = {
                                     let mut temp =
@@ -3008,7 +3008,7 @@ pub fn from_can<'a>(
                                     return_type,
                                 );
 
-                                let closure_data_layout = closure_fields.into_layout();
+                                let closure_data_layout = closure_fields.as_layout();
                                 // define the function pointer
                                 let function_ptr_layout = {
                                     let mut temp = Vec::from_iter_in(

@@ -508,14 +508,12 @@ fn solve(
                                 let result = offenders.len();
 
                                 if result > 0 {
-                                    /*
                                     dbg!(
                                         &subs,
                                         &offenders,
                                         &let_con.def_types,
                                         &let_con.def_aliases
                                     );
-                                    */
                                 }
 
                                 result
