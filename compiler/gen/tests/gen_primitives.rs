@@ -974,6 +974,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn io_poc() {
         use roc_std::RocStr;
         assert_evals_to!(

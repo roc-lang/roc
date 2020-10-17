@@ -48,6 +48,23 @@ impl<'a> ClosureLayout<'a> {
         }
     }
 
+    pub fn extend_function_layout(
+        arena: &'a Bump,
+        argument_layouts: &'a [Layout<'a>],
+        closure_layout: Self,
+        ret_layout: &'a Layout<'a>,
+    ) -> Layout<'a> {
+        let closure_data_layout = closure_layout.into_layout();
+        // define the function pointer
+        let function_ptr_layout = {
+            let mut temp = Vec::from_iter_in(argument_layouts.iter().cloned(), arena);
+            temp.push(closure_data_layout.clone());
+            Layout::FunctionPointer(temp.into_bump_slice(), ret_layout)
+        };
+
+        function_ptr_layout
+    }
+
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
         self.max_size
             .iter()

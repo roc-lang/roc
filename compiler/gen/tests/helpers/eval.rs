@@ -191,7 +191,6 @@ pub fn helper<'a>(
     // because their bodies may reference each other.
     let mut scope = Scope::default();
     for ((symbol, layout), proc) in procedures.drain() {
-        dbg!(&symbol, &layout);
         let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
 
         if proc.args.is_empty() {
@@ -230,8 +229,8 @@ pub fn helper<'a>(
                 mode,
             );
 
-            // fn_val.print_to_stderr();
-            module.print_to_stderr();
+            fn_val.print_to_stderr();
+            // module.print_to_stderr();
 
             panic!(
                 "The preceding code was from {:?}, which failed LLVM verification in {} build.",

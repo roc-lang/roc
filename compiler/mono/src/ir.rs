@@ -1,6 +1,6 @@
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
-use crate::layout::{Builtin, Layout, LayoutCache, LayoutProblem};
+use crate::layout::{Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
@@ -433,7 +433,15 @@ impl<'a> Procs<'a> {
                             {
                                 Ok((proc, layout)) => {
                                     debug_assert_eq!(outside_layout, layout);
-                                    self.specialized.insert((symbol, layout), Done(proc));
+                                    if let Layout::Closure(args, closure, ret) = layout {
+                                        self.specialized.remove(&(symbol, outside_layout));
+                                        let layout = ClosureLayout::extend_function_layout(
+                                            env.arena, args, closure, ret,
+                                        );
+                                        self.specialized.insert((symbol, layout), Done(proc));
+                                    } else {
+                                        self.specialized.insert((symbol, layout), Done(proc));
+                                    }
                                 }
                                 Err(error) => {
                                     let error_msg = format!(
@@ -1405,12 +1413,18 @@ fn specialize_external<'a>(
 
         let field_layouts = layouts.into_bump_slice();
 
+        let wrapped = if captured.len() > 1 {
+            Wrapped::RecordOrSingleTagUnion
+        } else {
+            Wrapped::SingleElementRecord
+        };
+
         for (index, (symbol, variable)) in captured.iter().enumerate() {
             let expr = Expr::AccessAtIndex {
                 index: index as _,
                 field_layouts,
                 structure: Symbol::ARG_CLOSURE,
-                wrapped: Wrapped::RecordOrSingleTagUnion,
+                wrapped,
             };
 
             // layout is cached anyway, re-using the one found above leads to
@@ -2350,8 +2364,6 @@ pub fn with_hole<'a>(
                 Located::at_zero(roc_can::pattern::Pattern::Identifier(record_symbol)),
             )];
 
-            dbg!("aaaa");
-
             match procs.insert_anonymous(
                 env,
                 name,
@@ -2488,35 +2500,110 @@ pub fn with_hole<'a>(
             return_type,
             name,
             arguments,
+            captured_symbols,
             loc_body: boxed_body,
             ..
         } => {
             let loc_body = *boxed_body;
 
-            dbg!("bbb");
-            match procs.insert_anonymous(
-                env,
-                name,
-                function_type,
-                arguments,
-                loc_body,
-                CapturedSymbols::None,
-                return_type,
-                layout_cache,
-            ) {
-                Ok(layout) => {
-                    // TODO should the let have layout Pointer?
-                    Stmt::Let(
-                        assigned,
-                        Expr::FunctionPointer(name, layout.clone()),
-                        layout,
-                        hole,
-                    )
-                }
+            match layout_cache.from_var(env.arena, function_type, env.subs) {
+                Err(e) => panic!("invalid layout {:?}", e),
+                Ok(Layout::Closure(argument_layouts, closure_layout, ret_layout)) => {
+                    let mut captured_symbols = Vec::from_iter_in(captured_symbols, env.arena);
+                    captured_symbols.sort();
+                    let captured_symbols = captured_symbols.into_bump_slice();
 
-                Err(_error) => Stmt::RuntimeError(
-                    "TODO convert anonymous function error to a RuntimeError string",
-                ),
+                    procs
+                        .insert_anonymous(
+                            env,
+                            name,
+                            function_type,
+                            arguments,
+                            loc_body,
+                            CapturedSymbols::Captured(captured_symbols),
+                            return_type,
+                            layout_cache,
+                        )
+                        .unwrap();
+
+                    let closure_data_layout = closure_layout.into_layout();
+                    // define the function pointer
+                    let function_ptr_layout = {
+                        let mut temp =
+                            Vec::from_iter_in(argument_layouts.iter().cloned(), env.arena);
+                        temp.push(closure_data_layout.clone());
+                        Layout::FunctionPointer(temp.into_bump_slice(), ret_layout)
+                    };
+
+                    let mut stmt = hole.clone();
+
+                    let function_pointer = env.unique_symbol();
+                    let closure_data = env.unique_symbol();
+
+                    // define the closure
+                    let expr = Expr::Struct(env.arena.alloc([function_pointer, closure_data]));
+
+                    stmt = Stmt::Let(
+                        assigned,
+                        expr,
+                        Layout::Struct(
+                            env.arena
+                                .alloc([function_ptr_layout.clone(), closure_data_layout.clone()]),
+                        ),
+                        env.arena.alloc(stmt),
+                    );
+
+                    // define the closure data
+
+                    let symbols =
+                        Vec::from_iter_in(captured_symbols.iter().map(|x| x.0), env.arena)
+                            .into_bump_slice();
+                    let expr = Expr::Struct(symbols);
+
+                    stmt = Stmt::Let(
+                        closure_data,
+                        expr,
+                        closure_data_layout.clone(),
+                        env.arena.alloc(stmt),
+                    );
+
+                    let expr = Expr::FunctionPointer(name, function_ptr_layout.clone());
+
+                    stmt = Stmt::Let(
+                        function_pointer,
+                        expr,
+                        function_ptr_layout,
+                        env.arena.alloc(stmt),
+                    );
+
+                    stmt
+                }
+                Ok(_) => {
+                    match procs.insert_anonymous(
+                        env,
+                        name,
+                        function_type,
+                        arguments,
+                        loc_body,
+                        CapturedSymbols::None,
+                        return_type,
+                        layout_cache,
+                    ) {
+                        Ok(layout) => {
+                            // TODO should the let have layout Pointer?
+                            Stmt::Let(
+                                assigned,
+                                Expr::FunctionPointer(name, layout.clone()),
+                                layout,
+                                hole,
+                            )
+                        }
+
+                        Err(_error) => Stmt::RuntimeError(
+                            "TODO convert anonymous function error to a RuntimeError string",
+                        ),
+                    }
+                }
             }
         }
 
@@ -4121,10 +4208,9 @@ fn call_by_name<'a>(
 
             // TODO does this work?
             let empty = &[] as &[_];
-            let (arg_layouts, ret_layout) = if let Layout::FunctionPointer(args, rlayout) = layout {
-                (args, rlayout)
-            } else {
-                (empty, &layout)
+            let (arg_layouts, ret_layout) = match layout {
+                Layout::FunctionPointer(args, rlayout) => (args, rlayout),
+                _ => (empty, &layout),
             };
 
             // If we've already specialized this one, no further work is needed.
