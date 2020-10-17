@@ -972,4 +972,34 @@ mod gen_primitives {
             i64
         );
     }
+
+    #[test]
+    fn io_poc() {
+        use roc_std::RocStr;
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Effect a : [ @Effect ({} -> a) ]
+
+                succeed : a -> Effect a
+                succeed = \x -> @Effect \{} -> x
+
+                foo : Effect Float
+                foo = 
+                    succeed 3.14
+
+                runEffect : Effect a -> a
+                runEffect = \@Effect thunk -> thunk {}
+
+                main = 
+                    runEffect foo
+
+                "#
+            ),
+            RocStr::from_slice(&"Foo".as_bytes()),
+            RocStr
+        );
+    }
 }

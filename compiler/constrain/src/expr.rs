@@ -322,8 +322,10 @@ pub fn constrain_expr(
             arguments,
             loc_body: boxed,
             captured_symbols,
+            name,
             ..
         } => {
+            dbg!(name, &captured_symbols);
             let loc_body_expr = &**boxed;
             let mut state = PatternState {
                 headers: SendMap::default(),

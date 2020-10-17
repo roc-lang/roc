@@ -2350,6 +2350,8 @@ pub fn with_hole<'a>(
                 Located::at_zero(roc_can::pattern::Pattern::Identifier(record_symbol)),
             )];
 
+            dbg!("aaaa");
+
             match procs.insert_anonymous(
                 env,
                 name,
@@ -2491,6 +2493,7 @@ pub fn with_hole<'a>(
         } => {
             let loc_body = *boxed_body;
 
+            dbg!("bbb");
             match procs.insert_anonymous(
                 env,
                 name,

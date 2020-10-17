@@ -1841,6 +1841,7 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     let args = proc.args;
     let arena = env.arena;
     let context = &env.context;
+
     let ret_type = basic_type_from_layout(arena, context, &proc.ret_layout, env.ptr_bytes);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
     let mut arg_symbols = Vec::new_in(arena);

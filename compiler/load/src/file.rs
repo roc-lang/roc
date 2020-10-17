@@ -1440,7 +1440,7 @@ fn update<'a>(
             {
                 // state.timings.insert(module_id, module_timing);
 
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
+                // Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 msg_tx
                     .send(Msg::FinishedAllSpecialization {
