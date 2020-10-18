@@ -1464,35 +1464,69 @@ fn build_specialized_proc_from_var<'a>(
     pattern_symbols: &[Symbol],
     fn_var: Variable,
 ) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
-    match env.subs.get_without_compacting(fn_var).content {
-        Content::Structure(FlatType::Func(pattern_vars, closure_var, ret_var)) => {
-            let closure_layout = ClosureLayout::from_var(env.arena, env.subs, closure_var)?;
+    match layout_cache.from_var(env.arena, fn_var, env.subs) {
+        Ok(Layout::FunctionPointer(pattern_layouts, ret_layout)) => {
+            let mut pattern_layouts_vec = Vec::with_capacity_in(pattern_layouts.len(), env.arena);
+            pattern_layouts_vec.extend_from_slice(pattern_layouts);
+
             build_specialized_proc(
-                env,
-                layout_cache,
+                env.arena,
                 pattern_symbols,
-                &pattern_vars,
-                closure_layout,
-                ret_var,
+                pattern_layouts_vec,
+                None,
+                ret_layout.clone(),
             )
         }
-        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args))
-            if !pattern_symbols.is_empty() =>
-        {
-            build_specialized_proc_from_var(env, layout_cache, pattern_symbols, args[1])
-        }
-        Content::Alias(_, _, actual) => {
-            build_specialized_proc_from_var(env, layout_cache, pattern_symbols, actual)
+        Ok(Layout::Closure(pattern_layouts, closure_layout, ret_layout)) => {
+            let mut pattern_layouts_vec = Vec::with_capacity_in(pattern_layouts.len(), env.arena);
+            pattern_layouts_vec.extend_from_slice(pattern_layouts);
+
+            build_specialized_proc(
+                env.arena,
+                pattern_symbols,
+                pattern_layouts_vec,
+                Some(closure_layout),
+                ret_layout.clone(),
+            )
         }
         _ => {
-            // a top-level constant 0-argument thunk
-            build_specialized_proc(env, layout_cache, pattern_symbols, &[], None, fn_var)
+            match env.subs.get_without_compacting(fn_var).content {
+                Content::Structure(FlatType::Func(pattern_vars, closure_var, ret_var)) => {
+                    let closure_layout = ClosureLayout::from_var(env.arena, env.subs, closure_var)?;
+                    build_specialized_proc_adapter(
+                        env,
+                        layout_cache,
+                        pattern_symbols,
+                        &pattern_vars,
+                        closure_layout,
+                        ret_var,
+                    )
+                }
+                Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args))
+                    if !pattern_symbols.is_empty() =>
+                {
+                    build_specialized_proc_from_var(env, layout_cache, pattern_symbols, args[1])
+                }
+                Content::Alias(_, _, actual) => {
+                    build_specialized_proc_from_var(env, layout_cache, pattern_symbols, actual)
+                }
+                _ => {
+                    // a top-level constant 0-argument thunk
+                    build_specialized_proc_adapter(
+                        env,
+                        layout_cache,
+                        pattern_symbols,
+                        &[],
+                        None,
+                        fn_var,
+                    )
+                }
+            }
         }
     }
 }
-
 #[allow(clippy::type_complexity)]
-fn build_specialized_proc<'a>(
+fn build_specialized_proc_adapter<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
     pattern_symbols: &[Symbol],
@@ -1500,12 +1534,41 @@ fn build_specialized_proc<'a>(
     opt_closure_layout: Option<ClosureLayout<'a>>,
     ret_var: Variable,
 ) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
-    let mut proc_args = Vec::with_capacity_in(pattern_vars.len(), &env.arena);
+    let mut arg_layouts = Vec::with_capacity_in(pattern_vars.len(), &env.arena);
 
-    for (arg_var, arg_name) in pattern_vars.iter().zip(pattern_symbols.iter()) {
+    for arg_var in pattern_vars {
         let layout = layout_cache.from_var(&env.arena, *arg_var, env.subs)?;
 
-        proc_args.push((layout, *arg_name));
+        arg_layouts.push(layout);
+    }
+
+    let ret_layout = layout_cache
+        .from_var(&env.arena, ret_var, env.subs)
+        .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
+
+    build_specialized_proc(
+        env.arena,
+        pattern_symbols,
+        arg_layouts,
+        opt_closure_layout,
+        ret_layout,
+    )
+}
+
+#[allow(clippy::type_complexity)]
+fn build_specialized_proc<'a>(
+    arena: &'a Bump,
+    pattern_symbols: &[Symbol],
+    pattern_layouts: Vec<Layout<'a>>,
+    opt_closure_layout: Option<ClosureLayout<'a>>,
+    ret_layout: Layout<'a>,
+) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
+    let mut proc_args = Vec::with_capacity_in(pattern_layouts.len(), arena);
+
+    let pattern_layouts_len = pattern_layouts.len();
+
+    for (arg_layout, arg_name) in pattern_layouts.into_iter().zip(pattern_symbols.iter()) {
+        proc_args.push((arg_layout, *arg_name));
     }
 
     // Given
@@ -1532,7 +1595,7 @@ fn build_specialized_proc<'a>(
             proc_args.push((layout.as_layout(), Symbol::ARG_CLOSURE));
 
             debug_assert_eq!(
-                pattern_vars.len() + 1,
+                pattern_layouts_len + 1,
                 pattern_symbols.len(),
                 "Tried to zip two vecs with different lengths!"
             );
@@ -1540,19 +1603,15 @@ fn build_specialized_proc<'a>(
         Some(layout) => {
             // else if there is a closure layout, we're building the `f_closure` value
             // that means we're really creating a ( function_ptr, closure_data ) pair
-            let ret_layout = layout_cache
-                .from_var(&env.arena, ret_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
             let closure_data_layout = layout.as_layout();
             let function_ptr_layout = Layout::FunctionPointer(
-                env.arena
-                    .alloc([Layout::Struct(&[]), closure_data_layout.clone()]),
-                env.arena.alloc(ret_layout),
+                arena.alloc([Layout::Struct(&[]), closure_data_layout.clone()]),
+                arena.alloc(ret_layout),
             );
 
             let closure_layout =
-                Layout::Struct(env.arena.alloc([function_ptr_layout, closure_data_layout]));
+                Layout::Struct(arena.alloc([function_ptr_layout, closure_data_layout]));
 
             return Ok((&[], closure_layout));
         }
@@ -1566,7 +1625,7 @@ fn build_specialized_proc<'a>(
             // since this is not a closure, the number of arguments should match between symbols
             // and layout
             debug_assert_eq!(
-                pattern_vars.len(),
+                pattern_layouts_len,
                 pattern_symbols.len(),
                 "Tried to zip two vecs with different lengths!"
             );
@@ -1574,10 +1633,6 @@ fn build_specialized_proc<'a>(
     }
 
     let proc_args = proc_args.into_bump_slice();
-
-    let ret_layout = layout_cache
-        .from_var(&env.arena, ret_var, env.subs)
-        .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
     Ok((proc_args, ret_layout))
 }

@@ -649,7 +649,10 @@ fn layout_from_flat_type<'a>(
                     use roc_types::types::RecordField::*;
                     match field {
                         Optional(_) => {
-                            // optional values are not available at this point
+                            // when an optional field reaches this stage, the field was truly
+                            // optional, and not unified to be demanded or required
+                            // therefore, there is no such field on the record, and we ignore this
+                            // field from now on.
                             continue;
                         }
                         Required(var) => var,
