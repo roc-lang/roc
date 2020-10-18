@@ -1,6 +1,7 @@
 use crate::llvm::build::{ptr_from_symbol, Env, InPlace, Scope};
 use crate::llvm::build_list::{
-    allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, load_list_ptr, store_list,
+    allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, incrementing_index_loop,
+    load_list_ptr, store_list,
 };
 use crate::llvm::convert::{collection, ptr_int};
 use inkwell::builder::Builder;
@@ -601,7 +602,7 @@ pub fn str_starts_with<'a, 'ctx, 'env>(
     first_str_symbol: Symbol,
     second_str_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
-    let _builder = env.builder;
+    let builder = env.builder;
     let ctx = env.context;
     let prefix_str_ptr = ptr_from_symbol(scope, first_str_symbol);
     let str_ptr = ptr_from_symbol(scope, second_str_symbol);
@@ -612,31 +613,87 @@ pub fn str_starts_with<'a, 'ctx, 'env>(
         parent,
         *prefix_str_ptr,
         bool_wrapper_type,
-        |_prefix_str_ptr, prefix_str_len, _prefix_str_smallness| {
+        |prefix_str_ptr, prefix_str_len, _prefix_str_smallness| {
             load_str(
                 env,
                 parent,
                 *str_ptr,
                 bool_wrapper_type,
-                |_second_str_ptr, second_str_len, _second_str_smallness| {
-                    let return_false = || ctx.bool_type().const_int(0, false).into();
+                |input_str_ptr, input_str_len, _second_str_smallness| {
+                    let return_false = || ctx.bool_type().const_zero().into();
 
-                    let if_second_str_is_longer_or_equal_to_prefix = env.builder.build_int_compare(
+                    let if_input_str_is_longer_or_equal_to_prefix = builder.build_int_compare(
                         IntPredicate::UGE,
-                        second_str_len,
+                        input_str_len,
                         prefix_str_len,
                         "str_longer_than_prefix",
                     );
                     let check_if_str_starts_with_prefix = || {
-                        ctx.bool_type().const_int(1, false).into()
                         // Loop over prefix and compare each character to the one from the input
                         // string at the  same index
                         // If they are different - return false
+                        incrementing_index_loop(
+                            builder,
+                            ctx,
+                            parent,
+                            prefix_str_len,
+                            "starts_with_loop",
+                            |index| {
+                                // The pointer to the element in the list
+                                let prefix_ptr = unsafe {
+                                    builder.build_in_bounds_gep(
+                                        prefix_str_ptr,
+                                        &[index],
+                                        "prefix_index",
+                                    )
+                                };
+                                let input_ptr = unsafe {
+                                    builder.build_in_bounds_gep(
+                                        input_str_ptr,
+                                        &[index],
+                                        "input_str_index",
+                                    )
+                                };
+
+                                let prefix_char = builder
+                                    .build_load(prefix_ptr, "get_prefix_char")
+                                    .into_int_value();
+                                let input_char = builder
+                                    .build_load(input_ptr, "get_input_char")
+                                    .into_int_value();
+
+                                let comparison = builder.build_int_compare(
+                                    IntPredicate::EQ,
+                                    prefix_char,
+                                    input_char,
+                                    "prefix_char_equals_to_input_char",
+                                );
+                                let condition_block =
+                                    ctx.append_basic_block(parent, "condition_block");
+
+                                // Empty block to continue the loop if the comparison is true
+                                let then_block = ctx.append_basic_block(parent, "then_block");
+                                //
+                                let else_block = ctx.append_basic_block(parent, "else_block");
+
+                                // Build the condition_block
+                                builder.position_at_end(condition_block);
+                                builder
+                                    .build_conditional_branch(comparison, then_block, else_block);
+
+                                // Build the else_block
+                                builder.position_at_end(else_block);
+                                // Do an early return
+                                builder.build_return(Some(&ctx.bool_type().const_zero()));
+                                // Return true by default
+                                // builder.build_return(Some(&ctx.bool_type().const_int(1, false)));
+                            },
+                        );
                     };
                     build_basic_phi2(
                         env,
                         parent,
-                        if_second_str_is_longer_or_equal_to_prefix,
+                        if_input_str_is_longer_or_equal_to_prefix,
                         check_if_str_starts_with_prefix,
                         return_false,
                         bool_wrapper_type,

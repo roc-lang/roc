@@ -1393,7 +1393,7 @@ where
 
 // This helper simulates a basic for loop, where
 // and index increments up from 0 to some end value
-fn incrementing_index_loop<'ctx, LoopFn>(
+pub fn incrementing_index_loop<'ctx, LoopFn>(
     builder: &Builder<'ctx>,
     ctx: &'ctx Context,
     parent: FunctionValue<'ctx>,
