@@ -28,6 +28,40 @@ For macOS, you can run `brew install llvm` (but before you do so, check the vers
 
 There are also plenty of alternative options at http://releases.llvm.org/download.html
 
+## Using Nix
+
+### Install
+
+Using [nix](https://nixos.org/download.html) is a quick way to get an environment bootstrapped with a single command.
+
+Anyone having trouble installing the proper version of LLVM themselves might also prefer this method.
+
+First, install nix:
+
+`curl -L https://nixos.org/nix/install | sh`
+
+If MacOS and using a version >= 10.15:
+
+`sh <(curl -L https://nixos.org/nix/install) --darwin-use-unencrypted-nix-store-volume`
+
+You may prefer to setup up the volume manually by following nix documentation.
+
+> You my need to restart your terminal
+
+### Usage
+
+Now with nix installed you just need to run one command:
+
+`nix-shell`
+
+> This may not output anything for a little while. This is normal, hang in there. Also make sure you are in the roc project root.
+
+You should be in a shell with everything needed to build already installed. Next run:
+
+`cargo run repl`
+
+You should be in a repl now. Have fun!
+
 ## Troubleshooting
 
 Create an issue if you run into problems not listed here.
