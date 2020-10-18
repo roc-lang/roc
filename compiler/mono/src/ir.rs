@@ -1466,12 +1466,13 @@ fn build_specialized_proc_from_var<'a>(
 ) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
     match env.subs.get_without_compacting(fn_var).content {
         Content::Structure(FlatType::Func(pattern_vars, closure_var, ret_var)) => {
+            let closure_layout = ClosureLayout::from_var(env.arena, env.subs, closure_var)?;
             build_specialized_proc(
                 env,
                 layout_cache,
                 pattern_symbols,
                 &pattern_vars,
-                Some(closure_var),
+                closure_layout,
                 ret_var,
             )
         }
@@ -1496,7 +1497,7 @@ fn build_specialized_proc<'a>(
     layout_cache: &mut LayoutCache<'a>,
     pattern_symbols: &[Symbol],
     pattern_vars: &[Variable],
-    closure_var: Option<Variable>,
+    closure_layout: Option<ClosureLayout<'a>>,
     ret_var: Variable,
 ) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
     let mut proc_args = Vec::with_capacity_in(pattern_vars.len(), &env.arena);
@@ -1510,7 +1511,7 @@ fn build_specialized_proc<'a>(
     // is the final argument symbol the closure symbol? then add the closure variable to the
     // pattern variables
     if pattern_symbols.last() == Some(&Symbol::ARG_CLOSURE) {
-        let layout = layout_cache.from_var(&env.arena, closure_var.unwrap(), env.subs)?;
+        let layout = closure_layout.unwrap().as_layout();
         proc_args.push((layout, Symbol::ARG_CLOSURE));
 
         debug_assert_eq!(
@@ -1518,6 +1519,22 @@ fn build_specialized_proc<'a>(
             pattern_symbols.len(),
             "Tried to zip two vecs with different lengths!"
         );
+    } else if let Some(layout) = closure_layout {
+        let ret_layout = layout_cache
+            .from_var(&env.arena, ret_var, env.subs)
+            .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
+
+        let closure_data_layout = layout.as_layout();
+        let function_ptr_layout = Layout::FunctionPointer(
+            env.arena
+                .alloc([Layout::Struct(&[]), closure_data_layout.clone()]),
+            env.arena.alloc(ret_layout),
+        );
+
+        let closure_layout =
+            Layout::Struct(env.arena.alloc([function_ptr_layout, closure_data_layout]));
+
+        return Ok((&[], closure_layout));
     } else {
         debug_assert_eq!(
             pattern_vars.len(),
