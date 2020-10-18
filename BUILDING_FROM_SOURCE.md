@@ -11,7 +11,7 @@ To build the compiler, you need these installed:
 
 To run the test suite (via `cargo test`), you additionally need to install:
 
-* [`valgrind`](https://www.valgrind.org/)
+* [`valgrind`](https://www.valgrind.org/) (needs special treatment to [install on macOS](https://stackoverflow.com/a/61359781)]
 
 Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev`.) macOS systems
 should already have `libunwind`, but other systems will need to install it

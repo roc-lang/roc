@@ -2321,6 +2321,7 @@ dependencies = [
  "serde-xml-rs",
  "strip-ansi-escapes",
  "target-lexicon",
+ "tempfile",
  "tokio",
 ]
 

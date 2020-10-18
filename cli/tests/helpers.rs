@@ -3,14 +3,17 @@ extern crate inlinable_string;
 extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
+extern crate tempfile;
 
 use roc_cli::repl::{INSTRUCTIONS, PROMPT, WELCOME_MESSAGE};
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
+use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
+use tempfile::NamedTempFile;
 
 pub struct Out {
     pub stdout: String,
@@ -57,13 +60,36 @@ pub fn run_roc(args: &[&str]) -> Out {
 }
 
 #[allow(dead_code)]
-pub fn run_with_valgrind(args: &[&str]) -> Out {
+pub fn run_cmd(cmd_name: &str, args: &[&str]) -> Out {
+    let mut cmd = Command::new(cmd_name);
+
+    for arg in args {
+        cmd.arg(arg);
+    }
+
+    let output = cmd
+        .output()
+        .expect(&format!("failed to execute cmd `{}` in CLI test", cmd_name));
+
+    Out {
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8(output.stderr).unwrap(),
+        status: output.status,
+    }
+}
+
+#[allow(dead_code)]
+pub fn run_with_valgrind(args: &[&str]) -> (Out, String) {
     //TODO: figure out if there is a better way to get the valgrind executable.
     let mut cmd = Command::new("valgrind");
+    let named_tempfile =
+        NamedTempFile::new().expect("Unable to create tempfile for valgrind results");
+    let filepath = named_tempfile.path().to_str().unwrap();
 
     cmd.arg("--tool=memcheck");
     cmd.arg("--xml=yes");
-    cmd.arg("--xml-fd=2");
+    cmd.arg(format!("--xml-file={}", filepath));
+
     for arg in args {
         cmd.arg(arg);
     }
@@ -72,11 +98,19 @@ pub fn run_with_valgrind(args: &[&str]) -> Out {
         .output()
         .expect("failed to execute compiled `valgrind` binary in CLI test");
 
-    Out {
-        stdout: String::from_utf8(output.stdout).unwrap(),
-        stderr: String::from_utf8(output.stderr).unwrap(),
-        status: output.status,
-    }
+    let mut file = named_tempfile.into_file();
+    let mut raw_xml = String::new();
+
+    file.read_to_string(&mut raw_xml).unwrap();
+
+    (
+        Out {
+            stdout: String::from_utf8(output.stdout).unwrap(),
+            stderr: String::from_utf8(output.stderr).unwrap(),
+            status: output.status,
+        },
+        raw_xml,
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,7 +159,8 @@ pub struct ValgrindErrorXWhat {
 #[allow(dead_code)]
 pub fn extract_valgrind_errors(xml: &str) -> Vec<ValgrindError> {
     let parsed_xml: ValgrindOutput =
-        from_str(xml).expect("failed to parse the `valgrind` xml output");
+        from_str(xml).unwrap_or_else(|err|
+            panic!("failed to parse the `valgrind` xml output. Error was:\n\n{:?}\n\nRaw valgrind output was:\n\n{}", err, xml));
     parsed_xml
         .fields
         .iter()
