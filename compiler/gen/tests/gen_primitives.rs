@@ -974,7 +974,6 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn io_poc_effect() {
         assert_evals_to!(
             indoc!(
@@ -983,13 +982,13 @@ mod gen_primitives {
 
                 Effect a : [ @Effect ({} -> a) ]
 
-                succeed : a -> Effect a
+                # succeed : a -> Effect a
                 succeed = \x -> @Effect \{} -> x
 
-                runEffect : Effect a -> a
+                # runEffect : Effect a -> a
                 runEffect = \@Effect thunk -> thunk {}
 
-                foo : Effect Float
+                # foo : Effect Float
                 foo =
                     succeed 3.14
 
