@@ -60,6 +60,25 @@ pub fn run_roc(args: &[&str]) -> Out {
 }
 
 #[allow(dead_code)]
+pub fn run_cmd(cmd_name: &str, args: &[&str]) -> Out {
+    let mut cmd = Command::new(cmd_name);
+
+    for arg in args {
+        cmd.arg(arg);
+    }
+
+    let output = cmd
+        .output()
+        .expect(&format!("failed to execute cmd `{}` in CLI test", cmd_name));
+
+    Out {
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8(output.stderr).unwrap(),
+        status: output.status,
+    }
+}
+
+#[allow(dead_code)]
 pub fn run_with_valgrind(args: &[&str]) -> (Out, String) {
     //TODO: figure out if there is a better way to get the valgrind executable.
     let mut cmd = Command::new("valgrind");
