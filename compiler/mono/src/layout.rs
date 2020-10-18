@@ -64,6 +64,54 @@ impl<'a> ClosureLayout<'a> {
         }
     }
 
+    pub fn from_var<'b>(
+        arena: &'a Bump,
+        subs: &Subs,
+        closure_var: Variable,
+    ) -> Result<Option<Self>, LayoutProblem> {
+        let mut tags = std::vec::Vec::new();
+        match roc_types::pretty_print::chase_ext_tag_union(subs, closure_var, &mut tags) {
+            Ok(()) | Err((_, Content::FlexVar(_))) if !tags.is_empty() => {
+                // this is a closure
+                let variant = union_sorted_tags_help(arena, tags, None, subs);
+
+                use UnionVariant::*;
+                match variant {
+                    Never | Unit => {
+                        // a max closure size of 0 means this is a standart top-level function
+                        Ok(None)
+                    }
+                    BoolUnion { .. } => {
+                        let closure_layout = ClosureLayout::from_bool(arena);
+
+                        Ok(Some(closure_layout))
+                    }
+                    ByteUnion(_) => {
+                        let closure_layout = ClosureLayout::from_byte(arena);
+
+                        Ok(Some(closure_layout))
+                    }
+                    Unwrapped(layouts) => {
+                        let closure_layout =
+                            ClosureLayout::from_unwrapped(layouts.into_bump_slice());
+
+                        Ok(Some(closure_layout))
+                    }
+                    Wrapped(_tags) => {
+                        // Wrapped(Vec<'a, (TagName, &'a [Layout<'a>])>),
+                        todo!("can't specialize multi-size closures yet")
+                    }
+                }
+            }
+
+            Ok(()) | Err((_, Content::FlexVar(_))) => {
+                // a max closure size of 0 means this is a standart top-level function
+                Ok(None)
+            }
+            _ => panic!("called ClosureLayout.from_var on invalid input"),
+        }
+    }
+
     pub fn extend_function_layout(
         arena: &'a Bump,
         argument_layouts: &'a [Layout<'a>],
@@ -567,52 +615,12 @@ fn layout_from_flat_type<'a>(
 
             let ret = Layout::from_var(env, ret_var)?;
 
-            let mut tags = std::vec::Vec::new();
-            match roc_types::pretty_print::chase_ext_tag_union(env.subs, closure_var, &mut tags) {
-                Ok(()) | Err((_, Content::FlexVar(_))) if !tags.is_empty() => {
-                    // this is a closure
-                    let variant = union_sorted_tags_help(env.arena, tags, None, env.subs);
+            let fn_args = fn_args.into_bump_slice();
+            let ret = arena.alloc(ret);
 
-                    let fn_args = fn_args.into_bump_slice();
-                    let ret = arena.alloc(ret);
-
-                    use UnionVariant::*;
-                    match variant {
-                        Never | Unit => {
-                            // a max closure size of 0 means this is a standart top-level function
-                            Ok(Layout::FunctionPointer(fn_args, ret))
-                        }
-                        BoolUnion { .. } => {
-                            let closure_layout = ClosureLayout::from_bool(env.arena);
-
-                            Ok(Layout::Closure(fn_args, closure_layout, ret))
-                        }
-                        ByteUnion(_) => {
-                            let closure_layout = ClosureLayout::from_byte(env.arena);
-
-                            Ok(Layout::Closure(fn_args, closure_layout, ret))
-                        }
-                        Unwrapped(layouts) => {
-                            let closure_layout =
-                                ClosureLayout::from_unwrapped(layouts.into_bump_slice());
-
-                            Ok(Layout::Closure(fn_args, closure_layout, ret))
-                        }
-                        Wrapped(_tags) => {
-                            // Wrapped(Vec<'a, (TagName, &'a [Layout<'a>])>),
-                            todo!("can't specialize multi-size closures yet")
-                        }
-                    }
-                }
-
-                Ok(()) | Err((_, Content::FlexVar(_))) => {
-                    // a max closure size of 0 means this is a standart top-level function
-                    Ok(Layout::FunctionPointer(
-                        fn_args.into_bump_slice(),
-                        arena.alloc(ret),
-                    ))
-                }
-                Err(_) => todo!(),
+            match ClosureLayout::from_var(env.arena, env.subs, closure_var)? {
+                Some(closure_layout) => Ok(Layout::Closure(fn_args, closure_layout, ret)),
+                None => Ok(Layout::FunctionPointer(fn_args, ret)),
             }
         }
         Record(fields, ext_var) => {
