@@ -1025,7 +1025,6 @@ mod gen_primitives {
                 main : Float
                 main =
                     runEffect foo
-
                 "#
             ),
             3.14,

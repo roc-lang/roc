@@ -1497,7 +1497,7 @@ fn build_specialized_proc<'a>(
     layout_cache: &mut LayoutCache<'a>,
     pattern_symbols: &[Symbol],
     pattern_vars: &[Variable],
-    closure_layout: Option<ClosureLayout<'a>>,
+    opt_closure_layout: Option<ClosureLayout<'a>>,
     ret_var: Variable,
 ) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
     let mut proc_args = Vec::with_capacity_in(pattern_vars.len(), &env.arena);
@@ -1508,39 +1508,69 @@ fn build_specialized_proc<'a>(
         proc_args.push((layout, *arg_name));
     }
 
-    // is the final argument symbol the closure symbol? then add the closure variable to the
-    // pattern variables
-    if pattern_symbols.last() == Some(&Symbol::ARG_CLOSURE) {
-        let layout = closure_layout.unwrap().as_layout();
-        proc_args.push((layout, Symbol::ARG_CLOSURE));
+    // Given
+    //
+    //     foo =
+    //         x = 42
+    //
+    //         f = \{} -> x
+    //
+    // We desugar that into
+    //
+    //     f = \{}, x -> x
+    //
+    //     foo =
+    //         x = 42
+    //
+    //         f_closure = { ptr: f, closure: x }
+    //
+    // then
+    match opt_closure_layout {
+        Some(layout) if pattern_symbols.last() == Some(&Symbol::ARG_CLOSURE) => {
+            // here we define the lifted (now top-level) f function. Its final argument is `Symbol::ARG_CLOSURE`,
+            // it stores the closure structure (just an integer in this case)
+            proc_args.push((layout.as_layout(), Symbol::ARG_CLOSURE));
 
-        debug_assert_eq!(
-            pattern_vars.len() + 1,
-            pattern_symbols.len(),
-            "Tried to zip two vecs with different lengths!"
-        );
-    } else if let Some(layout) = closure_layout {
-        let ret_layout = layout_cache
-            .from_var(&env.arena, ret_var, env.subs)
-            .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
+            debug_assert_eq!(
+                pattern_vars.len() + 1,
+                pattern_symbols.len(),
+                "Tried to zip two vecs with different lengths!"
+            );
+        }
+        Some(layout) => {
+            // else if there is a closure layout, we're building the `f_closure` value
+            // that means we're really creating a ( function_ptr, closure_data ) pair
+            let ret_layout = layout_cache
+                .from_var(&env.arena, ret_var, env.subs)
+                .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
-        let closure_data_layout = layout.as_layout();
-        let function_ptr_layout = Layout::FunctionPointer(
-            env.arena
-                .alloc([Layout::Struct(&[]), closure_data_layout.clone()]),
-            env.arena.alloc(ret_layout),
-        );
+            let closure_data_layout = layout.as_layout();
+            let function_ptr_layout = Layout::FunctionPointer(
+                env.arena
+                    .alloc([Layout::Struct(&[]), closure_data_layout.clone()]),
+                env.arena.alloc(ret_layout),
+            );
 
-        let closure_layout =
-            Layout::Struct(env.arena.alloc([function_ptr_layout, closure_data_layout]));
+            let closure_layout =
+                Layout::Struct(env.arena.alloc([function_ptr_layout, closure_data_layout]));
 
-        return Ok((&[], closure_layout));
-    } else {
-        debug_assert_eq!(
-            pattern_vars.len(),
-            pattern_symbols.len(),
-            "Tried to zip two vecs with different lengths!"
-        );
+            return Ok((&[], closure_layout));
+        }
+        None => {
+            // else we're making a normal function, no closure problems to worry about
+            // we'll just assert some things
+
+            // make sure there is not arg_closure argument without a closure layout
+            debug_assert!(pattern_symbols.last() != Some(&Symbol::ARG_CLOSURE));
+
+            // since this is not a closure, the number of arguments should match between symbols
+            // and layout
+            debug_assert_eq!(
+                pattern_vars.len(),
+                pattern_symbols.len(),
+                "Tried to zip two vecs with different lengths!"
+            );
+        }
     }
 
     let proc_args = proc_args.into_bump_slice();
