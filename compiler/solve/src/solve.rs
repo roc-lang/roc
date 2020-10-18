@@ -1121,7 +1121,7 @@ fn adjust_rank_content(
                     rank
                 }
 
-                Func(arg_vars, _closure_var, ret_var) => {
+                Func(arg_vars, closure_var, ret_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, ret_var);
 
                     // TODO investigate further.
@@ -1129,13 +1129,15 @@ fn adjust_rank_content(
                     // My theory is that because the closure_var contains variables already
                     // contained in the signature only, it does not need to be part of the rank
                     // calculuation
-                    //                    rank = rank.max(adjust_rank(
-                    //                        subs,
-                    //                        young_mark,
-                    //                        visit_mark,
-                    //                        group_rank,
-                    //                        closure_var,
-                    //                    ));
+                    if false {
+                        rank = rank.max(adjust_rank(
+                            subs,
+                            young_mark,
+                            visit_mark,
+                            group_rank,
+                            closure_var,
+                        ));
+                    }
 
                     for var in arg_vars {
                         rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
