@@ -234,6 +234,7 @@ mod gen_tags {
     //    }
 
     #[test]
+    #[ignore]
     fn even_odd() {
         assert_evals_to!(
             indoc!(
@@ -604,12 +605,15 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
+                app Test provides [ main ] imports []
+
                 Maybe a : [ Nothing, Just a ]
 
-                x : Maybe (Maybe a)
+                x : Maybe (Maybe Int)
                 x = Just (Just 41)
 
-                5
+                main = 
+                    5
                 "#
             ),
             5,

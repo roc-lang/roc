@@ -24,8 +24,13 @@ pub struct Env<'a> {
     /// current tail-callable symbol
     pub tailcallable_symbol: Option<Symbol>,
 
+    /// current closure name (if any)
+    pub closure_name_symbol: Option<Symbol>,
+
     /// Symbols which were referenced by qualified lookups.
     pub qualified_lookups: MutSet<Symbol>,
+
+    pub top_level_symbols: MutSet<Symbol>,
 
     pub ident_ids: IdentIds,
     pub exposed_ident_ids: IdentIds,
@@ -48,6 +53,8 @@ impl<'a> Env<'a> {
             closures: MutMap::default(),
             qualified_lookups: MutSet::default(),
             tailcallable_symbol: None,
+            closure_name_symbol: None,
+            top_level_symbols: MutSet::default(),
         }
     }
 

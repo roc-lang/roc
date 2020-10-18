@@ -1097,6 +1097,14 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         env.arena.alloc(format!("struct_field_access_{}_", index)),
                     )
                     .unwrap(),
+                (StructValue(argument), Layout::Closure(_, _, _)) => env
+                    .builder
+                    .build_extract_value(
+                        argument,
+                        *index as u32,
+                        env.arena.alloc(format!("closure_field_access_{}_", index)),
+                    )
+                    .unwrap(),
                 (other, layout) => {
                     unreachable!("can only index into struct layout {:?} {:?}", other, layout)
                 }
@@ -1179,7 +1187,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         .module
                         .get_function(fn_name.as_str())
                         .unwrap_or_else(|| {
-                            panic!("Could not get pointer to unknown function {:?}", symbol)
+                            panic!(
+                                "Could not get pointer to unknown function {:?} {:?}",
+                                fn_name, layout
+                            )
                         })
                         .as_global_value()
                         .as_pointer_value();
@@ -1830,6 +1841,7 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     let args = proc.args;
     let arena = env.arena;
     let context = &env.context;
+
     let ret_type = basic_type_from_layout(arena, context, &proc.ret_layout, env.ptr_bytes);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
     let mut arg_symbols = Vec::new_in(arena);

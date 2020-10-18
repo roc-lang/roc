@@ -15,7 +15,8 @@ use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::ir::{
-    ExternalSpecializations, MonoProblem, PartialProc, PendingSpecialization, Proc, Procs,
+    CapturedSymbols, ExternalSpecializations, MonoProblem, PartialProc, PendingSpecialization,
+    Proc, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
@@ -374,7 +375,7 @@ pub struct LoadedModule {
     pub can_problems: Vec<roc_problem::can::Problem>,
     pub type_problems: Vec<solve::TypeError>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
-    pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub exposed_to_host: MutMap<Symbol, Variable>,
     pub src: Box<str>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
 }
@@ -1531,7 +1532,7 @@ fn finish<'a>(
         can_problems: state.can_problems,
         type_problems: state.type_problems,
         declarations_by_id: state.declarations_by_id,
-        exposed_vars_by_symbol,
+        exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
         src: src.into(),
         timings: state.timings,
     }
@@ -1926,8 +1927,26 @@ fn run_solve<'a>(
     let constrain_end = SystemTime::now();
 
     let module_id = module.module_id;
-    let (solved_subs, solved_module) =
-        roc_solve::module::solve_module(module, constraint, var_store);
+
+    let Module {
+        exposed_vars_by_symbol,
+        aliases,
+        rigid_variables,
+        ..
+    } = module;
+
+    let (solved_subs, solved_env, problems) =
+        roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
+
+    let solved_types =
+        roc_solve::module::make_solved_types(&solved_env, &solved_subs, &exposed_vars_by_symbol);
+
+    let solved_module = SolvedModule {
+        exposed_vars_by_symbol,
+        solved_types,
+        problems,
+        aliases: solved_env.aliases,
+    };
 
     // Record the final timings
     let solve_end = SystemTime::now();
@@ -2256,6 +2275,7 @@ fn add_def_to_module<'a>(
                         annotation,
                         loc_args,
                         *loc_body,
+                        CapturedSymbols::None,
                         is_recursive,
                         ret_var,
                     );
@@ -2278,6 +2298,8 @@ fn add_def_to_module<'a>(
                         annotation: def.expr_var,
                         // This is a 0-arity thunk, so it has no arguments.
                         pattern_symbols: &[],
+                        // This is a top-level definition, so it cannot capture anything
+                        captured_symbols: CapturedSymbols::None,
                         body,
                         // This is a 0-arity thunk, so it cannot be recursive
                         is_self_recursive: false,

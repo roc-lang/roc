@@ -1,6 +1,6 @@
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
-use crate::layout::{Builtin, Layout, LayoutCache, LayoutProblem};
+use crate::layout::{Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
@@ -23,8 +23,15 @@ pub enum MonoProblem {
 pub struct PartialProc<'a> {
     pub annotation: Variable,
     pub pattern_symbols: &'a [Symbol],
+    pub captured_symbols: CapturedSymbols<'a>,
     pub body: roc_can::expr::Expr,
     pub is_self_recursive: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CapturedSymbols<'a> {
+    None,
+    Captured(&'a [(Symbol, Variable)]),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -308,6 +315,7 @@ impl<'a> Procs<'a> {
         annotation: Variable,
         loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
         loc_body: Located<roc_can::expr::Expr>,
+        captured_symbols: CapturedSymbols<'a>,
         is_self_recursive: bool,
         ret_var: Variable,
     ) {
@@ -323,6 +331,7 @@ impl<'a> Procs<'a> {
                     PartialProc {
                         annotation,
                         pattern_symbols,
+                        captured_symbols,
                         body: body.value,
                         is_self_recursive,
                     },
@@ -354,6 +363,7 @@ impl<'a> Procs<'a> {
         annotation: Variable,
         loc_args: std::vec::Vec<(Variable, Located<roc_can::pattern::Pattern>)>,
         loc_body: Located<roc_can::expr::Expr>,
+        captured_symbols: CapturedSymbols<'a>,
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
     ) -> Result<Layout<'a>, RuntimeError> {
@@ -395,6 +405,7 @@ impl<'a> Procs<'a> {
                                 PartialProc {
                                     annotation,
                                     pattern_symbols,
+                                    captured_symbols,
                                     body: body.value,
                                     is_self_recursive,
                                 },
@@ -405,6 +416,7 @@ impl<'a> Procs<'a> {
                             let partial_proc = PartialProc {
                                 annotation,
                                 pattern_symbols,
+                                captured_symbols,
                                 body: body.value,
                                 is_self_recursive,
                             };
@@ -421,7 +433,15 @@ impl<'a> Procs<'a> {
                             {
                                 Ok((proc, layout)) => {
                                     debug_assert_eq!(outside_layout, layout);
-                                    self.specialized.insert((symbol, layout), Done(proc));
+                                    if let Layout::Closure(args, closure, ret) = layout {
+                                        self.specialized.remove(&(symbol, outside_layout));
+                                        let layout = ClosureLayout::extend_function_layout(
+                                            env.arena, args, closure, ret,
+                                        );
+                                        self.specialized.insert((symbol, layout), Done(proc));
+                                    } else {
+                                        self.specialized.insert((symbol, layout), Done(proc));
+                                    }
                                 }
                                 Err(error) => {
                                     let error_msg = format!(
@@ -1357,6 +1377,7 @@ fn specialize_external<'a>(
     let PartialProc {
         annotation,
         pattern_symbols,
+        captured_symbols,
         body,
         is_self_recursive,
     } = partial_proc;
@@ -1370,17 +1391,55 @@ fn specialize_external<'a>(
     let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
     debug_assert!(is_valid);
 
-    let specialized_body = from_can(env, body, procs, layout_cache);
+    let mut specialized_body = from_can(env, body, procs, layout_cache);
 
-    let (proc_args, ret_layout) =
+    // if this is a closure, add the closure record argument
+    let pattern_symbols = if let CapturedSymbols::Captured(_) = captured_symbols {
+        let mut temp = Vec::from_iter_in(pattern_symbols.iter().copied(), env.arena);
+        temp.push(Symbol::ARG_CLOSURE);
+        temp.into_bump_slice()
+    } else {
+        pattern_symbols
+    };
+
+    // unpack the closure symbols, if any
+    if let CapturedSymbols::Captured(captured) = captured_symbols {
+        let mut layouts = Vec::with_capacity_in(captured.len(), env.arena);
+
+        for (_, variable) in captured.iter() {
+            let layout = layout_cache.from_var(env.arena, *variable, env.subs)?;
+            layouts.push(layout);
+        }
+
+        let field_layouts = layouts.into_bump_slice();
+
+        let wrapped = if captured.len() > 1 {
+            Wrapped::RecordOrSingleTagUnion
+        } else {
+            Wrapped::SingleElementRecord
+        };
+
+        for (index, (symbol, variable)) in captured.iter().enumerate() {
+            let expr = Expr::AccessAtIndex {
+                index: index as _,
+                field_layouts,
+                structure: Symbol::ARG_CLOSURE,
+                wrapped,
+            };
+
+            // layout is cached anyway, re-using the one found above leads to
+            // issues (combining by-ref and by-move in pattern match
+            let layout = layout_cache.from_var(env.arena, *variable, env.subs)?;
+            specialized_body = Stmt::Let(*symbol, expr, layout, env.arena.alloc(specialized_body));
+        }
+    }
+
+    let (proc_args, closes_over, ret_layout) =
         build_specialized_proc_from_var(env, layout_cache, pattern_symbols, fn_var)?;
 
     // reset subs, so we don't get type errors when specializing for a different signature
     layout_cache.rollback_to(cache_snapshot);
     env.subs.rollback_to(snapshot);
-
-    // TODO WRONG
-    let closes_over_layout = Layout::Struct(&[]);
 
     let recursivity = if is_self_recursive {
         SelfRecursive::SelfRecursive(JoinPointId(env.unique_symbol()))
@@ -1392,7 +1451,7 @@ fn specialize_external<'a>(
         name: proc_name,
         args: proc_args,
         body: specialized_body,
-        closes_over: closes_over_layout,
+        closes_over,
         ret_layout,
         is_self_recursive: recursivity,
     };
@@ -1406,10 +1465,17 @@ fn build_specialized_proc_from_var<'a>(
     layout_cache: &mut LayoutCache<'a>,
     pattern_symbols: &[Symbol],
     fn_var: Variable,
-) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
+) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>, Layout<'a>), LayoutProblem> {
     match env.subs.get_without_compacting(fn_var).content {
-        Content::Structure(FlatType::Func(pattern_vars, _closure_var, ret_var)) => {
-            build_specialized_proc(env, layout_cache, pattern_symbols, &pattern_vars, ret_var)
+        Content::Structure(FlatType::Func(pattern_vars, closure_var, ret_var)) => {
+            build_specialized_proc(
+                env,
+                layout_cache,
+                pattern_symbols,
+                &pattern_vars,
+                Some(closure_var),
+                ret_var,
+            )
         }
         Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args))
             if !pattern_symbols.is_empty() =>
@@ -1421,8 +1487,7 @@ fn build_specialized_proc_from_var<'a>(
         }
         _ => {
             // a top-level constant 0-argument thunk
-
-            build_specialized_proc(env, layout_cache, pattern_symbols, &[], fn_var)
+            build_specialized_proc(env, layout_cache, pattern_symbols, &[], None, fn_var)
         }
     }
 }
@@ -1433,15 +1498,10 @@ fn build_specialized_proc<'a>(
     layout_cache: &mut LayoutCache<'a>,
     pattern_symbols: &[Symbol],
     pattern_vars: &[Variable],
+    closure_var: Option<Variable>,
     ret_var: Variable,
-) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
+) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>, Layout<'a>), LayoutProblem> {
     let mut proc_args = Vec::with_capacity_in(pattern_vars.len(), &env.arena);
-
-    debug_assert_eq!(
-        &pattern_vars.len(),
-        &pattern_symbols.len(),
-        "Tried to zip two vecs with different lengths!"
-    );
 
     for (arg_var, arg_name) in pattern_vars.iter().zip(pattern_symbols.iter()) {
         let layout = layout_cache.from_var(&env.arena, *arg_var, env.subs)?;
@@ -1449,13 +1509,41 @@ fn build_specialized_proc<'a>(
         proc_args.push((layout, *arg_name));
     }
 
+    // is the final argument symbol the closure symbol? then add the closure variable to the
+    // pattern variables
+    if pattern_symbols.last() == Some(&Symbol::ARG_CLOSURE) {
+        let layout = layout_cache.from_var(&env.arena, closure_var.unwrap(), env.subs)?;
+        proc_args.push((layout, Symbol::ARG_CLOSURE));
+
+        debug_assert_eq!(
+            pattern_vars.len() + 1,
+            pattern_symbols.len(),
+            "Tried to zip two vecs with different lengths!"
+        );
+    } else {
+        debug_assert_eq!(
+            pattern_vars.len(),
+            pattern_symbols.len(),
+            "Tried to zip two vecs with different lengths!"
+        );
+    }
+
     let proc_args = proc_args.into_bump_slice();
+
+    let closes_over = match closure_var {
+        Some(cvar) => match layout_cache.from_var(&env.arena, cvar, env.subs) {
+            Ok(layout) => layout,
+            Err(LayoutProblem::UnresolvedTypeVar) => Layout::Struct(&[]),
+            Err(err) => panic!("TODO handle invalid function {:?}", err),
+        },
+        None => Layout::Struct(&[]),
+    };
 
     let ret_layout = layout_cache
         .from_var(&env.arena, ret_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
-    Ok((proc_args, ret_layout))
+    Ok((proc_args, closes_over, ret_layout))
 }
 
 fn specialize<'a>(
@@ -1625,6 +1713,7 @@ pub fn with_hole<'a>(
                         function_type,
                         arguments,
                         loc_body,
+                        CapturedSymbols::None,
                         is_self_recursive,
                         return_type,
                     );
@@ -1736,6 +1825,7 @@ pub fn with_hole<'a>(
                             function_type,
                             arguments,
                             loc_body,
+                            CapturedSymbols::None,
                             is_self_recursive,
                             return_type,
                         );
@@ -2280,6 +2370,7 @@ pub fn with_hole<'a>(
                 function_var,
                 arguments,
                 loc_body,
+                CapturedSymbols::None,
                 field_var,
                 layout_cache,
             ) {
@@ -2409,33 +2500,110 @@ pub fn with_hole<'a>(
             return_type,
             name,
             arguments,
+            captured_symbols,
             loc_body: boxed_body,
             ..
         } => {
             let loc_body = *boxed_body;
 
-            match procs.insert_anonymous(
-                env,
-                name,
-                function_type,
-                arguments,
-                loc_body,
-                return_type,
-                layout_cache,
-            ) {
-                Ok(layout) => {
-                    // TODO should the let have layout Pointer?
-                    Stmt::Let(
-                        assigned,
-                        Expr::FunctionPointer(name, layout.clone()),
-                        layout,
-                        hole,
-                    )
-                }
+            match layout_cache.from_var(env.arena, function_type, env.subs) {
+                Err(e) => panic!("invalid layout {:?}", e),
+                Ok(Layout::Closure(argument_layouts, closure_layout, ret_layout)) => {
+                    let mut captured_symbols = Vec::from_iter_in(captured_symbols, env.arena);
+                    captured_symbols.sort();
+                    let captured_symbols = captured_symbols.into_bump_slice();
 
-                Err(_error) => Stmt::RuntimeError(
-                    "TODO convert anonymous function error to a RuntimeError string",
-                ),
+                    procs
+                        .insert_anonymous(
+                            env,
+                            name,
+                            function_type,
+                            arguments,
+                            loc_body,
+                            CapturedSymbols::Captured(captured_symbols),
+                            return_type,
+                            layout_cache,
+                        )
+                        .unwrap();
+
+                    let closure_data_layout = closure_layout.as_layout();
+                    // define the function pointer
+                    let function_ptr_layout = {
+                        let mut temp =
+                            Vec::from_iter_in(argument_layouts.iter().cloned(), env.arena);
+                        temp.push(closure_data_layout.clone());
+                        Layout::FunctionPointer(temp.into_bump_slice(), ret_layout)
+                    };
+
+                    let mut stmt = hole.clone();
+
+                    let function_pointer = env.unique_symbol();
+                    let closure_data = env.unique_symbol();
+
+                    // define the closure
+                    let expr = Expr::Struct(env.arena.alloc([function_pointer, closure_data]));
+
+                    stmt = Stmt::Let(
+                        assigned,
+                        expr,
+                        Layout::Struct(
+                            env.arena
+                                .alloc([function_ptr_layout.clone(), closure_data_layout.clone()]),
+                        ),
+                        env.arena.alloc(stmt),
+                    );
+
+                    // define the closure data
+
+                    let symbols =
+                        Vec::from_iter_in(captured_symbols.iter().map(|x| x.0), env.arena)
+                            .into_bump_slice();
+                    let expr = Expr::Struct(symbols);
+
+                    stmt = Stmt::Let(
+                        closure_data,
+                        expr,
+                        closure_data_layout.clone(),
+                        env.arena.alloc(stmt),
+                    );
+
+                    let expr = Expr::FunctionPointer(name, function_ptr_layout.clone());
+
+                    stmt = Stmt::Let(
+                        function_pointer,
+                        expr,
+                        function_ptr_layout,
+                        env.arena.alloc(stmt),
+                    );
+
+                    stmt
+                }
+                Ok(_) => {
+                    match procs.insert_anonymous(
+                        env,
+                        name,
+                        function_type,
+                        arguments,
+                        loc_body,
+                        CapturedSymbols::None,
+                        return_type,
+                        layout_cache,
+                    ) {
+                        Ok(layout) => {
+                            // TODO should the let have layout Pointer?
+                            Stmt::Let(
+                                assigned,
+                                Expr::FunctionPointer(name, layout.clone()),
+                                layout,
+                                hole,
+                            )
+                        }
+
+                        Err(_error) => Stmt::RuntimeError(
+                            "TODO convert anonymous function error to a RuntimeError string",
+                        ),
+                    }
+                }
             }
         }
 
@@ -2496,6 +2664,7 @@ pub fn with_hole<'a>(
 
                     let arg_layouts = match full_layout {
                         Layout::FunctionPointer(args, _) => args,
+                        Layout::Closure(args, _, _) => args,
                         _ => unreachable!("function has layout that is not function pointer"),
                     };
 
@@ -2510,18 +2679,96 @@ pub fn with_hole<'a>(
                     let mut result;
                     match can_reuse_symbol(procs, &loc_expr.value) {
                         Some(function_symbol) => {
-                            result = Stmt::Let(
-                                assigned,
-                                Expr::FunctionCall {
-                                    call_type: CallType::ByPointer(function_symbol),
-                                    full_layout,
-                                    ret_layout: ret_layout.clone(),
-                                    args: arg_symbols,
+                            if let Layout::Closure(_, closure_fields, _) = full_layout {
+                                // we're invoking a closure
+                                let closure_record_symbol = env.unique_symbol();
+                                let closure_function_symbol = env.unique_symbol();
+                                let closure_symbol = function_symbol;
+
+                                // layout of the closure record
+                                let closure_record_layout = closure_fields.as_layout();
+
+                                let arg_symbols = {
+                                    let mut temp =
+                                        Vec::from_iter_in(arg_symbols.iter().copied(), env.arena);
+                                    temp.push(closure_record_symbol);
+                                    temp.into_bump_slice()
+                                };
+
+                                let arg_layouts = {
+                                    let mut temp =
+                                        Vec::from_iter_in(arg_layouts.iter().cloned(), env.arena);
+                                    temp.push(closure_record_layout.clone());
+                                    temp.into_bump_slice()
+                                };
+
+                                // layout of the function itself, so typically FunctionPointer(arg_layouts ++ [closure_record], ret_layout)
+                                let function_ptr_layout = Layout::FunctionPointer(
                                     arg_layouts,
-                                },
-                                ret_layout,
-                                arena.alloc(hole),
-                            );
+                                    env.arena.alloc(ret_layout.clone()),
+                                );
+
+                                // build the call
+                                result = Stmt::Let(
+                                    assigned,
+                                    Expr::FunctionCall {
+                                        call_type: CallType::ByPointer(closure_function_symbol),
+                                        full_layout: function_ptr_layout.clone(),
+                                        ret_layout: ret_layout.clone(),
+                                        args: arg_symbols,
+                                        arg_layouts,
+                                    },
+                                    ret_layout,
+                                    arena.alloc(hole),
+                                );
+
+                                // layout of the ( function_pointer, closure_record ) pair
+                                let closure_layout = env.arena.alloc([
+                                    function_ptr_layout.clone(),
+                                    closure_record_layout.clone(),
+                                ]);
+
+                                // extract & assign the closure function
+                                let expr = Expr::AccessAtIndex {
+                                    index: 0,
+                                    field_layouts: closure_layout,
+                                    structure: closure_symbol,
+                                    wrapped: Wrapped::RecordOrSingleTagUnion,
+                                };
+                                result = Stmt::Let(
+                                    closure_function_symbol,
+                                    expr,
+                                    function_ptr_layout,
+                                    env.arena.alloc(result),
+                                );
+
+                                // extract & assign the closure record
+                                let expr = Expr::AccessAtIndex {
+                                    index: 1,
+                                    field_layouts: closure_layout,
+                                    structure: closure_symbol,
+                                    wrapped: Wrapped::RecordOrSingleTagUnion,
+                                };
+                                result = Stmt::Let(
+                                    closure_record_symbol,
+                                    expr,
+                                    closure_record_layout,
+                                    env.arena.alloc(result),
+                                );
+                            } else {
+                                result = Stmt::Let(
+                                    assigned,
+                                    Expr::FunctionCall {
+                                        call_type: CallType::ByPointer(function_symbol),
+                                        full_layout,
+                                        ret_layout: ret_layout.clone(),
+                                        args: arg_symbols,
+                                        arg_layouts,
+                                    },
+                                    ret_layout,
+                                    arena.alloc(hole),
+                                );
+                            }
                         }
                         None => {
                             let function_symbol = env.unique_symbol();
@@ -2696,6 +2943,7 @@ pub fn from_can<'a>(
                                 function_type,
                                 arguments,
                                 loc_body,
+                                CapturedSymbols::None,
                                 is_self_recursive,
                                 return_type,
                             );
@@ -2722,6 +2970,7 @@ pub fn from_can<'a>(
                             recursive,
                             arguments,
                             loc_body: boxed_body,
+                            captured_symbols,
                             ..
                         } => {
                             // Extract Procs, but discard the resulting Expr::Load.
@@ -2732,18 +2981,187 @@ pub fn from_can<'a>(
                             let is_self_recursive =
                                 !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
-                            procs.insert_named(
-                                env,
-                                layout_cache,
-                                *symbol,
-                                function_type,
-                                arguments,
-                                loc_body,
-                                is_self_recursive,
-                                return_type,
-                            );
+                            // does this function capture any local values?
+                            let function_layout =
+                                layout_cache.from_var(env.arena, function_type, env.subs);
 
-                            return from_can(env, cont.value, procs, layout_cache);
+                            if let Ok(Layout::Closure(
+                                argument_layouts,
+                                closure_fields,
+                                ret_layout,
+                            )) = &function_layout
+                            {
+                                let mut captured_symbols =
+                                    Vec::from_iter_in(captured_symbols, env.arena);
+                                captured_symbols.sort();
+                                let captured_symbols = captured_symbols.into_bump_slice();
+
+                                procs.insert_named(
+                                    env,
+                                    layout_cache,
+                                    *symbol,
+                                    function_type,
+                                    arguments,
+                                    loc_body,
+                                    CapturedSymbols::Captured(captured_symbols),
+                                    is_self_recursive,
+                                    return_type,
+                                );
+
+                                let closure_data_layout = closure_fields.as_layout();
+                                // define the function pointer
+                                let function_ptr_layout = {
+                                    let mut temp = Vec::from_iter_in(
+                                        argument_layouts.iter().cloned(),
+                                        env.arena,
+                                    );
+                                    temp.push(closure_data_layout.clone());
+                                    Layout::FunctionPointer(temp.into_bump_slice(), ret_layout)
+                                };
+
+                                let full_layout = function_ptr_layout.clone();
+
+                                let fn_var = function_type;
+                                let proc_name = *symbol;
+                                let pending = PendingSpecialization::from_var(env.subs, fn_var);
+
+                                // When requested (that is, when procs.pending_specializations is `Some`),
+                                // store a pending specialization rather than specializing immediately.
+                                //
+                                // We do this so that we can do specialization in two passes: first,
+                                // build the mono_expr with all the specialized calls in place (but
+                                // no specializations performed yet), and then second, *after*
+                                // de-duplicating requested specializations (since multiple modules
+                                // which could be getting monomorphized in parallel might request
+                                // the same specialization independently), we work through the
+                                // queue of pending specializations to complete each specialization
+                                // exactly once.
+                                match &mut procs.pending_specializations {
+                                    Some(pending_specializations) => {
+                                        // register the pending specialization, so this gets code genned later
+                                        add_pending(
+                                            pending_specializations,
+                                            proc_name,
+                                            full_layout.clone(),
+                                            pending,
+                                        );
+                                    }
+                                    None => {
+                                        let opt_partial_proc = procs.partial_procs.get(&proc_name);
+
+                                        match opt_partial_proc {
+                                            None => panic!("invalid proc"),
+                                            Some(partial_proc) => {
+                                                // TODO should pending_procs hold a Rc<Proc> to avoid this .clone()?
+                                                let partial_proc = partial_proc.clone();
+
+                                                // Mark this proc as in-progress, so if we're dealing with
+                                                // mutually recursive functions, we don't loop forever.
+                                                // (We had a bug around this before this system existed!)
+                                                procs.specialized.insert(
+                                                    (proc_name, full_layout.clone()),
+                                                    InProgress,
+                                                );
+
+                                                match specialize(
+                                                    env,
+                                                    procs,
+                                                    proc_name,
+                                                    layout_cache,
+                                                    pending,
+                                                    partial_proc,
+                                                ) {
+                                                    Ok((proc, _layout)) => {
+                                                        // TODO sometimes the full_layout is a
+                                                        // function pointer, but the layout is a
+                                                        // closure. Figure out how to handle this
+                                                        // debug_assert_eq!(full_layout, layout);
+                                                        // let function_layout = FunctionLayouts::from_layout(layout);
+
+                                                        procs.specialized.remove(&(
+                                                            proc_name,
+                                                            full_layout.clone(),
+                                                        ));
+
+                                                        procs.specialized.insert(
+                                                            (
+                                                                proc_name,
+                                                                // function_layout.full.clone(),
+                                                                full_layout.clone(),
+                                                            ),
+                                                            Done(proc),
+                                                        );
+                                                    }
+                                                    Err(error) => {
+                                                        panic!("procedure is invalid {:?}", error);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                let mut stmt = from_can(env, cont.value, procs, layout_cache);
+
+                                let function_pointer = env.unique_symbol();
+                                let closure_data = env.unique_symbol();
+
+                                // define the closure
+                                let expr =
+                                    Expr::Struct(env.arena.alloc([function_pointer, closure_data]));
+
+                                stmt = Stmt::Let(
+                                    *symbol,
+                                    expr,
+                                    Layout::Struct(env.arena.alloc([
+                                        function_ptr_layout.clone(),
+                                        closure_data_layout.clone(),
+                                    ])),
+                                    env.arena.alloc(stmt),
+                                );
+
+                                // define the closure data
+
+                                let symbols = Vec::from_iter_in(
+                                    captured_symbols.iter().map(|x| x.0),
+                                    env.arena,
+                                )
+                                .into_bump_slice();
+                                let expr = Expr::Struct(symbols);
+
+                                stmt = Stmt::Let(
+                                    closure_data,
+                                    expr,
+                                    closure_data_layout.clone(),
+                                    env.arena.alloc(stmt),
+                                );
+
+                                let expr =
+                                    Expr::FunctionPointer(*symbol, function_ptr_layout.clone());
+
+                                stmt = Stmt::Let(
+                                    function_pointer,
+                                    expr,
+                                    function_ptr_layout,
+                                    env.arena.alloc(stmt),
+                                );
+
+                                return stmt;
+                            } else {
+                                procs.insert_named(
+                                    env,
+                                    layout_cache,
+                                    *symbol,
+                                    function_type,
+                                    arguments,
+                                    loc_body,
+                                    CapturedSymbols::None,
+                                    is_self_recursive,
+                                    return_type,
+                                );
+
+                                return from_can(env, cont.value, procs, layout_cache);
+                            }
                         }
                         _ => unreachable!(),
                     }
@@ -3787,10 +4205,9 @@ fn call_by_name<'a>(
 
             // TODO does this work?
             let empty = &[] as &[_];
-            let (arg_layouts, ret_layout) = if let Layout::FunctionPointer(args, rlayout) = layout {
-                (args, rlayout)
-            } else {
-                (empty, &layout)
+            let (arg_layouts, ret_layout) = match layout {
+                Layout::FunctionPointer(args, rlayout) => (args, rlayout),
+                _ => (empty, &layout),
             };
 
             // If we've already specialized this one, no further work is needed.

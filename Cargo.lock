@@ -2442,6 +2442,7 @@ dependencies = [
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_reporting",
  "roc_solve",
  "roc_std",
  "roc_types",
@@ -2507,6 +2508,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_load",
  "roc_module",
  "roc_parse",
  "roc_problem",
@@ -2597,6 +2599,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_load",
  "roc_module",
  "roc_parse",
  "roc_problem",
@@ -2604,6 +2607,7 @@ dependencies = [
  "roc_solve",
  "roc_types",
  "roc_unify",
+ "tempfile",
 ]
 
 [[package]]

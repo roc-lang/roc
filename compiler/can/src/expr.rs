@@ -30,6 +30,7 @@ pub struct Output {
     pub tail_call: Option<Symbol>,
     pub introduced_variables: IntroducedVariables,
     pub aliases: SendMap<Symbol, Alias>,
+    pub non_closures: MutSet<Symbol>,
 }
 
 impl Output {
@@ -42,6 +43,7 @@ impl Output {
 
         self.introduced_variables.union(&other.introduced_variables);
         self.aliases.extend(other.aliases);
+        self.non_closures.extend(other.non_closures);
     }
 }
 
@@ -100,8 +102,10 @@ pub enum Expr {
     Closure {
         function_type: Variable,
         closure_type: Variable,
+        closure_ext_var: Variable,
         return_type: Variable,
         name: Symbol,
+        captured_symbols: Vec<(Symbol, Variable)>,
         recursive: Recursive,
         arguments: Vec<(Variable, Located<Pattern>)>,
         loc_body: Box<Located<Expr>>,
@@ -431,7 +435,10 @@ pub fn canonicalize_expr<'a>(
             // into a top-level procedure for code gen.
             //
             // In the Foo module, this will look something like Foo.$1 or Foo.$2.
-            let symbol = env.gen_unique_symbol();
+            let symbol = env
+                .closure_name_symbol
+                .unwrap_or_else(|| env.gen_unique_symbol());
+            env.closure_name_symbol = None;
 
             // The body expression gets a new scope for canonicalization.
             // Shadow `scope` to make sure we don't accidentally use the original one for the
@@ -440,6 +447,8 @@ pub fn canonicalize_expr<'a>(
             let mut scope = original_scope.clone();
             let mut can_args = Vec::with_capacity(loc_arg_patterns.len());
             let mut output = Output::default();
+
+            let mut bound_by_argument_patterns = MutSet::default();
 
             for loc_pattern in loc_arg_patterns.into_iter() {
                 let (new_output, can_arg) = canonicalize_pattern(
@@ -450,6 +459,9 @@ pub fn canonicalize_expr<'a>(
                     &loc_pattern.value,
                     loc_pattern.region,
                 );
+
+                bound_by_argument_patterns
+                    .extend(new_output.references.bound_symbols.iter().copied());
 
                 output.union(new_output);
 
@@ -464,7 +476,33 @@ pub fn canonicalize_expr<'a>(
                 &loc_body_expr.value,
             );
 
+            let mut captured_symbols: MutSet<Symbol> =
+                new_output.references.lookups.iter().copied().collect();
+
+            // filter out the closure's name itself
+            captured_symbols.remove(&symbol);
+
+            // symbols bound either in this pattern or deeper down are not captured!
+            captured_symbols.retain(|s| !new_output.references.bound_symbols.contains(s));
+            captured_symbols.retain(|s| !bound_by_argument_patterns.contains(s));
+
+            // filter out top-level symbols
+            // those will be globally available, and don't need to be captured
+            captured_symbols.retain(|s| !env.top_level_symbols.contains(s));
+
+            // filter out imported symbols
+            // those will be globally available, and don't need to be captured
+            captured_symbols.retain(|s| s.module_id() == env.home);
+
+            // TODO any Closure that has an empty `captured_symbols` list could be excluded!
+
             output.union(new_output);
+
+            // filter out aliases
+            captured_symbols.retain(|s| !output.references.referenced_aliases.contains(s));
+
+            // filter out functions that don't close over anything
+            captured_symbols.retain(|s| !output.non_closures.contains(s));
 
             // Now that we've collected all the references, check to see if any of the args we defined
             // went unreferenced. If any did, report them as unused arguments.
@@ -484,12 +522,28 @@ pub fn canonicalize_expr<'a>(
 
             env.register_closure(symbol, output.references.clone());
 
+            let mut captured_symbols: Vec<_> = captured_symbols
+                .into_iter()
+                .map(|s| (s, var_store.fresh()))
+                .collect();
+
+            // sort symbols, so we know the order in which they're stored in the closure record
+            captured_symbols.sort();
+
+            // store that this function doesn't capture anything. It will be promoted to a
+            // top-level function, and does not need to be captured by other surrounding functions.
+            if captured_symbols.is_empty() {
+                output.non_closures.insert(symbol);
+            }
+
             (
                 Closure {
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
+                    closure_ext_var: var_store.fresh(),
                     return_type: var_store.fresh(),
                     name: symbol,
+                    captured_symbols,
                     recursive: Recursive::NotRecursive,
                     arguments: can_args,
                     loc_body: Box::new(loc_body_expr),
@@ -1214,9 +1268,11 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         Closure {
             function_type,
             closure_type,
+            closure_ext_var,
             return_type,
             recursive,
             name,
+            captured_symbols,
             arguments,
             loc_body,
         } => {
@@ -1229,9 +1285,11 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             Closure {
                 function_type,
                 closure_type,
+                closure_ext_var,
                 return_type,
                 recursive,
                 name,
+                captured_symbols,
                 arguments,
                 loc_body: Box::new(loc_expr),
             }

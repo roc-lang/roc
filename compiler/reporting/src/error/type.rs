@@ -882,6 +882,11 @@ fn add_category<'b>(
 
         Lambda => alloc.concat(vec![this_is, alloc.text(" an anonymous function of type:")]),
 
+        ClosureSize => alloc.concat(vec![
+            this_is,
+            alloc.text(" the closure size of a function of type:"),
+        ]),
+
         TagApply {
             tag_name: TagName::Global(name),
             args_count: 0,

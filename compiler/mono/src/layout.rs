@@ -26,7 +26,85 @@ pub enum Layout<'a> {
     RecursivePointer,
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
+    Closure(&'a [Layout<'a>], ClosureLayout<'a>, &'a Layout<'a>),
     Pointer(&'a Layout<'a>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ClosureLayout<'a> {
+    /// the layout that this specific closure captures
+    captured: &'a [Layout<'a>],
+
+    /// the layout that represents the maximum size the closure layout can have
+    max_size: &'a [Layout<'a>],
+}
+
+impl<'a> ClosureLayout<'a> {
+    fn from_bool(arena: &'a Bump) -> Self {
+        let layout = Layout::Builtin(Builtin::Int1);
+        let layouts = arena.alloc([layout]);
+        ClosureLayout {
+            captured: layouts,
+            max_size: layouts,
+        }
+    }
+    fn from_byte(arena: &'a Bump) -> Self {
+        let layout = Layout::Builtin(Builtin::Int8);
+        let layouts = arena.alloc([layout]);
+        ClosureLayout {
+            captured: layouts,
+            max_size: layouts,
+        }
+    }
+    fn from_unwrapped(layouts: &'a [Layout<'a>]) -> Self {
+        debug_assert!(!layouts.is_empty());
+        ClosureLayout {
+            captured: layouts,
+            max_size: layouts,
+        }
+    }
+
+    pub fn extend_function_layout(
+        arena: &'a Bump,
+        argument_layouts: &'a [Layout<'a>],
+        closure_layout: Self,
+        ret_layout: &'a Layout<'a>,
+    ) -> Layout<'a> {
+        let closure_data_layout = closure_layout.as_layout();
+        // define the function pointer
+        let function_ptr_layout = {
+            let mut temp = Vec::from_iter_in(argument_layouts.iter().cloned(), arena);
+            temp.push(closure_data_layout.clone());
+            Layout::FunctionPointer(temp.into_bump_slice(), ret_layout)
+        };
+
+        function_ptr_layout
+    }
+
+    pub fn stack_size(&self, pointer_size: u32) -> u32 {
+        self.max_size
+            .iter()
+            .map(|l| l.stack_size(pointer_size))
+            .sum()
+    }
+    pub fn contains_refcounted(&self) -> bool {
+        self.captured.iter().any(|l| l.contains_refcounted())
+    }
+    pub fn safe_to_memcpy(&self) -> bool {
+        self.captured.iter().all(|l| l.safe_to_memcpy())
+    }
+
+    pub fn as_layout(&self) -> Layout<'a> {
+        if self.captured.len() == 1 {
+            self.captured[0].clone()
+        } else {
+            Layout::Struct(self.captured)
+        }
+    }
+
+    pub fn as_block_of_memory_layout(&self) -> Layout<'a> {
+        Layout::Struct(self.max_size)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
@@ -139,6 +217,7 @@ impl<'a> Layout<'a> {
                 // Function pointers are immutable and can always be safely copied
                 true
             }
+            Closure(_, closure_layout, _) => closure_layout.safe_to_memcpy(),
             Pointer(_) => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
@@ -191,6 +270,7 @@ impl<'a> Layout<'a> {
                 })
                 .max()
                 .unwrap_or_default(),
+            Closure(_, closure_layout, _) => pointer_size + closure_layout.stack_size(pointer_size),
             FunctionPointer(_, _) => pointer_size,
             RecursivePointer => pointer_size,
             Pointer(_) => pointer_size,
@@ -220,6 +300,7 @@ impl<'a> Layout<'a> {
                 .flatten()
                 .any(|f| f.is_refcounted()),
             RecursiveUnion(_) => true,
+            Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
             FunctionPointer(_, _) | RecursivePointer | Pointer(_) => false,
         }
     }
@@ -477,7 +558,7 @@ fn layout_from_flat_type<'a>(
                 }
             }
         }
-        Func(args, _, ret_var) => {
+        Func(args, closure_var, ret_var) => {
             let mut fn_args = Vec::with_capacity_in(args.len(), arena);
 
             for arg_var in args {
@@ -486,10 +567,53 @@ fn layout_from_flat_type<'a>(
 
             let ret = Layout::from_var(env, ret_var)?;
 
-            Ok(Layout::FunctionPointer(
-                fn_args.into_bump_slice(),
-                arena.alloc(ret),
-            ))
+            let mut tags = std::vec::Vec::new();
+            match roc_types::pretty_print::chase_ext_tag_union(env.subs, closure_var, &mut tags) {
+                Ok(()) | Err((_, Content::FlexVar(_))) if !tags.is_empty() => {
+                    // this is a closure
+                    let variant = union_sorted_tags_help(env.arena, tags, None, env.subs);
+
+                    let fn_args = fn_args.into_bump_slice();
+                    let ret = arena.alloc(ret);
+
+                    use UnionVariant::*;
+                    match variant {
+                        Never | Unit => {
+                            // a max closure size of 0 means this is a standart top-level function
+                            Ok(Layout::FunctionPointer(fn_args, ret))
+                        }
+                        BoolUnion { .. } => {
+                            let closure_layout = ClosureLayout::from_bool(env.arena);
+
+                            Ok(Layout::Closure(fn_args, closure_layout, ret))
+                        }
+                        ByteUnion(_) => {
+                            let closure_layout = ClosureLayout::from_byte(env.arena);
+
+                            Ok(Layout::Closure(fn_args, closure_layout, ret))
+                        }
+                        Unwrapped(layouts) => {
+                            let closure_layout =
+                                ClosureLayout::from_unwrapped(layouts.into_bump_slice());
+
+                            Ok(Layout::Closure(fn_args, closure_layout, ret))
+                        }
+                        Wrapped(_tags) => {
+                            // Wrapped(Vec<'a, (TagName, &'a [Layout<'a>])>),
+                            todo!("can't specialize multi-size closures yet")
+                        }
+                    }
+                }
+
+                Ok(()) | Err((_, Content::FlexVar(_))) => {
+                    // a max closure size of 0 means this is a standart top-level function
+                    Ok(Layout::FunctionPointer(
+                        fn_args.into_bump_slice(),
+                        arena.alloc(ret),
+                    ))
+                }
+                Err(_) => todo!(),
+            }
         }
         Record(fields, ext_var) => {
             // Sort the fields by label

@@ -900,4 +900,107 @@ mod gen_primitives {
             i64
         );
     }
+
+    #[test]
+    fn closure() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                x = 42
+
+                f = \{} -> x
+
+
+                main =
+                    f {}
+                "#
+            ),
+            42,
+            i64
+        );
+    }
+
+    #[test]
+    fn nested_closure() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                foo = \{} ->
+                    x = 41
+                    y = 1
+                    f = \{} -> x + y
+                    f
+
+                main = 
+                    f = foo {}
+                    f {}
+                "#
+            ),
+            42,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn specialize_closure() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                foo = \{} ->
+                    x = 41
+                    y = 1
+
+                    f = \{} -> x
+                    g = \{} -> x + y
+
+                    [ f, g ]
+
+                main = 
+                    items = foo {}
+
+                    List.len items
+                "#
+            ),
+            2,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn io_poc() {
+        use roc_std::RocStr;
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Effect a : [ @Effect ({} -> a) ]
+
+                succeed : a -> Effect a
+                succeed = \x -> @Effect \{} -> x
+
+                foo : Effect Float
+                foo = 
+                    succeed 3.14
+
+                runEffect : Effect a -> a
+                runEffect = \@Effect thunk -> thunk {}
+
+                main = 
+                    runEffect foo
+
+                "#
+            ),
+            RocStr::from_slice(&"Foo".as_bytes()),
+            RocStr
+        );
+    }
 }

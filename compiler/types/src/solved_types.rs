@@ -98,7 +98,7 @@ impl SolvedType {
         Self::from_var(solved_subs.inner(), var)
     }
 
-    pub fn from_type(solved_subs: &Solved<Subs>, typ: Type) -> Self {
+    pub fn from_type(solved_subs: &Solved<Subs>, typ: &Type) -> Self {
         use crate::types::Type::*;
 
         match typ {
@@ -113,14 +113,14 @@ impl SolvedType {
                     solved_types.push(solved_type);
                 }
 
-                SolvedType::Apply(symbol, solved_types)
+                SolvedType::Apply(*symbol, solved_types)
             }
             Function(args, box_closure, box_ret) => {
-                let solved_ret = Self::from_type(solved_subs, *box_ret);
-                let solved_closure = Self::from_type(solved_subs, *box_closure);
+                let solved_ret = Self::from_type(solved_subs, box_ret);
+                let solved_closure = Self::from_type(solved_subs, box_closure);
                 let mut solved_args = Vec::with_capacity(args.len());
 
-                for arg in args.into_iter() {
+                for arg in args {
                     let solved_arg = Self::from_type(solved_subs, arg);
 
                     solved_args.push(solved_arg);
@@ -129,7 +129,7 @@ impl SolvedType {
                 SolvedType::Func(solved_args, Box::new(solved_closure), Box::new(solved_ret))
             }
             Record(fields, box_ext) => {
-                let solved_ext = Self::from_type(solved_subs, *box_ext);
+                let solved_ext = Self::from_type(solved_subs, box_ext);
                 let mut solved_fields = Vec::with_capacity(fields.len());
 
                 for (label, field) in fields {
@@ -150,7 +150,7 @@ impl SolvedType {
                 }
             }
             TagUnion(tags, box_ext) => {
-                let solved_ext = Self::from_type(solved_subs, *box_ext);
+                let solved_ext = Self::from_type(solved_subs, box_ext);
                 let mut solved_tags = Vec::with_capacity(tags.len());
                 for (tag_name, types) in tags {
                     let mut solved_types = Vec::with_capacity(types.len());
@@ -166,7 +166,7 @@ impl SolvedType {
                 SolvedType::TagUnion(solved_tags, Box::new(solved_ext))
             }
             RecursiveTagUnion(rec_var, tags, box_ext) => {
-                let solved_ext = Self::from_type(solved_subs, *box_ext);
+                let solved_ext = Self::from_type(solved_subs, box_ext);
                 let mut solved_tags = Vec::with_capacity(tags.len());
                 for (tag_name, types) in tags {
                     let mut solved_types = Vec::with_capacity(types.len());
@@ -180,24 +180,24 @@ impl SolvedType {
                 }
 
                 SolvedType::RecursiveTagUnion(
-                    VarId::from_var(rec_var, solved_subs.inner()),
+                    VarId::from_var(*rec_var, solved_subs.inner()),
                     solved_tags,
                     Box::new(solved_ext),
                 )
             }
-            Erroneous(problem) => SolvedType::Erroneous(problem),
+            Erroneous(problem) => SolvedType::Erroneous(problem.clone()),
             Alias(symbol, args, box_type) => {
-                let solved_type = Self::from_type(solved_subs, *box_type);
+                let solved_type = Self::from_type(solved_subs, box_type);
                 let mut solved_args = Vec::with_capacity(args.len());
 
                 for (name, var) in args {
                     solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
                 }
 
-                SolvedType::Alias(symbol, solved_args, Box::new(solved_type))
+                SolvedType::Alias(*symbol, solved_args, Box::new(solved_type))
             }
             Boolean(val) => SolvedType::Boolean(SolvedBool::from_bool(&val, solved_subs.inner())),
-            Variable(var) => Self::from_var(solved_subs.inner(), var),
+            Variable(var) => Self::from_var(solved_subs.inner(), *var),
         }
     }
 
