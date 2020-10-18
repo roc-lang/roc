@@ -64,7 +64,7 @@ impl<'a> ClosureLayout<'a> {
         }
     }
 
-    pub fn from_var<'b>(
+    pub fn from_var(
         arena: &'a Bump,
         subs: &Subs,
         closure_var: Variable,
