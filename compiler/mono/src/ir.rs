@@ -51,7 +51,6 @@ pub struct Proc<'a> {
     pub name: Symbol,
     pub args: &'a [(Layout<'a>, Symbol)],
     pub body: Stmt<'a>,
-    pub closes_over: Layout<'a>,
     pub ret_layout: Layout<'a>,
     pub is_self_recursive: SelfRecursive,
 }
@@ -1434,7 +1433,7 @@ fn specialize_external<'a>(
         }
     }
 
-    let (proc_args, closes_over, ret_layout) =
+    let (proc_args, ret_layout) =
         build_specialized_proc_from_var(env, layout_cache, pattern_symbols, fn_var)?;
 
     // reset subs, so we don't get type errors when specializing for a different signature
@@ -1451,7 +1450,6 @@ fn specialize_external<'a>(
         name: proc_name,
         args: proc_args,
         body: specialized_body,
-        closes_over,
         ret_layout,
         is_self_recursive: recursivity,
     };
@@ -1465,7 +1463,7 @@ fn build_specialized_proc_from_var<'a>(
     layout_cache: &mut LayoutCache<'a>,
     pattern_symbols: &[Symbol],
     fn_var: Variable,
-) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>, Layout<'a>), LayoutProblem> {
+) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
     match env.subs.get_without_compacting(fn_var).content {
         Content::Structure(FlatType::Func(pattern_vars, closure_var, ret_var)) => {
             build_specialized_proc(
@@ -1500,7 +1498,7 @@ fn build_specialized_proc<'a>(
     pattern_vars: &[Variable],
     closure_var: Option<Variable>,
     ret_var: Variable,
-) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>, Layout<'a>), LayoutProblem> {
+) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
     let mut proc_args = Vec::with_capacity_in(pattern_vars.len(), &env.arena);
 
     for (arg_var, arg_name) in pattern_vars.iter().zip(pattern_symbols.iter()) {
@@ -1530,20 +1528,11 @@ fn build_specialized_proc<'a>(
 
     let proc_args = proc_args.into_bump_slice();
 
-    let closes_over = match closure_var {
-        Some(cvar) => match layout_cache.from_var(&env.arena, cvar, env.subs) {
-            Ok(layout) => layout,
-            Err(LayoutProblem::UnresolvedTypeVar) => Layout::Struct(&[]),
-            Err(err) => panic!("TODO handle invalid function {:?}", err),
-        },
-        None => Layout::Struct(&[]),
-    };
-
     let ret_layout = layout_cache
         .from_var(&env.arena, ret_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
-    Ok((proc_args, closes_over, ret_layout))
+    Ok((proc_args, ret_layout))
 }
 
 fn specialize<'a>(

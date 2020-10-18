@@ -1005,6 +1005,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn io_poc_desugared() {
         assert_evals_to!(
             indoc!(
