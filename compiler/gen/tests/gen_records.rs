@@ -405,6 +405,34 @@ mod gen_records {
         assert_evals_to!(
             indoc!(
                 r#"
+                app Test provides [ main ] imports []
+
+                f = \r ->
+                    when r is
+                        { x: Blue, y ? 3 } -> y
+                        { x: Red, y ? 5 } -> y
+
+
+                main =
+                    a = f { x: Blue, y: 7 }
+                    b = f { x: Blue }
+                    c = f { x: Red, y: 11 }
+                    d = f { x: Red }
+
+                    a * b * c * d
+                "#
+            ),
+            3 * 5 * 7 * 11,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn optional_field_when_use_default_nested() {
+        assert_evals_to!(
+            indoc!(
+                r#"
                 f = \r ->
                     when r is
                         { x: Blue, y ? 3 } -> y
@@ -428,6 +456,27 @@ mod gen_records {
         assert_evals_to!(
             indoc!(
                 r#"
+                app Test provides [ main ] imports []
+
+                f = \r ->
+                    { x ? 10, y } = r
+                    x + y
+
+                main =
+                    f { x: 4, y: 9 }
+                "#
+            ),
+            13,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn optional_field_when_no_use_default_nested() {
+        assert_evals_to!(
+            indoc!(
+                r#"
                 f = \r ->
                     { x ? 10, y } = r
                     x + y
@@ -445,11 +494,14 @@ mod gen_records {
         assert_evals_to!(
             indoc!(
                 r#"
+                app Test provides [ main ] imports []
+
                 f = \r ->
                     { x ? 10, y } = r
                     x + y
 
-                f { y: 9 }
+                main =
+                    f { y: 9 }
                 "#
             ),
             19,
@@ -459,6 +511,27 @@ mod gen_records {
 
     #[test]
     fn optional_field_let_no_use_default() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                f = \r ->
+                    { x ? 10, y } = r
+                    x + y
+
+                main =
+                    f { x: 4, y: 9 }
+                "#
+            ),
+            13,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn optional_field_let_no_use_default_nested() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -492,6 +565,25 @@ mod gen_records {
 
     #[test]
     fn optional_field_function_no_use_default() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                f = \{ x ? 10, y } -> x + y
+
+                main =
+                    f { x: 4, y: 9 }
+                "#
+            ),
+            13,
+            i64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn optional_field_function_no_use_default_nested() {
         assert_evals_to!(
             indoc!(
                 r#"
