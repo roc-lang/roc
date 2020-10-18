@@ -1129,7 +1129,7 @@ fn adjust_rank_content(
                     // My theory is that because the closure_var contains variables already
                     // contained in the signature only, it does not need to be part of the rank
                     // calculuation
-                    if false {
+                    if true {
                         rank = rank.max(adjust_rank(
                             subs,
                             young_mark,
