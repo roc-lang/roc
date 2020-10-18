@@ -1209,13 +1209,18 @@ fn adjust_rank_content(
             }
         }
 
-        Alias(_, args, _) => {
+        Alias(_, args, real_var) => {
             let mut rank = Rank::toplevel();
 
-            // from elm-compiler: THEORY: anything in the real_var would be Rank::toplevel()
             for (_, var) in args {
                 rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
             }
+
+            // from elm-compiler: THEORY: anything in the real_var would be Rank::toplevel()
+            // this theory is not true in Roc! aliases of function types capture the closure var
+            rank = rank.max(adjust_rank(
+                subs, young_mark, visit_mark, group_rank, real_var,
+            ));
 
             rank
         }
