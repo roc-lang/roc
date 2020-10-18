@@ -1011,15 +1011,14 @@ mod gen_primitives {
                 r#"
                 app Test provides [ main ] imports []
 
-
-                succeed : a -> ({} -> a)
+                # succeed : a -> ({} -> a)
                 succeed = \x -> \{} -> x
 
                 foo : {} -> Float
                 foo =
                     succeed 3.14
 
-                runEffect : ({} ->  a) -> a
+                # runEffect : ({} ->  a) -> a
                 runEffect = \thunk -> thunk {}
 
                 main : Float
