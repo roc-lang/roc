@@ -88,3 +88,4 @@ quickcheck_macros = "0.8"
 strip-ansi-escapes = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde-xml-rs = "0.4"
+tempfile = "3.1.0"
