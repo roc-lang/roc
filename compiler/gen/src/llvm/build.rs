@@ -2548,8 +2548,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
 
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
-            let is_finite =
-                call_bitcode_fn(NumIsFinite, env, &[result.into()], "is_finite_").into_int_value();
+            let is_finite = call_bitcode_fn(env, &[result.into()], "is_finite_").into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
@@ -2569,8 +2568,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
 
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
-            let is_finite =
-                call_bitcode_fn(NumIsFinite, env, &[result.into()], "is_finite_").into_int_value();
+            let is_finite = call_bitcode_fn(env, &[result.into()], "is_finite_").into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
@@ -2699,8 +2697,8 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             env.context.i64_type(),
             "num_floor",
         ),
-        NumIsFinite => call_bitcode_fn(NumIsFinite, env, &[arg.into()], "is_finite_"),
-        NumAtan => call_bitcode_fn(NumAtan, env, &[arg.into()], "atan_"),
+        NumIsFinite => call_bitcode_fn(env, &[arg.into()], "is_finite_"),
+        NumAtan => call_bitcode_fn(env, &[arg.into()], "atan_"),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }
