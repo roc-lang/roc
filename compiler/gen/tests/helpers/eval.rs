@@ -348,7 +348,7 @@ macro_rules! assert_evals_to {
             assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak);
         }
         {
-            // assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
+            assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
         }
     };
 }

@@ -2237,8 +2237,12 @@ fn add_def_to_module<'a>(
                     return_type: ret_var,
                     arguments: loc_args,
                     loc_body,
+                    captured_symbols,
                     ..
                 } => {
+                    // this is a top-level definition, it should not capture anything
+                    debug_assert!(captured_symbols.is_empty());
+
                     // If this is an exposed symbol, we need to
                     // register it as such. Otherwise, since it
                     // never gets called by Roc code, it will never

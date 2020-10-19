@@ -51,7 +51,6 @@ pub struct Proc<'a> {
     pub name: Symbol,
     pub args: &'a [(Layout<'a>, Symbol)],
     pub body: Stmt<'a>,
-    pub closes_over: Layout<'a>,
     pub ret_layout: Layout<'a>,
     pub is_self_recursive: SelfRecursive,
 }
@@ -1434,7 +1433,7 @@ fn specialize_external<'a>(
         }
     }
 
-    let (proc_args, closes_over, ret_layout) =
+    let (proc_args, ret_layout) =
         build_specialized_proc_from_var(env, layout_cache, pattern_symbols, fn_var)?;
 
     // reset subs, so we don't get type errors when specializing for a different signature
@@ -1451,7 +1450,6 @@ fn specialize_external<'a>(
         name: proc_name,
         args: proc_args,
         body: specialized_body,
-        closes_over,
         ret_layout,
         is_self_recursive: recursivity,
     };
@@ -1465,85 +1463,178 @@ fn build_specialized_proc_from_var<'a>(
     layout_cache: &mut LayoutCache<'a>,
     pattern_symbols: &[Symbol],
     fn_var: Variable,
-) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>, Layout<'a>), LayoutProblem> {
-    match env.subs.get_without_compacting(fn_var).content {
-        Content::Structure(FlatType::Func(pattern_vars, closure_var, ret_var)) => {
+) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
+    match layout_cache.from_var(env.arena, fn_var, env.subs) {
+        Ok(Layout::FunctionPointer(pattern_layouts, ret_layout)) => {
+            let mut pattern_layouts_vec = Vec::with_capacity_in(pattern_layouts.len(), env.arena);
+            pattern_layouts_vec.extend_from_slice(pattern_layouts);
+
             build_specialized_proc(
-                env,
-                layout_cache,
+                env.arena,
                 pattern_symbols,
-                &pattern_vars,
-                Some(closure_var),
-                ret_var,
+                pattern_layouts_vec,
+                None,
+                ret_layout.clone(),
             )
         }
-        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args))
-            if !pattern_symbols.is_empty() =>
-        {
-            build_specialized_proc_from_var(env, layout_cache, pattern_symbols, args[1])
-        }
-        Content::Alias(_, _, actual) => {
-            build_specialized_proc_from_var(env, layout_cache, pattern_symbols, actual)
+        Ok(Layout::Closure(pattern_layouts, closure_layout, ret_layout)) => {
+            let mut pattern_layouts_vec = Vec::with_capacity_in(pattern_layouts.len(), env.arena);
+            pattern_layouts_vec.extend_from_slice(pattern_layouts);
+
+            build_specialized_proc(
+                env.arena,
+                pattern_symbols,
+                pattern_layouts_vec,
+                Some(closure_layout),
+                ret_layout.clone(),
+            )
         }
         _ => {
-            // a top-level constant 0-argument thunk
-            build_specialized_proc(env, layout_cache, pattern_symbols, &[], None, fn_var)
+            match env.subs.get_without_compacting(fn_var).content {
+                Content::Structure(FlatType::Func(pattern_vars, closure_var, ret_var)) => {
+                    let closure_layout = ClosureLayout::from_var(env.arena, env.subs, closure_var)?;
+                    build_specialized_proc_adapter(
+                        env,
+                        layout_cache,
+                        pattern_symbols,
+                        &pattern_vars,
+                        closure_layout,
+                        ret_var,
+                    )
+                }
+                Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args))
+                    if !pattern_symbols.is_empty() =>
+                {
+                    build_specialized_proc_from_var(env, layout_cache, pattern_symbols, args[1])
+                }
+                Content::Alias(_, _, actual) => {
+                    build_specialized_proc_from_var(env, layout_cache, pattern_symbols, actual)
+                }
+                _ => {
+                    // a top-level constant 0-argument thunk
+                    build_specialized_proc_adapter(
+                        env,
+                        layout_cache,
+                        pattern_symbols,
+                        &[],
+                        None,
+                        fn_var,
+                    )
+                }
+            }
         }
     }
 }
-
 #[allow(clippy::type_complexity)]
-fn build_specialized_proc<'a>(
+fn build_specialized_proc_adapter<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
     pattern_symbols: &[Symbol],
     pattern_vars: &[Variable],
-    closure_var: Option<Variable>,
+    opt_closure_layout: Option<ClosureLayout<'a>>,
     ret_var: Variable,
-) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>, Layout<'a>), LayoutProblem> {
-    let mut proc_args = Vec::with_capacity_in(pattern_vars.len(), &env.arena);
+) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
+    let mut arg_layouts = Vec::with_capacity_in(pattern_vars.len(), &env.arena);
 
-    for (arg_var, arg_name) in pattern_vars.iter().zip(pattern_symbols.iter()) {
+    for arg_var in pattern_vars {
         let layout = layout_cache.from_var(&env.arena, *arg_var, env.subs)?;
 
-        proc_args.push((layout, *arg_name));
+        arg_layouts.push(layout);
     }
-
-    // is the final argument symbol the closure symbol? then add the closure variable to the
-    // pattern variables
-    if pattern_symbols.last() == Some(&Symbol::ARG_CLOSURE) {
-        let layout = layout_cache.from_var(&env.arena, closure_var.unwrap(), env.subs)?;
-        proc_args.push((layout, Symbol::ARG_CLOSURE));
-
-        debug_assert_eq!(
-            pattern_vars.len() + 1,
-            pattern_symbols.len(),
-            "Tried to zip two vecs with different lengths!"
-        );
-    } else {
-        debug_assert_eq!(
-            pattern_vars.len(),
-            pattern_symbols.len(),
-            "Tried to zip two vecs with different lengths!"
-        );
-    }
-
-    let proc_args = proc_args.into_bump_slice();
-
-    let closes_over = match closure_var {
-        Some(cvar) => match layout_cache.from_var(&env.arena, cvar, env.subs) {
-            Ok(layout) => layout,
-            Err(LayoutProblem::UnresolvedTypeVar) => Layout::Struct(&[]),
-            Err(err) => panic!("TODO handle invalid function {:?}", err),
-        },
-        None => Layout::Struct(&[]),
-    };
 
     let ret_layout = layout_cache
         .from_var(&env.arena, ret_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
-    Ok((proc_args, closes_over, ret_layout))
+    build_specialized_proc(
+        env.arena,
+        pattern_symbols,
+        arg_layouts,
+        opt_closure_layout,
+        ret_layout,
+    )
+}
+
+#[allow(clippy::type_complexity)]
+fn build_specialized_proc<'a>(
+    arena: &'a Bump,
+    pattern_symbols: &[Symbol],
+    pattern_layouts: Vec<Layout<'a>>,
+    opt_closure_layout: Option<ClosureLayout<'a>>,
+    ret_layout: Layout<'a>,
+) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
+    let mut proc_args = Vec::with_capacity_in(pattern_layouts.len(), arena);
+
+    let pattern_layouts_len = pattern_layouts.len();
+
+    for (arg_layout, arg_name) in pattern_layouts.into_iter().zip(pattern_symbols.iter()) {
+        proc_args.push((arg_layout, *arg_name));
+    }
+
+    // Given
+    //
+    //     foo =
+    //         x = 42
+    //
+    //         f = \{} -> x
+    //
+    // We desugar that into
+    //
+    //     f = \{}, x -> x
+    //
+    //     foo =
+    //         x = 42
+    //
+    //         f_closure = { ptr: f, closure: x }
+    //
+    // then
+    match opt_closure_layout {
+        Some(layout) if pattern_symbols.last() == Some(&Symbol::ARG_CLOSURE) => {
+            // here we define the lifted (now top-level) f function. Its final argument is `Symbol::ARG_CLOSURE`,
+            // it stores the closure structure (just an integer in this case)
+            proc_args.push((layout.as_layout(), Symbol::ARG_CLOSURE));
+
+            debug_assert_eq!(
+                pattern_layouts_len + 1,
+                pattern_symbols.len(),
+                "Tried to zip two vecs with different lengths!"
+            );
+        }
+        Some(layout) => {
+            // else if there is a closure layout, we're building the `f_closure` value
+            // that means we're really creating a ( function_ptr, closure_data ) pair
+
+            let closure_data_layout = layout.as_layout();
+            let function_ptr_layout = Layout::FunctionPointer(
+                arena.alloc([Layout::Struct(&[]), closure_data_layout.clone()]),
+                arena.alloc(ret_layout),
+            );
+
+            let closure_layout =
+                Layout::Struct(arena.alloc([function_ptr_layout, closure_data_layout]));
+
+            return Ok((&[], closure_layout));
+        }
+        None => {
+            // else we're making a normal function, no closure problems to worry about
+            // we'll just assert some things
+
+            // make sure there is not arg_closure argument without a closure layout
+            debug_assert!(pattern_symbols.last() != Some(&Symbol::ARG_CLOSURE));
+
+            // since this is not a closure, the number of arguments should match between symbols
+            // and layout
+            debug_assert_eq!(
+                pattern_layouts_len,
+                pattern_symbols.len(),
+                "Tried to zip two vecs with different lengths!"
+            );
+        }
+    }
+
+    let proc_args = proc_args.into_bump_slice();
+
+    Ok((proc_args, ret_layout))
 }
 
 fn specialize<'a>(

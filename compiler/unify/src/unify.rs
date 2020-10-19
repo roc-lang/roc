@@ -179,6 +179,10 @@ fn unify_alias(
 
                     problems.extend(merge(subs, &ctx, other_content.clone()));
 
+                    if problems.is_empty() {
+                        problems.extend(unify_pool(subs, pool, real_var, *other_real_var));
+                    }
+
                     problems
                 } else {
                     mismatch!()

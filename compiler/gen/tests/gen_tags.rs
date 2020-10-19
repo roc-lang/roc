@@ -416,6 +416,31 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
+                app Test provides [ main ] imports []
+
+                Maybe a : [ Just a, Nothing ]
+
+                isJust : Maybe a -> Bool
+                isJust = \list ->
+                    when list is
+                        Nothing -> False
+                        Just _ -> True
+
+                main =
+                    isJust (Just 42)
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn maybe_is_just_nested() {
+        assert_evals_to!(
+            indoc!(
+                r#"
                 Maybe a : [ Just a, Nothing ]
 
                 isJust : Maybe a -> Bool
