@@ -2013,6 +2013,8 @@ mod test_mono {
         compiles_to_ir(
             indoc!(
                 r#"
+                app Test provides [ main ] imports []
+
                 swap : Int, Int, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
@@ -2026,7 +2028,8 @@ mod test_mono {
                         _ ->
                             []
 
-                swap 0 0 [0x1]
+                main =
+                    swap 0 0 [0x1]
                 "#
             ),
             indoc!(

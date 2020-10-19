@@ -674,7 +674,7 @@ mod gen_primitives {
                         Cons _ rest -> 1 + length rest
 
 
-                main = 
+                main =
                     length three
                 "#
             ),
@@ -721,7 +721,7 @@ mod gen_primitives {
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
                 zero : LinkedList Int
-                zero = Nil 
+                zero = Nil
 
                 sum : LinkedList Int -> Int
                 sum = \list ->
@@ -935,7 +935,7 @@ mod gen_primitives {
                     f = \{} -> x + y
                     f
 
-                main = 
+                main =
                     f = foo {}
                     f {}
                 "#
@@ -962,7 +962,7 @@ mod gen_primitives {
 
                     [ f, g ]
 
-                main = 
+                main =
                     items = foo {}
 
                     List.len items
@@ -974,9 +974,7 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
-    fn io_poc() {
-        use roc_std::RocStr;
+    fn io_poc_effect() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -984,23 +982,51 @@ mod gen_primitives {
 
                 Effect a : [ @Effect ({} -> a) ]
 
-                succeed : a -> Effect a
+                # succeed : a -> Effect a
                 succeed = \x -> @Effect \{} -> x
 
-                foo : Effect Float
-                foo = 
-                    succeed 3.14
-
-                runEffect : Effect a -> a
+                # runEffect : Effect a -> a
                 runEffect = \@Effect thunk -> thunk {}
 
-                main = 
+                # foo : Effect Float
+                foo =
+                    succeed 3.14
+
+                main : Float
+                main =
                     runEffect foo
 
                 "#
             ),
-            RocStr::from_slice(&"Foo".as_bytes()),
-            RocStr
+            3.14,
+            f64
+        );
+    }
+
+    #[test]
+    fn io_poc_desugared() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                # succeed : a -> ({} -> a)
+                succeed = \x -> \{} -> x
+
+                foo : {} -> Float
+                foo =
+                    succeed 3.14
+
+                # runEffect : ({} ->  a) -> a
+                runEffect = \thunk -> thunk {}
+
+                main : Float
+                main =
+                    runEffect foo
+                "#
+            ),
+            3.14,
+            f64
         );
     }
 }
