@@ -1393,17 +1393,12 @@ where
 
 // This helper simulates a basic for loop, where
 // and index increments up from 0 to some end value
-fn incrementing_index_loop<'ctx, LoopFn>(
+pub fn incrementing_index_loop<'ctx, LoopFn>(
     builder: &Builder<'ctx>,
     ctx: &'ctx Context,
     parent: FunctionValue<'ctx>,
     end: IntValue<'ctx>,
     index_name: &str,
-    // allocating memory for an index is costly, so sometimes
-    // we want to reuse an index if multiple loops happen in a
-    // series, such as the case in List.concat. A memory
-    // allocation cab be passed in to be used, and the memory
-    // allocation that _is_ used is the return value.
     mut loop_fn: LoopFn,
 ) -> PointerValue<'ctx>
 where

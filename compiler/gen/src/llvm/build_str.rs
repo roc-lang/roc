@@ -2,8 +2,8 @@ use crate::llvm::build::{
     call_bitcode_fn, load_symbol, load_symbol_and_layout, ptr_from_symbol, Env, InPlace, Scope,
 };
 use crate::llvm::build_list::{
-    allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, list_single,
-    load_list_ptr, store_list,
+    allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, incrementing_index_loop,
+    list_single, load_list_ptr, store_list,
 };
 use crate::llvm::convert::{collection, ptr_int};
 use inkwell::builder::Builder;
@@ -51,18 +51,31 @@ pub fn str_split<'a, 'ctx, 'env>(
 
                     let str: BasicValueEnum<'ctx> = panic!("Get str basic value enum");
                     let delimiter: BasicValueEnum<'ctx> = panic!("Get delimiter basic value enum");
-git 
-                    let delimiter_count =
-                        call_bitcode_fn(env, &[str, delimiter], "count_delimiters_");
 
-                    build_basic_phi2(
-                        env,
+                    let delimiter_count =
+                        call_bitcode_fn(env, &[str, delimiter], "count_delimiters_")
+                            .into_int_value();
+
+                    let ret_list_len = builder.build_int_add(
+                        delimiter_count,
+                        ctx.i64_type().const_int(1, false),
+                        "ret_str_split_list_Len",
+                    );
+
+                    let ret_list_ptr = allocate_list(env, inplace, &CHAR_LAYOUT, ret_list_len);
+
+                    let ret_list_loop = |index| {};
+
+                    incrementing_index_loop(
+                        builder,
+                        ctx,
                         parent,
-                        delimiter_is_longer_comparison,
-                        if_delimiter_is_longer,
-                        if_delimiter_is_shorter,
-                        str_wrapper_type,
-                    )
+                        ret_list_len,
+                        "str_split_ret_list_len_index",
+                        ret_list_loop,
+                    );
+
+                    empty_list(env)
                 },
             )
         },
