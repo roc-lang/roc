@@ -74,6 +74,35 @@ pub fn count_delimiters_(str: &[u8], delimiter: &[u8]) -> i64 {
     }
 }
 
+pub fn measure_next_split_segment_length_(from_index: i64, str: &[u8], delimiter: &[u8]) -> i64 {
+    let str_len = str.len() as i64;
+    let delimiter_len = delimiter.len() as i64;
+
+    let mut str_index = from_index;
+
+    while str_index <= (str_len - delimiter_len) {
+        let mut delimiter_index = 0;
+        let mut matches_delimiter = true;
+
+        while matches_delimiter && delimiter_index < delimiter_len {
+            let delimiter_char = delimiter[delimiter_index as usize];
+            let str_char = str[(str_index + delimiter_index) as usize];
+
+            matches_delimiter = delimiter_char == str_char;
+
+            delimiter_index += 1;
+        }
+
+        if matches_delimiter {
+            return str_index - from_index;
+        } else {
+            str_index += 1;
+        }
+    }
+
+    str_len - from_index
+}
+
 /// Adapted from Rust's core::num module, by the Rust core team,
 /// licensed under the Apache License, version 2.0 - https://www.apache.org/licenses/LICENSE-2.0
 ///
