@@ -893,6 +893,7 @@ impl<'a> Expr<'a> {
                 let doc_tag = match tag_name {
                     TagName::Global(s) => alloc.text(s.as_str()),
                     TagName::Private(s) => alloc.text(format!("{}", s)),
+                    TagName::Closure(s) => alloc.text(format!("Closure({})", s)),
                 };
 
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
@@ -910,6 +911,7 @@ impl<'a> Expr<'a> {
                 let doc_tag = match tag_name {
                     TagName::Global(s) => alloc.text(s.as_str()),
                     TagName::Private(s) => alloc.text(format!("{}", s)),
+                    TagName::Closure(s) => alloc.text(format!("Closure({})", s)),
                 };
 
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
@@ -1434,7 +1436,7 @@ fn specialize_external<'a>(
     }
 
     let (proc_args, ret_layout) =
-        build_specialized_proc_from_var(env, layout_cache, pattern_symbols, fn_var)?;
+        build_specialized_proc_from_var(env, layout_cache, proc_name, pattern_symbols, fn_var)?;
 
     // reset subs, so we don't get type errors when specializing for a different signature
     layout_cache.rollback_to(cache_snapshot);
@@ -1461,6 +1463,7 @@ fn specialize_external<'a>(
 fn build_specialized_proc_from_var<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
+    proc_name: Symbol,
     pattern_symbols: &[Symbol],
     fn_var: Variable,
 ) -> Result<(&'a [(Layout<'a>, Symbol)], Layout<'a>), LayoutProblem> {
@@ -1471,6 +1474,7 @@ fn build_specialized_proc_from_var<'a>(
 
             build_specialized_proc(
                 env.arena,
+                proc_name,
                 pattern_symbols,
                 pattern_layouts_vec,
                 None,
@@ -1483,6 +1487,7 @@ fn build_specialized_proc_from_var<'a>(
 
             build_specialized_proc(
                 env.arena,
+                proc_name,
                 pattern_symbols,
                 pattern_layouts_vec,
                 Some(closure_layout),
@@ -1496,6 +1501,7 @@ fn build_specialized_proc_from_var<'a>(
                     build_specialized_proc_adapter(
                         env,
                         layout_cache,
+                        proc_name,
                         pattern_symbols,
                         &pattern_vars,
                         closure_layout,
@@ -1505,16 +1511,27 @@ fn build_specialized_proc_from_var<'a>(
                 Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args))
                     if !pattern_symbols.is_empty() =>
                 {
-                    build_specialized_proc_from_var(env, layout_cache, pattern_symbols, args[1])
+                    build_specialized_proc_from_var(
+                        env,
+                        layout_cache,
+                        proc_name,
+                        pattern_symbols,
+                        args[1],
+                    )
                 }
-                Content::Alias(_, _, actual) => {
-                    build_specialized_proc_from_var(env, layout_cache, pattern_symbols, actual)
-                }
+                Content::Alias(_, _, actual) => build_specialized_proc_from_var(
+                    env,
+                    layout_cache,
+                    proc_name,
+                    pattern_symbols,
+                    actual,
+                ),
                 _ => {
                     // a top-level constant 0-argument thunk
                     build_specialized_proc_adapter(
                         env,
                         layout_cache,
+                        proc_name,
                         pattern_symbols,
                         &[],
                         None,
@@ -1529,6 +1546,7 @@ fn build_specialized_proc_from_var<'a>(
 fn build_specialized_proc_adapter<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &mut LayoutCache<'a>,
+    proc_name: Symbol,
     pattern_symbols: &[Symbol],
     pattern_vars: &[Variable],
     opt_closure_layout: Option<ClosureLayout<'a>>,
@@ -1548,6 +1566,7 @@ fn build_specialized_proc_adapter<'a>(
 
     build_specialized_proc(
         env.arena,
+        proc_name,
         pattern_symbols,
         arg_layouts,
         opt_closure_layout,
@@ -1558,6 +1577,7 @@ fn build_specialized_proc_adapter<'a>(
 #[allow(clippy::type_complexity)]
 fn build_specialized_proc<'a>(
     arena: &'a Bump,
+    proc_name: Symbol,
     pattern_symbols: &[Symbol],
     pattern_layouts: Vec<Layout<'a>>,
     opt_closure_layout: Option<ClosureLayout<'a>>,
@@ -1592,7 +1612,7 @@ fn build_specialized_proc<'a>(
         Some(layout) if pattern_symbols.last() == Some(&Symbol::ARG_CLOSURE) => {
             // here we define the lifted (now top-level) f function. Its final argument is `Symbol::ARG_CLOSURE`,
             // it stores the closure structure (just an integer in this case)
-            proc_args.push((layout.as_layout(), Symbol::ARG_CLOSURE));
+            proc_args.push((layout.as_named_layout(proc_name), Symbol::ARG_CLOSURE));
 
             debug_assert_eq!(
                 pattern_layouts_len + 1,
@@ -1604,7 +1624,7 @@ fn build_specialized_proc<'a>(
             // else if there is a closure layout, we're building the `f_closure` value
             // that means we're really creating a ( function_ptr, closure_data ) pair
 
-            let closure_data_layout = layout.as_layout();
+            let closure_data_layout = layout.as_block_of_memory_layout();
             let function_ptr_layout = Layout::FunctionPointer(
                 arena.alloc([Layout::Struct(&[]), closure_data_layout.clone()]),
                 arena.alloc(ret_layout),

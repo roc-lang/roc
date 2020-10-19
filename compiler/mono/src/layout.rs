@@ -33,7 +33,7 @@ pub enum Layout<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ClosureLayout<'a> {
     /// the layout that this specific closure captures
-    captured: &'a [Layout<'a>],
+    captured: &'a [(TagName, &'a [Layout<'a>])],
 
     /// the layout that represents the maximum size the closure layout can have
     max_size: &'a [Layout<'a>],
@@ -44,7 +44,7 @@ impl<'a> ClosureLayout<'a> {
         let layout = Layout::Builtin(Builtin::Int1);
         let layouts = arena.alloc([layout]);
         ClosureLayout {
-            captured: layouts,
+            captured: &[],
             max_size: layouts,
         }
     }
@@ -52,15 +52,42 @@ impl<'a> ClosureLayout<'a> {
         let layout = Layout::Builtin(Builtin::Int8);
         let layouts = arena.alloc([layout]);
         ClosureLayout {
-            captured: layouts,
+            captured: &[],
             max_size: layouts,
         }
     }
     fn from_unwrapped(layouts: &'a [Layout<'a>]) -> Self {
         debug_assert!(!layouts.is_empty());
         ClosureLayout {
-            captured: layouts,
+            captured: &[],
             max_size: layouts,
+        }
+    }
+
+    fn from_wrapped(tags: &'a [(TagName, &'a [Layout<'a>])]) -> Self {
+        // NOTE we fabricate a pointer size here.
+        // That's fine because we don't care about the exact size, just the biggest one
+        let pointer_size = 8;
+
+        let mut largest_size = 0;
+        let mut largest = None;
+
+        for (_, tag_args) in tags.iter() {
+            let size = tag_args.iter().map(|l| l.stack_size(pointer_size)).sum();
+
+            // >= because some of our layouts have 0 size, but are still valid layouts
+            if size >= largest_size {
+                largest_size = size;
+                largest = Some(tag_args);
+            }
+        }
+
+        match largest {
+            None => unreachable!("A tag union layout must always contain 2 or more tags"),
+            Some(max_size) => ClosureLayout {
+                captured: tags,
+                max_size,
+            },
         }
     }
 
@@ -97,9 +124,10 @@ impl<'a> ClosureLayout<'a> {
 
                         Ok(Some(closure_layout))
                     }
-                    Wrapped(_tags) => {
+                    Wrapped(tags) => {
                         // Wrapped(Vec<'a, (TagName, &'a [Layout<'a>])>),
-                        todo!("can't specialize multi-size closures yet")
+                        let closure_layout = ClosureLayout::from_wrapped(tags.into_bump_slice());
+                        Ok(Some(closure_layout))
                     }
                 }
             }
@@ -136,17 +164,52 @@ impl<'a> ClosureLayout<'a> {
             .sum()
     }
     pub fn contains_refcounted(&self) -> bool {
-        self.captured.iter().any(|l| l.contains_refcounted())
+        self.captured
+            .iter()
+            .map(|t| t.1)
+            .flatten()
+            .any(|l| l.contains_refcounted())
     }
     pub fn safe_to_memcpy(&self) -> bool {
-        self.captured.iter().all(|l| l.safe_to_memcpy())
+        self.captured
+            .iter()
+            .map(|t| t.1)
+            .flatten()
+            .all(|l| l.safe_to_memcpy())
+    }
+
+    pub fn as_named_layout(&self, symbol: Symbol) -> Layout<'a> {
+        let layouts = if self.captured.is_empty() {
+            self.max_size
+        } else if let Some((_, tag_args)) = self
+            .captured
+            .iter()
+            .find(|(tn, _)| *tn == TagName::Closure(symbol))
+        {
+            tag_args
+        } else {
+            unreachable!(
+                "invariant broken, TagName::Closure({:?}) is not in {:?}",
+                symbol, &self.captured
+            );
+        };
+
+        if layouts.len() == 1 {
+            layouts[0].clone()
+        } else {
+            Layout::Struct(layouts)
+        }
     }
 
     pub fn as_layout(&self) -> Layout<'a> {
-        if self.captured.len() == 1 {
-            self.captured[0].clone()
+        if self.captured.is_empty() {
+            if self.max_size.len() == 1 {
+                self.max_size[0].clone()
+            } else {
+                Layout::Struct(self.max_size)
+            }
         } else {
-            Layout::Struct(self.captured)
+            panic!();
         }
     }
 

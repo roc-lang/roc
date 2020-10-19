@@ -1277,8 +1277,7 @@ fn constrain_closure_size(
         ));
     }
 
-    let tag_name_string = format!("Closure_{:?}_{}", name, closure_var.index());
-    let tag_name = roc_module::ident::TagName::Global(tag_name_string.into());
+    let tag_name = roc_module::ident::TagName::Closure(name);
     let closure_type = Type::TagUnion(
         vec![(tag_name, tag_arguments)],
         Box::new(Type::Variable(closure_ext_var)),

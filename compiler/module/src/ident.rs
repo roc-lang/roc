@@ -37,6 +37,9 @@ pub enum TagName {
     /// Private tags are associated with a specific module, and as such use a
     /// Symbol just like all other module-specific identifiers.
     Private(Symbol),
+
+    /// Used to connect the closure size to the function it corresponds to
+    Closure(Symbol),
 }
 
 impl TagName {
@@ -44,6 +47,7 @@ impl TagName {
         match self {
             TagName::Global(uppercase) => uppercase.as_inline_str().clone(),
             TagName::Private(symbol) => symbol.fully_qualified(interns, home),
+            TagName::Closure(symbol) => symbol.fully_qualified(interns, home),
         }
     }
 }
