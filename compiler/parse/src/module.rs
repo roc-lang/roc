@@ -77,10 +77,8 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>> {
 
     map!(
         and!(
-            move |arena, state| parse_package_part(arena, state),
-            skip_first!(ascii_char('/'), move |arena, state| parse_package_part(
-                arena, state
-            ))
+            parse_package_part,
+            skip_first!(ascii_char('/'), parse_package_part)
         ),
         |(account, pkg)| { PackageName { account, pkg } }
     )
