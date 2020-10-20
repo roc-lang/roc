@@ -40,6 +40,53 @@ pub fn pow_int_(mut base: i64, mut exp: i64) -> i64 {
 }
 
 #[no_mangle]
+pub fn str_split_<'a>(
+    list: &'a mut [&'a [u8]],
+    str_: &'a [u8],
+    delimiter: &[u8],
+) -> &'a [&'a [u8]] {
+    let mut ret_list_index = 0;
+
+    let str_len = str_.len();
+    let delimiter_len = delimiter.len();
+
+    let mut slice_start_index = 0;
+
+    let mut str_index = 0;
+
+    if str_len > delimiter_len {
+        while str_index <= (str_len - delimiter_len) {
+            let mut delimiter_index = 0;
+            let mut matches_delimiter = true;
+
+            while matches_delimiter && delimiter_index < delimiter_len {
+                let delimiter_char = delimiter[delimiter_index];
+                let str_char = str_[str_index + delimiter_index];
+
+                if delimiter_char != str_char {
+                    matches_delimiter = false;
+                }
+
+                delimiter_index += 1;
+            }
+
+            if matches_delimiter {
+                list[ret_list_index] = &str_[slice_start_index..str_index];
+                slice_start_index = str_index + delimiter_len;
+                ret_list_index += 1;
+                str_index += delimiter_len;
+            } else {
+                str_index += 1;
+            }
+        }
+    }
+
+    list[ret_list_index] = &str_[slice_start_index..str_len];
+
+    list
+}
+
+#[no_mangle]
 pub fn count_delimiters_(str: &[u8], delimiter: &[u8]) -> i64 {
     let mut count: i64 = 0;
 

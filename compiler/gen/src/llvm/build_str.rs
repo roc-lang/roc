@@ -64,18 +64,9 @@ pub fn str_split<'a, 'ctx, 'env>(
 
                     let ret_list_ptr = allocate_list(env, inplace, &CHAR_LAYOUT, ret_list_len);
 
-                    let ret_list_loop = |index| {};
+                    let ret_list: BasicValueEnum<'ctx> = panic!("Get return list");
 
-                    incrementing_index_loop(
-                        builder,
-                        ctx,
-                        parent,
-                        ret_list_len,
-                        "str_split_ret_list_len_index",
-                        ret_list_loop,
-                    );
-
-                    empty_list(env)
+                    call_bitcode_fn(env, &[ret_list, str, delimiter], "str_split_")
                 },
             )
         },
