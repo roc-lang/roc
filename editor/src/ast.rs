@@ -235,6 +235,49 @@ pub enum NodeContent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntStyle {
+    Decimal,
+    Octal,
+    Hex,
+    Binary,
+}
+
+/// Experimental idea for an Expr that fits in 16B
+#[derive(Debug, Clone, PartialEq)]
+pub enum Expr2 {
+    /// An integer literal (without a dot)
+    Num {
+        number: i64,
+        var: Variable,
+        style: IntStyle,
+    },
+    /// A floating-point literal (with a dot)
+    Float {
+        number: f64,
+        var: Variable,
+    },
+    /// A formatted integer literal (containing underscores)
+    FormattedInt {
+        text_bytes: *const u8,
+        var: Variable,
+        style: IntStyle,
+    },
+    /// A formatted float literal (containing underscores)
+    FormattedFloat {
+        text_bytes: *const u8,
+        var: Variable,
+    },
+    Str {
+        bytes: [u8; 15],
+    },
+}
+
+#[test]
+fn node_content_size() {
+    assert_eq!(std::mem::size_of::<Expr2>(), 16);
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     /// An integer literal (without a dot)
     Int {
