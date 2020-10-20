@@ -1,6 +1,8 @@
 use crate::spaces::{fmt_spaces, INDENT};
 use bumpalo::collections::{String, Vec};
-use roc_parse::ast::{AppHeader, ExposesEntry, ImportsEntry, InterfaceHeader, Module};
+use roc_parse::ast::{
+    AppHeader, ExposesEntry, ImportsEntry, InterfaceHeader, Module, PlatformHeader,
+};
 use roc_region::all::Located;
 
 pub fn fmt_module<'a>(buf: &mut String<'a>, module: &'a Module<'a>) {
@@ -11,6 +13,9 @@ pub fn fmt_module<'a>(buf: &mut String<'a>, module: &'a Module<'a>) {
         Module::App { header } => {
             fmt_app_header(buf, header);
         }
+        Module::Platform { header } => {
+            fmt_platform_header(buf, header);
+        }
     }
 }
 
@@ -20,10 +25,10 @@ pub fn fmt_interface_header<'a>(buf: &mut String<'a>, header: &'a InterfaceHeade
     buf.push_str("interface");
 
     // module name
-    if header.after_interface.is_empty() {
+    if header.after_interface_keyword.is_empty() {
         buf.push(' ');
     } else {
-        fmt_spaces(buf, header.after_interface.iter(), indent);
+        fmt_spaces(buf, header.after_interface_keyword.iter(), indent);
     }
 
     buf.push_str(header.name.value.as_str());
@@ -69,9 +74,15 @@ pub fn fmt_app_header<'a>(buf: &mut String<'a>, header: &'a AppHeader<'a>) {
     buf.push_str("app");
 
     // imports
+    buf.push_str("imports");
+
     fmt_spaces(buf, header.before_imports.iter(), indent);
     fmt_imports(buf, &header.imports, indent);
     fmt_spaces(buf, header.after_imports.iter(), indent);
+}
+
+pub fn fmt_platform_header<'a>(_buf: &mut String<'a>, _header: &'a PlatformHeader<'a>) {
+    todo!("TODO fmt platform header");
 }
 
 fn fmt_imports<'a>(

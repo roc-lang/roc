@@ -2265,7 +2265,7 @@ mod test_parse {
             exposes,
             imports,
 
-            after_interface: &[],
+            after_interface_keyword: &[],
             before_exposes: &[],
             after_exposes: &[],
             before_imports: &[],
@@ -2294,7 +2294,7 @@ mod test_parse {
             exposes,
             imports,
 
-            after_interface: &[],
+            after_interface_keyword: &[],
             before_exposes: &[],
             after_exposes: &[],
             before_imports: &[],
