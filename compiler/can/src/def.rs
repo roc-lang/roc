@@ -191,6 +191,20 @@ pub fn canonicalize_defs<'a>(
 
         output.union(new_output);
 
+        // store the top-level defs, used to ensure that closures won't capture them
+        if let PatternType::TopLevelDef = pattern_type {
+            match &pending_def {
+                PendingDef::AnnotationOnly(_, loc_can_pattern, _)
+                | PendingDef::Body(_, loc_can_pattern, _)
+                | PendingDef::TypedBody(_, loc_can_pattern, _, _) => env.top_level_symbols.extend(
+                    bindings_from_patterns(std::iter::once(loc_can_pattern))
+                        .iter()
+                        .map(|t| t.0),
+                ),
+                PendingDef::Alias { .. } | PendingDef::InvalidAlias => {}
+            }
+        }
+
         // Record the ast::Expr for later. We'll do another pass through these
         // once we have the entire scope assembled. If we were to canonicalize
         // the exprs right now, they wouldn't have symbols in scope from defs
@@ -211,6 +225,18 @@ pub fn canonicalize_defs<'a>(
                 let symbol = name.value;
                 let mut can_ann =
                     canonicalize_annotation(env, &mut scope, &ann.value, ann.region, var_store);
+
+                // all referenced symbols in an alias must be symbols
+                output
+                    .references
+                    .referenced_aliases
+                    .extend(can_ann.aliases.keys().copied());
+
+                // if an alias definition uses an alias, the used alias is referenced
+                output
+                    .references
+                    .lookups
+                    .extend(can_ann.aliases.keys().copied());
 
                 let mut can_vars: Vec<Located<(Lowercase, Variable)>> =
                     Vec::with_capacity(vars.len());
@@ -761,15 +787,13 @@ fn canonicalize_pending_def<'a>(
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
 
             // Record all the annotation's references in output.references.lookups
-            let lookups = &mut output.references.lookups;
 
             for symbol in ann.references {
-                lookups.insert(symbol);
+                output.references.lookups.insert(symbol);
+                output.references.referenced_aliases.insert(symbol);
             }
 
-            for (symbol, alias) in ann.aliases.clone() {
-                aliases.insert(symbol, alias);
-            }
+            aliases.extend(ann.aliases.iter().cloned());
 
             output.introduced_variables.union(&ann.introduced_variables);
 
@@ -812,8 +836,10 @@ fn canonicalize_pending_def<'a>(
                     value: Closure {
                         function_type: var_store.fresh(),
                         closure_type: var_store.fresh(),
+                        closure_ext_var: var_store.fresh(),
                         return_type: var_store.fresh(),
                         name: symbol,
+                        captured_symbols: Vec::new(),
                         recursive: Recursive::NotRecursive,
                         arguments: underscores,
                         loc_body: Box::new(body_expr),
@@ -857,10 +883,10 @@ fn canonicalize_pending_def<'a>(
             let can_ann = canonicalize_annotation(env, scope, &ann.value, ann.region, var_store);
 
             // Record all the annotation's references in output.references.lookups
-            let lookups = &mut output.references.lookups;
 
             for symbol in can_ann.references {
-                lookups.insert(symbol);
+                output.references.lookups.insert(symbol);
+                output.references.referenced_aliases.insert(symbol);
             }
 
             let mut can_vars: Vec<Located<(Lowercase, Variable)>> = Vec::with_capacity(vars.len());
@@ -918,10 +944,9 @@ fn canonicalize_pending_def<'a>(
                 canonicalize_annotation(env, scope, &loc_ann.value, loc_ann.region, var_store);
 
             // Record all the annotation's references in output.references.lookups
-            let lookups = &mut output.references.lookups;
-
             for symbol in ann.references {
-                lookups.insert(symbol);
+                output.references.lookups.insert(symbol);
+                output.references.referenced_aliases.insert(symbol);
             }
 
             let typ = ann.typ;
@@ -938,6 +963,13 @@ fn canonicalize_pending_def<'a>(
 
             if let Pattern::Identifier(ref defined_symbol) = &loc_can_pattern.value {
                 env.tailcallable_symbol = Some(*defined_symbol);
+            };
+
+            // regiser the name of this closure, to make sure the closure won't capture it's own name
+            if let (Pattern::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
+                (&loc_can_pattern.value, &loc_expr.value)
+            {
+                env.closure_name_symbol = Some(*defined_symbol);
             };
 
             pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
@@ -965,10 +997,12 @@ fn canonicalize_pending_def<'a>(
                 &Closure {
                     function_type,
                     closure_type,
+                    closure_ext_var,
                     return_type,
                     name: ref symbol,
                     ref arguments,
                     loc_body: ref body,
+                    ref captured_symbols,
                     ..
                 },
             ) = (
@@ -1011,8 +1045,10 @@ fn canonicalize_pending_def<'a>(
                 loc_can_expr.value = Closure {
                     function_type,
                     closure_type,
+                    closure_ext_var,
                     return_type,
-                    name: *symbol,
+                    name: *defined_symbol,
+                    captured_symbols: captured_symbols.clone(),
                     recursive: is_recursive,
                     arguments: arguments.clone(),
                     loc_body: body.clone(),
@@ -1078,6 +1114,13 @@ fn canonicalize_pending_def<'a>(
                 vars_by_symbol.insert(*defined_symbol, expr_var);
             };
 
+            // regiser the name of this closure, to make sure the closure won't capture it's own name
+            if let (Pattern::Identifier(ref defined_symbol), &ast::Expr::Closure(_, _)) =
+                (&loc_can_pattern.value, &loc_expr.value)
+            {
+                env.closure_name_symbol = Some(*defined_symbol);
+            };
+
             let (mut loc_can_expr, can_output) =
                 canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
 
@@ -1099,10 +1142,12 @@ fn canonicalize_pending_def<'a>(
                 &Closure {
                     function_type,
                     closure_type,
+                    closure_ext_var,
                     return_type,
                     name: ref symbol,
                     ref arguments,
                     loc_body: ref body,
+                    ref captured_symbols,
                     ..
                 },
             ) = (
@@ -1144,8 +1189,10 @@ fn canonicalize_pending_def<'a>(
                 loc_can_expr.value = Closure {
                     function_type,
                     closure_type,
+                    closure_ext_var,
                     return_type,
-                    name: *symbol,
+                    name: *defined_symbol,
+                    captured_symbols: captured_symbols.clone(),
                     recursive: is_recursive,
                     arguments: arguments.clone(),
                     loc_body: body.clone(),
@@ -1154,9 +1201,7 @@ fn canonicalize_pending_def<'a>(
 
             // Store the referenced locals in the refs_by_symbol map, so we can later figure out
             // which defined names reference each other.
-            for (symbol, region) in
-                bindings_from_patterns(std::iter::once(&loc_can_pattern), &scope)
-            {
+            for (symbol, region) in bindings_from_patterns(std::iter::once(&loc_can_pattern)) {
                 let refs =
                     // Functions' references don't count in defs.
                     // See 3d5a2560057d7f25813112dfa5309956c0f9e6a9 and its
@@ -1186,7 +1231,7 @@ fn canonicalize_pending_def<'a>(
                 );
             }
 
-            output.references = output.references.union(can_output.references);
+            output.union(can_output);
         }
     };
 

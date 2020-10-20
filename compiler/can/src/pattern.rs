@@ -117,7 +117,11 @@ pub fn canonicalize_pattern<'a>(
             &mut env.ident_ids,
             region,
         ) {
-            Ok(symbol) => Pattern::Identifier(symbol),
+            Ok(symbol) => {
+                output.references.bound_symbols.insert(symbol);
+
+                Pattern::Identifier(symbol)
+            }
             Err((original_region, shadow)) => {
                 env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
                     original_region,
@@ -254,6 +258,8 @@ pub fn canonicalize_pattern<'a>(
                             region,
                         ) {
                             Ok(symbol) => {
+                                output.references.bound_symbols.insert(symbol);
+
                                 destructs.push(Located {
                                     region: loc_pattern.region,
                                     value: RecordDestruct {
@@ -319,6 +325,9 @@ pub fn canonicalize_pattern<'a>(
                                     loc_default.region,
                                     &loc_default.value,
                                 );
+
+                                // an optional field binds the symbol!
+                                output.references.bound_symbols.insert(symbol);
 
                                 output.union(expr_output);
 
@@ -412,14 +421,14 @@ fn malformed_pattern<'a>(
     Pattern::MalformedPattern(problem, region)
 }
 
-pub fn bindings_from_patterns<'a, I>(loc_patterns: I, scope: &Scope) -> Vec<(Symbol, Region)>
+pub fn bindings_from_patterns<'a, I>(loc_patterns: I) -> Vec<(Symbol, Region)>
 where
     I: Iterator<Item = &'a Located<Pattern>>,
 {
     let mut answer = Vec::new();
 
     for loc_pattern in loc_patterns {
-        add_bindings_from_patterns(&loc_pattern.region, &loc_pattern.value, scope, &mut answer);
+        add_bindings_from_patterns(&loc_pattern.region, &loc_pattern.value, &mut answer);
     }
 
     answer
@@ -429,7 +438,6 @@ where
 fn add_bindings_from_patterns(
     region: &Region,
     pattern: &Pattern,
-    scope: &Scope,
     answer: &mut Vec<(Symbol, Region)>,
 ) {
     use Pattern::*;
@@ -443,7 +451,7 @@ fn add_bindings_from_patterns(
             ..
         } => {
             for (_, loc_arg) in loc_args {
-                add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, scope, answer);
+                add_bindings_from_patterns(&loc_arg.region, &loc_arg.value, answer);
             }
         }
         RecordDestructure { destructs, .. } => {

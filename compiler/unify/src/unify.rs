@@ -129,7 +129,7 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         //        dbg!(ctx.first, type1);
         //        println!("\n --- \n");
         //        dbg!(ctx.second, type2);
-        println!("\n --------------- \n");
+        //        println!("\n --------------- \n");
         println!(
             "{:?} {:?} ~ {:?} {:?}",
             ctx.first,
@@ -178,6 +178,10 @@ fn unify_alias(
                     }
 
                     problems.extend(merge(subs, &ctx, other_content.clone()));
+
+                    if problems.is_empty() {
+                        problems.extend(unify_pool(subs, pool, real_var, *other_real_var));
+                    }
 
                     problems
                 } else {

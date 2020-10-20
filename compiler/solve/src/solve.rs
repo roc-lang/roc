@@ -70,7 +70,7 @@ pub enum TypeError {
     BadType(roc_types::types::Problem),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Env {
     pub vars_by_symbol: SendMap<Symbol, Variable>,
     pub aliases: MutMap<Symbol, Alias>,
@@ -151,6 +151,33 @@ pub fn run(
     (Solved(subs), state.env)
 }
 
+/// Modify an existing subs in-place instead
+pub fn run_in_place(
+    env: &Env,
+    problems: &mut Vec<TypeError>,
+    subs: &mut Subs,
+    constraint: &Constraint,
+) -> Env {
+    let mut pools = Pools::default();
+    let state = State {
+        env: env.clone(),
+        mark: Mark::NONE.next(),
+    };
+    let rank = Rank::toplevel();
+    let state = solve(
+        env,
+        state,
+        rank,
+        &mut pools,
+        problems,
+        &mut MutMap::default(),
+        subs,
+        constraint,
+    );
+
+    state.env
+}
+
 #[allow(clippy::too_many_arguments)]
 fn solve(
     env: &Env,
@@ -165,6 +192,7 @@ fn solve(
     match constraint {
         True => state,
         SaveTheEnvironment => {
+            // NOTE deviation: elm only copies the env into the state on SaveTheEnvironment
             let mut copy = state;
 
             copy.env = env.clone();
@@ -1096,13 +1124,20 @@ fn adjust_rank_content(
                 Func(arg_vars, closure_var, ret_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, ret_var);
 
-                    rank = rank.max(adjust_rank(
-                        subs,
-                        young_mark,
-                        visit_mark,
-                        group_rank,
-                        closure_var,
-                    ));
+                    // TODO investigate further.
+                    //
+                    // My theory is that because the closure_var contains variables already
+                    // contained in the signature only, it does not need to be part of the rank
+                    // calculuation
+                    if true {
+                        rank = rank.max(adjust_rank(
+                            subs,
+                            young_mark,
+                            visit_mark,
+                            group_rank,
+                            closure_var,
+                        ));
+                    }
 
                     for var in arg_vars {
                         rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
@@ -1174,13 +1209,18 @@ fn adjust_rank_content(
             }
         }
 
-        Alias(_, args, _) => {
+        Alias(_, args, real_var) => {
             let mut rank = Rank::toplevel();
 
-            // from elm-compiler: THEORY: anything in the real_var would be Rank::toplevel()
             for (_, var) in args {
                 rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
             }
+
+            // from elm-compiler: THEORY: anything in the real_var would be Rank::toplevel()
+            // this theory is not true in Roc! aliases of function types capture the closure var
+            rank = rank.max(adjust_rank(
+                subs, young_mark, visit_mark, group_rank, real_var,
+            ));
 
             rank
         }

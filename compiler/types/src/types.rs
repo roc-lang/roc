@@ -163,15 +163,14 @@ impl fmt::Debug for Type {
 
                 for (index, arg) in args.iter().enumerate() {
                     if index > 0 {
-                        ", ".fmt(f)?;
+                        write!(f, ", ")?;
                     }
 
-                    arg.fmt(f)?;
+                    write!(f, "{:?}", arg)?;
                 }
 
-                write!(f, " -")?;
-                closure.fmt(f)?;
-                write!(f, "-> ")?;
+                write!(f, " |{:?}|", closure)?;
+                write!(f, " -> ")?;
 
                 ret.fmt(f)?;
 
@@ -942,6 +941,7 @@ pub enum Category {
     },
     Lambda,
     Uniqueness,
+    ClosureSize,
     StrInterpolation,
 
     // storing variables in the ast

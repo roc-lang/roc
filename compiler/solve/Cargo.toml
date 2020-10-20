@@ -17,6 +17,7 @@ roc_builtins = { path = "../builtins" }
 
 [dev-dependencies]
 roc_constrain = { path = "../constrain" }
+roc_load = { path = "../load" }
 roc_builtins = { path = "../builtins" }
 roc_problem = { path = "../problem" }
 roc_parse = { path = "../parse" }
@@ -24,6 +25,7 @@ roc_solve = { path = "../solve" }
 pretty_assertions = "0.5.1"
 maplit = "1.0.1"
 indoc = "0.3.3"
+tempfile = "3.0.1"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
 bumpalo = { version = "3.2", features = ["collections"] }

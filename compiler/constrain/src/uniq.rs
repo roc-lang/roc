@@ -712,9 +712,11 @@ pub fn constrain_expr(
             function_type: fn_var,
             return_type: ret_var,
             closure_type: closure_var,
+            closure_ext_var,
             recursive: recursion,
             arguments,
             loc_body: boxed,
+            captured_symbols,
             ..
         } => {
             use roc_can::expr::Recursive;
@@ -730,10 +732,11 @@ pub fn constrain_expr(
             let ret_var = *ret_var;
             let ret_type = Type::Variable(ret_var);
             let closure_var = *closure_var;
-            let closure_type = Type::Variable(closure_var);
+            let closure_ext_var = *closure_ext_var;
 
             vars.push(ret_var);
             vars.push(closure_var);
+            vars.push(closure_ext_var);
             vars.push(*fn_var);
 
             for (pattern_var, loc_pattern) in arguments {
@@ -765,15 +768,7 @@ pub fn constrain_expr(
                 fn_uniq_type = Bool::shared()
             }
 
-            let fn_type = attr_type(
-                fn_uniq_type,
-                Type::Function(
-                    pattern_types,
-                    Box::new(closure_type),
-                    Box::new(ret_type.clone()),
-                ),
-            );
-            let body_type = Expected::NoExpectation(ret_type);
+            let body_type = Expected::NoExpectation(ret_type.clone());
             let ret_constraint = constrain_expr(
                 env,
                 var_store,
@@ -785,6 +780,36 @@ pub fn constrain_expr(
             );
 
             let defs_constraint = And(state.constraints);
+
+            let mut tag_arguments = Vec::with_capacity(captured_symbols.len());
+            let mut captured_symbols_constraints = Vec::with_capacity(captured_symbols.len());
+
+            for (symbol, var) in captured_symbols {
+                // make sure the variable is registered
+                vars.push(*var);
+
+                // this symbol is captured, so it must be part of the closure type
+                tag_arguments.push(Type::Variable(*var));
+
+                // make the variable equal to the looked-up type of symbol
+                captured_symbols_constraints.push(Constraint::Lookup(
+                    *symbol,
+                    Expected::NoExpectation(Type::Variable(*var)),
+                    Region::zero(),
+                ));
+            }
+
+            let tag_name_string = format!("Closure_{}", closure_var.index());
+            let tag_name = roc_module::ident::TagName::Global(tag_name_string.into());
+            let closure_type = Type::TagUnion(
+                vec![(tag_name, tag_arguments)],
+                Box::new(Type::Variable(closure_ext_var)),
+            );
+
+            let fn_type = attr_type(
+                fn_uniq_type,
+                Type::Function(pattern_types, Box::new(closure_type), Box::new(ret_type)),
+            );
 
             exists(
                 vars,
@@ -806,6 +831,7 @@ pub fn constrain_expr(
                         Category::Lambda,
                         region,
                     ),
+                    Constraint::And(captured_symbols_constraints),
                 ]),
             )
         }
@@ -1917,13 +1943,15 @@ fn annotation_to_attr_type(
             let uniq_var = var_store.fresh();
             let (mut arg_vars, args_lifted) =
                 annotation_to_attr_type_many(var_store, arguments, rigids, change_var_kind);
-            let (closure_vars, closure_lifted) =
-                annotation_to_attr_type(var_store, closure, rigids, change_var_kind);
+
+            // NOTE: we don't lift the closure var!
+            // their uniqueness will never matter (it's a phantom parameter)
+            // and not lifting makes code reuse possible
+
             let (result_vars, result_lifted) =
                 annotation_to_attr_type(var_store, result, rigids, change_var_kind);
 
             arg_vars.extend(result_vars);
-            arg_vars.extend(closure_vars);
             arg_vars.push(uniq_var);
 
             match **closure {
@@ -1935,11 +1963,7 @@ fn annotation_to_attr_type(
                 arg_vars,
                 attr_type(
                     Bool::variable(uniq_var),
-                    Type::Function(
-                        args_lifted,
-                        Box::new(closure_lifted),
-                        Box::new(result_lifted),
-                    ),
+                    Type::Function(args_lifted, closure.clone(), Box::new(result_lifted)),
                 ),
             )
         }

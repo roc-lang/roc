@@ -45,6 +45,7 @@ target-lexicon = "0.10"
 roc_can = { path = "../can" }
 roc_parse = { path = "../parse" }
 roc_load = { path = "../load" }
+roc_reporting = { path = "../reporting" }
 pretty_assertions = "0.5.1"
 maplit = "1.0.1"
 indoc = "0.3.3"

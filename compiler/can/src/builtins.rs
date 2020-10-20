@@ -1614,8 +1614,10 @@ fn defn(
     let expr = Closure {
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
         return_type: ret_var,
         name: fn_name,
+        captured_symbols: Vec::new(),
         recursive: Recursive::NotRecursive,
         arguments: closure_args,
         loc_body: Box::new(no_region(body)),

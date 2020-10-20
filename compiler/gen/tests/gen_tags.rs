@@ -234,6 +234,7 @@ mod gen_tags {
     //    }
 
     #[test]
+    #[ignore]
     fn even_odd() {
         assert_evals_to!(
             indoc!(
@@ -412,6 +413,31 @@ mod gen_tags {
 
     #[test]
     fn maybe_is_just() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                Maybe a : [ Just a, Nothing ]
+
+                isJust : Maybe a -> Bool
+                isJust = \list ->
+                    when list is
+                        Nothing -> False
+                        Just _ -> True
+
+                main =
+                    isJust (Just 42)
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn maybe_is_just_nested() {
         assert_evals_to!(
             indoc!(
                 r#"
@@ -604,12 +630,15 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
+                app Test provides [ main ] imports []
+
                 Maybe a : [ Nothing, Just a ]
 
-                x : Maybe (Maybe a)
+                x : Maybe (Maybe Int)
                 x = Just (Just 41)
 
-                5
+                main = 
+                    5
                 "#
             ),
             5,

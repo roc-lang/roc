@@ -156,7 +156,7 @@ pub fn canonicalize_module_defs<'a>(
     // this is now done later, in file.rs.
 
     match sort_can_defs(&mut env, defs, Output::default()) {
-        (Ok(declarations), output) => {
+        (Ok(mut declarations), output) => {
             use crate::def::Declaration::*;
 
             // Record the variables for all exposed symbols.
@@ -249,6 +249,16 @@ pub fn canonicalize_module_defs<'a>(
                 references.insert(*symbol);
             }
 
+            for declaration in declarations.iter_mut() {
+                match declaration {
+                    Declare(def) => fix_values_captured_in_closure_def(def, &mut MutSet::default()),
+                    DeclareRec(defs) => {
+                        fix_values_captured_in_closure_defs(defs, &mut MutSet::default())
+                    }
+                    InvalidCycle(_, _) | Builtin(_) => {}
+                }
+            }
+
             Ok(ModuleOutput {
                 aliases,
                 rigid_variables,
@@ -262,5 +272,187 @@ pub fn canonicalize_module_defs<'a>(
             })
         }
         (Err(runtime_error), _) => Err(runtime_error),
+    }
+}
+
+fn fix_values_captured_in_closure_def(
+    def: &mut crate::def::Def,
+    no_capture_symbols: &mut MutSet<Symbol>,
+) {
+    // patterns can contain default expressions, so much go over them too!
+    fix_values_captured_in_closure_pattern(&mut def.loc_pattern.value, no_capture_symbols);
+
+    fix_values_captured_in_closure_expr(&mut def.loc_expr.value, no_capture_symbols);
+}
+
+fn fix_values_captured_in_closure_defs(
+    defs: &mut Vec<crate::def::Def>,
+    no_capture_symbols: &mut MutSet<Symbol>,
+) {
+    for def in defs.iter_mut() {
+        fix_values_captured_in_closure_def(def, no_capture_symbols);
+    }
+}
+
+fn fix_values_captured_in_closure_pattern(
+    pattern: &mut crate::pattern::Pattern,
+    no_capture_symbols: &mut MutSet<Symbol>,
+) {
+    use crate::pattern::Pattern::*;
+
+    match pattern {
+        AppliedTag {
+            arguments: loc_args,
+            ..
+        } => {
+            for (_, loc_arg) in loc_args.iter_mut() {
+                fix_values_captured_in_closure_pattern(&mut loc_arg.value, no_capture_symbols);
+            }
+        }
+        RecordDestructure { destructs, .. } => {
+            for loc_destruct in destructs.iter_mut() {
+                use crate::pattern::DestructType::*;
+                match &mut loc_destruct.value.typ {
+                    Required => {}
+                    Optional(_, loc_expr) => {
+                        fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols)
+                    }
+                    Guard(_, loc_pattern) => fix_values_captured_in_closure_pattern(
+                        &mut loc_pattern.value,
+                        no_capture_symbols,
+                    ),
+                }
+            }
+        }
+        Identifier(_)
+        | NumLiteral(_, _)
+        | IntLiteral(_)
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | Underscore
+        | Shadowed(_, _)
+        | MalformedPattern(_, _)
+        | UnsupportedPattern(_) => (),
+    }
+}
+
+fn fix_values_captured_in_closure_expr(
+    expr: &mut crate::expr::Expr,
+    no_capture_symbols: &mut MutSet<Symbol>,
+) {
+    use crate::expr::Expr::*;
+
+    match expr {
+        LetNonRec(def, loc_expr, _, _) => {
+            // LetNonRec(Box<Def>, Box<Located<Expr>>, Variable, Aliases),
+            fix_values_captured_in_closure_def(def, no_capture_symbols);
+            fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
+        }
+        LetRec(defs, loc_expr, _, _) => {
+            // LetRec(Vec<Def>, Box<Located<Expr>>, Variable, Aliases),
+            fix_values_captured_in_closure_defs(defs, no_capture_symbols);
+            fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
+        }
+
+        Closure {
+            captured_symbols,
+            name,
+            arguments,
+            loc_body,
+            ..
+        } => {
+            captured_symbols.retain(|(s, _)| !no_capture_symbols.contains(s));
+            captured_symbols.retain(|(s, _)| s != name);
+
+            if captured_symbols.is_empty() {
+                no_capture_symbols.insert(*name);
+            }
+
+            // patterns can contain default expressions, so much go over them too!
+            for (_, loc_pat) in arguments.iter_mut() {
+                fix_values_captured_in_closure_pattern(&mut loc_pat.value, no_capture_symbols);
+            }
+
+            fix_values_captured_in_closure_expr(&mut loc_body.value, no_capture_symbols);
+        }
+
+        Num(_, _)
+        | Int(_, _)
+        | Float(_, _)
+        | Str(_)
+        | Var(_)
+        | EmptyRecord
+        | RuntimeError(_)
+        | Accessor { .. } => {}
+
+        List { loc_elems, .. } => {
+            for elem in loc_elems.iter_mut() {
+                fix_values_captured_in_closure_expr(&mut elem.value, no_capture_symbols);
+            }
+        }
+
+        When {
+            loc_cond, branches, ..
+        } => {
+            fix_values_captured_in_closure_expr(&mut loc_cond.value, no_capture_symbols);
+
+            for branch in branches.iter_mut() {
+                fix_values_captured_in_closure_expr(&mut branch.value.value, no_capture_symbols);
+
+                // patterns can contain default expressions, so much go over them too!
+                for loc_pat in branch.patterns.iter_mut() {
+                    fix_values_captured_in_closure_pattern(&mut loc_pat.value, no_capture_symbols);
+                }
+
+                if let Some(guard) = &mut branch.guard {
+                    fix_values_captured_in_closure_expr(&mut guard.value, no_capture_symbols);
+                }
+            }
+        }
+
+        If {
+            branches,
+            final_else,
+            ..
+        } => {
+            for (loc_cond, loc_then) in branches.iter_mut() {
+                fix_values_captured_in_closure_expr(&mut loc_cond.value, no_capture_symbols);
+                fix_values_captured_in_closure_expr(&mut loc_then.value, no_capture_symbols);
+            }
+
+            fix_values_captured_in_closure_expr(&mut final_else.value, no_capture_symbols);
+        }
+
+        Call(function, arguments, _) => {
+            fix_values_captured_in_closure_expr(&mut function.1.value, no_capture_symbols);
+
+            for (_, loc_arg) in arguments.iter_mut() {
+                fix_values_captured_in_closure_expr(&mut loc_arg.value, no_capture_symbols);
+            }
+        }
+        RunLowLevel { args, .. } => {
+            for (_, arg) in args.iter_mut() {
+                fix_values_captured_in_closure_expr(arg, no_capture_symbols);
+            }
+        }
+
+        Record { fields, .. }
+        | Update {
+            updates: fields, ..
+        } => {
+            for field in fields.iter_mut() {
+                fix_values_captured_in_closure_expr(&mut field.loc_expr.value, no_capture_symbols);
+            }
+        }
+
+        Access { loc_expr, .. } => {
+            fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
+        }
+
+        Tag { arguments, .. } => {
+            for (_, loc_arg) in arguments.iter_mut() {
+                fix_values_captured_in_closure_expr(&mut loc_arg.value, no_capture_symbols);
+            }
+        }
     }
 }
