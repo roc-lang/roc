@@ -34,6 +34,15 @@ pub enum CapturedSymbols<'a> {
     Captured(&'a [(Symbol, Variable)]),
 }
 
+impl<'a> CapturedSymbols<'a> {
+    fn captures(&self) -> bool {
+        match self {
+            CapturedSymbols::None => false,
+            CapturedSymbols::Captured(_) => true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PendingSpecialization {
     solved_type: SolvedType,
@@ -1741,6 +1750,7 @@ impl<'a> FunctionLayouts<'a> {
                 result: (*result).clone(),
                 full: layout,
             },
+            Layout::Closure(_, _, _) => todo!(),
             _ => FunctionLayouts {
                 full: layout.clone(),
                 arguments: &[],
@@ -4226,32 +4236,52 @@ fn assign_to_symbol<'a>(
 ) -> Stmt<'a> {
     // if this argument is already a symbol, we don't need to re-define it
     if let roc_can::expr::Expr::Var(original) = loc_arg.value {
-        if procs.partial_procs.contains_key(&original) {
-            // this symbol is a function, that is used by-name (e.g. as an argument to another
-            // function). Register it with the current variable, then create a function pointer
-            // to it in the IR.
-            let layout = layout_cache
-                .from_var(env.arena, arg_var, env.subs)
-                .expect("creating layout does not fail");
-            procs.insert_passed_by_name(env, arg_var, original, layout.clone(), layout_cache);
+        match procs.partial_procs.get(&original) {
+            Some(partial_proc) => {
+                // this symbol is a function, that is used by-name (e.g. as an argument to another
+                // function). Register it with the current variable, then create a function pointer
+                // to it in the IR.
+                let layout = layout_cache
+                    .from_var(env.arena, arg_var, env.subs)
+                    .expect("creating layout does not fail");
 
-            return Stmt::Let(
-                symbol,
-                Expr::FunctionPointer(original, layout.clone()),
-                layout,
-                env.arena.alloc(result),
-            );
+                // we have three kinds of functions really. Plain functions, closures by capture,
+                // and closures by unification. Here we record whether this function captures
+                // anything.
+                let captures = partial_proc.captured_symbols.captures();
+                drop(partial_proc);
+
+                procs.insert_passed_by_name(env, arg_var, original, layout.clone(), layout_cache);
+
+                match layout {
+                    Layout::Closure(_, _, _) if captures => {
+                        // this is a closure by capture, meaning it itself captures local variables.
+                        // we've defined the closure as a (function_ptr, closure_data) pair already
+                        // replace `symbol` with `original`
+                        let mut stmt = result;
+                        substitute_in_exprs(env.arena, &mut stmt, symbol, original);
+                        stmt
+                    }
+                    _ => Stmt::Let(
+                        symbol,
+                        Expr::FunctionPointer(original, layout.clone()),
+                        layout,
+                        env.arena.alloc(result),
+                    ),
+                }
+            }
+            _ => result,
         }
-        return result;
+    } else {
+        with_hole(
+            env,
+            loc_arg.value,
+            procs,
+            layout_cache,
+            symbol,
+            env.arena.alloc(result),
+        )
     }
-    with_hole(
-        env,
-        loc_arg.value,
-        procs,
-        layout_cache,
-        symbol,
-        env.arena.alloc(result),
-    )
 }
 
 fn assign_to_symbols<'a, I>(

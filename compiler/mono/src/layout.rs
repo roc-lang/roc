@@ -64,30 +64,33 @@ impl<'a> ClosureLayout<'a> {
         }
     }
 
-    fn from_wrapped(tags: &'a [(TagName, &'a [Layout<'a>])]) -> Self {
+    fn from_wrapped(arena: &'a Bump, tags: &'a [(TagName, &'a [Layout<'a>])]) -> Self {
+        debug_assert!(!tags.is_empty());
         // NOTE we fabricate a pointer size here.
         // That's fine because we don't care about the exact size, just the biggest one
         let pointer_size = 8;
 
         let mut largest_size = 0;
-        let mut largest = None;
+        let mut max_size = &[] as &[_];
 
-        for (_, tag_args) in tags.iter() {
+        let mut tag_arguments = Vec::with_capacity_in(tags.len(), arena);
+
+        for (name, tag_args_with_discr) in tags.iter() {
+            let tag_args = &tag_args_with_discr[1..];
             let size = tag_args.iter().map(|l| l.stack_size(pointer_size)).sum();
 
             // >= because some of our layouts have 0 size, but are still valid layouts
             if size >= largest_size {
                 largest_size = size;
-                largest = Some(tag_args);
+                max_size = tag_args;
             }
+
+            tag_arguments.push((name.clone(), tag_args));
         }
 
-        match largest {
-            None => unreachable!("A tag union layout must always contain 2 or more tags"),
-            Some(max_size) => ClosureLayout {
-                captured: tags,
-                max_size,
-            },
+        ClosureLayout {
+            captured: tag_arguments.into_bump_slice(),
+            max_size,
         }
     }
 
@@ -105,7 +108,7 @@ impl<'a> ClosureLayout<'a> {
                 use UnionVariant::*;
                 match variant {
                     Never | Unit => {
-                        // a max closure size of 0 means this is a standart top-level function
+                        // a max closure size of 0 means this is a standard top-level function
                         Ok(None)
                     }
                     BoolUnion { .. } => {
@@ -126,7 +129,8 @@ impl<'a> ClosureLayout<'a> {
                     }
                     Wrapped(tags) => {
                         // Wrapped(Vec<'a, (TagName, &'a [Layout<'a>])>),
-                        let closure_layout = ClosureLayout::from_wrapped(tags.into_bump_slice());
+                        let closure_layout =
+                            ClosureLayout::from_wrapped(arena, tags.into_bump_slice());
                         Ok(Some(closure_layout))
                     }
                 }
@@ -214,7 +218,11 @@ impl<'a> ClosureLayout<'a> {
     }
 
     pub fn as_block_of_memory_layout(&self) -> Layout<'a> {
-        Layout::Struct(self.max_size)
+        if self.max_size.len() == 1 {
+            self.max_size[0].clone()
+        } else {
+            Layout::Struct(self.max_size)
+        }
     }
 }
 

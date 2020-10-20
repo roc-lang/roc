@@ -946,6 +946,31 @@ mod gen_primitives {
     }
 
     #[test]
+    fn closure_in_list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                foo = \{} ->
+                    x = 41
+
+                    f = \{} -> x
+
+                    [ f ]
+
+                main =
+                    items = foo {}
+
+                    List.len items
+                "#
+            ),
+            1,
+            i64
+        );
+    }
+
+    #[test]
     #[ignore]
     fn specialize_closure() {
         assert_evals_to!(
