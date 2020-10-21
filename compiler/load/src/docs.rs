@@ -1574,7 +1574,7 @@ pub struct DocEntry {
     pub docs: Option<String>,
 }
 
-fn generate_module_docs<'a>(
+pub fn generate_module_docs<'a>(
     module_name: ModuleName,
     exposed_ident_ids: &'a IdentIds,
     parsed_defs: &'a bumpalo::collections::Vec<'a, Located<Def<'a>>>,
