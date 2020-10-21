@@ -1,9 +1,6 @@
-use crate::llvm::build::{
-    call_bitcode_fn, load_symbol, load_symbol_and_layout, ptr_from_symbol, Env, InPlace, Scope,
-};
+use crate::llvm::build::{call_bitcode_fn, ptr_from_symbol, Env, InPlace, Scope};
 use crate::llvm::build_list::{
-    allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, incrementing_index_loop,
-    list_single, load_list_ptr, store_list,
+    allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, load_list_ptr, store_list,
 };
 use crate::llvm::convert::{collection, ptr_int};
 use inkwell::builder::Builder;
@@ -37,13 +34,13 @@ pub fn str_split<'a, 'ctx, 'env>(
         parent,
         *str_ptr,
         str_wrapper_type,
-        |_, str_len, str_smallness| {
+        |_, _str_len, _str_smallness| {
             load_str(
                 env,
                 parent,
                 *delimiter_ptr,
                 str_wrapper_type,
-                |_, delimiter_len, delimiter_smallness| {
+                |_, _delimiter_len, _delimiter_smallness| {
                     let str_ = builder.build_load(*str_ptr, "get_str");
 
                     let delimiter = builder.build_load(*delimiter_ptr, "get_delimiter");
