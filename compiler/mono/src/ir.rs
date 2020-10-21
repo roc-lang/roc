@@ -1661,7 +1661,7 @@ fn build_specialized_proc<'a>(
             let closure_layout =
                 Layout::Struct(arena.alloc([function_ptr_layout, closure_data_layout]));
 
-            return Ok((&[], None, closure_layout));
+            Ok((&[], None, closure_layout))
         }
         None => {
             // else we're making a normal function, no closure problems to worry about

@@ -33,9 +33,11 @@ pub enum Layout<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ClosureLayout<'a> {
     /// the layout that this specific closure captures
+    /// uses a Vec instead of a MutMap because it's Hash
+    /// the vec is likely to be small, so linear search is fine
     captured: &'a [(TagName, &'a [Layout<'a>])],
 
-    max_size: &'a Layout<'a>,
+    layout: &'a Layout<'a>,
 }
 
 impl<'a> ClosureLayout<'a> {
@@ -44,7 +46,7 @@ impl<'a> ClosureLayout<'a> {
         let layouts = arena.alloc(layout);
         ClosureLayout {
             captured: &[],
-            max_size: layouts,
+            layout: layouts,
         }
     }
     fn from_byte(arena: &'a Bump) -> Self {
@@ -52,49 +54,42 @@ impl<'a> ClosureLayout<'a> {
         let layouts = arena.alloc(layout);
         ClosureLayout {
             captured: &[],
-            max_size: layouts,
+            layout: layouts,
         }
     }
     fn from_unwrapped(arena: &'a Bump, layouts: &'a [Layout<'a>]) -> Self {
         debug_assert!(!layouts.is_empty());
-        if layouts.len() == 1 {
-            ClosureLayout {
-                captured: &[],
-                max_size: &layouts[0],
-            }
+        let layout = if layouts.len() == 1 {
+            &layouts[0]
         } else {
-            ClosureLayout {
-                captured: &[],
-                max_size: arena.alloc(Layout::Struct(layouts)),
-            }
+            arena.alloc(Layout::Struct(layouts))
+        };
+
+        ClosureLayout {
+            captured: &[],
+            layout,
         }
     }
 
     fn from_tag_union(arena: &'a Bump, tags: &'a [(TagName, &'a [Layout<'a>])]) -> Self {
-        debug_assert!(!tags.is_empty());
+        debug_assert!(tags.len() > 1);
 
         let mut tag_arguments = Vec::with_capacity_in(tags.len(), arena);
-        let mut foobar = Vec::with_capacity_in(tags.len(), arena);
 
-        for (name, tag_args_with_discr) in tags.iter() {
-            // drop the discriminant, essentially creating an untagged union
-            let tag_args = &tag_args_with_discr[0..];
-
-            tag_arguments.push((name.clone(), tag_args));
-            foobar.push(tag_args);
+        for (_, tag_args) in tags.iter() {
+            tag_arguments.push(&tag_args[0..]);
         }
 
-        let arguments = tag_arguments.into_bump_slice();
         ClosureLayout {
-            captured: arguments,
-            max_size: arena.alloc(Layout::Union(foobar.into_bump_slice())),
+            captured: tags,
+            layout: arena.alloc(Layout::Union(tag_arguments.into_bump_slice())),
         }
     }
 
     pub fn get_wrapped(&self) -> crate::ir::Wrapped {
         use crate::ir::Wrapped;
 
-        match self.max_size {
+        match self.layout {
             Layout::Struct(_) => Wrapped::RecordOrSingleTagUnion,
             Layout::Union(_) => Wrapped::MultiTagUnion,
             _ => Wrapped::SingleElementRecord,
@@ -157,7 +152,7 @@ impl<'a> ClosureLayout<'a> {
         closure_layout: Self,
         ret_layout: &'a Layout<'a>,
     ) -> Layout<'a> {
-        let closure_data_layout = closure_layout.max_size;
+        let closure_data_layout = closure_layout.layout;
 
         // define the function pointer
         let function_ptr_layout = {
@@ -170,18 +165,18 @@ impl<'a> ClosureLayout<'a> {
     }
 
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
-        self.max_size.stack_size(pointer_size)
+        self.layout.stack_size(pointer_size)
     }
     pub fn contains_refcounted(&self) -> bool {
-        self.max_size.contains_refcounted()
+        self.layout.contains_refcounted()
     }
     pub fn safe_to_memcpy(&self) -> bool {
-        self.max_size.safe_to_memcpy()
+        self.layout.safe_to_memcpy()
     }
 
     pub fn as_named_layout(&self, symbol: Symbol) -> Layout<'a> {
         let layouts = if self.captured.is_empty() {
-            self.max_size.clone()
+            self.layout.clone()
         } else if let Some((_, tag_args)) = self
             .captured
             .iter()
@@ -203,7 +198,7 @@ impl<'a> ClosureLayout<'a> {
     }
 
     pub fn as_block_of_memory_layout(&self) -> Layout<'a> {
-        self.max_size.clone()
+        self.layout.clone()
     }
 
     pub fn build_closure_data(
@@ -213,13 +208,18 @@ impl<'a> ClosureLayout<'a> {
     ) -> Result<crate::ir::Expr<'a>, Symbol> {
         use crate::ir::Expr;
 
-        match self.max_size {
-            Layout::Struct(fields) if fields.len() > 1 => Ok(Expr::Struct(symbols)),
+        match self.layout {
+            Layout::Struct(fields) => {
+                debug_assert!(fields.len() > 1);
+                debug_assert_eq!(fields.len(), symbols.len());
+
+                Ok(Expr::Struct(symbols))
+            }
             Layout::Union(tags) => {
                 let expr = Expr::Tag {
                     tag_layout: Layout::Union(tags),
                     tag_name: TagName::Closure(original),
-                    tag_id: 0 as u8,
+                    tag_id: 0,
                     union_size: tags.len() as u8,
                     arguments: symbols,
                 };

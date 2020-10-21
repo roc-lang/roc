@@ -1256,8 +1256,8 @@ fn constrain_closure_size(
     closure_ext_var: Variable,
     variables: &mut Vec<Variable>,
 ) -> Constraint {
-    debug_assert!(variables.iter().find(|s| **s == closure_var).is_some());
-    debug_assert!(variables.iter().find(|s| **s == closure_ext_var).is_some());
+    debug_assert!(variables.iter().any(|s| *s == closure_var));
+    debug_assert!(variables.iter().any(|s| *s == closure_ext_var));
 
     let mut tag_arguments = Vec::with_capacity(captured_symbols.len());
     let mut captured_symbols_constraints = Vec::with_capacity(captured_symbols.len());
