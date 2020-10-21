@@ -92,6 +92,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "arraystring"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d517c467117e1d8ca795bc8cc90857ff7f79790cca0e26f6e9462694ece0185"
+dependencies = [
+ "typenum",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2358,6 +2367,7 @@ dependencies = [
 name = "roc_editor"
 version = "0.1.0"
 dependencies = [
+ "arraystring",
  "bumpalo",
  "env_logger 0.7.1",
  "futures",
@@ -2389,7 +2399,6 @@ dependencies = [
  "roc_unify",
  "roc_uniq",
  "target-lexicon",
- "tokio",
  "wgpu",
  "wgpu_glyph",
  "winit",

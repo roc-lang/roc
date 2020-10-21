@@ -1,3 +1,4 @@
+use arraystring::{typenum::U14, ArrayString};
 use inlinable_string::string_ext::StringExt;
 use inlinable_string::InlinableString;
 use roc_types::subs::Variable;
@@ -267,8 +268,10 @@ pub enum Expr2 {
         text_bytes: *const u8,
         var: Variable,
     },
-    Str {
-        bytes: [u8; 15],
+    SmallStr(ArrayString<U14>),
+    BigStr {
+        bytes: *const u8,
+        len: u32,
     },
 }
 
