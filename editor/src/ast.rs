@@ -235,7 +235,7 @@ pub enum NodeContent {
     Removed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum IntStyle {
     Decimal,
     Octal,
@@ -275,10 +275,120 @@ pub enum Expr2 {
         bytes: *const u8,
         len: u32, // string literals can be at most 2^32 (~4 billion) bytes long
     },
+    If {
+        cond_var: Variable,
+        expr_var: Variable,
+        // Each branch is an (Expr, Expr) tuple.
+        // Make sure to put them in the bucket contiguously.
+        first_branch: ExprId,
+        num_branches: u8,
+        final_else: ExprId,
+    },
+    When {
+        cond_var: Variable,
+        expr_var: Variable,
+        cond: ExprId,
+        // Make sure to put these branches
+        // in the bucket contiguously.
+        first_branch: WhenBranchId,
+        num_branches: u8,
+    },
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct WhenBranchId {
+    /// TODO: WhenBranchBucketId
+    bucket_id: ExprBucketId,
+    /// TODO: WhenBranchBucketSlot
+    slot: ExprBucketSlot,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WhenBranch {
+    /// TODO: what if each branch had exactly 1 pattern?
+    /// That would save us 1B from storing the length.
+    pub first_pattern: PatternId,
+    pub num_patterns: u8,
+    pub body: ExprId,
+    /// TODO: should we have an ExprId::NULL for this?
+    pub guard: Option<ExprId>,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct PatternId {
+    /// TODO: PatternBucketId
+    bucket_id: ExprBucketId,
+    /// TODO: PatternBucketSlot
+    slot: ExprBucketSlot,
+}
+
+// Each bucket has metadata and slots.
+// The metadata determines things like which slots are free.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExprBucket {
+    // We can store this as a u8 because whenever we create a bucket, we
+    // always fill at least one slot. So there will never be 256 unused slots
+    // remaining; the most there will ever be will be 255.
+    //
+    // Note that there can be "holes" in this as we remove nodes; those
+    // are recorded in the containing struct, not here.
+    //
+    // Also note that we can derive from this the next unused slot.
+    unused_slots_remaining: u8,
+    slots: Box<ExprBucketSlots>,
+}
+
+pub struct Exprs {
+    // Whenever we free a slot of a particular size, we make a note of it
+    // here, so we can reuse it later. This can lead to poor data locality
+    // over time, but the alternative is memory fragmentation and ever-growing
+    // memory usage. We could in theory go up to free_128node_slots, but in
+    // practice it seems unlikely that it would be worth the bookkeeping
+    // effort to go that high.
+    pub free_1node_slots: Vec<ExprId>,
+    pub free_2node_slots: Vec<ExprId>,
+    pub free_4node_slots: Vec<ExprId>,
+    pub free_8node_slots: Vec<ExprId>,
+    pub free_16node_slots: Vec<ExprId>,
+    // Note that empty_buckets is equivalent to free_256node_slots - it means
+    // the entire bucket is empty, at which point we can fill it with
+    // whatever we please.
+    pub empty_buckets: Vec<ExprBucketId>,
+    pub buckets: Vec<ExprBucket>,
+}
+
+// Each bucket has 256 slots. Each slot holds one 16B node
+// This means each bucket is 4096B, which is the size of a memory page
+// on typical systems where the compiler will be run.
+//
+// Because each bucket has 256 slots, and arrays of nodes must fit inside
+// a single bucket, this implies that nodes which contain arrays of nodes
+// (e.g. If, When, Record, Tag, Call, Closure) can only contain at most
+// 255 nodes. So functions can have at most 255 arguments, records can have
+// at most 255 fields, etc.
+type ExprBucketSlots = [Expr2; 256];
+
 #[test]
-fn node_content_size() {
+fn size_of_expr_bucket() {
+    assert_eq!(std::mem::size_of::<ExprBucketSlots>(), 4096);
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct ExprId {
+    bucket_id: ExprBucketId,
+    slot: ExprBucketSlot,
+}
+
+// We have a maximum of 65K buckets.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct ExprBucketId(u16);
+
+/// Each of these is the index of one 16B node inside a bucket's 4096B
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct ExprBucketSlot(u8);
+
+#[test]
+fn size_of_expr() {
     assert_eq!(std::mem::size_of::<Expr2>(), 16);
 }
 
