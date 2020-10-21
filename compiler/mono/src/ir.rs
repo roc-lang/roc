@@ -1416,6 +1416,9 @@ fn specialize_external<'a>(
         pattern_symbols
     };
 
+    let (proc_args, opt_closure_layout, ret_layout) =
+        build_specialized_proc_from_var(env, layout_cache, proc_name, pattern_symbols, fn_var)?;
+
     // unpack the closure symbols, if any
     if let CapturedSymbols::Captured(captured) = captured_symbols {
         let mut layouts = Vec::with_capacity_in(captured.len(), env.arena);
@@ -1427,10 +1430,9 @@ fn specialize_external<'a>(
 
         let field_layouts = layouts.into_bump_slice();
 
-        let wrapped = if captured.len() > 1 {
-            Wrapped::RecordOrSingleTagUnion
-        } else {
-            Wrapped::SingleElementRecord
+        let wrapped = match &opt_closure_layout {
+            Some(x) => x.get_wrapped(),
+            None => unreachable!("symbols are captured, so this must be a closure"),
         };
 
         for (index, (symbol, variable)) in captured.iter().enumerate() {
@@ -1447,9 +1449,6 @@ fn specialize_external<'a>(
             specialized_body = Stmt::Let(*symbol, expr, layout, env.arena.alloc(specialized_body));
         }
     }
-
-    let (proc_args, opt_closure_layout, ret_layout) =
-        build_specialized_proc_from_var(env, layout_cache, proc_name, pattern_symbols, fn_var)?;
 
     // reset subs, so we don't get type errors when specializing for a different signature
     layout_cache.rollback_to(cache_snapshot);
