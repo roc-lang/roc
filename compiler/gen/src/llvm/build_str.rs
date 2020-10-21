@@ -44,29 +44,18 @@ pub fn str_split<'a, 'ctx, 'env>(
                 *delimiter_ptr,
                 str_wrapper_type,
                 |_, delimiter_len, delimiter_smallness| {
-                    let ret_list_len_alloca =
-                        builder.build_alloca(ctx.i64_type(), "ret_list_len_alloca");
+                    let str_ = builder.build_load(*str_ptr, "get_str");
 
-                    builder.build_store(ret_list_len_alloca, ctx.i64_type().const_zero());
+                    let delimiter = builder.build_load(*delimiter_ptr, "get_delimiter");
 
-                    let str: BasicValueEnum<'ctx> = panic!("Get str basic value enum");
-                    let delimiter: BasicValueEnum<'ctx> = panic!("Get delimiter basic value enum");
+                    let segment_count = call_bitcode_fn(env, &[str_, delimiter], "count_segments_")
+                        .into_int_value();
 
-                    let delimiter_count =
-                        call_bitcode_fn(env, &[str, delimiter], "count_delimiters_")
-                            .into_int_value();
+                    let ret_list_ptr = allocate_list(env, inplace, &CHAR_LAYOUT, segment_count);
 
-                    let ret_list_len = builder.build_int_add(
-                        delimiter_count,
-                        ctx.i64_type().const_int(1, false),
-                        "ret_str_split_list_Len",
-                    );
+                    let ret_list = builder.build_load(ret_list_ptr, "get_str_split_ret_list");
 
-                    let ret_list_ptr = allocate_list(env, inplace, &CHAR_LAYOUT, ret_list_len);
-
-                    let ret_list: BasicValueEnum<'ctx> = panic!("Get return list");
-
-                    call_bitcode_fn(env, &[ret_list, str, delimiter], "str_split_")
+                    call_bitcode_fn(env, &[ret_list, str_, delimiter], "str_split_")
                 },
             )
         },
