@@ -4,6 +4,12 @@ use inlinable_string::InlinableString;
 use roc_region::all::Loc;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub struct PackageName<'a> {
+    pub account: &'a str,
+    pub pkg: &'a str,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct ModuleName<'a>(&'a str);
 
 impl<'a> Into<&'a str> for ModuleName<'a> {
