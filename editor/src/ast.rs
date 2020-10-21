@@ -260,18 +260,20 @@ pub enum Expr2 {
     /// A formatted integer literal (containing underscores)
     FormattedInt {
         text_bytes: *const u8,
+        text_len: u8, // numeric literals can be at most 255 chars long
         var: Variable,
         style: IntStyle,
     },
     /// A formatted float literal (containing underscores)
     FormattedFloat {
         text_bytes: *const u8,
+        text_len: u8, // numeric literals can be at most 255 chars long
         var: Variable,
     },
     SmallStr(ArrayString<U14>),
     BigStr {
         bytes: *const u8,
-        len: u32,
+        len: u32, // string literals can be at most 2^32 (~4 billion) bytes long
     },
 }
 
