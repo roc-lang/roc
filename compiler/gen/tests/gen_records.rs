@@ -428,7 +428,6 @@ mod gen_records {
     }
 
     #[test]
-    #[ignore]
     fn optional_field_when_use_default_nested() {
         assert_evals_to!(
             indoc!(
@@ -472,7 +471,6 @@ mod gen_records {
     }
 
     #[test]
-    #[ignore]
     fn optional_field_when_no_use_default_nested() {
         assert_evals_to!(
             indoc!(
@@ -530,7 +528,6 @@ mod gen_records {
     }
 
     #[test]
-    #[ignore]
     fn optional_field_let_no_use_default_nested() {
         assert_evals_to!(
             indoc!(
@@ -582,7 +579,6 @@ mod gen_records {
     }
 
     #[test]
-    #[ignore]
     fn optional_field_function_no_use_default_nested() {
         assert_evals_to!(
             indoc!(
