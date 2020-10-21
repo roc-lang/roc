@@ -296,7 +296,7 @@ mod test_parse {
 
     #[test]
     fn first_line_too_long() {
-        let max_line_length = std::u16::MAX as usize;
+        let max_line_length = u16::MAX as usize;
 
         // the string literal "ZZZZZZZZZ" but with way more Zs
         let too_long_str_body: String = (1..max_line_length)

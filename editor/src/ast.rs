@@ -17,7 +17,7 @@ pub type Res<T> = Result<T, Problem>;
 pub struct NodeId(u32);
 
 impl NodeId {
-    pub const NONE: NodeId = NodeId(std::u32::MAX);
+    pub const NONE: NodeId = NodeId(u32::MAX);
 
     pub fn as_index(self) -> usize {
         self.0 as usize
@@ -154,7 +154,7 @@ impl Nodes {
 
         self.nodes.push(node);
 
-        if index < std::u32::MAX as usize {
+        if index < u32::MAX as usize {
             Ok(NodeId(index as u32))
         } else {
             // u32::MAX is reserved for NodeId::NONE, so if we hit that on a
