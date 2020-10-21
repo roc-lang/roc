@@ -35,14 +35,13 @@ pub struct ClosureLayout<'a> {
     /// the layout that this specific closure captures
     captured: &'a [(TagName, &'a [Layout<'a>])],
 
-    /// the layout that represents the maximum size the closure layout can have
-    max_size: &'a [Layout<'a>],
+    max_size: &'a Layout<'a>,
 }
 
 impl<'a> ClosureLayout<'a> {
     fn from_bool(arena: &'a Bump) -> Self {
         let layout = Layout::Builtin(Builtin::Int1);
-        let layouts = arena.alloc([layout]);
+        let layouts = arena.alloc(layout);
         ClosureLayout {
             captured: &[],
             max_size: layouts,
@@ -50,47 +49,55 @@ impl<'a> ClosureLayout<'a> {
     }
     fn from_byte(arena: &'a Bump) -> Self {
         let layout = Layout::Builtin(Builtin::Int8);
-        let layouts = arena.alloc([layout]);
+        let layouts = arena.alloc(layout);
         ClosureLayout {
             captured: &[],
             max_size: layouts,
         }
     }
-    fn from_unwrapped(layouts: &'a [Layout<'a>]) -> Self {
+    fn from_unwrapped(arena: &'a Bump, layouts: &'a [Layout<'a>]) -> Self {
         debug_assert!(!layouts.is_empty());
-        ClosureLayout {
-            captured: &[],
-            max_size: layouts,
+        if layouts.len() == 1 {
+            ClosureLayout {
+                captured: &[],
+                max_size: &layouts[0],
+            }
+        } else {
+            ClosureLayout {
+                captured: &[],
+                max_size: arena.alloc(Layout::Struct(layouts)),
+            }
         }
     }
 
-    fn from_wrapped(arena: &'a Bump, tags: &'a [(TagName, &'a [Layout<'a>])]) -> Self {
+    fn from_tag_union(arena: &'a Bump, tags: &'a [(TagName, &'a [Layout<'a>])]) -> Self {
         debug_assert!(!tags.is_empty());
-        // NOTE we fabricate a pointer size here.
-        // That's fine because we don't care about the exact size, just the biggest one
-        let pointer_size = 8;
-
-        let mut largest_size = 0;
-        let mut max_size = &[] as &[_];
 
         let mut tag_arguments = Vec::with_capacity_in(tags.len(), arena);
+        let mut foobar = Vec::with_capacity_in(tags.len(), arena);
 
         for (name, tag_args_with_discr) in tags.iter() {
-            let tag_args = &tag_args_with_discr[1..];
-            let size = tag_args.iter().map(|l| l.stack_size(pointer_size)).sum();
-
-            // >= because some of our layouts have 0 size, but are still valid layouts
-            if size >= largest_size {
-                largest_size = size;
-                max_size = tag_args;
-            }
+            // drop the discriminant, essentially creating an untagged union
+            let tag_args = &tag_args_with_discr[0..];
 
             tag_arguments.push((name.clone(), tag_args));
+            foobar.push(tag_args);
         }
 
+        let arguments = tag_arguments.into_bump_slice();
         ClosureLayout {
-            captured: tag_arguments.into_bump_slice(),
-            max_size,
+            captured: arguments,
+            max_size: arena.alloc(Layout::Union(foobar.into_bump_slice())),
+        }
+    }
+
+    pub fn get_wrapped(&self) -> crate::ir::Wrapped {
+        use crate::ir::Wrapped;
+
+        match self.max_size {
+            Layout::Struct(_) => Wrapped::RecordOrSingleTagUnion,
+            Layout::Union(_) => Wrapped::MultiTagUnion,
+            _ => Wrapped::SingleElementRecord,
         }
     }
 
@@ -123,14 +130,14 @@ impl<'a> ClosureLayout<'a> {
                     }
                     Unwrapped(layouts) => {
                         let closure_layout =
-                            ClosureLayout::from_unwrapped(layouts.into_bump_slice());
+                            ClosureLayout::from_unwrapped(arena, layouts.into_bump_slice());
 
                         Ok(Some(closure_layout))
                     }
                     Wrapped(tags) => {
                         // Wrapped(Vec<'a, (TagName, &'a [Layout<'a>])>),
                         let closure_layout =
-                            ClosureLayout::from_wrapped(arena, tags.into_bump_slice());
+                            ClosureLayout::from_tag_union(arena, tags.into_bump_slice());
                         Ok(Some(closure_layout))
                     }
                 }
@@ -150,7 +157,8 @@ impl<'a> ClosureLayout<'a> {
         closure_layout: Self,
         ret_layout: &'a Layout<'a>,
     ) -> Layout<'a> {
-        let closure_data_layout = closure_layout.as_layout();
+        let closure_data_layout = closure_layout.max_size;
+
         // define the function pointer
         let function_ptr_layout = {
             let mut temp = Vec::from_iter_in(argument_layouts.iter().cloned(), arena);
@@ -162,35 +170,28 @@ impl<'a> ClosureLayout<'a> {
     }
 
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
-        self.max_size
-            .iter()
-            .map(|l| l.stack_size(pointer_size))
-            .sum()
+        self.max_size.stack_size(pointer_size)
     }
     pub fn contains_refcounted(&self) -> bool {
-        self.captured
-            .iter()
-            .map(|t| t.1)
-            .flatten()
-            .any(|l| l.contains_refcounted())
+        self.max_size.contains_refcounted()
     }
     pub fn safe_to_memcpy(&self) -> bool {
-        self.captured
-            .iter()
-            .map(|t| t.1)
-            .flatten()
-            .all(|l| l.safe_to_memcpy())
+        self.max_size.safe_to_memcpy()
     }
 
     pub fn as_named_layout(&self, symbol: Symbol) -> Layout<'a> {
         let layouts = if self.captured.is_empty() {
-            self.max_size
+            self.max_size.clone()
         } else if let Some((_, tag_args)) = self
             .captured
             .iter()
             .find(|(tn, _)| *tn == TagName::Closure(symbol))
         {
-            tag_args
+            if tag_args.len() == 1 {
+                tag_args[0].clone()
+            } else {
+                Layout::Struct(tag_args)
+            }
         } else {
             unreachable!(
                 "invariant broken, TagName::Closure({:?}) is not in {:?}",
@@ -198,30 +199,38 @@ impl<'a> ClosureLayout<'a> {
             );
         };
 
-        if layouts.len() == 1 {
-            layouts[0].clone()
-        } else {
-            Layout::Struct(layouts)
-        }
-    }
-
-    pub fn as_layout(&self) -> Layout<'a> {
-        if self.captured.is_empty() {
-            if self.max_size.len() == 1 {
-                self.max_size[0].clone()
-            } else {
-                Layout::Struct(self.max_size)
-            }
-        } else {
-            panic!();
-        }
+        layouts
     }
 
     pub fn as_block_of_memory_layout(&self) -> Layout<'a> {
-        if self.max_size.len() == 1 {
-            self.max_size[0].clone()
-        } else {
-            Layout::Struct(self.max_size)
+        self.max_size.clone()
+    }
+
+    pub fn build_closure_data(
+        &self,
+        original: Symbol,
+        symbols: &'a [Symbol],
+    ) -> Result<crate::ir::Expr<'a>, Symbol> {
+        use crate::ir::Expr;
+
+        match self.max_size {
+            Layout::Struct(fields) if fields.len() > 1 => Ok(Expr::Struct(symbols)),
+            Layout::Union(tags) => {
+                let expr = Expr::Tag {
+                    tag_layout: Layout::Union(tags),
+                    tag_name: TagName::Closure(original),
+                    tag_id: 0 as u8,
+                    union_size: tags.len() as u8,
+                    arguments: symbols,
+                };
+
+                Ok(expr)
+            }
+            _ => {
+                debug_assert_eq!(symbols.len(), 1);
+
+                Err(symbols[0])
+            }
         }
     }
 }
@@ -503,13 +512,18 @@ impl<'a> LayoutCache<'a> {
 
                 let result = Layout::from_var(&mut env, var);
 
-                let cached_layout = match &result {
-                    Ok(layout) => Cached(layout.clone()),
-                    Err(problem) => Problem(problem.clone()),
-                };
+                // Don't actually cache. The layout cache is very hard to get right in the presence
+                // of specialization, it's turned of for now so an invalid cache is never the cause
+                // of a problem
+                if false {
+                    let cached_layout = match &result {
+                        Ok(layout) => Cached(layout.clone()),
+                        Err(problem) => Problem(problem.clone()),
+                    };
 
-                self.layouts
-                    .update_value(cached_var, |existing| existing.value = cached_layout);
+                    self.layouts
+                        .update_value(cached_var, |existing| existing.value = cached_layout);
+                }
 
                 result
             }

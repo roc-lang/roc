@@ -936,8 +936,8 @@ mod gen_primitives {
                     f
 
                 main =
-                    f = foo {}
-                    f {}
+                    g = foo {}
+                    g {}
                 "#
             ),
             42,
@@ -971,8 +971,9 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn specialize_closure() {
+        use roc_std::RocList;
+
         assert_evals_to!(
             indoc!(
                 r#"
@@ -990,11 +991,12 @@ mod gen_primitives {
                 main =
                     items = foo {}
 
-                    List.len items
+                    # List.len items
+                    List.map items (\f -> f {})
                 "#
             ),
-            2,
-            i64
+            RocList::from_slice(&[41, 42]),
+            RocList<i64>
         );
     }
 
