@@ -436,7 +436,6 @@ mod gen_tags {
     }
 
     #[test]
-    #[ignore]
     fn maybe_is_just_nested() {
         assert_evals_to!(
             indoc!(

@@ -717,6 +717,7 @@ pub fn constrain_expr(
             arguments,
             loc_body: boxed,
             captured_symbols,
+            name,
             ..
         } => {
             use roc_can::expr::Recursive;
@@ -781,34 +782,22 @@ pub fn constrain_expr(
 
             let defs_constraint = And(state.constraints);
 
-            let mut tag_arguments = Vec::with_capacity(captured_symbols.len());
-            let mut captured_symbols_constraints = Vec::with_capacity(captured_symbols.len());
-
-            for (symbol, var) in captured_symbols {
-                // make sure the variable is registered
-                vars.push(*var);
-
-                // this symbol is captured, so it must be part of the closure type
-                tag_arguments.push(Type::Variable(*var));
-
-                // make the variable equal to the looked-up type of symbol
-                captured_symbols_constraints.push(Constraint::Lookup(
-                    *symbol,
-                    Expected::NoExpectation(Type::Variable(*var)),
-                    Region::zero(),
-                ));
-            }
-
-            let tag_name_string = format!("Closure_{}", closure_var.index());
-            let tag_name = roc_module::ident::TagName::Global(tag_name_string.into());
-            let closure_type = Type::TagUnion(
-                vec![(tag_name, tag_arguments)],
-                Box::new(Type::Variable(closure_ext_var)),
+            let closure_constraint = constrain_closure_size(
+                *name,
+                region,
+                captured_symbols,
+                closure_var,
+                closure_ext_var,
+                &mut vars,
             );
 
             let fn_type = attr_type(
                 fn_uniq_type,
-                Type::Function(pattern_types, Box::new(closure_type), Box::new(ret_type)),
+                Type::Function(
+                    pattern_types,
+                    Box::new(Type::Variable(closure_var)),
+                    Box::new(ret_type),
+                ),
             );
 
             exists(
@@ -831,7 +820,7 @@ pub fn constrain_expr(
                         Category::Lambda,
                         region,
                     ),
-                    Constraint::And(captured_symbols_constraints),
+                    closure_constraint,
                 ]),
             )
         }
@@ -2293,6 +2282,53 @@ fn constrain_def(
         })),
         ret_constraint: body_con,
     }))
+}
+
+fn constrain_closure_size(
+    name: Symbol,
+    region: Region,
+    captured_symbols: &[(Symbol, Variable)],
+    closure_var: Variable,
+    closure_ext_var: Variable,
+    variables: &mut Vec<Variable>,
+) -> Constraint {
+    debug_assert!(variables.iter().any(|s| *s == closure_var));
+    debug_assert!(variables.iter().any(|s| *s == closure_ext_var));
+
+    let mut tag_arguments = Vec::with_capacity(captured_symbols.len());
+    let mut captured_symbols_constraints = Vec::with_capacity(captured_symbols.len());
+
+    for (symbol, var) in captured_symbols {
+        // make sure the variable is registered
+        variables.push(*var);
+
+        // this symbol is captured, so it must be part of the closure type
+        tag_arguments.push(Type::Variable(*var));
+
+        // make the variable equal to the looked-up type of symbol
+        captured_symbols_constraints.push(Constraint::Lookup(
+            *symbol,
+            Expected::NoExpectation(Type::Variable(*var)),
+            Region::zero(),
+        ));
+    }
+
+    let tag_name = roc_module::ident::TagName::Closure(name);
+    let closure_type = Type::TagUnion(
+        vec![(tag_name, tag_arguments)],
+        Box::new(Type::Variable(closure_ext_var)),
+    );
+
+    let finalizer = Eq(
+        Type::Variable(closure_var),
+        Expected::NoExpectation(closure_type),
+        Category::ClosureSize,
+        region,
+    );
+
+    captured_symbols_constraints.push(finalizer);
+
+    Constraint::And(captured_symbols_constraints)
 }
 
 fn instantiate_rigids(
