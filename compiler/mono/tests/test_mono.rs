@@ -2182,9 +2182,8 @@ mod test_mono {
                 r#"
                 procedure Test.1 (Test.5):
                     let Test.2 = 42i64;
-                    let Test.14 = FunctionPointer Test.3;
-                    let Test.15 = Struct {Test.2};
-                    let Test.3 = Struct {Test.14, Test.15};
+                    let Test.13 = FunctionPointer Test.3;
+                    let Test.3 = Struct {Test.13, Test.2};
                     ret Test.3;
 
                 procedure Test.3 (Test.11, #Attr.12):
@@ -2198,6 +2197,54 @@ mod test_mono {
                     let Test.8 = Index 1 Test.4;
                     let Test.9 = Index 0 Test.4;
                     let Test.6 = CallByPointer Test.9 Test.7 Test.8;
+                    ret Test.6;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn closure_in_list() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                app Test provides [ main ] imports []
+
+                foo = \{} ->
+                    x = 41
+
+                    f = \{} -> x
+
+                    [ f ]
+
+                main =
+                    items = foo {}
+
+                    List.len items
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure List.7 (#Attr.2):
+                    let Test.7 = lowlevel ListLen #Attr.2;
+                    ret Test.7;
+
+                procedure Test.1 (Test.5):
+                    let Test.2 = 41i64;
+                    let Test.12 = FunctionPointer Test.3;
+                    let Test.11 = Struct {Test.12, Test.2};
+                    let Test.10 = Array [Test.11];
+                    ret Test.10;
+
+                procedure Test.3 (Test.9, #Attr.12):
+                    let Test.2 = Index 0 #Attr.12;
+                    ret Test.2;
+
+                procedure Test.0 ():
+                    let Test.8 = Struct {};
+                    let Test.4 = CallByName Test.1 Test.8;
+                    let Test.6 = CallByName List.7 Test.4;
+                    dec Test.4;
                     ret Test.6;
                 "#
             ),

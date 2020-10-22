@@ -924,6 +924,10 @@ fn add_category<'b>(
             alloc.private_tag_name(*name),
             alloc.text(" private tag application has the type:"),
         ]),
+        TagApply {
+            tag_name: TagName::Closure(_name),
+            args_count: _,
+        } => unreachable!("closure tags are for internal use only"),
 
         Record => alloc.concat(vec![this_is, alloc.text(" a record of type:")]),
 

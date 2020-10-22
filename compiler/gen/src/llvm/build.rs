@@ -1844,13 +1844,11 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
 
     let ret_type = basic_type_from_layout(arena, context, &proc.ret_layout, env.ptr_bytes);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
-    let mut arg_symbols = Vec::new_in(arena);
 
-    for (layout, arg_symbol) in args.iter() {
+    for (layout, _) in args.iter() {
         let arg_type = basic_type_from_layout(arena, env.context, &layout, env.ptr_bytes);
 
         arg_basic_types.push(arg_type);
-        arg_symbols.push(arg_symbol);
     }
 
     let fn_type = get_fn_type(&ret_type, &arg_basic_types);
@@ -1895,14 +1893,29 @@ pub fn build_proc<'a, 'ctx, 'env>(
     for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {
         set_name(arg_val, arg_symbol.ident_string(&env.interns));
 
+        // the closure argument (if any) comes in as an opaque sequence of bytes.
+        // we need to cast that to the specific closure data layout that the body expects
+        let value = if let Symbol::ARG_CLOSURE = *arg_symbol {
+            // blindly trust that there is a layout available for the closure data
+            let layout = proc.closure_data_layout.clone().unwrap();
+
+            // cast the input into the type that the body expects
+            let closure_data_type =
+                basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+
+            cast_basic_basic(env.builder, arg_val, closure_data_type)
+        } else {
+            arg_val
+        };
+
         let alloca = create_entry_block_alloca(
             env,
             fn_val,
-            arg_val.get_type(),
+            value.get_type(),
             arg_symbol.ident_string(&env.interns),
         );
 
-        builder.build_store(alloca, arg_val);
+        builder.build_store(alloca, value);
 
         scope.insert(*arg_symbol, (layout.clone(), alloca));
     }

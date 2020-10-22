@@ -77,7 +77,7 @@ pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
                     parent,
                     layout_ids,
                     field_ptr,
-                    &closure_layout.as_layout(),
+                    &closure_layout.as_block_of_memory_layout(),
                 )
             }
         }
