@@ -52,9 +52,9 @@ pub fn canonical_string_literal<'a>(_arena: &Bump, _raw: &'a str, _region: Regio
 //                     // line length, that would have already happened back
 //                     // in the parsing step, and we never would have reached
 //                     // this code. Still, debug_assert that they won't!
-//                     debug_assert!(buf_col_offset <= std::u16::MAX as usize);
-//                     debug_assert!(ident.len() <= std::u16::MAX as usize);
-//                     debug_assert!((parsed_length - ident.len() - 1) <= std::u16::MAX as usize);
+//                     debug_assert!(buf_col_offset <= u16::MAX as usize);
+//                     debug_assert!(ident.len() <= u16::MAX as usize);
+//                     debug_assert!((parsed_length - ident.len() - 1) <= u16::MAX as usize);
 
 //                     let start_line = state.line;
 
