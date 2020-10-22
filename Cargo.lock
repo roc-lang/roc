@@ -1640,6 +1640,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "page_size"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eebde548fbbf1ea81a99b128872779c437752fb99f217c45245e1a61dcd9edcd"
+dependencies = [
+ "libc",
+ "winapi 0.3.9",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2377,8 +2387,10 @@ dependencies = [
  "indoc",
  "inkwell",
  "inlinable_string",
+ "libc",
  "log",
  "maplit",
+ "page_size",
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",

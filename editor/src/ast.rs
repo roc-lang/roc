@@ -345,6 +345,10 @@ pub struct Exprs {
     // memory usage. We could in theory go up to free_128node_slots, but in
     // practice it seems unlikely that it would be worth the bookkeeping
     // effort to go that high.
+    //
+    // TODO: this could be refactored Into `free_slots: [5; Vec<ExprId>]`
+    // where (2 ^ index) is the size node in that slot. It's less
+    // self-documenting but might allow for better code reuse.
     pub free_1node_slots: Vec<ExprId>,
     pub free_2node_slots: Vec<ExprId>,
     pub free_4node_slots: Vec<ExprId>,
@@ -366,6 +370,26 @@ pub struct Exprs {
 // (e.g. If, When, Record, Tag, Call, Closure) can only contain at most
 // 255 nodes. So functions can have at most 255 arguments, records can have
 // at most 255 fields, etc.
+//
+// Nice things about this system include:
+// * Allocating a new bucket is as simple as asking the OS for a memory page.
+// * Since each node is 16B, each node's memory address will be a multiple of 16.
+// * Thanks to the free lists and our consistent chunk sizes, we should
+//   end up with very little fragmentation.
+// * Finding a slot for a given node should be very fast: see if the relevant
+//   free list has any openings; if not, try the next size up.
+//
+// Less nice things include:
+// * This system makes it very hard to ever give a page back to the OS.
+//   We could try doing the Mesh Allocator strategy: whenever we allocate
+//   something, assign it to a random slot in the bucket, and then periodically
+//   try to merge two pages into one (by locking and remapping them in the OS)
+//   and then returning the redundant physical page back to the OS. This should
+//   work in theory, but is pretty complicated, and we'd need to schedule it.
+//   Keep in mind that we can't use the Mesh Allocator itself because it returns
+//   usize pointers, which would be too big for us to have 16B nodes.
+//   On the plus side, we could be okay with higher memory usage early on,
+//   and then later use the Mesh strategy to reduce long-running memory usage.
 type ExprBucketSlots = [Expr2; 256];
 
 #[test]
