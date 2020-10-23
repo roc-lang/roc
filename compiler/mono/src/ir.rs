@@ -1712,8 +1712,8 @@ fn specialize_solved_type<'a>(
     partial_proc: PartialProc<'a>,
 ) -> Result<(Proc<'a>, Layout<'a>), LayoutProblem> {
     // add the specializations that other modules require of us
-    use roc_constrain::module::{to_type, FreeVars};
     use roc_solve::solve::{insert_type_into_subs, instantiate_rigids};
+    use roc_types::solved_types::{to_type, FreeVars};
     use roc_types::subs::VarStore;
 
     let snapshot = env.subs.snapshot();
@@ -1761,14 +1761,22 @@ struct FunctionLayouts<'a> {
 }
 
 impl<'a> FunctionLayouts<'a> {
-    pub fn from_layout(layout: Layout<'a>) -> Self {
+    pub fn from_layout(arena: &'a Bump, layout: Layout<'a>) -> Self {
         match &layout {
             Layout::FunctionPointer(arguments, result) => FunctionLayouts {
                 arguments,
                 result: (*result).clone(),
                 full: layout,
             },
-            Layout::Closure(_, _, _) => todo!(),
+            Layout::Closure(arguments, closure_layout, result) => {
+                let full = ClosureLayout::extend_function_layout(
+                    arena,
+                    arguments,
+                    closure_layout.clone(),
+                    result,
+                );
+                FunctionLayouts::from_layout(arena, full)
+            }
             _ => FunctionLayouts {
                 full: layout.clone(),
                 arguments: &[],
@@ -4411,7 +4419,8 @@ fn call_by_name<'a>(
                                 ) {
                                     Ok((proc, layout)) => {
                                         debug_assert_eq!(full_layout, layout);
-                                        let function_layout = FunctionLayouts::from_layout(layout);
+                                        let function_layout =
+                                            FunctionLayouts::from_layout(env.arena, layout);
 
                                         procs.specialized.remove(&(proc_name, full_layout));
 
