@@ -11,9 +11,7 @@ mod helpers;
 
 #[cfg(test)]
 mod cli_run {
-    use crate::helpers::{
-        example_file, extract_valgrind_errors, run_cmd, run_roc, run_with_valgrind, Out,
-    };
+    use crate::helpers::{example_file, extract_valgrind_errors, run_roc, run_with_valgrind, Out};
 
     #[test]
     fn run_hello_world() {
@@ -58,20 +56,19 @@ mod cli_run {
             }
             assert!(out.status.success());
 
-            // let (valgrind_out, raw_xml) =
-            //    run_with_valgrind(&[example_file("quicksort", "app").to_str().unwrap()]);
-            let valgrind_out = run_cmd(example_file("quicksort", "app").to_str().unwrap(), &[]);
-            let ending = "[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]\n";
+            let (valgrind_out, raw_xml) =
+                run_with_valgrind(&[example_file("quicksort", "app").to_str().unwrap()]);
+            let ending = "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n";
             if !&valgrind_out.stdout.ends_with(ending) {
                 panic!(
                     "expected output to end with {:?} but instead got {:?}",
                     ending, &valgrind_out.stdout
                 );
             }
-            // let memory_errors = extract_valgrind_errors(&raw_xml);
-            // if !memory_errors.is_empty() {
-            //     panic!("{:?}", memory_errors);
-            // }
+            let memory_errors = extract_valgrind_errors(&raw_xml);
+            if !memory_errors.is_empty() {
+                panic!("{:?}", memory_errors);
+            }
             assert!(valgrind_out.status.success());
         }
 
@@ -97,20 +94,19 @@ mod cli_run {
             }
             assert!(out.status.success());
 
-            // let (valgrind_out, raw_xml) =
-            //     run_with_valgrind(&[example_file("multi-module", "app").to_str().unwrap()]);
-            let valgrind_out = run_cmd(example_file("multi-module", "app").to_str().unwrap(), &[]);
-            let ending = "[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]\n";
+            let (valgrind_out, raw_xml) =
+                run_with_valgrind(&[example_file("multi-module", "app").to_str().unwrap()]);
+            let ending = "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n";
             if !&valgrind_out.stdout.ends_with(ending) {
                 panic!(
                     "expected output to end with {:?} but instead got {:?}",
                     ending, &valgrind_out.stdout
                 );
             }
-            // let memory_errors = extract_valgrind_errors(&raw_xml);
-            // if !memory_errors.is_empty() {
-            //     panic!("{:?}", memory_errors);
-            // }
+            let memory_errors = extract_valgrind_errors(&raw_xml);
+            if !memory_errors.is_empty() {
+                panic!("{:?}", memory_errors);
+            }
             assert!(valgrind_out.status.success());
         }
 
