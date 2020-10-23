@@ -7,7 +7,7 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::boolean_algebra::Bool;
-use roc_types::solved_types::{BuiltinAlias, SolvedBool, SolvedType};
+use roc_types::solved_types::{BuiltinAlias, FreeVars, SolvedBool, SolvedType};
 use roc_types::subs::{VarId, VarStore, Variable};
 use roc_types::types::{Alias, Problem, RecordField, Type};
 
@@ -71,7 +71,11 @@ pub fn constrain_imported_values(
                 // do nothing, in the future the alias definitions should not be in the list of imported values
             }
             _ => {
-                let typ = to_type(&import.solved_type, &mut free_vars, var_store);
+                let typ = roc_types::solved_types::to_type(
+                    &import.solved_type,
+                    &mut free_vars,
+                    var_store,
+                );
 
                 def_types.insert(
                     loc_symbol.value,
@@ -127,7 +131,8 @@ where
     for (symbol, builtin_alias) in aliases {
         let mut free_vars = FreeVars::default();
 
-        let actual = to_type(&builtin_alias.typ, &mut free_vars, var_store);
+        let actual =
+            roc_types::solved_types::to_type(&builtin_alias.typ, &mut free_vars, var_store);
 
         let mut vars = Vec::with_capacity(builtin_alias.vars.len());
 
@@ -165,156 +170,6 @@ where
         defs_constraint: True,
         ret_constraint: body_con,
     }))
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct FreeVars {
-    pub named_vars: ImMap<Lowercase, Variable>,
-    pub unnamed_vars: ImMap<VarId, Variable>,
-    pub wildcards: Vec<Variable>,
-}
-
-pub fn to_type(
-    solved_type: &SolvedType,
-    free_vars: &mut FreeVars,
-    var_store: &mut VarStore,
-) -> Type {
-    use roc_types::solved_types::SolvedType::*;
-
-    match solved_type {
-        Func(args, closure, ret) => {
-            let mut new_args = Vec::with_capacity(args.len());
-
-            for arg in args {
-                new_args.push(to_type(&arg, free_vars, var_store));
-            }
-
-            let new_ret = to_type(&ret, free_vars, var_store);
-            let new_closure = to_type(&closure, free_vars, var_store);
-
-            Type::Function(new_args, Box::new(new_closure), Box::new(new_ret))
-        }
-        Apply(symbol, args) => {
-            let mut new_args = Vec::with_capacity(args.len());
-
-            for arg in args {
-                new_args.push(to_type(&arg, free_vars, var_store));
-            }
-
-            Type::Apply(*symbol, new_args)
-        }
-        Rigid(lowercase) => {
-            if let Some(var) = free_vars.named_vars.get(&lowercase) {
-                Type::Variable(*var)
-            } else {
-                let var = var_store.fresh();
-                free_vars.named_vars.insert(lowercase.clone(), var);
-                Type::Variable(var)
-            }
-        }
-        Flex(var_id) => Type::Variable(var_id_to_flex_var(*var_id, free_vars, var_store)),
-        Wildcard => {
-            let var = var_store.fresh();
-            free_vars.wildcards.push(var);
-            Type::Variable(var)
-        }
-        Record { fields, ext } => {
-            use RecordField::*;
-
-            let mut new_fields = SendMap::default();
-
-            for (label, field) in fields {
-                let field_val = match field {
-                    Required(typ) => Required(to_type(&typ, free_vars, var_store)),
-                    Optional(typ) => Optional(to_type(&typ, free_vars, var_store)),
-                    Demanded(typ) => Demanded(to_type(&typ, free_vars, var_store)),
-                };
-
-                new_fields.insert(label.clone(), field_val);
-            }
-
-            Type::Record(new_fields, Box::new(to_type(ext, free_vars, var_store)))
-        }
-        EmptyRecord => Type::EmptyRec,
-        EmptyTagUnion => Type::EmptyTagUnion,
-        TagUnion(tags, ext) => {
-            let mut new_tags = Vec::with_capacity(tags.len());
-
-            for (tag_name, args) in tags {
-                let mut new_args = Vec::with_capacity(args.len());
-
-                for arg in args.iter() {
-                    new_args.push(to_type(arg, free_vars, var_store));
-                }
-
-                new_tags.push((tag_name.clone(), new_args));
-            }
-
-            Type::TagUnion(new_tags, Box::new(to_type(ext, free_vars, var_store)))
-        }
-        RecursiveTagUnion(rec_var_id, tags, ext) => {
-            let mut new_tags = Vec::with_capacity(tags.len());
-
-            for (tag_name, args) in tags {
-                let mut new_args = Vec::with_capacity(args.len());
-
-                for arg in args.iter() {
-                    new_args.push(to_type(arg, free_vars, var_store));
-                }
-
-                new_tags.push((tag_name.clone(), new_args));
-            }
-
-            let rec_var = free_vars
-                .unnamed_vars
-                .get(rec_var_id)
-                .expect("rec var not in unnamed vars");
-
-            Type::RecursiveTagUnion(
-                *rec_var,
-                new_tags,
-                Box::new(to_type(ext, free_vars, var_store)),
-            )
-        }
-        Boolean(SolvedBool::SolvedShared) => Type::Boolean(Bool::Shared),
-        Boolean(SolvedBool::SolvedContainer(solved_cvar, solved_mvars)) => {
-            let cvar = var_id_to_flex_var(*solved_cvar, free_vars, var_store);
-
-            let mvars = solved_mvars
-                .iter()
-                .map(|var_id| var_id_to_flex_var(*var_id, free_vars, var_store));
-
-            Type::Boolean(Bool::container(cvar, mvars))
-        }
-        Alias(symbol, solved_type_variables, solved_actual) => {
-            let mut type_variables = Vec::with_capacity(solved_type_variables.len());
-
-            for (lowercase, solved_arg) in solved_type_variables {
-                type_variables.push((lowercase.clone(), to_type(solved_arg, free_vars, var_store)));
-            }
-
-            let actual = to_type(solved_actual, free_vars, var_store);
-
-            Type::Alias(*symbol, type_variables, Box::new(actual))
-        }
-        Error => Type::Erroneous(Problem::SolvedTypeError),
-        Erroneous(problem) => Type::Erroneous(problem.clone()),
-    }
-}
-
-fn var_id_to_flex_var(
-    var_id: VarId,
-    free_vars: &mut FreeVars,
-    var_store: &mut VarStore,
-) -> Variable {
-    if let Some(var) = free_vars.unnamed_vars.get(&var_id) {
-        *var
-    } else {
-        let var = var_store.fresh();
-        free_vars.unnamed_vars.insert(var_id, var);
-
-        var
-    }
 }
 
 pub fn constrain_imported_aliases(
