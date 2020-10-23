@@ -1,6 +1,6 @@
 use crate::env::Env;
 use crate::scope::Scope;
-use roc_collections::all::{MutSet, SendMap};
+use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{AssignedField, Tag, TypeAnnotation};
@@ -66,8 +66,8 @@ pub fn canonicalize_annotation(
     var_store: &mut VarStore,
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
-    let mut aliases = SendMap::default();
     let mut references = MutSet::default();
+    let mut aliases = SendMap::default();
     let typ = can_annotation_help(
         env,
         annotation,
@@ -180,7 +180,51 @@ fn can_annotation_help(
                 args.push(arg_ann);
             }
 
-            Type::Apply(symbol, args)
+            match scope.lookup_alias(symbol) {
+                Some(alias) => {
+                    // use a known alias
+                    let mut actual = alias.typ.clone();
+                    let mut substitutions = ImMap::default();
+                    let mut vars = Vec::new();
+
+                    for (loc_var, arg_ann) in alias.vars.iter().zip(args.into_iter()) {
+                        let name = loc_var.value.0.clone();
+                        let var = loc_var.value.1;
+
+                        substitutions.insert(var, arg_ann.clone());
+                        vars.push((name.clone(), arg_ann));
+                    }
+
+                    // instantiate variables
+                    actual.substitute(&substitutions);
+
+                    let alias = Type::Alias(symbol, vars, Box::new(actual));
+
+                    alias
+                }
+                None => {
+                    let mut args = Vec::new();
+
+                    references.insert(symbol);
+
+                    for arg in *type_arguments {
+                        let arg_ann = can_annotation_help(
+                            env,
+                            &arg.value,
+                            region,
+                            scope,
+                            var_store,
+                            introduced_variables,
+                            local_aliases,
+                            references,
+                        );
+
+                        args.push(arg_ann);
+                    }
+
+                    Type::Apply(symbol, args)
+                }
+            }
         }
         BoundVariable(v) => {
             let name = Lowercase::from(*v);
