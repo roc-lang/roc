@@ -169,9 +169,9 @@ pub struct Field {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Recursive {
-    Recursive,
-    TailRecursive,
-    NotRecursive,
+    NotRecursive = 0,
+    Recursive = 1,
+    TailRecursive = 2,
 }
 
 #[derive(Clone, Debug, PartialEq)]

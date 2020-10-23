@@ -243,75 +243,209 @@ pub enum IntStyle {
     Binary,
 }
 
-/// Experimental idea for an Expr that fits in 16B
+/// Experimental idea for an Expr that fits in 16B.
+/// It has a 1B discriminant and variants which hold payloads of at most 15B.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr2 {
-    /// An integer literal (without a dot)
+    /// A number literal (without a dot) containing no underscores
     Num {
-        number: i64,
-        var: Variable,
-        style: IntStyle,
+        number: i64,     // 8B
+        var: Variable,   // 4B
+        style: IntStyle, // 1B
     },
-    /// A floating-point literal (with a dot)
+    /// A floating-point literal (with a dot) containing no underscores
     Float {
-        number: f64,
-        var: Variable,
+        number: f64,   // 8B
+        var: Variable, // 4B
     },
-    /// A formatted integer literal (containing underscores)
-    FormattedInt {
-        text_bytes: *const u8,
-        text_len: u8, // numeric literals can be at most 255 chars long
-        var: Variable,
-        style: IntStyle,
+    /// A number literal (without a dot) containing underscores
+    NumWithUnderscores {
+        number: i64,             // 8B
+        var: Variable,           // 4B
+        text: NodeId<BucketStr>, // 3B
     },
-    /// A formatted float literal (containing underscores)
-    FormattedFloat {
-        text_bytes: *const u8,
-        text_len: u8, // numeric literals can be at most 255 chars long
-        var: Variable,
+    /// A float literal (with a dot) containing underscores
+    FloatWithUnderscores {
+        number: f64,             // 8B
+        var: Variable,           // 4B
+        text: NodeId<BucketStr>, // 3B
     },
-    SmallStr(ArrayString<U14>),
+    /// string literals of length up to 14B
+    SmallStr(ArrayString<U14>), // 15B
+    /// string literals of length up to 4094B
+    MedStr(NodeId<BucketStr>), // 4B
+    /// string literals of length over 4094B, but requires calling malloc/free
     BigStr {
-        bytes: *const u8,
-        len: u32, // string literals can be at most 2^32 (~4 billion) bytes long
+        pointer: *const u8, // 8B on 64-bit systems
+        len: u32, // 4B, meaning maximum string literal size of 4GB. Could theoretically fit 7B here, which would go up to the full isize::MAX
     },
+
+    // Lookups
+    Var(Symbol), // 8B
+
+    /// Separate from List because BuckeList must be non-empty, and in this case
+    /// the list literal has no elements
+    EmptyList {
+        list_var: Variable, // 4B - required for uniqueness of the list
+        elem_var: Variable, // 4B
+    },
+
+    List {
+        list_var: Variable,       // 4B - required for uniqueness of the list
+        elem_var: Variable,       // 4B
+        elems: BucketList<Expr2>, // 4B
+    },
+
     If {
-        cond_var: Variable,
-        expr_var: Variable,
-        // Each branch is an (Expr, Expr) tuple.
-        // Make sure to put them in the bucket contiguously.
-        first_branch: ExprId,
-        num_branches: u8,
-        final_else: ExprId,
+        cond_var: Variable,                   // 4B
+        expr_var: Variable,                   // 4B
+        branches: BucketList<(Expr2, Expr2)>, // 4B
+        final_else: NodeId<Expr2>,            // 3B
     },
     When {
-        cond_var: Variable,
-        expr_var: Variable,
-        cond: ExprId,
-        // Make sure to put these branches
-        // in the bucket contiguously.
-        first_branch: WhenBranchId,
-        num_branches: u8,
+        cond_var: Variable,               // 4B
+        expr_var: Variable,               // 4B
+        branches: BucketList<WhenBranch>, // 4B
+        cond: ExprId,                     // 3B
     },
+    LetRec {
+        // TODO need to make this Alias type here bucket-friendly, which will be hard!
+        aliases: BucketList<(Symbol, Alias)>, // 4B
+        defs: BucketList<Def>,                // 4B
+        body_var: Variable,                   // 4B
+        body: NodeId<Expr2>,                  // 3B
+    },
+    LetNonRec {
+        // TODO need to make this Alias type here bucket-friendly, which will be hard!
+        aliases: BucketList<(Symbol, Alias)>, // 4B
+        def: NodeId<Def>,                     // 3B
+        body: NodeId<Expr2>,                  // 3B
+        body_var: Variable,                   // 4B
+    },
+    Call {
+        /// NOTE: the first elem in this list is the expression and its variable.
+        /// The others are arguments. This is because we didn't have room for
+        /// both the expr and its variable otherwise.
+        expr_and_args: BucketList<(Variable, NodeId<Expr2>)>, // 4B
+        fn_var: Variable,      // 4B
+        closure_var: Variable, // 4B
+        called_via: CalledVia, // 1B
+        /// Cached outside expr_and_args so we don't have to potentially
+        /// traverse that whole linked list chain to count all the args.
+        arity: u16, // 2B
+    },
+    RunLowLevel {
+        op: LowLevel,                                // 1B
+        args: BucketList<(Variable, NodeId<Expr2>)>, // 4B
+        ret_var: Variable,                           // 4B
+    },
+    Closure {
+        /// NOTE: the first elem in this list is the function's name Symbol, plus Variable::NONE
+        ///
+        /// This is not ideal, but there's no room for an 8-byte Symbol
+        /// in a 16B node that already needs to hold this much other data.
+        captured_symbols: BucketList<(Symbol, Variable)>, // 4B
+        args: BucketList<(Variable, NodeId<Pat2>)>, // 4B
+        body: NodeId<Expr2>,                        // 3B
+        recursive: Recursive,                       // 1B
+        vars: NodeId<ClosureVars>,                  // 3B
+    },
+
+    // Product Types
+    Record {
+        record_var: Variable,                                     // 4B
+        fields: BucketList<(BucketStr, Variable, NodeId<Expr2>)>, // 4B
+    },
+
+    /// Empty record constant
+    EmptyRecord,
+
+    /// Look up exactly one field on a record, e.g. (expr).foo.
+    Access {
+        field: NodeId<BucketStr>, // 3B
+        expr: NodeId<Expr2>,      // 3B
+        vars: NodeId<AccessVars>, // 3B
+    },
+
+    /// field accessor as a function, e.g. (.foo) expr
+    Accessor {
+        record_vars: NodeId<RecordVars>, // 3B
+        function_var: Variable,          // 4B
+        closure_var: Variable,           // 4B
+        field: NodeId<BucketStr>,        // 3B
+    },
+    Update {
+        symbol: Symbol,                          // 8B
+        updates: BucketList<(Lowercase, Field)>, // 4B
+        vars: NodeId<UpdateVars>,                // 3B
+    },
+
+    // Sum Types
+    Tag {
+        // NOTE: A BucketStr node is a 2B length and then 14B bytes,
+        // plus more bytes in adjacent nodes if necessary. Thus we have
+        // a hard cap of 4094 bytes as the maximum length of tags and fields.
+        name: NodeId<BucketStr>,                          // 3B
+        variant_var: Variable,                            // 4B
+        ext_var: Variable,                                // 4B
+        arguments: BucketList<(Variable, NodeId<Expr2>)>, // 4B
+    },
+
+    // Compiles, but will crash if reached
+    RuntimeError(RuntimeError),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Def {
+    pub pattern: NodeId<Pat2>, // 3B
+    pub expr: NodeId<Expr2>,   // 3B
+    // TODO maybe need to combine these vars behind a pointer?
+    pub expr_var: Variable,                           // 4B
+    pub pattern_vars: BucketList<(Symbol, Variable)>, // 4B
+    // TODO how big is an annotation? What about an Option<Annotation>?
+    pub annotation: Option<Annotation>, // ???
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct WhenBranchId {
-    /// TODO: WhenBranchBucketId
-    bucket_id: ExprBucketId,
-    /// TODO: WhenBranchBucketSlot
-    slot: ExprBucketSlot,
+enum Pat2 {
+    Todo,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+struct UpdateVars {
+    record_var: Variable, // 4B
+    ext_var: Variable,    // 4B
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+struct RecordVars {
+    record_var: Variable, // 4B
+    ext_var: Variable,    // 4B
+    field_var: Variable,  // 4B
+}
+
+/// This is 15B, so it fits in a Node slot.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+struct AccessVars {
+    record_var: Variable, // 4B
+    ext_var: Variable,    // 4B
+    field_var: Variable,  // 4B
+}
+
+/// This is 16B, so it fits in a Node slot.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+struct ClosureVars {
+    function_type: Variable,
+    closure_type: Variable,
+    closure_ext_var: Variable,
+    return_type: Variable,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct WhenBranch {
-    /// TODO: what if each branch had exactly 1 pattern?
-    /// That would save us 1B from storing the length.
-    pub first_pattern: PatternId,
-    pub num_patterns: u8,
-    pub body: ExprId,
-    /// TODO: should we have an ExprId::NULL for this?
-    pub guard: Option<ExprId>,
+    pub patterns: BucketList<Pat2>,   // 4B
+    pub body: NodeId<Expr2>,          // 3B
+    pub guard: Option<NodeId<Expr2>>, // 4B
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -395,6 +529,12 @@ type ExprBucketSlots = [Expr2; 256];
 #[test]
 fn size_of_expr_bucket() {
     assert_eq!(std::mem::size_of::<ExprBucketSlots>(), 4096);
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct PatId {
+    bucket_id: ExprBucketId, // TODO PatBucketId
+    slot: ExprBucketSlot,    // TODO PatBucketSlot
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
