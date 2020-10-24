@@ -8,6 +8,7 @@ extern crate serde_json;
 use std::error::Error;
 use std::fs;
 extern crate roc_load;
+use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use std::path::{Path, PathBuf};
 
@@ -43,6 +44,8 @@ pub struct TemplateLinkEntry {
 fn main() -> Result<(), Box<dyn Error>> {
     let std_lib = roc_builtins::std::standard_stdlib();
     let subs_by_module = MutMap::default();
+    let arena = Bump::new();
+
     let src_dir = Path::new("../compiler/builtins/docs");
     let files = vec![
         PathBuf::from(r"../compiler/builtins/docs/Bool.roc"),
@@ -59,9 +62,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Load each file is files vector
     for filename in files {
-        let loaded = roc_load::docs::load(filename, &std_lib, src_dir, subs_by_module.clone())
-            .expect("TODO gracefully handle load failing");
-        modules_docs.push(loaded.module_docs);
+        let mut loaded = roc_load::file::load_and_typecheck(
+            &arena,
+            filename,
+            std_lib.clone(),
+            src_dir,
+            subs_by_module.clone(),
+        )
+        .expect("TODO gracefully handle load failing");
+        modules_docs.extend(loaded.documentation.drain().map(|x| x.1));
     }
 
     let package = roc_load::docs::Documentation {

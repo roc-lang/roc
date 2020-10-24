@@ -1,3 +1,4 @@
+use crate::docs::ModuleDocumentation;
 use bumpalo::Bump;
 use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
@@ -202,6 +203,7 @@ struct ModuleCache<'a> {
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
+    documentation: MutMap<ModuleId, ModuleDocumentation>,
 }
 
 fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> BuildTask<'a> {
@@ -378,6 +380,7 @@ pub struct LoadedModule {
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub src: Box<str>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
+    pub documentation: MutMap<ModuleId, ModuleDocumentation>,
 }
 
 #[derive(Debug)]
@@ -458,6 +461,7 @@ enum Msg<'a> {
         problems: Vec<roc_problem::can::Problem>,
         var_store: VarStore,
         module_timing: ModuleTiming,
+        module_docs: ModuleDocumentation,
     },
     SolvedTypes {
         src: &'a str,
@@ -471,6 +475,7 @@ enum Msg<'a> {
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+        documentation: MutMap<ModuleId, ModuleDocumentation>,
         src: &'a str,
     },
     FoundSpecializations {
@@ -1096,6 +1101,7 @@ where
                     Msg::FinishedAllTypeChecking {
                         solved_subs,
                         exposed_vars_by_symbol,
+                        documentation,
                         src,
                     } => {
                         // We're done! There should be no more messages pending.
@@ -1112,6 +1118,7 @@ where
                             state,
                             solved_subs,
                             exposed_vars_by_symbol,
+                            documentation,
                             src,
                         )));
                     }
@@ -1228,10 +1235,16 @@ fn update<'a>(
             problems,
             var_store,
             module_timing,
+            module_docs,
         } => {
             log!("generated constraints for {:?}", module.module_id);
             let module_id = module.module_id;
             state.can_problems.extend(problems);
+
+            state
+                .module_cache
+                .documentation
+                .insert(module_id, module_docs);
 
             let constrained_module = ConstrainedModule {
                 module,
@@ -1243,6 +1256,7 @@ fn update<'a>(
                 var_store,
                 imported_modules,
             };
+
             state
                 .module_cache
                 .constrained
@@ -1288,10 +1302,18 @@ fn update<'a>(
 
                 state.timings.insert(module_id, module_timing);
 
+                let documentation = {
+                    let mut empty = MutMap::default();
+                    std::mem::swap(&mut empty, &mut state.module_cache.documentation);
+
+                    empty
+                };
+
                 msg_tx
                     .send(Msg::FinishedAllTypeChecking {
                         solved_subs,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
+                        documentation,
                         src,
                     })
                     .map_err(|_| LoadingProblem::MsgChannelDied)?;
@@ -1514,6 +1536,7 @@ fn finish<'a>(
     state: State<'a>,
     solved: Solved<Subs>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    documentation: MutMap<ModuleId, ModuleDocumentation>,
     src: &'a str,
 ) -> LoadedModule {
     let module_ids = Arc::try_unwrap(state.arc_modules)
@@ -1535,6 +1558,7 @@ fn finish<'a>(
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
         src: src.into(),
         timings: state.timings,
+        documentation,
     }
 }
 
@@ -1994,6 +2018,15 @@ fn parse_and_constrain<'a>(
     // immediately afterward (for the beginning of canonicalization).
     let parse_end = SystemTime::now();
     let module_id = header.module_id;
+
+    // Generate documentation information
+    // TODO: store timing information?
+    let module_docs = crate::docs::generate_module_docs(
+        header.module_name,
+        &header.exposed_ident_ids,
+        &parsed_defs,
+    );
+
     let mut var_store = VarStore::default();
     let canonicalized = canonicalize_module_defs(
         &arena,
@@ -2070,6 +2103,7 @@ fn parse_and_constrain<'a>(
         problems,
         var_store,
         module_timing,
+        module_docs,
     })
 }
 

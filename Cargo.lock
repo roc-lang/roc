@@ -614,6 +614,7 @@ dependencies = [
 name = "docs"
 version = "0.1.0"
 dependencies = [
+ "bumpalo",
  "fs_extra",
  "handlebars",
  "pulldown-cmark",
