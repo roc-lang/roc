@@ -2258,10 +2258,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "roc_builtins_bitcode"
-version = "0.1.0"
-
-[[package]]
 name = "roc_can"
 version = "0.1.0"
 dependencies = [
