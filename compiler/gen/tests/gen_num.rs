@@ -788,16 +788,4 @@ mod gen_num {
             f64
         );
     }
-
-    #[test]
-    fn blah() {
-        let lib =
-            libloading::Library::new("/Users/rtfeldman/code/roc/examples/hello-world/app.dylib")
-                .unwrap();
-
-        let func: libloading::Symbol<unsafe extern "C" fn() -> &'static str> =
-            unsafe { lib.get(b"main_1").unwrap() };
-
-        println!("Roc says: {}", unsafe { func() });
-    }
 }
