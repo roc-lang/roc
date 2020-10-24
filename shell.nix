@@ -32,6 +32,7 @@ let
       pkgs.rustup
       pkgs.cargo
       llvm
+      pkgs.valgrind
       # libraries for llvm
       pkgs.libffi
       pkgs.libxml2

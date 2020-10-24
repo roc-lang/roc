@@ -277,6 +277,12 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ctx.struct_type(&fields, false)
             .fn_type(&[i64_type.into(), i64_type.into()], false)
     });
+
+    add_intrinsic(
+        module,
+        LIBC_ATAN,
+        f64_type.fn_type(&[f64_type.into()], false),
+    );
 }
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
@@ -290,6 +296,7 @@ static LLVM_POW_F64: &str = "llvm.pow.f64";
 static LLVM_CEILING_F64: &str = "llvm.ceil.f64";
 static LLVM_FLOOR_F64: &str = "llvm.floor.f64";
 pub static LLVM_SADD_WITH_OVERFLOW_I64: &str = "llvm.sadd.with.overflow.i64";
+static LIBC_ATAN: &str = "atan";
 
 fn add_intrinsic<'ctx>(
     module: &Module<'ctx>,
@@ -2718,7 +2725,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             "num_floor",
         ),
         NumIsFinite => call_bitcode_fn(NumIsFinite, env, &[arg.into()], "is_finite_"),
-        NumAtan => call_bitcode_fn(NumAtan, env, &[arg.into()], "atan_"),
+        NumAtan => env.call_intrinsic(LIBM_ATAN, &[arg.into()]),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }

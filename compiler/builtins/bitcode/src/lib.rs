@@ -4,8 +4,6 @@
 #![crate_type = "lib"]
 #![no_std]
 
-mod libm;
-
 /// TODO this is no longer used. Feel free to delete it the next time
 /// we need to rebuild builtins.bc!
 #[no_mangle]
@@ -46,9 +44,4 @@ pub fn pow_int_(mut base: i64, mut exp: i64) -> i64 {
 #[no_mangle]
 pub fn is_finite_(num: f64) -> bool {
     f64::is_finite(num)
-}
-
-#[no_mangle]
-pub fn atan_(x: f64) -> f64 {
-    libm::atan(x)
 }
