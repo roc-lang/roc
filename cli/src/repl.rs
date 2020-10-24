@@ -1,6 +1,5 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
-use inkwell::execution_engine::ExecutionEngine;
 use inkwell::OptimizationLevel;
 use roc_builtins::unique::uniq_stdlib;
 use roc_can::constraint::Constraint;
@@ -284,13 +283,7 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         let (module_pass, function_pass) =
             roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
-        let execution_engine = module
-            .create_jit_execution_engine(OptimizationLevel::None)
-            .expect("Error creating JIT execution engine for test");
-
-        // Without calling this, we get a linker error when building this crate
-        // in --release mode and then trying to eval anything in the repl.
-        ExecutionEngine::link_in_mc_jit();
+        let lib = todo!("create the lib");
 
         // Compile and add all the Procs before adding main
         let env = roc_gen::llvm::build::Env {
@@ -389,7 +382,7 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         let answer = unsafe {
             eval::jit_to_ast(
                 &arena,
-                execution_engine,
+                lib,
                 main_fn_name,
                 &main_fn_layout,
                 &content,

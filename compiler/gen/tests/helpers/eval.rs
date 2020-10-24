@@ -1,3 +1,4 @@
+use libloading::Library;
 use roc_collections::all::{MutMap, MutSet};
 
 fn promote_expr_to_module(src: &str) -> String {
@@ -19,11 +20,7 @@ pub fn helper<'a>(
     stdlib: roc_builtins::std::StdLib,
     leak: bool,
     context: &'a inkwell::context::Context,
-) -> (
-    &'static str,
-    Vec<roc_problem::can::Problem>,
-    inkwell::execution_engine::ExecutionEngine<'a>,
-) {
+) -> (&'static str, Vec<roc_problem::can::Problem>, Library) {
     use inkwell::OptimizationLevel;
     use roc_gen::llvm::build::{build_proc, build_proc_header, Scope};
     use std::path::{Path, PathBuf};
@@ -166,9 +163,11 @@ pub fn helper<'a>(
     let (module_pass, function_pass) =
         roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
-    let execution_engine = module
-        .create_jit_execution_engine(OptimizationLevel::None)
-        .expect("Error creating JIT execution engine for test");
+    // TODO: use build/program to generate a .o file in a tempdir
+    // TODO: use link.rs to link the .o into .dylib/.so
+
+    let path = "";
+    let lib = Library::new(path).expect("Error loading compiled dylib for test");
 
     // Compile and add all the Procs before adding main
     let env = roc_gen::llvm::build::Env {
@@ -265,7 +264,7 @@ pub fn helper<'a>(
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    (main_fn_name, errors, execution_engine.clone())
+    (main_fn_name, errors, lib)
 }
 
 // TODO this is almost all code duplication with assert_llvm_evals_to
@@ -284,7 +283,7 @@ macro_rules! assert_opt_evals_to {
 
         let stdlib = roc_builtins::unique::uniq_stdlib();
 
-        let (main_fn_name, errors, execution_engine) =
+        let (main_fn_name, errors, lib) =
             $crate::helpers::eval::helper(&arena, $src, stdlib, $leak, &context);
 
         let transform = |success| {
@@ -292,7 +291,7 @@ macro_rules! assert_opt_evals_to {
             let given = $transform(success);
             assert_eq!(&given, &expected);
         };
-        run_jit_function!(execution_engine, main_fn_name, $ty, transform, errors)
+        run_jit_function!(lib, main_fn_name, $ty, transform, errors)
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
@@ -312,7 +311,7 @@ macro_rules! assert_llvm_evals_to {
         let context = Context::create();
         let stdlib = roc_builtins::std::standard_stdlib();
 
-        let (main_fn_name, errors, execution_engine) =
+        let (main_fn_name, errors, li) =
             $crate::helpers::eval::helper(&arena, $src, stdlib, $leak, &context);
 
         let transform = |success| {
@@ -320,7 +319,7 @@ macro_rules! assert_llvm_evals_to {
             let given = $transform(success);
             assert_eq!(&given, &expected);
         };
-        run_jit_function!(execution_engine, main_fn_name, $ty, transform, errors)
+        run_jit_function!(lib, main_fn_name, $ty, transform, errors)
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {

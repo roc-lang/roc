@@ -99,7 +99,8 @@ pub fn build_file(
             binary_path.as_path(),
             host_input_path.as_path(),
             dest_filename.as_path(),
-            LinkType::Executable,
+            // LinkType::Executable,
+            LinkType::Dylib,
         )
         .map_err(|_| {
             todo!("gracefully handle `rustc` failing to spawn.");
