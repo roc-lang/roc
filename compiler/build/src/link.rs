@@ -4,11 +4,18 @@ use std::path::Path;
 use std::process::{Child, Command};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum LinkType {
+    Executable,
+    Dylib,
+}
+
 pub fn link(
     target: &Triple,
     binary_path: &Path,
     host_input_path: &Path,
     dest_filename: &Path,
+    link_type: LinkType,
 ) -> io::Result<Child> {
     // TODO we should no longer need to do this once we have platforms on
     // a package repository, as we can then get precompiled hosts from there.
@@ -19,12 +26,24 @@ pub fn link(
             architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Linux,
             ..
-        } => link_linux(target, binary_path, host_input_path, dest_filename),
+        } => link_linux(
+            target,
+            binary_path,
+            host_input_path,
+            dest_filename,
+            link_type,
+        ),
         Triple {
             architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Darwin,
             ..
-        } => link_macos(target, binary_path, host_input_path, dest_filename),
+        } => link_macos(
+            target,
+            binary_path,
+            host_input_path,
+            dest_filename,
+            link_type,
+        ),
         _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
@@ -121,12 +140,26 @@ fn link_linux(
     binary_path: &Path,
     host_input_path: &Path,
     dest_filename: &Path,
+    link_type: LinkType,
 ) -> io::Result<Child> {
+    let base_args = match link_type {
+        LinkType::Executable => Vec::new(),
+        // TODO: find a way to avoid using a vec! here - should theoretically be
+        // able to do this somehow using &[] but the borrow checker isn't having it.
+        //
+        // TODO: do we need to add a version number on to this? e.g. ".1"
+        //
+        // See https://software.intel.com/content/www/us/en/develop/articles/create-a-unix-including-linux-shared-library.html
+        // TODO: do we even need the -soname argument?
+        LinkType::Dylib => vec!["-shared", "-soname", binary_path.to_str().unwrap()],
+    };
+
     let libcrt_path = if Path::new("/usr/lib/x86_64-linux-gnu").exists() {
         Path::new("/usr/lib/x86_64-linux-gnu")
     } else {
         Path::new("/usr/lib")
     };
+
     let libgcc_path = if Path::new("/lib/x86_64-linux-gnu/libgcc_s.so.1").exists() {
         Path::new("/lib/x86_64-linux-gnu/libgcc_s.so.1")
     } else if Path::new("/usr/lib/x86_64-linux-gnu/libgcc_s.so.1").exists() {
@@ -134,11 +167,13 @@ fn link_linux(
     } else {
         Path::new("/usr/lib/libgcc_s.so.1")
     };
+
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
     Command::new("ld")
         // Don't allow LD_ env vars to affect this
         .env_clear()
+        .args(&base_args)
         .args(&[
             "-arch",
             arch_str(target),
@@ -174,13 +209,20 @@ fn link_macos(
     binary_path: &Path,
     host_input_path: &Path,
     dest_filename: &Path,
+    link_type: LinkType,
 ) -> io::Result<Child> {
+    let link_type_arg = match link_type {
+        LinkType::Executable => "-execute",
+        LinkType::Dylib => "-dylib",
+    };
+
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
     Command::new("ld")
         // Don't allow LD_ env vars to affect this
         .env_clear()
         .args(&[
+            link_type_arg,
             "-arch",
             target.architecture.to_string().as_str(),
             // Inputs

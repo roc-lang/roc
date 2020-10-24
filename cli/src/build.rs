@@ -1,5 +1,8 @@
 use bumpalo::Bump;
-use roc_build::{link::link, program};
+use roc_build::{
+    link::{link, LinkType},
+    program,
+};
 use roc_collections::all::MutMap;
 use roc_gen::llvm::build::OptLevel;
 use roc_load::file::LoadingProblem;
@@ -96,6 +99,7 @@ pub fn build_file(
             binary_path.as_path(),
             host_input_path.as_path(),
             dest_filename.as_path(),
+            LinkType::Executable,
         )
         .map_err(|_| {
             todo!("gracefully handle `rustc` failing to spawn.");
