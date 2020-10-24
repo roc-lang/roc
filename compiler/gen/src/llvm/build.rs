@@ -2725,7 +2725,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             "num_floor",
         ),
         NumIsFinite => call_bitcode_fn(NumIsFinite, env, &[arg.into()], "is_finite_"),
-        NumAtan => env.call_intrinsic(LIBM_ATAN, &[arg.into()]),
+        NumAtan => env.call_intrinsic(LIBC_ATAN, &[arg.into()]),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }
