@@ -1,6 +1,6 @@
 use crate::target::arch_str;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
@@ -10,45 +10,29 @@ pub enum LinkType {
     Dylib,
 }
 
+/// input_paths can include the host as well as the app. e.g. &["host.o", "roc_app.o"]
 pub fn link(
     target: &Triple,
-    binary_path: &Path,
-    host_input_path: &Path,
-    dest_filename: &Path,
+    output_path: PathBuf,
+    input_paths: &[&str],
     link_type: LinkType,
-) -> io::Result<Child> {
-    // TODO we should no longer need to do this once we have platforms on
-    // a package repository, as we can then get precompiled hosts from there.
-    rebuild_host(host_input_path);
-
+) -> io::Result<(Child, PathBuf)> {
     match target {
         Triple {
             architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Linux,
             ..
-        } => link_linux(
-            target,
-            binary_path,
-            host_input_path,
-            dest_filename,
-            link_type,
-        ),
+        } => link_linux(target, output_path, input_paths, link_type),
         Triple {
             architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Darwin,
             ..
-        } => link_macos(
-            target,
-            binary_path,
-            host_input_path,
-            dest_filename,
-            link_type,
-        ),
+        } => link_macos(target, output_path, input_paths, link_type),
         _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
 
-fn rebuild_host(host_input_path: &Path) {
+pub fn rebuild_host(host_input_path: &Path) {
     let c_host_src = host_input_path.with_file_name("host.c");
     let c_host_dest = host_input_path.with_file_name("c_host.o");
     let rust_host_src = host_input_path.with_file_name("host.rs");
@@ -137,21 +121,33 @@ fn rebuild_host(host_input_path: &Path) {
 
 fn link_linux(
     target: &Triple,
-    binary_path: &Path,
-    host_input_path: &Path,
-    dest_filename: &Path,
+    output_path: PathBuf,
+    input_paths: &[&str],
     link_type: LinkType,
-) -> io::Result<Child> {
-    let base_args = match link_type {
-        LinkType::Executable => Vec::new(),
-        // TODO: find a way to avoid using a vec! here - should theoretically be
-        // able to do this somehow using &[] but the borrow checker isn't having it.
-        //
-        // TODO: do we need to add a version number on to this? e.g. ".1"
-        //
-        // See https://software.intel.com/content/www/us/en/develop/articles/create-a-unix-including-linux-shared-library.html
-        // TODO: do we even need the -soname argument?
-        LinkType::Dylib => vec!["-shared", "-soname", binary_path.to_str().unwrap()],
+) -> io::Result<(Child, PathBuf)> {
+    let mut soname;
+    let (base_args, output_path) = match link_type {
+        LinkType::Executable => (Vec::new(), output_path),
+        LinkType::Dylib => {
+            // TODO: do we acually need the version number on this?
+            // Do we even need the "-soname" argument?
+            //
+            // See https://software.intel.com/content/www/us/en/develop/articles/create-a-unix-including-linux-shared-library.html
+
+            soname = output_path.clone();
+            soname.set_extension("so.1");
+
+            let mut output_path = output_path;
+
+            output_path.set_extension("so.1.0");
+
+            (
+                // TODO: find a way to avoid using a vec! here - should theoretically be
+                // able to do this somehow using &[] but the borrow checker isn't having it.
+                vec!["-shared", "-soname", soname.as_path().to_str().unwrap()],
+                output_path,
+            )
+        }
     };
 
     let libcrt_path = if Path::new("/usr/lib/x86_64-linux-gnu").exists() {
@@ -170,77 +166,88 @@ fn link_linux(
 
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
-    Command::new("ld")
-        // Don't allow LD_ env vars to affect this
-        .env_clear()
-        .args(&base_args)
-        .args(&[
-            "-arch",
-            arch_str(target),
-            libcrt_path.join("crti.o").to_str().unwrap(),
-            libcrt_path.join("crtn.o").to_str().unwrap(),
-            libcrt_path.join("Scrt1.o").to_str().unwrap(),
-            "-dynamic-linker",
-            "/lib64/ld-linux-x86-64.so.2",
-            // Inputs
-            host_input_path.to_str().unwrap(), // host.o
-            dest_filename.to_str().unwrap(),   // app.o
-            // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925
-            // for discussion and further references
-            "-lc",
-            "-lm",
-            "-lpthread",
-            "-ldl",
-            "-lrt",
-            "-lutil",
-            "-lc_nonshared",
-            "-lc++",
-            "-lunwind",
-            libgcc_path.to_str().unwrap(),
-            // Output
-            "-o",
-            binary_path.to_str().unwrap(), // app
-        ])
-        .spawn()
+    Ok((
+        Command::new("ld")
+            // Don't allow LD_ env vars to affect this
+            .env_clear()
+            .args(&base_args)
+            .args(&[
+                "-arch",
+                arch_str(target),
+                libcrt_path.join("crti.o").to_str().unwrap(),
+                libcrt_path.join("crtn.o").to_str().unwrap(),
+                libcrt_path.join("Scrt1.o").to_str().unwrap(),
+                "-dynamic-linker",
+                "/lib64/ld-linux-x86-64.so.2",
+            ])
+            .args(input_paths)
+            .args(&[
+                // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925
+                // for discussion and further references
+                "-lc",
+                "-lm",
+                "-lpthread",
+                "-ldl",
+                "-lrt",
+                "-lutil",
+                "-lc_nonshared",
+                "-lc++",
+                "-lunwind",
+                libgcc_path.to_str().unwrap(),
+                // Output
+                "-o",
+                output_path.as_path().to_str().unwrap(), // app (or app.so or app.dylib etc.)
+            ])
+            .spawn()?,
+        output_path,
+    ))
 }
 
 fn link_macos(
     target: &Triple,
-    binary_path: &Path,
-    host_input_path: &Path,
-    dest_filename: &Path,
+    output_path: PathBuf,
+    input_paths: &[&str],
     link_type: LinkType,
-) -> io::Result<Child> {
-    let link_type_arg = match link_type {
-        LinkType::Executable => "-execute",
-        LinkType::Dylib => "-dylib",
+) -> io::Result<(Child, PathBuf)> {
+    let (link_type_arg, output_path) = match link_type {
+        LinkType::Executable => ("-execute", output_path),
+        LinkType::Dylib => {
+            let mut output_path = output_path;
+
+            output_path.set_extension("dylib");
+
+            ("-dylib", output_path)
+        }
     };
 
-    // NOTE: order of arguments to `ld` matters here!
-    // The `-l` flags should go after the `.o` arguments
-    Command::new("ld")
-        // Don't allow LD_ env vars to affect this
-        .env_clear()
-        .args(&[
-            link_type_arg,
-            "-arch",
-            target.architecture.to_string().as_str(),
-            // Inputs
-            host_input_path.to_str().unwrap(), // host.o
-            dest_filename.to_str().unwrap(),   // roc_app.o
-            // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
-            // for discussion and further references
-            "-lSystem",
-            "-lresolv",
-            "-lpthread",
-            // "-lrt", // TODO shouldn't we need this?
-            // "-lc_nonshared", // TODO shouldn't we need this?
-            // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
-            // "-lunwind", // TODO will eventually need this, see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
-            "-lc++", // TODO shouldn't we need this?
-            // Output
-            "-o",
-            binary_path.to_str().unwrap(), // app
-        ])
-        .spawn()
+    Ok((
+        // NOTE: order of arguments to `ld` matters here!
+        // The `-l` flags should go after the `.o` arguments
+        Command::new("ld")
+            // Don't allow LD_ env vars to affect this
+            .env_clear()
+            .args(&[
+                link_type_arg,
+                "-arch",
+                target.architecture.to_string().as_str(),
+            ])
+            .args(input_paths)
+            .args(&[
+                // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496392274
+                // for discussion and further references
+                "-lSystem",
+                "-lresolv",
+                "-lpthread",
+                // "-lrt", // TODO shouldn't we need this?
+                // "-lc_nonshared", // TODO shouldn't we need this?
+                // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
+                // "-lunwind", // TODO will eventually need this, see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
+                "-lc++", // TODO shouldn't we need this?
+                // Output
+                "-o",
+                output_path.to_str().unwrap(), // app
+            ])
+            .spawn()?,
+        output_path,
+    ))
 }

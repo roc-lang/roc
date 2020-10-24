@@ -2435,6 +2435,7 @@ dependencies = [
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",
+ "roc_build",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -2452,6 +2453,7 @@ dependencies = [
  "roc_unify",
  "roc_uniq",
  "target-lexicon",
+ "tempfile",
  "tokio",
 ]
 
