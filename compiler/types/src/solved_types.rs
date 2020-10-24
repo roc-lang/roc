@@ -68,8 +68,6 @@ pub enum SolvedBool {
 
 impl SolvedBool {
     pub fn from_bool(boolean: &boolean_algebra::Bool, subs: &Subs) -> Self {
-        use boolean_algebra::Bool;
-
         match boolean {
             Bool::Shared => SolvedBool::SolvedShared,
             Bool::Container(cvar, mvars) => {

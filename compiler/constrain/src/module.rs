@@ -3,13 +3,11 @@ use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::{Constraint, LetConstraint};
 use roc_can::module::ModuleOutput;
 use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
-use roc_module::ident::Lowercase;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
-use roc_types::boolean_algebra::Bool;
-use roc_types::solved_types::{BuiltinAlias, FreeVars, SolvedBool, SolvedType};
+use roc_types::solved_types::{BuiltinAlias, FreeVars, SolvedType};
 use roc_types::subs::{VarId, VarStore, Variable};
-use roc_types::types::{Alias, Problem, RecordField, Type};
+use roc_types::types::{Alias, Problem, Type};
 
 pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
 
