@@ -1,7 +1,8 @@
+use inkwell::targets::{CodeModel, FileType, RelocMode};
 use libloading::Library;
 use roc_build::{
     link::{link, LinkType},
-    program::gen_from_mono_module,
+    target,
 };
 use roc_collections::all::{MutMap, MutSet};
 use target_lexicon::Triple;
@@ -156,44 +157,134 @@ pub fn helper<'a>(
         }
     }
 
+    let module = roc_gen::llvm::build::module_from_builtins(context, "app");
+    let builder = context.create_builder();
     let opt_level = if cfg!(debug_assertions) {
         roc_gen::llvm::build::OptLevel::Normal
     } else {
         roc_gen::llvm::build::OptLevel::Optimize
     };
 
+    let module = arena.alloc(module);
+    let (module_pass, function_pass) =
+        roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
+
+    // Compile and add all the Procs before adding main
+    let env = roc_gen::llvm::build::Env {
+        arena: &arena,
+        builder: &builder,
+        context,
+        interns,
+        module,
+        ptr_bytes,
+        leak,
+        // important! we don't want any procedures to get the C calling convention
+        exposed_to_host: MutSet::default(),
+    };
+
+    let mut layout_ids = roc_gen::layout_id::LayoutIds::default();
+    let mut headers = Vec::with_capacity(procedures.len());
+
+    // Add all the Proc headers to the module.
+    // We have to do this in a separate pass first,
+    // because their bodies may reference each other.
+    let mut scope = Scope::default();
+    for ((symbol, layout), proc) in procedures.drain() {
+        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+
+        if proc.args.is_empty() {
+            // this is a 0-argument thunk, i.e. a top-level constant definition
+            // it must be in-scope everywhere in the module!
+            scope.insert_top_level_thunk(symbol, layout, fn_val);
+        }
+
+        headers.push((proc, fn_val));
+    }
+
+    // Build each proc using its header info.
+    for (proc, fn_val) in headers {
+        let mut current_scope = scope.clone();
+
+        // only have top-level thunks for this proc's module in scope
+        // this retain is not needed for correctness, but will cause less confusion when debugging
+        let home = proc.name.module_id();
+        current_scope.retain_top_level_thunks_for_module(home);
+
+        build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
+
+        if fn_val.verify(true) {
+            function_pass.run_on(&fn_val);
+        } else {
+            use roc_builtins::std::Mode;
+
+            let mode = match stdlib_mode {
+                Mode::Uniqueness => "OPTIMIZED",
+                Mode::Standard => "NON-OPTIMIZED",
+            };
+
+            eprintln!(
+                "\n\nFunction {:?} failed LLVM verification in {} build. Its content was:\n",
+                fn_val.get_name().to_str().unwrap(),
+                mode,
+            );
+
+            fn_val.print_to_stderr();
+            // module.print_to_stderr();
+
+            panic!(
+                "The preceding code was from {:?}, which failed LLVM verification in {} build.",
+                fn_val.get_name().to_str().unwrap(),
+                mode,
+            );
+        }
+    }
+    let (main_fn_name, main_fn) = roc_gen::llvm::build::promote_to_main_function(
+        &env,
+        &mut layout_ids,
+        main_fn_symbol,
+        &main_fn_layout,
+    );
+
+    // Uncomment this to see the module's un-optimized LLVM instruction output:
+    // env.module.print_to_stderr();
+
+    if main_fn.verify(true) {
+        function_pass.run_on(&main_fn);
+    } else {
+        panic!("Main function {} failed LLVM verification in NON-OPTIMIZED build. Uncomment things nearby to see more details.", main_fn_name);
+    }
+
+    module_pass.run_on(env.module);
+
+    // Verify the module
+    if let Err(errors) = env.module.verify() {
+        panic!("Errors defining module: {:?}", errors);
+    }
+
+    // Uncomment this to see the module's optimized LLVM instruction output:
+    // env.module.print_to_stderr();
+
     let dir = tempdir().unwrap();
     let filename = PathBuf::from("Test.roc");
     let file_path = dir.path().join(filename.clone());
-    let full_file_path = PathBuf::from(file_path.clone());
-    let monomorphized_module = MonomorphizedModule {
-        module_id: home,
-        can_problems: Vec::new(),
-        type_problems: Vec::new(),
-        mono_problems: Vec::new(),
-        procedures,
-        interns,
-        exposed_to_host,
-        src: loaded.src,
-        subs: loaded.subs,
-        timings: loaded.timings,
-    };
+    let mut app_o_file = PathBuf::from(file_path.clone());
 
-    // Generate app.o
-    gen_from_mono_module(
-        arena,
-        monomorphized_module,
-        filename,
-        Triple::host(),
-        &full_file_path,
-        opt_level,
-    );
+    app_o_file.set_file_name("app.o");
+
+    // Emit the .o file
+    let reloc = RelocMode::Default;
+    let model = CodeModel::Default;
+    let target_machine = target::target_machine(&target, opt_level.into(), reloc, model).unwrap();
+
+    target_machine
+        .write_to_file(&env.module, FileType::Object, &app_o_file)
+        .expect("Writing .o file failed");
 
     // Link app.o into a dylib - e.g. app.so or app.dylib
     let (mut child, dylib_path) = link(
         &Triple::host(),
-        full_file_path.clone(),
-        &[full_file_path.to_str().unwrap()],
+        app_o_file.clone(),
+        &[app_o_file.to_str().unwrap()],
         LinkType::Dylib,
     )
     .unwrap();
@@ -204,8 +295,7 @@ pub fn helper<'a>(
     let path = dylib_path.as_path().to_str().unwrap();
     let lib = Library::new(path).expect("Error loading compiled dylib for test");
 
-    todo!("TODO promote a main function");
-    // (main_fn_name, errors, lib)
+    (main_fn_name, errors, lib)
 }
 
 // TODO this is almost all code duplication with assert_llvm_evals_to
