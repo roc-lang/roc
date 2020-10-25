@@ -2020,7 +2020,8 @@ fn parse_and_constrain<'a>(
     let module_id = header.module_id;
 
     // Generate documentation information
-    // TODO: store timing information?
+    // TODO: store timing information
+    // TODO: only run this if we're doing a doc gen pass!
     let module_docs = crate::docs::generate_module_docs(
         header.module_name,
         &header.exposed_ident_ids,
