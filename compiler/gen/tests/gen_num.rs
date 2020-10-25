@@ -68,7 +68,7 @@ mod gen_num {
             indoc!(
                 r#"
                     limitedNegate = \num ->
-                        x = 
+                        x =
                             if num == 1 then
                                 -1
                             else if num == -1 then
@@ -482,7 +482,7 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                wrapper = \{} -> 
+                wrapper = \{} ->
                     when 10 is
                         x if x == 5 -> 0
                         _ -> 42
@@ -500,7 +500,7 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                wrapper = \{} -> 
+                wrapper = \{} ->
                     when 10 is
                         x if x == 10 -> 42
                         _ -> 0
@@ -750,7 +750,7 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                when Num.addChecked 1.0 0.0 is 
+                when Num.addChecked 1.0 0.0 is
                     Ok v -> v
                     Err Overflow -> -1.0
                 "#

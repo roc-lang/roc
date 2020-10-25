@@ -125,9 +125,28 @@ fn link_linux(
     input_paths: &[&str],
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
+    let libcrt_path = if Path::new("/usr/lib/x86_64-linux-gnu").exists() {
+        Path::new("/usr/lib/x86_64-linux-gnu")
+    } else {
+        Path::new("/usr/lib")
+    };
+
+    let libgcc_path = if Path::new("/lib/x86_64-linux-gnu/libgcc_s.so.1").exists() {
+        Path::new("/lib/x86_64-linux-gnu/libgcc_s.so.1")
+    } else if Path::new("/usr/lib/x86_64-linux-gnu/libgcc_s.so.1").exists() {
+        Path::new("/usr/lib/x86_64-linux-gnu/libgcc_s.so.1")
+    } else {
+        Path::new("/usr/lib/libgcc_s.so.1")
+    };
+
     let mut soname;
     let (base_args, output_path) = match link_type {
-        LinkType::Executable => (Vec::new(), output_path),
+        LinkType::Executable => (
+            // Presumably this S stands for Static, since if we include Scrt1.o
+            // in the linking for dynamic builds, linking fails.
+            vec![libcrt_path.join("Scrt1.o").to_str().unwrap().to_string()],
+            output_path,
+        ),
         LinkType::Dylib => {
             // TODO: do we acually need the version number on this?
             // Do we even need the "-soname" argument?
@@ -144,24 +163,15 @@ fn link_linux(
             (
                 // TODO: find a way to avoid using a vec! here - should theoretically be
                 // able to do this somehow using &[] but the borrow checker isn't having it.
-                vec!["-shared", "-soname", soname.as_path().to_str().unwrap()],
+                // Also find a way to have these be string slices instead of Strings.
+                vec![
+                    "-shared".to_string(),
+                    "-soname".to_string(),
+                    soname.as_path().to_str().unwrap().to_string(),
+                ],
                 output_path,
             )
         }
-    };
-
-    let libcrt_path = if Path::new("/usr/lib/x86_64-linux-gnu").exists() {
-        Path::new("/usr/lib/x86_64-linux-gnu")
-    } else {
-        Path::new("/usr/lib")
-    };
-
-    let libgcc_path = if Path::new("/lib/x86_64-linux-gnu/libgcc_s.so.1").exists() {
-        Path::new("/lib/x86_64-linux-gnu/libgcc_s.so.1")
-    } else if Path::new("/usr/lib/x86_64-linux-gnu/libgcc_s.so.1").exists() {
-        Path::new("/usr/lib/x86_64-linux-gnu/libgcc_s.so.1")
-    } else {
-        Path::new("/usr/lib/libgcc_s.so.1")
     };
 
     // NOTE: order of arguments to `ld` matters here!
@@ -170,16 +180,14 @@ fn link_linux(
         Command::new("ld")
             // Don't allow LD_ env vars to affect this
             .env_clear()
-            .args(&base_args)
             .args(&[
                 "-arch",
                 arch_str(target),
                 libcrt_path.join("crti.o").to_str().unwrap(),
                 libcrt_path.join("crtn.o").to_str().unwrap(),
-                libcrt_path.join("Scrt1.o").to_str().unwrap(),
-                "-dynamic-linker",
-                "/lib64/ld-linux-x86-64.so.2",
             ])
+            .args(&base_args)
+            .args(&["-dynamic-linker", "/lib64/ld-linux-x86-64.so.2"])
             .args(input_paths)
             .args(&[
                 // Libraries - see https://github.com/rtfeldman/roc/pull/554#discussion_r496365925
