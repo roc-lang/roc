@@ -34,6 +34,8 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{JoinPointId, Wrapped};
 use roc_mono::layout::{Builtin, Layout, MemoryMode};
+use std::fs::File;
+use std::io::prelude::Read;
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -181,8 +183,19 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 }
 
 pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
-    let memory_buffer =
-        MemoryBuffer::create_from_memory_range(include_bytes!("builtins.bc"), module_name);
+    // In the build script for the gen module, we compile the builtins bitcode and set
+    // BUILTINS_BC to the path to the compiled output.
+    let path: &'static str = env!(
+        "BUILTINS_BC",
+        "Env var BUILTINS_BC not found. Is there a problem with the build script?"
+    );
+    let mut builtins_bitcode = File::open(path).expect("Unable to find builtins bitcode source");
+    let mut buffer = std::vec::Vec::new();
+    builtins_bitcode
+        .read_to_end(&mut buffer)
+        .expect("Unable to read builtins bitcode");
+
+    let memory_buffer = MemoryBuffer::create_from_memory_range(&buffer, module_name);
 
     let module = Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
         .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err));
