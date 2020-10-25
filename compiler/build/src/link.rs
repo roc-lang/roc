@@ -273,8 +273,8 @@ pub fn module_to_dylib(
 ) -> Result<Library, Error> {
     let dir = tempdir().unwrap();
     let filename = PathBuf::from("Test.roc");
-    let file_path = dir.path().join(filename.clone());
-    let mut app_o_file = PathBuf::from(file_path.clone());
+    let file_path = dir.path().join(filename);
+    let mut app_o_file = file_path;
 
     app_o_file.set_file_name("app.o");
 
