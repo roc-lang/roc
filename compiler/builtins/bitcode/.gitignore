@@ -1,1 +1,3 @@
-lib.ll
+test.ll
+src/zig-cache
+zig-cache

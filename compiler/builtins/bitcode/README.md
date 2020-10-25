@@ -15,8 +15,15 @@ You can find the compiled bitcode in `target/debug/build/roc_gen-[some random ch
 > run the following command. It should create `compiler/builtins/bitcode/lib.ll`
 >
 > ```bash
-> clang -S -emit-llvm src/lib.c
+> zig build-obj src/main.zig -femit-llvm-ir=test.ll -fno-emit-bin --strip 
 > ```
+>
+> NOTE: The full command that we use when generating the bitcode is:
+> ```bash
+> zig build-obj src/main.zig -femit-llvm-ir=test.ll -fno-emit-bin --strip -O ReleaseSafe
+> ```
+> This is probably less readable then the first command, because it does some mangling of 
+> non-exported names, etc. But if you're hitting a bug, it may be helpful.
 
 The bitcode is a bunch of bytes that aren't particularly human-readable.
 Since Roc is designed to be distributed as a single binary, these bytes
