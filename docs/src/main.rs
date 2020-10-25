@@ -177,6 +177,7 @@ fn documentation_to_template_data(doc: &Documentation, module: &ModuleDocumentat
 
 fn markdown_to_html(markdown: String) -> String {
     use pulldown_cmark::CodeBlockKind::*;
+    use pulldown_cmark::CowStr::*;
     use pulldown_cmark::Event::*;
     use pulldown_cmark::Tag::*;
 
@@ -185,12 +186,12 @@ fn markdown_to_html(markdown: String) -> String {
     let (_, _) = pulldown_cmark::Parser::new_ext(&markdown, markdown_options).fold(
         (0, 0),
         |(start_quote_count, end_quote_count), event| match event {
-            // Replace this pattern (`>>>` syntax):
+            // Replace this sequence (`>>>` syntax):
             //     Start(BlockQuote)
             //     Start(BlockQuote)
             //     Start(BlockQuote)
             //     Start(Paragraph)
-            // For `Start(CodeBlock(Indented))`
+            // For `Start(CodeBlock(Fenced(Borrowed("roc"))))`
             Start(BlockQuote) => {
                 docs_parser.push(event);
                 (start_quote_count + 1, 0)
@@ -200,18 +201,18 @@ fn markdown_to_html(markdown: String) -> String {
                     docs_parser.pop();
                     docs_parser.pop();
                     docs_parser.pop();
-                    docs_parser.push(Start(CodeBlock(Indented)));
+                    docs_parser.push(Start(CodeBlock(Fenced(Borrowed("roc")))));
                 } else {
                     docs_parser.push(event);
                 }
                 (0, 0)
             }
-            // Replace this pattern (`>>>` syntax):
+            // Replace this sequence (`>>>` syntax):
             //     End(Paragraph)
             //     End(BlockQuote)
             //     End(BlockQuote)
             //     End(BlockQuote)
-            // For `End(CodeBlock(Indented))`
+            // For `End(CodeBlock(Fenced(Borrowed("roc"))))`
             End(Paragraph) => {
                 docs_parser.push(event);
                 (0, 1)
@@ -221,7 +222,7 @@ fn markdown_to_html(markdown: String) -> String {
                     docs_parser.pop();
                     docs_parser.pop();
                     docs_parser.pop();
-                    docs_parser.push(End(CodeBlock(Indented)));
+                    docs_parser.push(End(CodeBlock(Fenced(Borrowed("roc")))));
                     (0, 0)
                 } else {
                     docs_parser.push(event);
@@ -269,7 +270,7 @@ mod tests {
                 docs: "<p>Multiparagraph documentation.</p>\n<p>Without any complex syntax yet!</p>\n".to_string(),
             }, ModuleEntry {
                 name: "codeblock".to_string(),
-                docs: "<p>Turns &gt;&gt;&gt; into code block for now.</p>\n<pre><code>codeblock</code></pre>\n".to_string(),
+                docs: "<p>Turns &gt;&gt;&gt; into code block for now.</p>\n<pre><code class=\"language-roc\">codeblock</code></pre>\n".to_string(),
             },
         ];
 
