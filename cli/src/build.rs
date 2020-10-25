@@ -24,6 +24,7 @@ pub fn build_file(
     src_dir: PathBuf,
     roc_file_path: PathBuf,
     opt_level: OptLevel,
+    link_type: LinkType,
 ) -> Result<PathBuf, LoadingProblem> {
     let compilation_start = SystemTime::now();
     let arena = Bump::new();
@@ -104,8 +105,7 @@ pub fn build_file(
             target,
             binary_path,
             &[host_input_path.as_path().to_str().unwrap(), app_o_file.as_path().to_str().unwrap()],
-            // LinkType::Executable,
-            LinkType::Dylib,
+            link_type
         )
         .map_err(|_| {
             todo!("gracefully handle `rustc` failing to spawn.");
