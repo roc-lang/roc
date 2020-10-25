@@ -1,14 +1,15 @@
-let
+{ }:
+
+with {
   # Look here for information about how pin version of nixpkgs
   #  → https://nixos.wiki/wiki/FAQ/Pinning_Nixpkgs
-  pinnedPkgs = import (builtins.fetchGit {
-    name = "nixpkgs-20.03";
-    url = "https://github.com/nixos/nixpkgs/";
-    ref = "refs/heads/release-20.03";
+  pkgs = import (builtins.fetchGit {
+    name = "nixpkgs-2020-10-24";
+    url = "https://github.com/nixos/nixpkgs-channels/";
+    ref = "refs/heads/nixpkgs-unstable";
+    rev = "502845c3e31ef3de0e424f3fcb09217df2ce6df6";
   }) { };
-
-  # This allows overriding pkgs by passing `--arg pkgs ...`
-in { pkgs ? pinnedPkgs }:
+};
 
 let
   isMacOS = builtins.currentSystem == "x86_64-darwin";
@@ -29,15 +30,20 @@ let
   lld = pkgs.lld_10; # this should match llvm's version
   inputs =
     [
+      # build libraries
       pkgs.rustup
       pkgs.cargo
       llvm
-      # libraries for llvm
+      pkgs.valgrind
+      # llb deps
       pkgs.libffi
       pkgs.libxml2
       pkgs.zlib
       # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
       lld
+      # dev tools
+      pkgs.rust-analyzer
+      pkgs.ccls
     ];
 in pkgs.mkShell {
   buildInputs = inputs ++ darwin-frameworks;
