@@ -58,17 +58,19 @@ macro_rules! log {
 pub enum Phase {
     LoadHeader,
     Parse,
-    CanonicalizeAndConstrain,
+    Canonicalize,
+    Constrain,
     SolveTypes,
     FindSpecializations,
     MakeSpecializations,
 }
 
 /// NOTE keep up to date manually, from ParseAndGenerateConstraints to the highest phase we support
-const PHASES: [Phase; 6] = [
+const PHASES: [Phase; 7] = [
     Phase::LoadHeader,
     Phase::Parse,
-    Phase::CanonicalizeAndConstrain,
+    Phase::Canonicalize,
+    Phase::Constrain,
     Phase::SolveTypes,
     Phase::FindSpecializations,
     Phase::MakeSpecializations,
@@ -93,12 +95,10 @@ impl Dependencies {
         for dep in dependencies.iter().copied() {
             // to parse and generate constraints, the headers of all dependencies must be loaded!
             // otherwise, we don't know whether an imported symbol is actually exposed
-            self.add_dependency_help(
-                module_id,
-                dep,
-                Phase::ParseAndGenerateConstraints,
-                Phase::LoadHeader,
-            );
+            self.add_dependency_help(module_id, dep, Phase::Parse, Phase::LoadHeader);
+
+            // self.add_dependency(module_id, dep, Phase::Canonicalize);
+            // self.add_dependency(module_id, dep, Phase::Constrain);
 
             self.add_dependency(module_id, dep, Phase::SolveTypes);
 
@@ -127,6 +127,8 @@ impl Dependencies {
         for dep in dependencies {
             output.insert((*dep, LoadHeader));
         }
+
+        dbg!(&self);
 
         output
     }
@@ -227,64 +229,72 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
             }
         }
-
-        Phase::ParseAndGenerateConstraints => {
+        Phase::Parse => {
+            // parse the file
             let header = state.module_cache.headers.remove(&module_id).unwrap();
-            let module_id = header.module_id;
-            let deps_by_name = &header.deps_by_name;
-            let num_deps = deps_by_name.len();
-            let mut dep_idents: IdentIdsByModule = IdentIds::exposed_builtins(num_deps);
 
-            let State {
-                ident_ids_by_module,
-                ..
-            } = &state;
-
-            {
-                let ident_ids_by_module = (*ident_ids_by_module).lock();
-
-                // Populate dep_idents with each of their IdentIds,
-                // which we'll need during canonicalization to translate
-                // identifier strings into IdentIds, which we need to build Symbols.
-                // We only include the modules we care about (the ones we import).
-                //
-                // At the end of this loop, dep_idents contains all the information to
-                // resolve a symbol from another module: if it's in here, that means
-                // we have both imported the module and the ident was exported by that mdoule.
-                for dep_id in header.deps_by_name.values() {
-                    // We already verified that these are all present,
-                    // so unwrapping should always succeed here.
-                    let idents = ident_ids_by_module.get(&dep_id).unwrap();
-
-                    dep_idents.insert(*dep_id, idents.clone());
-                }
-            }
-
-            // Clone the module_ids we'll need for canonicalization.
-            // This should be small, and cloning it should be quick.
-            // We release the lock as soon as we're done cloning, so we don't have
-            // to lock the global module_ids while canonicalizing any given module.
-            let module_ids = Arc::clone(&state.arc_modules);
-            let module_ids = { (*module_ids).lock().clone() };
-
-            debug_assert!(header
-                .imported_modules
-                .iter()
-                .all(|id| module_ids.get_name(*id).is_some()));
-
-            let exposed_symbols = state
-                .exposed_symbols_by_module
-                .remove(&module_id)
-                .expect("Could not find listener ID in exposed_symbols_by_module");
-
-            BuildTask::ParseAndConstrain {
-                header,
-                mode: state.stdlib.mode,
-                module_ids,
-                dep_idents,
-                exposed_symbols,
-            }
+            BuildTask::Parse { header }
         }
+        Phase::Canonicalize => todo!(),
+        Phase::Constrain => todo!(),
+
+        //        Phase::ParseAndGenerateConstraints => {
+        //            let header = state.module_cache.headers.remove(&module_id).unwrap();
+        //            let module_id = header.module_id;
+        //            let deps_by_name = &header.deps_by_name;
+        //            let num_deps = deps_by_name.len();
+        //            let mut dep_idents: IdentIdsByModule = IdentIds::exposed_builtins(num_deps);
+        //
+        //            let State {
+        //                ident_ids_by_module,
+        //                ..
+        //            } = &state;
+        //
+        //            {
+        //                let ident_ids_by_module = (*ident_ids_by_module).lock();
+        //
+        //                // Populate dep_idents with each of their IdentIds,
+        //                // which we'll need during canonicalization to translate
+        //                // identifier strings into IdentIds, which we need to build Symbols.
+        //                // We only include the modules we care about (the ones we import).
+        //                //
+        //                // At the end of this loop, dep_idents contains all the information to
+        //                // resolve a symbol from another module: if it's in here, that means
+        //                // we have both imported the module and the ident was exported by that mdoule.
+        //                for dep_id in header.deps_by_name.values() {
+        //                    // We already verified that these are all present,
+        //                    // so unwrapping should always succeed here.
+        //                    let idents = ident_ids_by_module.get(&dep_id).unwrap();
+        //
+        //                    dep_idents.insert(*dep_id, idents.clone());
+        //                }
+        //            }
+        //
+        //            // Clone the module_ids we'll need for canonicalization.
+        //            // This should be small, and cloning it should be quick.
+        //            // We release the lock as soon as we're done cloning, so we don't have
+        //            // to lock the global module_ids while canonicalizing any given module.
+        //            let module_ids = Arc::clone(&state.arc_modules);
+        //            let module_ids = { (*module_ids).lock().clone() };
+        //
+        //            debug_assert!(header
+        //                .imported_modules
+        //                .iter()
+        //                .all(|id| module_ids.get_name(*id).is_some()));
+        //
+        //            let exposed_symbols = state
+        //                .exposed_symbols_by_module
+        //                .remove(&module_id)
+        //                .expect("Could not find listener ID in exposed_symbols_by_module");
+        //
+        //            BuildTask::ParseAndConstrain {
+        //                header,
+        //                mode: state.stdlib.mode,
+        //                module_ids,
+        //                dep_idents,
+        //                exposed_symbols,
+        //            }
+        //        }
         Phase::SolveTypes => {
             let constrained = state.module_cache.constrained.remove(&module_id).unwrap();
 
@@ -454,6 +464,12 @@ pub struct MonomorphizedModule<'a> {
 #[derive(Debug)]
 enum Msg<'a> {
     Header(ModuleHeader<'a>),
+    Parsed {
+        src: &'a str,
+        module_timing: ModuleTiming,
+        imported_modules: MutSet<ModuleId>,
+    },
+    Canonicalized {},
     Constrained {
         module: Module,
         declarations: Vec<Declaration>,
@@ -647,13 +663,18 @@ enum BuildTask<'a> {
         module_ids: Arc<Mutex<ModuleIds>>,
         ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     },
-    ParseAndConstrain {
+    Parse {
         header: ModuleHeader<'a>,
-        mode: Mode,
-        module_ids: ModuleIds,
-        dep_idents: IdentIdsByModule,
-        exposed_symbols: MutSet<Symbol>,
     },
+    //    ParseAndConstrain {
+    //        header: ModuleHeader<'a>,
+    //        mode: Mode,
+    //        module_ids: ModuleIds,
+    //        dep_idents: IdentIdsByModule,
+    //        exposed_symbols: MutSet<Symbol>,
+    //    },
+    Canonicalize {},
+    Constrain {},
     Solve {
         module: Module,
         ident_ids: IdentIds,
@@ -1228,6 +1249,12 @@ fn update<'a>(
 
             Ok(state)
         }
+        Parsed {
+            module_timing,
+            src,
+            imported_modules,
+        } => todo!(),
+        Canonicalized {} => todo!(),
         Constrained {
             module,
             declarations,
@@ -1265,9 +1292,7 @@ fn update<'a>(
                 .constrained
                 .insert(module_id, constrained_module);
 
-            let work = state
-                .dependencies
-                .notify(module_id, Phase::ParseAndGenerateConstraints);
+            let work = state.dependencies.notify(module_id, Phase::Constrain);
 
             for (module_id, phase) in work {
                 let task = start_phase(module_id, phase, &mut state);
@@ -2001,6 +2026,35 @@ fn run_solve<'a>(
     }
 }
 
+fn parse<'a>(header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem> {
+    let mut module_timing = header.module_timing;
+    let parse_start = SystemTime::now();
+    let arena = Bump::new();
+    let parse_state = parser::State::new(&header.src, Attempting::Module);
+    let (parsed_defs, _) = module_defs()
+        .parse(&arena, parse_state)
+        .expect("TODO gracefully handle parse error on module defs. IMPORTANT: Bail out entirely if there are any BadUtf8 problems! That means the whole source file is not valid UTF-8 and any other errors we report may get mis-reported. We rely on this for safety in an `unsafe` block later on in this function.");
+
+    // Record the parse end time once, to avoid checking the time a second time
+    // immediately afterward (for the beginning of canonicalization).
+    let parse_end = SystemTime::now();
+
+    module_timing.parse_body = parse_end.duration_since(parse_start).unwrap();
+
+    let imported_modules = header.imported_modules;
+
+    // SAFETY: By this point we've already incrementally verified that there
+    // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors,
+    // we'd have bailed out before now.
+    let src = unsafe { from_utf8_unchecked(header.src) };
+
+    Ok(Msg::Parsed {
+        module_timing,
+        src,
+        imported_modules,
+    })
+}
+
 /// Parse the module, canonicalize it, and generate constraints for it.
 fn parse_and_constrain<'a>(
     header: ModuleHeader<'a>,
@@ -2380,13 +2434,16 @@ fn run_task<'a>(
             ident_ids_by_module,
         } => load_module(arena, src_dir, module_name, module_ids, ident_ids_by_module)
             .map(|(_, msg)| msg),
-        ParseAndConstrain {
-            header,
-            mode,
-            module_ids,
-            dep_idents,
-            exposed_symbols,
-        } => parse_and_constrain(header, mode, &module_ids, dep_idents, exposed_symbols),
+        Parse { header } => parse(header),
+        Canonicalize {} => todo!(),
+        Constrain {} => todo!(),
+        //        ParseAndConstrain {
+        //            header,
+        //            mode,
+        //            module_ids,
+        //            dep_idents,
+        //            exposed_symbols,
+        //        } => parse_and_constrain(header, mode, &module_ids, dep_idents, exposed_symbols),
         Solve {
             module,
             module_timing,
