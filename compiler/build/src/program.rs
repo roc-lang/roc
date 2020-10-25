@@ -2,7 +2,6 @@ use crate::target;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::targets::{CodeModel, FileType, RelocMode};
-use inkwell::OptimizationLevel;
 use roc_gen::layout_id::LayoutIds;
 use roc_gen::llvm::build::{build_proc, build_proc_header, module_from_builtins, OptLevel, Scope};
 use roc_load::file::MonomorphizedModule;
@@ -126,10 +125,9 @@ pub fn gen_from_mono_module(
 
     // Emit the .o file
 
-    let opt = OptimizationLevel::Aggressive;
     let reloc = RelocMode::Default;
     let model = CodeModel::Default;
-    let target_machine = target::target_machine(&target, opt, reloc, model).unwrap();
+    let target_machine = target::target_machine(&target, opt_level.into(), reloc, model).unwrap();
 
     target_machine
         .write_to_file(&env.module, FileType::Object, &app_o_file)
