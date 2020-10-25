@@ -1,8 +1,14 @@
+use crate::target;
 use crate::target::arch_str;
+use inkwell::module::Module;
+use inkwell::targets::{CodeModel, FileType, RelocMode};
+use libloading::{Error, Library};
+use roc_gen::llvm::build::OptLevel;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
+use tempfile::tempdir;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LinkType {
@@ -258,4 +264,42 @@ fn link_macos(
             .spawn()?,
         output_path,
     ))
+}
+
+pub fn module_to_dylib(
+    module: &Module,
+    target: &Triple,
+    opt_level: OptLevel,
+) -> Result<Library, Error> {
+    let dir = tempdir().unwrap();
+    let filename = PathBuf::from("Test.roc");
+    let file_path = dir.path().join(filename.clone());
+    let mut app_o_file = PathBuf::from(file_path.clone());
+
+    app_o_file.set_file_name("app.o");
+
+    // Emit the .o file using position-indepedent code (PIC) - needed for dylibs
+    let reloc = RelocMode::PIC;
+    let model = CodeModel::Default;
+    let target_machine = target::target_machine(target, opt_level.into(), reloc, model).unwrap();
+
+    target_machine
+        .write_to_file(module, FileType::Object, &app_o_file)
+        .expect("Writing .o file failed");
+
+    // Link app.o into a dylib - e.g. app.so or app.dylib
+    let (mut child, dylib_path) = link(
+        &Triple::host(),
+        app_o_file.clone(),
+        &[app_o_file.to_str().unwrap()],
+        LinkType::Dylib,
+    )
+    .unwrap();
+
+    child.wait().unwrap();
+
+    // Load the dylib
+    let path = dylib_path.as_path().to_str().unwrap();
+
+    Library::new(path)
 }

@@ -2217,6 +2217,7 @@ dependencies = [
  "indoc",
  "inkwell",
  "inlinable_string",
+ "libloading",
  "maplit",
  "pretty_assertions",
  "quickcheck",
@@ -2238,7 +2239,7 @@ dependencies = [
  "roc_unify",
  "roc_uniq",
  "target-lexicon",
- "tokio",
+ "tempfile",
 ]
 
 [[package]]
@@ -2453,7 +2454,6 @@ dependencies = [
  "roc_unify",
  "roc_uniq",
  "target-lexicon",
- "tempfile",
  "tokio",
 ]
 

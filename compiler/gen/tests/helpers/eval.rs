@@ -1,12 +1,6 @@
-use inkwell::targets::{CodeModel, FileType, RelocMode};
 use libloading::Library;
-use roc_build::{
-    link::{link, LinkType},
-    target,
-};
+use roc_build::link::module_to_dylib;
 use roc_collections::all::{MutMap, MutSet};
-use target_lexicon::Triple;
-use tempfile::tempdir;
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app Test provides [ main ] imports []\n\nmain =\n");
@@ -264,36 +258,8 @@ pub fn helper<'a>(
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    let dir = tempdir().unwrap();
-    let filename = PathBuf::from("Test.roc");
-    let file_path = dir.path().join(filename.clone());
-    let mut app_o_file = PathBuf::from(file_path.clone());
-
-    app_o_file.set_file_name("app.o");
-
-    // Emit the .o file using position-indepedent code (PIC) - needed for dylibs
-    let reloc = RelocMode::PIC;
-    let model = CodeModel::Default;
-    let target_machine = target::target_machine(&target, opt_level.into(), reloc, model).unwrap();
-
-    target_machine
-        .write_to_file(&env.module, FileType::Object, &app_o_file)
-        .expect("Writing .o file failed");
-
-    // Link app.o into a dylib - e.g. app.so or app.dylib
-    let (mut child, dylib_path) = link(
-        &Triple::host(),
-        app_o_file.clone(),
-        &[app_o_file.to_str().unwrap()],
-        LinkType::Dylib,
-    )
-    .unwrap();
-
-    child.wait().unwrap();
-
-    // Load the dylib
-    let path = dylib_path.as_path().to_str().unwrap();
-    let lib = Library::new(path).expect("Error loading compiled dylib for test");
+    let lib = module_to_dylib(&env.module, &target, opt_level)
+        .expect("Error loading compiled dylib for test");
 
     (main_fn_name, errors, lib)
 }
