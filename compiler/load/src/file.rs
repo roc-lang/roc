@@ -97,9 +97,6 @@ impl Dependencies {
             // otherwise, we don't know whether an imported symbol is actually exposed
             self.add_dependency_help(module_id, dep, Phase::Parse, Phase::LoadHeader);
 
-            // self.add_dependency(module_id, dep, Phase::Canonicalize);
-            // self.add_dependency(module_id, dep, Phase::Constrain);
-
             self.add_dependency(module_id, dep, Phase::SolveTypes);
 
             if goal_phase >= FindSpecializations {
@@ -203,7 +200,8 @@ impl Dependencies {
 struct ModuleCache<'a> {
     module_names: MutMap<ModuleId, ModuleName>,
     headers: MutMap<ModuleId, ModuleHeader<'a>>,
-    canonicalized: MutMap<ModuleId, ModuleOutput>,
+    parsed: MutMap<ModuleId, ParsedModule<'a>>,
+    canonicalized: MutMap<ModuleId, CanonicalizedModule<'a>>,
     constrained: MutMap<ModuleId, ConstrainedModule<'a>>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
@@ -235,7 +233,63 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
 
             BuildTask::Parse { header }
         }
-        Phase::Canonicalize => todo!(),
+        Phase::Canonicalize => {
+            // canonicalize the file
+            let parsed = state.module_cache.parsed.remove(&module_id).unwrap();
+
+            let deps_by_name = parsed.deps_by_name;
+            let num_deps = deps_by_name.len();
+            let mut dep_idents: IdentIdsByModule = IdentIds::exposed_builtins(num_deps);
+
+            let State {
+                ident_ids_by_module,
+                ..
+            } = &state;
+
+            {
+                let ident_ids_by_module = (*ident_ids_by_module).lock();
+
+                // Populate dep_idents with each of their IdentIds,
+                // which we'll need during canonicalization to translate
+                // identifier strings into IdentIds, which we need to build Symbols.
+                // We only include the modules we care about (the ones we import).
+                //
+                // At the end of this loop, dep_idents contains all the information to
+                // resolve a symbol from another module: if it's in here, that means
+                // we have both imported the module and the ident was exported by that mdoule.
+                for dep_id in deps_by_name.values() {
+                    // We already verified that these are all present,
+                    // so unwrapping should always succeed here.
+                    let idents = ident_ids_by_module.get(&dep_id).unwrap();
+
+                    dep_idents.insert(*dep_id, idents.clone());
+                }
+            }
+
+            // Clone the module_ids we'll need for canonicalization.
+            // This should be small, and cloning it should be quick.
+            // We release the lock as soon as we're done cloning, so we don't have
+            // to lock the global module_ids while canonicalizing any given module.
+            let module_ids = Arc::clone(&state.arc_modules);
+            let module_ids = { (*module_ids).lock().clone() };
+
+            //            debug_assert!(parse
+            //                .imported_modules
+            //                .iter()
+            //                .all(|id| module_ids.get_name(*id).is_some()));
+
+            let exposed_symbols = state
+                .exposed_symbols_by_module
+                .remove(&module_id)
+                .expect("Could not find listener ID in exposed_symbols_by_module");
+
+            BuildTask::Canonicalize {
+                parsed,
+                dep_idents,
+                exposed_symbols,
+                module_ids,
+            }
+        }
         Phase::Constrain => todo!(),
 
         //        Phase::ParseAndGenerateConstraints => {
@@ -462,14 +516,31 @@ pub struct MonomorphizedModule<'a> {
 }
 
 #[derive(Debug)]
+struct ParsedModule<'a> {
+    module_id: ModuleId,
+    module_name: ModuleName,
+    src: &'a str,
+    module_timing: ModuleTiming,
+    deps_by_name: MutMap<ModuleName, ModuleId>,
+    imported_modules: MutSet<ModuleId>,
+    exposed_ident_ids: IdentIds,
+    exposed_imports: MutMap<Ident, (Symbol, Region)>,
+    parsed_defs: &'a [Located<roc_parse::ast::Def<'a>>],
+}
+
+#[derive(Debug)]
+struct CanonicalizedModule<'a> {
+    module: Module,
+    module_output: ModuleOutput,
+    src: &'a str,
+    module_timing: ModuleTiming,
+}
+
+#[derive(Debug)]
 enum Msg<'a> {
     Header(ModuleHeader<'a>),
-    Parsed {
-        src: &'a str,
-        module_timing: ModuleTiming,
-        imported_modules: MutSet<ModuleId>,
-    },
-    Canonicalized {},
+    Parsed(ParsedModule<'a>),
+    Canonicalized(CanonicalizedModule<'a>),
     Constrained {
         module: Module,
         declarations: Vec<Declaration>,
@@ -673,7 +744,12 @@ enum BuildTask<'a> {
     //        dep_idents: IdentIdsByModule,
     //        exposed_symbols: MutSet<Symbol>,
     //    },
-    Canonicalize {},
+    Canonicalize {
+        parsed: ParsedModule<'a>,
+        module_ids: ModuleIds,
+        dep_idents: IdentIdsByModule,
+        exposed_symbols: MutSet<Symbol>,
+    },
     Constrain {},
     Solve {
         module: Module,
@@ -1249,12 +1325,37 @@ fn update<'a>(
 
             Ok(state)
         }
-        Parsed {
-            module_timing,
-            src,
-            imported_modules,
-        } => todo!(),
-        Canonicalized {} => todo!(),
+        Parsed(parsed) => {
+            state.module_cache.parsed.insert(parsed.module_id, parsed);
+
+            let work = state.dependencies.notify(parsed.module_id, Phase::Parse);
+
+            for (module_id, phase) in work {
+                let task = start_phase(module_id, phase, &mut state);
+
+                enqueue_task(&injector, worker_listeners, task)?
+            }
+
+            Ok(state)
+        }
+        Canonicalized(canonical) => {
+            state
+                .module_cache
+                .canonicalized
+                .insert(canonical.module.module_id, canonical);
+
+            let work = state
+                .dependencies
+                .notify(canonical.module.module_id, Phase::Canonicalize);
+
+            for (module_id, phase) in work {
+                let task = start_phase(module_id, phase, &mut state);
+
+                enqueue_task(&injector, worker_listeners, task)?
+            }
+
+            Ok(state)
+        }
         Constrained {
             module,
             declarations,
@@ -2026,14 +2127,85 @@ fn run_solve<'a>(
     }
 }
 
-fn parse<'a>(header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem> {
+fn canonicalize<'a>(
+    arena: &'a Bump,
+    module_ids: &ModuleIds,
+    dep_idents: IdentIdsByModule,
+    exposed_symbols: MutSet<Symbol>,
+    parsed: ParsedModule<'a>,
+) -> Result<Msg<'a>, LoadingProblem> {
+    let canonicalize_start = SystemTime::now();
+
+    let ParsedModule {
+        module_id,
+        module_name,
+        exposed_ident_ids,
+        parsed_defs,
+        exposed_imports,
+        mut module_timing,
+        src,
+        ..
+    } = parsed;
+
+    // Generate documentation information
+    // TODO: store timing information?
+    let module_docs =
+        crate::docs::generate_module_docs(module_name, &exposed_ident_ids, &parsed_defs);
+
+    let mut var_store = VarStore::default();
+    let canonicalized = canonicalize_module_defs(
+        &arena,
+        parsed_defs,
+        module_id,
+        module_ids,
+        exposed_ident_ids,
+        dep_idents,
+        exposed_imports,
+        exposed_symbols,
+        &mut var_store,
+    );
+    let canonicalize_end = SystemTime::now();
+
+    module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start).unwrap();
+
+    match canonicalized {
+        Ok(mut module_output) => {
+            let module = Module {
+                module_id,
+                exposed_imports: module_output.exposed_imports,
+                exposed_vars_by_symbol: module_output.exposed_vars_by_symbol,
+                references: module_output.references,
+                aliases: module_output.aliases,
+                rigid_variables: module_output.rigid_variables,
+            };
+
+            let canonical = CanonicalizedModule {
+                module,
+                module_output,
+                module_timing,
+                src,
+            };
+
+            Ok(Msg::Canonicalized(canonical))
+        }
+        Err(runtime_error) => {
+            panic!(
+                "TODO gracefully handle module canonicalization error {:?}",
+                runtime_error
+            );
+        }
+    }
+}
+
+fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem> {
     let mut module_timing = header.module_timing;
     let parse_start = SystemTime::now();
-    let arena = Bump::new();
     let parse_state = parser::State::new(&header.src, Attempting::Module);
     let (parsed_defs, _) = module_defs()
         .parse(&arena, parse_state)
         .expect("TODO gracefully handle parse error on module defs. IMPORTANT: Bail out entirely if there are any BadUtf8 problems! That means the whole source file is not valid UTF-8 and any other errors we report may get mis-reported. We rely on this for safety in an `unsafe` block later on in this function.");
+
+    let parsed_defs = parsed_defs.into_bump_slice();
 
     // Record the parse end time once, to avoid checking the time a second time
     // immediately afterward (for the beginning of canonicalization).
@@ -2048,11 +2220,28 @@ fn parse<'a>(header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem> {
     // we'd have bailed out before now.
     let src = unsafe { from_utf8_unchecked(header.src) };
 
-    Ok(Msg::Parsed {
-        module_timing,
+    let ModuleHeader {
+        module_id,
+        module_name,
+        deps_by_name,
+        exposed_ident_ids,
+        exposed_imports,
+        ..
+    } = header;
+
+    let parsed = ParsedModule {
+        module_id,
+        module_name,
+        deps_by_name,
+        exposed_ident_ids,
+        exposed_imports,
         src,
+        parsed_defs,
         imported_modules,
-    })
+        module_timing,
+    };
+
+    Ok(Msg::Parsed(parsed))
 }
 
 /// Parse the module, canonicalize it, and generate constraints for it.
@@ -2083,6 +2272,8 @@ fn parse_and_constrain<'a>(
         &header.exposed_ident_ids,
         &parsed_defs,
     );
+
+    let parsed_defs = parsed_defs.into_bump_slice();
 
     let mut var_store = VarStore::default();
     let canonicalized = canonicalize_module_defs(
@@ -2434,8 +2625,14 @@ fn run_task<'a>(
             ident_ids_by_module,
         } => load_module(arena, src_dir, module_name, module_ids, ident_ids_by_module)
             .map(|(_, msg)| msg),
-        Parse { header } => parse(header),
-        Canonicalize {} => todo!(),
+        Parse { header } => parse(arena, header),
+        Canonicalize {
+            parsed,
+            module_ids,
+            dep_idents,
+            exposed_symbols,
+        } => canonicalize(arena, &module_ids, dep_idents, exposed_symbols, parsed),
+
         Constrain {} => todo!(),
         //        ParseAndConstrain {
         //            header,
