@@ -1,4 +1,4 @@
-use roc_collections::all::ImMap;
+use roc_collections::all::{ImMap, MutSet};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -146,14 +146,21 @@ impl Scope {
         vars: Vec<Located<(Lowercase, Variable)>>,
         typ: Type,
     ) {
-        self.aliases.insert(
-            name,
-            Alias {
-                region,
-                vars,
-                uniqueness: None,
-                typ,
-            },
-        );
+        let mut hidden_variables = MutSet::default();
+        hidden_variables.extend(typ.variables());
+
+        for loc_var in vars.iter() {
+            hidden_variables.remove(&loc_var.value.1);
+        }
+
+        let alias = Alias {
+            region,
+            vars,
+            hidden_variables,
+            uniqueness: None,
+            typ,
+        };
+
+        self.aliases.insert(name, alias);
     }
 }

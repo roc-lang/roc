@@ -150,8 +150,16 @@ where
             ));
         }
 
+        let mut hidden_variables = MutSet::default();
+        hidden_variables.extend(actual.variables());
+
+        for loc_var in vars.iter() {
+            hidden_variables.remove(&loc_var.value.1);
+        }
+
         let alias = Alias {
             vars,
+            hidden_variables,
             region: builtin_alias.region,
             uniqueness: None,
             typ: actual,
@@ -196,8 +204,16 @@ pub fn constrain_imported_aliases(
 
         actual.substitute(&substitution);
 
+        let mut hidden_variables = MutSet::default();
+        hidden_variables.extend(actual.variables());
+
+        for loc_var in vars.iter() {
+            hidden_variables.remove(&loc_var.value.1);
+        }
+
         let alias = Alias {
             vars,
+            hidden_variables,
             region: imported_alias.region,
             uniqueness: imported_alias.uniqueness,
             typ: actual,

@@ -195,6 +195,18 @@ fn can_annotation_help(
                         vars.push((name.clone(), arg_ann));
                     }
 
+                    // make sure the recursion variable is freshly instantiated
+                    if let Type::RecursiveTagUnion(rvar, _, _) = &mut actual {
+                        let new = var_store.fresh();
+                        substitutions.insert(*rvar, Type::Variable(new));
+                        *rvar = new;
+                    }
+
+                    // make sure hidden variables are freshly instantiated
+                    for var in alias.hidden_variables.iter() {
+                        substitutions.insert(*var, Type::Variable(var_store.fresh()));
+                    }
+
                     // instantiate variables
                     actual.substitute(&substitutions);
 
@@ -320,9 +332,17 @@ fn can_annotation_help(
                     inner_type
                 };
 
+                let mut hidden_variables = MutSet::default();
+                hidden_variables.extend(alias_actual.variables());
+
+                for loc_var in lowercase_vars.iter() {
+                    hidden_variables.remove(&loc_var.value.1);
+                }
+
                 let alias = Alias {
                     region,
                     vars: lowercase_vars,
+                    hidden_variables,
                     uniqueness: None,
                     typ: alias_actual,
                 };
