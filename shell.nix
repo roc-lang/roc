@@ -35,6 +35,7 @@ let
       pkgs.cargo
       llvm
       pkgs.valgrind
+      (import ./nix/zig.nix { inherit pkgs isMacOS; })
       # llb deps
       pkgs.libffi
       pkgs.libxml2
