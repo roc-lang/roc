@@ -686,9 +686,17 @@ mod gen_num {
         assert_evals_to!("Num.powInt 2 3", 8, i64);
     }
 
+    // For some reason, libm's atan has slightly different results on macos vs non-macos
     #[test]
-    fn atan() {
+    #[cfg(target_os = "macos")]
+    fn atan_macos() {
         assert_evals_to!("Num.atan 10", 1.4711276743037345, f64);
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn atan() {
+        assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
     }
 
     // #[test]
