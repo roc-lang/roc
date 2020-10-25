@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
-use roc_can::module::{canonicalize_module_defs, Module};
+use roc_can::module::{canonicalize_module_defs, Module, ModuleOutput};
 use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_constrain::module::{
     constrain_imports, load_builtin_aliases, pre_constrain_imports, ConstrainableImports, Import,
@@ -57,16 +57,18 @@ macro_rules! log {
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Debug)]
 pub enum Phase {
     LoadHeader,
-    ParseAndGenerateConstraints,
+    Parse,
+    CanonicalizeAndConstrain,
     SolveTypes,
     FindSpecializations,
     MakeSpecializations,
 }
 
 /// NOTE keep up to date manually, from ParseAndGenerateConstraints to the highest phase we support
-const PHASES: [Phase; 5] = [
+const PHASES: [Phase; 6] = [
     Phase::LoadHeader,
-    Phase::ParseAndGenerateConstraints,
+    Phase::Parse,
+    Phase::CanonicalizeAndConstrain,
     Phase::SolveTypes,
     Phase::FindSpecializations,
     Phase::MakeSpecializations,
@@ -199,6 +201,7 @@ impl Dependencies {
 struct ModuleCache<'a> {
     module_names: MutMap<ModuleId, ModuleName>,
     headers: MutMap<ModuleId, ModuleHeader<'a>>,
+    canonicalized: MutMap<ModuleId, ModuleOutput>,
     constrained: MutMap<ModuleId, ConstrainedModule<'a>>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
