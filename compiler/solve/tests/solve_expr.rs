@@ -2286,7 +2286,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn typecheck_mutually_recursive_tag_union() {
+    fn typecheck_mutually_recursive_tag_union_2() {
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -2313,6 +2313,7 @@ mod solve_expr {
     }
 
     #[test]
+    #[ignore]
     fn typecheck_mutually_recursive_tag_union_listabc() {
         infer_eq_without_problem(
             indoc!(

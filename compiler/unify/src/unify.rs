@@ -140,6 +140,7 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
     }
     match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, &ctx.second_desc.content),
+        RecursionVar(opt_name) => unify_recursion(subs, &ctx, opt_name, &ctx.second_desc.content),
         RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
@@ -168,7 +169,7 @@ fn unify_alias(
             // Alias wins
             merge(subs, &ctx, Alias(symbol, args.to_owned(), real_var))
         }
-        RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second),
+        RecursionVar(_) | RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second),
         Alias(other_symbol, other_args, other_real_var) => {
             if symbol == *other_symbol {
                 if args.len() == other_args.len() {
@@ -212,6 +213,10 @@ fn unify_structure(
         RigidVar(name) => {
             // Type mismatch! Rigid can only unify with flex.
             mismatch!("trying to unify {:?} with rigid var {:?}", &flat_type, name)
+        }
+        RecursionVar(_) => {
+            // keep recursion var around
+            merge(subs, ctx, other.clone())
         }
 
         Structure(ref other_flat_type) => {
@@ -769,6 +774,21 @@ fn unify_flat_type(
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
 
+            //            if true {
+            //                let c1 = subs.get(*rec1);
+            //                let c2 = subs.get(*rec2);
+            //
+            //                let context = Context {
+            //                    first: *rec1,
+            //                    first_desc: c1,
+            //                    second: *rec2,
+            //                    second_desc: c2,
+            //                };
+            //                let content = subs.get(*rec1).content;
+            //
+            //                merge(subs, &context, content);
+            //            }
+
             unify_tag_union(subs, pool, ctx, union1, union2, (Some(*rec1), Some(*rec2)))
         }
 
@@ -902,7 +922,7 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
             // If the other is flex, rigid wins!
             merge(subs, ctx, RigidVar(name.clone()))
         }
-        RigidVar(_) | Structure(_) | Alias(_, _, _) => {
+        RigidVar(_) | RecursionVar(_) | Structure(_) | Alias(_, _, _) => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
             mismatch!("Rigid with {:?}", &other)
@@ -927,7 +947,36 @@ fn unify_flex(
             merge(subs, ctx, FlexVar(opt_name.clone()))
         }
 
-        FlexVar(Some(_)) | RigidVar(_) | Structure(_) | Alias(_, _, _) => {
+        FlexVar(Some(_)) | RigidVar(_) | RecursionVar(_) | Structure(_) | Alias(_, _, _) => {
+            // TODO special-case boolean here
+            // In all other cases, if left is flex, defer to right.
+            // (This includes using right's name if both are flex and named.)
+            merge(subs, ctx, other.clone())
+        }
+
+        Error => merge(subs, ctx, Error),
+    }
+}
+
+#[inline(always)]
+fn unify_recursion(
+    subs: &mut Subs,
+    ctx: &Context,
+    opt_name: &Option<Lowercase>,
+    other: &Content,
+) -> Outcome {
+    match other {
+        RecursionVar(None) => {
+            // If both are flex, and only left has a name, keep the name around.
+            merge(subs, ctx, FlexVar(opt_name.clone()))
+        }
+
+        Structure(_) => {
+            // keep the recursion var around
+            merge(subs, ctx, FlexVar(opt_name.clone()))
+        }
+
+        FlexVar(_) | RigidVar(_) | RecursionVar(_) | Alias(_, _, _) => {
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
             // (This includes using right's name if both are flex and named.)

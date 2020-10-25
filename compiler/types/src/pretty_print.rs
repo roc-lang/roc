@@ -109,7 +109,7 @@ fn find_names_needed(
     }
 
     match subs.get_without_compacting(variable).content {
-        FlexVar(None) => {
+        RecursionVar(None) | FlexVar(None) => {
             let root = subs.get_root_key_without_compacting(variable);
 
             // If this var is *not* its own root, then the
@@ -128,7 +128,7 @@ fn find_names_needed(
                 }
             }
         }
-        FlexVar(Some(name)) => {
+        RecursionVar(Some(name)) | FlexVar(Some(name)) => {
             // This root already has a name. Nothing more to do here!
 
             // User-defined names are already taken.
@@ -289,8 +289,8 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
     use crate::subs::Content::*;
 
     match content {
-        FlexVar(Some(name)) => buf.push_str(name.as_str()),
-        FlexVar(None) => buf.push_str(WILDCARD),
+        RecursionVar(Some(name)) | FlexVar(Some(name)) => buf.push_str(name.as_str()),
+        RecursionVar(None) | FlexVar(None) => buf.push_str(WILDCARD),
         RigidVar(name) => buf.push_str(name.as_str()),
         Structure(flat_type) => write_flat_type(env, flat_type, subs, buf, parens),
         Alias(symbol, args, _actual) => {

@@ -527,11 +527,11 @@ pub enum Content {
     ///
     /// When we auto-generate a type var name, e.g. the "a" in (a -> a), we
     /// change the Option in here from None to Some.
-    FlexVar(
-        Option<Lowercase>, /* name - e.g. in pattern matching, or a named type var */
-    ),
+    FlexVar(Option<Lowercase>),
     /// name given in a user-written annotation
     RigidVar(Lowercase),
+    /// name given to a recursion variable
+    RecursionVar(Option<Lowercase>),
     Structure(FlatType),
     Alias(Symbol, Vec<(Lowercase, Variable)>, Variable),
     Error,
@@ -606,7 +606,7 @@ fn occurs(
         Some((root_var, vec![]))
     } else {
         match subs.get_without_compacting(root_var).content {
-            FlexVar(_) | RigidVar(_) | Error => None,
+            FlexVar(_) | RigidVar(_) | RecursionVar(_) | Error => None,
 
             Structure(flat_type) => {
                 let mut new_seen = seen.clone();
@@ -698,7 +698,7 @@ fn explicit_substitute(
             to
         } else {
             match subs.get(in_var).content {
-                FlexVar(_) | RigidVar(_) | Error => in_var,
+                FlexVar(_) | RigidVar(_) | RecursionVar(_) | Error => in_var,
 
                 Structure(flat_type) => {
                     match flat_type {
@@ -803,8 +803,9 @@ fn get_var_names(
         subs.set_mark(var, Mark::GET_VAR_NAMES);
 
         match desc.content {
-            Error | FlexVar(None) => taken_names,
-            FlexVar(Some(name)) => {
+            Error | RecursionVar(None) | FlexVar(None) => taken_names,
+
+            RecursionVar(Some(name)) | FlexVar(Some(name)) => {
                 add_name(subs, 0, name, var, |name| FlexVar(Some(name)), taken_names)
             }
 
@@ -984,6 +985,8 @@ fn content_to_err_type(
 
         RigidVar(name) => ErrorType::RigidVar(name),
 
+        RecursionVar(_opt_name) => todo!(),
+
         Alias(symbol, args, aliased_to) => {
             let err_args = args
                 .into_iter()
@@ -1154,7 +1157,7 @@ fn restore_content(subs: &mut Subs, content: &Content) {
     use FlatType::*;
 
     match content {
-        FlexVar(_) | RigidVar(_) | Error => (),
+        FlexVar(_) | RigidVar(_) | RecursionVar(_) | Error => (),
 
         Structure(flat_type) => match flat_type {
             Apply(_, args) => {
