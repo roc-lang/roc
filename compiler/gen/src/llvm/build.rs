@@ -50,6 +50,15 @@ pub enum OptLevel {
     Optimize,
 }
 
+impl Into<OptimizationLevel> for OptLevel {
+    fn into(self) -> OptimizationLevel {
+        match self {
+            OptLevel::Normal => OptimizationLevel::None,
+            OptLevel::Optimize => OptimizationLevel::Aggressive,
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, PointerValue<'ctx>)>,

@@ -2219,6 +2219,7 @@ dependencies = [
  "indoc",
  "inkwell",
  "inlinable_string",
+ "libloading",
  "maplit",
  "pretty_assertions",
  "quickcheck",
@@ -2240,7 +2241,7 @@ dependencies = [
  "roc_unify",
  "roc_uniq",
  "target-lexicon",
- "tokio",
+ "tempfile",
 ]
 
 [[package]]
@@ -2258,10 +2259,6 @@ dependencies = [
  "roc_region",
  "roc_types",
 ]
-
-[[package]]
-name = "roc_builtins_bitcode"
-version = "0.1.0"
 
 [[package]]
 name = "roc_can"
@@ -2297,6 +2294,7 @@ dependencies = [
  "inkwell",
  "inlinable_string",
  "libc",
+ "libloading",
  "maplit",
  "pretty_assertions",
  "quickcheck",
@@ -2431,10 +2429,12 @@ dependencies = [
  "inkwell",
  "inlinable_string",
  "libc",
+ "libloading",
  "maplit",
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",
+ "roc_build",
  "roc_builtins",
  "roc_can",
  "roc_collections",
