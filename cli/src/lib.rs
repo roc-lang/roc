@@ -3,6 +3,7 @@ extern crate clap;
 
 use clap::ArgMatches;
 use clap::{App, Arg};
+use roc_build::link::LinkType;
 use roc_gen::llvm::build::OptLevel;
 use std::io;
 use std::path::Path;
@@ -91,7 +92,7 @@ pub fn build(target: &Triple, matches: &ArgMatches, run_after_build: bool) -> io
         }
     });
 
-    let binary_path = build::build_file(target, src_dir, path, opt_level)
+    let binary_path = build::build_file(target, src_dir, path, opt_level, LinkType::Executable)
         .expect("TODO gracefully handle build_file failing");
 
     if run_after_build {

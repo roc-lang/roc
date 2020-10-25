@@ -28,24 +28,23 @@ impl<T: Sized> Into<Result<T, String>> for RocCallResult<T> {
 
 #[macro_export]
 macro_rules! run_jit_function {
-    ($execution_engine: expr, $main_fn_name: expr, $ty:ty, $transform:expr) => {{
+    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr) => {{
         let v: std::vec::Vec<roc_problem::can::Problem> = std::vec::Vec::new();
-        run_jit_function!($execution_engine, $main_fn_name, $ty, $transform, v)
+        run_jit_function!($lib, $main_fn_name, $ty, $transform, v)
     }};
 
-    ($execution_engine: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr) => {{
+    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr) => {{
         use inkwell::context::Context;
-        use inkwell::execution_engine::JitFunction;
         use roc_gen::run_roc::RocCallResult;
 
         unsafe {
-            let main: JitFunction<unsafe extern "C" fn() -> RocCallResult<$ty>> = $execution_engine
-                .get_function($main_fn_name)
+            let main: libloading::Symbol<unsafe extern "C" fn() -> RocCallResult<$ty>> = $lib
+                .get($main_fn_name.as_bytes())
                 .ok()
                 .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
                 .expect("errored");
 
-            match main.call().into() {
+            match main().into() {
                 Ok(success) => {
                     // only if there are no exceptions thrown, check for errors
                     assert_eq!(
@@ -68,26 +67,25 @@ macro_rules! run_jit_function {
 /// It explicitly allocates a buffer that the roc main function can write its result into.
 #[macro_export]
 macro_rules! run_jit_function_dynamic_type {
-    ($execution_engine: expr, $main_fn_name: expr, $bytes:expr, $transform:expr) => {{
+    ($lib: expr, $main_fn_name: expr, $bytes:expr, $transform:expr) => {{
         let v: std::vec::Vec<roc_problem::can::Problem> = std::vec::Vec::new();
-        run_jit_function_dynamic_type!($execution_engine, $main_fn_name, $bytes, $transform, v)
+        run_jit_function_dynamic_type!($lib, $main_fn_name, $bytes, $transform, v)
     }};
 
-    ($execution_engine: expr, $main_fn_name: expr, $bytes:expr, $transform:expr, $errors:expr) => {{
+    ($lib: expr, $main_fn_name: expr, $bytes:expr, $transform:expr, $errors:expr) => {{
         use inkwell::context::Context;
-        use inkwell::execution_engine::JitFunction;
         use roc_gen::run_roc::RocCallResult;
 
         unsafe {
-            let main: JitFunction<unsafe extern "C" fn(*const u8)> = $execution_engine
-                .get_function($main_fn_name)
+            let main: libloading::Symbol<unsafe extern "C" fn(*const u8)> = $lib
+                .get($main_fn_name.as_bytes())
                 .ok()
                 .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
                 .expect("errored");
 
             let layout = std::alloc::Layout::array::<u8>($bytes).unwrap();
             let result = std::alloc::alloc(layout);
-            main.call(result);
+            main(result);
 
             let flag = *result;
 
