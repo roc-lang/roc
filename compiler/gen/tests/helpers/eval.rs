@@ -271,8 +271,8 @@ pub fn helper<'a>(
 
     app_o_file.set_file_name("app.o");
 
-    // Emit the .o file
-    let reloc = RelocMode::Default;
+    // Emit the .o file using position-indepedent code (PIC) - needed for dylibs
+    let reloc = RelocMode::PIC;
     let model = CodeModel::Default;
     let target_machine = target::target_machine(&target, opt_level.into(), reloc, model).unwrap();
 
