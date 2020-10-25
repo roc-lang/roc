@@ -2991,7 +2991,11 @@ pub fn with_hole<'a>(
                 .zip(arg_symbols.iter().rev());
             assign_to_symbols(env, procs, layout_cache, iter, result)
         }
-        RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
+        RuntimeError(e) => {
+            eprintln!("emitted runtime error {:?}", &e);
+
+            Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e)))
+        }
     }
 }
 
@@ -4496,9 +4500,9 @@ fn call_by_name<'a>(
                             None => {
                                 // This must have been a runtime error.
                                 match procs.runtime_errors.get(&proc_name) {
-                                    Some(error) => {
-                                        Stmt::RuntimeError(env.arena.alloc(format!("{:?}", error)))
-                                    }
+                                    Some(error) => Stmt::RuntimeError(
+                                        env.arena.alloc(format!("runtime error {:?}", error)),
+                                    ),
                                     None => unreachable!("Proc name {:?} is invalid", proc_name),
                                 }
                             }
@@ -4507,10 +4511,19 @@ fn call_by_name<'a>(
                 }
             }
         }
-        Err(e) => {
-            // This function code gens to a runtime error,
-            // so attempting to call it will immediately crash.
-            Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e)))
+        Err(LayoutProblem::UnresolvedTypeVar(var)) => {
+            let msg = format!(
+                "Hit an unresolved type variable {:?} when creating a layout for {:?}",
+                var, proc_name
+            );
+            Stmt::RuntimeError(env.arena.alloc(msg))
+        }
+        Err(LayoutProblem::Erroneous) => {
+            let msg = format!(
+                "Hit an erroneous type when creating a layout for {:?}",
+                proc_name
+            );
+            Stmt::RuntimeError(env.arena.alloc(msg))
         }
     }
 }
