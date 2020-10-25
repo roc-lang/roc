@@ -1,6 +1,6 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use inkwell::execution_engine::ExecutionEngine;
+use libloading::Library;
 use roc_collections::all::MutMap;
 use roc_gen::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::ident::{Lowercase, TagName};
@@ -31,7 +31,7 @@ struct Env<'a, 'env> {
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn jit_to_ast<'a>(
     arena: &'a Bump,
-    execution_engine: ExecutionEngine,
+    lib: Library,
     main_fn_name: &str,
     layout: &Layout<'a>,
     content: &Content,
@@ -48,42 +48,43 @@ pub unsafe fn jit_to_ast<'a>(
         interns,
     };
 
-    jit_to_ast_help(&env, execution_engine, main_fn_name, layout, content)
+    jit_to_ast_help(&env, lib, main_fn_name, layout, content)
 }
 
 fn jit_to_ast_help<'a>(
     env: &Env<'a, '_>,
-    execution_engine: ExecutionEngine,
+    lib: Library,
     main_fn_name: &str,
     layout: &Layout<'a>,
     content: &Content,
 ) -> Expr<'a> {
     match layout {
-        Layout::Builtin(Builtin::Int64) => run_jit_function!(
-            execution_engine,
-            main_fn_name,
-            i64,
-            |num| num_to_ast(env, i64_to_ast(env.arena, num), content)
-        ),
-        Layout::Builtin(Builtin::Float64) => run_jit_function!(
-            execution_engine,
-            main_fn_name,
-            f64,
-            |num| num_to_ast(env, f64_to_ast(env.arena, num), content)
-        ),
-        Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => run_jit_function!(
-            execution_engine,
-            main_fn_name,
-            &'static str,
-            |string: &'static str| { str_to_ast(env.arena, env.arena.alloc(string)) }
-        ),
+        Layout::Builtin(Builtin::Int64) => {
+            run_jit_function!(lib, main_fn_name, i64, |num| num_to_ast(
+                env,
+                i64_to_ast(env.arena, num),
+                content
+            ))
+        }
+        Layout::Builtin(Builtin::Float64) => {
+            run_jit_function!(lib, main_fn_name, f64, |num| num_to_ast(
+                env,
+                f64_to_ast(env.arena, num),
+                content
+            ))
+        }
+        Layout::Builtin(Builtin::Str) | Layout::Builtin(Builtin::EmptyStr) => {
+            run_jit_function!(lib, main_fn_name, &'static str, |string: &'static str| {
+                str_to_ast(env.arena, env.arena.alloc(string))
+            })
+        }
         Layout::Builtin(Builtin::EmptyList) => {
-            run_jit_function!(execution_engine, main_fn_name, &'static str, |_| {
+            run_jit_function!(lib, main_fn_name, &'static str, |_| {
                 Expr::List(Vec::new_in(env.arena))
             })
         }
         Layout::Builtin(Builtin::List(_, elem_layout)) => run_jit_function!(
-            execution_engine,
+            lib,
             main_fn_name,
             (*const libc::c_void, usize),
             |(ptr, len): (*const libc::c_void, usize)| {
@@ -111,31 +112,21 @@ fn jit_to_ast_help<'a>(
                 8 => match layout.stack_size(env.ptr_bytes) {
                     8 => {
                         // just one eightbyte, returned as-is
-                        run_jit_function!(
-                            execution_engine,
-                            main_fn_name,
-                            [u8; 8],
-                            |bytes: [u8; 8]| {
-                                ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
-                            }
-                        )
+                        run_jit_function!(lib, main_fn_name, [u8; 8], |bytes: [u8; 8]| {
+                            ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
+                        })
                     }
                     16 => {
                         // two eightbytes, returned as-is
-                        run_jit_function!(
-                            execution_engine,
-                            main_fn_name,
-                            [u8; 16],
-                            |bytes: [u8; 16]| {
-                                ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
-                            }
-                        )
+                        run_jit_function!(lib, main_fn_name, [u8; 16], |bytes: [u8; 16]| {
+                            ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
+                        })
                     }
                     larger_size => {
                         // anything more than 2 eightbytes
                         // the return "value" is a pointer to the result
                         run_jit_function_dynamic_type!(
-                            execution_engine,
+                            lib,
                             main_fn_name,
                             larger_size as usize,
                             |bytes: *const u8| { ptr_to_ast(bytes as *const libc::c_void) }
@@ -150,31 +141,21 @@ fn jit_to_ast_help<'a>(
                     match layout.stack_size(env.ptr_bytes) {
                         4 => {
                             // just one fourbyte, returned as-is
-                            run_jit_function!(
-                                execution_engine,
-                                main_fn_name,
-                                [u8; 4],
-                                |bytes: [u8; 4]| {
-                                    ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
-                                }
-                            )
+                            run_jit_function!(lib, main_fn_name, [u8; 4], |bytes: [u8; 4]| {
+                                ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
+                            })
                         }
                         8 => {
                             // just one fourbyte, returned as-is
-                            run_jit_function!(
-                                execution_engine,
-                                main_fn_name,
-                                [u8; 8],
-                                |bytes: [u8; 8]| {
-                                    ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
-                                }
-                            )
+                            run_jit_function!(lib, main_fn_name, [u8; 8], |bytes: [u8; 8]| {
+                                ptr_to_ast((&bytes).as_ptr() as *const libc::c_void)
+                            })
                         }
                         larger_size => {
                             // anything more than 2 fourbytes
                             // the return "value" is a pointer to the result
                             run_jit_function_dynamic_type!(
-                                execution_engine,
+                                lib,
                                 main_fn_name,
                                 larger_size as usize,
                                 |bytes: *const u8| { ptr_to_ast(bytes as *const libc::c_void) }

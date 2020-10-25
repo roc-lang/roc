@@ -68,7 +68,7 @@ mod gen_num {
             indoc!(
                 r#"
                     limitedNegate = \num ->
-                        x = 
+                        x =
                             if num == 1 then
                                 -1
                             else if num == -1 then
@@ -482,7 +482,7 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                wrapper = \{} -> 
+                wrapper = \{} ->
                     when 10 is
                         x if x == 5 -> 0
                         _ -> 42
@@ -500,7 +500,7 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                wrapper = \{} -> 
+                wrapper = \{} ->
                     when 10 is
                         x if x == 10 -> 42
                         _ -> 0
@@ -691,19 +691,19 @@ mod gen_num {
         assert_evals_to!("Num.atan 10", 1.4711276743037345, f64);
     }
 
-    #[test]
-    #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
-    fn int_overflow() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                9_223_372_036_854_775_807 + 1
-                "#
-            ),
-            0,
-            i64
-        );
-    }
+    // #[test]
+    // #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
+    // fn int_overflow() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //             9_223_372_036_854_775_807 + 1
+    //             "#
+    //         ),
+    //         0,
+    //         i64
+    //     );
+    // }
 
     #[test]
     fn int_add_checked() {
@@ -750,7 +750,7 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                when Num.addChecked 1.0 0.0 is 
+                when Num.addChecked 1.0 0.0 is
                     Ok v -> v
                     Err Overflow -> -1.0
                 "#
@@ -775,17 +775,17 @@ mod gen_num {
         );
     }
 
-    #[test]
-    #[should_panic(expected = r#"Roc failed with message: "float addition overflowed!"#)]
-    fn float_overflow() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                1.7976931348623157e308 + 1.7976931348623157e308
-                "#
-            ),
-            0.0,
-            f64
-        );
-    }
+    //     #[test]
+    //     #[should_panic(expected = r#"Roc failed with message: "float addition overflowed!"#)]
+    //     fn float_overflow() {
+    //         assert_evals_to!(
+    //             indoc!(
+    //                 r#"
+    //                 1.7976931348623157e308 + 1.7976931348623157e308
+    //                 "#
+    //             ),
+    //             0.0,
+    //             f64
+    //         );
+    //     }
 }
