@@ -181,12 +181,6 @@ fn markdown_to_html(markdown: String) -> String {
     use pulldown_cmark::Tag::*;
 
     let markdown_options = pulldown_cmark::Options::all();
-    // let docs_parser =
-    //     pulldown_cmark::Parser::new_ext(&markdown, markdown_options).map(|event| match event {
-    //         Event::Start(Tag::BlockQuote) => {println!("{:?}", event);event},
-    //         Event::End(Tag::BlockQuote) => {println!("{:?}", event);event},
-    //         _ => {println!("{:?}", event);event},
-    //     });
     let mut docs_parser = vec![];
     let (_, _) = pulldown_cmark::Parser::new_ext(&markdown, markdown_options).fold(
         (0, 0),
