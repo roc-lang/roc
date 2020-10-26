@@ -194,12 +194,12 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 if multiline_args {
                     let arg_indent = indent + INDENT;
 
-                    for loc_arg in loc_args {
+                    for loc_arg in loc_args.iter() {
                         newline(buf, arg_indent);
                         loc_arg.format_with_options(buf, Parens::InApply, Newlines::No, arg_indent);
                     }
                 } else {
-                    for loc_arg in loc_args {
+                    for loc_arg in loc_args.iter() {
                         buf.push(' ');
                         loc_arg.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
                     }
@@ -707,7 +707,7 @@ fn fmt_if<'a>(
 
 pub fn fmt_closure<'a>(
     buf: &mut String<'a>,
-    loc_patterns: &'a Vec<'a, Located<Pattern<'a>>>,
+    loc_patterns: &'a [Located<Pattern<'a>>],
     loc_ret: &'a Located<Expr<'a>>,
     indent: u16,
 ) {
