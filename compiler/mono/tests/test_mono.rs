@@ -13,6 +13,9 @@ mod helpers;
 #[cfg(test)]
 mod test_mono {
     use roc_collections::all::MutMap;
+    use roc_module::symbol::Symbol;
+    use roc_mono::ir::Proc;
+    use roc_mono::layout::Layout;
 
     fn promote_expr_to_module(src: &str) -> String {
         let mut buffer = String::from("app Test provides [ main ] imports []\n\nmain =\n");
@@ -27,15 +30,6 @@ mod test_mono {
         buffer
     }
 
-    // NOTE because the Show instance of module names is different in --release mode,
-    // these tests would all fail. In the future, when we do interesting optimizations,
-    // we'll likely want some tests for --release too.
-    #[cfg(not(debug_assertions))]
-    fn compiles_to_ir(_src: &str, _expected: &str) {
-        // just do nothing
-    }
-
-    #[cfg(debug_assertions)]
     fn compiles_to_ir(src: &str, expected: &str) {
         use bumpalo::Bump;
         use std::path::{Path, PathBuf};
@@ -88,8 +82,18 @@ mod test_mono {
         assert!(mono_problems.is_empty());
 
         debug_assert_eq!(exposed_to_host.len(), 1);
+
         let main_fn_symbol = exposed_to_host.keys().copied().nth(0).unwrap();
 
+        verify_procedures(expected, procedures, main_fn_symbol);
+    }
+
+    #[cfg(debug_assertions)]
+    fn verify_procedures(
+        expected: &str,
+        procedures: MutMap<(Symbol, Layout<'_>), Proc<'_>>,
+        main_fn_symbol: Symbol,
+    ) {
         let index = procedures
             .keys()
             .position(|(s, _)| *s == main_fn_symbol)
@@ -118,6 +122,18 @@ mod test_mono {
             assert_eq!(expected_lines, result_lines);
             assert_eq!(0, 1);
         }
+    }
+
+    // NOTE because the Show instance of module names is different in --release mode,
+    // these tests would all fail. In the future, when we do interesting optimizations,
+    // we'll likely want some tests for --release too.
+    #[cfg(not(debug_assertions))]
+    fn verify_procedures(
+        _expected: &str,
+        _procedures: MutMap<(Symbol, Layout<'_>), Proc<'_>>,
+        _main_fn_symbol: Symbol,
+    ) {
+        // Do nothing
     }
 
     #[test]
@@ -154,7 +170,6 @@ mod test_mono {
         )
     }
 
-    #[test]
     #[test]
     fn ir_when_maybe() {
         compiles_to_ir(
