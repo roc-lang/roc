@@ -90,9 +90,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
         List(elems) | Nested(List(elems)) => {
             let mut new_elems = Vec::with_capacity_in(elems.len(), arena);
 
-            for elem in elems {
+            for elem in elems.iter() {
                 new_elems.push(desugar_expr(arena, elem));
             }
+            let new_elems = new_elems.into_bump_slice();
             let value: Expr<'a> = List(new_elems);
 
             arena.alloc(Located {
@@ -103,7 +104,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
         Record { fields, update } | Nested(Record { fields, update }) => {
             let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
 
-            for field in fields {
+            for field in fields.iter() {
                 let value = desugar_field(arena, &field.value);
 
                 new_fields.push(Located {
@@ -111,6 +112,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                     region: field.region,
                 });
             }
+
+            let new_fields = new_fields.into_bump_slice();
 
             arena.alloc(Located {
                 region: loc_expr.region,
@@ -139,6 +142,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 desugared_defs.push(&*arena.alloc(loc_def));
             }
 
+            let desugared_defs = desugared_defs.into_bump_slice();
+
             arena.alloc(Located {
                 value: Defs(desugared_defs, desugar_expr(arena, loc_ret)),
                 region: loc_expr.region,
@@ -147,9 +152,11 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
         Apply(loc_fn, loc_args, called_via) | Nested(Apply(loc_fn, loc_args, called_via)) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), arena);
 
-            for loc_arg in loc_args {
+            for loc_arg in loc_args.iter() {
                 desugared_args.push(desugar_expr(arena, loc_arg));
             }
+
+            let desugared_args = desugared_args.into_bump_slice();
 
             arena.alloc(Located {
                 value: Apply(desugar_expr(arena, loc_fn), desugared_args, *called_via),
@@ -164,7 +171,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 let desugared = desugar_expr(arena, &branch.value);
 
                 let mut alternatives = Vec::with_capacity_in(branch.patterns.len(), arena);
-                for loc_pattern in &branch.patterns {
+                for loc_pattern in branch.patterns.iter() {
                     alternatives.push(Located {
                         region: loc_pattern.region,
                         value: Pattern::Nested(&loc_pattern.value),
@@ -177,6 +184,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                     None
                 };
 
+                let alternatives = alternatives.into_bump_slice();
+
                 desugared_branches.push(&*arena.alloc(WhenBranch {
                     patterns: alternatives,
                     value: Located {
@@ -186,6 +195,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                     guard: desugared_guard,
                 }));
             }
+
+            let desugared_branches = desugared_branches.into_bump_slice();
 
             arena.alloc(Located {
                 value: When(loc_desugared_cond, desugared_branches),
@@ -212,6 +223,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             };
             let loc_fn_var = arena.alloc(Located { region, value });
             let desugared_args = bumpalo::vec![in arena; desugar_expr(arena, loc_arg)];
+
+            let desugared_args = desugared_args.into_bump_slice();
 
             arena.alloc(Located {
                 value: Apply(loc_fn_var, desugared_args, CalledVia::UnaryOp(op)),
@@ -463,9 +476,11 @@ fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a L
 
                         args.push(left);
 
-                        for arg in arguments {
+                        for arg in arguments.iter() {
                             args.push(arg);
                         }
+
+                        let args = args.into_bump_slice();
 
                         Apply(function, args, CalledVia::BinOp(Pizza))
                     }
@@ -479,6 +494,8 @@ fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a L
                             value: Nested(expr),
                             region: right.region,
                         });
+
+                        let args = args.into_bump_slice();
 
                         Apply(function, args, CalledVia::BinOp(Pizza))
                     }
@@ -497,6 +514,8 @@ fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a L
                     value: Expr::Var { module_name, ident },
                     region: loc_op.region,
                 });
+
+                let args = args.into_bump_slice();
 
                 Apply(loc_expr, args, CalledVia::BinOp(binop))
             }
