@@ -237,7 +237,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
             // canonicalize the file
             let parsed = state.module_cache.parsed.remove(&module_id).unwrap();
 
-            let deps_by_name = parsed.deps_by_name;
+            let deps_by_name = &parsed.deps_by_name;
             let num_deps = deps_by_name.len();
             let mut dep_idents: IdentIdsByModule = IdentIds::exposed_builtins(num_deps);
 
@@ -531,7 +531,6 @@ struct ParsedModule<'a> {
 #[derive(Debug)]
 struct CanonicalizedModule<'a> {
     module: Module,
-    module_output: ModuleOutput,
     src: &'a str,
     module_timing: ModuleTiming,
 }
@@ -1326,9 +1325,11 @@ fn update<'a>(
             Ok(state)
         }
         Parsed(parsed) => {
+            let module_id = parsed.module_id;
+
             state.module_cache.parsed.insert(parsed.module_id, parsed);
 
-            let work = state.dependencies.notify(parsed.module_id, Phase::Parse);
+            let work = state.dependencies.notify(module_id, Phase::Parse);
 
             for (module_id, phase) in work {
                 let task = start_phase(module_id, phase, &mut state);
@@ -1339,14 +1340,14 @@ fn update<'a>(
             Ok(state)
         }
         Canonicalized(canonical) => {
+            let module_id = canonical.module.module_id;
+
             state
                 .module_cache
                 .canonicalized
                 .insert(canonical.module.module_id, canonical);
 
-            let work = state
-                .dependencies
-                .notify(canonical.module.module_id, Phase::Canonicalize);
+            let work = state.dependencies.notify(module_id, Phase::Canonicalize);
 
             for (module_id, phase) in work {
                 let task = start_phase(module_id, phase, &mut state);
@@ -2169,7 +2170,7 @@ fn canonicalize<'a>(
     module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start).unwrap();
 
     match canonicalized {
-        Ok(mut module_output) => {
+        Ok(module_output) => {
             let module = Module {
                 module_id,
                 exposed_imports: module_output.exposed_imports,
@@ -2181,7 +2182,6 @@ fn canonicalize<'a>(
 
             let canonical = CanonicalizedModule {
                 module,
-                module_output,
                 module_timing,
                 src,
             };
