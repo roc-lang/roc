@@ -171,7 +171,6 @@ mod test_mono {
     }
 
     #[test]
-    #[test]
     fn ir_when_maybe() {
         compiles_to_ir(
             r#"
