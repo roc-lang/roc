@@ -1411,7 +1411,24 @@ fn instantiate_rigids_help(
             copy
         }
 
-        FlexVar(_) | RecursionVar { .. } | Error => copy,
+        FlexVar(_) | Error => copy,
+
+        RecursionVar {
+            opt_name,
+            structure,
+        } => {
+            let new_structure = instantiate_rigids_help(subs, max_rank, pools, structure);
+
+            subs.set(
+                copy,
+                make_descriptor(RecursionVar {
+                    opt_name,
+                    structure: new_structure,
+                }),
+            );
+
+            copy
+        }
 
         RigidVar(name) => {
             subs.set(copy, make_descriptor(FlexVar(Some(name))));
@@ -1586,7 +1603,24 @@ fn deep_copy_var_help(
             copy
         }
 
-        FlexVar(_) | RecursionVar { .. } | Error => copy,
+        FlexVar(_) | Error => copy,
+
+        RecursionVar {
+            opt_name,
+            structure,
+        } => {
+            let new_structure = deep_copy_var_help(subs, max_rank, pools, structure);
+
+            subs.set(
+                copy,
+                make_descriptor(RecursionVar {
+                    opt_name,
+                    structure: new_structure,
+                }),
+            );
+
+            copy
+        }
 
         RigidVar(name) => {
             subs.set(copy, make_descriptor(FlexVar(Some(name))));
