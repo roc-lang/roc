@@ -293,7 +293,7 @@ impl<'a> Layout<'a> {
 
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
-            RecursionVar(_) => todo!("recursion var"),
+            RecursionVar { .. } => todo!("recursion var"),
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
             Alias(Symbol::NUM_INT, args, _) => {
@@ -878,7 +878,7 @@ pub enum UnionVariant<'a> {
 pub fn union_sorted_tags<'a>(arena: &'a Bump, var: Variable, subs: &Subs) -> UnionVariant<'a> {
     let mut tags_vec = std::vec::Vec::new();
     let result = match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => {
+        Ok(()) | Err((_, Content::FlexVar(_))) | Err((_, Content::RecursionVar { .. })) => {
             let opt_rec_var = get_recursion_var(subs, var);
             union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs)
         }
@@ -1091,7 +1091,7 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
     use roc_types::subs::FlatType::*;
 
     match content {
-        RecursionVar(_) => panic!("recursion var in num"),
+        RecursionVar { .. } => panic!("recursion var in num"),
         FlexVar(_) | RigidVar(_) => {
             // If a Num makes it all the way through type checking with an unbound
             // type variable, then assume it's a 64-bit integer.

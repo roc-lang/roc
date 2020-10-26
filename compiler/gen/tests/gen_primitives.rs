@@ -712,6 +712,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn linked_list_sum_int() {
         assert_evals_to!(
             indoc!(
@@ -739,6 +740,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn linked_list_map() {
         assert_evals_to!(
             indoc!(

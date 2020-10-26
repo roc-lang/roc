@@ -531,7 +531,10 @@ pub enum Content {
     /// name given in a user-written annotation
     RigidVar(Lowercase),
     /// name given to a recursion variable
-    RecursionVar(Option<Lowercase>),
+    RecursionVar {
+        structure: Variable,
+        opt_name: Option<Lowercase>,
+    },
     Structure(FlatType),
     Alias(Symbol, Vec<(Lowercase, Variable)>, Variable),
     Error,
@@ -606,7 +609,7 @@ fn occurs(
         Some((root_var, vec![]))
     } else {
         match subs.get_without_compacting(root_var).content {
-            FlexVar(_) | RigidVar(_) | RecursionVar(_) | Error => None,
+            FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Error => None,
 
             Structure(flat_type) => {
                 let mut new_seen = seen.clone();
@@ -698,7 +701,7 @@ fn explicit_substitute(
             to
         } else {
             match subs.get(in_var).content {
-                FlexVar(_) | RigidVar(_) | RecursionVar(_) | Error => in_var,
+                FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Error => in_var,
 
                 Structure(flat_type) => {
                     match flat_type {
@@ -803,11 +806,29 @@ fn get_var_names(
         subs.set_mark(var, Mark::GET_VAR_NAMES);
 
         match desc.content {
-            Error | RecursionVar(None) | FlexVar(None) => taken_names,
+            Error | FlexVar(None) => taken_names,
 
-            RecursionVar(Some(name)) | FlexVar(Some(name)) => {
+            FlexVar(Some(name)) => {
                 add_name(subs, 0, name, var, |name| FlexVar(Some(name)), taken_names)
             }
+
+            RecursionVar {
+                opt_name,
+                structure,
+            } => match opt_name {
+                Some(name) => add_name(
+                    subs,
+                    0,
+                    name,
+                    var,
+                    |name| RecursionVar {
+                        opt_name: Some(name),
+                        structure,
+                    },
+                    taken_names,
+                ),
+                None => taken_names,
+            },
 
             RigidVar(name) => add_name(subs, 0, name, var, RigidVar, taken_names),
 
@@ -985,7 +1006,7 @@ fn content_to_err_type(
 
         RigidVar(name) => ErrorType::RigidVar(name),
 
-        RecursionVar(_opt_name) => todo!(),
+        RecursionVar { .. } => todo!(),
 
         Alias(symbol, args, aliased_to) => {
             let err_args = args
@@ -1157,7 +1178,7 @@ fn restore_content(subs: &mut Subs, content: &Content) {
     use FlatType::*;
 
     match content {
-        FlexVar(_) | RigidVar(_) | RecursionVar(_) | Error => (),
+        FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Error => (),
 
         Structure(flat_type) => match flat_type {
             Apply(_, args) => {

@@ -747,12 +747,20 @@ fn type_to_variable(
             };
             tag_vars.extend(ext_tag_vec.into_iter());
 
-            subs.set_content(*rec_var, Content::RecursionVar(None));
-
             let content =
                 Content::Structure(FlatType::RecursiveTagUnion(*rec_var, tag_vars, new_ext_var));
 
-            register(subs, rank, pools, content)
+            let tag_union_var = register(subs, rank, pools, content);
+
+            subs.set_content(
+                *rec_var,
+                Content::RecursionVar {
+                    opt_name: None,
+                    structure: tag_union_var,
+                },
+            );
+
+            tag_union_var
         }
         Alias(Symbol::BOOL_BOOL, _, _) => Variable::BOOL,
         Alias(symbol, args, alias_type) => {
@@ -1116,7 +1124,7 @@ fn adjust_rank_content(
     use roc_types::subs::FlatType::*;
 
     match content {
-        FlexVar(_) | RigidVar(_) | RecursionVar(_) | Error => group_rank,
+        FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Error => group_rank,
 
         Structure(flat_type) => {
             match flat_type {
@@ -1403,7 +1411,7 @@ fn instantiate_rigids_help(
             copy
         }
 
-        FlexVar(_) | RecursionVar(_) | Error => copy,
+        FlexVar(_) | RecursionVar { .. } | Error => copy,
 
         RigidVar(name) => {
             subs.set(copy, make_descriptor(FlexVar(Some(name))));
@@ -1578,7 +1586,7 @@ fn deep_copy_var_help(
             copy
         }
 
-        FlexVar(_) | RecursionVar(_) | Error => copy,
+        FlexVar(_) | RecursionVar { .. } | Error => copy,
 
         RigidVar(name) => {
             subs.set(copy, make_descriptor(FlexVar(Some(name))));
