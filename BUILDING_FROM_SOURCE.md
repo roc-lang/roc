@@ -7,15 +7,17 @@ To build the compiler, you need these installed:
 
 * `libunwind` (macOS should already have this one installed)
 * `libc++-dev`
+* [`zig`](https://ziglang.org/download/)
 * a particular version of LLVM
 
 To run the test suite (via `cargo test`), you additionally need to install:
 
 * [`valgrind`](https://www.valgrind.org/) (needs special treatment to [install on macOS](https://stackoverflow.com/a/61359781)]
 
-Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev`.) macOS systems
-should already have `libunwind`, but other systems will need to install it
-(e.g. with `sudo apt-get install libunwind-dev`).
+Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev`.)
+MacOS systems should already have `libunwind`, but other systems will need to install it (e.g. with `sudo apt-get install libunwind-dev`).
+
+To install Zig on macOS, use `brew install zig`. To install on Ubuntu, checkout [zig's docs](https://github.com/dryzig/zig-debian/blob/master/README.md).
 
 To see which version of LLVM you need, take a look at `Cargo.toml`, in particular the `branch` section of the `inkwell` dependency. It should have something like `llvmX-Y` where X and Y are the major and minor revisions of LLVM you need.
 

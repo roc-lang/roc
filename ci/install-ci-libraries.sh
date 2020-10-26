@@ -60,3 +60,11 @@ wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
 add-apt-repository "${REPO_NAME}"
 apt-get update
 apt-get install -y clang-$LLVM_VERSION lldb-$LLVM_VERSION lld-$LLVM_VERSION clangd-$LLVM_VERSION libc++abi-dev libunwind-dev valgrind
+
+# install zig
+echo 'deb https://dl.bintray.com/dryzig/zig-ubuntu bionic main' | tee -a /etc/apt/sources.list
+apt update
+apt install zig
+
+# symlink llvm tools
+ln -s /usr/bin/llvm-as-10 /usr/local/bin/llvm-as
