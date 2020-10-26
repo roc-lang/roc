@@ -55,10 +55,9 @@ jobs:
         name: cargo test
         with:
           command: test
-          args: --no-fail-fast
 
       - uses: actions-rs/cargo@v1
         name: cargo test --release
         with:
           command: test
-          args: --release --no-fail-fast
+          args: --release
