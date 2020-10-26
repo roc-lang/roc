@@ -58,19 +58,17 @@ macro_rules! log {
 pub enum Phase {
     LoadHeader,
     Parse,
-    Canonicalize,
-    Constrain,
+    CanonicalizeAndConstrain,
     SolveTypes,
     FindSpecializations,
     MakeSpecializations,
 }
 
 /// NOTE keep up to date manually, from ParseAndGenerateConstraints to the highest phase we support
-const PHASES: [Phase; 7] = [
+const PHASES: [Phase; 6] = [
     Phase::LoadHeader,
     Phase::Parse,
-    Phase::Canonicalize,
-    Phase::Constrain,
+    Phase::CanonicalizeAndConstrain,
     Phase::SolveTypes,
     Phase::FindSpecializations,
     Phase::MakeSpecializations,
@@ -124,8 +122,6 @@ impl Dependencies {
         for dep in dependencies {
             output.insert((*dep, LoadHeader));
         }
-
-        dbg!(&self);
 
         output
     }
@@ -233,7 +229,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
 
             BuildTask::Parse { header }
         }
-        Phase::Canonicalize => {
+        Phase::CanonicalizeAndConstrain => {
             // canonicalize the file
             let parsed = state.module_cache.parsed.remove(&module_id).unwrap();
 
@@ -283,14 +279,14 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 .remove(&module_id)
                 .expect("Could not find listener ID in exposed_symbols_by_module");
 
-            BuildTask::Canonicalize {
+            BuildTask::CanonicalizeAndConstrain {
                 parsed,
                 dep_idents,
                 exposed_symbols,
                 module_ids,
+                mode: state.stdlib.mode,
             }
         }
-        Phase::Constrain => todo!(),
 
         //        Phase::ParseAndGenerateConstraints => {
         //            let header = state.module_cache.headers.remove(&module_id).unwrap();
@@ -539,19 +535,23 @@ struct CanonicalizedModule<'a> {
 enum Msg<'a> {
     Header(ModuleHeader<'a>),
     Parsed(ParsedModule<'a>),
-    Canonicalized(CanonicalizedModule<'a>),
-    Constrained {
-        module: Module,
-        declarations: Vec<Declaration>,
-        imported_modules: MutSet<ModuleId>,
-        src: &'a str,
-        constraint: Constraint,
-        ident_ids: IdentIds,
-        problems: Vec<roc_problem::can::Problem>,
-        var_store: VarStore,
-        module_timing: ModuleTiming,
+    CanonicalizedAndConstrained {
+        constrained_module: ConstrainedModule<'a>,
+        canonicalization_problems: Vec<roc_problem::can::Problem>,
         module_docs: ModuleDocumentation,
     },
+    //    Constrained {
+    //        module: Module,
+    //        declarations: Vec<Declaration>,
+    //        imported_modules: MutSet<ModuleId>,
+    //        src: &'a str,
+    //        constraint: Constraint,
+    //        ident_ids: IdentIds,
+    //        problems: Vec<roc_problem::can::Problem>,
+    //        var_store: VarStore,
+    //        module_timing: ModuleTiming,
+    //        module_docs: ModuleDocumentation,
+    //    },
     SolvedTypes {
         src: &'a str,
         module_id: ModuleId,
@@ -736,20 +736,13 @@ enum BuildTask<'a> {
     Parse {
         header: ModuleHeader<'a>,
     },
-    //    ParseAndConstrain {
-    //        header: ModuleHeader<'a>,
-    //        mode: Mode,
-    //        module_ids: ModuleIds,
-    //        dep_idents: IdentIdsByModule,
-    //        exposed_symbols: MutSet<Symbol>,
-    //    },
-    Canonicalize {
+    CanonicalizeAndConstrain {
         parsed: ParsedModule<'a>,
         module_ids: ModuleIds,
         dep_idents: IdentIdsByModule,
+        mode: Mode,
         exposed_symbols: MutSet<Symbol>,
     },
-    Constrain {},
     Solve {
         module: Module,
         ident_ids: IdentIds,
@@ -1339,62 +1332,40 @@ fn update<'a>(
 
             Ok(state)
         }
-        Canonicalized(canonical) => {
-            let module_id = canonical.module.module_id;
-
-            state
-                .module_cache
-                .canonicalized
-                .insert(canonical.module.module_id, canonical);
-
-            let work = state.dependencies.notify(module_id, Phase::Canonicalize);
-
-            for (module_id, phase) in work {
-                let task = start_phase(module_id, phase, &mut state);
-
-                enqueue_task(&injector, worker_listeners, task)?
-            }
-
-            Ok(state)
-        }
-        Constrained {
-            module,
-            declarations,
-            src,
-            ident_ids,
-            imported_modules,
-            constraint,
-            problems,
-            var_store,
-            module_timing,
+        //        CanonicalizedAndConstrained {
+        //            module,
+        //            declarations,
+        //            src,
+        //            ident_ids,
+        //            imported_modules,
+        //            constraint,
+        //            problems,
+        //            var_store,
+        //            module_timing,
+        //            module_docs,
+        //        } => {
+        CanonicalizedAndConstrained {
+            constrained_module,
+            canonicalization_problems,
             module_docs,
         } => {
-            log!("generated constraints for {:?}", module.module_id);
-            let module_id = module.module_id;
-            state.can_problems.extend(problems);
+            let module_id = constrained_module.module.module_id;
+            log!("generated constraints for {:?}", module_id);
+            state.can_problems.extend(canonicalization_problems);
 
             state
                 .module_cache
                 .documentation
                 .insert(module_id, module_docs);
 
-            let constrained_module = ConstrainedModule {
-                module,
-                constraint,
-                declarations,
-                ident_ids,
-                src,
-                module_timing,
-                var_store,
-                imported_modules,
-            };
-
             state
                 .module_cache
                 .constrained
                 .insert(module_id, constrained_module);
 
-            let work = state.dependencies.notify(module_id, Phase::Constrain);
+            let work = state
+                .dependencies
+                .notify(module_id, Phase::CanonicalizeAndConstrain);
 
             for (module_id, phase) in work {
                 let task = start_phase(module_id, phase, &mut state);
@@ -2128,11 +2099,12 @@ fn run_solve<'a>(
     }
 }
 
-fn canonicalize<'a>(
+fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
     module_ids: &ModuleIds,
     dep_idents: IdentIdsByModule,
     exposed_symbols: MutSet<Symbol>,
+    mode: Mode,
     parsed: ParsedModule<'a>,
 ) -> Result<Msg<'a>, LoadingProblem> {
     let canonicalize_start = SystemTime::now();
@@ -2143,6 +2115,7 @@ fn canonicalize<'a>(
         exposed_ident_ids,
         parsed_defs,
         exposed_imports,
+        imported_modules,
         mut module_timing,
         src,
         ..
@@ -2170,7 +2143,19 @@ fn canonicalize<'a>(
     module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start).unwrap();
 
     match canonicalized {
-        Ok(module_output) => {
+        Ok(mut module_output) => {
+            // Add builtin defs (e.g. List.get) to the module's defs
+            let builtin_defs = roc_can::builtins::builtin_defs(&mut var_store);
+            let references = &module_output.references;
+
+            for (symbol, def) in builtin_defs {
+                if references.contains(&symbol) {
+                    module_output.declarations.push(Declaration::Builtin(def));
+                }
+            }
+
+            let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
+
             let module = Module {
                 module_id,
                 exposed_imports: module_output.exposed_imports,
@@ -2180,13 +2165,22 @@ fn canonicalize<'a>(
                 rigid_variables: module_output.rigid_variables,
             };
 
-            let canonical = CanonicalizedModule {
+            let constrained_module = ConstrainedModule {
                 module,
-                module_timing,
+                declarations: module_output.declarations,
+                imported_modules,
                 src,
+                var_store,
+                constraint,
+                ident_ids: module_output.ident_ids,
+                module_timing,
             };
 
-            Ok(Msg::Canonicalized(canonical))
+            Ok(Msg::CanonicalizedAndConstrained {
+                constrained_module,
+                canonicalization_problems: module_output.problems,
+                module_docs,
+            })
         }
         Err(runtime_error) => {
             panic!(
@@ -2340,19 +2334,20 @@ fn parse_and_constrain<'a>(
     // we'd have bailed out before now.
     let src = unsafe { from_utf8_unchecked(header.src) };
 
-    // Send the constraint to the main thread for processing.
-    Ok(Msg::Constrained {
-        module,
-        src,
-        declarations,
-        imported_modules,
-        ident_ids,
-        constraint,
-        problems,
-        var_store,
-        module_timing,
-        module_docs,
-    })
+    //    // Send the constraint to the main thread for processing.
+    //    Ok(Msg::Constrained {
+    //        module,
+    //        src,
+    //        declarations,
+    //        imported_modules,
+    //        ident_ids,
+    //        constraint,
+    //        problems,
+    //        var_store,
+    //        module_timing,
+    //        module_docs,
+    //    })
+    unreachable!()
 }
 
 fn exposed_from_import(entry: &ImportsEntry<'_>) -> (ModuleName, Vec<Ident>) {
@@ -2626,21 +2621,20 @@ fn run_task<'a>(
         } => load_module(arena, src_dir, module_name, module_ids, ident_ids_by_module)
             .map(|(_, msg)| msg),
         Parse { header } => parse(arena, header),
-        Canonicalize {
+        CanonicalizeAndConstrain {
             parsed,
             module_ids,
             dep_idents,
+            mode,
             exposed_symbols,
-        } => canonicalize(arena, &module_ids, dep_idents, exposed_symbols, parsed),
-
-        Constrain {} => todo!(),
-        //        ParseAndConstrain {
-        //            header,
-        //            mode,
-        //            module_ids,
-        //            dep_idents,
-        //            exposed_symbols,
-        //        } => parse_and_constrain(header, mode, &module_ids, dep_idents, exposed_symbols),
+        } => canonicalize_and_constrain(
+            arena,
+            &module_ids,
+            dep_idents,
+            exposed_symbols,
+            mode,
+            parsed,
+        ),
         Solve {
             module,
             module_timing,
