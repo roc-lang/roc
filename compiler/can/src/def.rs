@@ -110,7 +110,7 @@ pub fn canonicalize_defs<'a>(
     mut output: Output,
     var_store: &mut VarStore,
     original_scope: &Scope,
-    loc_defs: &'a bumpalo::collections::Vec<'a, &'a Located<ast::Def<'a>>>,
+    loc_defs: &'a [&'a Located<ast::Def<'a>>],
     pattern_type: PatternType,
 ) -> (CanDefs, Scope, Output, MutMap<Symbol, Region>) {
     // Canonicalizing defs while detecting shadowing involves a multi-step process:
@@ -1239,7 +1239,7 @@ pub fn can_defs_with_return<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: Scope,
-    loc_defs: &'a bumpalo::collections::Vec<'a, &'a Located<ast::Def<'a>>>,
+    loc_defs: &'a [&'a Located<ast::Def<'a>>],
     loc_ret: &'a Located<ast::Expr<'a>>,
 ) -> (Expr, Output) {
     let (unsorted, mut scope, defs_output, symbols_introduced) = canonicalize_defs(
