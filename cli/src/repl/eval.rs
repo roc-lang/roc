@@ -79,9 +79,7 @@ fn jit_to_ast_help<'a>(
             })
         }
         Layout::Builtin(Builtin::EmptyList) => {
-            run_jit_function!(lib, main_fn_name, &'static str, |_| {
-                Expr::List(Vec::new_in(env.arena))
-            })
+            run_jit_function!(lib, main_fn_name, &'static str, |_| { Expr::List(&[]) })
         }
         Layout::Builtin(Builtin::List(_, elem_layout)) => run_jit_function!(
             lib,
@@ -191,7 +189,7 @@ fn ptr_to_ast<'a>(
 
             num_to_ast(env, f64_to_ast(env.arena, num), content)
         }
-        Layout::Builtin(Builtin::EmptyList) => Expr::List(Vec::new_in(env.arena)),
+        Layout::Builtin(Builtin::EmptyList) => Expr::List(&[]),
         Layout::Builtin(Builtin::List(_, elem_layout)) => {
             // Turn the (ptr, len) wrapper struct into actual ptr and len values.
             let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
@@ -263,6 +261,8 @@ fn list_to_ast<'a>(
         output.push(loc_expr);
     }
 
+    let output = output.into_bump_slice();
+
     Expr::List(output)
 }
 
@@ -314,6 +314,8 @@ fn struct_to_ast<'a>(
         field_ptr = unsafe { field_ptr.offset(field_layout.stack_size(env.ptr_bytes) as isize) };
     }
 
+    let output = output.into_bump_slice();
+
     Expr::Record {
         update: None,
         fields: output,
@@ -362,7 +364,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
 
                     Expr::Record {
                         update: None,
-                        fields: bumpalo::vec![in arena; loc_assigned_field],
+                        fields: arena.alloc([loc_assigned_field]),
                     }
                 }
                 FlatType::TagUnion(tags, _) => {
@@ -404,7 +406,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                             region: Region::zero(),
                         });
 
-                        bumpalo::vec![in arena; loc_payload]
+                        arena.alloc([loc_payload])
                     };
 
                     Expr::Apply(loc_tag_expr, payload, CalledVia::Space)
