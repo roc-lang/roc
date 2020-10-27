@@ -70,7 +70,8 @@ pub fn target_machine(
         arch,
         // TODO: this probably should be TargetMachine::get_host_cpu_features() to enable all features.
         // For now disabling all avx512 because valgrind does not seem to support it.
-        "-avx512bf16,-avx512bitalg,-avx512bw,-avx512cd,-avx512dq,-avx512er,-avx512f,-avx512ifma,-avx512pf,-avx512vbmi,-avx512vbmi2,-avx512vl,-avx512vnni,-avx512vp2intersect,-avx512vpopcntdq", 
+        //"-avx512bf16,-avx512bitalg,-avx512bw,-avx512cd,-avx512dq,-avx512er,-avx512f,-avx512ifma,-avx512pf,-avx512vbmi,-avx512vbmi2,-avx512vl,-avx512vnni,-avx512vp2intersect,-avx512vpopcntdq",
+        "+sse2,+cx16,+sahf,-tbm,-avx512ifma,-sha,-gfni,-fma4,-vpclmulqdq,+prfchw,+bmi2,-cldemote,+fsgsbase,-ptwrite,+xsavec,+popcnt,+aes,-avx512bitalg,-movdiri,+xsaves,-avx512er,-avx512vnni,-avx512vpopcntdq,-pconfig,-clwb,-avx512f,-clzero,-pku,+mmx,-lwp,-rdpid,-xop,+rdseed,-waitpkg,-movdir64b,-sse4a,-avx512bw,+clflushopt,+xsave,-avx512vbmi2,+64bit,-avx512vl,+invpcid,-avx512cd,+avx,-vaes,+cx8,+fma,-rtm,+bmi,-enqcmd,+rdrnd,-mwaitx,+sse4.1,+sse4.2,+avx2,+fxsr,-wbnoinvd,+sse,+lzcnt,+pclmul,-prefetchwt1,+f16c,+ssse3,+sgx,-shstk,+cmov,-avx512vbmi,-avx512bf16,+movbe,+xsaveopt,-avx512dq,+adx,-avx512pf,+sse3",
         opt,
         reloc,
         model,
