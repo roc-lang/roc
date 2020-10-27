@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use tempfile::NamedTempFile;
 
+#[derive(Debug)]
 pub struct Out {
     pub stdout: String,
     pub stderr: String,

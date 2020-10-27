@@ -26,8 +26,8 @@ mod cli_run {
         let ending = "Hello, World!!!!!!!!!!!!!\n";
         if !&valgrind_out.stdout.ends_with(ending) {
             panic!(
-                "expected output to end with {:?} but instead got {:?}",
-                ending, &valgrind_out.stdout
+                "expected output to end with {:?} but instead got {:#?}",
+                ending, valgrind_out
             );
         }
         let memory_errors = extract_valgrind_errors(&raw_xml);
@@ -67,8 +67,8 @@ mod cli_run {
         let ending = "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n";
         if !&valgrind_out.stdout.ends_with(ending) {
             panic!(
-                "expected output to end with {:?} but instead got {:?}",
-                ending, &valgrind_out.stdout
+                "expected output to end with {:?} but instead got {:#?}",
+                ending, valgrind_out
             );
         }
         let memory_errors = extract_valgrind_errors(&raw_xml);
@@ -82,7 +82,7 @@ mod cli_run {
     #[serial(quicksort)]
     // TODO: Stop ignoring this test once we are correctly freeing the RocList even when in dev build.
     #[ignore]
-    fn run_quicksort_valgrind() {
+    fn run_quicksort() {
         check_quicksort_output(run_roc(&[
             "build",
             example_file("quicksort", "Quicksort.roc").to_str().unwrap(),
@@ -91,7 +91,7 @@ mod cli_run {
 
     #[test]
     #[serial(quicksort)]
-    fn run_quicksort_valgrind_optimized() {
+    fn run_quicksort_optimized() {
         check_quicksort_output(run_roc(&[
             "build",
             "--optimize",
@@ -107,12 +107,11 @@ mod cli_run {
 
         let (valgrind_out, raw_xml) =
             run_with_valgrind(&[example_file("multi-module", "app").to_str().unwrap()]);
-        // let valgrind_out = run_cmd(example_file("multi-module", "app").to_str().unwrap(), &[]);
         let ending = "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n";
         if !&valgrind_out.stdout.ends_with(ending) {
             panic!(
-                "expected output to end with {:?} but instead got {:?}",
-                ending, &valgrind_out.stdout
+                "expected output to end with {:?} but instead got {:#?}",
+                ending, valgrind_out
             );
         }
         let memory_errors = extract_valgrind_errors(&raw_xml);
