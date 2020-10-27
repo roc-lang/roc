@@ -569,7 +569,7 @@ divRound : Int, Int -> Int
 ## >>> -8 %% -3
 ##
 ## >>> Int.modFloor -8 -3
-#modFloor : Int, Int -> Result DivByZero Int
+modFloor : Int, Int -> Result Int <DivByZero>
 
 
 ## Bitwise
@@ -752,11 +752,7 @@ pi : Float *
 ##
 ## >>> Float.pi
 ## >>>     |> Num.div 2.0
-#div : Float, Float -> Result Float DivByZero
-div = \numerator, denominator ->
-    when numerator is
-        0.0 -> 0.0 # TODO return Result!
-        _ -> denominator
+div : Float, Float -> Result Float <DivByZero>
 
 ## Perform modulo on two #Float numbers.
 ##
@@ -775,7 +771,7 @@ div = \numerator, denominator ->
 ##
 ## >>> Float.pi
 ## >>>     |> Float.mod 2.0
-mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
+mod : Float a, Float a -> Result (Float a) <DivByZero>
 
 ## Raises a #Float to the power of another #Float.
 ##
@@ -810,12 +806,12 @@ expBySquaring : Int a, U8 -> Int a
 ## Crashes if given `0.0`, because division by zero is undefined in mathematics.
 ##
 ## For a version that does not crash, use #tryRecip
-recip : Float a -> Result (Float a) [ DivByZero ]*
+recip : Float a -> Result (Float a) <DivByZero>
 
 ## NOTE: Need to come up a suffix alternative to the "try" prefix.
 ## This should be like (for example) recipTry so that it's more discoverable
 ## in documentation and editor autocomplete when you type "recip"
-tryRecip : Float a -> Result (Float a) [ DivByZero ]*
+tryRecip : Float a -> Result (Float a) <DivByZero>
 
 ## Return an approximation of the absolute value of the square root of the #Float.
 ##

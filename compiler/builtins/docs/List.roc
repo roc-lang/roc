@@ -349,16 +349,17 @@ dropIf : List elem, (elem -> Bool) -> List elem
 ## Access
 
 ## Returns the first element in the list, or `ListWasEmpty` if it was empty.
-first : List elem -> Result elem [ ListWasEmpty ]*
+first : List elem -> Result elem <ListWasEmpty>
+
 
 ## Returns the last element in the list, or `ListWasEmpty` if it was empty.
-last : List elem -> Result elem [ ListWasEmpty ]*
+last : List elem -> Result elem <ListWasEmpty>
 
-get : List elem, Len -> Result elem [ OutOfBounds ]*
+get : List elem, Len -> Result elem <OutOfBounds>
 
-max : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+max : List (Num a) -> Result (Num a) <ListWasEmpty>
 
-min : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+min : List (Num a) -> Result (Num a) <ListWasEmpty>
 
 ## Modify
 
@@ -432,7 +433,7 @@ prepend : List elem, elem -> List elem
 ## In contrast, calling #List.pop on a Shared list creates a new list, then
 ## copies over every element in the original list except the last one. This
 ## takes much longer.
-dropLast : List elem -> Result { others : List elem, last : elem } [ ListWasEmpty ]*
+dropLast : List elem -> Result { others : List elem, last : elem } <ListWasEmpty>
 
 ##
 ## Here's one way you can use this:
@@ -455,7 +456,7 @@ dropLast : List elem -> Result { others : List elem, last : elem } [ ListWasEmpt
 ##-----------+----------------------------------+---------------------------------+
 ## dropFirst | #List.last + length change       | #List.last + clone rest of list |
 ## dropLast  | #List.last + clone rest of list  | #List.last + clone rest of list |
-dropFirst : List elem -> Result { first: elem, others : List elem } [ ListWasEmpty ]*
+dropFirst : List elem -> Result { first: elem, others : List elem } <ListWasEmpty>
 
 ## Returns the given number of elements from the beginning of the list.
 ##

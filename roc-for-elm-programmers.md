@@ -183,6 +183,8 @@ when color is
 
 This is the biggest semantic difference between Roc and Elm.
 
+### Motivation: Chained effects
+
 Let's start with the motivation. Suppose I'm using a platform for making a
 web server, and I want to:
 
@@ -255,7 +257,7 @@ after : Task a err, (a -> Task b err) -> Task b err
 ```
 
 The key is that each of the error types is a type alias for a Roc *tag union*.
-Here's how they look:
+Here's how those look:
 
 ```elm
 Http.Err a : [ PageNotFound, Timeout, BadPayload ]a
@@ -265,126 +267,218 @@ File.WriteErr a : [ FileNotFound, DiskFull ]a
 
 In Elm, these would be defined as custom types (aka algebraic data types) using
 the `type` keyword. However, instead of traditional algebraic data types, Roc has
-only tags - which work more like OCaml's *polymorphic variants*, and which
+only *tags* - which work more like OCaml's *polymorphic variants*, and which
 can be used in type aliases without a separate `type` keyword. (Roc has no `type` keyword.)
 
-Here are some examples of using tags in a REPL:
+Let's walk through how tag unions work.
+
+### Tags
+
+Tags have a lot in common with traditional algebraic data types' *variants*,
+but also have some differences.
+
+One difference is that you can make up any tag you want, on the fly,
+and use it in any module, without declaring it first. (These cannot be used to
+create opaque types; we'll discuss those in the next section.)
+
+Here are some examples of using basic tags in a REPL:
 
 ```
 > True
-True : [ True ]*
+True : <True>
 
 > False
-False : [ False ]*
+False : <False>
 
-> Ok 5
-Ok 5 : [ Ok Int ]*
+> Blah
+Blah : <Blah>
 
-> SomethingIJustMadeUp 1 2 "stuff"
-SomethingIJustMadeUp 1 2 "stuff" : [ SomethingIJustMadeUp Int Int Str ]*
-
-> x = Foo
-Foo : [ Foo ]*
-
-> y = Foo "hi" 5
-Foo "hi" 5 : [ Foo Str Int ]*
-
-> z = Foo 1 2
-Foo 1 2 : [ Foo Int Int ]*
+> SomethingIJustMadeUp
+SomethingIJustMadeUp : <SomethingIJustMadeUp>
 ```
 
-Tags have a lot in common with traditional algebraic data types' *variants*,
-but are different in several ways.
+Tag names must always be capitalized.
 
-One difference is that you can make up any tag you want, on the fly, and use it in any module,
-without declaring it first. (These cannot be used to create opaque types; we'll discuss those
-in the next section.)
+Each tag's type is equal to the name of the tag, surrounded by angle brackets.
 
-Another difference is that the same tag can be used with different arities and types.
-In the REPL above, `x`, `y`, and `z`, can all coexist in the same module even though
-they use `Foo` with different arities - and also with different types within the same arity.
+### Applied Tags
 
-Now let's say I do a pattern match with no type annotations.
+Tags can also be *applied* to give them payloads. As with applying a variant in
+Elm, the syntax for applying tags in Roc is just like calling a function:
+
+```
+> Ok 1.2
+Ok 1.2 : <Ok Float>
+
+> Blah 1.1 2.2 "stuff"
+Blah 1.1 2.2 "stuff" : <Blah Float Float Str>
+
+> x = Foo
+Foo : <Foo>
+
+> y = Foo [ 1.1 ] "hi"
+Foo [ 1.1 ] "hi" : <Foo (List Float) Str>
+
+> z = Foo "hi" True
+Foo "hi" True : <Foo Str <True>>
+```
+
+Here, you can think of the expression `Blah 1.1 2.2 "stuff"` as
+"applying the arguments `1.1`, `2.2`, and `"stuff"` to a `<Blah>` tag."
+
+Another difference between tags in Roc and variants in Elm is that that the
+same tag can be used with different arities and types. In the REPL above,
+`x`, `y`, and `z`, can all coexist in the same module even though they use `Foo`
+with different arities - and also with different types within the same arity.
+
+### Tag Unions
+
+Let's say I do a pattern match with no type annotations.
 
 ```elm
 when foo is
-    MyInt num -> num + 1
+    MyInt num -> num + 0x1
     MyFloat float -> Num.round float
 ```
 
-The inferred type of this expression would be `[ MyInt Int, MyFloat Float ]`,
-based on its usage.
+The inferred type of this expression would be `[ <MyInt Int>, <MyFloat Float> ]`,
+based on its usage. This type is a *tag union* - a collection of tags bracketed
+by `[` and `]`.
 
-> As with OCaml's polymorphic variants, exhaustiveness checking is still in full effect here.
-> It's based on usage; if any code pathways led to `foo` being set to the tag `Blah`,
-> I'd get an exhaustiveness error because this `when` does not have a `Blah` branch.
+Here, we have a union of the specific tags `<MyInt Int>` and `<MyFloat Float>`.
+You can think of the type `[ <MyInt Int>, <MyFloat Float> ]` as representing
+"either a `<MyInt Int>` tag or a `<MyFloat Float>` tag." The compiler knows
+those are the only two possible alternatives because those are the only two
+branches in this `when`.
 
-There's an important interaction here between the inferred type of a *when-expression* and
-the inferred type of a tag value. Note which types have a `*` and which do not.
+> Exhaustiveness checking is still in full effect here.  It's based on usage;
+> if any code pathways led to `foo` being set to the tag `Blah`, I'd get an
+> exhaustiveness error because this `when` does not have a `Blah` branch.
 
-```elm
-x : [ Foo ]*
-x = Foo
-
-y : [ Bar Float ]*
-y = Bar 3.14
-
-toInt : [ Foo, Bar Float ] -> Int
-toInt = \tag ->
-    when tag is
-        Foo -> 1
-        Bar float -> Num.round float
-```
-
-Each of these type annotations involves a *tag union* - a collection of tags bracketed by `[` and `]`.
-
-* The type `[ Foo, Bar Float ]` is a **closed** tag union.
-* The type `[ Foo ]*` is an **open** tag union.
-
-You can pass `x` to `toInt` because an open tag union is type-compatible with
-any closed tag union which contains its tags (in this case, the `Foo` tag). You can also
-pass `y` to `toInt` for the same reason.
-
-In general, when you make a tag value, you'll get an open tag union (with a `*`).
-Using `when` *can* get you a closed union (a union without a `*`) but that's not
-always what happens. Here's a `when` in which the inferred type is an open tag union:
+It's possible to have a tag union with only one tag in it:
 
 ```elm
-alwaysFoo : [ Foo Int ]* -> [ Foo Int ]*
+alwaysFoo : [ <Foo Int> ] -> <Foo Int>
 alwaysFoo = \tag ->
     when tag is
         Foo num -> Foo (num + 1)
-        _ -> Foo 0
 ```
 
-The return value is an open tag union because all branches return something
-tagged with `Foo`.
+In these situations, you can destructure inline instead of writing `when`, like so:
 
-The argument is also an open tag union, because this *when-expression* has
-a default branch; that argument is compatible with any tag union. This means you
-can pass the function some totally nonsensical tag, and it will still compile.
+```elm
+alwaysFoo : [ <Foo Int> ] -> <Foo Int>
+alwaysFoo = \Foo num ->
+    Foo (num + 1)
+```
 
-> Note that the argument does *not* have the type `*`. That's because you
-> cannot pass it values of any type; you can only pass it tags!
->
-> You could, if you wanted, change the argument's annotation to be `[]*` and
-> it would compile. After all, its default branch means it will accept any tag!
->
-> Still, the compiler will infer `[ Foo Int ]*` based on usage.
+By the way, inside a tag union annotation, the `<` and `>` angle brackets around
+each tag are syntactically optional because they don't add any information.
+So you can write `[ <Foo>, <Bar Float> ]`, but conventionally that tag union
+would be written as `[ Foo, Bar Float ]` instead for brevity.
+That's the style we'll use from now on.
 
-Just because `[ Foo Int ]*` is the inferred type of this argument,
+### Unapplied tags as functions
+
+In Elm, these two are equivalent:
+
+```elm
+(\val -> Just val)
+```
+
+```elm
+Just
+```
+
+That is, I can give a `map` function either `(\val -> Just val)` or the more
+concise `Just`.
+
+In Roc, I can also give a `map` function either `(\val -> Just val)` or the more
+concise `Just`.
+
+However, the types involved are different.
+
+* In Elm, both `(\val -> Just val)` and `Just` have the exact same type: `a -> Maybe a`.
+* In Roc, `(\val -> Just val)` has the type `a -> <Just a>` and `Just` has the type `<Just>`.
+
+The reason I can still give either Roc expression to `map` is that `<Just>` is
+type-compatible with `a -> <Just a>`. It's also type-compatible with
+`a, b -> <Just a b>`, `a, b, c -> <Just a b c>`, and so on.
+
+That's because `<Just>` is an *unapplied tag*. It hasn't had any arguments
+applied to it (unlike the *applied tag* `<Just Float>`, which is a `<Just>` tag
+with a `Float` argument applied), so `<Just>` on its own can still have
+arguments applied to it if desired. Much like how you can pass around a normal
+function like `List.isEmpty` and then apply it later (by calling it), so too
+can you pass around unapplied tags and apply arguments to them later.
+
+The main difference between passing around functions and passing around unapplied
+tags is that functions generally need to be applied to do anything useful, but
+unapplied tags can be useful on their own. For example, in `foo == Nothing`
+we're usefully comparing `foo` to an unapplied tag of type `<Nothing>`.
+
+In summary, any `<Foo>` value can be used either as a standalone tag (which can
+be pattern-matched on, compared using `==`, etc.), or as a function which applies
+arguments to that tag. The Roc compiler understands and accepts either usage.
+
+### Open and closed tag unions
+
+There's an important interaction between a *when-expression* having a
+default branch and the inferred type of the resulting tag union. Consider these
+two functions, whose implementations are identical except the second one
+adds a default branch at the end.
+
+```elm
+x : <Foo>
+x = Foo
+
+y : <Bar Float>
+y = Bar 3.14
+
+closedToInt : [ <Foo>, <Bar Float> ] -> Int
+closedToInt = \tag ->
+    when tag is
+        Foo -> 1
+        Bar float -> Num.round float
+
+openToInt : [ <Foo>, <Bar Float> ]* -> Int
+openToInt = \tag ->
+    when tag is
+        Foo -> 1
+        Bar float -> Num.round float
+        _ -> 0
+```
+
+Note the difference in the types of these `closedToInt` and `openToInt` functions:
+
+* The type `[ <Foo>, <Bar Float> ]` is a **closed** tag union.
+* The type `[ <Foo>, <Bar Float> ]*` is an **open** tag union.
+
+You can pass `x : <Foo>` to either function, because both `[ Foo, Bar Float ]`
+and `[ Foo, Bar Float ]*` contain the tag `<Foo>`. You can also pass
+`y : <Bar Float>` to either function for similar reasons.
+
+The difference is that you can also pass any other tag you like to the
+`openToInt` function, in which case it will take the default branch. You really
+can pass any tag or tag union you like - from `<Blah>` to `<Fuzz Int>` to
+`[ Foo, Bar Int, Baz Float Str ]` - and it will compile and work fine.
+
+Just because `[ Foo Float ]*` is the inferred type of `openToInt`'s agument,
 doesn't mean you have to accept that much flexibility. You can restrict it
 by removing the `*`. For example, if you changed the annotation to this...
 
 ```elm
-alwaysFoo : [ Foo Int, Bar Str ] -> [ Foo Int ]*
+openToInt : [ Foo, Bar Float ] -> Float
 ```
 
-...then the function would only accept tags like `Foo 5` and `Bar "hi"`. By writing
-out your own annotations, you can get the same level of restriction you get with
+...then `openToInt` would only accept tags like `Foo` and `Bar 5`, and the
+`_ ->` branch would become unreachable. (The name "openToInt" would also no
+longer be apt, since we'd changed it from accepting an open union to accepting
+a closed one.)
+
+By writing out your own annotations, you can get the same level of restriction you get with
 traditional algebraic data types (which, after all, come with the requirement that
-you write out their annotations). Using annotations, you can restrict even
-*when-expressions* with default branches to accept only the values you define to be valid.
+you write out their annotations).
 
 In fact, if you want a traditional algebraic data type in Roc, you can get about the same
 functionality by making (and then using) a type alias for a closed tag union.
@@ -394,18 +488,129 @@ Here's exactly how `Result` is defined using tags in Roc's standard library:
 Result ok err : [ Ok ok, Err err ]
 ```
 
-You can also use tags to define recursive data structures, because recursive
-type aliases are allowed as long as the recursion happens within a tag. For example:
+Closed tag unions can't be extended. If you have a function which returns
+a `Result`, then the only two tags it can return are `Ok` and `Err`.
+
+In contrast, open tag unions can have more values added to them.
+
+Suppose I have a couple of functions which return open tag unions:
+tag unions:
+
+```elm
+fooOrBar : Str -> [ Foo, Bar ]*
+barOrBaz : Str -> [ Bar, Baz ]*
+alwaysBlah : Str -> <Blah>
+```
+
+Here's a conditional which can potentially return any of these:
+
+```elm
+when something is
+    One -> fooOrBar "hi"
+    Two -> barOrBaz "hello"
+    Three -> alwaysBlah "whee"
+```
+
+Here's the inferred type of this expression:
+
+```elm
+[ Foo, Bar, Baz, Blah ]*
+```
+
+If these functions returned closed tag unions, this would give a type mismatch
+because the branches would have incompatible types. However, open tag unions
+merge together (or "union" together, if you prefer), meaning the expression
+as a whole ends up with an open tag union containing all the tags that any of
+these branches could have returned.
+
+Knowing this, let's return to those type aliases for open tag unions from our
+original motivating example, along with some functions that return them:
+
+```elm
+Http.Err a : [ PageNotFound, Timeout, BadPayload ]a
+File.ReadErr a : [ FileNotFound, Corrupted, BadFormat ]a
+File.WriteErr a : [ FileNotFound, DiskFull ]a
+
+File.read : Filename -> Task File.Data (File.ReadErr *)
+File.write : Filename, File.Data -> Task File.Data (File.WriteErr *)
+Http.get : Url -> Task Http.Response (Http.Err *)
+
+Task.after : Task a err, (a -> Task b err) -> Task b err
+```
+Earlier we looked at this code, which uses these functions:
+
+```elm
+doStuff = \filename ->
+    Task.after (File.read filename) \fileData ->
+    Task.after (Http.get (urlFromData fileData)) \response ->
+    File.write filename (responseToData response)
+```
+
+we said that not only would this type-check, but at the end we'd get a combined
+error type which had the union of all the possible errors that could have
+occurred in this sequence.
+
+That's absolutely true! Specifically, the error type here after all these
+values are chained together by `Task.after` will be the union of all the
+tags in all the error type aliases involved:
+
+```elm
+[
+    PageNotFound,
+    Timeout,
+    BadPayload,
+    FileNotFound,
+    Corrupted,
+    BadFormat,
+    FileNotFound,
+    DiskFull
+]*
+```
+
+We also said earlier that we could handle those errors using a single `when`, like so:
+
+```coffeescript
+when error is
+    # Http.Err possibilities
+    PageNotFound -> ...
+    Timeout -> ...
+    BadPayload -> ...
+
+    # File.ReadErr possibilities
+    FileNotFound -> ...
+    ReadAcessDenied -> ...
+    FileCorrupted -> ...
+
+    # File.WriteErr possibilities
+    DirectoryNotFound -> ...
+    WriteAcessDenied -> ...
+    DiskFull -> ...
+```
+
+That is absolutely true! We even get exhaustiveness checking here, because
+open tag unions become closed (with whatever tags were in there at the time)
+as soon as you pattern match on them.
+
+Error accumulation like this is the main use case for open tag unions.
+Closed tag unions, since they work essentially like traditional algebraic data
+types, are the more common choice everywhere else.
+
+### Recursive tag unions
+
+You can use tags to define recursive data structures, because recursive type
+aliases are allowed as long as the recursion happens within a tag. For example:
 
 ```elm
 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 ```
 
 > Inferred recursive tags use the `as` keyword, which is what OCaml does to
-> display inferred types of recursive polymorphic variants. For example, the
-> inferred version of the above type alias would be:
+> display inferred types of recursive [polymorphic variants](https://dev.realworldocaml.org/variants.html#scrollNav-4).
+> For example, the inferred version of the above type alias would be:
 >
 > `[ Nil, Cons a b ] as b`
+
+### Bound variables in open tag unions
 
 The `*` in open tag unions is actually an unbound ("wildcard") type variable.
 It can be bound too, with a lowercase letter like any other bound type variable.
@@ -424,29 +629,6 @@ The `*` says "this union can also include any other tags", and here the `a` says
 includes in its union."
 
 > The Roc type `[]` is equivalent to Elm's `Never`. You can never satisfy it!
-
-One final note about tags: *tag application* is not the same as *function application*,
-the way it is with Elm's variants. For example:
-
-* `foo bar` is function application, because `foo` is lowercase.
-* `Foo bar` is tag application, because `Foo` is uppercase.
-
-So this wouldn't compile:
-
-```
-foo : [ Foo ]*
-foo = Foo
-
-foo bar
-```
-
-You can't "call" the type `[ Foo ]*` because it's not a function.
-
-In practical terms, this also means you can't do `|> Decode.map UserId`
-because `UserId` is not a function, and `map` expects a function.
-This code would work in Elm, but in Roc you'd need to use an anonymous function -
-e.g. `|> Decode.map (\val -> UserId val)` - or a helper function, e.g.
-`|> Decode.map UserId.fromInt`
 
 ## Opaque Types
 
