@@ -68,7 +68,9 @@ pub fn target_machine(
     Target::from_name(arch).unwrap().create_target_machine(
         &TargetTriple::create(target_triple_str(target)),
         arch,
-        "-avx512dq", // TODO: this probably should be TargetMachine::get_host_cpu_features() to enable all features
+        // TODO: this probably should be TargetMachine::get_host_cpu_features() to enable all features.
+        // For now disabling all avx512 because valgrind does not seem to support it.
+        "-avx512bf16,-avx512bitalg,-avx512bw,-avx512cd,-avx512dq,-avx512er,-avx512f,-avx512ifma,-avx512pf,-avx512vbmi,-avx512vbmi2,-avx512vl,-avx512vnni,-avx512vp2intersect,-avx512vpopcntdq", 
         opt,
         reloc,
         model,
