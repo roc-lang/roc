@@ -59,4 +59,13 @@ esac
 wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
 add-apt-repository "${REPO_NAME}"
 apt-get update
-apt-get install -y clang-$LLVM_VERSION lldb-$LLVM_VERSION lld-$LLVM_VERSION clangd-$LLVM_VERSION libc++abi-dev libunwind-dev valgrind
+apt-get install -y clang-$LLVM_VERSION lldb-$LLVM_VERSION lld-$LLVM_VERSION clangd-$LLVM_VERSION libc++abi-dev libunwind-dev
+
+wget https://sourceware.org/pub/valgrind/valgrind-3.16.1.tar.bz2
+tar -xf valgrind-3.16.1.tar.bz2
+cd valgrind-3.16.1
+./autogen.sh
+./configure
+make -j`nproc`
+sudo make install
+cd ..
