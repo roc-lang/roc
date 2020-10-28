@@ -55,6 +55,7 @@ macro_rules! mismatch {
 
 type Pool = Vec<Variable>;
 
+#[derive(Debug)]
 pub struct Context {
     first: Variable,
     first_desc: Descriptor,
@@ -117,7 +118,7 @@ pub fn unify_pool(subs: &mut Subs, pool: &mut Pool, var1: Variable, var2: Variab
 }
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
-    if false {
+    if true {
         // if true, print the types that are unified.
         //
         // NOTE: names are generated here (when creating an error type) and that modifies names
@@ -140,9 +141,17 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
     }
     match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, &ctx.second_desc.content),
-        RecursionVar { opt_name, .. } => {
-            unify_recursion(subs, &ctx, opt_name, &ctx.second_desc.content)
-        }
+        RecursionVar {
+            opt_name,
+            structure,
+        } => unify_recursion(
+            subs,
+            pool,
+            &ctx,
+            opt_name,
+            *structure,
+            &ctx.second_desc.content,
+        ),
         RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
@@ -216,10 +225,37 @@ fn unify_structure(
             // Type mismatch! Rigid can only unify with flex.
             mismatch!("trying to unify {:?} with rigid var {:?}", &flat_type, name)
         }
-        RecursionVar { .. } => {
-            // keep recursion var around
-            merge(subs, ctx, other.clone())
-        }
+        RecursionVar { structure, .. } => match flat_type {
+            FlatType::TagUnion(_, _) => {
+                let structure_rank = subs.get(*structure).rank;
+                let self_rank = subs.get(ctx.first).rank;
+                let other_rank = subs.get(ctx.second).rank;
+                // unify the structure with this unrecursive tag union
+                let problems = unify_pool(subs, pool, ctx.first, *structure);
+
+                let min_rank = structure_rank.min(self_rank).min(other_rank);
+                subs.set_rank(*structure, min_rank);
+                subs.set_rank(ctx.first, min_rank);
+                subs.set_rank(ctx.second, min_rank);
+
+                problems
+            }
+            FlatType::RecursiveTagUnion(_, _, _) => {
+                let structure_rank = subs.get(*structure).rank;
+                let self_rank = subs.get(ctx.first).rank;
+                let other_rank = subs.get(ctx.second).rank;
+                // unify the structure with this recursive tag union
+                let problems = unify_pool(subs, pool, ctx.first, *structure);
+
+                let min_rank = structure_rank.min(self_rank).min(other_rank);
+                subs.set_rank(*structure, min_rank);
+                subs.set_rank(ctx.first, min_rank);
+                subs.set_rank(ctx.second, min_rank);
+
+                problems
+            }
+            _ => todo!("rec structure {:?}", &flat_type),
+        },
 
         Structure(ref other_flat_type) => {
             // Unify the two flat types
@@ -398,10 +434,7 @@ fn unify_tag_union(
     let recursion_var = match recursion {
         (None, None) => None,
         (Some(v), None) | (None, Some(v)) => Some(v),
-        (Some(v1), Some(v2)) => {
-            unify_pool(subs, pool, v1, v2);
-            Some(v1)
-        }
+        (Some(v1), Some(v2)) => Some(v1),
     };
 
     if unique_tags1.is_empty() {
@@ -521,6 +554,145 @@ fn unify_tag_union(
     }
 }
 
+fn unify_tag_union_not_recursive_recursive(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    ctx: &Context,
+    rec1: TagUnionStructure,
+    rec2: TagUnionStructure,
+    recursion_var: Variable,
+) -> Outcome {
+    let tags1 = rec1.tags;
+    let tags2 = rec2.tags;
+    let shared_tags = get_shared(&tags1, &tags2);
+    // NOTE: don't use `difference` here. In contrast to Haskell, im's `difference` is symmetric
+    let unique_tags1 = relative_complement(&tags1, &tags2);
+    let unique_tags2 = relative_complement(&tags2, &tags1);
+
+    if unique_tags1.is_empty() {
+        if unique_tags2.is_empty() {
+            let ext_problems = unify_pool(subs, pool, rec1.ext, rec2.ext);
+
+            if !ext_problems.is_empty() {
+                return ext_problems;
+            }
+
+            let mut tag_problems = unify_shared_tags_recursive_not_recursive(
+                subs,
+                pool,
+                ctx,
+                shared_tags,
+                MutMap::default(),
+                rec1.ext,
+                recursion_var,
+            );
+
+            tag_problems.extend(ext_problems);
+
+            tag_problems
+        } else {
+            let flat_type = FlatType::RecursiveTagUnion(recursion_var, unique_tags2, rec2.ext);
+            let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
+            let ext_problems = unify_pool(subs, pool, rec1.ext, sub_record);
+
+            if !ext_problems.is_empty() {
+                return ext_problems;
+            }
+
+            let mut tag_problems = unify_shared_tags_recursive_not_recursive(
+                subs,
+                pool,
+                ctx,
+                shared_tags,
+                MutMap::default(),
+                sub_record,
+                recursion_var,
+            );
+
+            tag_problems.extend(ext_problems);
+
+            tag_problems
+        }
+    } else if unique_tags2.is_empty() {
+        let flat_type = FlatType::RecursiveTagUnion(recursion_var, unique_tags1, rec1.ext);
+        let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
+        let ext_problems = unify_pool(subs, pool, sub_record, rec2.ext);
+
+        if !ext_problems.is_empty() {
+            return ext_problems;
+        }
+
+        let mut tag_problems = unify_shared_tags_recursive_not_recursive(
+            subs,
+            pool,
+            ctx,
+            shared_tags,
+            MutMap::default(),
+            sub_record,
+            recursion_var,
+        );
+
+        tag_problems.extend(ext_problems);
+
+        tag_problems
+    } else {
+        let other_tags = union(unique_tags1.clone(), &unique_tags2);
+
+        let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
+        let flat_type1 = FlatType::RecursiveTagUnion(recursion_var, unique_tags1, ext);
+        let flat_type2 = FlatType::RecursiveTagUnion(recursion_var, unique_tags2, ext);
+
+        let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
+        let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
+
+        // NOTE: for clearer error messages, we rollback unification of the ext vars when either fails
+        //
+        // This is inspired by
+        //
+        //
+        //      f : [ Red, Green ] -> Bool
+        //      f = \_ -> True
+        //
+        //      f Blue
+        //
+        //  In this case, we want the mismatch to be between `[ Blue ]a` and `[ Red, Green ]`, but
+        //  without rolling back, the mismatch is between `[ Blue, Red, Green ]a` and `[ Red, Green ]`.
+        //  TODO is this also required for the other cases?
+
+        let snapshot = subs.snapshot();
+
+        let ext1_problems = unify_pool(subs, pool, rec1.ext, sub2);
+        if !ext1_problems.is_empty() {
+            subs.rollback_to(snapshot);
+            return ext1_problems;
+        }
+
+        let ext2_problems = unify_pool(subs, pool, sub1, rec2.ext);
+        if !ext2_problems.is_empty() {
+            subs.rollback_to(snapshot);
+            return ext2_problems;
+        }
+
+        subs.commit_snapshot(snapshot);
+
+        let mut tag_problems = unify_shared_tags_recursive_not_recursive(
+            subs,
+            pool,
+            ctx,
+            shared_tags,
+            other_tags,
+            ext,
+            recursion_var,
+        );
+
+        tag_problems.reserve(ext1_problems.len() + ext2_problems.len());
+        tag_problems.extend(ext1_problems);
+        tag_problems.extend(ext2_problems);
+
+        tag_problems
+    }
+}
+
 /// Is the given variable a structure. Does not consider Attr itself a structure, and instead looks
 /// into it.
 fn is_structure(var: Variable, subs: &mut Subs) -> bool {
@@ -529,6 +701,85 @@ fn is_structure(var: Variable, subs: &mut Subs) -> bool {
         Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => is_structure(args[1], subs),
         Content::Structure(_) => true,
         _ => false,
+    }
+}
+
+fn unify_shared_tags_recursive_not_recursive(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    ctx: &Context,
+    shared_tags: MutMap<TagName, (Vec<Variable>, Vec<Variable>)>,
+    other_tags: MutMap<TagName, Vec<Variable>>,
+    ext: Variable,
+    recursion_var: Variable,
+) -> Outcome {
+    let mut matching_tags = MutMap::default();
+    let num_shared_tags = shared_tags.len();
+
+    for (name, (actual_vars, expected_vars)) in shared_tags {
+        let mut matching_vars = Vec::with_capacity(actual_vars.len());
+
+        let actual_len = actual_vars.len();
+        let expected_len = expected_vars.len();
+
+        for (actual, expected) in actual_vars.into_iter().zip(expected_vars.into_iter()) {
+            // NOTE the arguments of a tag can be recursive. For instance in the expression
+            //
+            //  Cons 1 (Cons "foo" Nil)
+            //
+            // We need to not just check the outer layer (inferring ConsList Int)
+            // but also the inner layer (finding a type error, as desired)
+            //
+            // This correction introduces the same issue as in https://github.com/elm/compiler/issues/1964
+            // Polymorphic recursion is now a type error.
+            //
+            // The strategy is to expand the recursive tag union as deeply as the non-recursive one
+            // is.
+            //
+            // > RecursiveTagUnion(rvar, [ Cons a rvar, Nil ], ext)
+            //
+            // Conceptually becomes
+            //
+            // > RecursiveTagUnion(rvar, [ Cons a [ Cons a rvar, Nil ], Nil ], ext)
+            //
+            // and so on until the whole non-recursive tag union can be unified with it.
+            let mut problems = Vec::new();
+
+            {
+                // we always unify NonRecursive with Recursive, so this should never happen
+                //debug_assert_ne!(Some(actual), recursion_var);
+
+                problems.extend(unify_pool(subs, pool, actual, expected));
+            }
+
+            if problems.is_empty() {
+                matching_vars.push(expected);
+            }
+        }
+
+        // only do this check after unification so the error message has more info
+        if actual_len == expected_len && actual_len == matching_vars.len() {
+            matching_tags.insert(name, matching_vars);
+        }
+    }
+
+    if num_shared_tags == matching_tags.len() {
+        // merge fields from the ext_var into this tag union
+        let mut fields = Vec::new();
+        let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(subs, ext, &mut fields)
+        {
+            Ok(()) => Variable::EMPTY_TAG_UNION,
+            Err((new, _)) => new,
+        };
+
+        let mut new_tags = union(matching_tags, &other_tags);
+        new_tags.extend(fields.into_iter());
+
+        let flat_type = FlatType::RecursiveTagUnion(recursion_var, new_tags, new_ext_var);
+
+        merge(subs, ctx, Structure(flat_type))
+    } else {
+        mismatch!("Problem with Tag Union")
     }
 }
 
@@ -573,83 +824,12 @@ fn unify_shared_tags(
             // and so on until the whole non-recursive tag union can be unified with it.
             let mut problems = Vec::new();
 
-            let attr_wrapped = match (subs.get(expected).content, subs.get(actual).content) {
-                (
-                    Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, expected_args)),
-                    Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, actual_args)),
-                ) => Some((
-                    expected_args[0],
-                    expected_args[1],
-                    actual_args[0],
-                    actual_args[1],
-                )),
-                _ => None,
-            };
-
-            if let Some(rvar) = recursion_var {
-                match attr_wrapped {
-                    None => {
-                        if subs.equivalent(expected, rvar) {
-                            if subs.equivalent(actual, rvar) {
-                                problems.extend(unify_pool(subs, pool, expected, actual));
-                            } else {
-                                problems.extend(unify_pool(subs, pool, actual, ctx.second));
-
-                                // this unification is required for layout generation,
-                                // but causes worse error messages
-                                problems.extend(unify_pool(subs, pool, expected, actual));
-                            }
-                        } else if is_structure(actual, subs) {
-                            // the recursion variable is hidden behind some structure (commonly an Attr
-                            // with uniqueness inference). Thus we must expand the recursive tag union to
-                            // unify if with the non-recursive one. Thus:
-
-                            // replace the rvar with ctx.second (the whole recursive tag union) in expected
-                            subs.explicit_substitute(rvar, ctx.second, expected);
-
-                            // but, by the `is_structure` condition above, only if we're unifying with a structure!
-                            // when `actual` is just a flex/rigid variable, the substitution would expand a
-                            // recursive tag union infinitely!
-
-                            problems.extend(unify_pool(subs, pool, actual, expected));
-                        } else {
-                            // unification with a non-structure is trivial
-                            problems.extend(unify_pool(subs, pool, actual, expected));
-                        }
-                    }
-                    Some((_expected_uvar, inner_expected, _actual_uvar, inner_actual)) => {
-                        if subs.equivalent(inner_expected, rvar) {
-                            if subs.equivalent(inner_actual, rvar) {
-                                problems.extend(unify_pool(subs, pool, actual, expected));
-                            } else {
-                                problems.extend(unify_pool(subs, pool, inner_actual, ctx.second));
-                                problems.extend(unify_pool(subs, pool, expected, actual));
-                            }
-                        } else if is_structure(inner_actual, subs) {
-                            // the recursion variable is hidden behind some structure (commonly an Attr
-                            // with uniqueness inference). Thus we must expand the recursive tag union to
-                            // unify if with the non-recursive one. Thus:
-
-                            // replace the rvar with ctx.second (the whole recursive tag union) in expected
-                            subs.explicit_substitute(rvar, ctx.second, inner_expected);
-
-                            // but, by the `is_structure` condition above, only if we're unifying with a structure!
-                            // when `actual` is just a flex/rigid variable, the substitution would expand a
-                            // recursive tag union infinitely!
-
-                            problems.extend(unify_pool(subs, pool, actual, expected));
-                        } else {
-                            // unification with a non-structure is trivial
-                            problems.extend(unify_pool(subs, pool, actual, expected));
-                        }
-                    }
-                }
-            } else {
+            {
                 // we always unify NonRecursive with Recursive, so this should never happen
-                debug_assert_ne!(Some(actual), recursion_var);
+                //debug_assert_ne!(Some(actual), recursion_var);
 
                 problems.extend(unify_pool(subs, pool, actual, expected));
-            };
+            }
 
             if problems.is_empty() {
                 matching_vars.push(actual);
@@ -762,36 +942,18 @@ fn unify_flat_type(
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
 
-            unify_tag_union(
-                subs,
-                pool,
-                ctx,
-                union1,
-                union2,
-                (None, Some(*recursion_var)),
-            )
+            unify_tag_union_not_recursive_recursive(subs, pool, ctx, union1, union2, *recursion_var)
         }
 
         (RecursiveTagUnion(rec1, tags1, ext1), RecursiveTagUnion(rec2, tags2, ext2)) => {
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
 
-            //            if true {
-            //                let c1 = subs.get(*rec1);
-            //                let c2 = subs.get(*rec2);
-            //
-            //                let context = Context {
-            //                    first: *rec1,
-            //                    first_desc: c1,
-            //                    second: *rec2,
-            //                    second_desc: c2,
-            //                };
-            //                let content = subs.get(*rec1).content;
-            //
-            //                merge(subs, &context, content);
-            //            }
+            let mut problems =
+                unify_tag_union(subs, pool, ctx, union1, union2, (Some(*rec1), Some(*rec2)));
+            problems.extend(unify_pool(subs, pool, *rec1, *rec2));
 
-            unify_tag_union(subs, pool, ctx, union1, union2, (Some(*rec1), Some(*rec2)))
+            problems
         }
 
         (Boolean(b1), Boolean(b2)) => {
@@ -963,26 +1125,49 @@ fn unify_flex(
 #[inline(always)]
 fn unify_recursion(
     subs: &mut Subs,
+    pool: &mut Pool,
     ctx: &Context,
     opt_name: &Option<Lowercase>,
+    structure: Variable,
     other: &Content,
 ) -> Outcome {
     match other {
-        RecursionVar { opt_name: None, .. } => {
+        RecursionVar {
+            opt_name: other_opt_name,
+            structure: other_structure,
+        } => {
             // If both are flex, and only left has a name, keep the name around.
-            merge(subs, ctx, FlexVar(opt_name.clone()))
+            //debug_assert!(subs.equivalent(structure, *other_structure));
+            let name = opt_name.clone().or(other_opt_name.clone());
+            merge(
+                subs,
+                ctx,
+                RecursionVar {
+                    opt_name: name,
+                    structure,
+                },
+            )
         }
 
         Structure(_) => {
             // keep the recursion var around
-            merge(subs, ctx, FlexVar(opt_name.clone()))
+            // merge(subs, ctx, FlexVar(opt_name.clone()))
+            panic!("unify recursion structure");
+
+            unify_pool(subs, pool, structure, ctx.second)
         }
 
-        FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Alias(_, _, _) => {
+        FlexVar(_) | RigidVar(_) => {
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
             // (This includes using right's name if both are flex and named.)
             merge(subs, ctx, other.clone())
+        }
+
+        Alias(_, _, actual) => {
+            // look at the type the alias stands for
+
+            unify_pool(subs, pool, ctx.first, *actual)
         }
 
         Error => merge(subs, ctx, Error),

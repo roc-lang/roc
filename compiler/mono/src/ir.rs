@@ -2046,7 +2046,10 @@ pub fn with_hole<'a>(
             let variant = crate::layout::union_sorted_tags(env.arena, variant_var, env.subs);
 
             match variant {
-                Never => unreachable!("The `[]` type has no constructors"),
+                Never => unreachable!(
+                    "The `[]` type has no constructors, source var {:?}",
+                    variant_var
+                ),
                 Unit => Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole),
                 BoolUnion { ttrue, .. } => Stmt::Let(
                     assigned,
@@ -4513,9 +4516,11 @@ fn call_by_name<'a>(
         }
         Err(LayoutProblem::UnresolvedTypeVar(var)) => {
             let msg = format!(
-                "Hit an unresolved type variable {:?} when creating a layout for {:?}",
-                var, proc_name
+                "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
+                var, proc_name, fn_var
             );
+            dbg!(&env.subs, var, proc_name, fn_var);
+            panic!();
             Stmt::RuntimeError(env.arena.alloc(msg))
         }
         Err(LayoutProblem::Erroneous) => {
@@ -4621,7 +4626,10 @@ pub fn from_can_pattern<'a>(
             let variant = crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs);
 
             match variant {
-                Never => unreachable!("there is no pattern of type `[]`"),
+                Never => unreachable!(
+                    "there is no pattern of type `[]`, union var {:?}",
+                    *whole_var
+                ),
                 Unit => Pattern::EnumLiteral {
                     tag_id: 0,
                     tag_name: tag_name.clone(),

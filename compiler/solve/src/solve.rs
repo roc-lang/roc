@@ -154,6 +154,9 @@ pub fn run(
         constraint,
     );
 
+    //dbg!(&subs, &state.env.vars_by_symbol);
+    //panic!();
+
     (Solved(subs), state.env)
 }
 
@@ -841,6 +844,13 @@ fn check_for_infinite_type(
                 if !is_uniq_infer {
                     let rec_var = subs.fresh_unnamed_flex_var();
                     subs.set_rank(rec_var, description.rank);
+                    subs.set_content(
+                        rec_var,
+                        Content::RecursionVar {
+                            opt_name: None,
+                            structure: recursive,
+                        },
+                    );
 
                     let mut new_tags = MutMap::default();
 
@@ -1124,7 +1134,9 @@ fn adjust_rank_content(
     use roc_types::subs::FlatType::*;
 
     match content {
-        FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Error => group_rank,
+        FlexVar(_) | RigidVar(_) | Error => group_rank,
+
+        RecursionVar { .. } => group_rank,
 
         Structure(flat_type) => {
             match flat_type {

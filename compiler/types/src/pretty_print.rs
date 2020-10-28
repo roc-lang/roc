@@ -268,9 +268,24 @@ fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
             descriptor.content = FlexVar(Some(name));
             subs.set(root, descriptor);
         }
-        FlexVar(Some(_existing)) => {
+        RecursionVar {
+            opt_name: None,
+            structure,
+        } => {
+            descriptor.content = RecursionVar {
+                structure,
+                opt_name: Some(name),
+            };
+            subs.set(root, descriptor);
+        }
+        RecursionVar {
+            opt_name: Some(_existing),
+            ..
+        }
+        | FlexVar(Some(_existing)) => {
             panic!("TODO FIXME - make sure the generated name does not clash with any bound vars! In other words, if the user decided to name a type variable 'a', make sure we don't generate 'a' to name a different one!");
         }
+
         _ => (),
     }
 }

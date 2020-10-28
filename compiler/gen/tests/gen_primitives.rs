@@ -547,6 +547,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn linked_list_len_0() {
         assert_evals_to!(
             indoc!(
@@ -555,9 +556,10 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                nil : LinkedList Int
-                nil = Nil
+                # nil : LinkedList Int
+                nil = Cons 0x1 Nil
 
+                # length : [ Nil, Cons a (LinkedList a) ] as LinkedList a -> Int
                 length : LinkedList a -> Int
                 length = \list ->
                     when list is
@@ -575,6 +577,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn linked_list_len_twice_0() {
         assert_evals_to!(
             indoc!(
@@ -602,6 +605,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn linked_list_len_1() {
         assert_evals_to!(
             indoc!(
@@ -629,6 +633,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn linked_list_len_twice_1() {
         assert_evals_to!(
             indoc!(
@@ -656,6 +661,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn linked_list_len_3() {
         assert_evals_to!(
             indoc!(
@@ -712,7 +718,6 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn linked_list_sum_int() {
         assert_evals_to!(
             indoc!(
@@ -740,7 +745,6 @@ mod gen_primitives {
     }
 
     #[test]
-    #[ignore]
     fn linked_list_map() {
         assert_evals_to!(
             indoc!(

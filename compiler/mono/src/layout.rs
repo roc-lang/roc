@@ -876,6 +876,13 @@ pub enum UnionVariant<'a> {
 }
 
 pub fn union_sorted_tags<'a>(arena: &'a Bump, var: Variable, subs: &Subs) -> UnionVariant<'a> {
+    let var =
+        if let Content::RecursionVar { structure, .. } = subs.get_without_compacting(var).content {
+            structure
+        } else {
+            var
+        };
+
     let mut tags_vec = std::vec::Vec::new();
     let result = match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
         Ok(()) | Err((_, Content::FlexVar(_))) | Err((_, Content::RecursionVar { .. })) => {
