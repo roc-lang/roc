@@ -1369,7 +1369,7 @@ mod solve_expr {
             indoc!(
                 r#"
                    int : Num Integer
-                   int = 5.5
+                   int = 5
 
                    int
                 "#
@@ -1384,7 +1384,7 @@ mod solve_expr {
             indoc!(
                 r#"
                    int : Num.Num Num.Integer
-                   int = 5.5
+                   int = 5
 
                    int
                 "#
@@ -2039,16 +2039,17 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    Peano : [ S Peano, Z ]
+                app Test provides [ main ] imports []
 
-                    map : Peano -> Peano
-                    map = \peano ->
-                            when peano is
-                                Z -> Z
-                                S rest ->
-                                    map rest |> S
+                Peano : [ S Peano, Z ]
 
+                map : Peano -> Peano
+                map = \peano ->
+                        when peano is
+                            Z -> Z
+                            S rest -> S (map rest)
 
+                main =
                     map
                 "#
             ),
