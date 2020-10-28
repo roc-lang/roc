@@ -57,6 +57,13 @@ jobs:
           command: test
 
       - uses: actions-rs/cargo@v1
+        name: cargo test -- --ignored
+        continue-on-error: true
+        with:
+          command: test
+          args: -- --ignored
+
+      - uses: actions-rs/cargo@v1
         name: cargo test --release
         with:
           command: test
