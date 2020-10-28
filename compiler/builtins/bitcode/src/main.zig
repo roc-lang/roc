@@ -72,7 +72,7 @@ export fn str_split_in_place_(
     list[ret_list_index] = RocStr.init(str_bytes + slice_start_index, str_len - slice_start_index);
 }
 
-test "str_split_in_place__no_delimiter" {
+test "str_split_in_place_ nodelimiter" {
     var str: [3]u8 = "abc".*;
     const str_ptr: [*]u8 = &str;
 
@@ -118,7 +118,7 @@ test "str_split_in_place__no_delimiter" {
 
 }
 
-test "str_split_in_place__delimiter_on_sides" {
+test "str_split_in_place_ delimiter on sides" {
     const str_len: usize = 9;
     var str: [str_len]u8 = "tttghittt".*;
     const str_ptr: [*]u8 = &str;
@@ -167,7 +167,7 @@ test "str_split_in_place__delimiter_on_sides" {
 
 }
 
-test "str_split_in_place__three_pieces" {
+test "str_split_in_place_ three pieces" {
     const str_len: usize = 5;
     var str: [str_len]u8 = "a!b!c".*;
     const str_ptr: [*]u8 = &str;
@@ -268,12 +268,13 @@ export fn count_segments_(
 
             var matches_delimiter = true;
 
-            while (matches_delimiter and (delimiter_index < delimiter_len)) {
+            while (delimiter_index < delimiter_len) {
                 const delimiter_char = delimiter_bytes[delimiter_index];
                 const str_char = str_bytes[str_index + delimiter_index];
 
                 if (delimiter_char != str_char) {
                     matches_delimiter = false;
+                    break;
                 }
 
                 delimiter_index += 1;
@@ -290,3 +291,59 @@ export fn count_segments_(
     return count;
 }
 
+test "count_segments_ long delimiter" {
+    const str_len: usize = 3;
+    var str: [str_len]u8 = "str".*;
+    const str_ptr: [*]u8 = &str;
+
+    const delimiter_len = 9;
+    var delimiter: [delimiter_len]u8 = "delimiter".*;
+    const delimiter_ptr: [*]u8 = &delimiter;
+
+    const segments_count = count_segments_(
+        str_ptr,
+        str_len,
+        delimiter_ptr,
+        delimiter_len
+    );
+
+    expect(segments_count == 1);
+}
+
+test "count_segments_ delimiter at start" {
+    const str_len: usize = 11;
+    var str: [str_len]u8 = "hello there".*;
+    const str_ptr: [*]u8 = &str;
+
+    const delimiter_len = 5;
+    var delimiter: [delimiter_len]u8 = "hello".*;
+    const delimiter_ptr: [*]u8 = &delimiter;
+
+    const segments_count = count_segments_(
+        str_ptr,
+        str_len,
+        delimiter_ptr,
+        delimiter_len
+    );
+
+    expect(segments_count == 2);
+}
+
+test "count_segments_ delimiter interspered" {
+    const str_len: usize = 5;
+    var str: [str_len]u8 = "a!b!c".*;
+    const str_ptr: [*]u8 = &str;
+
+    const delimiter_len = 1;
+    var delimiter: [delimiter_len]u8 = "!".*;
+    const delimiter_ptr: [*]u8 = &delimiter;
+
+    const segments_count = count_segments_(
+        str_ptr,
+        str_len,
+        delimiter_ptr,
+        delimiter_len
+    );
+
+    expect(segments_count == 3);
+}
