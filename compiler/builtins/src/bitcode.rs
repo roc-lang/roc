@@ -3,7 +3,7 @@ use std::io::prelude::Read;
 use std::vec::Vec;
 
 pub fn get_bytes() -> Vec<u8> {
-    // In the build script for the gen module, we compile the builtins bitcode and set
+    // In the build script for the builtins module, we compile the builtins bitcode and set
     // BUILTINS_BC to the path to the compiled output.
     let path: &'static str = env!(
         "BUILTINS_BC",

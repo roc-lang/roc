@@ -35,9 +35,9 @@ let
       # build libraries
       pkgs.rustup
       pkgs.cargo
+      llvm
       pkgs.valgrind
       zig
-      llvm
       # llb deps
       pkgs.libffi
       pkgs.libxml2

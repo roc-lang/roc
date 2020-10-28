@@ -1,14 +1,15 @@
 { pkgs, isMacOS }:
 
-# As of 2020-10-25, building Zig from source on MacOS fails
-# so we just download the binary from their release page :(
+# We require at least specific commit of Zig after the latest tagged
+# release (0.6.0), so we just download the binaries for that commit
+
 let
-  version = "0.6.0";
+  version = "0.6.0+0088efc4b";
   osName =
     if isMacOS
       then "macos"
       else "linux";
-  archiveName = "zig-${osName}-x86_64-${version}+0088efc4b";
+  archiveName = "zig-${osName}-x86_64-${version}";
   sha256 = 
     if isMacOS
       then "665c1a7f472cfc5e0715f0ddf6ff8409fb749ac91cbbae68c443b4a37ebd058e"
