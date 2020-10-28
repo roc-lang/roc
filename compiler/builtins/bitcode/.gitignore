@@ -1,4 +1,2 @@
-main.ll
-main.o
-src/zig-cache
 zig-cache
+src/zig-cache

@@ -61,11 +61,10 @@ add-apt-repository "${REPO_NAME}"
 apt-get update
 apt-get install -y clang-$LLVM_VERSION lldb-$LLVM_VERSION lld-$LLVM_VERSION clangd-$LLVM_VERSION libc++abi-dev libunwind-dev valgrind
 
-# install zig
-apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 379CE192D401AB61
-echo 'deb https://dl.bintray.com/dryzig/zig-ubuntu bionic main' | tee -a /etc/apt/sources.list
-apt update
-apt install zig
+# install zig - can't use apt-get since we require at least a specific commit later then the most recent tag (0.6.0)
+wget -c https://ziglang.org/builds/zig-linux-x86_64-0.6.0+0088efc4b.tar.xz --no-check-certificate
+tar -xf zig-linux-x86_64-0.6.0+0088efc4b.tar.xz
+ln -s "$PWD/zig-linux-x86_64-0.6.0+0088efc4b/zig" /usr/local/bin/zig
 
 # symlink llvm tools
 ln -s /usr/bin/llvm-as-10 /usr/local/bin/llvm-as

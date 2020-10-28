@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use tempfile::NamedTempFile;
 
+#[derive(Debug)]
 pub struct Out {
     pub stdout: String,
     pub stderr: String,
@@ -131,6 +132,9 @@ enum ValgrindField {
     Args(ValgrindDummyStruct),
     Error(ValgrindError),
     Status(ValgrindDummyStruct),
+    Stack(ValgrindDummyStruct),
+    #[serde(rename = "fatal_signal")]
+    FatalSignal(ValgrindDummyStruct),
     ErrorCounts(ValgrindDummyStruct),
     SuppCounts(ValgrindDummyStruct),
 }

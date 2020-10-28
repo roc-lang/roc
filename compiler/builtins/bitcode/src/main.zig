@@ -1,18 +1,20 @@
 const std = @import("std");
+const math = std.math;
 const expect = std.testing.expect;
-const print = std.debug.print;
 
-export fn is_finite_(f: f64) bool {
-    return std.math.isFinite(f);
+export fn atan_(num: f64) f64 {
+    return math.atan(num);
 }
 
-export fn atan_(f: f64) f64 {
-    return std.math.atan(f);
+export fn is_finite_(num: f64) bool {
+    return math.isFinite(num);
 }
 
 export fn pow_int_(base: i64, exp: i64) i64 {
-    return std.math.pow(i64, base, exp);
+    return math.pow(i64, base, exp);
 }
+
+// Str.split
 
 const RocStr = struct {
     str_bytes: [*]u8,

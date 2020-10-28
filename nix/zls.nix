@@ -1,8 +1,7 @@
 { pkgs, zig }:
 
-# As of 2020-10-25, building zls is not available on Nix
-# For some reason, this hangs on `zig build`. I'll try
-# to figure it our later :(
+# As of 2020-10-25, building zls is not available on Nix. For some reason,
+# this hangs on `zig build`. I'll try to figure it our later.
 
 let
   rev = "e8c20351d85da8eb4bf22480045b994007284d69";
