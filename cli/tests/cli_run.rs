@@ -11,138 +11,175 @@ mod helpers;
 
 #[cfg(test)]
 mod cli_run {
-    use crate::helpers::{example_file, extract_valgrind_errors, run_roc, run_with_valgrind, Out};
+    use crate::helpers::{
+        example_file, extract_valgrind_errors, run_cmd, run_roc, run_with_valgrind,
+    };
     use serial_test::serial;
 
-    fn check_hello_world_output(out: Out) {
-        if !out.stderr.is_empty() {
-            panic!(out.stderr);
+    fn check_output(
+        folder: &str,
+        file: &str,
+        flags: &[&str],
+        expected_ending: &str,
+        use_valgrind: bool,
+    ) {
+        let compile_out = run_roc(
+            &[
+                &["build", example_file(folder, file).to_str().unwrap()],
+                flags,
+            ]
+            .concat(),
+        );
+        if !compile_out.stderr.is_empty() {
+            panic!(compile_out.stderr);
         }
-        assert!(out.status.success());
+        assert!(compile_out.status.success());
 
-        let (valgrind_out, raw_xml) =
-            run_with_valgrind(&[example_file("hello-world", "app").to_str().unwrap()]);
-
-        let ending = "Hello, World!!!!!!!!!!!!!\n";
-        if !&valgrind_out.stdout.ends_with(ending) {
+        let out = if use_valgrind {
+            let (valgrind_out, raw_xml) =
+                run_with_valgrind(&[example_file(folder, "app").to_str().unwrap()]);
+            let memory_errors = extract_valgrind_errors(&raw_xml);
+            if !memory_errors.is_empty() {
+                panic!("{:?}", memory_errors);
+            }
+            valgrind_out
+        } else {
+            run_cmd(example_file(folder, "app").to_str().unwrap(), &[])
+        };
+        if !&out.stdout.ends_with(expected_ending) {
             panic!(
                 "expected output to end with {:?} but instead got {:#?}",
-                ending, valgrind_out
+                expected_ending, out
             );
         }
-        let memory_errors = extract_valgrind_errors(&raw_xml);
-        if !memory_errors.is_empty() {
-            panic!("{:?}", memory_errors);
-        }
-        assert!(valgrind_out.status.success());
+        assert!(out.status.success());
     }
 
     #[test]
     #[serial(hello_world)]
     fn run_hello_world() {
-        check_hello_world_output(run_roc(&[
-            "build",
-            example_file("hello-world", "Hello.roc").to_str().unwrap(),
-        ]));
+        check_output(
+            "hello-world",
+            "Hello.roc",
+            &[],
+            "Hello, World!!!!!!!!!!!!!\n",
+            true,
+        );
     }
 
     #[test]
     #[serial(hello_world)]
     fn run_hello_world_optimized() {
-        check_hello_world_output(run_roc(&[
-            "build",
-            "--optimize",
-            example_file("hello-world", "Hello.roc").to_str().unwrap(),
-        ]));
-    }
-
-    fn check_quicksort_output(out: Out) {
-        if !out.stderr.is_empty() {
-            panic!(out.stderr);
-        }
-        assert!(out.status.success());
-
-        let (valgrind_out, raw_xml) =
-            run_with_valgrind(&[example_file("quicksort", "app").to_str().unwrap()]);
-        let ending = "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n";
-        if !&valgrind_out.stdout.ends_with(ending) {
-            panic!(
-                "expected output to end with {:?} but instead got {:#?}",
-                ending, valgrind_out
-            );
-        }
-        let memory_errors = extract_valgrind_errors(&raw_xml);
-        if !memory_errors.is_empty() {
-            panic!("{:?}", memory_errors);
-        }
-        assert!(valgrind_out.status.success());
+        check_output(
+            "hello-world",
+            "Hello.roc",
+            &[],
+            "Hello, World!!!!!!!!!!!!!\n",
+            true,
+        );
     }
 
     #[test]
     #[serial(quicksort)]
-    // TODO: Stop ignoring this test once we are correctly freeing the RocList even when in dev build.
-    #[ignore]
     fn run_quicksort() {
-        check_quicksort_output(run_roc(&[
-            "build",
-            example_file("quicksort", "Quicksort.roc").to_str().unwrap(),
-        ]));
+        check_output(
+            "quicksort",
+            "Quicksort.roc",
+            &[],
+            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+            false,
+        );
     }
 
     #[test]
     #[serial(quicksort)]
     fn run_quicksort_optimized() {
-        check_quicksort_output(run_roc(&[
-            "build",
-            "--optimize",
-            example_file("quicksort", "Quicksort.roc").to_str().unwrap(),
-        ]));
+        check_output(
+            "quicksort",
+            "Quicksort.roc",
+            &["--optimize"],
+            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+            false,
+        );
     }
 
-    fn check_muti_module_output(out: Out) {
-        if !out.stderr.is_empty() {
-            panic!(out.stderr);
-        }
-        assert!(out.status.success());
+    #[test]
+    #[serial(quicksort)]
+    // TODO: Stop ignoring this test once we are correctly freeing the RocList even when in dev build.
+    #[ignore]
+    fn run_quicksort_valgrind() {
+        check_output(
+            "quicksort",
+            "Quicksort.roc",
+            &[],
+            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+            true,
+        );
+    }
 
-        let (valgrind_out, raw_xml) =
-            run_with_valgrind(&[example_file("multi-module", "app").to_str().unwrap()]);
-        let ending = "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n";
-        if !&valgrind_out.stdout.ends_with(ending) {
-            panic!(
-                "expected output to end with {:?} but instead got {:#?}",
-                ending, valgrind_out
-            );
-        }
-        let memory_errors = extract_valgrind_errors(&raw_xml);
-        if !memory_errors.is_empty() {
-            panic!("{:?}", memory_errors);
-        }
-        assert!(valgrind_out.status.success());
+    #[test]
+    #[serial(quicksort)]
+    // TODO: Stop ignoring this test once valgrind supports AVX512.
+    #[ignore]
+    fn run_quicksort_optimized_valgrind() {
+        check_output(
+            "quicksort",
+            "Quicksort.roc",
+            &["--optimize"],
+            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(multi_module)]
+    fn run_multi_module() {
+        check_output(
+            "multi-module",
+            "Quicksort.roc",
+            &[],
+            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+            false,
+        );
+    }
+
+    #[test]
+    #[serial(multi_module)]
+    fn run_multi_module_optimized() {
+        check_output(
+            "multi-module",
+            "Quicksort.roc",
+            &["--optimize"],
+            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+            false,
+        );
     }
 
     #[test]
     #[serial(multi_module)]
     // TODO: Stop ignoring this test once we are correctly freeing the RocList even when in dev build.
     #[ignore]
-    fn run_multi_module() {
-        check_muti_module_output(run_roc(&[
-            "run",
-            example_file("multi-module", "Quicksort.roc")
-                .to_str()
-                .unwrap(),
-        ]));
+    fn run_multi_module_valgrind() {
+        check_output(
+            "multi-module",
+            "Quicksort.roc",
+            &[],
+            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+            true,
+        );
     }
 
     #[test]
     #[serial(multi_module)]
-    fn run_multi_module_optimized() {
-        check_muti_module_output(run_roc(&[
-            "run",
-            example_file("multi-module", "Quicksort.roc")
-                .to_str()
-                .unwrap(),
-            "--optimize",
-        ]));
+    // TODO: Stop ignoring this test once valgrind supports AVX512.
+    #[ignore]
+    fn run_multi_module_optimized_valgrind() {
+        check_output(
+            "multi-module",
+            "Quicksort.roc",
+            &["--optimize"],
+            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+            true,
+        );
     }
 }
