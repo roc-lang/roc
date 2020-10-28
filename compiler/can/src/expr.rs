@@ -450,7 +450,7 @@ pub fn canonicalize_expr<'a>(
 
             let mut bound_by_argument_patterns = MutSet::default();
 
-            for loc_pattern in loc_arg_patterns.into_iter() {
+            for loc_pattern in loc_arg_patterns.iter() {
                 let (new_output, can_arg) = canonicalize_pattern(
                     env,
                     var_store,

@@ -133,7 +133,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
         Defs(defs, loc_ret) | Nested(Defs(defs, loc_ret)) => {
             let mut desugared_defs = Vec::with_capacity_in(defs.len(), arena);
 
-            for loc_def in defs.into_iter() {
+            for loc_def in defs.iter() {
                 let loc_def = Located {
                     value: desugar_def(arena, &loc_def.value),
                     region: loc_def.region,
@@ -167,7 +167,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             let loc_desugared_cond = &*arena.alloc(desugar_expr(arena, &loc_cond_expr));
             let mut desugared_branches = Vec::with_capacity_in(branches.len(), arena);
 
-            for branch in branches.into_iter() {
+            for branch in branches.iter() {
                 let desugared = desugar_expr(arena, &branch.value);
 
                 let mut alternatives = Vec::with_capacity_in(branch.patterns.len(), arena);
