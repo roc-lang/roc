@@ -21,7 +21,7 @@ MacOS systems should already have `libunwind`, but other systems will need to in
 Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev`.)
 
 ### Zig
-We use a specific version of Zig, a build off the the commit `0088efc4b`. The latest tagged version of Zig, 0.6.0, doesn't oinclude the feature to emit LLVM ir, which is a core feature of how we use Zig. To download this specific version, you can use the following links:
+We use a specific version of Zig, a build off the the commit `0088efc4b`. The latest tagged version of Zig, 0.6.0, doesn't include the feature to emit LLVM ir, which is a core feature of how we use Zig. To download this specific version, you can use the following links:
 * [linux](https://ziglang.org/builds/zig-linux-x86_64-0.6.0+0088efc4b.tar.xz)
 * [macOS](https://ziglang.org/builds/zig-macos-x86_64-0.6.0+0088efc4b.tar.xz)
 
