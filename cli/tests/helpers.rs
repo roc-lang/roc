@@ -132,6 +132,9 @@ enum ValgrindField {
     Args(ValgrindDummyStruct),
     Error(ValgrindError),
     Status(ValgrindDummyStruct),
+    Stack(ValgrindDummyStruct),
+    #[serde(rename = "fatal_signal")]
+    FatalSignal(ValgrindDummyStruct),
     ErrorCounts(ValgrindDummyStruct),
     SuppCounts(ValgrindDummyStruct),
 }
