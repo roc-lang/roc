@@ -10,9 +10,6 @@ jobs:
     steps:
       - uses: actions/checkout@v1
 
-      - name: Output CPU info
-        run: sudo cat /proc/cpuinfo
-
       - name: Install CI Libraries
         run: sudo ./ci/install-ci-libraries.sh 10
 
