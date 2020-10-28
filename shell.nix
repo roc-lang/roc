@@ -9,10 +9,11 @@ with {
     ref = "refs/heads/nixpkgs-unstable";
     rev = "502845c3e31ef3de0e424f3fcb09217df2ce6df6";
   }) { };
+
+  isMacOS = builtins.currentSystem == "x86_64-darwin";
 };
 
 let
-  isMacOS = builtins.currentSystem == "x86_64-darwin";
   darwin-frameworks =
     if isMacOS then
       with pkgs.darwin.apple_sdk.frameworks; [
@@ -28,6 +29,7 @@ let
       [ ];
   llvm = pkgs.llvm_10;
   lld = pkgs.lld_10; # this should match llvm's version
+  zig = import ./nix/zig.nix { inherit pkgs isMacOS; };
   inputs =
     [
       # build libraries
@@ -35,6 +37,7 @@ let
       pkgs.cargo
       llvm
       pkgs.valgrind
+      zig
       # llb deps
       pkgs.libffi
       pkgs.libxml2
@@ -43,6 +46,7 @@ let
       lld
       # dev tools
       pkgs.rust-analyzer
+      # (import ./nix/zls.nix { inherit pkgs zig; })
       pkgs.ccls
     ];
 in pkgs.mkShell {
