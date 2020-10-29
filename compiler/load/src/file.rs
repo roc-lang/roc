@@ -2033,13 +2033,6 @@ fn run_solve<'a>(
     decls: Vec<Declaration>,
     src: &'a str,
 ) -> Msg<'a> {
-    // Rebuild the aliases in this thread, so we don't have to clone all of
-    // stdlib.aliases on the main thread.
-    let aliases = match stdlib_mode {
-        Mode::Standard => roc_builtins::std::aliases(),
-        Mode::Uniqueness => roc_builtins::unique::aliases(),
-    };
-
     // We have more constraining work to do now, so we'll add it to our timings.
     let constrain_start = SystemTime::now();
 
@@ -2051,10 +2044,6 @@ fn run_solve<'a>(
         constraint,
         &mut var_store,
     );
-    let mut constraint = load_builtin_aliases(aliases, constraint, &mut var_store);
-
-    // Turn Apply into Alias
-    constraint.instantiate_aliases(&mut var_store);
 
     let constrain_end = SystemTime::now();
 

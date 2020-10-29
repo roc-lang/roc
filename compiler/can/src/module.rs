@@ -53,7 +53,7 @@ pub fn canonicalize_module_defs<'a>(
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
-    let mut scope = Scope::new(home);
+    let mut scope = Scope::new(home, var_store);
     let num_deps = dep_idents.len();
 
     // Desugar operators (convert them to Apply calls, taking into account

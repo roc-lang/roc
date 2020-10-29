@@ -3,7 +3,7 @@ use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
-use roc_types::subs::Variable;
+use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, Type};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -25,12 +25,44 @@ pub struct Scope {
 }
 
 impl Scope {
-    pub fn new(home: ModuleId) -> Scope {
+    pub fn new(home: ModuleId, var_store: &mut VarStore) -> Scope {
+        use roc_types::solved_types::{BuiltinAlias, FreeVars};
+        let solved_aliases = roc_types::builtin_aliases::aliases();
+        let mut aliases = ImMap::default();
+
+        for (symbol, builtin_alias) in solved_aliases {
+            let BuiltinAlias { region, vars, typ } = builtin_alias;
+
+            let mut free_vars = FreeVars::default();
+            let typ = roc_types::solved_types::to_type(&typ, &mut free_vars, var_store);
+
+            // NOTE: we make assumptions about the order of type arguments here!
+            // we assume the type variables occur in the body of the alias in the same order as
+            // they occur in the type
+
+            // TODO fix that assumption
+            // TODO aliases depend on one another currently, fix that
+            let mut variables = Vec::new();
+            for (loc_name, (_, var)) in vars.iter().zip(free_vars.unnamed_vars.iter()) {
+                variables.push(Located::at(loc_name.region, (loc_name.value.clone(), *var)));
+            }
+
+            let alias = Alias {
+                region,
+                typ,
+                hidden_variables: MutSet::default(),
+                vars: variables,
+                uniqueness: None,
+            };
+
+            aliases.insert(symbol, alias);
+        }
+
         Scope {
             home,
             idents: Symbol::default_in_scope(),
             symbols: ImMap::default(),
-            aliases: ImMap::default(),
+            aliases,
         }
     }
 
