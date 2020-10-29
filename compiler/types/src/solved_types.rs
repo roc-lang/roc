@@ -1,10 +1,11 @@
 use crate::boolean_algebra::{self, Bool};
 use crate::subs::{FlatType, Subs, VarId, VarStore, Variable};
 use crate::types::{Problem, RecordField, Type};
-use roc_collections::all::{ImMap, MutSet, SendMap};
+use roc_collections::all::{default_hasher, ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
+use std::collections::HashMap;
 
 /// A marker that a given Subs has been solved.
 /// The only way to obtain a Solved<Subs> is by running the solver on it.
