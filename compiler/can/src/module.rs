@@ -1,3 +1,4 @@
+use crate::builtins;
 use crate::def::{canonicalize_defs, sort_can_defs, Declaration};
 use crate::env::Env;
 use crate::expr::Output;
@@ -256,6 +257,15 @@ pub fn canonicalize_module_defs<'a>(
                         fix_values_captured_in_closure_defs(defs, &mut MutSet::default())
                     }
                     InvalidCycle(_, _) | Builtin(_) => {}
+                }
+            }
+
+            // Add builtin defs (e.g. List.get) to the module's defs
+            let builtin_defs = builtins::builtin_defs(var_store);
+
+            for (symbol, def) in builtin_defs {
+                if references.contains(&symbol) {
+                    declarations.push(Declaration::Builtin(def));
                 }
             }
 

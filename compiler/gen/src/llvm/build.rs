@@ -29,6 +29,7 @@ use inkwell::values::{
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
+use roc_builtins::bitcode;
 use roc_collections::all::{ImMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -48,6 +49,15 @@ const PRINT_FN_VERIFICATION_OUTPUT: bool = false;
 pub enum OptLevel {
     Normal,
     Optimize,
+}
+
+impl Into<OptimizationLevel> for OptLevel {
+    fn into(self) -> OptimizationLevel {
+        match self {
+            OptLevel::Normal => OptimizationLevel::None,
+            OptLevel::Optimize => OptimizationLevel::Aggressive,
+        }
+    }
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -172,8 +182,9 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 }
 
 pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
-    let memory_buffer =
-        MemoryBuffer::create_from_memory_range(include_bytes!("builtins.bc"), module_name);
+    let bitcode_bytes = bitcode::get_bytes();
+
+    let memory_buffer = MemoryBuffer::create_from_memory_range(&bitcode_bytes, module_name);
 
     let module = Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
         .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err));

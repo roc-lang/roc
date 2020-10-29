@@ -890,22 +890,22 @@ mod gen_primitives {
         );
     }
 
-    #[test]
-    #[should_panic(expected = "Roc failed with message: ")]
-    fn exception() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    if True then
-                        x + z
-                    else
-                        y + z
-                    "#
-            ),
-            3,
-            i64
-        );
-    }
+    // #[test]
+    // #[should_panic(expected = "Roc failed with message: ")]
+    // fn exception() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 if True then
+    //                     x + z
+    //                 else
+    //                     y + z
+    //                 "#
+    //         ),
+    //         3,
+    //         i64
+    //     );
+    // }
 
     #[test]
     fn closure() {

@@ -4,7 +4,7 @@ use crate::pattern::fmt_pattern;
 use crate::spaces::{
     add_spaces, fmt_comments_only, fmt_condition_spaces, fmt_spaces, newline, INDENT,
 };
-use bumpalo::collections::{String, Vec};
+use bumpalo::collections::String;
 use roc_module::operator::{self, BinOp};
 use roc_parse::ast::StrSegment;
 use roc_parse::ast::{AssignedField, Base, CommentOrNewline, Expr, Pattern, WhenBranch};

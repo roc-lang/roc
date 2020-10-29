@@ -2,7 +2,6 @@ use crate::target;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::targets::{CodeModel, FileType, RelocMode};
-use inkwell::OptimizationLevel;
 use roc_gen::layout_id::LayoutIds;
 use roc_gen::llvm::build::{build_proc, build_proc_header, module_from_builtins, OptLevel, Scope};
 use roc_load::file::MonomorphizedModule;
@@ -16,9 +15,9 @@ use target_lexicon::Triple;
 pub fn gen_from_mono_module(
     arena: &Bump,
     loaded: MonomorphizedModule,
-    filename: PathBuf,
+    file_path: PathBuf,
     target: Triple,
-    dest_filename: &Path,
+    app_o_file: &Path,
     opt_level: OptLevel,
 ) {
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
@@ -32,7 +31,7 @@ pub fn gen_from_mono_module(
     let alloc = RocDocAllocator::new(&src_lines, home, &loaded.interns);
 
     for problem in loaded.can_problems.into_iter() {
-        let report = can_problem(&alloc, filename.clone(), problem);
+        let report = can_problem(&alloc, file_path.clone(), problem);
         let mut buf = String::new();
 
         report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -41,7 +40,7 @@ pub fn gen_from_mono_module(
     }
 
     for problem in loaded.type_problems.into_iter() {
-        let report = type_problem(&alloc, filename.clone(), problem);
+        let report = type_problem(&alloc, file_path.clone(), problem);
         let mut buf = String::new();
 
         report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -126,14 +125,11 @@ pub fn gen_from_mono_module(
 
     // Emit the .o file
 
-    let opt = OptimizationLevel::Aggressive;
     let reloc = RelocMode::Default;
     let model = CodeModel::Default;
-    let target_machine = target::target_machine(&target, opt, reloc, model).unwrap();
+    let target_machine = target::target_machine(&target, opt_level.into(), reloc, model).unwrap();
 
     target_machine
-        .write_to_file(&env.module, FileType::Object, &dest_filename)
+        .write_to_file(&env.module, FileType::Object, &app_o_file)
         .expect("Writing .o file failed");
-
-    println!("\nSuccess! 🎉\n\n\t➡ {}\n", dest_filename.display());
 }

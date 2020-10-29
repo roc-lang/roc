@@ -2260,7 +2260,8 @@ fn parse_and_constrain<'a>(
     let module_id = header.module_id;
 
     // Generate documentation information
-    // TODO: store timing information?
+    // TODO: store timing information
+    // TODO: only run this if we're doing a doc gen pass!
     let module_docs = crate::docs::generate_module_docs(
         header.module_name,
         &header.exposed_ident_ids,
@@ -2272,7 +2273,7 @@ fn parse_and_constrain<'a>(
     let mut var_store = VarStore::default();
     let canonicalized = canonicalize_module_defs(
         &arena,
-        parsed_defs,
+        &parsed_defs,
         module_id,
         module_ids,
         header.exposed_ident_ids,
@@ -2283,17 +2284,7 @@ fn parse_and_constrain<'a>(
     );
     let canonicalize_end = SystemTime::now();
     let (module, declarations, ident_ids, constraint, problems) = match canonicalized {
-        Ok(mut module_output) => {
-            // Add builtin defs (e.g. List.get) to the module's defs
-            let builtin_defs = roc_can::builtins::builtin_defs(&mut var_store);
-            let references = &module_output.references;
-
-            for (symbol, def) in builtin_defs {
-                if references.contains(&symbol) {
-                    module_output.declarations.push(Declaration::Builtin(def));
-                }
-            }
-
+        Ok(module_output) => {
             let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
 
             // Now that we're done with parsing, canonicalization, and constraint gen,
