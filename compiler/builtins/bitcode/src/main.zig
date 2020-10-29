@@ -2,40 +2,48 @@ const std = @import("std");
 const math = std.math;
 const expect = std.testing.expect;
 
-export fn atan_(num: f64) f64 {
+const roc_builtins_namespace = "roc_builtins";
+const math_namespace = roc_builtins_namespace ++ ".math";
+const str_namespace = roc_builtins_namespace ++ ".str";
+
+comptime { @export(atan, .{ .name = math_namespace ++ ".atan", .linkage = .Strong  }); }
+fn atan(num: f64) callconv(.C) f64 {
     return math.atan(num);
 }
 
-export fn is_finite_(num: f64) bool {
+comptime { @export(isFinite, .{ .name = math_namespace ++ ".is_finite", .linkage = .Strong  }); }
+fn isFinite(num: f64) callconv(.C) bool {
     return math.isFinite(num);
 }
 
-export fn pow_int_(base: i64, exp: i64) i64 {
+comptime { @export(powInt, .{ .name = math_namespace ++ ".pow_int", .linkage = .Strong  }); }
+fn powInt(base: i64, exp: i64) callconv(.C) i64 {
     return math.pow(i64, base, exp);
 }
+
 
 // Str.split
 
 const RocStr = struct {
-    strBytesPtrs: [*]u8,
-    strLen: usize,
+    str_bytes_ptrs: [*]u8,
+    str_len: usize,
 
     pub fn init(bytes: [*]u8, len: usize) RocStr {
         return RocStr {
-            .strBytesPtrs = bytes,
-            .strLen = len
+            .str_bytes_ptrs = bytes,
+            .str_len = len
         };
     }
 
     pub fn eq(self: RocStr, other: RocStr) bool {
-        if (self.strLen != other.strLen) {
+        if (self.str_len != other.str_len) {
             return false;
         }
 
         var areEq: bool = true;
         var index: usize = 0;
-        while (index < self.strLen and areEq) {
-            areEq = areEq and self.strBytesPtrs[index] == other.strBytesPtrs[index];
+        while (index < self.str_len and areEq) {
+            areEq = areEq and self.str_bytes_ptrs[index] == other.str_bytes_ptrs[index];
             index = index + 1;
         }
 
@@ -43,184 +51,185 @@ const RocStr = struct {
     }
 
     test "RocStr.eq: equal" {
-        const str1Len = 3;
-        var str1: [str1Len]u8 = "abc".*;
-        const str1Ptr: [*]u8 = &str1;
-        var rocStr1 = RocStr.init(str1Ptr, str1Len);
+        const str1_len = 3;
+        var str1: [str1_len]u8 = "abc".*;
+        const str1_ptr: [*]u8 = &str1;
+        var roc_str1 = RocStr.init(str1_ptr, str1_len);
 
-        const str2Len = 3;
-        var str2: [str2Len]u8 = "abc".*;
-        const str2Ptr: [*]u8 = &str2;
-        var rocStr2 = RocStr.init(str2Ptr, str2Len);
+        const str2_len = 3;
+        var str2: [str2_len]u8 = "abc".*;
+        const str2_ptr: [*]u8 = &str2;
+        var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
-        expect(RocStr.eq(rocStr1, rocStr2));
+        expect(RocStr.eq(roc_str1, roc_str2));
     }
 
     test "RocStr.eq: not equal different length" {
-        const str1Len = 4;
-        var str1: [str1Len]u8 = "abcd".*;
-        const str1Ptr: [*]u8 = &str1;
-        var rocStr1 = RocStr.init(str1Ptr, str1Len);
+        const str1_len = 4;
+        var str1: [str1_len]u8 = "abcd".*;
+        const str1_ptr: [*]u8 = &str1;
+        var roc_str1 = RocStr.init(str1_ptr, str1_len);
 
-        const str2Len = 3;
-        var str2: [str2Len]u8 = "abc".*;
-        const str2Ptr: [*]u8 = &str2;
-        var rocStr2 = RocStr.init(str2Ptr, str2Len);
+        const str2_len = 3;
+        var str2: [str2_len]u8 = "abc".*;
+        const str2_ptr: [*]u8 = &str2;
+        var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
-        expect(!RocStr.eq(rocStr1, rocStr2));
+        expect(!RocStr.eq(roc_str1, roc_str2));
     }
 
     test "RocStr.eq: not equal same length" {
-        const str1Len = 3;
-        var str1: [str1Len]u8 = "acb".*;
-        const str1Ptr: [*]u8 = &str1;
-        var rocStr1 = RocStr.init(str1Ptr, str1Len);
+        const str1_len = 3;
+        var str1: [str1_len]u8 = "acb".*;
+        const str1_ptr: [*]u8 = &str1;
+        var roc_str1 = RocStr.init(str1_ptr, str1_len);
 
-        const str2Len = 3;
-        var str2: [str2Len]u8 = "abc".*;
-        const str2Ptr: [*]u8 = &str2;
-        var rocStr2 = RocStr.init(str2Ptr, str2Len);
+        const str2_len = 3;
+        var str2: [str2_len]u8 = "abc".*;
+        const str2_ptr: [*]u8 = &str2;
+        var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
-        expect(!RocStr.eq(rocStr1, rocStr2));
+        expect(!RocStr.eq(roc_str1, roc_str2));
     }
 };
 
-export fn str_split_in_place_(
+comptime { @export(strSplitInPlace, .{ .name = str_namespace ++ ".str_split_in_place", .linkage = .Strong  }); }
+fn strSplitInPlace(
     array: [*]RocStr,
-    arrayLen: usize,
-    strBytesPtrs: [*]u8,
-    strLen: usize,
-    delimiterBytes: [*]u8,
-    delimiterLen: usize
-) void {
-    var retArrayIndex : usize = 0;
+    array_len: usize,
+    str_bytes_ptrs: [*]u8,
+    str_len: usize,
+    delimiter_bytes: [*]u8,
+    delimiter_len: usize
+) callconv(.C) void {
+    var ret_array_index : usize = 0;
 
-    var sliceStartIndex : usize = 0;
+    var sliceStart_index : usize = 0;
 
-    var strIndex : usize = 0;
+    var str_index : usize = 0;
 
-    if (strLen > delimiterLen) {
-        const endIndex : usize = strLen - delimiterLen;
-        while (strIndex <= endIndex) {
-            var delimiterIndex : usize = 0;
-            var matchesDelimiter = true;
+    if (str_len > delimiter_len) {
+        const end_index : usize = str_len - delimiter_len;
+        while (str_index <= end_index) {
+            var delimiter_index : usize = 0;
+            var matches_delimiter = true;
 
-            while (delimiterIndex < delimiterLen) {
-                var delimiterChar = delimiterBytes[delimiterIndex];
-                var strChar = strBytesPtrs[strIndex + delimiterIndex];
+            while (delimiter_index < delimiter_len) {
+                var delimiterChar = delimiter_bytes[delimiter_index];
+                var strChar = str_bytes_ptrs[str_index + delimiter_index];
 
                 if (delimiterChar != strChar) {
-                    matchesDelimiter = false;
+                    matches_delimiter = false;
                     break;
                 }
 
-                delimiterIndex += 1;
+                delimiter_index += 1;
             }
 
-            if (matchesDelimiter) {
-                array[retArrayIndex] = RocStr.init(strBytesPtrs + sliceStartIndex, strIndex - sliceStartIndex);
-                sliceStartIndex = strIndex + delimiterLen;
-                retArrayIndex += 1;
-                strIndex += delimiterLen;
+            if (matches_delimiter) {
+                array[ret_array_index] = RocStr.init(str_bytes_ptrs + sliceStart_index, str_index - sliceStart_index);
+                sliceStart_index = str_index + delimiter_len;
+                ret_array_index += 1;
+                str_index += delimiter_len;
             } else {
-                strIndex += 1;
+                str_index += 1;
             }
         }
     }
 
-    array[retArrayIndex] = RocStr.init(strBytesPtrs + sliceStartIndex, strLen - sliceStartIndex);
+    array[ret_array_index] = RocStr.init(str_bytes_ptrs + sliceStart_index, str_len - sliceStart_index);
 }
 
-test "str_split_in_place_: no delimiter" {
+test "strSplitInPlace: no delimiter" {
     // Str.split "abc" "!" == [ "abc" ]
 
     var str: [3]u8 = "abc".*;
-    const strPtr: [*]u8 = &str;
+    const str_ptr: [*]u8 = &str;
 
     var delimiter: [1]u8 = "!".*;
-    const delimiterPtr: [*]u8 = &delimiter;
+    const delimiter_ptr: [*]u8 = &delimiter;
 
     var array: [1]RocStr = undefined;
-    const arrayPtr: [*]RocStr = &array;
+    const array_ptr: [*]RocStr = &array;
 
-    str_split_in_place_(
-        arrayPtr,
+    strSplitInPlace(
+        array_ptr,
         1,
-        strPtr,
+        str_ptr,
         3,
-        delimiterPtr,
+        delimiter_ptr,
         1
     );
 
     var expected = [1]RocStr{
-        RocStr.init(strPtr, 3),
+        RocStr.init(str_ptr, 3),
     };
 
     expect(array.len == expected.len);
     expect(RocStr.eq(array[0], expected[0]));
 }
 
-test "str_split_in_place_: delimiter on sides" {
+test "strSplitInPlace: delimiter on sides" {
     // Str.split "tttghittt" "ttt" == [ "", "ghi", "" ]
 
-    const strLen: usize = 9;
-    var str: [strLen]u8 = "tttghittt".*;
-    const strPtr: [*]u8 = &str;
+    const str_len: usize = 9;
+    var str: [str_len]u8 = "tttghittt".*;
+    const str_ptr: [*]u8 = &str;
 
-    const delimiterLen = 3;
-    var delimiter: [delimiterLen]u8 = "ttt".*;
-    const delimiterPtr: [*]u8 = &delimiter;
+    const delimiter_len = 3;
+    var delimiter: [delimiter_len]u8 = "ttt".*;
+    const delimiter_ptr: [*]u8 = &delimiter;
 
-    const arrayLen : usize = 3;
-    var array: [arrayLen]RocStr = [_]RocStr{
+    const array_len : usize = 3;
+    var array: [array_len]RocStr = [_]RocStr{
         undefined ,
         undefined,
         undefined,
     };
-    const arrayPtr: [*]RocStr = &array;
+    const array_ptr: [*]RocStr = &array;
 
-    str_split_in_place_(
-        arrayPtr,
-        arrayLen,
-        strPtr,
-        strLen,
-        delimiterPtr,
-        delimiterLen
+    strSplitInPlace(
+        array_ptr,
+        array_len,
+        str_ptr,
+        str_len,
+        delimiter_ptr,
+        delimiter_len
     );
 
-    const expectedStrLen: usize = 3;
-    var expectedStr: [expectedStrLen]u8 = "ghi".*;
-    const expectedStrPtr: [*]u8 = &expectedStr;
-    var expectedRocStr = RocStr.init(expectedStrPtr, expectedStrLen);
+    const expected_str_len: usize = 3;
+    var expected_str: [expected_str_len]u8 = "ghi".*;
+    const expected_str_ptr: [*]u8 = &expected_str;
+    var expectedRocStr = RocStr.init(expected_str_ptr, expected_str_len);
 
     expect(array.len == 3);
-    expect(array[0].strLen == 0);
+    expect(array[0].str_len == 0);
     expect(RocStr.eq(array[1], expectedRocStr));
-    expect(array[2].strLen == 0);
+    expect(array[2].str_len == 0);
 }
 
-test "str_split_in_place_: three pieces" {
+test "strSplitInPlace: three pieces" {
     // Str.split "a!b!c" "!" == [ "a", "b", "c" ]
 
-    const strLen: usize = 5;
-    var str: [strLen]u8 = "a!b!c".*;
-    const strPtr: [*]u8 = &str;
+    const str_len: usize = 5;
+    var str: [str_len]u8 = "a!b!c".*;
+    const str_ptr: [*]u8 = &str;
 
-    const delimiterLen = 1;
-    var delimiter: [delimiterLen]u8 = "!".*;
-    const delimiterPtr: [*]u8 = &delimiter;
+    const delimiter_len = 1;
+    var delimiter: [delimiter_len]u8 = "!".*;
+    const delimiter_ptr: [*]u8 = &delimiter;
 
-    const arrayLen : usize = 3;
-    var array: [arrayLen]RocStr = undefined;
-    const arrayPtr: [*]RocStr = &array;
+    const array_len : usize = 3;
+    var array: [array_len]RocStr = undefined;
+    const array_ptr: [*]RocStr = &array;
 
-    str_split_in_place_(
-        arrayPtr,
-        arrayLen,
-        strPtr,
-        strLen,
-        delimiterPtr,
-        delimiterLen
+    strSplitInPlace(
+        array_ptr,
+        array_len,
+        str_ptr,
+        str_len,
+        delimiter_ptr,
+        delimiter_len
     );
 
     var a: [1]u8 = "a".*;
@@ -232,133 +241,134 @@ test "str_split_in_place_: three pieces" {
     var c: [1]u8 = "c".*;
     const c_ptr: [*]u8 = &c;
 
-    var expectedArray = [arrayLen]RocStr{
+    var expected_array = [array_len]RocStr{
         RocStr{
-            .strBytesPtrs = a_ptr,
-            .strLen = 1,
+            .str_bytes_ptrs = a_ptr,
+            .str_len = 1,
         },
         RocStr{
-            .strBytesPtrs = b_ptr,
-            .strLen = 1,
+            .str_bytes_ptrs = b_ptr,
+            .str_len = 1,
         },
         RocStr{
-            .strBytesPtrs = c_ptr,
-            .strLen = 1,
+            .str_bytes_ptrs = c_ptr,
+            .str_len = 1,
         }
     };
 
-    expect(expectedArray.len == array.len);
-    expect(RocStr.eq(array[0], expectedArray[0]));
-    expect(RocStr.eq(array[1], expectedArray[1]));
-    expect(RocStr.eq(array[2], expectedArray[2]));
+    expect(expected_array.len == array.len);
+    expect(RocStr.eq(array[0], expected_array[0]));
+    expect(RocStr.eq(array[1], expected_array[1]));
+    expect(RocStr.eq(array[2], expected_array[2]));
 }
 
-// This is used for `Str.split : Str, Str -> array Str
-// It is used to count how many segments the input `Str`
+// This is used for `Str.split : Str, Str -> Array Str
+// It is used to count how many segments the input `_str`
 // needs to be broken into, so that we can allocate a array
 // of that size. It always returns at least 1.
-export fn count_segments_(
-    strBytesPtrs: [*]u8,
-    strLen: usize,
-    delimiterBytes: [*]u8,
-    delimiterLen: usize
-) i64 {
+comptime { @export(countSegments, .{ .name = str_namespace ++ ".count_segements", .linkage = .Strong  }); }
+fn countSegments(
+    str_bytes_ptrs: [*]u8,
+    str_len: usize,
+    delimiter_bytes: [*]u8,
+    delimiter_len: usize
+) callconv(.C) i64 {
     var count: i64 = 1;
 
-    if (strLen > delimiterLen) {
-        var strIndex: usize = 0;
-        const endCond: usize = strLen - delimiterLen;
+    if (str_len > delimiter_len) {
+        var str_index: usize = 0;
+        const end_cond: usize = str_len - delimiter_len;
 
-        while (strIndex < endCond) {
-            var delimiterIndex: usize = 0;
+        while (str_index < end_cond) {
+            var delimiter_index: usize = 0;
 
-            var matchesDelimiter = true;
+            var matches_delimiter = true;
 
-            while (delimiterIndex < delimiterLen) {
-                const delimiterChar = delimiterBytes[delimiterIndex];
-                const strChar = strBytesPtrs[strIndex + delimiterIndex];
+            while (delimiter_index < delimiter_len) {
+                const delimiterChar = delimiter_bytes[delimiter_index];
+                const strChar = str_bytes_ptrs[str_index + delimiter_index];
 
                 if (delimiterChar != strChar) {
-                    matchesDelimiter = false;
+                    matches_delimiter = false;
                     break;
                 }
 
-                delimiterIndex += 1;
+                delimiter_index += 1;
             }
 
-            if (matchesDelimiter) {
+            if (matches_delimiter) {
                 count += 1;
             }
 
-            strIndex += 1;
+            str_index += 1;
         }
     }
 
     return count;
 }
 
-test "count_segments_: long delimiter" {
+test "countSegments: long delimiter" {
     // Str.split "str" "delimiter" == [ "str" ]
     // 1 segment
 
-    const strLen: usize = 3;
-    var str: [strLen]u8 = "str".*;
-    const strPtr: [*]u8 = &str;
+    const str_len: usize = 3;
+    var str: [str_len]u8 = "str".*;
+    const str_ptr: [*]u8 = &str;
 
-    const delimiterLen = 9;
-    var delimiter: [delimiterLen]u8 = "delimiter".*;
-    const delimiterPtr: [*]u8 = &delimiter;
+    const delimiter_len = 9;
+    var delimiter: [delimiter_len]u8 = "delimiter".*;
+    const delimiter_ptr: [*]u8 = &delimiter;
 
-    const segmentsCount = count_segments_(
-        strPtr,
-        strLen,
-        delimiterPtr,
-        delimiterLen
+    const segments_count = countSegments(
+        str_ptr,
+        str_len,
+        delimiter_ptr,
+        delimiter_len
     );
 
-    expect(segmentsCount == 1);
+    expect(segments_count == 1);
 }
 
-test "count_segments_: delimiter at start" {
+test "countSegments: delimiter at start" {
     // Str.split "hello there" "hello" == [ "", " there" ]
     // 2 segments
 
-    const strLen: usize = 11;
-    var str: [strLen]u8 = "hello there".*;
-    const strPtr: [*]u8 = &str;
+    const str_len: usize = 11;
+    var str: [str_len]u8 = "hello there".*;
+    const str_ptr: [*]u8 = &str;
 
-    const delimiterLen = 5;
-    var delimiter: [delimiterLen]u8 = "hello".*;
-    const delimiterPtr: [*]u8 = &delimiter;
+    const delimiter_len = 5;
+    var delimiter: [delimiter_len]u8 = "hello".*;
+    const delimiter_ptr: [*]u8 = &delimiter;
 
-    const segmentsCount = count_segments_(
-        strPtr,
-        strLen,
-        delimiterPtr,
-        delimiterLen
+    const segments_count = countSegments(
+        str_ptr,
+        str_len,
+        delimiter_ptr,
+        delimiter_len
     );
 
-    expect(segmentsCount == 2);
+    expect(segments_count == 2);
 }
 
-test "count_segments_: delimiter interspered" {
+test "countSegments: delimiter interspered" {
     // Str.split "a!b!c" "!" == [ "a", "b", "c" ]
     // 3 segments
 
-    const strLen: usize = 5;
-    var str: [strLen]u8 = "a!b!c".*;
-    const strPtr: [*]u8 = &str;
+    const str_len: usize = 5;
+    var str: [str_len]u8 = "a!b!c".*;
+    const str_ptr: [*]u8 = &str;
 
-    const delimiterLen = 1;
-    var delimiter: [delimiterLen]u8 = "!".*;
-    const delimiterPtr: [*]u8 = &delimiter;
+    const delimiter_len = 1;
+    var delimiter: [delimiter_len]u8 = "!".*;
+    const delimiter_ptr: [*]u8 = &delimiter;
 
-    const segmentsCount = count_segments_(
-        strPtr,
-        strLen,
-        delimiterPtr,
-        delimiterLen
+    const segments_count = countSegments(
+        str_ptr,
+        str_len,
+        delimiter_ptr,
+        delimiter_len
     );
 
-    expect(segmentsCount == 3);
+    expect(segments_count == 3);
 }
