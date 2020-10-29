@@ -83,7 +83,7 @@ pub fn constrain_expr(
         Num(var, _) => exists(
             vec![*var],
             Eq(
-                Type::Apply(Symbol::NUM_NUM, vec![Type::Variable(*var)]),
+                crate::builtins::num_num(Type::Variable(*var)),
                 expected,
                 Category::Num,
                 region,
