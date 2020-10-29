@@ -50,13 +50,6 @@ const TVAR3: VarId = VarId::from_u32(3);
 const TVAR4: VarId = VarId::from_u32(4);
 const TOP_LEVEL_CLOSURE_VAR: VarId = VarId::from_u32(5);
 
-fn single_private_tag(symbol: Symbol, type_arguments: Vec<SolvedType>) -> SolvedType {
-    SolvedType::TagUnion(
-        vec![(TagName::Private(symbol), type_arguments)],
-        Box::new(SolvedType::EmptyTagUnion),
-    )
-}
-
 pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     let mut types = HashMap::with_capacity_and_hasher(NUM_BUILTIN_IMPORTS, default_hasher());
 
