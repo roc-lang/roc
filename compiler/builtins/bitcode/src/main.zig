@@ -140,14 +140,11 @@ test "str_split_in_place_: no delimiter" {
     var delimiter: [1]u8 = "!".*;
     const delimiterPtr: [*]u8 = &delimiter;
 
-    var array: [1]RocStr = [_]RocStr{
-        undefined,
-    };
-
-    const array_ptr: [*]RocStr = &array;
+    var array: [1]RocStr = undefined;
+    const arrayPtr: [*]RocStr = &array;
 
     str_split_in_place_(
-        array_ptr,
+        arrayPtr,
         1,
         strPtr,
         3,
@@ -180,10 +177,10 @@ test "str_split_in_place_: delimiter on sides" {
         undefined,
         undefined,
     };
-    const array_ptr: [*]RocStr = &array;
+    const arrayPtr: [*]RocStr = &array;
 
     str_split_in_place_(
-        array_ptr,
+        arrayPtr,
         arrayLen,
         strPtr,
         strLen,
@@ -214,15 +211,11 @@ test "str_split_in_place_: three pieces" {
     const delimiterPtr: [*]u8 = &delimiter;
 
     const arrayLen : usize = 3;
-    var array: [arrayLen]RocStr = [_]RocStr{
-        undefined ,
-        undefined,
-        undefined,
-    };
-    const array_ptr: [*]RocStr = &array;
+    var array: [arrayLen]RocStr = undefined;
+    const arrayPtr: [*]RocStr = &array;
 
     str_split_in_place_(
-        array_ptr,
+        arrayPtr,
         arrayLen,
         strPtr,
         strLen,
