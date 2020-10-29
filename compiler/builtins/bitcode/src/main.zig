@@ -74,7 +74,9 @@ export fn str_split_in_place_(
     list[ret_list_index] = RocStr.init(str_bytes + slice_start_index, str_len - slice_start_index);
 }
 
-test "str_split_in_place_ nodelimiter" {
+test "str_split_in_place_ no delimiter" {
+    // Str.split "abc" "!" == [ "abc" ]
+    
     var str: [3]u8 = "abc".*;
     const str_ptr: [*]u8 = &str;
 
@@ -121,6 +123,8 @@ test "str_split_in_place_ nodelimiter" {
 }
 
 test "str_split_in_place_ delimiter on sides" {
+    // Str.split "tttghittt" "ttt" == [ "", "ghi", "" ]
+
     const str_len: usize = 9;
     var str: [str_len]u8 = "tttghittt".*;
     const str_ptr: [*]u8 = &str;
@@ -170,6 +174,8 @@ test "str_split_in_place_ delimiter on sides" {
 }
 
 test "str_split_in_place_ three pieces" {
+    // Str.split "a!b!c" "!" == [ "a", "b", "c" ]
+
     const str_len: usize = 5;
     var str: [str_len]u8 = "a!b!c".*;
     const str_ptr: [*]u8 = &str;
@@ -253,6 +259,10 @@ test "str_split_in_place_ three pieces" {
     expect(list[2].str_len == 1);
 }
 
+// This is used for `Str.split : Str, Str -> List Str
+// It is used to count how many segments the input `Str`
+// needs to be broken into, so that we can allocate a list
+// of that size. It always returns at least 1.
 export fn count_segments_(
     str_bytes: [*]u8,
     str_len: usize,
@@ -294,6 +304,9 @@ export fn count_segments_(
 }
 
 test "count_segments_ long delimiter" {
+    // Str.split "str" "delimiter" == [ "str" ]
+    // 1 segment
+
     const str_len: usize = 3;
     var str: [str_len]u8 = "str".*;
     const str_ptr: [*]u8 = &str;
@@ -313,6 +326,9 @@ test "count_segments_ long delimiter" {
 }
 
 test "count_segments_ delimiter at start" {
+    // Str.split "hello there" "hello" == [ "", " there" ]
+    // 2 segments
+
     const str_len: usize = 11;
     var str: [str_len]u8 = "hello there".*;
     const str_ptr: [*]u8 = &str;
@@ -332,6 +348,9 @@ test "count_segments_ delimiter at start" {
 }
 
 test "count_segments_ delimiter interspered" {
+    // Str.split "a!b!c" "!" == [ "a", "b", "c" ]
+    // 3 segments
+
     const str_len: usize = 5;
     var str: [str_len]u8 = "a!b!c".*;
     const str_ptr: [*]u8 = &str;
