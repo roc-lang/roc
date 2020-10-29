@@ -54,7 +54,7 @@ in pkgs.mkShell {
   LLVM_SYS_100_PREFIX = "${llvm}";
   shellHook = ''
     alias llvm-as-10="llvm-as"
-    export S=$SHELL
+    export PATH="$PATH:$PWD/nix/bin"
   '';
 }
 
