@@ -65,6 +65,3 @@ apt-get install -y clang-$LLVM_VERSION lldb-$LLVM_VERSION lld-$LLVM_VERSION clan
 wget -c https://ziglang.org/builds/zig-linux-x86_64-0.6.0+0088efc4b.tar.xz --no-check-certificate
 tar -xf zig-linux-x86_64-0.6.0+0088efc4b.tar.xz
 ln -s "$PWD/zig-linux-x86_64-0.6.0+0088efc4b/zig" /usr/local/bin/zig
-
-# symlink llvm tools
-ln -s /usr/bin/llvm-as-10 /usr/local/bin/llvm-as
