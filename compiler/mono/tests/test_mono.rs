@@ -78,8 +78,8 @@ mod test_mono {
             println!("Ignoring {} canonicalization problems", can_problems.len());
         }
 
-        assert!(type_problems.is_empty());
-        assert!(mono_problems.is_empty());
+        assert_eq!(type_problems, Vec::new());
+        assert_eq!(mono_problems, Vec::new());
 
         debug_assert_eq!(exposed_to_host.len(), 1);
 
