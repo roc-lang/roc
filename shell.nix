@@ -52,5 +52,9 @@ let
 in pkgs.mkShell {
   buildInputs = inputs ++ darwin-frameworks;
   LLVM_SYS_100_PREFIX = "${llvm}";
+  shellHook = ''
+    alias llvm-as-10="llvm-as"
+    export S=$SHELL
+  '';
 }
 
