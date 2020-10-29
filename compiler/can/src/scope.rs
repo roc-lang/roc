@@ -36,15 +36,12 @@ impl Scope {
             let mut free_vars = FreeVars::default();
             let typ = roc_types::solved_types::to_type(&typ, &mut free_vars, var_store);
 
-            // NOTE: we make assumptions about the order of type arguments here!
-            // we assume the type variables occur in the body of the alias in the same order as
-            // they occur in the type
-
-            // TODO fix that assumption
-            // TODO aliases depend on one another currently, fix that
             let mut variables = Vec::new();
-            for (loc_name, (_, var)) in vars.iter().zip(free_vars.unnamed_vars.iter()) {
-                variables.push(Located::at(loc_name.region, (loc_name.value.clone(), *var)));
+            // make sure to sort these variables to make them line up with the type arguments
+            let mut type_variables: Vec<_> = free_vars.unnamed_vars.into_iter().collect();
+            type_variables.sort();
+            for (loc_name, (_, var)) in vars.iter().zip(type_variables) {
+                variables.push(Located::at(loc_name.region, (loc_name.value.clone(), var)));
             }
 
             let alias = Alias {
