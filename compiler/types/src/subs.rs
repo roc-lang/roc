@@ -328,11 +328,7 @@ impl Subs {
         let l_key = self.utable.get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
-            let mut new_desc = node.value.clone();
-
-            new_desc.rank = rank;
-
-            node.value = new_desc;
+            node.value.rank = rank;
         });
     }
 
@@ -340,11 +336,7 @@ impl Subs {
         let l_key = self.utable.get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
-            let mut new_desc = node.value.clone();
-
-            new_desc.mark = mark;
-
-            node.value = new_desc;
+            node.value.mark = mark;
         });
     }
 
@@ -352,11 +344,7 @@ impl Subs {
         let l_key = self.utable.get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
-            let mut new_desc = node.value.clone();
-
-            new_desc.content = content;
-
-            node.value = new_desc;
+            node.value.content = content;
         });
     }
 
