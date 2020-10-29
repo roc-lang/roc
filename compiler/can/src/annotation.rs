@@ -339,19 +339,12 @@ fn can_annotation_help(
                     hidden_variables.remove(&loc_var.value.1);
                 }
 
-                let alias = Alias {
-                    region,
-                    vars: lowercase_vars,
-                    hidden_variables,
-                    uniqueness: None,
-                    typ: alias_actual,
-                };
-                local_aliases.insert(symbol, alias);
+                scope.add_alias(symbol, region, lowercase_vars, alias_actual);
 
-                // We turn this 'inline' alias into an Apply. This will later get de-aliased again,
-                // but this approach is easier wrt. instantiation of uniqueness variables.
-                let args = vars.into_iter().map(|(_, b)| b).collect();
-                Type::Apply(symbol, args)
+                let alias = scope.lookup_alias(symbol).unwrap();
+                local_aliases.insert(symbol, alias.clone());
+
+                Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
             }
             _ => {
                 // This is a syntactically invalid type alias.
