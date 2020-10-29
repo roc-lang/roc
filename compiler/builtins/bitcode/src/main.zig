@@ -215,18 +215,9 @@ test "str_split_in_place_: three pieces" {
 
     const arrayLen : usize = 3;
     var array: [arrayLen]RocStr = [_]RocStr{
-        RocStr{
-            .strBytesPtrs = delimiterPtr,
-            .strLen = 1,
-        },
-        RocStr{
-            .strBytesPtrs = delimiterPtr,
-            .strLen = 1,
-        },
-        RocStr{
-            .strBytesPtrs = delimiterPtr,
-            .strLen = 1,
-        }
+        undefined ,
+        undefined,
+        undefined,
     };
     const array_ptr: [*]RocStr = &array;
 
