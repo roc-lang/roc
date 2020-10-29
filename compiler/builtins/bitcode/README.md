@@ -5,52 +5,19 @@ When their implementations are simple enough (e.g. addition), they
 can be implemented directly in Inkwell.
 
 When their implementations are complex enough, it's nicer to
-implement them in a higher-level language like Rust, compile the
-result to LLVM bitcode, and import that bitcode into the compiler.
+implement them in a higher-level language like Zig, then compile
+the result to LLVM bitcode, and import that bitcode into the compiler.
 
-Here is the process for doing that.
+Compiling the bitcode happens automatically in a Rust build script at `compiler/builtins/build.rs`.
+Then `builtins/src/bitcode/rs` staticlly imports the compiled bitcode for use in the compiler.
 
-## Building the bitcode
+You can find the compiled bitcode in `target/debug/build/roc_builtins-[some random characters]/out/builtins.bc`.
+There will be two directories like `roc_builtins-[some random characters]`, look for the one that has an
+`out` directory as a child.
 
-The source we'll use to generate the bitcode is in `src/lib.rs` in this directory.
-
-To generate the bitcode, `cd` into `compiler/builtins/bitcode/` and run:
-
-```bash
-$ ./regenerate.sh
-```
-
-> If you want to take a look at the human-readable LLVM IR rather than the
-> bitcode, run this instead and look for a `.ll` file instead of a `.bc` file:
->
-> ```bash
-> $ cargo rustc --release --lib -- --emit=llvm-ir
-> ```
->
-> Then look in the root `roc` source directory under `target/release/deps/` for a file
-> with a name like `roc_builtins_bitcode-8da0901c58a73ebf.bc` - except
-> probably with a different hash before the `.bc`. If there's more than one
-> `*.bc` file in that directory, delete the whole `deps/` directory and re-run
-> the `cargo rustc` command above to regenerate it.
-
-**Note**: In order to be able to address the bitcode functions by name, they need to be defined with the `#[no_mangle]` attribute.
-
-The bitcode is a bunch of bytes that aren't particularly human-readable.
-Since Roc is designed to be distributed as a single binary, these bytes
-need to be included in the raw source somewhere.
-
-The `llvm/src/build.rs` file statically imports these raw bytes
-using the [`include_bytes!` macro](https://doc.rust-lang.org/std/macro.include_bytes.html).
-The current `.bc` file is located at:
-
-```
-compiler/gen/src/llvm/builtins.bc
-```
-
-The script will automatically replace this `.bc` file with the new one.
-
-Once that's done, `git status` should show that the `builtins.bc` file
-has been changed. Commit that change and you're done!
+> The bitcode is a bunch of bytes that aren't particularly human-readable.
+> If you want to take a look at the human-readable LLVM IR, look at 
+> `target/debug/build/roc_builtins-[some random characters]/out/builtins.ll`
 
 ## Calling bitcode functions
 

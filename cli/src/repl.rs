@@ -1,7 +1,6 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
-use inkwell::execution_engine::ExecutionEngine;
-use inkwell::OptimizationLevel;
+use roc_build::link::module_to_dylib;
 use roc_builtins::unique::uniq_stdlib;
 use roc_can::constraint::Constraint;
 use roc_can::expected::Expected;
@@ -284,14 +283,6 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         let (module_pass, function_pass) =
             roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
-        let execution_engine = module
-            .create_jit_execution_engine(OptimizationLevel::None)
-            .expect("Error creating JIT execution engine for test");
-
-        // Without calling this, we get a linker error when building this crate
-        // in --release mode and then trying to eval anything in the repl.
-        ExecutionEngine::link_in_mc_jit();
-
         // Compile and add all the Procs before adding main
         let env = roc_gen::llvm::build::Env {
             arena: &arena,
@@ -386,10 +377,12 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         // Uncomment this to see the module's optimized LLVM instruction output:
         // env.module.print_to_stderr();
 
+        let lib = module_to_dylib(&env.module, &target, opt_level)
+            .expect("Error loading compiled dylib for test");
         let answer = unsafe {
             eval::jit_to_ast(
                 &arena,
-                execution_engine,
+                lib,
                 main_fn_name,
                 &main_fn_layout,
                 &content,

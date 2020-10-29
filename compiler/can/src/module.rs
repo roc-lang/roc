@@ -1,3 +1,4 @@
+use crate::builtins;
 use crate::def::{canonicalize_defs, sort_can_defs, Declaration};
 use crate::env::Env;
 use crate::expr::Output;
@@ -42,7 +43,7 @@ pub struct ModuleOutput {
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a>(
     arena: &Bump,
-    loc_defs: bumpalo::collections::Vec<'a, Located<ast::Def<'a>>>,
+    loc_defs: &'a [Located<ast::Def<'a>>],
     home: ModuleId,
     module_ids: &ModuleIds,
     exposed_ident_ids: IdentIds,
@@ -65,9 +66,9 @@ pub fn canonicalize_module_defs<'a>(
     let mut desugared =
         bumpalo::collections::Vec::with_capacity_in(loc_defs.len() + num_deps, arena);
 
-    for loc_def in loc_defs {
+    for loc_def in loc_defs.iter() {
         desugared.push(&*arena.alloc(Located {
-            value: desugar_def(arena, arena.alloc(loc_def.value)),
+            value: desugar_def(arena, &loc_def.value),
             region: loc_def.region,
         }));
     }
@@ -256,6 +257,15 @@ pub fn canonicalize_module_defs<'a>(
                         fix_values_captured_in_closure_defs(defs, &mut MutSet::default())
                     }
                     InvalidCycle(_, _) | Builtin(_) => {}
+                }
+            }
+
+            // Add builtin defs (e.g. List.get) to the module's defs
+            let builtin_defs = builtins::builtin_defs(var_store);
+
+            for (symbol, def) in builtin_defs {
+                if references.contains(&symbol) {
+                    declarations.push(Declaration::Builtin(def));
                 }
             }
 

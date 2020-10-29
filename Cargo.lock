@@ -2217,6 +2217,7 @@ dependencies = [
  "indoc",
  "inkwell",
  "inlinable_string",
+ "libloading",
  "maplit",
  "pretty_assertions",
  "quickcheck",
@@ -2238,7 +2239,7 @@ dependencies = [
  "roc_unify",
  "roc_uniq",
  "target-lexicon",
- "tokio",
+ "tempfile",
 ]
 
 [[package]]
@@ -2255,13 +2256,6 @@ dependencies = [
  "roc_module",
  "roc_region",
  "roc_types",
-]
-
-[[package]]
-name = "roc_builtins_bitcode"
-version = "0.1.0"
-dependencies = [
- "pretty_assertions",
 ]
 
 [[package]]
@@ -2298,6 +2292,7 @@ dependencies = [
  "inkwell",
  "inlinable_string",
  "libc",
+ "libloading",
  "maplit",
  "pretty_assertions",
  "quickcheck",
@@ -2323,6 +2318,7 @@ dependencies = [
  "roc_uniq",
  "serde",
  "serde-xml-rs",
+ "serial_test",
  "strip-ansi-escapes",
  "target-lexicon",
  "tempfile",
@@ -2432,10 +2428,12 @@ dependencies = [
  "inkwell",
  "inlinable_string",
  "libc",
+ "libloading",
  "maplit",
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",
+ "roc_build",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -2805,6 +2803,28 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serial_test"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b15f74add9a9d4a3eb2bf739c9a427d266d3895b53d992c3a7c234fec2ff1f1"
+dependencies = [
+ "lazy_static",
+ "parking_lot 0.10.2",
+ "serial_test_derive",
+]
+
+[[package]]
+name = "serial_test_derive"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65f59259be9fc1bf677d06cc1456e97756004a1a5a577480f71430bd7c17ba33"
+dependencies = [
+ "proc-macro2 1.0.21",
+ "quote 1.0.7",
+ "syn 1.0.40",
 ]
 
 [[package]]
