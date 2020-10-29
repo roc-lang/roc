@@ -2031,7 +2031,7 @@ fn parse_and_constrain<'a>(
     let mut var_store = VarStore::default();
     let canonicalized = canonicalize_module_defs(
         &arena,
-        parsed_defs,
+        &parsed_defs,
         module_id,
         module_ids,
         header.exposed_ident_ids,

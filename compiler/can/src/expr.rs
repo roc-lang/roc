@@ -309,7 +309,7 @@ pub fn canonicalize_expr<'a>(
             let mut args = Vec::new();
             let mut outputs = Vec::new();
 
-            for loc_arg in loc_args {
+            for loc_arg in loc_args.iter() {
                 let (arg_expr, arg_out) =
                     canonicalize_expr(env, var_store, scope, loc_arg.region, &loc_arg.value);
 
@@ -450,7 +450,7 @@ pub fn canonicalize_expr<'a>(
 
             let mut bound_by_argument_patterns = MutSet::default();
 
-            for loc_pattern in loc_arg_patterns.into_iter() {
+            for loc_pattern in loc_arg_patterns.iter() {
                 let (new_output, can_arg) = canonicalize_pattern(
                     env,
                     var_store,
@@ -562,7 +562,7 @@ pub fn canonicalize_expr<'a>(
 
             let mut can_branches = Vec::with_capacity(branches.len());
 
-            for branch in branches {
+            for branch in branches.iter() {
                 let (can_when_branch, branch_references) =
                     canonicalize_when_branch(env, var_store, scope, region, *branch, &mut output);
 
@@ -788,7 +788,7 @@ fn canonicalize_when_branch<'a>(
     let mut scope = original_scope.clone();
 
     // TODO report symbols not bound in all patterns
-    for loc_pattern in &branch.patterns {
+    for loc_pattern in branch.patterns.iter() {
         let (new_output, can_pattern) = canonicalize_pattern(
             env,
             var_store,
