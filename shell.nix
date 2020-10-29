@@ -52,8 +52,9 @@ let
 in pkgs.mkShell {
   buildInputs = inputs ++ darwin-frameworks;
   LLVM_SYS_100_PREFIX = "${llvm}";
+
+  # Aliases don't work cross shell, so we do this
   shellHook = ''
-    alias llvm-as-10="llvm-as"
     export PATH="$PATH:$PWD/nix/bin"
   '';
 }
