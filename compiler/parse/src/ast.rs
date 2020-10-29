@@ -29,7 +29,7 @@ pub struct InterfaceHeader<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct WhenBranch<'a> {
-    pub patterns: Vec<'a, Loc<Pattern<'a>>>,
+    pub patterns: &'a [Loc<Pattern<'a>>],
     pub value: Loc<Expr<'a>>,
     pub guard: Option<Loc<Expr<'a>>>,
 }
@@ -188,10 +188,10 @@ pub enum Expr<'a> {
     AccessorFunction(&'a str),
 
     // Collection Literals
-    List(Vec<'a, &'a Loc<Expr<'a>>>),
+    List(&'a [&'a Loc<Expr<'a>>]),
     Record {
         update: Option<&'a Loc<Expr<'a>>>,
-        fields: Vec<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+        fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
     },
 
     // Lookups
@@ -205,14 +205,14 @@ pub enum Expr<'a> {
     PrivateTag(&'a str),
 
     // Pattern Matching
-    Closure(&'a Vec<'a, Loc<Pattern<'a>>>, &'a Loc<Expr<'a>>),
+    Closure(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
     /// Multiple defs in a row
-    Defs(Vec<'a, &'a Loc<Def<'a>>>, &'a Loc<Expr<'a>>),
+    Defs(&'a [&'a Loc<Def<'a>>], &'a Loc<Expr<'a>>),
 
     // Application
     /// To apply by name, do Apply(Var(...), ...)
     /// To apply a tag by name, do Apply(Tag(...), ...)
-    Apply(&'a Loc<Expr<'a>>, Vec<'a, &'a Loc<Expr<'a>>>, CalledVia),
+    Apply(&'a Loc<Expr<'a>>, &'a [&'a Loc<Expr<'a>>], CalledVia),
     BinOp(&'a (Loc<Expr<'a>>, Loc<BinOp>, Loc<Expr<'a>>)),
     UnaryOp(&'a Loc<Expr<'a>>, Loc<UnaryOp>),
 
@@ -226,7 +226,7 @@ pub enum Expr<'a> {
         /// Vec, because there may be many patterns, and the guard
         /// is Option<Expr> because each branch may be preceded by
         /// a guard (".. if ..").
-        Vec<'a, &'a WhenBranch<'a>>,
+        &'a [&'a WhenBranch<'a>],
     ),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.

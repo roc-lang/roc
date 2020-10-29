@@ -82,7 +82,7 @@ macro_rules! loc_parenthetical_expr {
                             region: loc_expr_with_extras.region,
                             value: Expr::Apply(
                                 arena.alloc(loc_expr),
-                                allocated_args,
+                                allocated_args.into_bump_slice(),
                                 CalledVia::Space,
                             ),
                         },
@@ -250,7 +250,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
 
             let mut arg_patterns = Vec::with_capacity_in(loc_args.len(), arena);
 
-            for loc_arg in loc_args {
+            for loc_arg in loc_args.iter() {
                 let region = loc_arg.region;
                 let value = expr_to_pattern(arena, &loc_arg.value)?;
 
@@ -279,7 +279,7 @@ fn expr_to_pattern<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, 
         } => {
             let mut loc_patterns = Vec::with_capacity_in(fields.len(), arena);
 
-            for loc_assigned_field in fields {
+            for loc_assigned_field in fields.iter() {
                 let region = loc_assigned_field.region;
                 let value = assigned_expr_field_to_pattern(arena, &loc_assigned_field.value)?;
 
@@ -691,7 +691,10 @@ fn parse_def_expr<'a>(
                 // for formatting reasons, we must insert the first def first!
                 defs.insert(0, arena.alloc(loc_first_def));
 
-                Ok((Expr::Defs(defs, arena.alloc(loc_ret)), state))
+                Ok((
+                    Expr::Defs(defs.into_bump_slice(), arena.alloc(loc_ret)),
+                    state,
+                ))
             },
         )
         .parse(arena, state)
@@ -765,6 +768,8 @@ fn parse_def_signature<'a>(
                 // contrary to defs with an expression body, we must ensure the annotation comes just before its
                 // corresponding definition (the one with the body).
                 defs.insert(0, arena.alloc(loc_first_def));
+
+                let defs = defs.into_bump_slice();
 
                 Ok((Expr::Defs(defs, arena.alloc(loc_ret)), state))
             },
@@ -848,7 +853,12 @@ fn closure<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
         ),
         |arena: &'a Bump, opt_contents| match opt_contents {
             None => Expr::MalformedClosure,
-            Some((params, loc_body)) => Expr::Closure(arena.alloc(params), arena.alloc(loc_body)),
+            Some((params, loc_body)) => {
+                let params: Vec<'a, Located<Pattern<'a>>> = params;
+                let params: &'a [Located<Pattern<'a>>] = params.into_bump_slice();
+
+                Expr::Closure(params, arena.alloc(loc_body))
+            }
         }
     )
 }
@@ -1119,7 +1129,10 @@ mod when {
                 let (branches, state) =
                     attempt!(Attempting::WhenBranch, branches(min_indent)).parse(arena, state)?;
 
-                Ok((Expr::When(arena.alloc(loc_condition), branches), state))
+                Ok((
+                    Expr::When(arena.alloc(loc_condition), branches.into_bump_slice()),
+                    state,
+                ))
             },
         )
     }
@@ -1152,7 +1165,7 @@ mod when {
 
             // Record this as the first branch, then optionally parse additional branches.
             branches.push(arena.alloc(WhenBranch {
-                patterns: loc_first_patterns,
+                patterns: loc_first_patterns.into_bump_slice(),
                 value: loc_first_expr,
                 guard: loc_first_guard,
             }));
@@ -1173,10 +1186,13 @@ mod when {
                     ),
                     branch_result(indented_more)
                 ),
-                |((patterns, guard), expr)| WhenBranch {
-                    patterns,
-                    value: expr,
-                    guard
+                |((patterns, guard), expr)| {
+                    let patterns: Vec<'a, _> = patterns;
+                    WhenBranch {
+                        patterns: patterns.into_bump_slice(),
+                        value: expr,
+                        guard,
+                    }
                 }
             );
 
@@ -1444,7 +1460,11 @@ fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                     }
 
                     Ok((
-                        Expr::Apply(arena.alloc(loc_expr), allocated_args, CalledVia::Space),
+                        Expr::Apply(
+                            arena.alloc(loc_expr),
+                            allocated_args.into_bump_slice(),
+                            CalledVia::Space,
+                        ),
                         state,
                     ))
                 }
@@ -1638,7 +1658,7 @@ pub fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                 allocated.push(&*arena.alloc(parsed_elem));
             }
 
-            Expr::List(allocated)
+            Expr::List(allocated.into_bump_slice())
         }),
     )
 }
@@ -1663,7 +1683,7 @@ pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                     // This is a record literal, not a destructure.
                     let mut value = Expr::Record {
                         update: opt_update.map(|loc_expr| &*arena.alloc(loc_expr)),
-                        fields: loc_assigned_fields.value,
+                        fields: loc_assigned_fields.value.into_bump_slice(),
                     };
 
                     // there can be field access, e.g. `{ x : 4 }.x`

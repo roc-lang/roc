@@ -43,7 +43,7 @@ pub struct ModuleOutput {
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a>(
     arena: &Bump,
-    loc_defs: bumpalo::collections::Vec<'a, Located<ast::Def<'a>>>,
+    loc_defs: &'a [Located<ast::Def<'a>>],
     home: ModuleId,
     module_ids: &ModuleIds,
     exposed_ident_ids: IdentIds,
@@ -66,9 +66,9 @@ pub fn canonicalize_module_defs<'a>(
     let mut desugared =
         bumpalo::collections::Vec::with_capacity_in(loc_defs.len() + num_deps, arena);
 
-    for loc_def in loc_defs {
+    for loc_def in loc_defs.iter() {
         desugared.push(&*arena.alloc(Located {
-            value: desugar_def(arena, arena.alloc(loc_def.value)),
+            value: desugar_def(arena, &loc_def.value),
             region: loc_def.region,
         }));
     }
