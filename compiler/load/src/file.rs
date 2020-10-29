@@ -1092,8 +1092,6 @@ where
             let mut worker_listeners =
                 bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
 
-            let stdlib_mode = stdlib.mode;
-
             for worker_arena in it {
                 let msg_tx = msg_tx.clone();
                 let worker = worker_queues.pop().unwrap();
@@ -1129,14 +1127,8 @@ where
                                 // added. In that case, do nothing, and keep waiting
                                 // until we receive a Shutdown message.
                                 if let Some(task) = find_task(&worker, injector, stealers) {
-                                    run_task(
-                                        task,
-                                        worker_arena,
-                                        src_dir,
-                                        msg_tx.clone(),
-                                        stdlib_mode,
-                                    )
-                                    .expect("Msg channel closed unexpectedly.");
+                                    run_task(task, worker_arena, src_dir, msg_tx.clone())
+                                        .expect("Msg channel closed unexpectedly.");
                                 }
                             }
                         }
@@ -2025,7 +2017,6 @@ fn run_solve<'a>(
     module: Module,
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
-    stdlib_mode: Mode,
     imported_symbols: Vec<Import>,
     imported_aliases: MutMap<Symbol, Alias>,
     constraint: Constraint,
@@ -2589,7 +2580,6 @@ fn run_task<'a>(
     arena: &'a Bump,
     src_dir: &Path,
     msg_tx: MsgSender<'a>,
-    stdlib_mode: Mode,
 ) -> Result<(), LoadingProblem> {
     use BuildTask::*;
 
@@ -2629,7 +2619,6 @@ fn run_task<'a>(
             module,
             ident_ids,
             module_timing,
-            stdlib_mode,
             imported_symbols,
             imported_aliases,
             constraint,
