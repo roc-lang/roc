@@ -557,6 +557,7 @@ struct CanonicalizedModule<'a> {
 
 #[derive(Debug)]
 enum Msg<'a> {
+    SkipAhead(ModuleId, Phase),
     Header(ModuleHeader<'a>),
     Parsed(ParsedModule<'a>),
     CanonicalizedAndConstrained {
@@ -1291,6 +1292,21 @@ fn update<'a>(
     use self::Msg::*;
 
     match msg {
+        SkipAhead(home, phase) => {
+            // the work required is already completed and stored in the global state
+            // this message just exists to notify any depending modules that the given
+            // `phase` for module `home` is completed, and they can continue
+
+            let work = state.dependencies.notify(home, phase);
+
+            for (module_id, phase) in work {
+                let task = start_phase(module_id, phase, &mut state);
+
+                enqueue_task(&injector, worker_listeners, task)?
+            }
+
+            Ok(state)
+        }
         Header(header) => {
             log!("loaded header for {:?}", header.module_id);
             let home = header.module_id;
@@ -1309,7 +1325,10 @@ fn update<'a>(
                 exposed_symbols.insert(*symbol);
             }
 
-            debug_assert!(!state.exposed_symbols_by_module.contains_key(&home));
+            // NOTE we currently re-parse the headers when a module is imported twice.
+            // We need a proper solution that marks a phase as in-progress so it's not repeated
+            // debug_assert!(!state.exposed_symbols_by_module.contains_key(&home));
+
             state
                 .exposed_symbols_by_module
                 .insert(home, exposed_symbols);

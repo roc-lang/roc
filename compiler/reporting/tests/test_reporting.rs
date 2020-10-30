@@ -2988,7 +2988,7 @@ mod test_reporting {
                 Pair a b : [ Pair a b ]
 
                 x : Pair Int
-                x = 3
+                x = Pair 2 3
 
                 x
                 "#
