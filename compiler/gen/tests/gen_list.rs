@@ -14,8 +14,7 @@ mod helpers;
 #[cfg(test)]
 mod gen_list {
     use crate::helpers::with_larger_debug_stack;
-    //use roc_std::roclist;
-    use roc_std::RocList;
+    use roc_std::{RocList, RocStr};
 
     #[test]
     fn roc_list_construction() {
@@ -260,6 +259,47 @@ mod gen_list {
                 "#
             ),
             0,
+            i64
+        );
+    }
+
+    #[test]
+    fn list_walk_right_with_str() {
+        assert_evals_to!(
+            r#"List.walkRight [ "x", "y", "z" ] Str.concat "<""#,
+            RocStr::from("zyx<"),
+            RocStr
+        );
+
+        assert_evals_to!(
+            r#"List.walkRight [ "Third", "Second", "First" ] Str.concat "Fourth""#,
+            RocStr::from("FirstSecondThirdFourth"),
+            RocStr
+        );
+    }
+
+    #[test]
+    fn list_walk_right_with_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Bit : [ Zero, One ]
+
+                byte = [ Zero, One, Zero, One, Zero, Zero, One, Zero ]
+
+                initialCounts = { zeroes: 0, ones: 0 }
+
+                acc = \b, r ->
+                    when b is
+                        Zero -> { r & zeroes: r.zeroes + 1 }
+                        One -> { r & ones: r.ones + 1 }
+
+                finalCounts = List.walkRight byte acc initialCounts
+
+                finalCounts.ones * 10 + finalCounts.zeroes
+                "#
+            ),
+            35,
             i64
         );
     }
