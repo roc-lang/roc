@@ -130,8 +130,6 @@ pub fn canonicalize_defs<'a>(
     // This naturally handles recursion too, because a given expr which refers
     // to itself won't be processed until after its def has been added to scope.
 
-    use roc_parse::ast::Def::*;
-
     // Record both the original and final idents from the scope,
     // so we can diff them while detecting unused defs.
     let mut scope = original_scope.clone();

@@ -445,7 +445,8 @@ pub fn assigned_pattern_field_to_pattern<'a>(
 ///
 /// Note: Parenthetical patterns are a shorthand convenience, and may not have type annotations.
 /// It would be too weird to parse; imagine `(UserId userId) : ...` above `(UserId userId) = ...`
-pub fn loc_parenthetical_def<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
+/// !!!! THIS IS NOT USED !!!!
+fn loc_parenthetical_def<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
     move |arena, state| {
         let (loc_tuple, state) = loc!(and!(
             space0_after(
@@ -496,23 +497,20 @@ fn equals_for_def<'a>() -> impl Parser<'a, ()> {
 /// * A type annotation followed on the next line by a pattern, an `=`, and an expression
 pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>> {
     map_with_arena!(
-        either!(body(min_indent), annotated_body(min_indent)),
+        either!(annotated_body(min_indent), body(min_indent)),
         to_def
     )
 }
 
 fn to_def<'a>(
     arena: &'a Bump,
-    ann_body_or_body: Either<Body<'a>, AnnotationOrAnnotatedBody<'a>>,
+    ann_body_or_body: Either<AnnotationOrAnnotatedBody<'a>, Body<'a>>,
 ) -> Def<'a> {
     match ann_body_or_body {
-        Either::First((body_pattern, body_expr)) => {
-            Def::Body(arena.alloc(body_pattern), arena.alloc(body_expr))
-        }
-        Either::Second(((ann_pattern, ann_type), None)) => {
+        Either::First(((ann_pattern, ann_type), None)) => {
             annotation_or_alias(arena, &ann_pattern.value, ann_pattern.region, ann_type)
         }
-        Either::Second((
+        Either::First((
             (ann_pattern, ann_type),
             Some((opt_comment, (body_pattern, body_expr))),
         )) => Def::AnnotatedBody {
@@ -522,6 +520,9 @@ fn to_def<'a>(
             body_pattern: arena.alloc(body_pattern),
             body_expr: arena.alloc(body_expr),
         },
+        Either::Second((body_pattern, body_expr)) => {
+            Def::Body(arena.alloc(body_pattern), arena.alloc(body_expr))
+        }
     }
 }
 
@@ -801,44 +802,65 @@ fn parse_def_signature<'a>(
         // Indented more beyond the original indent.
         let indented_more = original_indent + 1;
 
-        then(
-            attempt!(
-                Attempting::Def,
+        attempt!(
+            Attempting::Def,
+            and!(
+                // Parse the first annotation. It doesn't need any spaces
+                // around it parsed, because both the subsquent defs and the
+                // final body will have space1_before on them.
+                //
+                // It should be indented more than the original, and it will
+                // end when outdented again.
                 and!(
-                    // Parse the first annotation. It doesn't need any spaces
-                    // around it parsed, because both the subsquent defs and the
-                    // final body will have space1_before on them.
-                    //
-                    // It should be indented more than the original, and it will
-                    // end when outdented again.
                     type_annotation::located(indented_more),
-                    and!(
-                        // Optionally parse additional defs.
-                        zero_or_more!(allocated(space1_before(
-                            loc!(def(original_indent)),
-                            original_indent,
-                        ))),
-                        // Parse the final expression that will be returned.
-                        // It should be indented the same amount as the original.
-                        space1_before(
-                            loc!(move |arena, state: State<'a>| {
-                                parse_expr(original_indent, arena, state)
-                            }),
-                            original_indent,
-                        )
+                    // The first annotation may be followed by a body
+                    // leading to an AnnotatedBody in this case
+                    optional(and!(spaces_then_comment_or_newline(), body(min_indent)))
+                ),
+                and!(
+                    // Optionally parse additional defs.
+                    zero_or_more!(allocated(space1_before(
+                        loc!(def(original_indent)),
+                        original_indent,
+                    ))),
+                    // Parse the final expression that will be returned.
+                    // It should be indented the same amount as the original.
+                    space1_before(
+                        loc!(|arena, state: State<'a>| {
+                            parse_expr(original_indent, arena, state)
+                        }),
+                        original_indent,
                     )
                 )
-            ),
-            move |arena, state, (loc_first_annotation, (mut defs, loc_ret))| {
-                let first_def: Def<'a> = annotation_or_alias(
-                    arena,
-                    &loc_first_pattern.value,
-                    loc_first_pattern.region,
-                    loc_first_annotation,
-                );
-                let loc_first_def = Located {
-                    value: first_def,
-                    region: loc_first_pattern.region,
+            )
+        )
+        .parse(arena, state)
+        .and_then(
+            move |(((loc_first_annotation, opt_body), (mut defs, loc_ret)), state)| {
+                let loc_first_def: Located<Def<'a>> = match opt_body {
+                    None => Located {
+                        value: annotation_or_alias(
+                            arena,
+                            &loc_first_pattern.value,
+                            loc_first_pattern.region,
+                            loc_first_annotation,
+                        ),
+                        region: loc_first_pattern.region,
+                    },
+                    Some((opt_comment, (body_pattern, body_expr))) => {
+                        let region =
+                            Region::span_across(&loc_first_pattern.region, &body_expr.region);
+                        Located {
+                            value: Def::AnnotatedBody {
+                                ann_pattern: loc_first_pattern,
+                                ann_type: loc_first_annotation,
+                                comment: opt_comment,
+                                body_pattern: arena.alloc(body_pattern),
+                                body_expr: arena.alloc(body_expr),
+                            },
+                            region: region,
+                        }
+                    }
                 };
 
                 // contrary to defs with an expression body, we must ensure the annotation comes just before its
@@ -850,9 +872,12 @@ fn parse_def_signature<'a>(
                 Ok((Expr::Defs(defs, arena.alloc(loc_ret)), state))
             },
         )
-        .parse(arena, state)
     }
 }
+
+// fn to_expr<'a>(arena, state, ((loc_first_annotation, opt_body), (mut defs, loc_ret))-> ParseResult<'a, Expr<'a>>{
+
+// }
 
 fn loc_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
     skip_first!(
@@ -1761,7 +1786,7 @@ pub fn list_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
 }
 
 // Parser<'a, Vec<'a, Located<AssignedField<'a, S>>>>
-pub fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
+fn record_literal<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
     then(
         and!(
             attempt!(
