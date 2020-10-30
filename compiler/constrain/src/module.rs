@@ -301,12 +301,12 @@ pub fn pre_constrain_imports(
                 None => {
                     let is_valid_alias = stdlib.applies.contains(&symbol)
                         // This wasn't a builtin value or Apply; maybe it was a builtin alias.
-                        || stdlib.aliases.contains_key(&symbol);
+                        || roc_types::builtin_aliases::aliases().contains_key(&symbol);
 
                     if !is_valid_alias {
                         panic!(
-                            "Could not find {:?} in builtin types {:?} or aliases {:?}",
-                            symbol, stdlib.types, stdlib.aliases
+                            "Could not find {:?} in builtin types {:?} or builtin aliases",
+                            symbol, stdlib.types,
                         );
                     }
                 }

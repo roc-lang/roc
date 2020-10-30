@@ -3,7 +3,8 @@ use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
-use roc_types::solved_types::{BuiltinAlias, SolvedBool, SolvedType};
+use roc_types::builtin_aliases;
+use roc_types::solved_types::{SolvedBool, SolvedType};
 use roc_types::subs::VarId;
 use std::collections::HashMap;
 
@@ -58,7 +59,6 @@ pub fn uniq_stdlib() -> StdLib {
     use crate::std::Mode;
 
     let types = types();
-    let aliases = aliases();
 
     /*
     debug_assert!({
@@ -103,7 +103,6 @@ pub fn uniq_stdlib() -> StdLib {
     StdLib {
         mode: Mode::Uniqueness,
         types,
-        aliases,
         applies: vec![
             Symbol::ATTR_ATTR,
             Symbol::LIST_LIST,
@@ -114,132 +113,6 @@ pub fn uniq_stdlib() -> StdLib {
         .into_iter()
         .collect(),
     }
-}
-
-pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
-    let mut aliases = MutMap::default();
-
-    let mut add_alias = |symbol, alias| {
-        debug_assert!(
-            !aliases.contains_key(&symbol),
-            "Duplicate alias definition for {:?}",
-            symbol
-        );
-
-        // TODO instead of using Region::zero for all of these,
-        // instead use the Region where they were defined in their
-        // source .roc files! This can give nicer error messages.
-        aliases.insert(symbol, alias);
-    };
-
-    let single_private_tag = |symbol, targs| {
-        SolvedType::TagUnion(
-            vec![(TagName::Private(symbol), targs)],
-            Box::new(SolvedType::EmptyTagUnion),
-        )
-    };
-
-    // NOTE: `a` must be the first variable bound here!
-    let_tvars! { a, err, star };
-
-    // Num : Num Integer
-    add_alias(
-        Symbol::NUM_NUM,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), "a".into())],
-            typ: single_private_tag(Symbol::NUM_AT_NUM, vec![flex(a)]),
-        },
-    );
-
-    // Integer : [ @Integer ]
-    add_alias(
-        Symbol::NUM_INTEGER,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: Vec::new(),
-            typ: single_private_tag(Symbol::NUM_AT_INTEGER, Vec::new()),
-        },
-    );
-
-    // FloatingPoint : [ @FloatingPoint ]
-    add_alias(
-        Symbol::NUM_FLOATINGPOINT,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: Vec::new(),
-            typ: single_private_tag(Symbol::NUM_AT_FLOATINGPOINT, Vec::new()),
-        },
-    );
-
-    // Int : Num Integer
-    add_alias(
-        Symbol::NUM_INT,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: Vec::new(),
-            typ: SolvedType::Apply(
-                Symbol::NUM_NUM,
-                vec![lift(
-                    star,
-                    SolvedType::Apply(Symbol::NUM_INTEGER, Vec::new()),
-                )],
-            ),
-        },
-    );
-
-    // Float : Num FloatingPoint
-    add_alias(
-        Symbol::NUM_FLOAT,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: Vec::new(),
-            typ: SolvedType::Apply(
-                Symbol::NUM_NUM,
-                vec![lift(
-                    star,
-                    SolvedType::Apply(Symbol::NUM_FLOATINGPOINT, Vec::new()),
-                )],
-            ),
-        },
-    );
-
-    // Bool : [ True, False ]
-    add_alias(
-        Symbol::BOOL_BOOL,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: Vec::new(),
-            typ: SolvedType::TagUnion(
-                vec![
-                    (TagName::Global("True".into()), Vec::new()),
-                    (TagName::Global("False".into()), Vec::new()),
-                ],
-                Box::new(SolvedType::EmptyTagUnion),
-            ),
-        },
-    );
-
-    // Result a e : [ Ok a, Err e ]
-    add_alias(
-        Symbol::RESULT_RESULT,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![
-                Located::at(Region::zero(), "a".into()),
-                Located::at(Region::zero(), "e".into()),
-            ],
-            typ: SolvedType::TagUnion(
-                vec![
-                    (TagName::Global("Ok".into()), vec![flex(a)]),
-                    (TagName::Global("Err".into()), vec![flex(err)]),
-                ],
-                Box::new(SolvedType::EmptyTagUnion),
-            ),
-        },
-    );
-
-    aliases
 }
 
 pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
@@ -1206,7 +1079,17 @@ fn lift(u: VarId, a: SolvedType) -> SolvedType {
 fn float_type(u: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![flex(u), SolvedType::Apply(Symbol::NUM_FLOAT, Vec::new())],
+        vec![
+            flex(u),
+            SolvedType::Alias(
+                Symbol::NUM_FLOAT,
+                Vec::new(),
+                Box::new(builtin_aliases::num_type(SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![flex(u), builtin_aliases::floatingpoint_type()],
+                ))),
+            ),
+        ],
     )
 }
 
@@ -1214,7 +1097,17 @@ fn float_type(u: VarId) -> SolvedType {
 fn int_type(u: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![flex(u), SolvedType::Apply(Symbol::NUM_INT, Vec::new())],
+        vec![
+            flex(u),
+            SolvedType::Alias(
+                Symbol::NUM_INT,
+                Vec::new(),
+                Box::new(builtin_aliases::num_type(SolvedType::Apply(
+                    Symbol::ATTR_ATTR,
+                    vec![flex(u), builtin_aliases::integer_type()],
+                ))),
+            ),
+        ],
     )
 }
 
@@ -1222,7 +1115,7 @@ fn int_type(u: VarId) -> SolvedType {
 fn bool_type(u: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![flex(u), SolvedType::Apply(Symbol::BOOL_BOOL, Vec::new())],
+        vec![flex(u), builtin_aliases::bool_type()],
     )
 }
 
@@ -1238,10 +1131,15 @@ fn str_type(u: VarId) -> SolvedType {
 fn num_type(u: VarId, a: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![
-            flex(u),
-            SolvedType::Apply(Symbol::NUM_NUM, vec![attr_type(u, a)]),
-        ],
+        vec![flex(u), builtin_aliases::num_type(attr_type(u, a))],
+    )
+}
+
+#[inline(always)]
+fn num_type_help(u: VarId, a: SolvedType) -> SolvedType {
+    SolvedType::Apply(
+        Symbol::ATTR_ATTR,
+        vec![flex(u), builtin_aliases::num_type(a)],
     )
 }
 
@@ -1249,10 +1147,7 @@ fn num_type(u: VarId, a: VarId) -> SolvedType {
 fn result_type(u: VarId, a: SolvedType, e: SolvedType) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
-        vec![
-            flex(u),
-            SolvedType::Apply(Symbol::RESULT_RESULT, vec![a, e]),
-        ],
+        vec![flex(u), builtin_aliases::result_type(a, e)],
     )
 }
 

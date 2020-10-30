@@ -20,7 +20,6 @@ pub enum Mode {
 pub struct StdLib {
     pub mode: Mode,
     pub types: MutMap<Symbol, (SolvedType, Region)>,
-    pub aliases: MutMap<Symbol, BuiltinAlias>,
     pub applies: MutSet<Symbol>,
 }
 
@@ -28,7 +27,6 @@ pub fn standard_stdlib() -> StdLib {
     StdLib {
         mode: Mode::Standard,
         types: types(),
-        aliases: roc_types::builtin_aliases::aliases(),
         applies: vec![
             Symbol::LIST_LIST,
             Symbol::SET_SET,

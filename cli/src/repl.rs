@@ -9,7 +9,7 @@ use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap, SendSet};
 use roc_constrain::expr::constrain_expr;
-use roc_constrain::module::{constrain_imported_values, load_builtin_aliases, Import};
+use roc_constrain::module::{constrain_imported_values, Import};
 use roc_fmt::annotation::{Formattable, Newlines, Parens};
 use roc_gen::llvm::build::{build_proc, build_proc_header, OptLevel};
 use roc_module::ident::Ident;
@@ -523,11 +523,6 @@ pub fn uniq_expr_with(
     // TODO what to do with those rigids?
     let (_introduced_rigids, constraint) =
         constrain_imported_values(imports, constraint, &mut var_store);
-
-    // load builtin types
-    let mut constraint = load_builtin_aliases(stdlib.aliases, constraint, &mut var_store);
-
-    constraint.instantiate_aliases(&mut var_store);
 
     let subs2 = Subs::new(var_store.into());
 

@@ -1,3 +1,4 @@
+use crate::builtins::{num_floatingpoint, num_integer, num_num};
 use crate::expr::{exists, exists_with_aliases, Info};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::Constraint::{self, *};
@@ -420,31 +421,30 @@ fn unique_unbound_num(
     let val_type = Type::Variable(inner_var);
     let val_utype = attr_type(Bool::variable(val_uvar), val_type);
 
-    let num_utype = Type::Apply(Symbol::NUM_NUM, vec![val_utype]);
+    let num_utype = num_num(val_utype);
     let num_type = attr_type(Bool::variable(num_uvar), num_utype);
 
     (num_uvar, val_uvar, num_type, num_var)
 }
 
-fn unique_num(var_store: &mut VarStore, symbol: Symbol) -> (Variable, Variable, Type) {
+fn unique_num(var_store: &mut VarStore, val_type: Type) -> (Variable, Variable, Type) {
     let num_uvar = var_store.fresh();
     let val_uvar = var_store.fresh();
 
-    let val_type = Type::Apply(symbol, Vec::new());
     let val_utype = attr_type(Bool::variable(val_uvar), val_type);
 
-    let num_utype = Type::Apply(Symbol::NUM_NUM, vec![val_utype]);
+    let num_utype = num_num(val_utype);
     let num_type = attr_type(Bool::variable(num_uvar), num_utype);
 
     (num_uvar, val_uvar, num_type)
 }
 
 fn unique_int(var_store: &mut VarStore) -> (Variable, Variable, Type) {
-    unique_num(var_store, Symbol::NUM_INTEGER)
+    unique_num(var_store, num_integer())
 }
 
 fn unique_float(var_store: &mut VarStore) -> (Variable, Variable, Type) {
-    unique_num(var_store, Symbol::NUM_FLOATINGPOINT)
+    unique_num(var_store, num_floatingpoint())
 }
 
 pub fn constrain_expr(
