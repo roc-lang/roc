@@ -181,11 +181,6 @@ pub fn uniq_expr_with(
     let (_introduced_rigids, constraint) =
         constrain_imported_values(imports, constraint, &mut var_store);
 
-    // load builtin types
-    let mut constraint = load_builtin_aliases(stdlib.aliases, constraint, &mut var_store);
-
-    constraint.instantiate_aliases(&mut var_store);
-
     let subs2 = Subs::new(var_store.into());
 
     (

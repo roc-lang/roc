@@ -894,6 +894,7 @@ fn check_for_infinite_type(
                                 uniq_var,
                                 tag_union_var,
                                 ext_var,
+                                description.rank,
                                 &tags,
                             );
                         }
@@ -914,6 +915,7 @@ fn check_for_infinite_type(
                             uniq_var,
                             tag_union_var,
                             ext_var,
+                            description.rank,
                             &tags,
                         );
                     }
@@ -958,6 +960,7 @@ fn correct_recursive_attr(
     uniq_var: Variable,
     tag_union_var: Variable,
     ext_var: Variable,
+    recursion_var_rank: Rank,
     tags: &MutMap<TagName, Vec<Variable>>,
 ) {
     let rec_var = subs.fresh_unnamed_flex_var();
@@ -965,6 +968,15 @@ fn correct_recursive_attr(
 
     let content = content_attr(uniq_var, rec_var);
     subs.set_content(attr_var, content);
+
+    subs.set_rank(rec_var, recursion_var_rank);
+    subs.set_content(
+        rec_var,
+        Content::RecursionVar {
+            opt_name: None,
+            structure: recursive,
+        },
+    );
 
     let mut new_tags = MutMap::default();
 
