@@ -15,7 +15,7 @@ impl<'a> Formattable<'a> for Def<'a> {
                 loc_pattern.is_multiline() || loc_annotation.is_multiline()
             }
             Body(loc_pattern, loc_expr) => loc_pattern.is_multiline() || loc_expr.is_multiline(),
-
+            AnnotatedBody { .. } => true, // Sebbes: not really sure here...
             SpaceBefore(sub_def, spaces) | SpaceAfter(sub_def, spaces) => {
                 spaces.iter().any(|s| is_comment(s)) || sub_def.is_multiline()
             }
@@ -58,6 +58,24 @@ impl<'a> Formattable<'a> for Def<'a> {
             Body(loc_pattern, loc_expr) => {
                 fmt_body(buf, &loc_pattern.value, &loc_expr.value, indent);
             }
+            AnnotatedBody {
+                ann_pattern,
+                ann_type,
+                comment,
+                body_pattern,
+                body_expr,
+            } => {
+                ann_pattern.format(buf, indent);
+                buf.push_str(" : ");
+                ann_type.format(buf, indent);
+                if let Some(comment_str) = comment {
+                    buf.push_str(" # ");
+                    buf.push_str(comment_str.trim());
+                }
+                buf.push_str("\n");
+                fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
+            }
+
             SpaceBefore(sub_def, spaces) => {
                 fmt_spaces(buf, spaces.iter(), indent);
                 sub_def.format(buf, indent);

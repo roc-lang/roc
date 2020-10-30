@@ -281,8 +281,8 @@ pub enum Def<'a> {
         ann_pattern: Loc<Pattern<'a>>,
         ann_type: Loc<TypeAnnotation<'a>>,
         comment: Option<&'a str>,
-        body_pattern: Loc<Pattern<'a>>,
-        body_expr: Loc<Expr<'a>>,
+        body_pattern: &'a Loc<Pattern<'a>>,
+        body_expr: &'a Loc<Expr<'a>>,
     },
 
     // Blank Space (e.g. comments, spaces, newlines) before or after a def.
