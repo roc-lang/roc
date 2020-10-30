@@ -68,7 +68,7 @@ pub fn target_machine(
     Target::from_name(arch).unwrap().create_target_machine(
         &TargetTriple::create(target_triple_str(target)),
         arch,
-        "+avx2", // TODO this string was used uncritically from an example, and should be reexamined
+        "", // TODO: this probably should be TargetMachine::get_host_cpu_features() to enable all features.
         opt,
         reloc,
         model,

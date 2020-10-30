@@ -30,7 +30,7 @@ pub struct DocEntry {
 pub fn generate_module_docs<'a>(
     module_name: ModuleName,
     exposed_ident_ids: &'a IdentIds,
-    parsed_defs: &'a bumpalo::collections::Vec<'a, Located<Def<'a>>>,
+    parsed_defs: &'a [Located<Def<'a>>],
 ) -> ModuleDocumentation {
     let (entries, _) =
         parsed_defs

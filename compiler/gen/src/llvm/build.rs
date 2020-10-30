@@ -29,13 +29,12 @@ use inkwell::values::{
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
+use roc_builtins::bitcode;
 use roc_collections::all::{ImMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{JoinPointId, Wrapped};
 use roc_mono::layout::{Builtin, Layout, MemoryMode};
-use std::fs::File;
-use std::io::prelude::Read;
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -183,19 +182,9 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 }
 
 pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
-    // In the build script for the gen module, we compile the builtins bitcode and set
-    // BUILTINS_BC to the path to the compiled output.
-    let path: &'static str = env!(
-        "BUILTINS_BC",
-        "Env var BUILTINS_BC not found. Is there a problem with the build script?"
-    );
-    let mut builtins_bitcode = File::open(path).expect("Unable to find builtins bitcode source");
-    let mut buffer = std::vec::Vec::new();
-    builtins_bitcode
-        .read_to_end(&mut buffer)
-        .expect("Unable to read builtins bitcode");
+    let bitcode_bytes = bitcode::get_bytes();
 
-    let memory_buffer = MemoryBuffer::create_from_memory_range(&buffer, module_name);
+    let memory_buffer = MemoryBuffer::create_from_memory_range(&bitcode_bytes, module_name);
 
     let module = Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
         .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err));
@@ -2541,7 +2530,12 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
         NumRemUnchecked => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
         NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
-        NumPowInt => call_bitcode_fn(NumPowInt, env, &[lhs.into(), rhs.into()], "pow_int_"),
+        NumPowInt => call_bitcode_fn(
+            NumPowInt,
+            env,
+            &[lhs.into(), rhs.into()],
+            &bitcode::MATH_POW_INT,
+        ),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
@@ -2589,7 +2583,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(NumIsFinite, env, &[result.into()], "is_finite_").into_int_value();
+                call_bitcode_fn(NumIsFinite, env, &[result.into()], &bitcode::MATH_IS_FINITE)
+                    .into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
@@ -2610,7 +2605,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(NumIsFinite, env, &[result.into()], "is_finite_").into_int_value();
+                call_bitcode_fn(NumIsFinite, env, &[result.into()], &bitcode::MATH_IS_FINITE)
+                    .into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
@@ -2739,8 +2735,8 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             env.context.i64_type(),
             "num_floor",
         ),
-        NumIsFinite => call_bitcode_fn(NumIsFinite, env, &[arg.into()], "is_finite_"),
-        NumAtan => call_bitcode_fn(NumAtan, env, &[arg.into()], "atan_"),
+        NumIsFinite => call_bitcode_fn(NumIsFinite, env, &[arg.into()], &bitcode::MATH_IS_FINITE),
+        NumAtan => call_bitcode_fn(NumAtan, env, &[arg.into()], &bitcode::MATH_ATAN),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }

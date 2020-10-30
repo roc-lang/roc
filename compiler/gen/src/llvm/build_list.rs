@@ -788,8 +788,7 @@ pub fn list_walk_right<'a, 'ctx, 'env>(
                 let new_current = call_site_value
                     .try_as_basic_value()
                     .left()
-                    .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
-                    .into_int_value();
+                    .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
 
                 builder.build_store(accum_alloca, new_current);
             };
