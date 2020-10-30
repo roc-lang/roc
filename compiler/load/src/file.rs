@@ -97,6 +97,10 @@ impl Dependencies {
             // otherwise, we don't know whether an imported symbol is actually exposed
             self.add_dependency_help(module_id, dep, Phase::Parse, Phase::LoadHeader);
 
+            // to canonicalize a module, all its dependencies must be canonicalized
+            self.add_dependency(module_id, dep, Phase::CanonicalizeAndConstrain);
+
+            // to typecheck a module, all its dependencies must be type checked already
             self.add_dependency(module_id, dep, Phase::SolveTypes);
 
             if goal_phase >= FindSpecializations {
@@ -200,6 +204,7 @@ struct ModuleCache<'a> {
     headers: MutMap<ModuleId, ModuleHeader<'a>>,
     parsed: MutMap<ModuleId, ParsedModule<'a>>,
     canonicalized: MutMap<ModuleId, CanonicalizedModule<'a>>,
+    aliases: MutMap<ModuleId, MutMap<Symbol, Alias>>,
     constrained: MutMap<ModuleId, ConstrainedModule<'a>>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
@@ -281,12 +286,29 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 .remove(&module_id)
                 .expect("Could not find listener ID in exposed_symbols_by_module");
 
+            let mut aliases = MutMap::default();
+
+            for imported in parsed.imported_modules.iter() {
+                match state.module_cache.aliases.get(imported) {
+                    None => unreachable!(
+                        "imported module {:?} did not register its aliases, so {:?} cannot use them",
+                        imported,
+                        parsed.module_id,
+                    ),
+                    Some(new) => {
+                        // TODO filter to only add imported aliases
+                        aliases.extend(new.iter().map(|(s, a)| (*s, a.clone())));
+                    }
+                }
+            }
+
             BuildTask::CanonicalizeAndConstrain {
                 parsed,
                 dep_idents,
                 exposed_symbols,
                 module_ids,
                 mode: state.stdlib.mode,
+                aliases,
             }
         }
 
@@ -744,6 +766,7 @@ enum BuildTask<'a> {
         dep_idents: IdentIdsByModule,
         mode: Mode,
         exposed_symbols: MutSet<Symbol>,
+        aliases: MutMap<Symbol, Alias>,
     },
     Solve {
         module: Module,
@@ -1142,7 +1165,8 @@ where
                         // Needed to prevent a borrow checker error about this closure
                         // outliving its enclosing function.
                         drop(worker_msg_rx);
-                    });
+                    })
+                    .unwrap();
             }
 
             let mut state = State {
@@ -1329,18 +1353,6 @@ fn update<'a>(
 
             Ok(state)
         }
-        //        CanonicalizedAndConstrained {
-        //            module,
-        //            declarations,
-        //            src,
-        //            ident_ids,
-        //            imported_modules,
-        //            constraint,
-        //            problems,
-        //            var_store,
-        //            module_timing,
-        //            module_docs,
-        //        } => {
         CanonicalizedAndConstrained {
             constrained_module,
             canonicalization_problems,
@@ -1354,6 +1366,11 @@ fn update<'a>(
                 .module_cache
                 .documentation
                 .insert(module_id, module_docs);
+
+            state
+                .module_cache
+                .aliases
+                .insert(module_id, constrained_module.module.aliases.clone());
 
             state
                 .module_cache
@@ -2089,6 +2106,7 @@ fn canonicalize_and_constrain<'a>(
     module_ids: &ModuleIds,
     dep_idents: IdentIdsByModule,
     exposed_symbols: MutSet<Symbol>,
+    aliases: MutMap<Symbol, Alias>,
     mode: Mode,
     parsed: ParsedModule<'a>,
 ) -> Result<Msg<'a>, LoadingProblem> {
@@ -2119,6 +2137,7 @@ fn canonicalize_and_constrain<'a>(
         module_ids,
         exposed_ident_ids,
         dep_idents,
+        aliases,
         exposed_imports,
         exposed_symbols,
         &mut var_store,
@@ -2499,11 +2518,13 @@ fn run_task<'a>(
             dep_idents,
             mode,
             exposed_symbols,
+            aliases,
         } => canonicalize_and_constrain(
             arena,
             &module_ids,
             dep_idents,
             exposed_symbols,
+            aliases,
             mode,
             parsed,
         ),
