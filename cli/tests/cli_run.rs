@@ -81,7 +81,7 @@ mod cli_run {
 
     #[test]
     #[serial(quicksort)]
-    fn run_quicksort() {
+    fn run_quicksort_not_optimized() {
         check_output(
             "quicksort",
             "Quicksort.roc",

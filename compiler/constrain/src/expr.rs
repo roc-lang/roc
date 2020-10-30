@@ -313,7 +313,10 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        Var(symbol) => Lookup(*symbol, expected, region),
+        Var(symbol) => {
+            // make lookup constraint to lookup this symbol's type in the environment
+            Lookup(*symbol, expected, region)
+        }
         Closure {
             function_type: fn_var,
             closure_type: closure_var,
@@ -465,6 +468,7 @@ pub fn constrain_expr(
                         branch_cons.push(cond_con);
                         branch_cons.push(then_con);
                     }
+
                     let else_con = constrain_expr(
                         env,
                         final_else.region,
@@ -745,11 +749,10 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        LetRec(defs, loc_ret, var, aliases) => {
+        LetRec(defs, loc_ret, var, _aliases) => {
             let body_con = constrain_expr(env, loc_ret.region, &loc_ret.value, expected.clone());
 
-            exists_with_aliases(
-                aliases.clone(),
+            exists(
                 vec![*var],
                 And(vec![
                     constrain_recursive_defs(env, defs, body_con),
@@ -764,15 +767,14 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        LetNonRec(def, loc_ret, var, aliases) => {
+        LetNonRec(def, loc_ret, var, _aliases) => {
             let body_con = constrain_expr(env, loc_ret.region, &loc_ret.value, expected.clone());
 
-            exists_with_aliases(
-                aliases.clone(),
+            exists(
                 vec![*var],
                 And(vec![
                     constrain_def(env, def, body_con),
-                    // Record the type of tne entire def-expression in the variable.
+                    // Record the type of the entire def-expression in the variable.
                     // Code gen will need that later!
                     Eq(
                         Type::Variable(*var),
@@ -983,18 +985,10 @@ pub fn constrain_decls(
 
         match decl {
             Declaration::Declare(def) | Declaration::Builtin(def) => {
-                constraint = exists_with_aliases(
-                    aliases.clone(),
-                    Vec::new(),
-                    constrain_def(&env, def, constraint),
-                );
+                constraint = exists(Vec::new(), constrain_def(&env, def, constraint));
             }
             Declaration::DeclareRec(defs) => {
-                constraint = exists_with_aliases(
-                    aliases.clone(),
-                    Vec::new(),
-                    constrain_recursive_defs(&env, defs, constraint),
-                );
+                constraint = exists(Vec::new(), constrain_recursive_defs(&env, defs, constraint));
             }
             Declaration::InvalidCycle(_, _) => {
                 // invalid cycles give a canonicalization error. we skip them here.
@@ -1223,12 +1217,16 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                 ),
             }
         }
-        None => constrain_expr(
-            env,
-            def.loc_expr.region,
-            &def.loc_expr.value,
-            NoExpectation(expr_type),
-        ),
+        None => {
+            // no annotation, so no extra work with rigids
+
+            constrain_expr(
+                env,
+                def.loc_expr.region,
+                &def.loc_expr.value,
+                NoExpectation(expr_type),
+            )
+        }
     };
 
     Let(Box::new(LetConstraint {
@@ -1426,6 +1424,7 @@ pub fn rec_defs_help(
                     },
                     signature.clone(),
                 );
+
                 let expr_con = constrain_expr(
                     &Env {
                         rigids: ftv,

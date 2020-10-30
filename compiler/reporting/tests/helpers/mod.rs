@@ -159,7 +159,7 @@ pub fn can_expr_with(
     // rules multiple times unnecessarily.
     let loc_expr = operator::desugar_expr(arena, &loc_expr);
 
-    let mut scope = Scope::new(home);
+    let mut scope = Scope::new(home, &mut var_store);
     let dep_idents = IdentIds::exposed_builtins(0);
     let mut env = Env::new(home, dep_idents, &module_ids, IdentIds::default());
     let (loc_expr, output) = canonicalize_expr(
@@ -193,12 +193,6 @@ pub fn can_expr_with(
     //load builtin values
     let (_introduced_rigids, constraint) =
         constrain_imported_values(imports, constraint, &mut var_store);
-
-    //load builtin types
-    let mut constraint =
-        load_builtin_aliases(roc_builtins::std::aliases(), constraint, &mut var_store);
-
-    constraint.instantiate_aliases(&mut var_store);
 
     let mut all_ident_ids = MutMap::default();
 

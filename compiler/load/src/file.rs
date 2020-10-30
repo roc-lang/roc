@@ -47,6 +47,8 @@ const MODULE_SEPARATOR: char = '.';
 
 const SHOW_MESSAGE_LOG: bool = false;
 
+const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
+
 macro_rules! log {
     () => (if SHOW_MESSAGE_LOG { println!()} else {});
     ($($arg:tt)*) => (if SHOW_MESSAGE_LOG { println!($($arg)*); } else {})
@@ -1105,39 +1107,42 @@ where
                 let injector = &injector;
 
                 // Record this thread's handle so the main thread can join it later.
-                thread_scope.spawn(move |_| {
-                    // Keep listening until we receive a Shutdown msg
-                    for msg in worker_msg_rx.iter() {
-                        match msg {
-                            WorkerMsg::Shutdown => {
-                                // We've finished all our work. It's time to
-                                // shut down the thread, so when the main thread
-                                // blocks on joining with all the worker threads,
-                                // it can finally exit too!
-                                return;
-                            }
-                            WorkerMsg::TaskAdded => {
-                                // Find a task - either from this thread's queue,
-                                // or from the main queue, or from another worker's
-                                // queue - and run it.
-                                //
-                                // There might be no tasks to work on! That could
-                                // happen if another thread is working on a task
-                                // which will later result in more tasks being
-                                // added. In that case, do nothing, and keep waiting
-                                // until we receive a Shutdown message.
-                                if let Some(task) = find_task(&worker, injector, stealers) {
-                                    run_task(task, worker_arena, src_dir, msg_tx.clone())
-                                        .expect("Msg channel closed unexpectedly.");
+                thread_scope
+                    .builder()
+                    .stack_size(EXPANDED_STACK_SIZE)
+                    .spawn(move |_| {
+                        // Keep listening until we receive a Shutdown msg
+                        for msg in worker_msg_rx.iter() {
+                            match msg {
+                                WorkerMsg::Shutdown => {
+                                    // We've finished all our work. It's time to
+                                    // shut down the thread, so when the main thread
+                                    // blocks on joining with all the worker threads,
+                                    // it can finally exit too!
+                                    return;
+                                }
+                                WorkerMsg::TaskAdded => {
+                                    // Find a task - either from this thread's queue,
+                                    // or from the main queue, or from another worker's
+                                    // queue - and run it.
+                                    //
+                                    // There might be no tasks to work on! That could
+                                    // happen if another thread is working on a task
+                                    // which will later result in more tasks being
+                                    // added. In that case, do nothing, and keep waiting
+                                    // until we receive a Shutdown message.
+                                    if let Some(task) = find_task(&worker, injector, stealers) {
+                                        run_task(task, worker_arena, src_dir, msg_tx.clone())
+                                            .expect("Msg channel closed unexpectedly.");
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    // Needed to prevent a borrow checker error about this closure
-                    // outliving its enclosing function.
-                    drop(worker_msg_rx);
-                });
+                        // Needed to prevent a borrow checker error about this closure
+                        // outliving its enclosing function.
+                        drop(worker_msg_rx);
+                    });
             }
 
             let mut state = State {
