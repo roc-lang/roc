@@ -187,6 +187,16 @@ fn can_annotation_help(
                     let mut substitutions = ImMap::default();
                     let mut vars = Vec::new();
 
+                    if alias.vars.len() != args.len() {
+                        let error = Type::Erroneous(Problem::BadTypeArguments {
+                            symbol,
+                            region,
+                            alias_needs: alias.vars.len() as u8,
+                            type_got: args.len() as u8,
+                        });
+                        return error;
+                    }
+
                     for (loc_var, arg_ann) in alias.vars.iter().zip(args.into_iter()) {
                         let name = loc_var.value.0.clone();
                         let var = loc_var.value.1;

@@ -1006,7 +1006,20 @@ fn content_to_err_type(
 
         RigidVar(name) => ErrorType::RigidVar(name),
 
-        RecursionVar { .. } => todo!(),
+        RecursionVar { opt_name, .. } => {
+            let name = match opt_name {
+                Some(name) => name,
+                None => {
+                    let name = get_fresh_var_name(state);
+
+                    subs.set_content(var, FlexVar(Some(name.clone())));
+
+                    name
+                }
+            };
+
+            ErrorType::FlexVar(name)
+        }
 
         Alias(symbol, args, aliased_to) => {
             let err_args = args
@@ -1101,6 +1114,9 @@ fn flat_type_to_err_type(
 
             match var_to_err_type(subs, state, ext_var).unwrap_alias() {
                 ErrorType::TagUnion(sub_tags, sub_ext) => {
+                    ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext)
+                }
+                ErrorType::RecursiveTagUnion(_, sub_tags, sub_ext) => {
                     ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext)
                 }
 
