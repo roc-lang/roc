@@ -2,7 +2,7 @@ use crate::std::StdLib;
 use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
+use roc_region::all::Region;
 use roc_types::builtin_aliases;
 use roc_types::solved_types::{SolvedBool, SolvedType};
 use roc_types::subs::VarId;
@@ -1132,14 +1132,6 @@ fn num_type(u: VarId, a: VarId) -> SolvedType {
     SolvedType::Apply(
         Symbol::ATTR_ATTR,
         vec![flex(u), builtin_aliases::num_type(attr_type(u, a))],
-    )
-}
-
-#[inline(always)]
-fn num_type_help(u: VarId, a: SolvedType) -> SolvedType {
-    SolvedType::Apply(
-        Symbol::ATTR_ATTR,
-        vec![flex(u), builtin_aliases::num_type(a)],
     )
 }
 

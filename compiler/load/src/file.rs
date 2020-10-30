@@ -7,10 +7,10 @@ use parking_lot::Mutex;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
-use roc_can::module::{canonicalize_module_defs, Module, ModuleOutput};
+use roc_can::module::{canonicalize_module_defs, Module};
 use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_constrain::module::{
-    constrain_imports, load_builtin_aliases, pre_constrain_imports, ConstrainableImports, Import,
+    constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName};
@@ -557,7 +557,6 @@ struct CanonicalizedModule<'a> {
 
 #[derive(Debug)]
 enum Msg<'a> {
-    SkipAhead(ModuleId, Phase),
     Header(ModuleHeader<'a>),
     Parsed(ParsedModule<'a>),
     CanonicalizedAndConstrained {
@@ -1292,21 +1291,6 @@ fn update<'a>(
     use self::Msg::*;
 
     match msg {
-        SkipAhead(home, phase) => {
-            // the work required is already completed and stored in the global state
-            // this message just exists to notify any depending modules that the given
-            // `phase` for module `home` is completed, and they can continue
-
-            let work = state.dependencies.notify(home, phase);
-
-            for (module_id, phase) in work {
-                let task = start_phase(module_id, phase, &mut state);
-
-                enqueue_task(&injector, worker_listeners, task)?
-            }
-
-            Ok(state)
-        }
         Header(header) => {
             log!("loaded header for {:?}", header.module_id);
             let home = header.module_id;

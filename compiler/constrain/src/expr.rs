@@ -969,7 +969,7 @@ fn constrain_empty_record(region: Region, expected: Expected<Type>) -> Constrain
 pub fn constrain_decls(
     home: ModuleId,
     decls: &[Declaration],
-    aliases: SendMap<Symbol, Alias>,
+    _aliases: SendMap<Symbol, Alias>,
 ) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
 

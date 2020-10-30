@@ -220,9 +220,7 @@ fn can_annotation_help(
                     // instantiate variables
                     actual.substitute(&substitutions);
 
-                    let alias = Type::Alias(symbol, vars, Box::new(actual));
-
-                    alias
+                    Type::Alias(symbol, vars, Box::new(actual))
                 }
                 None => {
                     let mut args = Vec::new();

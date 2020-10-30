@@ -6,7 +6,7 @@ use roc_types::builtin_aliases::{
     bool_type, float_type, int_type, list_type, map_type, num_type, ordering_type, result_type,
     set_type, str_type,
 };
-use roc_types::solved_types::{BuiltinAlias, SolvedType};
+use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
 use std::collections::HashMap;
 

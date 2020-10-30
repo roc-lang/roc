@@ -4519,8 +4519,6 @@ fn call_by_name<'a>(
                 "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
                 var, proc_name, fn_var
             );
-            dbg!(&env.subs, var, proc_name, fn_var);
-            panic!();
             Stmt::RuntimeError(env.arena.alloc(msg))
         }
         Err(LayoutProblem::Erroneous) => {

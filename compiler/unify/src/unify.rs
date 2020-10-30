@@ -434,7 +434,7 @@ fn unify_tag_union(
     let recursion_var = match recursion {
         (None, None) => None,
         (Some(v), None) | (None, Some(v)) => Some(v),
-        (Some(v1), Some(v2)) => Some(v1),
+        (Some(v1), Some(_v2)) => Some(v1),
     };
 
     if unique_tags1.is_empty() {
@@ -695,6 +695,7 @@ fn unify_tag_union_not_recursive_recursive(
 
 /// Is the given variable a structure. Does not consider Attr itself a structure, and instead looks
 /// into it.
+#[allow(dead_code)]
 fn is_structure(var: Variable, subs: &mut Subs) -> bool {
     match subs.get(var).content {
         Content::Alias(_, _, actual) => is_structure(actual, subs),
@@ -1134,11 +1135,11 @@ fn unify_recursion(
     match other {
         RecursionVar {
             opt_name: other_opt_name,
-            structure: other_structure,
+            structure: _other_structure,
         } => {
-            // If both are flex, and only left has a name, keep the name around.
-            //debug_assert!(subs.equivalent(structure, *other_structure));
-            let name = opt_name.clone().or(other_opt_name.clone());
+            // NOTE: structure and other_structure may not be unified yet, but will be
+            // we should not do that here, it would create an infinite loop!
+            let name = opt_name.clone().or_else(|| other_opt_name.clone());
             merge(
                 subs,
                 ctx,
@@ -1152,7 +1153,6 @@ fn unify_recursion(
         Structure(_) => {
             // keep the recursion var around
             // merge(subs, ctx, FlexVar(opt_name.clone()))
-            panic!("unify recursion structure");
 
             unify_pool(subs, pool, structure, ctx.second)
         }
