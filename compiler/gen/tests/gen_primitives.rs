@@ -489,7 +489,7 @@ mod gen_primitives {
 
     #[test]
     fn peano1() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                     Peano : [ S Peano, Z ]
@@ -509,7 +509,7 @@ mod gen_primitives {
 
     #[test]
     fn peano2() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                     Peano : [ S Peano, Z ]
@@ -691,7 +691,7 @@ mod gen_primitives {
 
     #[test]
     fn linked_list_sum_num_a() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app Test provides [ main ] imports []
@@ -719,7 +719,7 @@ mod gen_primitives {
 
     #[test]
     fn linked_list_sum_int() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app Test provides [ main ] imports []
@@ -746,7 +746,7 @@ mod gen_primitives {
 
     #[test]
     fn linked_list_map() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app Test provides [ main ] imports []
@@ -835,7 +835,7 @@ mod gen_primitives {
 
     #[test]
     fn when_peano() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                     Peano : [ S Peano, Z ]
@@ -853,7 +853,7 @@ mod gen_primitives {
             i64
         );
 
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                     Peano : [ S Peano, Z ]
@@ -871,7 +871,7 @@ mod gen_primitives {
             i64
         );
 
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                     Peano : [ S Peano, Z ]
@@ -1008,7 +1008,7 @@ mod gen_primitives {
 
     #[test]
     fn io_poc_effect() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app Test provides [ main ] imports []

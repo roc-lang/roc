@@ -344,7 +344,23 @@ macro_rules! assert_evals_to {
             assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak);
         }
         {
-            // assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
+            assert_opt_evals_to!($src, $expected, $ty, $transform, $leak);
         }
     };
+}
+
+#[macro_export]
+macro_rules! assert_non_opt_evals_to {
+    ($src:expr, $expected:expr, $ty:ty) => {{
+        assert_llvm_evals_to!($src, $expected, $ty, (|val| val));
+    }};
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
+        // Same as above, except with an additional transformation argument.
+        {
+            assert_llvm_evals_to!($src, $expected, $ty, $transform, true);
+        }
+    };
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {{
+        assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak);
+    }};
 }
