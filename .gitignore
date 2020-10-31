@@ -4,3 +4,6 @@ target
 
 #valgrind
 vgcore.*
+
+#editors
+.idea/
