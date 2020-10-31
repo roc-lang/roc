@@ -1834,7 +1834,7 @@ pub fn with_hole<'a>(
                 hole,
             ),
         },
-        LetNonRec(def, cont, _, _) => {
+        LetNonRec(def, cont, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
                 if let Closure {
                     function_type,
@@ -1944,7 +1944,7 @@ pub fn with_hole<'a>(
                 )
             }
         }
-        LetRec(defs, cont, _, _) => {
+        LetRec(defs, cont, _) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
@@ -3085,7 +3085,7 @@ pub fn from_can<'a>(
 
             stmt
         }
-        LetRec(defs, cont, _, _) => {
+        LetRec(defs, cont, _) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
@@ -3130,7 +3130,7 @@ pub fn from_can<'a>(
 
             from_can(env, cont.value, procs, layout_cache)
         }
-        LetNonRec(def, cont, outer_pattern_vars, outer_annotation) => {
+        LetNonRec(def, cont, outer_annotation) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
                 if let Closure { .. } = &def.loc_expr.value {
                     // Now that we know for sure it's a closure, get an owned
@@ -3192,12 +3192,7 @@ pub fn from_can<'a>(
 
                         return rest;
                     }
-                    roc_can::expr::Expr::LetNonRec(
-                        nested_def,
-                        nested_cont,
-                        nested_pattern_vars,
-                        nested_annotation,
-                    ) => {
+                    roc_can::expr::Expr::LetNonRec(nested_def, nested_cont, nested_annotation) => {
                         use roc_can::expr::Expr::*;
                         // We must transform
                         //
@@ -3228,28 +3223,17 @@ pub fn from_can<'a>(
                             expr_var: def.expr_var,
                         };
 
-                        let new_inner = LetNonRec(
-                            Box::new(new_def),
-                            cont,
-                            outer_pattern_vars,
-                            outer_annotation,
-                        );
+                        let new_inner = LetNonRec(Box::new(new_def), cont, outer_annotation);
 
                         let new_outer = LetNonRec(
                             nested_def,
                             Box::new(Located::at_zero(new_inner)),
-                            nested_pattern_vars,
                             nested_annotation,
                         );
 
                         return from_can(env, new_outer, procs, layout_cache);
                     }
-                    roc_can::expr::Expr::LetRec(
-                        nested_defs,
-                        nested_cont,
-                        nested_pattern_vars,
-                        nested_annotation,
-                    ) => {
+                    roc_can::expr::Expr::LetRec(nested_defs, nested_cont, nested_annotation) => {
                         use roc_can::expr::Expr::*;
                         // We must transform
                         //
@@ -3280,17 +3264,11 @@ pub fn from_can<'a>(
                             expr_var: def.expr_var,
                         };
 
-                        let new_inner = LetNonRec(
-                            Box::new(new_def),
-                            cont,
-                            outer_pattern_vars,
-                            outer_annotation,
-                        );
+                        let new_inner = LetNonRec(Box::new(new_def), cont, outer_annotation);
 
                         let new_outer = LetRec(
                             nested_defs,
                             Box::new(Located::at_zero(new_inner)),
-                            nested_pattern_vars,
                             nested_annotation,
                         );
 

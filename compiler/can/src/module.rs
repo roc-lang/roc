@@ -358,12 +358,12 @@ fn fix_values_captured_in_closure_expr(
     use crate::expr::Expr::*;
 
     match expr {
-        LetNonRec(def, loc_expr, _, _) => {
+        LetNonRec(def, loc_expr, _) => {
             // LetNonRec(Box<Def>, Box<Located<Expr>>, Variable, Aliases),
             fix_values_captured_in_closure_def(def, no_capture_symbols);
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
         }
-        LetRec(defs, loc_expr, _, _) => {
+        LetRec(defs, loc_expr, _) => {
             // LetRec(Vec<Def>, Box<Located<Expr>>, Variable, Aliases),
             fix_values_captured_in_closure_defs(defs, no_capture_symbols);
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);

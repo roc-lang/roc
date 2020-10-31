@@ -584,7 +584,6 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_bytes: &[u8]) -> Result<
                     value: with_builtins,
                 }),
                 var_store.fresh(),
-                SendMap::default(),
             );
         }
     }
