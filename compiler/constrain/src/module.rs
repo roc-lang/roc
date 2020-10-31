@@ -112,65 +112,6 @@ pub fn constrain_imported_values(
     )
 }
 
-pub fn load_builtin_aliases<I>(
-    aliases: I,
-    body_con: Constraint,
-    var_store: &mut VarStore,
-) -> Constraint
-where
-    I: IntoIterator<Item = (Symbol, BuiltinAlias)>,
-{
-    use Constraint::*;
-
-    for (symbol, builtin_alias) in aliases {
-        let mut free_vars = FreeVars::default();
-
-        let actual =
-            roc_types::solved_types::to_type(&builtin_alias.typ, &mut free_vars, var_store);
-
-        let mut vars = Vec::with_capacity(builtin_alias.vars.len());
-
-        for (loc_lowercase, index) in builtin_alias.vars.iter().zip(1..) {
-            let var = if let Some(result) = free_vars.unnamed_vars.get(&VarId::from_u32(index)) {
-                result
-            } else {
-                panic!(
-                    "var_id {:?} was not instantiated in the body of {:?} : {:?} (is it phantom?)",
-                    index, symbol, &builtin_alias
-                )
-            };
-
-            vars.push(Located::at(
-                loc_lowercase.region,
-                (loc_lowercase.value.clone(), *var),
-            ));
-        }
-
-        let mut hidden_variables = MutSet::default();
-        hidden_variables.extend(actual.variables());
-
-        for loc_var in vars.iter() {
-            hidden_variables.remove(&loc_var.value.1);
-        }
-
-        let alias = Alias {
-            vars,
-            hidden_variables,
-            region: builtin_alias.region,
-            uniqueness: None,
-            typ: actual,
-        };
-    }
-
-    Let(Box::new(LetConstraint {
-        rigid_vars: Vec::new(),
-        flex_vars: Vec::new(),
-        def_types: SendMap::default(),
-        defs_constraint: True,
-        ret_constraint: body_con,
-    }))
-}
-
 pub fn constrain_imported_aliases(
     aliases: MutMap<Symbol, Alias>,
     body_con: Constraint,
