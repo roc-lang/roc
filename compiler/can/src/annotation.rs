@@ -1,6 +1,6 @@
 use crate::env::Env;
 use crate::scope::Scope;
-use roc_collections::all::{MutSet, SendMap};
+use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{AssignedField, Tag, TypeAnnotation};
@@ -66,8 +66,8 @@ pub fn canonicalize_annotation(
     var_store: &mut VarStore,
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
-    let mut aliases = SendMap::default();
     let mut references = MutSet::default();
+    let mut aliases = SendMap::default();
     let typ = can_annotation_help(
         env,
         annotation,
@@ -180,7 +180,71 @@ fn can_annotation_help(
                 args.push(arg_ann);
             }
 
-            Type::Apply(symbol, args)
+            match scope.lookup_alias(symbol) {
+                Some(alias) => {
+                    // use a known alias
+                    let mut actual = alias.typ.clone();
+                    let mut substitutions = ImMap::default();
+                    let mut vars = Vec::new();
+
+                    if alias.vars.len() != args.len() {
+                        let error = Type::Erroneous(Problem::BadTypeArguments {
+                            symbol,
+                            region,
+                            alias_needs: alias.vars.len() as u8,
+                            type_got: args.len() as u8,
+                        });
+                        return error;
+                    }
+
+                    for (loc_var, arg_ann) in alias.vars.iter().zip(args.into_iter()) {
+                        let name = loc_var.value.0.clone();
+                        let var = loc_var.value.1;
+
+                        substitutions.insert(var, arg_ann.clone());
+                        vars.push((name.clone(), arg_ann));
+                    }
+
+                    // make sure the recursion variable is freshly instantiated
+                    if let Type::RecursiveTagUnion(rvar, _, _) = &mut actual {
+                        let new = var_store.fresh();
+                        substitutions.insert(*rvar, Type::Variable(new));
+                        *rvar = new;
+                    }
+
+                    // make sure hidden variables are freshly instantiated
+                    for var in alias.hidden_variables.iter() {
+                        substitutions.insert(*var, Type::Variable(var_store.fresh()));
+                    }
+
+                    // instantiate variables
+                    actual.substitute(&substitutions);
+
+                    Type::Alias(symbol, vars, Box::new(actual))
+                }
+                None => {
+                    let mut args = Vec::new();
+
+                    references.insert(symbol);
+
+                    for arg in *type_arguments {
+                        let arg_ann = can_annotation_help(
+                            env,
+                            &arg.value,
+                            region,
+                            scope,
+                            var_store,
+                            introduced_variables,
+                            local_aliases,
+                            references,
+                        );
+
+                        args.push(arg_ann);
+                    }
+
+                    Type::Apply(symbol, args)
+                }
+            }
         }
         BoundVariable(v) => {
             let name = Lowercase::from(*v);
@@ -276,18 +340,19 @@ fn can_annotation_help(
                     inner_type
                 };
 
-                let alias = Alias {
-                    region,
-                    vars: lowercase_vars,
-                    uniqueness: None,
-                    typ: alias_actual,
-                };
-                local_aliases.insert(symbol, alias);
+                let mut hidden_variables = MutSet::default();
+                hidden_variables.extend(alias_actual.variables());
 
-                // We turn this 'inline' alias into an Apply. This will later get de-aliased again,
-                // but this approach is easier wrt. instantiation of uniqueness variables.
-                let args = vars.into_iter().map(|(_, b)| b).collect();
-                Type::Apply(symbol, args)
+                for loc_var in lowercase_vars.iter() {
+                    hidden_variables.remove(&loc_var.value.1);
+                }
+
+                scope.add_alias(symbol, region, lowercase_vars, alias_actual);
+
+                let alias = scope.lookup_alias(symbol).unwrap();
+                local_aliases.insert(symbol, alias.clone());
+
+                Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
             }
             _ => {
                 // This is a syntactically invalid type alias.

@@ -1,9 +1,9 @@
-use roc_collections::all::ImMap;
+use roc_collections::all::{ImMap, MutSet};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
-use roc_types::subs::Variable;
+use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, Type};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -25,12 +25,41 @@ pub struct Scope {
 }
 
 impl Scope {
-    pub fn new(home: ModuleId) -> Scope {
+    pub fn new(home: ModuleId, var_store: &mut VarStore) -> Scope {
+        use roc_types::solved_types::{BuiltinAlias, FreeVars};
+        let solved_aliases = roc_types::builtin_aliases::aliases();
+        let mut aliases = ImMap::default();
+
+        for (symbol, builtin_alias) in solved_aliases {
+            let BuiltinAlias { region, vars, typ } = builtin_alias;
+
+            let mut free_vars = FreeVars::default();
+            let typ = roc_types::solved_types::to_type(&typ, &mut free_vars, var_store);
+
+            let mut variables = Vec::new();
+            // make sure to sort these variables to make them line up with the type arguments
+            let mut type_variables: Vec<_> = free_vars.unnamed_vars.into_iter().collect();
+            type_variables.sort();
+            for (loc_name, (_, var)) in vars.iter().zip(type_variables) {
+                variables.push(Located::at(loc_name.region, (loc_name.value.clone(), var)));
+            }
+
+            let alias = Alias {
+                region,
+                typ,
+                hidden_variables: MutSet::default(),
+                vars: variables,
+                uniqueness: None,
+            };
+
+            aliases.insert(symbol, alias);
+        }
+
         Scope {
             home,
             idents: Symbol::default_in_scope(),
             symbols: ImMap::default(),
-            aliases: ImMap::default(),
+            aliases,
         }
     }
 
@@ -146,14 +175,21 @@ impl Scope {
         vars: Vec<Located<(Lowercase, Variable)>>,
         typ: Type,
     ) {
-        self.aliases.insert(
-            name,
-            Alias {
-                region,
-                vars,
-                uniqueness: None,
-                typ,
-            },
-        );
+        let mut hidden_variables = MutSet::default();
+        hidden_variables.extend(typ.variables());
+
+        for loc_var in vars.iter() {
+            hidden_variables.remove(&loc_var.value.1);
+        }
+
+        let alias = Alias {
+            region,
+            vars,
+            hidden_variables,
+            uniqueness: None,
+            typ,
+        };
+
+        self.aliases.insert(name, alias);
     }
 }

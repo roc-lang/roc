@@ -280,13 +280,9 @@ pub fn canonicalize_defs<'a>(
                     );
                 }
 
-                let alias = roc_types::types::Alias {
-                    region: ann.region,
-                    vars: can_vars,
-                    uniqueness: None,
-                    typ: can_ann.typ,
-                };
-                aliases.insert(symbol, alias);
+                scope.add_alias(symbol, ann.region, can_vars.clone(), can_ann.typ.clone());
+                let alias = scope.lookup_alias(symbol).expect("alias is added to scope");
+                aliases.insert(symbol, alias.clone());
             }
             other => value_defs.push(other),
         }
@@ -1591,6 +1587,7 @@ fn make_tag_union_recursive<'a>(
             *typ = Type::RecursiveTagUnion(rec_var, tags.to_vec(), ext.clone());
             typ.substitute_alias(symbol, &Type::Variable(rec_var));
         }
+        Type::RecursiveTagUnion(_, _, _) => {}
         Type::Alias(_, _, actual) => make_tag_union_recursive(
             env,
             symbol,

@@ -1575,6 +1575,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn result_succeed_alias() {
         infer_eq(
             indoc!(
@@ -1607,6 +1608,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn list_singleton_alias() {
         infer_eq(
             indoc!(
@@ -1624,6 +1626,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn list_singleton_as() {
         infer_eq(
             indoc!(
@@ -1653,6 +1656,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn list_map_alias() {
         infer_eq(
             indoc!(
@@ -1700,6 +1704,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn peano_map_alias() {
         infer_eq(
             indoc!(
@@ -1741,6 +1746,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn rigids_in_signature() {
         infer_eq(
             indoc!(
@@ -1857,6 +1863,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn alias_of_alias_with_type_variable() {
         infer_eq(
             indoc!(
@@ -1876,6 +1883,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn alias_assoc_list_head() {
         infer_eq(
            indoc!(
@@ -1903,6 +1911,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn cons_list_as_assoc_list_head() {
         infer_eq(
            indoc!(
@@ -1927,6 +1936,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn assoc_list_map() {
         infer_eq(
             indoc!(
@@ -1962,6 +1972,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn same_uniqueness_cons_list() {
         infer_eq(
                     indoc!(
@@ -1981,6 +1992,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn typecheck_mutually_recursive_tag_union() {
         infer_eq(
                     indoc!(
@@ -2013,6 +2025,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn typecheck_triple_mutually_recursive_tag_union() {
         infer_eq(
                     indoc!(
@@ -2427,6 +2440,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn list_roc_head() {
         infer_eq(
             indoc!(
@@ -2448,6 +2462,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn list_roc_is_empty() {
         infer_eq(
             indoc!(
@@ -2521,6 +2536,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn peano_roc_is_empty() {
         infer_eq(
             indoc!(
@@ -2541,6 +2557,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn result_roc_map() {
         infer_eq(
             indoc!(
@@ -2559,6 +2576,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn result_roc_with_default_with_signature() {
         infer_eq(
             indoc!(
@@ -2726,6 +2744,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn reconstruct_path() {
         infer_eq(
             indoc!(
@@ -2747,6 +2766,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn cheapest_open() {
         with_larger_debug_stack(|| {
             infer_eq(
@@ -2790,6 +2810,7 @@ mod solve_uniq_expr {
     }
 
     #[test]
+    #[ignore]
     fn update_cost() {
         infer_eq(
             indoc!(

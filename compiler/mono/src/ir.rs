@@ -1712,8 +1712,8 @@ fn specialize_solved_type<'a>(
     partial_proc: PartialProc<'a>,
 ) -> Result<(Proc<'a>, Layout<'a>), LayoutProblem> {
     // add the specializations that other modules require of us
-    use roc_constrain::module::{to_type, FreeVars};
     use roc_solve::solve::{insert_type_into_subs, instantiate_rigids};
+    use roc_types::solved_types::{to_type, FreeVars};
     use roc_types::subs::VarStore;
 
     let snapshot = env.subs.snapshot();
@@ -1761,14 +1761,22 @@ struct FunctionLayouts<'a> {
 }
 
 impl<'a> FunctionLayouts<'a> {
-    pub fn from_layout(layout: Layout<'a>) -> Self {
+    pub fn from_layout(arena: &'a Bump, layout: Layout<'a>) -> Self {
         match &layout {
             Layout::FunctionPointer(arguments, result) => FunctionLayouts {
                 arguments,
                 result: (*result).clone(),
                 full: layout,
             },
-            Layout::Closure(_, _, _) => todo!(),
+            Layout::Closure(arguments, closure_layout, result) => {
+                let full = ClosureLayout::extend_function_layout(
+                    arena,
+                    arguments,
+                    closure_layout.clone(),
+                    result,
+                );
+                FunctionLayouts::from_layout(arena, full)
+            }
             _ => FunctionLayouts {
                 full: layout.clone(),
                 arguments: &[],
@@ -2038,7 +2046,10 @@ pub fn with_hole<'a>(
             let variant = crate::layout::union_sorted_tags(env.arena, variant_var, env.subs);
 
             match variant {
-                Never => unreachable!("The `[]` type has no constructors"),
+                Never => unreachable!(
+                    "The `[]` type has no constructors, source var {:?}",
+                    variant_var
+                ),
                 Unit => Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole),
                 BoolUnion { ttrue, .. } => Stmt::Let(
                     assigned,
@@ -2983,7 +2994,11 @@ pub fn with_hole<'a>(
                 .zip(arg_symbols.iter().rev());
             assign_to_symbols(env, procs, layout_cache, iter, result)
         }
-        RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
+        RuntimeError(e) => {
+            eprintln!("emitted runtime error {:?}", &e);
+
+            Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e)))
+        }
     }
 }
 
@@ -4411,7 +4426,8 @@ fn call_by_name<'a>(
                                 ) {
                                     Ok((proc, layout)) => {
                                         debug_assert_eq!(full_layout, layout);
-                                        let function_layout = FunctionLayouts::from_layout(layout);
+                                        let function_layout =
+                                            FunctionLayouts::from_layout(env.arena, layout);
 
                                         procs.specialized.remove(&(proc_name, full_layout));
 
@@ -4487,9 +4503,9 @@ fn call_by_name<'a>(
                             None => {
                                 // This must have been a runtime error.
                                 match procs.runtime_errors.get(&proc_name) {
-                                    Some(error) => {
-                                        Stmt::RuntimeError(env.arena.alloc(format!("{:?}", error)))
-                                    }
+                                    Some(error) => Stmt::RuntimeError(
+                                        env.arena.alloc(format!("runtime error {:?}", error)),
+                                    ),
                                     None => unreachable!("Proc name {:?} is invalid", proc_name),
                                 }
                             }
@@ -4498,10 +4514,19 @@ fn call_by_name<'a>(
                 }
             }
         }
-        Err(e) => {
-            // This function code gens to a runtime error,
-            // so attempting to call it will immediately crash.
-            Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e)))
+        Err(LayoutProblem::UnresolvedTypeVar(var)) => {
+            let msg = format!(
+                "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
+                var, proc_name, fn_var
+            );
+            Stmt::RuntimeError(env.arena.alloc(msg))
+        }
+        Err(LayoutProblem::Erroneous) => {
+            let msg = format!(
+                "Hit an erroneous type when creating a layout for {:?}",
+                proc_name
+            );
+            Stmt::RuntimeError(env.arena.alloc(msg))
         }
     }
 }
@@ -4599,7 +4624,10 @@ pub fn from_can_pattern<'a>(
             let variant = crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs);
 
             match variant {
-                Never => unreachable!("there is no pattern of type `[]`"),
+                Never => unreachable!(
+                    "there is no pattern of type `[]`, union var {:?}",
+                    *whole_var
+                ),
                 Unit => Pattern::EnumLiteral {
                     tag_id: 0,
                     tag_name: tag_name.clone(),

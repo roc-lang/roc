@@ -48,13 +48,18 @@ pub fn canonicalize_module_defs<'a>(
     module_ids: &ModuleIds,
     exposed_ident_ids: IdentIds,
     dep_idents: MutMap<ModuleId, IdentIds>,
+    aliases: MutMap<Symbol, Alias>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     mut exposed_symbols: MutSet<Symbol>,
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
-    let mut scope = Scope::new(home);
+    let mut scope = Scope::new(home, var_store);
     let num_deps = dep_idents.len();
+
+    for (name, alias) in aliases.into_iter() {
+        scope.add_alias(name, alias.region, alias.vars, alias.typ);
+    }
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.

@@ -211,6 +211,7 @@ mod test_uniq_load {
     }
 
     #[test]
+    #[ignore]
     fn load_astar() {
         let subs_by_module = MutMap::default();
         let loaded_module = load_fixture("interface_with_deps", "AStar", subs_by_module);
@@ -273,6 +274,7 @@ mod test_uniq_load {
     }
 
     #[test]
+    #[ignore]
     fn load_dep_types() {
         let subs_by_module = MutMap::default();
         let loaded_module = load_fixture("interface_with_deps", "Primary", subs_by_module);
@@ -297,6 +299,7 @@ mod test_uniq_load {
     }
 
     #[test]
+    #[ignore]
     fn load_custom_res() {
         let subs_by_module = MutMap::default();
         let loaded_module = load_fixture("interface_with_deps", "Res", subs_by_module);
