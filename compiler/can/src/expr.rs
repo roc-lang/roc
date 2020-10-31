@@ -83,8 +83,8 @@ pub enum Expr {
     },
 
     // Let
-    LetRec(Vec<Def>, Box<Located<Expr>>, Variable, Aliases),
-    LetNonRec(Box<Def>, Box<Located<Expr>>, Variable, Aliases),
+    LetRec(Vec<Def>, Box<Located<Expr>>, Variable),
+    LetNonRec(Box<Def>, Box<Located<Expr>>, Variable),
 
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
@@ -1221,7 +1221,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             }
         }
 
-        LetRec(defs, loc_expr, var, aliases) => {
+        LetRec(defs, loc_expr, var) => {
             let mut new_defs = Vec::with_capacity(defs.len());
 
             for def in defs {
@@ -1242,10 +1242,10 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 value: inline_calls(var_store, scope, loc_expr.value),
             };
 
-            LetRec(new_defs, Box::new(loc_expr), var, aliases)
+            LetRec(new_defs, Box::new(loc_expr), var)
         }
 
-        LetNonRec(def, loc_expr, var, aliases) => {
+        LetNonRec(def, loc_expr, var) => {
             let def = Def {
                 loc_pattern: def.loc_pattern,
                 loc_expr: Located {
@@ -1262,7 +1262,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 value: inline_calls(var_store, scope, loc_expr.value),
             };
 
-            LetNonRec(Box::new(def), Box::new(loc_expr), var, aliases)
+            LetNonRec(Box::new(def), Box::new(loc_expr), var)
         }
 
         Closure {
@@ -1367,9 +1367,6 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                             // Not sure if param_var should be involved.
                             let pattern_vars = SendMap::default();
 
-                            // TODO get the actual correct aliases
-                            let aliases = SendMap::default();
-
                             let def = Def {
                                 loc_pattern,
                                 loc_expr,
@@ -1384,7 +1381,6 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                                     Box::new(def),
                                     Box::new(loc_answer),
                                     var_store.fresh(),
-                                    aliases,
                                 ),
                             };
                         }

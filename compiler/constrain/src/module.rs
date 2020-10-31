@@ -39,8 +39,8 @@ pub fn constrain_module(
     let decls = &module.declarations;
 
     match mode {
-        Standard => constrain_decls(home, decls, send_aliases),
-        Uniqueness => crate::uniq::constrain_decls(home, decls, send_aliases, var_store),
+        Standard => constrain_decls(home, decls),
+        Uniqueness => crate::uniq::constrain_decls(home, decls, var_store),
     }
 }
 
@@ -106,7 +106,6 @@ pub fn constrain_imported_values(
             rigid_vars,
             flex_vars: Vec::new(),
             def_types,
-            def_aliases: SendMap::default(),
             defs_constraint: True,
             ret_constraint: body_con,
         })),
@@ -122,9 +121,6 @@ where
     I: IntoIterator<Item = (Symbol, BuiltinAlias)>,
 {
     use Constraint::*;
-
-    // Load all the given builtin aliases.
-    let mut def_aliases = SendMap::default();
 
     for (symbol, builtin_alias) in aliases {
         let mut free_vars = FreeVars::default();
@@ -164,15 +160,12 @@ where
             uniqueness: None,
             typ: actual,
         };
-
-        def_aliases.insert(symbol, alias);
     }
 
     Let(Box::new(LetConstraint {
         rigid_vars: Vec::new(),
         flex_vars: Vec::new(),
         def_types: SendMap::default(),
-        def_aliases,
         defs_constraint: True,
         ret_constraint: body_con,
     }))
@@ -184,7 +177,6 @@ pub fn constrain_imported_aliases(
     var_store: &mut VarStore,
 ) -> Constraint {
     use Constraint::*;
-    let mut def_aliases = SendMap::default();
 
     for (symbol, imported_alias) in aliases {
         let mut vars = Vec::with_capacity(imported_alias.vars.len());
@@ -218,15 +210,12 @@ pub fn constrain_imported_aliases(
             uniqueness: imported_alias.uniqueness,
             typ: actual,
         };
-
-        def_aliases.insert(symbol, alias);
     }
 
     Let(Box::new(LetConstraint {
         rigid_vars: Vec::new(),
         flex_vars: Vec::new(),
         def_types: SendMap::default(),
-        def_aliases,
         defs_constraint: True,
         ret_constraint: body_con,
     }))

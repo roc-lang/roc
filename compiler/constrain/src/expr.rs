@@ -42,23 +42,6 @@ pub fn exists(flex_vars: Vec<Variable>, constraint: Constraint) -> Constraint {
         rigid_vars: Vec::new(),
         flex_vars,
         def_types: SendMap::default(),
-        def_aliases: SendMap::default(),
-        defs_constraint: constraint,
-        ret_constraint: Constraint::True,
-    }))
-}
-
-#[inline(always)]
-pub fn exists_with_aliases(
-    def_aliases: SendMap<Symbol, Alias>,
-    flex_vars: Vec<Variable>,
-    constraint: Constraint,
-) -> Constraint {
-    Let(Box::new(LetConstraint {
-        rigid_vars: Vec::new(),
-        flex_vars,
-        def_types: SendMap::default(),
-        def_aliases,
         defs_constraint: constraint,
         ret_constraint: Constraint::True,
     }))
@@ -399,7 +382,6 @@ pub fn constrain_expr(
                         rigid_vars: Vec::new(),
                         flex_vars: state.vars,
                         def_types: state.headers,
-                        def_aliases: SendMap::default(),
                         defs_constraint,
                         ret_constraint,
                     })),
@@ -749,7 +731,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        LetRec(defs, loc_ret, var, _aliases) => {
+        LetRec(defs, loc_ret, var) => {
             let body_con = constrain_expr(env, loc_ret.region, &loc_ret.value, expected.clone());
 
             exists(
@@ -767,7 +749,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        LetNonRec(def, loc_ret, var, _aliases) => {
+        LetNonRec(def, loc_ret, var) => {
             let body_con = constrain_expr(env, loc_ret.region, &loc_ret.value, expected.clone());
 
             exists(
@@ -928,13 +910,11 @@ fn constrain_when_branch(
             rigid_vars: Vec::new(),
             flex_vars: state.vars,
             def_types: state.headers,
-            def_aliases: SendMap::default(),
             defs_constraint: Constraint::And(state.constraints),
             ret_constraint: Constraint::Let(Box::new(LetConstraint {
                 rigid_vars: Vec::new(),
                 flex_vars: Vec::new(),
                 def_types: SendMap::default(),
-                def_aliases: SendMap::default(),
                 defs_constraint: guard_constraint,
                 ret_constraint,
             })),
@@ -944,7 +924,6 @@ fn constrain_when_branch(
             rigid_vars: Vec::new(),
             flex_vars: state.vars,
             def_types: state.headers,
-            def_aliases: SendMap::default(),
             defs_constraint: Constraint::And(state.constraints),
             ret_constraint,
         }))
@@ -966,11 +945,7 @@ fn constrain_empty_record(region: Region, expected: Expected<Type>) -> Constrain
 
 /// Constrain top-level module declarations
 #[inline(always)]
-pub fn constrain_decls(
-    home: ModuleId,
-    decls: &[Declaration],
-    _aliases: SendMap<Symbol, Alias>,
-) -> Constraint {
+pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
 
     let mut env = Env {
@@ -1035,13 +1010,10 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
 
     pattern_state.vars.push(expr_var);
 
-    let mut def_aliases = SendMap::default();
     let mut new_rigids = Vec::new();
 
     let expr_con = match &def.annotation {
         Some(annotation) => {
-            def_aliases = annotation.aliases.clone();
-
             let arity = annotation.signature.arity();
             let rigids = &env.rigids;
             let mut ftv = rigids.clone();
@@ -1191,7 +1163,6 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                                 rigid_vars: Vec::new(),
                                 flex_vars: state.vars,
                                 def_types: state.headers,
-                                def_aliases: SendMap::default(),
                                 defs_constraint,
                                 ret_constraint,
                             })),
@@ -1233,12 +1204,10 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
         rigid_vars: new_rigids,
         flex_vars: pattern_state.vars,
         def_types: pattern_state.headers,
-        def_aliases,
         defs_constraint: Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),        // always empty
             flex_vars: Vec::new(),         // empty, because our functions have no arguments
             def_types: SendMap::default(), // empty, because our functions have no arguments!
-            def_aliases: SendMap::default(),
             defs_constraint: And(pattern_state.constraints),
             ret_constraint: expr_con,
         })),
@@ -1350,8 +1319,6 @@ pub fn rec_defs_help(
     mut rigid_info: Info,
     mut flex_info: Info,
 ) -> Constraint {
-    let mut def_aliases = SendMap::default();
-
     for def in defs {
         let expr_var = def.expr_var;
         let expr_type = Type::Variable(expr_var);
@@ -1389,7 +1356,6 @@ pub fn rec_defs_help(
                     rigid_vars: Vec::new(),
                     flex_vars: Vec::new(), // empty because Roc function defs have no args
                     def_types: SendMap::default(), // empty because Roc function defs have no args
-                    def_aliases: SendMap::default(),
                     defs_constraint: True, // I think this is correct, once again because there are no args
                     ret_constraint: expr_con,
                 }));
@@ -1400,10 +1366,6 @@ pub fn rec_defs_help(
             }
 
             Some(annotation) => {
-                for (symbol, alias) in annotation.aliases.clone() {
-                    def_aliases.insert(symbol, alias);
-                }
-
                 let arity = annotation.signature.arity();
                 let mut ftv = env.rigids.clone();
 
@@ -1448,7 +1410,6 @@ pub fn rec_defs_help(
                     rigid_vars: Vec::new(),
                     flex_vars: Vec::new(), // empty because Roc function defs have no args
                     def_types: SendMap::default(), // empty because Roc function defs have no args
-                    def_aliases: SendMap::default(),
                     defs_constraint: True, // I think this is correct, once again because there are no args
                     ret_constraint: expr_con,
                 }));
@@ -1460,7 +1421,6 @@ pub fn rec_defs_help(
                     rigid_vars: new_rigids,
                     flex_vars: Vec::new(),         // no flex vars introduced
                     def_types: SendMap::default(), // no headers introduced (at this level)
-                    def_aliases: SendMap::default(),
                     defs_constraint: def_con,
                     ret_constraint: True,
                 })));
@@ -1473,18 +1433,15 @@ pub fn rec_defs_help(
         rigid_vars: rigid_info.vars,
         flex_vars: Vec::new(),
         def_types: rigid_info.def_types,
-        def_aliases,
         defs_constraint: True,
         ret_constraint: Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),
             flex_vars: flex_info.vars,
             def_types: flex_info.def_types.clone(),
-            def_aliases: SendMap::default(),
             defs_constraint: Let(Box::new(LetConstraint {
                 rigid_vars: Vec::new(),
                 flex_vars: Vec::new(),
                 def_types: flex_info.def_types,
-                def_aliases: SendMap::default(),
                 defs_constraint: True,
                 ret_constraint: And(flex_info.constraints),
             })),

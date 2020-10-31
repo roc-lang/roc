@@ -1278,7 +1278,7 @@ pub fn can_defs_with_return<'a>(
             for declaration in decls.into_iter().rev() {
                 loc_expr = Located {
                     region: Region::zero(),
-                    value: decl_to_let(var_store, declaration, loc_expr, output.aliases.clone()),
+                    value: decl_to_let(var_store, declaration, loc_expr),
                 };
             }
 
@@ -1288,19 +1288,12 @@ pub fn can_defs_with_return<'a>(
     }
 }
 
-fn decl_to_let(
-    var_store: &mut VarStore,
-    decl: Declaration,
-    loc_ret: Located<Expr>,
-    aliases: SendMap<Symbol, Alias>,
-) -> Expr {
+fn decl_to_let(var_store: &mut VarStore, decl: Declaration, loc_ret: Located<Expr>) -> Expr {
     match decl {
         Declaration::Declare(def) => {
-            Expr::LetNonRec(Box::new(def), Box::new(loc_ret), var_store.fresh(), aliases)
+            Expr::LetNonRec(Box::new(def), Box::new(loc_ret), var_store.fresh())
         }
-        Declaration::DeclareRec(defs) => {
-            Expr::LetRec(defs, Box::new(loc_ret), var_store.fresh(), aliases)
-        }
+        Declaration::DeclareRec(defs) => Expr::LetRec(defs, Box::new(loc_ret), var_store.fresh()),
         Declaration::InvalidCycle(symbols, regions) => {
             Expr::RuntimeError(RuntimeError::CircularDef(symbols, regions))
         }
