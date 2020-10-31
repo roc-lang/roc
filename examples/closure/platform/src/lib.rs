@@ -1,3 +1,4 @@
+use std::alloc::Layout;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
@@ -18,14 +19,25 @@ pub fn rust_main() -> isize {
     let start_time = SystemTime::now();
 
     let size = unsafe { closure_size() } as usize;
+    let layout = Layout::array::<u8>(size).unwrap();
     let roc_closure = unsafe {
-        let mut output: MaybeUninit<RocCallResult<(fn(i64) -> i64, i64)>> = MaybeUninit::uninit();
+        let buffer = std::alloc::alloc(layout);
 
-        closure(output.as_mut_ptr() as _);
+        closure(buffer);
 
-        match output.assume_init().into() {
-            Ok((function_pointer, closure_data)) => move || function_pointer(closure_data),
-            Err(msg) => panic!("Roc failed with message: {}", msg),
+        let output = &*(buffer as *mut RocCallResult<(fn(i64) -> i64, i64)>);
+
+        match output.into() {
+            Ok((function_pointer, closure_data)) => {
+                std::alloc::dealloc(buffer, layout);
+
+                move || function_pointer(closure_data)
+            }
+            Err(msg) => {
+                std::alloc::dealloc(buffer, layout);
+
+                panic!("Roc failed with message: {}", msg);
+            }
         }
     };
     let answer = roc_closure();
@@ -55,6 +67,24 @@ impl<T: Sized> Into<Result<T, String>> for RocCallResult<T> {
             Success(value) => Ok(value),
             Failure(failure) => Err({
                 let raw = unsafe { CString::from_raw(failure) };
+
+                let result = format!("{:?}", raw);
+
+                // make sure rust does not try to free the Roc string
+                std::mem::forget(raw);
+
+                result
+            }),
+        }
+    }
+}
+
+impl<T: Sized + Copy> Into<Result<T, String>> for &RocCallResult<T> {
+    fn into(self) -> Result<T, String> {
+        match self {
+            Success(value) => Ok(*value),
+            Failure(failure) => Err({
+                let raw = unsafe { CString::from_raw(*failure) };
 
                 let result = format!("{:?}", raw);
 
