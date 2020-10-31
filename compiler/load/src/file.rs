@@ -772,7 +772,6 @@ enum BuildTask<'a> {
         module: Module,
         ident_ids: IdentIds,
         imported_symbols: Vec<Import>,
-        imported_aliases: MutMap<Symbol, Alias>,
         module_timing: ModuleTiming,
         constraint: Constraint,
         var_store: VarStore,
@@ -2004,7 +2003,7 @@ impl<'a> BuildTask<'a> {
         // (which would be more expensive for the main thread).
         let ConstrainableImports {
             imported_symbols,
-            imported_aliases,
+            imported_aliases: _,
             unused_imports,
         } = pre_constrain_imports(
             home,
@@ -2027,7 +2026,6 @@ impl<'a> BuildTask<'a> {
             module,
             ident_ids,
             imported_symbols,
-            imported_aliases,
             constraint,
             var_store,
             src,
@@ -2043,7 +2041,6 @@ fn run_solve<'a>(
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
     imported_symbols: Vec<Import>,
-    imported_aliases: MutMap<Symbol, Alias>,
     constraint: Constraint,
     mut var_store: VarStore,
     decls: Vec<Declaration>,
@@ -2054,12 +2051,7 @@ fn run_solve<'a>(
 
     // Finish constraining the module by wrapping the existing Constraint
     // in the ones we just computed. We can do this off the main thread.
-    let constraint = constrain_imports(
-        imported_symbols,
-        imported_aliases,
-        constraint,
-        &mut var_store,
-    );
+    let constraint = constrain_imports(imported_symbols, constraint, &mut var_store);
 
     let constrain_end = SystemTime::now();
 
@@ -2535,7 +2527,6 @@ fn run_task<'a>(
             module,
             module_timing,
             imported_symbols,
-            imported_aliases,
             constraint,
             var_store,
             ident_ids,
@@ -2546,7 +2537,6 @@ fn run_task<'a>(
             ident_ids,
             module_timing,
             imported_symbols,
-            imported_aliases,
             constraint,
             var_store,
             declarations,

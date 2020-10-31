@@ -112,60 +112,9 @@ pub fn constrain_imported_values(
     )
 }
 
-pub fn constrain_imported_aliases(
-    aliases: MutMap<Symbol, Alias>,
-    body_con: Constraint,
-    var_store: &mut VarStore,
-) -> Constraint {
-    use Constraint::*;
-
-    for (symbol, imported_alias) in aliases {
-        let mut vars = Vec::with_capacity(imported_alias.vars.len());
-        let mut substitution = ImMap::default();
-
-        for Located {
-            region,
-            value: (lowercase, old_var),
-        } in &imported_alias.vars
-        {
-            let new_var = var_store.fresh();
-            vars.push(Located::at(*region, (lowercase.clone(), new_var)));
-            substitution.insert(*old_var, Type::Variable(new_var));
-        }
-
-        let mut actual = imported_alias.typ.clone();
-
-        actual.substitute(&substitution);
-
-        let mut hidden_variables = MutSet::default();
-        hidden_variables.extend(actual.variables());
-
-        for loc_var in vars.iter() {
-            hidden_variables.remove(&loc_var.value.1);
-        }
-
-        let alias = Alias {
-            vars,
-            hidden_variables,
-            region: imported_alias.region,
-            uniqueness: imported_alias.uniqueness,
-            typ: actual,
-        };
-    }
-
-    Let(Box::new(LetConstraint {
-        rigid_vars: Vec::new(),
-        flex_vars: Vec::new(),
-        def_types: SendMap::default(),
-        defs_constraint: True,
-        ret_constraint: body_con,
-    }))
-}
-
 /// Run pre_constrain_imports to get imported_symbols and imported_aliases.
 pub fn constrain_imports(
     imported_symbols: Vec<Import>,
-    imported_aliases: MutMap<Symbol, Alias>,
     constraint: Constraint,
     var_store: &mut VarStore,
 ) -> Constraint {
@@ -177,7 +126,7 @@ pub fn constrain_imports(
     //        output.ftv.insert(var, format!("internal_{:?}", var).into());
     //    }
 
-    constrain_imported_aliases(imported_aliases, constraint, var_store)
+    constraint
 }
 
 pub struct ConstrainableImports {
