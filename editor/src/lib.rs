@@ -76,7 +76,6 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
     // Prepare swap chain
     let render_format = wgpu::TextureFormat::Bgra8UnormSrgb;
     let mut size = window.inner_size();
-
     let mut swap_chain = device.create_swap_chain(
         &surface,
         &wgpu::SwapChainDescriptor {
@@ -87,6 +86,43 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
             present_mode: wgpu::PresentMode::Immediate,
         },
     );
+
+    // Prepare Triangle Pipeline
+    let triangle_vs_module =
+        device.create_shader_module(wgpu::include_spirv!("shaders/rect.vert.spv"));
+    let triangle_fs_module =
+        device.create_shader_module(wgpu::include_spirv!("shaders/rect.frag.spv"));
+
+    let triangle_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[],
+        push_constant_ranges: &[],
+    });
+
+    let triangle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: None,
+        layout: Some(&triangle_pipeline_layout),
+        vertex_stage: wgpu::ProgrammableStageDescriptor {
+            module: &triangle_vs_module,
+            entry_point: "main",
+        },
+        fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
+            module: &triangle_fs_module,
+            entry_point: "main",
+        }),
+        // Use the default rasterizer state: no culling, no depth bias
+        rasterization_state: None,
+        primitive_topology: wgpu::PrimitiveTopology::TriangleList,
+        color_states: &[wgpu::TextureFormat::Bgra8UnormSrgb.into()],
+        depth_stencil_state: None,
+        vertex_state: wgpu::VertexStateDescriptor {
+            index_format: wgpu::IndexFormat::Uint16,
+            vertex_buffers: &[],
+        },
+        sample_count: 1,
+        sample_mask: !0,
+        alpha_to_coverage_enabled: false,
+    });
 
     // Prepare glyph_brush
     let inconsolata =
@@ -182,7 +218,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
                 // Clear frame
                 {
-                    let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
                             attachment: &frame.view,
                             resolve_target: None,
@@ -198,6 +234,9 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                         }],
                         depth_stencil_attachment: None,
                     });
+
+                    render_pass.set_pipeline(&triangle_pipeline);
+                    render_pass.draw(0..3, 0..1);
                 }
 
                 glyph_brush.queue(Section {
