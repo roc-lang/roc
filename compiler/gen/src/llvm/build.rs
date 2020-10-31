@@ -1842,6 +1842,76 @@ pub fn create_entry_block_alloca<'a, 'ctx>(
     builder.build_alloca(basic_type, name)
 }
 
+fn expose_function_to_host<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    roc_function: &FunctionValue<'ctx>,
+) {
+    use inkwell::types::BasicType;
+
+    let roc_function_type = roc_function.get_type();
+
+    // STEP 1: turn `f : a,b,c -> d` into `f : a,b,c, &d -> {}`
+    let mut argument_types = roc_function_type.get_param_types();
+    let return_type = roc_function_type.get_return_type().unwrap();
+    let output_type = return_type.ptr_type(AddressSpace::Generic);
+    argument_types.push(output_type.into());
+
+    let c_function_type = env.context.void_type().fn_type(&argument_types, false);
+    let c_function_name: String = format!("{}_exposed", roc_function.get_name().to_str().unwrap());
+
+    let c_function = env.module.add_function(
+        c_function_name.as_str(),
+        c_function_type,
+        Some(Linkage::External),
+    );
+
+    // STEP 2: build the exposed function's body
+    let builder = env.builder;
+    let context = env.context;
+
+    let entry = context.append_basic_block(c_function, "entry");
+
+    builder.position_at_end(entry);
+
+    // drop the final argument, which is the pointer we write the result into
+    let args = c_function.get_params();
+    let output_arg_index = args.len() - 1;
+    let args = &args[..args.len() - 1];
+
+    debug_assert_eq!(args.len(), roc_function.get_params().len());
+
+    let call_wrapped = builder.build_call(roc_function.clone(), args, "call_wrapped_function");
+    call_wrapped.set_call_convention(FAST_CALL_CONV);
+
+    let call_result = call_wrapped.try_as_basic_value().left().unwrap();
+
+    let output_arg = c_function
+        .get_nth_param(output_arg_index as u32)
+        .unwrap()
+        .into_pointer_value();
+
+    builder.build_store(output_arg, call_result);
+
+    builder.build_return(None);
+
+    // STEP 3: build a {} -> u64 function that gives the size of the return type
+    let size_function_type = env.context.i64_type().fn_type(&[], false);
+    let size_function_name: String = format!("{}_size", roc_function.get_name().to_str().unwrap());
+
+    let size_function = env.module.add_function(
+        size_function_name.as_str(),
+        size_function_type,
+        Some(Linkage::External),
+    );
+
+    let entry = context.append_basic_block(size_function, "entry");
+
+    builder.position_at_end(entry);
+
+    let size: BasicValueEnum = return_type.size_of().unwrap().into();
+    builder.build_return(Some(&size));
+}
+
 pub fn build_proc_header<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -1871,14 +1941,10 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
         .module
         .add_function(fn_name.as_str(), fn_type, Some(Linkage::Private));
 
+    fn_val.set_call_conventions(FAST_CALL_CONV);
+
     if env.exposed_to_host.contains(&symbol) {
-        // If this is an external-facing function, it'll use the C calling convention
-        // and external linkage.
-        fn_val.set_linkage(Linkage::External);
-        fn_val.set_call_conventions(C_CALL_CONV);
-    } else {
-        // If it's an internal-only function, it should use the fast calling conention.
-        fn_val.set_call_conventions(FAST_CALL_CONV);
+        expose_function_to_host(env, &fn_val);
     }
 
     fn_val
