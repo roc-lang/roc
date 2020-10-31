@@ -1450,6 +1450,8 @@ fn to_pending_def<'a>(
         SpaceBefore(sub_def, _) | SpaceAfter(sub_def, _) | Nested(sub_def) => {
             to_pending_def(env, var_store, sub_def, scope, pattern_type)
         }
+
+        NotYetImplemented(s) => todo!("{}", s),
     }
 }
 
