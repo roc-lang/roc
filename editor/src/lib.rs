@@ -186,7 +186,15 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                         color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
                             attachment: &frame.view,
                             resolve_target: None,
-                            ops: Default::default(),
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color {
+                                    r: 0.007,
+                                    g: 0.007,
+                                    b: 0.007,
+                                    a: 1.0,
+                                }),
+                                store: true,
+                            },
                         }],
                         depth_stencil_attachment: None,
                     });
