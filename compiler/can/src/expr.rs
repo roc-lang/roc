@@ -157,8 +157,6 @@ pub enum Expr {
     RuntimeError(RuntimeError),
 }
 
-type Aliases = SendMap<Symbol, Alias>;
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Field {
     pub var: Variable,

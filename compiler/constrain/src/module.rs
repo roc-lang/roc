@@ -2,12 +2,12 @@ use crate::expr::constrain_decls;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::{Constraint, LetConstraint};
 use roc_can::module::ModuleOutput;
-use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
+use roc_collections::all::{MutMap, MutSet, SendMap};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
-use roc_types::solved_types::{BuiltinAlias, FreeVars, SolvedType};
-use roc_types::subs::{VarId, VarStore, Variable};
-use roc_types::types::{Alias, Problem, Type};
+use roc_types::solved_types::{FreeVars, SolvedType};
+use roc_types::subs::{VarStore, Variable};
+use roc_types::types::{Alias, Problem};
 
 pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
 
