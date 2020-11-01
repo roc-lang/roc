@@ -208,6 +208,40 @@ pub fn example_file(dir_name: &str, file_name: &str) -> PathBuf {
 }
 
 #[allow(dead_code)]
+pub fn fixtures_dir(dir_name: &str) -> PathBuf {
+    let mut path = env::current_exe().ok().unwrap();
+
+    // Get rid of the filename in target/debug/deps/cli_run-99c65e4e9a1fbd06
+    path.pop();
+
+    // If we're in deps/ get rid of deps/ in target/debug/deps/
+    if path.ends_with("deps") {
+        path.pop();
+    }
+
+    // Get rid of target/debug/ so we're back at the project root
+    path.pop();
+    path.pop();
+
+    // Descend into cli/tests/fixtures/{dir_name}
+    path.push("cli");
+    path.push("tests");
+    path.push("fixtures");
+    path.push(dir_name);
+
+    path
+}
+
+#[allow(dead_code)]
+pub fn fixture_file(dir_name: &str, file_name: &str) -> PathBuf {
+    let mut path = fixtures_dir(dir_name);
+
+    path.push(file_name);
+
+    path
+}
+
+#[allow(dead_code)]
 pub fn repl_eval(input: &str) -> Out {
     let mut cmd = Command::new(path_to_roc_binary());
 

@@ -12,7 +12,7 @@ mod helpers;
 #[cfg(test)]
 mod cli_run {
     use crate::helpers::{
-        example_file, extract_valgrind_errors, run_cmd, run_roc, run_with_valgrind,
+        example_file, extract_valgrind_errors, fixture_file, run_cmd, run_roc, run_with_valgrind,
     };
     use serial_test::serial;
     use std::path::Path;
@@ -158,6 +158,62 @@ mod cli_run {
             &example_file("multi-module", "Quicksort.roc"),
             &["--optimize"],
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_str)]
+    fn run_multi_dep_str() {
+        if true {
+            todo!(
+                "fix this test so it no longer deadlocks and hangs during monomorphization! The test never shows the error; to see the panic error, run this: cargo run run cli/tests/fixtures/multi-dep-str/Main.roc"
+            );
+        }
+
+        check_output(
+            &fixture_file("multi-dep-str", "Main.roc"),
+            &[],
+            "I am Dep2.str2\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_str)]
+    fn run_multi_dep_str_optimized() {
+        if true {
+            todo!(
+                "fix this test so it no longer deadlocks and hangs during monomorphization! The test never shows the error; to see the panic error, run this: cargo run run cli/tests/fixtures/multi-dep-str/Main.roc"
+            );
+        }
+
+        check_output(
+            &fixture_file("multi-dep-str", "Main.roc"),
+            &[],
+            "I am Dep2.str2\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_thunk)]
+    fn run_multi_dep_thunk() {
+        check_output(
+            &fixture_file("multi-dep-thunk", "Main.roc"),
+            &[],
+            "I am Dep2.value2\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_str)]
+    fn run_multi_dep_thunk_optimized() {
+        check_output(
+            &fixture_file("multi-dep-thunk", "Main.roc"),
+            &[],
+            "I am Dep2.value2\n",
             true,
         );
     }
