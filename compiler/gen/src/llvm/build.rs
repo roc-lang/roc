@@ -2172,7 +2172,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             list_join(env, inplace, parent, list, outer_list_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumCeiling | NumFloor
-        | NumToFloat | NumIsFinite | NumAtan => {
+        | NumToFloat | NumIsFinite | NumAtan | NumAcos => {
             debug_assert_eq!(args.len(), 1);
 
             let (arg, arg_layout) = load_symbol_and_layout(env, scope, &args[0]);
@@ -2737,6 +2737,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
         ),
         NumIsFinite => call_bitcode_fn(NumIsFinite, env, &[arg.into()], &bitcode::MATH_IS_FINITE),
         NumAtan => call_bitcode_fn(NumAtan, env, &[arg.into()], &bitcode::MATH_ATAN),
+        NumAcos => call_bitcode_fn(NumAcos, env, &[arg.into()], &bitcode::MATH_ACOS),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }

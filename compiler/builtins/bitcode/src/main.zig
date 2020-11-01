@@ -21,6 +21,11 @@ fn powInt(base: i64, exp: i64) callconv(.C) i64 {
     return math.pow(i64, base, exp);
 }
 
+comptime { @export(acos, .{ .name = math_namespace ++ ".acos", .linkage = .Strong  }); }
+fn acos(num: f64) callconv(.C) f64 {
+    return math.acos(num);    
+}
+
 
 // Str.split
 

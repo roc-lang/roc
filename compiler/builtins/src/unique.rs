@@ -375,6 +375,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![float_type(star1)], float_type(star2))
     });
 
+    // acos : Float -> Float
+    add_type(Symbol::NUM_ACOS, {
+        let_tvars! { star1, star2 };
+        unique_function(vec![float_type(star1)], float_type(star2))
+    });
+
     // Bool module
 
     // isEq or (==) : Attr * a, Attr * a -> Attr * Bool

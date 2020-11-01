@@ -652,6 +652,7 @@ define_builtins! {
         42 NUM_ADD_WRAP: "addWrap"
         43 NUM_ADD_CHECKED: "addChecked"
         44 NUM_ATAN: "atan"
+        45 NUM_ACOS: "acos"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
