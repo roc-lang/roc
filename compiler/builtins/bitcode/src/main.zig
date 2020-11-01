@@ -26,6 +26,11 @@ fn acos(num: f64) callconv(.C) f64 {
     return math.acos(num);    
 }
 
+comptime { @export(asin, .{ .name = math_namespace ++ ".asin", .linkage = .Strong  }); }
+fn asin(num: f64) callconv(.C) f64 {
+    return math.asin(num);
+}
+
 
 // Str.split
 

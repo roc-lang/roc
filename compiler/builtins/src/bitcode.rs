@@ -17,6 +17,7 @@ pub fn get_bytes() -> Vec<u8> {
     buffer
 }
 
+pub const MATH_ASIN: &str = "roc_builtins.math.asin";
 pub const MATH_ACOS: &str = "roc_builtins.math.acos";
 pub const MATH_ATAN: &str = "roc_builtins.math.atan";
 pub const MATH_IS_FINITE: &str = "roc_builtins.math.is_finite";
