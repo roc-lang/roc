@@ -1971,8 +1971,8 @@ fn call_with_args<'a, 'ctx, 'env>(
             panic!("Unrecognized builtin function: {:?}", fn_name)
         } else {
             panic!(
-                "Unrecognized non-builtin function: {:?} {:?}",
-                fn_name, layout
+                "Unrecognized non-builtin function: {:?} (symbol: {:?}, layout: {:?})",
+                fn_name, symbol, layout
             )
         }
     });
