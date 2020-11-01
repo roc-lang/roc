@@ -2,7 +2,7 @@ use roc_std::RocStr;
 use std::str;
 
 extern "C" {
-    #[link_name = "main_1"]
+    #[link_name = "main_1_exposed"]
     fn main() -> RocStr;
 }
 

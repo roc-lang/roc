@@ -1960,9 +1960,15 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     let result_alloca = builder.build_alloca(wrapper_return_type, "result");
 
     // invoke instead of call, so that we can catch any exeptions thrown in Roc code
+    let arguments = wrapper_function.get_params();
     let call_result = {
-        let call =
-            builder.build_invoke(roc_function, &[], then_block, catch_block, "call_roc_main");
+        let call = builder.build_invoke(
+            roc_function,
+            &arguments,
+            then_block,
+            catch_block,
+            "call_roc_function",
+        );
         call.set_call_convention(FAST_CALL_CONV);
         call.try_as_basic_value().left().unwrap()
     };
