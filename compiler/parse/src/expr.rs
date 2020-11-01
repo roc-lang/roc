@@ -1200,7 +1200,7 @@ mod when {
                             if alternatives_indented_correctly(&loc_patterns, original_indent) {
                                 Ok(((loc_patterns, loc_guard), state))
                             } else {
-                                return Err((
+                                Err((
                                     Fail {
                                         attempting: state.attempting,
                                         reason: FailReason::NotYetImplemented(
@@ -1208,7 +1208,7 @@ mod when {
                                         ),
                                     },
                                     state,
-                                ));
+                                ))
                             }
                         },
                     ),
