@@ -562,6 +562,27 @@ impl<'a> Procs<'a> {
     }
 }
 
+fn add_needed_external<'a>(
+    procs: &mut Procs<'a>,
+    env: &mut Env<'a, '_>,
+    fn_var: Variable,
+    name: Symbol,
+) {
+    // call of a function that is not in this module
+    use std::collections::hash_map::Entry::{Occupied, Vacant};
+
+    let existing =
+        match procs.externals_we_need.entry(name.module_id()) {
+            Vacant(entry) => {
+                entry.insert(ExternalSpecializations::default())
+            }
+            Occupied(entry) => entry.into_mut(),
+        };
+
+    let solved_type = SolvedType::from_var(env.subs, fn_var);
+    existing.insert(name, solved_type);
+}
+
 fn add_pending<'a>(
     pending_specializations: &mut MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization>>,
     symbol: Symbol,
@@ -4366,6 +4387,10 @@ fn call_by_name<'a>(
                             pending,
                         );
 
+                        if assigned.module_id() != proc_name.module_id() {
+                            add_needed_external(procs, env, original_fn_var, proc_name);
+                        }
+
                         let call = Expr::FunctionCall {
                             call_type: CallType::ByName(proc_name),
                             ret_layout: ret_layout.clone(),
@@ -4447,21 +4472,7 @@ fn call_by_name<'a>(
                             }
 
                             None if assigned.module_id() != proc_name.module_id() => {
-                                let fn_var = original_fn_var;
-
-                                // call of a function that is not not in this module
-                                use std::collections::hash_map::Entry::{Occupied, Vacant};
-
-                                let existing =
-                                    match procs.externals_we_need.entry(proc_name.module_id()) {
-                                        Vacant(entry) => {
-                                            entry.insert(ExternalSpecializations::default())
-                                        }
-                                        Occupied(entry) => entry.into_mut(),
-                                    };
-
-                                let solved_type = SolvedType::from_var(env.subs, fn_var);
-                                existing.insert(proc_name, solved_type);
+                                add_needed_external(procs, env, original_fn_var, proc_name);
 
                                 let call = Expr::FunctionCall {
                                     call_type: CallType::ByName(proc_name),

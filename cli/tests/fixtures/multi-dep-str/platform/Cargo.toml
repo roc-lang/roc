@@ -8,6 +8,6 @@ edition = "2018"
 crate-type = ["staticlib"]
 
 [dependencies]
-roc_std = { path = "../../../roc_std" }
+roc_std = { path = "../../../../../roc_std" }
 
 [workspace]
