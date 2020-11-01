@@ -489,7 +489,7 @@ mod gen_primitives {
 
     #[test]
     fn peano1() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                     Peano : [ S Peano, Z ]
@@ -509,7 +509,7 @@ mod gen_primitives {
 
     #[test]
     fn peano2() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                     Peano : [ S Peano, Z ]
@@ -547,6 +547,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn linked_list_len_0() {
         assert_evals_to!(
             indoc!(
@@ -555,9 +556,10 @@ mod gen_primitives {
 
                 LinkedList a : [ Nil, Cons a (LinkedList a) ]
 
-                nil : LinkedList Int
-                nil = Nil
+                # nil : LinkedList Int
+                nil = Cons 0x1 Nil
 
+                # length : [ Nil, Cons a (LinkedList a) ] as LinkedList a -> Int
                 length : LinkedList a -> Int
                 length = \list ->
                     when list is
@@ -575,6 +577,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn linked_list_len_twice_0() {
         assert_evals_to!(
             indoc!(
@@ -602,6 +605,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn linked_list_len_1() {
         assert_evals_to!(
             indoc!(
@@ -629,6 +633,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn linked_list_len_twice_1() {
         assert_evals_to!(
             indoc!(
@@ -656,6 +661,7 @@ mod gen_primitives {
     }
 
     #[test]
+    #[ignore]
     fn linked_list_len_3() {
         assert_evals_to!(
             indoc!(
@@ -685,7 +691,7 @@ mod gen_primitives {
 
     #[test]
     fn linked_list_sum_num_a() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app Test provides [ main ] imports []
@@ -713,7 +719,7 @@ mod gen_primitives {
 
     #[test]
     fn linked_list_sum_int() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app Test provides [ main ] imports []
@@ -740,7 +746,7 @@ mod gen_primitives {
 
     #[test]
     fn linked_list_map() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app Test provides [ main ] imports []
@@ -829,7 +835,7 @@ mod gen_primitives {
 
     #[test]
     fn when_peano() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                     Peano : [ S Peano, Z ]
@@ -847,7 +853,7 @@ mod gen_primitives {
             i64
         );
 
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                     Peano : [ S Peano, Z ]
@@ -865,7 +871,7 @@ mod gen_primitives {
             i64
         );
 
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                     Peano : [ S Peano, Z ]
@@ -1002,20 +1008,20 @@ mod gen_primitives {
 
     #[test]
     fn io_poc_effect() {
-        assert_evals_to!(
+        assert_non_opt_evals_to!(
             indoc!(
                 r#"
                 app Test provides [ main ] imports []
 
                 Effect a : [ @Effect ({} -> a) ]
 
-                # succeed : a -> Effect a
+                succeed : a -> Effect a
                 succeed = \x -> @Effect \{} -> x
 
-                # runEffect : Effect a -> a
+                runEffect : Effect a -> a
                 runEffect = \@Effect thunk -> thunk {}
 
-                # foo : Effect Float
+                foo : Effect Float
                 foo =
                     succeed 3.14
 

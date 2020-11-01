@@ -45,6 +45,8 @@ pub enum LowLevel {
     NumFloor,
     NumIsFinite,
     NumAtan,
+    NumAcos,
+    NumAsin,
     Eq,
     NotEq,
     And,

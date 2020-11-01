@@ -1,8 +1,12 @@
 use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
-use roc_region::all::{Located, Region};
-use roc_types::solved_types::{BuiltinAlias, SolvedType};
+use roc_region::all::Region;
+use roc_types::builtin_aliases::{
+    bool_type, float_type, int_type, list_type, map_type, num_type, ordering_type, result_type,
+    set_type, str_type,
+};
+use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
 use std::collections::HashMap;
 
@@ -16,7 +20,6 @@ pub enum Mode {
 pub struct StdLib {
     pub mode: Mode,
     pub types: MutMap<Symbol, (SolvedType, Region)>,
-    pub aliases: MutMap<Symbol, BuiltinAlias>,
     pub applies: MutSet<Symbol>,
 }
 
@@ -24,7 +27,6 @@ pub fn standard_stdlib() -> StdLib {
     StdLib {
         mode: Mode::Standard,
         types: types(),
-        aliases: aliases(),
         applies: vec![
             Symbol::LIST_LIST,
             Symbol::SET_SET,
@@ -45,123 +47,6 @@ const TVAR2: VarId = VarId::from_u32(2);
 const TVAR3: VarId = VarId::from_u32(3);
 const TVAR4: VarId = VarId::from_u32(4);
 const TOP_LEVEL_CLOSURE_VAR: VarId = VarId::from_u32(5);
-
-pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
-    let mut aliases = HashMap::with_capacity_and_hasher(NUM_BUILTIN_IMPORTS, default_hasher());
-
-    let mut add_alias = |symbol, alias| {
-        debug_assert!(
-            !aliases.contains_key(&symbol),
-            "Duplicate alias definition for {:?}",
-            symbol
-        );
-
-        // TODO instead of using Region::zero for all of these,
-        // instead use the Region where they were defined in their
-        // source .roc files! This can give nicer error messages.
-        aliases.insert(symbol, alias);
-    };
-
-    let single_private_tag = |symbol, targs| {
-        SolvedType::TagUnion(
-            vec![(TagName::Private(symbol), targs)],
-            Box::new(SolvedType::EmptyTagUnion),
-        )
-    };
-
-    // Num range : [ @Num range ]
-    add_alias(
-        Symbol::NUM_NUM,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![Located::at(Region::zero(), "range".into())],
-            typ: single_private_tag(Symbol::NUM_AT_NUM, vec![flex(TVAR1)]),
-        },
-    );
-
-    // Integer : [ @Integer ]
-    add_alias(
-        Symbol::NUM_INTEGER,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: Vec::new(),
-            typ: single_private_tag(Symbol::NUM_AT_INTEGER, Vec::new()),
-        },
-    );
-
-    // Int : Num Integer
-    add_alias(
-        Symbol::NUM_INT,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: Vec::new(),
-            typ: SolvedType::Apply(
-                Symbol::NUM_NUM,
-                vec![SolvedType::Apply(Symbol::NUM_INTEGER, Vec::new())],
-            ),
-        },
-    );
-
-    // FloatingPoint : [ @FloatingPoint ]
-    add_alias(
-        Symbol::NUM_FLOATINGPOINT,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: Vec::new(),
-            typ: single_private_tag(Symbol::NUM_AT_FLOATINGPOINT, Vec::new()),
-        },
-    );
-
-    // Float : Num FloatingPoint
-    add_alias(
-        Symbol::NUM_FLOAT,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: Vec::new(),
-            typ: SolvedType::Apply(
-                Symbol::NUM_NUM,
-                vec![SolvedType::Apply(Symbol::NUM_FLOATINGPOINT, Vec::new())],
-            ),
-        },
-    );
-
-    // Bool : [ True, False ]
-    add_alias(
-        Symbol::BOOL_BOOL,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: Vec::new(),
-            typ: SolvedType::TagUnion(
-                vec![
-                    (TagName::Global("True".into()), Vec::new()),
-                    (TagName::Global("False".into()), Vec::new()),
-                ],
-                Box::new(SolvedType::EmptyTagUnion),
-            ),
-        },
-    );
-
-    // Result a e : [ Ok a, Err e ]
-    add_alias(
-        Symbol::RESULT_RESULT,
-        BuiltinAlias {
-            region: Region::zero(),
-            vars: vec![
-                Located::at(Region::zero(), "a".into()),
-                Located::at(Region::zero(), "e".into()),
-            ],
-            typ: SolvedType::TagUnion(
-                vec![
-                    (TagName::Global("Ok".into()), vec![flex(TVAR1)]),
-                    (TagName::Global("Err".into()), vec![flex(TVAR2)]),
-                ],
-                Box::new(SolvedType::EmptyTagUnion),
-            ),
-        },
-    );
-
-    aliases
-}
 
 pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     let mut types = HashMap::with_capacity_and_hasher(NUM_BUILTIN_IMPORTS, default_hasher());
@@ -462,6 +347,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // atan : Float -> Float
     add_type(
         Symbol::NUM_ATAN,
+        top_level_function(vec![float_type()], Box::new(float_type())),
+    );
+
+    // acos : Float -> Float
+    add_type(
+        Symbol::NUM_ACOS,
+        top_level_function(vec![float_type()], Box::new(float_type())),
+    );
+
+    // asin : Float -> Float
+    add_type(
+        Symbol::NUM_ASIN,
         top_level_function(vec![float_type()], Box::new(float_type())),
     );
 
@@ -790,62 +687,4 @@ fn top_level_function(arguments: Vec<SolvedType>, ret: Box<SolvedType>) -> Solve
 #[inline(always)]
 fn closure(arguments: Vec<SolvedType>, closure_var: VarId, ret: Box<SolvedType>) -> SolvedType {
     SolvedType::Func(arguments, Box::new(SolvedType::Flex(closure_var)), ret)
-}
-
-#[inline(always)]
-fn float_type() -> SolvedType {
-    SolvedType::Apply(Symbol::NUM_FLOAT, Vec::new())
-}
-
-#[inline(always)]
-fn int_type() -> SolvedType {
-    SolvedType::Apply(Symbol::NUM_INT, Vec::new())
-}
-
-#[inline(always)]
-fn bool_type() -> SolvedType {
-    SolvedType::Apply(Symbol::BOOL_BOOL, Vec::new())
-}
-
-#[inline(always)]
-fn ordering_type() -> SolvedType {
-    // [ LT, EQ, GT ]
-    SolvedType::TagUnion(
-        vec![
-            (TagName::Global("GT".into()), vec![]),
-            (TagName::Global("EQ".into()), vec![]),
-            (TagName::Global("LT".into()), vec![]),
-        ],
-        Box::new(SolvedType::EmptyTagUnion),
-    )
-}
-
-#[inline(always)]
-fn str_type() -> SolvedType {
-    SolvedType::Apply(Symbol::STR_STR, Vec::new())
-}
-
-#[inline(always)]
-fn num_type(a: SolvedType) -> SolvedType {
-    SolvedType::Apply(Symbol::NUM_NUM, vec![a])
-}
-
-#[inline(always)]
-fn result_type(a: SolvedType, e: SolvedType) -> SolvedType {
-    SolvedType::Apply(Symbol::RESULT_RESULT, vec![a, e])
-}
-
-#[inline(always)]
-fn list_type(a: SolvedType) -> SolvedType {
-    SolvedType::Apply(Symbol::LIST_LIST, vec![a])
-}
-
-#[inline(always)]
-fn set_type(a: SolvedType) -> SolvedType {
-    SolvedType::Apply(Symbol::SET_SET, vec![a])
-}
-
-#[inline(always)]
-fn map_type(key: SolvedType, value: SolvedType) -> SolvedType {
-    SolvedType::Apply(Symbol::MAP_MAP, vec![key, value])
 }

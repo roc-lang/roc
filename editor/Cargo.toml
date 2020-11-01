@@ -49,13 +49,13 @@ tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded", 
 inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm10-0.release2" }
 target-lexicon = "0.10"
 winit = "0.22"
-wgpu = "0.5"
+wgpu = "0.6"
 glyph_brush = "0.7"
 log = "0.4"
 zerocopy = "0.3"
 env_logger = "0.7"
 futures = "0.3"
-wgpu_glyph = "0.9"
+wgpu_glyph = "0.10"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
@@ -63,3 +63,9 @@ maplit = "1.0.1"
 indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
+
+[build-dependencies]
+anyhow = "1.0"
+fs_extra = "1.1"
+glob = "0.3"
+shaderc = "0.6"

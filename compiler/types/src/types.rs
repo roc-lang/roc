@@ -984,6 +984,10 @@ pub enum PatternCategory {
 pub struct Alias {
     pub region: Region,
     pub vars: Vec<Located<(Lowercase, Variable)>>,
+
+    /// hidden type variables, like the closure variable in `a -> b`
+    pub hidden_variables: MutSet<Variable>,
+
     pub uniqueness: Option<boolean_algebra::Bool>,
     pub typ: Type,
 }

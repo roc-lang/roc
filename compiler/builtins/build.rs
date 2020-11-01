@@ -62,7 +62,7 @@ fn main() {
     let dest_bc = dest_bc_path.to_str().expect("Invalid dest bc path");
     println!("Compiling bitcode to: {}", dest_bc);
 
-    run_command("llvm-as", &[dest_ll, "-o", dest_bc]);
+    run_command("llvm-as-10", &[dest_ll, "-o", dest_bc]);
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={}", src_path_str);

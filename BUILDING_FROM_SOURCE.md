@@ -21,8 +21,25 @@ MacOS systems should already have `libunwind`, but other systems will need to in
 Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev`.)
 
 ### Zig
-We use a specific version of Zig, a build off the the commit `0088efc4b`. The latest tagged version of Zig, 0.6.0, doesn't include the feature to emit LLVM ir, which is a core feature of how we use Zig. To download this specific version, you can use the following links:
-* [linux](https://ziglang.org/builds/zig-linux-x86_64-0.6.0+0088efc4b.tar.xz)
+We use a specific version of Zig, a build off the the commit `0088efc4b`. The latest tagged version of Zig, 0.6.0, doesn't include the feature to emit LLVM ir, which is a core feature of how we use Zig. To download this specific version, you can:
+* use the following commands on Debian/Ubuntu (on other distros, steps should be essentially the same):
+  ```
+  cd /tmp
+  # download the files
+  wget https://ziglang.org/builds/zig-linux-x86_64-0.6.0+0088efc4b.tar.xz
+  # uncompress:
+  xz -d zig-linux-x86_64-0.6.0+0088efc4b.tar.xz
+  # untar:
+  tar xvf zig-linux-x86_64-0.6.0+0088efc4b.tar
+  # move the files into /opt:
+  sudo mkdir -p /opt/zig
+  sudo mv tar xvf zig-linux-x86_64-0.6.0+0088efc4b.tar/* /opt/zig/
+  ```
+  Then add `/opt/zig/` to your `PATH` (e.g. in `~/.bashrc`).
+  
+  Reload your `.bashrc` file: `source ~/.bashrc` and test that `zig` is
+  an available command.
+
 * [macOS](https://ziglang.org/builds/zig-macos-x86_64-0.6.0+0088efc4b.tar.xz)
 
 Alternatively, any recent master branch build should work. To install the latest master branch build you can use:

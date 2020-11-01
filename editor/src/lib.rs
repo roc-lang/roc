@@ -6,7 +6,7 @@
 // long-term unclear which allocations *need* to happen for compilation's sake
 // (e.g. recursive structures) versus those which were only added to appease clippy.
 //
-// Effectively optimizing data struture memory layout isn't a quick fix,
+// Effectively optimizing data structure memory layout isn't a quick fix,
 // and encouraging shortcuts here creates bad incentives. I would rather temporarily
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
@@ -41,34 +41,41 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
         .build(&event_loop)
         .unwrap();
 
-    let surface = wgpu::Surface::create(&window);
+    let instance = wgpu::Instance::new(wgpu::BackendBit::all());
+
+    let surface = unsafe { instance.create_surface(&window) };
 
     // Initialize GPU
     let (device, queue) = futures::executor::block_on(async {
-        let adapter = wgpu::Adapter::request(
-            &wgpu::RequestAdapterOptions {
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
-            },
-            wgpu::BackendBit::all(),
-        )
-        .await
-        .expect("Request adapter");
-
-        adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                extensions: wgpu::Extensions {
-                    anisotropic_filtering: false,
-                },
-                limits: wgpu::Limits { max_bind_groups: 1 },
             })
             .await
+            .expect("Request adapter");
+
+        adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    features: wgpu::Features::empty(),
+                    limits: wgpu::Limits::default(),
+                    shader_validation: false,
+                },
+                None,
+            )
+            .await
+            .expect("Request device")
     });
+
+    // Create staging belt and a local pool
+    let mut staging_belt = wgpu::util::StagingBelt::new(1024);
+    let mut local_pool = futures::executor::LocalPool::new();
+    let local_spawner = local_pool.spawner();
 
     // Prepare swap chain
     let render_format = wgpu::TextureFormat::Bgra8UnormSrgb;
     let mut size = window.inner_size();
-
     let mut swap_chain = device.create_swap_chain(
         &surface,
         &wgpu::SwapChainDescriptor {
@@ -79,6 +86,43 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
             present_mode: wgpu::PresentMode::Immediate,
         },
     );
+
+    // Prepare Triangle Pipeline
+    let triangle_vs_module =
+        device.create_shader_module(wgpu::include_spirv!("shaders/rect.vert.spv"));
+    let triangle_fs_module =
+        device.create_shader_module(wgpu::include_spirv!("shaders/rect.frag.spv"));
+
+    let triangle_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[],
+        push_constant_ranges: &[],
+    });
+
+    let triangle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: None,
+        layout: Some(&triangle_pipeline_layout),
+        vertex_stage: wgpu::ProgrammableStageDescriptor {
+            module: &triangle_vs_module,
+            entry_point: "main",
+        },
+        fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
+            module: &triangle_fs_module,
+            entry_point: "main",
+        }),
+        // Use the default rasterizer state: no culling, no depth bias
+        rasterization_state: None,
+        primitive_topology: wgpu::PrimitiveTopology::TriangleList,
+        color_states: &[wgpu::TextureFormat::Bgra8UnormSrgb.into()],
+        depth_stencil_state: None,
+        vertex_state: wgpu::VertexStateDescriptor {
+            index_format: wgpu::IndexFormat::Uint16,
+            vertex_buffers: &[],
+        },
+        sample_count: 1,
+        sample_mask: !0,
+        alpha_to_coverage_enabled: false,
+    });
 
     // Prepare glyph_brush
     let inconsolata =
@@ -167,25 +211,32 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 });
 
                 // Get the next frame
-                let frame = swap_chain.get_next_texture().expect("Get next frame");
+                let frame = swap_chain
+                    .get_current_frame()
+                    .expect("Failed to acquire next swap chain texture")
+                    .output;
 
                 // Clear frame
                 {
-                    let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
                             attachment: &frame.view,
                             resolve_target: None,
-                            load_op: wgpu::LoadOp::Clear,
-                            store_op: wgpu::StoreOp::Store,
-                            clear_color: wgpu::Color {
-                                r: 0.007,
-                                g: 0.007,
-                                b: 0.007,
-                                a: 1.0,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color {
+                                    r: 0.007,
+                                    g: 0.007,
+                                    b: 0.007,
+                                    a: 1.0,
+                                }),
+                                store: true,
                             },
                         }],
                         depth_stencil_attachment: None,
                     });
+
+                    render_pass.set_pipeline(&triangle_pipeline);
+                    render_pass.draw(0..3, 0..1);
                 }
 
                 glyph_brush.queue(Section {
@@ -208,10 +259,27 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
 
                 // Draw the text!
                 glyph_brush
-                    .draw_queued(&device, &mut encoder, &frame.view, size.width, size.height)
+                    .draw_queued(
+                        &device,
+                        &mut staging_belt,
+                        &mut encoder,
+                        &frame.view,
+                        size.width,
+                        size.height,
+                    )
                     .expect("Draw queued");
 
-                queue.submit(&[encoder.finish()]);
+                staging_belt.finish();
+                queue.submit(Some(encoder.finish()));
+
+                // Recall unused staging buffers
+                use futures::task::SpawnExt;
+
+                local_spawner
+                    .spawn(staging_belt.recall())
+                    .expect("Recall staging belt");
+
+                local_pool.run_until_stalled();
             }
             _ => {
                 *control_flow = winit::event_loop::ControlFlow::Wait;

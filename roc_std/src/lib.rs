@@ -382,6 +382,12 @@ impl RocStr {
     }
 }
 
+impl From<&str> for RocStr {
+    fn from(str: &str) -> Self {
+        Self::from_slice(str.as_bytes())
+    }
+}
+
 impl fmt::Debug for RocStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // RocStr { is_small_str: false, storage: Refcounted(3), elements: [ 1,2,3,4] }
