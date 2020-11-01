@@ -324,12 +324,7 @@ fn num_add_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
         annotation: None,
     };
 
-    let body = LetNonRec(
-        Box::new(def),
-        Box::new(no_region(cont)),
-        ret_var,
-        SendMap::default(),
-    );
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
 
     defn(
         symbol,

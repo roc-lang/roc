@@ -276,11 +276,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
             let module_ids = Arc::clone(&state.arc_modules);
             let module_ids = { (*module_ids).lock().clone() };
 
-            //            debug_assert!(parse
-            //                .imported_modules
-            //                .iter()
-            //                .all(|id| module_ids.get_name(*id).is_some()));
-
             let exposed_symbols = state
                 .exposed_symbols_by_module
                 .remove(&module_id)
@@ -312,63 +307,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
             }
         }
 
-        //        Phase::ParseAndGenerateConstraints => {
-        //            let header = state.module_cache.headers.remove(&module_id).unwrap();
-        //            let module_id = header.module_id;
-        //            let deps_by_name = &header.deps_by_name;
-        //            let num_deps = deps_by_name.len();
-        //            let mut dep_idents: IdentIdsByModule = IdentIds::exposed_builtins(num_deps);
-        //
-        //            let State {
-        //                ident_ids_by_module,
-        //                ..
-        //            } = &state;
-        //
-        //            {
-        //                let ident_ids_by_module = (*ident_ids_by_module).lock();
-        //
-        //                // Populate dep_idents with each of their IdentIds,
-        //                // which we'll need during canonicalization to translate
-        //                // identifier strings into IdentIds, which we need to build Symbols.
-        //                // We only include the modules we care about (the ones we import).
-        //                //
-        //                // At the end of this loop, dep_idents contains all the information to
-        //                // resolve a symbol from another module: if it's in here, that means
-        //                // we have both imported the module and the ident was exported by that mdoule.
-        //                for dep_id in header.deps_by_name.values() {
-        //                    // We already verified that these are all present,
-        //                    // so unwrapping should always succeed here.
-        //                    let idents = ident_ids_by_module.get(&dep_id).unwrap();
-        //
-        //                    dep_idents.insert(*dep_id, idents.clone());
-        //                }
-        //            }
-        //
-        //            // Clone the module_ids we'll need for canonicalization.
-        //            // This should be small, and cloning it should be quick.
-        //            // We release the lock as soon as we're done cloning, so we don't have
-        //            // to lock the global module_ids while canonicalizing any given module.
-        //            let module_ids = Arc::clone(&state.arc_modules);
-        //            let module_ids = { (*module_ids).lock().clone() };
-        //
-        //            debug_assert!(header
-        //                .imported_modules
-        //                .iter()
-        //                .all(|id| module_ids.get_name(*id).is_some()));
-        //
-        //            let exposed_symbols = state
-        //                .exposed_symbols_by_module
-        //                .remove(&module_id)
-        //                .expect("Could not find listener ID in exposed_symbols_by_module");
-        //
-        //            BuildTask::ParseAndConstrain {
-        //                header,
-        //                mode: state.stdlib.mode,
-        //                module_ids,
-        //                dep_idents,
-        //                exposed_symbols,
-        //            }
-        //        }
         Phase::SolveTypes => {
             let constrained = state.module_cache.constrained.remove(&module_id).unwrap();
 
@@ -564,18 +502,6 @@ enum Msg<'a> {
         canonicalization_problems: Vec<roc_problem::can::Problem>,
         module_docs: ModuleDocumentation,
     },
-    //    Constrained {
-    //        module: Module,
-    //        declarations: Vec<Declaration>,
-    //        imported_modules: MutSet<ModuleId>,
-    //        src: &'a str,
-    //        constraint: Constraint,
-    //        ident_ids: IdentIds,
-    //        problems: Vec<roc_problem::can::Problem>,
-    //        var_store: VarStore,
-    //        module_timing: ModuleTiming,
-    //        module_docs: ModuleDocumentation,
-    //    },
     SolvedTypes {
         src: &'a str,
         module_id: ModuleId,
@@ -772,7 +698,6 @@ enum BuildTask<'a> {
         module: Module,
         ident_ids: IdentIds,
         imported_symbols: Vec<Import>,
-        imported_aliases: MutMap<Symbol, Alias>,
         module_timing: ModuleTiming,
         constraint: Constraint,
         var_store: VarStore,
@@ -2004,7 +1929,7 @@ impl<'a> BuildTask<'a> {
         // (which would be more expensive for the main thread).
         let ConstrainableImports {
             imported_symbols,
-            imported_aliases,
+            imported_aliases: _,
             unused_imports,
         } = pre_constrain_imports(
             home,
@@ -2027,7 +1952,6 @@ impl<'a> BuildTask<'a> {
             module,
             ident_ids,
             imported_symbols,
-            imported_aliases,
             constraint,
             var_store,
             src,
@@ -2043,7 +1967,6 @@ fn run_solve<'a>(
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
     imported_symbols: Vec<Import>,
-    imported_aliases: MutMap<Symbol, Alias>,
     constraint: Constraint,
     mut var_store: VarStore,
     decls: Vec<Declaration>,
@@ -2054,12 +1977,7 @@ fn run_solve<'a>(
 
     // Finish constraining the module by wrapping the existing Constraint
     // in the ones we just computed. We can do this off the main thread.
-    let constraint = constrain_imports(
-        imported_symbols,
-        imported_aliases,
-        constraint,
-        &mut var_store,
-    );
+    let constraint = constrain_imports(imported_symbols, constraint, &mut var_store);
 
     let constrain_end = SystemTime::now();
 
@@ -2535,7 +2453,6 @@ fn run_task<'a>(
             module,
             module_timing,
             imported_symbols,
-            imported_aliases,
             constraint,
             var_store,
             ident_ids,
@@ -2546,7 +2463,6 @@ fn run_task<'a>(
             ident_ids,
             module_timing,
             imported_symbols,
-            imported_aliases,
             constraint,
             var_store,
             declarations,

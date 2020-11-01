@@ -9,7 +9,7 @@ use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, SendMap, SendSet};
 use roc_constrain::expr::constrain_expr;
-use roc_constrain::module::{constrain_imported_values, load_builtin_aliases, Import};
+use roc_constrain::module::{constrain_imported_values, Import};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_parse::ast::{self, Attempting};
 use roc_parse::blankspace::space0_before;

@@ -307,7 +307,7 @@ mod test_can {
 
     fn get_closure(expr: &Expr, i: usize) -> roc_can::expr::Recursive {
         match expr {
-            LetRec(assignments, body, _, _) => {
+            LetRec(assignments, body, _) => {
                 match &assignments.get(i).map(|def| &def.loc_expr.value) {
                     Some(Closure {
                         recursive: recursion,
@@ -325,7 +325,7 @@ mod test_can {
                     }
                 }
             }
-            LetNonRec(def, body, _, _) => {
+            LetNonRec(def, body, _) => {
                 if i > 0 {
                     // recurse in the body (not the def!)
                     get_closure(&body.value, i - 1)

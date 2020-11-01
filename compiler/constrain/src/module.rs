@@ -2,12 +2,12 @@ use crate::expr::constrain_decls;
 use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::{Constraint, LetConstraint};
 use roc_can::module::ModuleOutput;
-use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
+use roc_collections::all::{MutMap, MutSet, SendMap};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
-use roc_types::solved_types::{BuiltinAlias, FreeVars, SolvedType};
-use roc_types::subs::{VarId, VarStore, Variable};
-use roc_types::types::{Alias, Problem, Type};
+use roc_types::solved_types::{FreeVars, SolvedType};
+use roc_types::subs::{VarStore, Variable};
+use roc_types::types::{Alias, Problem};
 
 pub type SubsByModule = MutMap<ModuleId, ExposedModuleTypes>;
 
@@ -39,8 +39,8 @@ pub fn constrain_module(
     let decls = &module.declarations;
 
     match mode {
-        Standard => constrain_decls(home, decls, send_aliases),
-        Uniqueness => crate::uniq::constrain_decls(home, decls, send_aliases, var_store),
+        Standard => constrain_decls(home, decls),
+        Uniqueness => crate::uniq::constrain_decls(home, decls, var_store),
     }
 }
 
@@ -106,136 +106,15 @@ pub fn constrain_imported_values(
             rigid_vars,
             flex_vars: Vec::new(),
             def_types,
-            def_aliases: SendMap::default(),
             defs_constraint: True,
             ret_constraint: body_con,
         })),
     )
 }
 
-pub fn load_builtin_aliases<I>(
-    aliases: I,
-    body_con: Constraint,
-    var_store: &mut VarStore,
-) -> Constraint
-where
-    I: IntoIterator<Item = (Symbol, BuiltinAlias)>,
-{
-    use Constraint::*;
-
-    // Load all the given builtin aliases.
-    let mut def_aliases = SendMap::default();
-
-    for (symbol, builtin_alias) in aliases {
-        let mut free_vars = FreeVars::default();
-
-        let actual =
-            roc_types::solved_types::to_type(&builtin_alias.typ, &mut free_vars, var_store);
-
-        let mut vars = Vec::with_capacity(builtin_alias.vars.len());
-
-        for (loc_lowercase, index) in builtin_alias.vars.iter().zip(1..) {
-            let var = if let Some(result) = free_vars.unnamed_vars.get(&VarId::from_u32(index)) {
-                result
-            } else {
-                panic!(
-                    "var_id {:?} was not instantiated in the body of {:?} : {:?} (is it phantom?)",
-                    index, symbol, &builtin_alias
-                )
-            };
-
-            vars.push(Located::at(
-                loc_lowercase.region,
-                (loc_lowercase.value.clone(), *var),
-            ));
-        }
-
-        let mut hidden_variables = MutSet::default();
-        hidden_variables.extend(actual.variables());
-
-        for loc_var in vars.iter() {
-            hidden_variables.remove(&loc_var.value.1);
-        }
-
-        let alias = Alias {
-            vars,
-            hidden_variables,
-            region: builtin_alias.region,
-            uniqueness: None,
-            typ: actual,
-        };
-
-        def_aliases.insert(symbol, alias);
-    }
-
-    Let(Box::new(LetConstraint {
-        rigid_vars: Vec::new(),
-        flex_vars: Vec::new(),
-        def_types: SendMap::default(),
-        def_aliases,
-        defs_constraint: True,
-        ret_constraint: body_con,
-    }))
-}
-
-pub fn constrain_imported_aliases(
-    aliases: MutMap<Symbol, Alias>,
-    body_con: Constraint,
-    var_store: &mut VarStore,
-) -> Constraint {
-    use Constraint::*;
-    let mut def_aliases = SendMap::default();
-
-    for (symbol, imported_alias) in aliases {
-        let mut vars = Vec::with_capacity(imported_alias.vars.len());
-        let mut substitution = ImMap::default();
-
-        for Located {
-            region,
-            value: (lowercase, old_var),
-        } in &imported_alias.vars
-        {
-            let new_var = var_store.fresh();
-            vars.push(Located::at(*region, (lowercase.clone(), new_var)));
-            substitution.insert(*old_var, Type::Variable(new_var));
-        }
-
-        let mut actual = imported_alias.typ.clone();
-
-        actual.substitute(&substitution);
-
-        let mut hidden_variables = MutSet::default();
-        hidden_variables.extend(actual.variables());
-
-        for loc_var in vars.iter() {
-            hidden_variables.remove(&loc_var.value.1);
-        }
-
-        let alias = Alias {
-            vars,
-            hidden_variables,
-            region: imported_alias.region,
-            uniqueness: imported_alias.uniqueness,
-            typ: actual,
-        };
-
-        def_aliases.insert(symbol, alias);
-    }
-
-    Let(Box::new(LetConstraint {
-        rigid_vars: Vec::new(),
-        flex_vars: Vec::new(),
-        def_types: SendMap::default(),
-        def_aliases,
-        defs_constraint: True,
-        ret_constraint: body_con,
-    }))
-}
-
 /// Run pre_constrain_imports to get imported_symbols and imported_aliases.
 pub fn constrain_imports(
     imported_symbols: Vec<Import>,
-    imported_aliases: MutMap<Symbol, Alias>,
     constraint: Constraint,
     var_store: &mut VarStore,
 ) -> Constraint {
@@ -247,7 +126,7 @@ pub fn constrain_imports(
     //        output.ftv.insert(var, format!("internal_{:?}", var).into());
     //    }
 
-    constrain_imported_aliases(imported_aliases, constraint, var_store)
+    constraint
 }
 
 pub struct ConstrainableImports {

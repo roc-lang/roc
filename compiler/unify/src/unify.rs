@@ -826,9 +826,6 @@ fn unify_shared_tags(
             let mut problems = Vec::new();
 
             {
-                // we always unify NonRecursive with Recursive, so this should never happen
-                //debug_assert_ne!(Some(actual), recursion_var);
-
                 problems.extend(unify_pool(subs, pool, actual, expected));
             }
 
@@ -1151,9 +1148,7 @@ fn unify_recursion(
         }
 
         Structure(_) => {
-            // keep the recursion var around
-            // merge(subs, ctx, FlexVar(opt_name.clone()))
-
+            // unify the structure variable with this Structure
             unify_pool(subs, pool, structure, ctx.second)
         }
 
