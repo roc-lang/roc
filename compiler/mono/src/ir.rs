@@ -2044,12 +2044,7 @@ pub fn with_hole<'a>(
                 match layout_cache.from_var(env.arena, variable, env.subs) {
                     Err(e) => panic!("invalid layout {:?}", e),
                     Ok(Layout::FunctionPointer(_, _)) => {
-                        specialize_imported_symbol(
-                            env,
-                            &mut procs.externals_we_need,
-                            symbol,
-                            variable,
-                        );
+                        add_needed_external(procs, env, variable, symbol);
                     }
                     Ok(_) => {
                         // this is a 0-arity thunk
@@ -4368,22 +4363,22 @@ where
     result
 }
 
-fn specialize_imported_symbol<'a>(
+fn add_needed_external<'a>(
+    procs: &mut Procs<'a>,
     env: &mut Env<'a, '_>,
-    externals_we_need: &mut MutMap<ModuleId, ExternalSpecializations>,
-    proc_name: Symbol,
     fn_var: Variable,
+    name: Symbol,
 ) {
-    // call of a function that is not not in this module
+    // call of a function that is not in this module
     use std::collections::hash_map::Entry::{Occupied, Vacant};
 
-    let existing = match externals_we_need.entry(proc_name.module_id()) {
+    let existing = match procs.externals_we_need.entry(name.module_id()) {
         Vacant(entry) => entry.insert(ExternalSpecializations::default()),
         Occupied(entry) => entry.into_mut(),
     };
 
     let solved_type = SolvedType::from_var(env.subs, fn_var);
-    existing.insert(proc_name, solved_type);
+    existing.insert(name, solved_type);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4473,12 +4468,7 @@ fn call_by_name<'a>(
                         // builtins are currently (re)defined in each module, so not really imported
                         let is_builtin = proc_name.is_builtin();
                         if is_imported && !is_builtin {
-                            specialize_imported_symbol(
-                                env,
-                                &mut procs.externals_we_need,
-                                proc_name,
-                                fn_var,
-                            );
+                            add_needed_external(procs, env, original_fn_var, proc_name);
                         } else {
                             // register the pending specialization, so this gets code genned later
                             add_pending(
@@ -4570,14 +4560,7 @@ fn call_by_name<'a>(
                             }
 
                             None if assigned.module_id() != proc_name.module_id() => {
-                                let fn_var = original_fn_var;
-
-                                specialize_imported_symbol(
-                                    env,
-                                    &mut procs.externals_we_need,
-                                    proc_name,
-                                    fn_var,
-                                );
+                                add_needed_external(procs, env, original_fn_var, proc_name);
 
                                 let call = Expr::FunctionCall {
                                     call_type: CallType::ByName(proc_name),
