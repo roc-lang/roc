@@ -2,6 +2,8 @@
 #![no_std]
 use core::fmt;
 
+pub mod alloca;
+
 // A list of C functions that are being imported
 extern "C" {
     pub fn printf(format: *const u8, ...) -> i32;
