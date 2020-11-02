@@ -98,6 +98,8 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_POW_INT => num_pow_int,
         Symbol::NUM_FLOOR => num_floor,
         Symbol::NUM_ATAN => num_atan,
+        Symbol::NUM_ACOS => num_acos,
+        Symbol::NUM_ASIN => num_asin,
     }
 }
 
@@ -768,6 +770,46 @@ fn num_atan(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     let body = RunLowLevel {
         op: LowLevel::NumAtan,
+        args: vec![(arg_float_var, Var(Symbol::ARG_1))],
+        ret_var: ret_float_var,
+    };
+
+    defn(
+        symbol,
+        vec![(arg_float_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_float_var,
+    )
+}
+
+/// Num.acos : Float -> Float
+fn num_acos(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let arg_float_var = var_store.fresh();
+    let ret_float_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumAcos,
+        args: vec![(arg_float_var, Var(Symbol::ARG_1))],
+        ret_var: ret_float_var,
+    };
+
+    defn(
+        symbol,
+        vec![(arg_float_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_float_var,
+    )
+}
+
+/// Num.asin : Float -> Float
+fn num_asin(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let arg_float_var = var_store.fresh();
+    let ret_float_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumAsin,
         args: vec![(arg_float_var, Var(Symbol::ARG_1))],
         ret_var: ret_float_var,
     };

@@ -47,6 +47,8 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
         Nested(alias @ Alias { .. }) => Nested(alias),
         ann @ Annotation(_, _) => Nested(ann),
         Nested(ann @ Annotation(_, _)) => Nested(ann),
+        Nested(NotYetImplemented(s)) => todo!("{}", s),
+        NotYetImplemented(s) => todo!("{}", s),
     }
 }
 
