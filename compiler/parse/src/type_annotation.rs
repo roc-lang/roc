@@ -4,8 +4,8 @@ use crate::expr::{global_tag, private_tag};
 use crate::ident::join_module_parts;
 use crate::keyword;
 use crate::parser::{
-    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, unexpected, Either,
-    ParseResult, Parser, State,
+    allocated, ascii_char, ascii_string, not, optional, peek_utf8_char, unexpected, Either, Fail,
+    FailReason, ParseResult, Parser, State,
 };
 use bumpalo::collections::string::String;
 use bumpalo::collections::vec::Vec;
@@ -239,7 +239,13 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
                 Ok((first, state))
             } else {
                 // e.g. `Int,Int` without an arrow and return type
-                panic!("Invalid function signature")
+                Err((
+                    Fail {
+                        attempting: state.attempting,
+                        reason: FailReason::NotYetImplemented("TODO: Decide the correct error to return for 'Invalid function signature'".to_string()),
+                    },
+                    state,
+                ))
             }
         }
     }

@@ -350,6 +350,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![float_type()], Box::new(float_type())),
     );
 
+    // acos : Float -> Float
+    add_type(
+        Symbol::NUM_ACOS,
+        top_level_function(vec![float_type()], Box::new(float_type())),
+    );
+
+    // asin : Float -> Float
+    add_type(
+        Symbol::NUM_ASIN,
+        top_level_function(vec![float_type()], Box::new(float_type())),
+    );
+
     // Bool module
 
     // and : Bool, Bool -> Bool
