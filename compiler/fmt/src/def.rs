@@ -20,6 +20,7 @@ impl<'a> Formattable<'a> for Def<'a> {
                 spaces.iter().any(|s| is_comment(s)) || sub_def.is_multiline()
             }
             Nested(def) => def.is_multiline(),
+            NotYetImplemented(s) => todo!("{}", s),
         }
     }
 
@@ -66,6 +67,7 @@ impl<'a> Formattable<'a> for Def<'a> {
                 fmt_spaces(buf, spaces.iter(), indent);
             }
             Nested(def) => def.format(buf, indent),
+            NotYetImplemented(s) => todo!("{}", s),
         }
     }
 }
