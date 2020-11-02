@@ -4275,6 +4275,24 @@ where
     result
 }
 
+fn specialize_imported_symbol<'a>(
+    env: &mut Env<'a, '_>,
+    externals_we_need: &mut MutMap<ModuleId, ExternalSpecializations>,
+    proc_name: Symbol,
+    fn_var: Variable,
+) {
+    // call of a function that is not not in this module
+    use std::collections::hash_map::Entry::{Occupied, Vacant};
+
+    let existing = match externals_we_need.entry(proc_name.module_id()) {
+        Vacant(entry) => entry.insert(ExternalSpecializations::default()),
+        Occupied(entry) => entry.into_mut(),
+    };
+
+    let solved_type = SolvedType::from_var(env.subs, fn_var);
+    existing.insert(proc_name, solved_type);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn call_by_name<'a>(
     env: &mut Env<'a, '_>,
@@ -4287,6 +4305,8 @@ fn call_by_name<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     let original_fn_var = fn_var;
+
+    println!("call by name of {:?}", proc_name);
 
     // Register a pending_specialization for this function
     match layout_cache.from_var(env.arena, fn_var, env.subs) {
@@ -4358,13 +4378,22 @@ fn call_by_name<'a>(
                 // exactly once.
                 match &mut procs.pending_specializations {
                     Some(pending_specializations) => {
-                        // register the pending specialization, so this gets code genned later
-                        add_pending(
-                            pending_specializations,
-                            proc_name,
-                            full_layout.clone(),
-                            pending,
-                        );
+                        if assigned.module_id() != proc_name.module_id() {
+                            specialize_imported_symbol(
+                                env,
+                                &mut procs.externals_we_need,
+                                proc_name,
+                                fn_var,
+                            );
+                        } else {
+                            // register the pending specialization, so this gets code genned later
+                            add_pending(
+                                pending_specializations,
+                                proc_name,
+                                full_layout.clone(),
+                                pending,
+                            );
+                        }
 
                         let call = Expr::FunctionCall {
                             call_type: CallType::ByName(proc_name),
@@ -4449,19 +4478,12 @@ fn call_by_name<'a>(
                             None if assigned.module_id() != proc_name.module_id() => {
                                 let fn_var = original_fn_var;
 
-                                // call of a function that is not not in this module
-                                use std::collections::hash_map::Entry::{Occupied, Vacant};
-
-                                let existing =
-                                    match procs.externals_we_need.entry(proc_name.module_id()) {
-                                        Vacant(entry) => {
-                                            entry.insert(ExternalSpecializations::default())
-                                        }
-                                        Occupied(entry) => entry.into_mut(),
-                                    };
-
-                                let solved_type = SolvedType::from_var(env.subs, fn_var);
-                                existing.insert(proc_name, solved_type);
+                                specialize_imported_symbol(
+                                    env,
+                                    &mut procs.externals_we_need,
+                                    proc_name,
+                                    fn_var,
+                                );
 
                                 let call = Expr::FunctionCall {
                                     call_type: CallType::ByName(proc_name),
