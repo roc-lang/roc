@@ -52,11 +52,6 @@ jobs:
           args: -- -D warnings
 
       - uses: actions-rs/cargo@v1
-        name: cargo test
-        with:
-          command: test
-
-      - uses: actions-rs/cargo@v1
         name: cargo test -- --ignored
         continue-on-error: true
         with:
