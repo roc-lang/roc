@@ -1780,6 +1780,7 @@ impl<'a> FunctionLayouts<'a> {
 pub fn with_hole<'a>(
     env: &mut Env<'a, '_>,
     can_expr: roc_can::expr::Expr,
+    variable: Variable,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
@@ -1856,7 +1857,15 @@ pub fn with_hole<'a>(
                         return_type,
                     );
 
-                    return with_hole(env, cont.value, procs, layout_cache, assigned, hole);
+                    return with_hole(
+                        env,
+                        cont.value,
+                        variable,
+                        procs,
+                        layout_cache,
+                        assigned,
+                        hole,
+                    );
                 }
             }
 
@@ -1868,6 +1877,7 @@ pub fn with_hole<'a>(
                         return with_hole(
                             env,
                             def.loc_expr.value,
+                            def.expr_var,
                             procs,
                             layout_cache,
                             assigned,
@@ -1878,7 +1888,15 @@ pub fn with_hole<'a>(
                 }
 
                 // continue with the default path
-                let mut stmt = with_hole(env, cont.value, procs, layout_cache, assigned, hole);
+                let mut stmt = with_hole(
+                    env,
+                    cont.value,
+                    variable,
+                    procs,
+                    layout_cache,
+                    assigned,
+                    hole,
+                );
 
                 // a variable is aliased
                 if let roc_can::expr::Expr::Var(original) = def.loc_expr.value {
@@ -1889,6 +1907,7 @@ pub fn with_hole<'a>(
                     with_hole(
                         env,
                         def.loc_expr.value,
+                        def.expr_var,
                         procs,
                         layout_cache,
                         symbol,
@@ -1918,7 +1937,15 @@ pub fn with_hole<'a>(
                 }
 
                 // convert the continuation
-                let mut stmt = with_hole(env, cont.value, procs, layout_cache, assigned, hole);
+                let mut stmt = with_hole(
+                    env,
+                    cont.value,
+                    variable,
+                    procs,
+                    layout_cache,
+                    assigned,
+                    hole,
+                );
 
                 let outer_symbol = env.unique_symbol();
                 stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
@@ -1928,6 +1955,7 @@ pub fn with_hole<'a>(
                 with_hole(
                     env,
                     def.loc_expr.value,
+                    def.expr_var,
                     procs,
                     layout_cache,
                     outer_symbol,
@@ -1974,7 +2002,15 @@ pub fn with_hole<'a>(
                 unreachable!("recursive value does not have Identifier pattern")
             }
 
-            with_hole(env, cont.value, procs, layout_cache, assigned, hole)
+            with_hole(
+                env,
+                cont.value,
+                variable,
+                procs,
+                layout_cache,
+                assigned,
+                hole,
+            )
         }
         Var(symbol) => {
             if procs.module_thunks.contains(&symbol) {
@@ -2139,12 +2175,9 @@ pub fn with_hole<'a>(
             let sorted_fields = crate::layout::sort_record_fields(env.arena, record_var, env.subs);
 
             let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
-            let mut field_layouts = Vec::with_capacity_in(fields.len(), env.arena);
             let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
 
-            for (label, layout) in sorted_fields.into_iter() {
-                field_layouts.push(layout);
-
+            for (label, _) in sorted_fields.into_iter() {
                 // TODO how should function pointers be handled here?
                 match fields.remove(&label) {
                     Some(field) => match can_reuse_symbol(procs, &field.loc_expr.value) {
@@ -2178,6 +2211,7 @@ pub fn with_hole<'a>(
                     stmt = with_hole(
                         env,
                         field.loc_expr.value,
+                        field.var,
                         procs,
                         layout_cache,
                         *symbol,
@@ -2214,6 +2248,7 @@ pub fn with_hole<'a>(
                 let mut stmt = with_hole(
                     env,
                     final_else.value,
+                    branch_var,
                     procs,
                     layout_cache,
                     assigned,
@@ -2225,6 +2260,7 @@ pub fn with_hole<'a>(
                     let then = with_hole(
                         env,
                         loc_then.value,
+                        branch_var,
                         procs,
                         layout_cache,
                         assigned,
@@ -2245,6 +2281,7 @@ pub fn with_hole<'a>(
                     stmt = with_hole(
                         env,
                         loc_cond.value,
+                        cond_var,
                         procs,
                         layout_cache,
                         branching_symbol,
@@ -2263,6 +2300,7 @@ pub fn with_hole<'a>(
                 let mut stmt = with_hole(
                     env,
                     final_else.value,
+                    branch_var,
                     procs,
                     layout_cache,
                     assigned_in_jump,
@@ -2274,6 +2312,7 @@ pub fn with_hole<'a>(
                     let then = with_hole(
                         env,
                         loc_then.value,
+                        branch_var,
                         procs,
                         layout_cache,
                         assigned_in_jump,
@@ -2294,6 +2333,7 @@ pub fn with_hole<'a>(
                     stmt = with_hole(
                         env,
                         loc_cond.value,
+                        cond_var,
                         procs,
                         layout_cache,
                         branching_symbol,
@@ -2945,6 +2985,7 @@ pub fn with_hole<'a>(
                             result = with_hole(
                                 env,
                                 loc_expr.value,
+                                fn_var,
                                 procs,
                                 layout_cache,
                                 function_symbol,
@@ -3065,6 +3106,7 @@ pub fn from_can<'a>(
                 stmt = with_hole(
                     env,
                     loc_cond.value,
+                    cond_var,
                     procs,
                     layout_cache,
                     branching_symbol,
@@ -3268,6 +3310,7 @@ pub fn from_can<'a>(
                         return with_hole(
                             env,
                             def.loc_expr.value,
+                            def.expr_var,
                             procs,
                             layout_cache,
                             *symbol,
@@ -3285,7 +3328,15 @@ pub fn from_can<'a>(
                     env.arena
                         .alloc(from_can(env, variable, cont.value, procs, layout_cache));
 
-                with_hole(env, def.loc_expr.value, procs, layout_cache, symbol, hole)
+                with_hole(
+                    env,
+                    def.loc_expr.value,
+                    def.expr_var,
+                    procs,
+                    layout_cache,
+                    symbol,
+                    hole,
+                )
             } else {
                 let context = crate::exhaustive::Context::BadDestruct;
                 match crate::exhaustive::check(
@@ -3321,6 +3372,7 @@ pub fn from_can<'a>(
                     with_hole(
                         env,
                         def.loc_expr.value,
+                        def.expr_var,
                         procs,
                         layout_cache,
                         outer_symbol,
@@ -3333,7 +3385,7 @@ pub fn from_can<'a>(
         _ => {
             let symbol = env.unique_symbol();
             let hole = env.arena.alloc(Stmt::Ret(symbol));
-            with_hole(env, can_expr, procs, layout_cache, symbol, hole)
+            with_hole(env, can_expr, variable, procs, layout_cache, symbol, hole)
         }
     }
 }
@@ -3459,7 +3511,7 @@ fn from_can_when<'a>(
                     let arguments = bumpalo::vec![in env.arena; symbol].into_bump_slice();
                     let jump = env.arena.alloc(Stmt::Jump(id, arguments));
 
-                    with_hole(env, can_expr, procs, layout_cache, symbol, jump)
+                    with_hole(env, can_expr, expr_var, procs, layout_cache, symbol, jump)
                 }
             };
 
@@ -3469,7 +3521,15 @@ fn from_can_when<'a>(
                 let symbol = env.unique_symbol();
                 let jump = env.arena.alloc(Stmt::Jump(id, env.arena.alloc([symbol])));
 
-                let guard_stmt = with_hole(env, loc_expr.value, procs, layout_cache, symbol, jump);
+                let guard_stmt = with_hole(
+                    env,
+                    loc_expr.value,
+                    cond_var,
+                    procs,
+                    layout_cache,
+                    symbol,
+                    jump,
+                );
 
                 match store_pattern(env, procs, layout_cache, &pattern, cond_symbol, guard_stmt) {
                     Ok(new_guard_stmt) => (
@@ -4012,9 +4072,11 @@ fn store_record_destruct<'a>(
             );
         }
         DestructType::Optional(expr) => {
+            let variable = panic!();
             stmt = with_hole(
                 env,
                 expr.clone(),
+                variable,
                 procs,
                 layout_cache,
                 destruct.symbol,
@@ -4245,6 +4307,7 @@ fn assign_to_symbol<'a>(
         with_hole(
             env,
             loc_arg.value,
+            arg_var,
             procs,
             layout_cache,
             symbol,
