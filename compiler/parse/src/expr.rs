@@ -1083,11 +1083,12 @@ fn loc_ident_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>
                     } else {
                         format!("{}.{}", module_name, parts.join("."))
                     };
-
                     Ok((
                         Located {
                             region: loc_ident.region,
-                            value: Pattern::Malformed(arena.alloc(malformed_str)),
+                            value: Pattern::Malformed(
+                                String::from_str_in(&malformed_str, &arena).into_bump_str(),
+                            ),
                         },
                         state,
                     ))
