@@ -52,6 +52,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::BOOL_NOT => bool_not,
         Symbol::STR_CONCAT => str_concat,
         Symbol::STR_IS_EMPTY => str_is_empty,
+        Symbol::STR_COUNT_GRAPHEMES => str_count_graphemes,
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
         Symbol::LIST_SET => list_set,
@@ -924,7 +925,7 @@ fn str_concat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Str.isEmpty : List * -> Bool
+/// Str.isEmpty : Str -> Bool
 fn str_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let str_var = var_store.fresh();
     let bool_var = var_store.fresh();
@@ -941,6 +942,26 @@ fn str_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         bool_var,
+    )
+}
+
+/// Str.countGraphemes : Str -> Int
+fn str_count_graphemes(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let str_var = var_store.fresh();
+    let int_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrCountGraphemes,
+        args: vec![(str_var, Var(Symbol::ARG_1))],
+        ret_var: int_var,
+    };
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        int_var,
     )
 }
 

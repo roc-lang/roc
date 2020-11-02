@@ -4,7 +4,7 @@ use crate::llvm::build_list::{
     list_get_unsafe, list_join, list_keep_if, list_len, list_map, list_prepend, list_repeat,
     list_reverse, list_set, list_single, list_walk_right,
 };
-use crate::llvm::build_str::{str_concat, str_len, CHAR_LAYOUT};
+use crate::llvm::build_str::{str_concat, str_count_graphemes, str_len, CHAR_LAYOUT};
 use crate::llvm::compare::{build_eq, build_neq};
 use crate::llvm::convert::{
     basic_type_from_layout, block_of_memory, collection, get_fn_type, get_ptr_type, ptr_int,
@@ -2526,6 +2526,12 @@ fn run_low_level<'a, 'ctx, 'env>(
                 "str_len_is_zero",
             );
             BasicValueEnum::IntValue(is_zero)
+        }
+        StrCountGraphemes => {
+            // Str.countGraphemes : Str -> Int
+            debug_assert_eq!(args.len(), 1);
+
+            str_count_graphemes(env, scope, parent, args[0])
         }
         ListLen => {
             // List.len : List * -> Int

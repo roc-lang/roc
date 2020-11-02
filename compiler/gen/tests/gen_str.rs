@@ -202,4 +202,9 @@ mod gen_str {
     fn empty_str_is_empty() {
         assert_evals_to!(r#"Str.isEmpty """#, true, bool);
     }
+
+    #[test]
+    fn str_count_graphemes() {
+        assert_evals_to!(r#"Str.countGraphemes "6🤔å🤔e¥🤔çpp""#, 10, usize);
+    }
 }

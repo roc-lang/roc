@@ -1,10 +1,14 @@
 const std = @import("std");
 const math = std.math;
-const expect = std.testing.expect;
+const unicode = std.unicode;
+const testing = std.testing;
+const expectEqual = testing.expectEqual;
+const expect = testing.expect;
 
 const roc_builtins_namespace = "roc_builtins";
+
+// MATH
 const math_namespace = roc_builtins_namespace ++ ".math";
-const str_namespace = roc_builtins_namespace ++ ".str";
 
 comptime { @export(atan, .{ .name = math_namespace ++ ".atan", .linkage = .Strong  }); }
 fn atan(num: f64) callconv(.C) f64 {
@@ -23,7 +27,7 @@ fn powInt(base: i64, exp: i64) callconv(.C) i64 {
 
 comptime { @export(acos, .{ .name = math_namespace ++ ".acos", .linkage = .Strong  }); }
 fn acos(num: f64) callconv(.C) f64 {
-    return math.acos(num);    
+    return math.acos(num);
 }
 
 comptime { @export(asin, .{ .name = math_namespace ++ ".asin", .linkage = .Strong  }); }
@@ -31,6 +35,8 @@ fn asin(num: f64) callconv(.C) f64 {
     return math.asin(num);
 }
 
+// STR
+const str_namespace = roc_builtins_namespace ++ ".str";
 
 // Str.split
 
@@ -45,7 +51,7 @@ const RocStr = struct {
         };
     }
 
-    pub fn eq(self: RocStr, other: RocStr) bool {
+    pub fn eq(self: *RocStr, other: RocStr) bool {
         if (self.str_len != other.str_len) {
             return false;
         }
@@ -71,7 +77,7 @@ const RocStr = struct {
         const str2_ptr: [*]u8 = &str2;
         var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
-        expect(RocStr.eq(roc_str1, roc_str2));
+        expect(roc_str1.eq(roc_str2));
     }
 
     test "RocStr.eq: not equal different length" {
@@ -85,7 +91,7 @@ const RocStr = struct {
         const str2_ptr: [*]u8 = &str2;
         var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
-        expect(!RocStr.eq(roc_str1, roc_str2));
+        expect(!roc_str1.eq(roc_str2));
     }
 
     test "RocStr.eq: not equal same length" {
@@ -99,7 +105,7 @@ const RocStr = struct {
         const str2_ptr: [*]u8 = &str2;
         var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
-        expect(!RocStr.eq(roc_str1, roc_str2));
+        expect(!roc_str1.eq(roc_str2));
     }
 };
 
@@ -175,8 +181,8 @@ test "strSplitInPlace: no delimiter" {
         RocStr.init(str_ptr, 3),
     };
 
-    expect(array.len == expected.len);
-    expect(RocStr.eq(array[0], expected[0]));
+    expectEqual(array.len, expected.len);
+    expect(array[0].eq(expected[0]));
 }
 
 test "strSplitInPlace: delimiter on sides" {
@@ -212,10 +218,10 @@ test "strSplitInPlace: delimiter on sides" {
     const expected_str_ptr: [*]u8 = &expected_str;
     var expectedRocStr = RocStr.init(expected_str_ptr, expected_str_len);
 
-    expect(array.len == 3);
-    expect(array[0].str_len == 0);
-    expect(RocStr.eq(array[1], expectedRocStr));
-    expect(array[2].str_len == 0);
+    expectEqual(array.len, 3);
+    expectEqual(array[0].str_len, 0);
+    expect(array[1].eq(expectedRocStr));
+    expectEqual(array[2].str_len, 0);
 }
 
 test "strSplitInPlace: three pieces" {
@@ -266,10 +272,10 @@ test "strSplitInPlace: three pieces" {
         }
     };
 
-    expect(expected_array.len == array.len);
-    expect(RocStr.eq(array[0], expected_array[0]));
-    expect(RocStr.eq(array[1], expected_array[1]));
-    expect(RocStr.eq(array[2], expected_array[2]));
+    expectEqual(expected_array.len, array.len);
+    expect(array[0].eq(expected_array[0]));
+    expect(array[1].eq(expected_array[1]));
+    expect(array[2].eq(expected_array[2]));
 }
 
 // This is used for `Str.split : Str, Str -> Array Str
@@ -336,7 +342,7 @@ test "countSegments: long delimiter" {
         delimiter_len
     );
 
-    expect(segments_count == 1);
+    expectEqual(segments_count, 1);
 }
 
 test "countSegments: delimiter at start" {
@@ -358,7 +364,7 @@ test "countSegments: delimiter at start" {
         delimiter_len
     );
 
-    expect(segments_count == 2);
+    expectEqual(segments_count, 2);
 }
 
 test "countSegments: delimiter interspered" {
@@ -380,5 +386,92 @@ test "countSegments: delimiter interspered" {
         delimiter_len
     );
 
-    expect(segments_count == 3);
+    expectEqual(segments_count, 3);
+}
+
+// Str.countGraphemeClusters
+const grapheme = @import("grapheme.zig");
+
+comptime { @export(countGraphemeClusters, .{ .name = str_namespace ++ ".count_grapheme_clusters", .linkage = .Strong  }); }
+fn countGraphemeClusters(bytes_ptr: [*]u8, bytes_len: usize)  callconv(.C) usize {
+    var bytes = bytes_ptr[0..bytes_len];
+    var iter = (unicode.Utf8View.init(bytes) catch unreachable).iterator();
+
+    var count: usize = 0;
+    var grapheme_break_state: ?grapheme.BoundClass = null;
+    var grapheme_break_state_ptr = &grapheme_break_state;
+    var opt_last_codepoint: ?u21 = null;
+    while (iter.nextCodepoint()) |cur_codepoint| {
+        if (opt_last_codepoint) |last_codepoint| {
+            var did_break = grapheme.isGraphemeBreak(
+                last_codepoint,
+                cur_codepoint,
+                grapheme_break_state_ptr
+            );
+            if (did_break) {
+                count += 1;
+                grapheme_break_state = null;
+            }
+        }
+        opt_last_codepoint = cur_codepoint;
+    }
+
+    if (bytes_len != 0) {
+        count += 1;
+    }
+
+    return count;
+}
+
+test "countGraphemeClusters: empty string" {
+    var bytes_arr = "".*;
+    var bytes_len = bytes_arr.len;
+    var bytes_ptr: [*]u8 = &bytes_arr;
+    var count = countGraphemeClusters(bytes_ptr, bytes_len);
+    expectEqual(count, 0);
+}
+
+test "countGraphemeClusters: ascii characters" {
+    var bytes_arr = "abcd".*;
+    var bytes_len = bytes_arr.len;
+    var bytes_ptr: [*]u8 = &bytes_arr;
+    var count = countGraphemeClusters(bytes_ptr, bytes_len);
+    expectEqual(count, 4);
+}
+
+test "countGraphemeClusters: utf8 characters" {
+    var bytes_arr = "ãxā".*;
+    var bytes_len = bytes_arr.len;
+    var bytes_ptr: [*]u8 = &bytes_arr;
+    var count = countGraphemeClusters(bytes_ptr, bytes_len);
+    expectEqual(count, 3);
+}
+
+test "countGraphemeClusters: emojis" {
+    var bytes_arr = "🤔🤔🤔".*;
+    var bytes_len = bytes_arr.len;
+    var bytes_ptr: [*]u8 = &bytes_arr;
+    var count = countGraphemeClusters(bytes_ptr, bytes_len);
+    expectEqual(count, 3);
+}
+
+test "countGraphemeClusters: emojis and ut8 characters" {
+    var bytes_arr = "🤔å🤔¥🤔ç".*;
+    var bytes_len = bytes_arr.len;
+    var bytes_ptr: [*]u8 = &bytes_arr;
+    var count = countGraphemeClusters(bytes_ptr, bytes_len);
+    expectEqual(count, 6);
+}
+
+test "countGraphemeClusters: emojis, ut8, and ascii characters" {
+    var bytes_arr = "6🤔å🤔e¥🤔çpp".*;
+    var bytes_len = bytes_arr.len;
+    var bytes_ptr: [*]u8 = &bytes_arr;
+    var count = countGraphemeClusters(bytes_ptr, bytes_len);
+    expectEqual(count, 10);
+}
+
+// https://github.com/ziglang/zig/blob/master/lib/std/std.zig#L94
+test "" {
+    testing.refAllDecls(@This());
 }

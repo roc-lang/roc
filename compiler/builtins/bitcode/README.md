@@ -1,5 +1,7 @@
 # Bitcode for Builtins
 
+## How it works
+
 Roc's builtins are implemented in the compiler using LLVM only.
 When their implementations are simple enough (e.g. addition), they
 can be implemented directly in Inkwell.
@@ -22,3 +24,10 @@ There will be two directories like `roc_builtins-[some random characters]`, look
 ## Calling bitcode functions
 
 Use the `call_bitcode_fn` function defined in `llvm/src/build.rs` to call bitcode funcitons.
+
+## Developing
+
+To add a builtin, just add it to `src/main.zig`. For anything you add, you must add tests for it! Not only does to make the builtins more maintainable, it's the the easiest way to test these functions on Zig. To run the test, run
+```
+zig build test
+```

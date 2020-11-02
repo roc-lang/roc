@@ -7,6 +7,8 @@ use inkwell::builder::Builder;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
+use roc_builtins::bitcode;
+use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 
@@ -590,4 +592,56 @@ fn str_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> IntVa
         env.ptr_int().const_zero(),
         "str_len_is_nonzero",
     )
+}
+
+/// Str.countGraphemes : Str -> Int
+pub fn str_count_graphemes<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    str_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+
+    let sym_str_ptr = ptr_from_symbol(scope, str_symbol);
+    let str_wrapper_type = BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes));
+
+    load_str(
+        env,
+        parent,
+        *sym_str_ptr,
+        str_wrapper_type,
+        |str_ptr, str_len, _str_smallness| {
+            call_bitcode_fn(
+                LowLevel::StrCountGraphemes,
+                env,
+                &[
+                    BasicValueEnum::PointerValue(str_ptr).into(),
+                    BasicValueEnum::IntValue(str_len).into(),
+                ],
+                &bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
+            )
+        },
+    )
+}
+
+// Duplicated from build.rs for now, once it's all working I'll delete this and import it form a
+// common place
+fn call_bitcode_fn<'a, 'ctx, 'env>(
+    op: LowLevel,
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) -> BasicValueEnum<'ctx> {
+    let fn_val = env
+                .module
+                .get_function(fn_name)
+                .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
+    let call = env.builder.build_call(fn_val, args, "call_builtin");
+
+    call.set_call_convention(fn_val.get_call_conventions());
+
+    call.try_as_basic_value()
+        .left()
+        .unwrap_or_else(|| panic!("LLVM error: Invalid call for low-level op {:?}", op))
 }

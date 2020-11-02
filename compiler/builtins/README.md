@@ -64,6 +64,34 @@ One of the cool things about Roc is that it evaluates if a value in memory is sh
 
 We have to define the uniqueness constraints of a function just like we have to define a type signature. That is what happens in `unique.rs`. This can be tricky so it would be a good step to ask for help on if it is confusing.
 
+## Testing it
+### solve/tests/solve_expr.rs
+To make sure that Roc is properly inferring the type of the new builting, add a test to this file simlar to:
+```
+ #[test]
+fn atan() {
+    infer_eq_without_problem(
+        indoc!(
+            r#"
+            Num.atan
+            "#
+        ),
+        "Float -> Float",
+    );
+}
+```
+But replace `Num.atan` and the type signature with the new builtin.
+
+### gen/test/*.rs
+In this directory, there are a couple files like `gen_num.rs`, `gen_str.rs`, etc. For the `Str` module builtins, put the test in `gen_str.rs`, etc. Find the one for the new builtin, and add a test like:
+```
+#[test]
+fn atan() {
+    assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
+}
+    ```
+But replace `Num.atan`, the return value, and the return type with your new builtin.
+
 # Mistakes that are easy to make!!
 
 When implementing a new builtin, it is often easy to copy and paste the implementation for an existing builtin. This can take you quite far since many builtins are very similar, but it also risks forgetting to change one small part of what you copy and pasted and losing a lot of time later on when you cant figure out why things dont work. So, speaking from experience, even if you are copying an existing builtin, try and implement it manually without copying and pasting. Two recent instances of this (as of September 7th, 2020):

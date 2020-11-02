@@ -24,4 +24,5 @@ pub const MATH_IS_FINITE: &str = "roc_builtins.math.is_finite";
 pub const MATH_POW_INT: &str = "roc_builtins.math.pow_int";
 
 pub const STR_COUNT_SEGEMENTS: &str = "roc_builtins.str.count_segements";
-pub const STR_STR_SPLIT_IN_PLACE: &str = "roc_builtins.str.str_split_in_place";
+pub const STR_SPLIT_IN_PLACE: &str = "roc_builtins.str.str_split_in_place";
+pub const STR_COUNT_GRAPEHEME_CLUSTERS: &str = "roc_builtins.str.count_grapheme_clusters";
