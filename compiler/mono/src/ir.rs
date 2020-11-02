@@ -968,15 +968,6 @@ impl<'a> Expr<'a> {
 }
 
 impl<'a> Stmt<'a> {
-    pub fn new(
-        env: &mut Env<'a, '_>,
-        can_expr: roc_can::expr::Expr,
-        procs: &mut Procs<'a>,
-        layout_cache: &mut LayoutCache<'a>,
-    ) -> Self {
-        from_can(env, can_expr, procs, layout_cache)
-    }
-
     pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
@@ -1405,7 +1396,7 @@ fn specialize_external<'a>(
     let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
     debug_assert!(is_valid);
 
-    let mut specialized_body = from_can(env, body, procs, layout_cache);
+    let mut specialized_body = from_can(env, fn_var, body, procs, layout_cache);
 
     // if this is a closure, add the closure record argument
     let pattern_symbols = if let CapturedSymbols::Captured(_) = captured_symbols {
@@ -3001,6 +2992,7 @@ pub fn with_hole<'a>(
 
 pub fn from_can<'a>(
     env: &mut Env<'a, '_>,
+    variable: Variable,
     can_expr: roc_can::expr::Expr,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
@@ -3053,11 +3045,11 @@ pub fn from_can<'a>(
                 .from_var(env.arena, cond_var, env.subs)
                 .expect("invalid cond_layout");
 
-            let mut stmt = from_can(env, final_else.value, procs, layout_cache);
+            let mut stmt = from_can(env, branch_var, final_else.value, procs, layout_cache);
 
             for (loc_cond, loc_then) in branches.into_iter().rev() {
                 let branching_symbol = env.unique_symbol();
-                let then = from_can(env, loc_then.value, procs, layout_cache);
+                let then = from_can(env, branch_var, loc_then.value, procs, layout_cache);
 
                 stmt = Stmt::Cond {
                     cond_symbol: branching_symbol,
@@ -3125,7 +3117,7 @@ pub fn from_can<'a>(
                 unreachable!("recursive value does not have Identifier pattern")
             }
 
-            from_can(env, cont.value, procs, layout_cache)
+            from_can(env, variable, cont.value, procs, layout_cache)
         }
         LetNonRec(def, cont, outer_annotation) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
@@ -3175,7 +3167,7 @@ pub fn from_can<'a>(
                                 return_type,
                             );
 
-                            return from_can(env, cont.value, procs, layout_cache);
+                            return from_can(env, variable, cont.value, procs, layout_cache);
                         }
                         _ => unreachable!(),
                     }
@@ -3183,7 +3175,7 @@ pub fn from_can<'a>(
 
                 match def.loc_expr.value {
                     roc_can::expr::Expr::Var(original) => {
-                        let mut rest = from_can(env, cont.value, procs, layout_cache);
+                        let mut rest = from_can(env, def.expr_var, cont.value, procs, layout_cache);
                         // a variable is aliased
                         substitute_in_exprs(env.arena, &mut rest, *symbol, original);
 
@@ -3228,7 +3220,7 @@ pub fn from_can<'a>(
                             nested_annotation,
                         );
 
-                        return from_can(env, new_outer, procs, layout_cache);
+                        return from_can(env, variable, new_outer, procs, layout_cache);
                     }
                     roc_can::expr::Expr::LetRec(nested_defs, nested_cont, nested_annotation) => {
                         use roc_can::expr::Expr::*;
@@ -3269,10 +3261,10 @@ pub fn from_can<'a>(
                             nested_annotation,
                         );
 
-                        return from_can(env, new_outer, procs, layout_cache);
+                        return from_can(env, variable, new_outer, procs, layout_cache);
                     }
                     _ => {
-                        let rest = from_can(env, cont.value, procs, layout_cache);
+                        let rest = from_can(env, variable, cont.value, procs, layout_cache);
                         return with_hole(
                             env,
                             def.loc_expr.value,
@@ -3289,9 +3281,9 @@ pub fn from_can<'a>(
             let mono_pattern = from_can_pattern(env, layout_cache, &def.loc_pattern.value);
 
             if let Pattern::Identifier(symbol) = mono_pattern {
-                let hole = env
-                    .arena
-                    .alloc(from_can(env, cont.value, procs, layout_cache));
+                let hole =
+                    env.arena
+                        .alloc(from_can(env, variable, cont.value, procs, layout_cache));
 
                 with_hole(env, def.loc_expr.value, procs, layout_cache, symbol, hole)
             } else {
@@ -3314,7 +3306,7 @@ pub fn from_can<'a>(
                 }
 
                 // convert the continuation
-                let mut stmt = from_can(env, cont.value, procs, layout_cache);
+                let mut stmt = from_can(env, variable, cont.value, procs, layout_cache);
 
                 if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
                     store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
@@ -3461,7 +3453,7 @@ fn from_can_when<'a>(
         .into_iter()
         .map(|(pattern, opt_guard, can_expr)| {
             let branch_stmt = match join_point {
-                None => from_can(env, can_expr, procs, layout_cache),
+                None => from_can(env, expr_var, can_expr, procs, layout_cache),
                 Some(id) => {
                     let symbol = env.unique_symbol();
                     let arguments = bumpalo::vec![in env.arena; symbol].into_bump_slice();
