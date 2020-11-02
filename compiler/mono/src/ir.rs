@@ -2030,20 +2030,32 @@ pub fn with_hole<'a>(
                 );
 
                 return result;
-            } else if symbol.module_id() != env.home {
-                // TODO here we assume this is a 0-arity thunk. That's not true in general!
-                let result = call_by_name(
-                    env,
-                    procs,
-                    variable,
-                    symbol,
-                    std::vec::Vec::new(),
-                    layout_cache,
-                    assigned,
-                    env.arena.alloc(Stmt::Ret(assigned)),
-                );
-                dbg!(&procs.externals_we_need);
-                return result;
+            } else if symbol.module_id() != env.home && symbol.module_id() != ModuleId::ATTR {
+                match layout_cache.from_var(env.arena, variable, env.subs) {
+                    Err(e) => panic!("invalid layout {:?}", e),
+                    Ok(Layout::FunctionPointer(_, _)) => {
+                        specialize_imported_symbol(
+                            env,
+                            &mut procs.externals_we_need,
+                            symbol,
+                            variable,
+                        );
+                    }
+                    Ok(_) => {
+                        // this is a 0-arity thunk
+                        let result = call_by_name(
+                            env,
+                            procs,
+                            variable,
+                            symbol,
+                            std::vec::Vec::new(),
+                            layout_cache,
+                            assigned,
+                            env.arena.alloc(Stmt::Ret(assigned)),
+                        );
+                        return result;
+                    }
+                }
             }
 
             // A bit ugly, but it does the job
@@ -2191,7 +2203,7 @@ pub fn with_hole<'a>(
             let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
             let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
 
-            for (label, _) in sorted_fields.into_iter() {
+            for (label, _, _) in sorted_fields.into_iter() {
                 // TODO how should function pointers be handled here?
                 match fields.remove(&label) {
                     Some(field) => match can_reuse_symbol(procs, &field.loc_expr.value) {
@@ -2483,7 +2495,7 @@ pub fn with_hole<'a>(
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 
             let mut current = 0;
-            for (label, opt_field_layout) in sorted_fields.into_iter() {
+            for (label, _, opt_field_layout) in sorted_fields.into_iter() {
                 match opt_field_layout {
                     Err(_) => {
                         // this was an optional field, and now does not exist!
@@ -2624,7 +2636,7 @@ pub fn with_hole<'a>(
             let mut fields = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 
             let mut current = 0;
-            for (label, opt_field_layout) in sorted_fields.into_iter() {
+            for (label, _, opt_field_layout) in sorted_fields.into_iter() {
                 match opt_field_layout {
                     Err(_) => {
                         debug_assert!(!updates.contains_key(&label));
@@ -4086,11 +4098,10 @@ fn store_record_destruct<'a>(
             );
         }
         DestructType::Optional(expr) => {
-            let variable = panic!();
             stmt = with_hole(
                 env,
                 expr.clone(),
-                variable,
+                destruct.variable,
                 procs,
                 layout_cache,
                 destruct.symbol,
@@ -4378,8 +4389,6 @@ fn call_by_name<'a>(
 ) -> Stmt<'a> {
     let original_fn_var = fn_var;
 
-    println!("call by name of {:?}", proc_name);
-
     // Register a pending_specialization for this function
     match layout_cache.from_var(env.arena, fn_var, env.subs) {
         Ok(layout) => {
@@ -4642,6 +4651,7 @@ pub enum Pattern<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecordDestruct<'a> {
     pub label: Lowercase,
+    pub variable: Variable,
     pub layout: Layout<'a>,
     pub symbol: Symbol,
     pub typ: DestructType<'a>,
@@ -4868,7 +4878,7 @@ pub fn from_can_pattern<'a>(
 
             loop {
                 match (opt_sorted, opt_destruct) {
-                    (Some((label, Ok(field_layout))), Some(destruct)) => {
+                    (Some((label, variable, Ok(field_layout))), Some(destruct)) => {
                         if destruct.value.label == label {
                             mono_destructs.push(from_can_record_destruct(
                                 env,
@@ -4884,6 +4894,7 @@ pub fn from_can_pattern<'a>(
                             mono_destructs.push(RecordDestruct {
                                 label: label.clone(),
                                 symbol: env.unique_symbol(),
+                                variable,
                                 layout: field_layout.clone(),
                                 typ: DestructType::Guard(Pattern::Underscore),
                             });
@@ -4892,7 +4903,7 @@ pub fn from_can_pattern<'a>(
                         }
                         field_layouts.push(field_layout);
                     }
-                    (Some((label, Err(field_layout))), Some(destruct)) => {
+                    (Some((label, variable, Err(field_layout))), Some(destruct)) => {
                         if destruct.value.label == label {
                             opt_destruct = it2.next();
 
@@ -4900,6 +4911,7 @@ pub fn from_can_pattern<'a>(
                                 label: destruct.value.label.clone(),
                                 symbol: destruct.value.symbol,
                                 layout: field_layout,
+                                variable,
                                 typ: match &destruct.value.typ {
                                     roc_can::pattern::DestructType::Optional(_, loc_expr) => {
                                         // if we reach this stage, the optional field is not present
@@ -4915,12 +4927,13 @@ pub fn from_can_pattern<'a>(
                         opt_sorted = it1.next();
                     }
 
-                    (Some((label, Err(field_layout))), None) => {
+                    (Some((label, variable, Err(field_layout))), None) => {
                         // the remainder of the fields (from the type) is not matched on in
                         // this pattern; to fill it out, we put underscores
                         mono_destructs.push(RecordDestruct {
                             label: label.clone(),
                             symbol: env.unique_symbol(),
+                            variable,
                             layout: field_layout.clone(),
                             typ: DestructType::Guard(Pattern::Underscore),
                         });
@@ -4928,12 +4941,13 @@ pub fn from_can_pattern<'a>(
                         opt_sorted = it1.next();
                     }
 
-                    (Some((label, Ok(field_layout))), None) => {
+                    (Some((label, variable, Ok(field_layout))), None) => {
                         // the remainder of the fields (from the type) is not matched on in
                         // this pattern; to fill it out, we put underscores
                         mono_destructs.push(RecordDestruct {
                             label: label.clone(),
                             symbol: env.unique_symbol(),
+                            variable,
                             layout: field_layout.clone(),
                             typ: DestructType::Guard(Pattern::Underscore),
                         });
@@ -4955,6 +4969,7 @@ pub fn from_can_pattern<'a>(
                                 mono_destructs.push(RecordDestruct {
                                     label: destruct.value.label.clone(),
                                     symbol: destruct.value.symbol,
+                                    variable: destruct.value.var,
                                     layout: field_layout,
                                     typ: DestructType::Optional(loc_expr.value.clone()),
                                 })
@@ -4988,6 +5003,7 @@ fn from_can_record_destruct<'a>(
     RecordDestruct {
         label: can_rd.label.clone(),
         symbol: can_rd.symbol,
+        variable: can_rd.var,
         layout: field_layout,
         typ: match &can_rd.typ {
             roc_can::pattern::DestructType::Required => DestructType::Required,
