@@ -968,6 +968,16 @@ impl<'a> Expr<'a> {
 }
 
 impl<'a> Stmt<'a> {
+    pub fn new(
+        env: &mut Env<'a, '_>,
+        can_expr: roc_can::expr::Expr,
+        var: Variable,
+        procs: &mut Procs<'a>,
+        layout_cache: &mut LayoutCache<'a>,
+    ) -> Self {
+        from_can(env, var, can_expr, procs, layout_cache)
+    }
+
     pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
@@ -4459,7 +4469,10 @@ fn call_by_name<'a>(
                 // exactly once.
                 match &mut procs.pending_specializations {
                     Some(pending_specializations) => {
-                        if assigned.module_id() != proc_name.module_id() {
+                        let is_imported = assigned.module_id() != proc_name.module_id();
+                        // builtins are currently (re)defined in each module, so not really imported
+                        let is_builtin = proc_name.is_builtin();
+                        if is_imported && !is_builtin {
                             specialize_imported_symbol(
                                 env,
                                 &mut procs.externals_we_need,
