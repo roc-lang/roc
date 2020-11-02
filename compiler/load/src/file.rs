@@ -1505,6 +1505,7 @@ fn update<'a>(
             {
                 // state.timings.insert(module_id, module_timing);
 
+                dbg!(&state.procedures);
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 msg_tx

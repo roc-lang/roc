@@ -788,4 +788,18 @@ mod gen_num {
     //             f64
     //         );
     //     }
+
+    #[test]
+    fn num_max_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                # Num.maxInt
+                Num.add (-1) Num.maxInt
+                "#
+            ),
+            1,
+            i64
+        );
+    }
 }
