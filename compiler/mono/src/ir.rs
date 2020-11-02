@@ -2030,6 +2030,20 @@ pub fn with_hole<'a>(
                 );
 
                 return result;
+            } else if symbol.module_id() != env.home {
+                // TODO here we assume this is a 0-arity thunk. That's not true in general!
+                let result = call_by_name(
+                    env,
+                    procs,
+                    variable,
+                    symbol,
+                    std::vec::Vec::new(),
+                    layout_cache,
+                    assigned,
+                    env.arena.alloc(Stmt::Ret(assigned)),
+                );
+                dbg!(&procs.externals_we_need);
+                return result;
             }
 
             // A bit ugly, but it does the job

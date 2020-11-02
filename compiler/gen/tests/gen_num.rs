@@ -794,11 +794,23 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
-                # Num.maxInt
-                Num.add (-1) Num.maxInt
+                Num.maxInt
                 "#
             ),
-            1,
+            i64::MAX,
+            i64
+        );
+    }
+
+    #[test]
+    fn num_min_int() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.minInt
+                "#
+            ),
+            i64::MIN,
             i64
         );
     }

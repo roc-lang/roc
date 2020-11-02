@@ -100,6 +100,36 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_ATAN => num_atan,
         Symbol::NUM_ACOS => num_acos,
         Symbol::NUM_ASIN => num_asin,
+        Symbol::NUM_MAX_INT => num_max_int,
+        Symbol::NUM_MIN_INT => num_min_int,
+    }
+}
+
+/// Num.maxInt : Int
+fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let body = Int(int_var, i64::MAX);
+
+    Def {
+        annotation: None,
+        expr_var: int_var,
+        loc_expr: Located::at_zero(body),
+        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
+/// Num.minInt : Int
+fn num_min_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let body = Int(int_var, i64::MIN);
+
+    Def {
+        annotation: None,
+        expr_var: int_var,
+        loc_expr: Located::at_zero(body),
+        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
     }
 }
 
