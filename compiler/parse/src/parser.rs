@@ -224,6 +224,7 @@ pub enum FailReason {
     BadUtf8,
     ReservedKeyword(Region),
     ArgumentsBeforeEquals(Region),
+    NotYetImplemented(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

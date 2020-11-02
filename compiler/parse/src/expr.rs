@@ -561,7 +561,7 @@ fn annotation_or_alias<'a>(
             ann: loc_ann,
         },
         Apply(_, _) => {
-            panic!("TODO gracefully handle invalid Apply in type annotation");
+            Def::NotYetImplemented("TODO gracefully handle invalid Apply in type annotation")
         }
         SpaceAfter(value, spaces_before) => Def::SpaceAfter(
             arena.alloc(annotation_or_alias(arena, value, region, loc_ann)),
@@ -574,19 +574,19 @@ fn annotation_or_alias<'a>(
         Nested(value) => annotation_or_alias(arena, value, region, loc_ann),
 
         PrivateTag(_) => {
-            panic!("TODO gracefully handle trying to use a private tag as an annotation.");
+            Def::NotYetImplemented("TODO gracefully handle trying to use a private tag as an annotation.")
         }
         QualifiedIdentifier { .. } => {
-            panic!("TODO gracefully handle trying to annotate a qualified identifier, e.g. `Foo.bar : ...`");
+            Def::NotYetImplemented("TODO gracefully handle trying to annotate a qualified identifier, e.g. `Foo.bar : ...`")
         }
         NumLiteral(_) | NonBase10Literal { .. } | FloatLiteral(_) | StrLiteral(_) => {
-            panic!("TODO gracefully handle trying to annotate a litera");
+            Def::NotYetImplemented("TODO gracefully handle trying to annotate a litera")
         }
         Underscore => {
-            panic!("TODO gracefully handle trying to give a type annotation to an undrscore");
+            Def::NotYetImplemented("TODO gracefully handle trying to give a type annotation to an undrscore")
         }
         Malformed(_) => {
-            panic!("TODO translate a malformed pattern into a malformed annotation");
+            Def::NotYetImplemented("TODO translate a malformed pattern into a malformed annotation")
         }
         Identifier(ident) => {
             // This is a regular Annotation
@@ -633,7 +633,13 @@ fn parse_def_expr<'a>(
         ))
     // `<` because '=' should be same indent (or greater) as the entire def-expr
     } else if equals_sign_indent < def_start_col {
-        todo!("TODO the = in this declaration seems outdented. equals_sign_indent was {} and def_start_col was {}", equals_sign_indent, def_start_col);
+        Err((
+            Fail {
+                attempting: state.attempting,
+                reason: FailReason::NotYetImplemented(format!("TODO the = in this declaration seems outdented. equals_sign_indent was {} and def_start_col was {}", equals_sign_indent, def_start_col)),
+            },
+            state,
+        ))
     } else {
         // Indented more beyond the original indent of the entire def-expr.
         let indented_more = def_start_col + 1;
@@ -720,7 +726,15 @@ fn parse_def_signature<'a>(
         ))
     // `<` because ':' should be same indent or greater
     } else if colon_indent < original_indent {
-        panic!("TODO the : in this declaration seems outdented");
+        Err((
+            Fail {
+                attempting: state.attempting,
+                reason: FailReason::NotYetImplemented(
+                    "TODO the : in this declaration seems outdented".to_string(),
+                ),
+            },
+            state,
+        ))
     } else {
         // Indented more beyond the original indent.
         let indented_more = original_indent + 1;
@@ -1069,11 +1083,12 @@ fn loc_ident_pattern<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<'a>
                     } else {
                         format!("{}.{}", module_name, parts.join("."))
                     };
-
                     Ok((
                         Located {
                             region: loc_ident.region,
-                            value: Pattern::Malformed(arena.alloc(malformed_str)),
+                            value: Pattern::Malformed(
+                                String::from_str_in(&malformed_str, &arena).into_bump_str(),
+                            ),
                         },
                         state,
                     ))
@@ -1120,7 +1135,15 @@ mod when {
             ),
             move |arena, state, (case_indent, loc_condition)| {
                 if case_indent < min_indent {
-                    panic!("TODO case wasn't indented enough");
+                    return Err((
+                        Fail {
+                            attempting: state.attempting,
+                            reason: FailReason::NotYetImplemented(
+                                "TODO case wasn't indented enough".to_string(),
+                            ),
+                        },
+                        state,
+                    ));
                 }
 
                 // Everything in the branches must be indented at least as much as the case itself.
@@ -1178,9 +1201,15 @@ mod when {
                             if alternatives_indented_correctly(&loc_patterns, original_indent) {
                                 Ok(((loc_patterns, loc_guard), state))
                             } else {
-                                panic!(
-                                "TODO additional branch didn't have same indentation as first branch"
-                            );
+                                Err((
+                                    Fail {
+                                        attempting: state.attempting,
+                                        reason: FailReason::NotYetImplemented(
+                                            "TODO additional branch didn't have same indentation as first branch".to_string(),
+                                        ),
+                                    },
+                                    state,
+                                ))
                             }
                         },
                     ),
@@ -1490,10 +1519,16 @@ fn ident_etc<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>> {
                                             });
                                         }
                                         Err(malformed) => {
-                                            panic!(
-                                                "TODO early return malformed pattern {:?}",
-                                                malformed
-                                            );
+                                            return Err((
+                                                Fail {
+                                                    attempting: state.attempting,
+                                                    reason: FailReason::NotYetImplemented(format!(
+                                                        "TODO early return malformed pattern {:?}",
+                                                        malformed
+                                                    )),
+                                                },
+                                                state,
+                                            ));
                                         }
                                     }
                                 }
