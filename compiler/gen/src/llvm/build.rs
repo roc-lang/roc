@@ -2126,6 +2126,70 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     fn_val
 }
 
+#[allow(dead_code)]
+pub fn build_closure_caller<'a, 'ctx, 'env>(
+    env: &'a Env<'a, 'ctx, 'env>,
+    closure_function: FunctionValue<'ctx>,
+) {
+    let context = env.context;
+    let builder = env.builder;
+    // asuming the closure has type `a, b, closure_data -> c`
+    // change that into `a, b, *const closure_data, *mut output -> ()`
+
+    // a function `a, b, closure_data -> RocCallResult<c>`
+    let wrapped_function = make_exception_catching_wrapper(env, closure_function);
+
+    let closure_function_type = closure_function.get_type();
+    let wrapped_function_type = wrapped_function.get_type();
+
+    let mut arguments = closure_function_type.get_param_types();
+
+    // require that the closure data is passed by reference
+    let closure_data_type = arguments.pop().unwrap();
+    let closure_data_ptr_type = get_ptr_type(&closure_data_type, AddressSpace::Generic);
+    arguments.push(closure_data_ptr_type.into());
+
+    // require that a pointer is passed in to write the result into
+    let output_type = get_ptr_type(
+        &wrapped_function_type.get_return_type().unwrap(),
+        AddressSpace::Generic,
+    );
+    arguments.push(output_type.into());
+
+    let caller_function_type = env.context.void_type().fn_type(&arguments, false);
+    let caller_function_name: String =
+        format!("{}_caller", closure_function.get_name().to_str().unwrap());
+
+    let caller_function = env.module.add_function(
+        caller_function_name.as_str(),
+        caller_function_type,
+        Some(Linkage::External),
+    );
+
+    caller_function.set_call_conventions(C_CALL_CONV);
+
+    let entry = context.append_basic_block(caller_function, "entry");
+
+    builder.position_at_end(entry);
+
+    let mut parameters = caller_function.get_params();
+    let output = parameters.pop().unwrap();
+    let closure_data_ptr = parameters.pop().unwrap();
+
+    let closure_data =
+        builder.build_load(closure_data_ptr.into_pointer_value(), "load_closure_data");
+    parameters.push(closure_data);
+
+    let call = builder.build_call(wrapped_function, &parameters, "call_wrapped_function");
+    call.set_call_convention(FAST_CALL_CONV);
+
+    let result = call.try_as_basic_value().left().unwrap();
+
+    builder.build_store(output.into_pointer_value(), result);
+
+    builder.build_return(None);
+}
+
 pub fn build_proc<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -2149,6 +2213,10 @@ pub fn build_proc<'a, 'ctx, 'env>(
         // the closure argument (if any) comes in as an opaque sequence of bytes.
         // we need to cast that to the specific closure data layout that the body expects
         let value = if let Symbol::ARG_CLOSURE = *arg_symbol {
+            // generate a caller function (to be used by the host)
+            // build_closure_caller(env, fn_val);
+            // builder.position_at_end(entry);
+
             // blindly trust that there is a layout available for the closure data
             let layout = proc.closure_data_layout.clone().unwrap();
 
@@ -3160,7 +3228,7 @@ fn cxa_rethrow_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
 }
 
 fn get_gxx_personality_v0<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> FunctionValue<'ctx> {
-    let name = "__cxa_rethrow";
+    let name = "__gxx_personality_v0";
 
     let module = env.module;
     let context = env.context;

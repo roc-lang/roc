@@ -7,7 +7,10 @@ use RocCallResult::*;
 
 extern "C" {
     #[link_name = "closure_1_exposed"]
-    fn closure(output: *mut u8) -> ();
+    fn make_closure(output: *mut u8) -> ();
+
+    // #[link_name = "0_1_caller"]
+    // fn call_closure_0(unit: (), closure_data: *const u8, output: *mut u8) -> ();
 
     #[link_name = "closure_1_size"]
     fn closure_size() -> i64;
@@ -23,9 +26,10 @@ pub fn rust_main() -> isize {
     let roc_closure = unsafe {
         let buffer = std::alloc::alloc(layout);
 
-        closure(buffer);
+        make_closure(buffer);
 
-        let output = &*(buffer as *mut RocCallResult<(fn(i64) -> i64, i64)>);
+        type CLOSURE_DATA = i64;
+        let output = &*(buffer as *mut RocCallResult<(fn(CLOSURE_DATA) -> i64, CLOSURE_DATA)>);
 
         match output.into() {
             Ok((function_pointer, closure_data)) => {
