@@ -95,8 +95,13 @@ mod test_reporting {
                 home,
                 ident_ids: &mut ident_ids,
             };
-            let _mono_expr =
-                Stmt::new(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
+            let _mono_expr = Stmt::new(
+                &mut mono_env,
+                loc_expr.value,
+                var,
+                &mut procs,
+                &mut layout_cache,
+            );
         }
 
         Ok((unify_problems, can_problems, mono_problems, home, interns))

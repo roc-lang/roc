@@ -822,7 +822,7 @@ pub fn sort_record_fields<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
-) -> Vec<'a, (Lowercase, Result<Layout<'a>, Layout<'a>>)> {
+) -> Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)> {
     let mut fields_map = MutMap::default();
 
     let mut env = Env {
@@ -844,7 +844,7 @@ pub fn sort_record_fields<'a>(
                     RecordField::Optional(v) => {
                         let layout =
                             Layout::from_var(&mut env, v).expect("invalid layout from var");
-                        sorted_fields.push((label, Err(layout)));
+                        sorted_fields.push((label, v, Err(layout)));
                         continue;
                     }
                 };
@@ -853,11 +853,11 @@ pub fn sort_record_fields<'a>(
 
                 // Drop any zero-sized fields like {}
                 if !layout.is_zero_sized() {
-                    sorted_fields.push((label, Ok(layout)));
+                    sorted_fields.push((label, var, Ok(layout)));
                 }
             }
 
-            sorted_fields.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
+            sorted_fields.sort_by(|(label1, _, _), (label2, _, _)| label1.cmp(label2));
 
             sorted_fields
         }

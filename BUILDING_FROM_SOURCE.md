@@ -1,12 +1,13 @@
 # Building the Roc compiler from source
 
 
-## Installing LLVM, Zig, valgrind, libunwind, and libc++-dev 
+## Installing LLVM, Python 2.7, Zig, valgrind, libunwind, and libc++-dev
 
 To build the compiler, you need these installed:
 
 * `libunwind` (macOS should already have this one installed)
 * `libc++-dev`
+* Python 2.7
 * a particular version of Zig (see below)
 * a particular version of LLVM (see below)
 
