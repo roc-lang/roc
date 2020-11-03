@@ -870,7 +870,7 @@ fn parse_def_signature<'a>(
 
                 let defs = defs.into_bump_slice();
 
-               (Expr::Defs(defs, arena.alloc(loc_ret)), state)
+                (Expr::Defs(defs, arena.alloc(loc_ret)), state)
             },
         )
     }
