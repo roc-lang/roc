@@ -285,6 +285,7 @@ mod gen_list {
                 r#"
                 Bit : [ Zero, One ]
 
+                byte : List Bit
                 byte = [ Zero, One, Zero, One, Zero, Zero, One, Zero ]
 
                 initialCounts = { zeroes: 0, ones: 0 }
@@ -313,7 +314,7 @@ mod gen_list {
                 empty =
                     []
 
-                List.keepIf empty (\x -> True)
+                List.keepIf empty (\_ -> True)
                 "#
             ),
             RocList::from_slice(&[]),
@@ -345,7 +346,7 @@ mod gen_list {
             indoc!(
                 r#"
                 alwaysTrue : Int -> Bool
-                alwaysTrue = \i ->
+                alwaysTrue = \_ ->
                     True
 
                 oneThroughEight : List Int
@@ -366,7 +367,7 @@ mod gen_list {
             indoc!(
                 r#"
                 alwaysFalse : Int -> Bool
-                alwaysFalse = \i ->
+                alwaysFalse = \_ ->
                     False
 
                 List.keepIf [1,2,3,4,5,6,7,8] alwaysFalse
