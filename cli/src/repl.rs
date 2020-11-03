@@ -226,8 +226,7 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
-        let problems = loaded.can_problems.remove(&home).unwrap_or_default();
-        for problem in problems.into_iter() {
+        for problem in can_problems.into_iter() {
             let report = can_problem(&alloc, module_path.clone(), problem);
             let mut buf = String::new();
 
@@ -236,8 +235,7 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             lines.push(buf);
         }
 
-        let problems = loaded.type_problems.remove(&home).unwrap_or_default();
-        for problem in problems {
+        for problem in type_problems {
             let report = type_problem(&alloc, module_path.clone(), problem);
             let mut buf = String::new();
 
@@ -246,8 +244,7 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             lines.push(buf);
         }
 
-        let problems = loaded.mono_problems.remove(&home).unwrap_or_default();
-        for problem in problems {
+        for problem in mono_problems {
             let report = mono_problem(&alloc, module_path.clone(), problem);
             let mut buf = String::new();
 
