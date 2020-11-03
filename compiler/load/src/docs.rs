@@ -110,25 +110,6 @@ fn generate_module_doc<'a>(
             _ => (acc, None),
         },
 
-        AnnotatedBody { ann_pattern, .. } => match ann_pattern.value {
-            Pattern::Identifier(identifier) => {
-                // Check if the definition is exposed
-                if exposed_ident_ids
-                    .get_id(&InlinableString::from(identifier))
-                    .is_some()
-                {
-                    let entry = DocEntry {
-                        name: identifier.to_string(),
-                        docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
-                    };
-                    acc.push(entry);
-                }
-                (acc, None)
-            }
-
-            _ => (acc, None),
-        },
-
         Alias {
             name: _,
             vars: _,
