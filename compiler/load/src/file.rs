@@ -5,6 +5,7 @@ use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::std::{Mode, StdLib};
+use roc_can::annotation::VariablySizedTypes;
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
@@ -210,6 +211,7 @@ struct ModuleCache<'a> {
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
+    host_exposed_variably_sized_types: MutMap<Symbol, VariablySizedTypes>,
 }
 
 fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> BuildTask<'a> {

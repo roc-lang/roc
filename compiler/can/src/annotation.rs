@@ -1,6 +1,6 @@
 use crate::env::Env;
 use crate::scope::Scope;
-use roc_collections::all::{ImMap, MutSet, SendMap};
+use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{AssignedField, Tag, TypeAnnotation};
@@ -56,6 +56,12 @@ impl IntroducedVariables {
     pub fn name_by_var(&self, var: Variable) -> Option<&Lowercase> {
         self.name_by_var.get(&var)
     }
+}
+
+#[derive(Debug, Default)]
+pub struct VariablySizedTypes {
+    rigids: MutMap<Lowercase, ()>,
+    aliases: MutMap<Symbol, ()>,
 }
 
 pub fn canonicalize_annotation(
