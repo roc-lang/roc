@@ -179,6 +179,9 @@ pub fn can_problem<'b>(
                 alloc.reflow(" definitions from this record."),
             ]),
         ]),
+        Problem::InvalidOptionalRecord => alloc.stack(vec![
+            alloc.reflow("This record contains optional values, it shouldn't!")
+        ]),
         Problem::DuplicateRecordFieldType {
             field_name,
             field_region,
@@ -533,6 +536,9 @@ fn pretty_runtime_error<'b>(
                 alloc.reflow("Roc uses signed 64-bit integers, allowing values between −9_223_372_036_854_775_808 and 9_223_372_036_854_775_807."),
                 tip,
             ])
+        }
+        RuntimeError::InvalidOptionalRecord => {
+            alloc.reflow("There is an inappropriate  optional field in a record")
         }
         RuntimeError::InvalidRecordUpdate { region } => alloc.stack(vec![
             alloc.concat(vec![

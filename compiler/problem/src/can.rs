@@ -40,6 +40,8 @@ pub enum Problem {
         field_region: Region,
         replaced_region: Region,
     },
+    InvalidOptionalRecord,
+
     DuplicateTag {
         tag_name: TagName,
         tag_union_region: Region,
@@ -101,6 +103,7 @@ pub enum RuntimeError {
         original_region: Region,
         shadow: Located<Ident>,
     },
+    InvalidOptionalRecord,
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
     // Example: when 1 is 1.X -> 32
