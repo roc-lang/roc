@@ -206,7 +206,7 @@ struct ModuleCache<'a> {
     parsed: MutMap<ModuleId, ParsedModule<'a>>,
     canonicalized: MutMap<ModuleId, CanonicalizedModule<'a>>,
     aliases: MutMap<ModuleId, MutMap<Symbol, Alias>>,
-    constrained: MutMap<ModuleId, ConstrainedModule<'a>>,
+    constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
@@ -322,7 +322,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 module,
                 ident_ids,
                 module_timing,
-                src,
                 constraint,
                 var_store,
                 imported_modules,
@@ -334,7 +333,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 module,
                 ident_ids,
                 module_timing,
-                src,
                 constraint,
                 var_store,
                 imported_modules,
@@ -432,11 +430,10 @@ struct ModuleHeader<'a> {
 }
 
 #[derive(Debug)]
-struct ConstrainedModule<'a> {
+struct ConstrainedModule {
     module: Module,
     declarations: Vec<Declaration>,
     imported_modules: MutSet<ModuleId>,
-    src: &'a str,
     constraint: Constraint,
     ident_ids: IdentIds,
     var_store: VarStore,
@@ -502,7 +499,7 @@ enum Msg<'a> {
     Header(ModuleHeader<'a>),
     Parsed(ParsedModule<'a>),
     CanonicalizedAndConstrained {
-        constrained_module: ConstrainedModule<'a>,
+        constrained_module: ConstrainedModule,
         canonicalization_problems: Vec<roc_problem::can::Problem>,
         module_docs: ModuleDocumentation,
     },
@@ -692,7 +689,6 @@ enum BuildTask<'a> {
         constraint: Constraint,
         var_store: VarStore,
         declarations: Vec<Declaration>,
-        src: &'a str,
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
@@ -1915,7 +1911,6 @@ impl<'a> BuildTask<'a> {
         module: Module,
         ident_ids: IdentIds,
         module_timing: ModuleTiming,
-        src: &'a str,
         constraint: Constraint,
         var_store: VarStore,
         imported_modules: MutSet<ModuleId>,
@@ -1955,7 +1950,6 @@ impl<'a> BuildTask<'a> {
             imported_symbols,
             constraint,
             var_store,
-            src,
             declarations,
             module_timing,
         }
@@ -1971,7 +1965,6 @@ fn run_solve<'a>(
     constraint: Constraint,
     mut var_store: VarStore,
     decls: Vec<Declaration>,
-    src: &'a str,
 ) -> Msg<'a> {
     // We have more constraining work to do now, so we'll add it to our timings.
     let constrain_start = SystemTime::now();
@@ -2041,7 +2034,6 @@ fn canonicalize_and_constrain<'a>(
         exposed_imports,
         imported_modules,
         mut module_timing,
-        src,
         ..
     } = parsed;
 
@@ -2094,7 +2086,6 @@ fn canonicalize_and_constrain<'a>(
                 module,
                 declarations: module_output.declarations,
                 imported_modules,
-                src,
                 var_store,
                 constraint,
                 ident_ids: module_output.ident_ids,
@@ -2455,7 +2446,6 @@ fn run_task<'a>(
             var_store,
             ident_ids,
             declarations,
-            src,
         } => Ok(run_solve(
             module,
             ident_ids,
@@ -2464,7 +2454,6 @@ fn run_task<'a>(
             constraint,
             var_store,
             declarations,
-            src,
         )),
         BuildPendingSpecializations {
             module_id,
