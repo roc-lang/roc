@@ -370,6 +370,7 @@ mod test_can {
             _ => false,
         }));
     }
+
     #[test]
     fn shadowed_annotation() {
         let src = indoc!(
@@ -392,6 +393,26 @@ mod test_can {
         }));
     }
 
+    #[test]
+    fn correct_nested_annotated_body() {
+        let src = indoc!(
+            r#"
+                f : Int -> Int
+                f =
+                    g : Int
+                    g = 42
+
+                    \ a -> a + g + h
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+    
     // LOCALS
 
     // TODO rewrite this test to check only for UnusedDef reports
