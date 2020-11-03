@@ -288,9 +288,7 @@ mod test_can {
             "#
         );
         let arena = Bump::new();
-        let CanExprOut {
-            problems, ..
-        } = can_expr_with(&arena, test_home(), src);
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         // Here we have 2 issues:
         // 1. `g` doesn't match the previous annotation named `f`, so we
@@ -299,7 +297,7 @@ mod test_can {
         //    `LookupNotInScope`.
         assert_eq!(problems.len(), 2);
         assert!(problems.iter().all(|problem| match problem {
-            Problem::SignatureDefMismatch{..} => true,
+            Problem::SignatureDefMismatch { .. } => true,
             Problem::RuntimeError(RuntimeError::LookupNotInScope(_, _)) => true,
             _ => false,
         }));
@@ -316,9 +314,7 @@ mod test_can {
             "#
         );
         let arena = Bump::new();
-        let CanExprOut {
-            problems, ..
-        } = can_expr_with(&arena, test_home(), src);
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         // Here we have 2 issues:
         // 1. `g` doesn't match the previous annotation named `f`, so we
@@ -327,7 +323,7 @@ mod test_can {
         //    `LookupNotInScope`.
         assert_eq!(problems.len(), 2);
         assert!(problems.iter().all(|problem| match problem {
-            Problem::SignatureDefMismatch{..} => true,
+            Problem::SignatureDefMismatch { .. } => true,
             Problem::RuntimeError(RuntimeError::LookupNotInScope(_, _)) => true,
             _ => false,
         }));
@@ -345,9 +341,7 @@ mod test_can {
             "#
         );
         let arena = Bump::new();
-        let CanExprOut {
-            problems, ..
-        } = can_expr_with(&arena, test_home(), src);
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems.len(), 1);
         assert!(problems.iter().all(|problem| match problem {
@@ -368,9 +362,7 @@ mod test_can {
             "#
         );
         let arena = Bump::new();
-        let CanExprOut {
-            problems, ..
-        } = can_expr_with(&arena, test_home(), src);
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems.len(), 1);
         assert!(problems.iter().all(|problem| match problem {
@@ -390,9 +382,7 @@ mod test_can {
             "#
         );
         let arena = Bump::new();
-        let CanExprOut {
-            problems, ..
-        } = can_expr_with(&arena, test_home(), src);
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems.len(), 1);
         println!("{:#?}", problems);

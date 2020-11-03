@@ -110,7 +110,7 @@ fn generate_module_doc<'a>(
             _ => (acc, None),
         },
 
-        AnnotatedBody{ ann_pattern, .. } => match ann_pattern.value {
+        AnnotatedBody { ann_pattern, .. } => match ann_pattern.value {
             Pattern::Identifier(identifier) => {
                 // Check if the definition is exposed
                 if exposed_ident_ids
