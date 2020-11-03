@@ -154,6 +154,9 @@ pub fn run(
         constraint,
     );
 
+    //dbg!(&subs, &state.env.vars_by_symbol);
+    //panic!();
+
     (Solved(subs), state.env)
 }
 
@@ -526,7 +529,7 @@ fn solve(
                             let result = offenders.len();
 
                             if result > 0 {
-                                dbg!(&subs, &offenders, &let_con.def_types, &let_con.def_aliases);
+                                dbg!(&subs, &offenders, &let_con.def_types);
                             }
 
                             result
@@ -750,7 +753,17 @@ fn type_to_variable(
             let content =
                 Content::Structure(FlatType::RecursiveTagUnion(*rec_var, tag_vars, new_ext_var));
 
-            register(subs, rank, pools, content)
+            let tag_union_var = register(subs, rank, pools, content);
+
+            subs.set_content(
+                *rec_var,
+                Content::RecursionVar {
+                    opt_name: None,
+                    structure: tag_union_var,
+                },
+            );
+
+            tag_union_var
         }
         Alias(Symbol::BOOL_BOOL, _, _) => Variable::BOOL,
         Alias(symbol, args, alias_type) => {
@@ -831,6 +844,13 @@ fn check_for_infinite_type(
                 if !is_uniq_infer {
                     let rec_var = subs.fresh_unnamed_flex_var();
                     subs.set_rank(rec_var, description.rank);
+                    subs.set_content(
+                        rec_var,
+                        Content::RecursionVar {
+                            opt_name: None,
+                            structure: recursive,
+                        },
+                    );
 
                     let mut new_tags = MutMap::default();
 
@@ -874,6 +894,7 @@ fn check_for_infinite_type(
                                 uniq_var,
                                 tag_union_var,
                                 ext_var,
+                                description.rank,
                                 &tags,
                             );
                         }
@@ -894,6 +915,7 @@ fn check_for_infinite_type(
                             uniq_var,
                             tag_union_var,
                             ext_var,
+                            description.rank,
                             &tags,
                         );
                     }
@@ -938,6 +960,7 @@ fn correct_recursive_attr(
     uniq_var: Variable,
     tag_union_var: Variable,
     ext_var: Variable,
+    recursion_var_rank: Rank,
     tags: &MutMap<TagName, Vec<Variable>>,
 ) {
     let rec_var = subs.fresh_unnamed_flex_var();
@@ -945,6 +968,15 @@ fn correct_recursive_attr(
 
     let content = content_attr(uniq_var, rec_var);
     subs.set_content(attr_var, content);
+
+    subs.set_rank(rec_var, recursion_var_rank);
+    subs.set_content(
+        rec_var,
+        Content::RecursionVar {
+            opt_name: None,
+            structure: recursive,
+        },
+    );
 
     let mut new_tags = MutMap::default();
 
@@ -1115,6 +1147,8 @@ fn adjust_rank_content(
 
     match content {
         FlexVar(_) | RigidVar(_) | Error => group_rank,
+
+        RecursionVar { .. } => group_rank,
 
         Structure(flat_type) => {
             match flat_type {
@@ -1403,6 +1437,23 @@ fn instantiate_rigids_help(
 
         FlexVar(_) | Error => copy,
 
+        RecursionVar {
+            opt_name,
+            structure,
+        } => {
+            let new_structure = instantiate_rigids_help(subs, max_rank, pools, structure);
+
+            subs.set(
+                copy,
+                make_descriptor(RecursionVar {
+                    opt_name,
+                    structure: new_structure,
+                }),
+            );
+
+            copy
+        }
+
         RigidVar(name) => {
             subs.set(copy, make_descriptor(FlexVar(Some(name))));
 
@@ -1577,6 +1628,23 @@ fn deep_copy_var_help(
         }
 
         FlexVar(_) | Error => copy,
+
+        RecursionVar {
+            opt_name,
+            structure,
+        } => {
+            let new_structure = deep_copy_var_help(subs, max_rank, pools, structure);
+
+            subs.set(
+                copy,
+                make_descriptor(RecursionVar {
+                    opt_name,
+                    structure: new_structure,
+                }),
+            );
+
+            copy
+        }
 
         RigidVar(name) => {
             subs.set(copy, make_descriptor(FlexVar(Some(name))));

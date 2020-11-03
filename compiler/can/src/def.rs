@@ -280,13 +280,9 @@ pub fn canonicalize_defs<'a>(
                     );
                 }
 
-                let alias = roc_types::types::Alias {
-                    region: ann.region,
-                    vars: can_vars,
-                    uniqueness: None,
-                    typ: can_ann.typ,
-                };
-                aliases.insert(symbol, alias);
+                scope.add_alias(symbol, ann.region, can_vars.clone(), can_ann.typ.clone());
+                let alias = scope.lookup_alias(symbol).expect("alias is added to scope");
+                aliases.insert(symbol, alias.clone());
             }
             other => value_defs.push(other),
         }
@@ -1282,7 +1278,7 @@ pub fn can_defs_with_return<'a>(
             for declaration in decls.into_iter().rev() {
                 loc_expr = Located {
                     region: Region::zero(),
-                    value: decl_to_let(var_store, declaration, loc_expr, output.aliases.clone()),
+                    value: decl_to_let(var_store, declaration, loc_expr),
                 };
             }
 
@@ -1292,19 +1288,12 @@ pub fn can_defs_with_return<'a>(
     }
 }
 
-fn decl_to_let(
-    var_store: &mut VarStore,
-    decl: Declaration,
-    loc_ret: Located<Expr>,
-    aliases: SendMap<Symbol, Alias>,
-) -> Expr {
+fn decl_to_let(var_store: &mut VarStore, decl: Declaration, loc_ret: Located<Expr>) -> Expr {
     match decl {
         Declaration::Declare(def) => {
-            Expr::LetNonRec(Box::new(def), Box::new(loc_ret), var_store.fresh(), aliases)
+            Expr::LetNonRec(Box::new(def), Box::new(loc_ret), var_store.fresh())
         }
-        Declaration::DeclareRec(defs) => {
-            Expr::LetRec(defs, Box::new(loc_ret), var_store.fresh(), aliases)
-        }
+        Declaration::DeclareRec(defs) => Expr::LetRec(defs, Box::new(loc_ret), var_store.fresh()),
         Declaration::InvalidCycle(symbols, regions) => {
             Expr::RuntimeError(RuntimeError::CircularDef(symbols, regions))
         }
@@ -1454,6 +1443,8 @@ fn to_pending_def<'a>(
         SpaceBefore(sub_def, _) | SpaceAfter(sub_def, _) | Nested(sub_def) => {
             to_pending_def(env, var_store, sub_def, scope, pattern_type)
         }
+
+        NotYetImplemented(s) => todo!("{}", s),
     }
 }
 
@@ -1591,6 +1582,7 @@ fn make_tag_union_recursive<'a>(
             *typ = Type::RecursiveTagUnion(rec_var, tags.to_vec(), ext.clone());
             typ.substitute_alias(symbol, &Type::Variable(rec_var));
         }
+        Type::RecursiveTagUnion(_, _, _) => {}
         Type::Alias(_, _, actual) => make_tag_union_recursive(
             env,
             symbol,

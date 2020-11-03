@@ -48,13 +48,18 @@ pub fn canonicalize_module_defs<'a>(
     module_ids: &ModuleIds,
     exposed_ident_ids: IdentIds,
     dep_idents: MutMap<ModuleId, IdentIds>,
+    aliases: MutMap<Symbol, Alias>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     mut exposed_symbols: MutSet<Symbol>,
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
     let mut can_exposed_imports = MutMap::default();
-    let mut scope = Scope::new(home);
+    let mut scope = Scope::new(home, var_store);
     let num_deps = dep_idents.len();
+
+    for (name, alias) in aliases.into_iter() {
+        scope.add_alias(name, alias.region, alias.vars, alias.typ);
+    }
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
@@ -353,12 +358,12 @@ fn fix_values_captured_in_closure_expr(
     use crate::expr::Expr::*;
 
     match expr {
-        LetNonRec(def, loc_expr, _, _) => {
+        LetNonRec(def, loc_expr, _) => {
             // LetNonRec(Box<Def>, Box<Located<Expr>>, Variable, Aliases),
             fix_values_captured_in_closure_def(def, no_capture_symbols);
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
         }
-        LetRec(defs, loc_expr, _, _) => {
+        LetRec(defs, loc_expr, _) => {
             // LetRec(Vec<Def>, Box<Located<Expr>>, Variable, Aliases),
             fix_values_captured_in_closure_defs(defs, no_capture_symbols);
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);

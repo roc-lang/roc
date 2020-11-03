@@ -1969,6 +1969,7 @@ mod test_mono {
     }
 
     #[test]
+    #[ignore]
     fn linked_list_length_twice() {
         compiles_to_ir(
             indoc!(

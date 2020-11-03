@@ -12,7 +12,7 @@ const DEFAULT_NUM_BUILTIN: Builtin<'_> = Builtin::Int64;
 
 #[derive(Debug, Clone)]
 pub enum LayoutProblem {
-    UnresolvedTypeVar,
+    UnresolvedTypeVar(Variable),
     Erroneous,
 }
 
@@ -284,21 +284,16 @@ impl<'a, 'b> Env<'a, 'b> {
 }
 
 impl<'a> Layout<'a> {
-    pub fn new(arena: &'a Bump, content: Content, subs: &Subs) -> Result<Self, LayoutProblem> {
-        let mut env = Env {
-            arena,
-            subs,
-            seen: MutSet::default(),
-        };
-
-        Self::new_help(&mut env, content)
-    }
-
-    fn new_help<'b>(env: &mut Env<'a, 'b>, content: Content) -> Result<Self, LayoutProblem> {
+    fn new_help<'b>(
+        env: &mut Env<'a, 'b>,
+        var: Variable,
+        content: Content,
+    ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
 
         match content {
-            FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar),
+            FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
+            RecursionVar { .. } => todo!("recursion var"),
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
             Alias(Symbol::NUM_INT, args, _) => {
@@ -322,7 +317,7 @@ impl<'a> Layout<'a> {
             Ok(Layout::RecursivePointer)
         } else {
             let content = env.subs.get_without_compacting(var).content;
-            Self::new_help(env, content)
+            Self::new_help(env, var, content)
         }
     }
 
@@ -752,7 +747,7 @@ fn layout_from_flat_type<'a>(
                             layouts.push(layout);
                         }
                     }
-                    Err(UnresolvedTypeVar) | Err(Erroneous) => {
+                    Err(UnresolvedTypeVar(_)) | Err(Erroneous) => {
                         // Invalid field!
                         panic!("TODO gracefully handle record with invalid field.var");
                     }
@@ -827,7 +822,7 @@ pub fn sort_record_fields<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
-) -> Vec<'a, (Lowercase, Result<Layout<'a>, Layout<'a>>)> {
+) -> Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)> {
     let mut fields_map = MutMap::default();
 
     let mut env = Env {
@@ -849,7 +844,7 @@ pub fn sort_record_fields<'a>(
                     RecordField::Optional(v) => {
                         let layout =
                             Layout::from_var(&mut env, v).expect("invalid layout from var");
-                        sorted_fields.push((label, Err(layout)));
+                        sorted_fields.push((label, v, Err(layout)));
                         continue;
                     }
                 };
@@ -858,11 +853,11 @@ pub fn sort_record_fields<'a>(
 
                 // Drop any zero-sized fields like {}
                 if !layout.is_zero_sized() {
-                    sorted_fields.push((label, Ok(layout)));
+                    sorted_fields.push((label, var, Ok(layout)));
                 }
             }
 
-            sorted_fields.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
+            sorted_fields.sort_by(|(label1, _, _), (label2, _, _)| label1.cmp(label2));
 
             sorted_fields
         }
@@ -881,9 +876,16 @@ pub enum UnionVariant<'a> {
 }
 
 pub fn union_sorted_tags<'a>(arena: &'a Bump, var: Variable, subs: &Subs) -> UnionVariant<'a> {
+    let var =
+        if let Content::RecursionVar { structure, .. } = subs.get_without_compacting(var).content {
+            structure
+        } else {
+            var
+        };
+
     let mut tags_vec = std::vec::Vec::new();
     let result = match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => {
+        Ok(()) | Err((_, Content::FlexVar(_))) | Err((_, Content::RecursionVar { .. })) => {
             let opt_rec_var = get_recursion_var(subs, var);
             union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs)
         }
@@ -948,7 +950,7 @@ fn union_sorted_tags_help<'a>(
                                     layouts.push(layout);
                                 }
                             }
-                            Err(LayoutProblem::UnresolvedTypeVar) => {
+                            Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                                 // If we encounter an unbound type var (e.g. `Ok *`)
                                 // then it's zero-sized; drop the argument.
                             }
@@ -989,7 +991,7 @@ fn union_sorted_tags_help<'a>(
                                 arg_layouts.push(layout);
                             }
                         }
-                        Err(LayoutProblem::UnresolvedTypeVar) => {
+                        Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                             // If we encounter an unbound type var (e.g. `Ok *`)
                             // then it's zero-sized; drop the argument.
                         }
@@ -1096,6 +1098,7 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
     use roc_types::subs::FlatType::*;
 
     match content {
+        RecursionVar { .. } => panic!("recursion var in num"),
         FlexVar(_) | RigidVar(_) => {
             // If a Num makes it all the way through type checking with an unbound
             // type variable, then assume it's a 64-bit integer.
@@ -1172,7 +1175,7 @@ pub fn list_layout_from_elem<'a>(
             Ok(Layout::Builtin(Builtin::EmptyList))
         }
         content => {
-            let elem_layout = Layout::new_help(env, content)?;
+            let elem_layout = Layout::new_help(env, elem_var, content)?;
 
             // This is a normal list.
             Ok(Layout::Builtin(Builtin::List(

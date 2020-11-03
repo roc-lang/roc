@@ -14,17 +14,6 @@ quicksort = \originalList ->
             list
 
 
-    swap : Int, Int, List a -> List a
-    swap = \i, j, list ->
-        when Pair (List.get list i) (List.get list j) is
-            Pair (Ok atI) (Ok atJ) ->
-                list
-                    |> List.set i atJ
-                    |> List.set j atI
-
-            _ ->
-                []
-
     partition : Int, Int, List (Num a) -> [ Pair Int (List (Num a)) ]
     partition = \low, high, initialList ->
         when List.get initialList high is
@@ -35,7 +24,6 @@ quicksort = \originalList ->
 
             Err _ ->
                 Pair (low - 1) initialList
-
 
     partitionHelp : Int, Int, List (Num a), Int, (Num a) -> [ Pair Int (List (Num a)) ]
     partitionHelp = \i, j, list, high, pivot ->
@@ -53,6 +41,22 @@ quicksort = \originalList ->
             Pair i list
 
 
+    swap : Int, Int, List a -> List a
+    swap = \i, j, list ->
+        when Pair (List.get list i) (List.get list j) is
+            Pair (Ok atI) (Ok atJ) ->
+                list
+                    |> List.set i atJ
+                    |> List.set j atI
+
+            _ ->
+                []
 
     n = List.len originalList 
     quicksortHelp originalList 0 (n - 1)
+
+
+
+
+
+

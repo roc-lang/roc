@@ -10,7 +10,7 @@ use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, ImSet, MutMap, SendMap, SendSet};
 use roc_constrain::expr::constrain_expr;
-use roc_constrain::module::{constrain_imported_values, load_builtin_aliases, Import};
+use roc_constrain::module::{constrain_imported_values, Import};
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::{self, Attempting};
@@ -141,11 +141,6 @@ pub fn uniq_expr_with(
     let (_introduced_rigids, constraint) =
         constrain_imported_values(imports, constraint, &mut var_store);
 
-    // load builtin types
-    let mut constraint = load_builtin_aliases(stdlib.aliases, constraint, &mut var_store);
-
-    constraint.instantiate_aliases(&mut var_store);
-
     let subs2 = Subs::new(var_store.into());
 
     (
@@ -187,7 +182,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     // rules multiple times unnecessarily.
     let loc_expr = operator::desugar_expr(arena, &loc_expr);
 
-    let mut scope = Scope::new(home);
+    let mut scope = Scope::new(home, &mut var_store);
     let dep_idents = IdentIds::exposed_builtins(0);
     let mut env = Env::new(home, dep_idents, &module_ids, IdentIds::default());
     let (loc_expr, output) = canonicalize_expr(
@@ -215,7 +210,6 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
                     value: with_builtins,
                 }),
                 var_store.fresh(),
-                SendMap::default(),
             );
         }
     }
@@ -248,12 +242,6 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     //load builtin values
     let (_introduced_rigids, constraint) =
         constrain_imported_values(imports, constraint, &mut var_store);
-
-    //load builtin types
-    let mut constraint =
-        load_builtin_aliases(roc_builtins::std::aliases(), constraint, &mut var_store);
-
-    constraint.instantiate_aliases(&mut var_store);
 
     let mut all_ident_ids = MutMap::default();
 

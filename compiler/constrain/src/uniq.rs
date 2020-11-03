@@ -1,4 +1,5 @@
-use crate::expr::{exists, exists_with_aliases, Info};
+use crate::builtins::{num_floatingpoint, num_integer, num_num};
+use crate::expr::{exists, Info};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::LetConstraint;
@@ -14,7 +15,7 @@ use roc_types::boolean_algebra::Bool;
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AnnotationSource::{self, *};
 use roc_types::types::Type::{self, *};
-use roc_types::types::{Alias, Category, PReason, Reason, RecordField};
+use roc_types::types::{Category, PReason, Reason, RecordField};
 use roc_uniq::builtins::{attr_type, empty_list_type, list_type, str_type};
 use roc_uniq::sharing::{self, FieldAccess, Mark, Usage, VarUsage};
 
@@ -60,7 +61,6 @@ pub fn constrain_declaration(
 pub fn constrain_decls(
     home: ModuleId,
     decls: &[Declaration],
-    mut aliases: SendMap<Symbol, Alias>,
     var_store: &mut VarStore,
 ) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
@@ -87,8 +87,6 @@ pub fn constrain_decls(
         }
     }
 
-    aliases_to_attr_type(var_store, &mut aliases);
-
     let mut env = Env {
         home,
         rigids: ImMap::default(),
@@ -101,8 +99,7 @@ pub fn constrain_decls(
 
         match decl {
             Declaration::Declare(def) | Declaration::Builtin(def) => {
-                constraint = exists_with_aliases(
-                    aliases.clone(),
+                constraint = exists(
                     Vec::new(),
                     constrain_def(
                         &env,
@@ -115,8 +112,7 @@ pub fn constrain_decls(
                 );
             }
             Declaration::DeclareRec(defs) => {
-                constraint = exists_with_aliases(
-                    aliases.clone(),
+                constraint = exists(
                     Vec::new(),
                     constrain_recursive_defs(
                         &env,
@@ -420,31 +416,30 @@ fn unique_unbound_num(
     let val_type = Type::Variable(inner_var);
     let val_utype = attr_type(Bool::variable(val_uvar), val_type);
 
-    let num_utype = Type::Apply(Symbol::NUM_NUM, vec![val_utype]);
+    let num_utype = num_num(val_utype);
     let num_type = attr_type(Bool::variable(num_uvar), num_utype);
 
     (num_uvar, val_uvar, num_type, num_var)
 }
 
-fn unique_num(var_store: &mut VarStore, symbol: Symbol) -> (Variable, Variable, Type) {
+fn unique_num(var_store: &mut VarStore, val_type: Type) -> (Variable, Variable, Type) {
     let num_uvar = var_store.fresh();
     let val_uvar = var_store.fresh();
 
-    let val_type = Type::Apply(symbol, Vec::new());
     let val_utype = attr_type(Bool::variable(val_uvar), val_type);
 
-    let num_utype = Type::Apply(Symbol::NUM_NUM, vec![val_utype]);
+    let num_utype = num_num(val_utype);
     let num_type = attr_type(Bool::variable(num_uvar), num_utype);
 
     (num_uvar, val_uvar, num_type)
 }
 
 fn unique_int(var_store: &mut VarStore) -> (Variable, Variable, Type) {
-    unique_num(var_store, Symbol::NUM_INTEGER)
+    unique_num(var_store, num_integer())
 }
 
 fn unique_float(var_store: &mut VarStore) -> (Variable, Variable, Type) {
-    unique_num(var_store, Symbol::NUM_FLOATINGPOINT)
+    unique_num(var_store, num_floatingpoint())
 }
 
 pub fn constrain_expr(
@@ -807,7 +802,6 @@ pub fn constrain_expr(
                         rigid_vars: Vec::new(),
                         flex_vars: state.vars,
                         def_types: state.headers,
-                        def_aliases: SendMap::default(),
                         defs_constraint,
                         ret_constraint,
                     })),
@@ -967,7 +961,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        LetRec(defs, loc_ret, var, unlifted_aliases) => {
+        LetRec(defs, loc_ret, var) => {
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
             let body_con = constrain_expr(
@@ -980,11 +974,7 @@ pub fn constrain_expr(
                 expected.clone(),
             );
 
-            let mut aliases = unlifted_aliases.clone();
-            aliases_to_attr_type(var_store, &mut aliases);
-
-            exists_with_aliases(
-                aliases,
+            exists(
                 vec![*var],
                 And(vec![
                     constrain_recursive_defs(
@@ -1006,7 +996,7 @@ pub fn constrain_expr(
                 ]),
             )
         }
-        LetNonRec(def, loc_ret, var, unlifted_aliases) => {
+        LetNonRec(def, loc_ret, var) => {
             // NOTE doesn't currently unregister bound symbols
             // may be a problem when symbols are not globally unique
             let body_con = constrain_expr(
@@ -1019,11 +1009,7 @@ pub fn constrain_expr(
                 expected.clone(),
             );
 
-            let mut aliases = unlifted_aliases.clone();
-            aliases_to_attr_type(var_store, &mut aliases);
-
-            exists_with_aliases(
-                aliases,
+            exists(
                 vec![*var],
                 And(vec![
                     constrain_def(
@@ -1842,13 +1828,11 @@ fn constrain_when_branch(
             rigid_vars: Vec::new(),
             flex_vars: state.vars,
             def_types: state.headers,
-            def_aliases: SendMap::default(),
             defs_constraint: Constraint::And(state.constraints),
             ret_constraint: Constraint::Let(Box::new(LetConstraint {
                 rigid_vars: Vec::new(),
                 flex_vars: vec![guard_uniq_var],
                 def_types: SendMap::default(),
-                def_aliases: SendMap::default(),
                 defs_constraint: guard_constraint,
                 ret_constraint,
             })),
@@ -1858,7 +1842,6 @@ fn constrain_when_branch(
             rigid_vars: Vec::new(),
             flex_vars: state.vars,
             def_types: state.headers,
-            def_aliases: SendMap::default(),
             defs_constraint: Constraint::And(state.constraints),
             ret_constraint,
         }))
@@ -2150,39 +2133,6 @@ fn annotation_to_attr_type_many(
         })
 }
 
-fn aliases_to_attr_type(var_store: &mut VarStore, aliases: &mut SendMap<Symbol, Alias>) {
-    for alias in aliases.iter_mut() {
-        // ensure
-        //
-        // Identity a : [ Identity a ]
-        //
-        // does not turn into
-        //
-        // Identity a : [ Identity (Attr u a) ]
-        //
-        // That would give a double attr wrapper on the type arguments.
-        // The `change_var_kind` flag set to false ensures type variables remain of kind *
-        let (_, new) = annotation_to_attr_type(var_store, &alias.typ, &mut ImSet::default(), false);
-        // remove the outer Attr, because when this occurs in a signature it'll already be wrapped in one
-        match new {
-            Type::Apply(Symbol::ATTR_ATTR, args) => {
-                alias.typ = args[1].clone();
-                if let Type::Boolean(b) = args[0].clone() {
-                    alias.uniqueness = Some(b);
-                }
-            }
-            _ => unreachable!("`annotation_to_attr_type` always gives back an Attr"),
-        }
-
-        // Check that if the alias is a recursive tag union, all structures containing the
-        // recursion variable get the same uniqueness as the recursion variable (and thus as the
-        // recursive tag union itself)
-        if let Some(b) = &alias.uniqueness {
-            fix_mutual_recursive_alias(&mut alias.typ, b);
-        }
-    }
-}
-
 fn constrain_def(
     env: &Env,
     var_store: &mut VarStore,
@@ -2205,12 +2155,10 @@ fn constrain_def(
 
     pattern_state.vars.push(expr_var);
 
-    let mut def_aliases = SendMap::default();
     let mut new_rigids = Vec::new();
 
     let expr_con = match &def.annotation {
         Some(annotation) => {
-            def_aliases = annotation.aliases.clone();
             let arity = annotation.signature.arity();
             let mut ftv = env.rigids.clone();
 
@@ -2264,19 +2212,14 @@ fn constrain_def(
         ),
     };
 
-    // Lift aliases to Attr types
-    aliases_to_attr_type(var_store, &mut def_aliases);
-
     Let(Box::new(LetConstraint {
         rigid_vars: new_rigids,
         flex_vars: pattern_state.vars,
         def_types: pattern_state.headers,
-        def_aliases,
         defs_constraint: Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),        // always empty
             flex_vars: Vec::new(),         // empty, because our functions have no arguments
             def_types: SendMap::default(), // empty, because our functions have no arguments!
-            def_aliases: SendMap::default(),
             defs_constraint: And(pattern_state.constraints),
             ret_constraint: expr_con,
         })),
@@ -2426,7 +2369,6 @@ pub fn rec_defs_help(
     mut rigid_info: Info,
     mut flex_info: Info,
 ) -> Constraint {
-    let mut def_aliases = SendMap::default();
     for def in defs {
         let expr_var = def.expr_var;
         let expr_type = Type::Variable(expr_var);
@@ -2470,7 +2412,6 @@ pub fn rec_defs_help(
                     rigid_vars: Vec::new(),
                     flex_vars: Vec::new(), // empty because Roc function defs have no args
                     def_types: SendMap::default(), // empty because Roc function defs have no args
-                    def_aliases: SendMap::default(),
                     defs_constraint: True, // I think this is correct, once again because there are no args
                     ret_constraint: expr_con,
                 }));
@@ -2481,9 +2422,6 @@ pub fn rec_defs_help(
             }
 
             Some(annotation) => {
-                for (symbol, alias) in annotation.aliases.clone() {
-                    def_aliases.insert(symbol, alias);
-                }
                 let arity = annotation.signature.arity();
                 let mut ftv = env.rigids.clone();
                 let signature = instantiate_rigids(
@@ -2529,7 +2467,6 @@ pub fn rec_defs_help(
                     rigid_vars: Vec::new(),
                     flex_vars: Vec::new(), // empty because Roc function defs have no args
                     def_types: SendMap::default(), // empty because Roc function defs have no args
-                    def_aliases: SendMap::default(),
                     defs_constraint: True, // I think this is correct, once again because there are no args
                     ret_constraint: expr_con,
                 }));
@@ -2541,7 +2478,6 @@ pub fn rec_defs_help(
                     rigid_vars: new_rigids,
                     flex_vars: Vec::new(),         // no flex vars introduced
                     def_types: SendMap::default(), // no headers introduced (at this level)
-                    def_aliases: SendMap::default(),
                     defs_constraint: def_con,
                     ret_constraint: True,
                 })));
@@ -2550,25 +2486,19 @@ pub fn rec_defs_help(
         }
     }
 
-    // list aliases to Attr types
-    aliases_to_attr_type(var_store, &mut def_aliases);
-
     Let(Box::new(LetConstraint {
         rigid_vars: rigid_info.vars,
         flex_vars: Vec::new(),
         def_types: rigid_info.def_types,
-        def_aliases,
         defs_constraint: True,
         ret_constraint: Let(Box::new(LetConstraint {
             rigid_vars: Vec::new(),
             flex_vars: flex_info.vars,
             def_types: flex_info.def_types.clone(),
-            def_aliases: SendMap::default(),
             defs_constraint: Let(Box::new(LetConstraint {
                 rigid_vars: Vec::new(),
                 flex_vars: Vec::new(),
                 def_types: flex_info.def_types,
-                def_aliases: SendMap::default(),
                 defs_constraint: True,
                 ret_constraint: And(flex_info.constraints),
             })),
@@ -2603,94 +2533,4 @@ fn constrain_field_update(
     );
 
     (var, field_type, con)
-}
-
-/// Fix uniqueness attributes on mutually recursive type aliases.
-/// Given aliases
-///
-/// >    ListA a b : [ Cons a (ListB b a), Nil ]
-/// >    ListB a b : [ Cons a (ListA b a), Nil ]
-///
-/// We get the lifted alias:
-///
-/// >   `Test.ListB`: Alias {
-/// >       ...,
-/// >       uniqueness: Some(
-/// >           Container(
-/// >               118,
-/// >               {},
-/// >           ),
-/// >       ),
-/// >       typ: [ Global('Cons') <9> (`#Attr.Attr` Container(119, {}) Alias `Test.ListA` <10> <9>[ but actually [ Global('Cons') <10> (`#Attr.Attr` Container(118, {}) <13>), Global('Nil') ] ]), Global('Nil') ] as <13>,
-/// >   },
-///
-/// Note that the alias will get uniqueness variable <118>, but the contained `ListA` gets variable
-/// <119>. But, 119 is contained in 118, and 118 in 119, so we need <119> >= <118> >= <119> >= <118> ...
-/// That can only be true if they are the same. Type inference will not find that, so we must do it
-/// ourselves in user-defined aliases.
-fn fix_mutual_recursive_alias(typ: &mut Type, attribute: &Bool) {
-    use Type::*;
-    if let RecursiveTagUnion(rec, tags, _ext) = typ {
-        for (_, args) in tags {
-            for mut arg in args {
-                fix_mutual_recursive_alias_help(*rec, &Type::Boolean(attribute.clone()), &mut arg);
-            }
-        }
-    }
-}
-
-fn fix_mutual_recursive_alias_help(rec_var: Variable, attribute: &Type, into_type: &mut Type) {
-    if into_type.contains_variable(rec_var) {
-        if let Type::Apply(Symbol::ATTR_ATTR, args) = into_type {
-            args[0] = attribute.clone();
-
-            fix_mutual_recursive_alias_help_help(rec_var, attribute, &mut args[1]);
-        }
-    }
-}
-
-#[inline(always)]
-fn fix_mutual_recursive_alias_help_help(rec_var: Variable, attribute: &Type, into_type: &mut Type) {
-    use Type::*;
-
-    match into_type {
-        Function(args, closure, ret) => {
-            fix_mutual_recursive_alias_help(rec_var, attribute, ret);
-            fix_mutual_recursive_alias_help(rec_var, attribute, closure);
-            args.iter_mut()
-                .for_each(|arg| fix_mutual_recursive_alias_help(rec_var, attribute, arg));
-        }
-        RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
-            fix_mutual_recursive_alias_help(rec_var, attribute, ext);
-
-            for (_tag, args) in tags.iter_mut() {
-                for arg in args.iter_mut() {
-                    fix_mutual_recursive_alias_help(rec_var, attribute, arg);
-                }
-            }
-        }
-
-        Record(fields, ext) => {
-            fix_mutual_recursive_alias_help(rec_var, attribute, ext);
-
-            for field in fields.iter_mut() {
-                let arg = match field {
-                    RecordField::Required(arg) => arg,
-                    RecordField::Optional(arg) => arg,
-                    RecordField::Demanded(arg) => arg,
-                };
-
-                fix_mutual_recursive_alias_help(rec_var, attribute, arg);
-            }
-        }
-        Alias(_, _, actual_type) => {
-            // call help_help, because actual_type is not wrapped in ATTR
-            fix_mutual_recursive_alias_help_help(rec_var, attribute, actual_type);
-        }
-        Apply(_, args) => {
-            args.iter_mut()
-                .for_each(|arg| fix_mutual_recursive_alias_help(rec_var, attribute, arg));
-        }
-        EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
-    }
 }

@@ -95,8 +95,13 @@ mod test_reporting {
                 home,
                 ident_ids: &mut ident_ids,
             };
-            let _mono_expr =
-                Stmt::new(&mut mono_env, loc_expr.value, &mut procs, &mut layout_cache);
+            let _mono_expr = Stmt::new(
+                &mut mono_env,
+                loc_expr.value,
+                var,
+                &mut procs,
+                &mut layout_cache,
+            );
         }
 
         Ok((unify_problems, can_problems, mono_problems, home, interns))
@@ -2574,6 +2579,7 @@ mod test_reporting {
     }
 
     #[test]
+    #[ignore]
     fn cyclic_alias() {
         report_problem_as(
             indoc!(
@@ -2988,7 +2994,7 @@ mod test_reporting {
                 Pair a b : [ Pair a b ]
 
                 x : Pair Int
-                x = 3
+                x = Pair 2 3
 
                 x
                 "#
@@ -3089,9 +3095,6 @@ mod test_reporting {
 
     #[test]
     fn two_different_cons() {
-        // TODO investigate what is happening here;
-        // while it makes some kind of sense to print the recursion var as infinite,
-        // it's not very helpful in practice.
         report_problem_as(
             indoc!(
                 r#"
@@ -3115,17 +3118,18 @@ mod test_reporting {
 
                 This `Cons` global tag application has the type:
 
-                    [ Cons {} [ Cons Str [ Cons {} ∞, Nil ] as ∞, Nil ], Nil ]
+                    [ Cons {} [ Cons Str [ Cons {} a, Nil ] as a, Nil ], Nil ]
 
                 But the type annotation on `x` says it should be:
 
-                    [ Cons {} ∞, Nil ] as ∞
+                    [ Cons {} a, Nil ] as a
                 "#
             ),
         )
     }
 
     #[test]
+    #[ignore]
     fn mutually_recursive_types_with_type_error() {
         report_problem_as(
             indoc!(

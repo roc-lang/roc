@@ -971,10 +971,11 @@ impl<'a> Stmt<'a> {
     pub fn new(
         env: &mut Env<'a, '_>,
         can_expr: roc_can::expr::Expr,
+        var: Variable,
         procs: &mut Procs<'a>,
         layout_cache: &mut LayoutCache<'a>,
     ) -> Self {
-        from_can(env, can_expr, procs, layout_cache)
+        from_can(env, var, can_expr, procs, layout_cache)
     }
 
     pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
@@ -1405,7 +1406,7 @@ fn specialize_external<'a>(
     let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
     debug_assert!(is_valid);
 
-    let mut specialized_body = from_can(env, body, procs, layout_cache);
+    let mut specialized_body = from_can(env, fn_var, body, procs, layout_cache);
 
     // if this is a closure, add the closure record argument
     let pattern_symbols = if let CapturedSymbols::Captured(_) = captured_symbols {
@@ -1712,8 +1713,8 @@ fn specialize_solved_type<'a>(
     partial_proc: PartialProc<'a>,
 ) -> Result<(Proc<'a>, Layout<'a>), LayoutProblem> {
     // add the specializations that other modules require of us
-    use roc_constrain::module::{to_type, FreeVars};
     use roc_solve::solve::{insert_type_into_subs, instantiate_rigids};
+    use roc_types::solved_types::{to_type, FreeVars};
     use roc_types::subs::VarStore;
 
     let snapshot = env.subs.snapshot();
@@ -1761,14 +1762,22 @@ struct FunctionLayouts<'a> {
 }
 
 impl<'a> FunctionLayouts<'a> {
-    pub fn from_layout(layout: Layout<'a>) -> Self {
+    pub fn from_layout(arena: &'a Bump, layout: Layout<'a>) -> Self {
         match &layout {
             Layout::FunctionPointer(arguments, result) => FunctionLayouts {
                 arguments,
                 result: (*result).clone(),
                 full: layout,
             },
-            Layout::Closure(_, _, _) => todo!(),
+            Layout::Closure(arguments, closure_layout, result) => {
+                let full = ClosureLayout::extend_function_layout(
+                    arena,
+                    arguments,
+                    closure_layout.clone(),
+                    result,
+                );
+                FunctionLayouts::from_layout(arena, full)
+            }
             _ => FunctionLayouts {
                 full: layout.clone(),
                 arguments: &[],
@@ -1781,6 +1790,7 @@ impl<'a> FunctionLayouts<'a> {
 pub fn with_hole<'a>(
     env: &mut Env<'a, '_>,
     can_expr: roc_can::expr::Expr,
+    variable: Variable,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
@@ -1826,7 +1836,7 @@ pub fn with_hole<'a>(
                 hole,
             ),
         },
-        LetNonRec(def, cont, _, _) => {
+        LetNonRec(def, cont, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
                 if let Closure {
                     function_type,
@@ -1857,7 +1867,15 @@ pub fn with_hole<'a>(
                         return_type,
                     );
 
-                    return with_hole(env, cont.value, procs, layout_cache, assigned, hole);
+                    return with_hole(
+                        env,
+                        cont.value,
+                        variable,
+                        procs,
+                        layout_cache,
+                        assigned,
+                        hole,
+                    );
                 }
             }
 
@@ -1869,6 +1887,7 @@ pub fn with_hole<'a>(
                         return with_hole(
                             env,
                             def.loc_expr.value,
+                            def.expr_var,
                             procs,
                             layout_cache,
                             assigned,
@@ -1879,7 +1898,15 @@ pub fn with_hole<'a>(
                 }
 
                 // continue with the default path
-                let mut stmt = with_hole(env, cont.value, procs, layout_cache, assigned, hole);
+                let mut stmt = with_hole(
+                    env,
+                    cont.value,
+                    variable,
+                    procs,
+                    layout_cache,
+                    assigned,
+                    hole,
+                );
 
                 // a variable is aliased
                 if let roc_can::expr::Expr::Var(original) = def.loc_expr.value {
@@ -1890,6 +1917,7 @@ pub fn with_hole<'a>(
                     with_hole(
                         env,
                         def.loc_expr.value,
+                        def.expr_var,
                         procs,
                         layout_cache,
                         symbol,
@@ -1919,7 +1947,15 @@ pub fn with_hole<'a>(
                 }
 
                 // convert the continuation
-                let mut stmt = with_hole(env, cont.value, procs, layout_cache, assigned, hole);
+                let mut stmt = with_hole(
+                    env,
+                    cont.value,
+                    variable,
+                    procs,
+                    layout_cache,
+                    assigned,
+                    hole,
+                );
 
                 let outer_symbol = env.unique_symbol();
                 stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
@@ -1929,6 +1965,7 @@ pub fn with_hole<'a>(
                 with_hole(
                     env,
                     def.loc_expr.value,
+                    def.expr_var,
                     procs,
                     layout_cache,
                     outer_symbol,
@@ -1936,7 +1973,7 @@ pub fn with_hole<'a>(
                 )
             }
         }
-        LetRec(defs, cont, _, _) => {
+        LetRec(defs, cont, _) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
@@ -1975,7 +2012,15 @@ pub fn with_hole<'a>(
                 unreachable!("recursive value does not have Identifier pattern")
             }
 
-            with_hole(env, cont.value, procs, layout_cache, assigned, hole)
+            with_hole(
+                env,
+                cont.value,
+                variable,
+                procs,
+                layout_cache,
+                assigned,
+                hole,
+            )
         }
         Var(symbol) => {
             if procs.module_thunks.contains(&symbol) {
@@ -1995,6 +2040,27 @@ pub fn with_hole<'a>(
                 );
 
                 return result;
+            } else if symbol.module_id() != env.home && symbol.module_id() != ModuleId::ATTR {
+                match layout_cache.from_var(env.arena, variable, env.subs) {
+                    Err(e) => panic!("invalid layout {:?}", e),
+                    Ok(Layout::FunctionPointer(_, _)) => {
+                        add_needed_external(procs, env, variable, symbol);
+                    }
+                    Ok(_) => {
+                        // this is a 0-arity thunk
+                        let result = call_by_name(
+                            env,
+                            procs,
+                            variable,
+                            symbol,
+                            std::vec::Vec::new(),
+                            layout_cache,
+                            assigned,
+                            env.arena.alloc(Stmt::Ret(assigned)),
+                        );
+                        return result;
+                    }
+                }
             }
 
             // A bit ugly, but it does the job
@@ -2023,9 +2089,6 @@ pub fn with_hole<'a>(
                 }
             }
         }
-        // Var(symbol) => panic!("reached Var {}", symbol),
-        // assigned,
-        // Stmt::Ret(symbol),
         Tag {
             variant_var,
             name: tag_name,
@@ -2038,7 +2101,10 @@ pub fn with_hole<'a>(
             let variant = crate::layout::union_sorted_tags(env.arena, variant_var, env.subs);
 
             match variant {
-                Never => unreachable!("The `[]` type has no constructors"),
+                Never => unreachable!(
+                    "The `[]` type has no constructors, source var {:?}",
+                    variant_var
+                ),
                 Unit => Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole),
                 BoolUnion { ttrue, .. } => Stmt::Let(
                     assigned,
@@ -2140,12 +2206,9 @@ pub fn with_hole<'a>(
             let sorted_fields = crate::layout::sort_record_fields(env.arena, record_var, env.subs);
 
             let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
-            let mut field_layouts = Vec::with_capacity_in(fields.len(), env.arena);
             let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
 
-            for (label, layout) in sorted_fields.into_iter() {
-                field_layouts.push(layout);
-
+            for (label, _, _) in sorted_fields.into_iter() {
                 // TODO how should function pointers be handled here?
                 match fields.remove(&label) {
                     Some(field) => match can_reuse_symbol(procs, &field.loc_expr.value) {
@@ -2179,6 +2242,7 @@ pub fn with_hole<'a>(
                     stmt = with_hole(
                         env,
                         field.loc_expr.value,
+                        field.var,
                         procs,
                         layout_cache,
                         *symbol,
@@ -2215,6 +2279,7 @@ pub fn with_hole<'a>(
                 let mut stmt = with_hole(
                     env,
                     final_else.value,
+                    branch_var,
                     procs,
                     layout_cache,
                     assigned,
@@ -2226,6 +2291,7 @@ pub fn with_hole<'a>(
                     let then = with_hole(
                         env,
                         loc_then.value,
+                        branch_var,
                         procs,
                         layout_cache,
                         assigned,
@@ -2246,6 +2312,7 @@ pub fn with_hole<'a>(
                     stmt = with_hole(
                         env,
                         loc_cond.value,
+                        cond_var,
                         procs,
                         layout_cache,
                         branching_symbol,
@@ -2264,6 +2331,7 @@ pub fn with_hole<'a>(
                 let mut stmt = with_hole(
                     env,
                     final_else.value,
+                    branch_var,
                     procs,
                     layout_cache,
                     assigned_in_jump,
@@ -2275,6 +2343,7 @@ pub fn with_hole<'a>(
                     let then = with_hole(
                         env,
                         loc_then.value,
+                        branch_var,
                         procs,
                         layout_cache,
                         assigned_in_jump,
@@ -2295,6 +2364,7 @@ pub fn with_hole<'a>(
                     stmt = with_hole(
                         env,
                         loc_cond.value,
+                        cond_var,
                         procs,
                         layout_cache,
                         branching_symbol,
@@ -2430,7 +2500,7 @@ pub fn with_hole<'a>(
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 
             let mut current = 0;
-            for (label, opt_field_layout) in sorted_fields.into_iter() {
+            for (label, _, opt_field_layout) in sorted_fields.into_iter() {
                 match opt_field_layout {
                     Err(_) => {
                         // this was an optional field, and now does not exist!
@@ -2571,7 +2641,7 @@ pub fn with_hole<'a>(
             let mut fields = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 
             let mut current = 0;
-            for (label, opt_field_layout) in sorted_fields.into_iter() {
+            for (label, _, opt_field_layout) in sorted_fields.into_iter() {
                 match opt_field_layout {
                     Err(_) => {
                         debug_assert!(!updates.contains_key(&label));
@@ -2946,6 +3016,7 @@ pub fn with_hole<'a>(
                             result = with_hole(
                                 env,
                                 loc_expr.value,
+                                fn_var,
                                 procs,
                                 layout_cache,
                                 function_symbol,
@@ -2983,12 +3054,17 @@ pub fn with_hole<'a>(
                 .zip(arg_symbols.iter().rev());
             assign_to_symbols(env, procs, layout_cache, iter, result)
         }
-        RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
+        RuntimeError(e) => {
+            eprintln!("emitted runtime error {:?}", &e);
+
+            Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e)))
+        }
     }
 }
 
 pub fn from_can<'a>(
     env: &mut Env<'a, '_>,
+    variable: Variable,
     can_expr: roc_can::expr::Expr,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
@@ -3041,11 +3117,11 @@ pub fn from_can<'a>(
                 .from_var(env.arena, cond_var, env.subs)
                 .expect("invalid cond_layout");
 
-            let mut stmt = from_can(env, final_else.value, procs, layout_cache);
+            let mut stmt = from_can(env, branch_var, final_else.value, procs, layout_cache);
 
             for (loc_cond, loc_then) in branches.into_iter().rev() {
                 let branching_symbol = env.unique_symbol();
-                let then = from_can(env, loc_then.value, procs, layout_cache);
+                let then = from_can(env, branch_var, loc_then.value, procs, layout_cache);
 
                 stmt = Stmt::Cond {
                     cond_symbol: branching_symbol,
@@ -3061,6 +3137,7 @@ pub fn from_can<'a>(
                 stmt = with_hole(
                     env,
                     loc_cond.value,
+                    cond_var,
                     procs,
                     layout_cache,
                     branching_symbol,
@@ -3070,7 +3147,7 @@ pub fn from_can<'a>(
 
             stmt
         }
-        LetRec(defs, cont, _, _) => {
+        LetRec(defs, cont, _) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
                 if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
@@ -3113,9 +3190,9 @@ pub fn from_can<'a>(
                 unreachable!("recursive value does not have Identifier pattern")
             }
 
-            from_can(env, cont.value, procs, layout_cache)
+            from_can(env, variable, cont.value, procs, layout_cache)
         }
-        LetNonRec(def, cont, outer_pattern_vars, outer_annotation) => {
+        LetNonRec(def, cont, outer_annotation) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
                 if let Closure { .. } = &def.loc_expr.value {
                     // Now that we know for sure it's a closure, get an owned
@@ -3163,7 +3240,7 @@ pub fn from_can<'a>(
                                 return_type,
                             );
 
-                            return from_can(env, cont.value, procs, layout_cache);
+                            return from_can(env, variable, cont.value, procs, layout_cache);
                         }
                         _ => unreachable!(),
                     }
@@ -3171,18 +3248,13 @@ pub fn from_can<'a>(
 
                 match def.loc_expr.value {
                     roc_can::expr::Expr::Var(original) => {
-                        let mut rest = from_can(env, cont.value, procs, layout_cache);
+                        let mut rest = from_can(env, def.expr_var, cont.value, procs, layout_cache);
                         // a variable is aliased
                         substitute_in_exprs(env.arena, &mut rest, *symbol, original);
 
                         return rest;
                     }
-                    roc_can::expr::Expr::LetNonRec(
-                        nested_def,
-                        nested_cont,
-                        nested_pattern_vars,
-                        nested_annotation,
-                    ) => {
+                    roc_can::expr::Expr::LetNonRec(nested_def, nested_cont, nested_annotation) => {
                         use roc_can::expr::Expr::*;
                         // We must transform
                         //
@@ -3213,28 +3285,17 @@ pub fn from_can<'a>(
                             expr_var: def.expr_var,
                         };
 
-                        let new_inner = LetNonRec(
-                            Box::new(new_def),
-                            cont,
-                            outer_pattern_vars,
-                            outer_annotation,
-                        );
+                        let new_inner = LetNonRec(Box::new(new_def), cont, outer_annotation);
 
                         let new_outer = LetNonRec(
                             nested_def,
                             Box::new(Located::at_zero(new_inner)),
-                            nested_pattern_vars,
                             nested_annotation,
                         );
 
-                        return from_can(env, new_outer, procs, layout_cache);
+                        return from_can(env, variable, new_outer, procs, layout_cache);
                     }
-                    roc_can::expr::Expr::LetRec(
-                        nested_defs,
-                        nested_cont,
-                        nested_pattern_vars,
-                        nested_annotation,
-                    ) => {
+                    roc_can::expr::Expr::LetRec(nested_defs, nested_cont, nested_annotation) => {
                         use roc_can::expr::Expr::*;
                         // We must transform
                         //
@@ -3265,27 +3326,22 @@ pub fn from_can<'a>(
                             expr_var: def.expr_var,
                         };
 
-                        let new_inner = LetNonRec(
-                            Box::new(new_def),
-                            cont,
-                            outer_pattern_vars,
-                            outer_annotation,
-                        );
+                        let new_inner = LetNonRec(Box::new(new_def), cont, outer_annotation);
 
                         let new_outer = LetRec(
                             nested_defs,
                             Box::new(Located::at_zero(new_inner)),
-                            nested_pattern_vars,
                             nested_annotation,
                         );
 
-                        return from_can(env, new_outer, procs, layout_cache);
+                        return from_can(env, variable, new_outer, procs, layout_cache);
                     }
                     _ => {
-                        let rest = from_can(env, cont.value, procs, layout_cache);
+                        let rest = from_can(env, variable, cont.value, procs, layout_cache);
                         return with_hole(
                             env,
                             def.loc_expr.value,
+                            def.expr_var,
                             procs,
                             layout_cache,
                             *symbol,
@@ -3299,11 +3355,19 @@ pub fn from_can<'a>(
             let mono_pattern = from_can_pattern(env, layout_cache, &def.loc_pattern.value);
 
             if let Pattern::Identifier(symbol) = mono_pattern {
-                let hole = env
-                    .arena
-                    .alloc(from_can(env, cont.value, procs, layout_cache));
+                let hole =
+                    env.arena
+                        .alloc(from_can(env, variable, cont.value, procs, layout_cache));
 
-                with_hole(env, def.loc_expr.value, procs, layout_cache, symbol, hole)
+                with_hole(
+                    env,
+                    def.loc_expr.value,
+                    def.expr_var,
+                    procs,
+                    layout_cache,
+                    symbol,
+                    hole,
+                )
             } else {
                 let context = crate::exhaustive::Context::BadDestruct;
                 match crate::exhaustive::check(
@@ -3324,7 +3388,7 @@ pub fn from_can<'a>(
                 }
 
                 // convert the continuation
-                let mut stmt = from_can(env, cont.value, procs, layout_cache);
+                let mut stmt = from_can(env, variable, cont.value, procs, layout_cache);
 
                 if let roc_can::expr::Expr::Var(outer_symbol) = def.loc_expr.value {
                     store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt)
@@ -3339,6 +3403,7 @@ pub fn from_can<'a>(
                     with_hole(
                         env,
                         def.loc_expr.value,
+                        def.expr_var,
                         procs,
                         layout_cache,
                         outer_symbol,
@@ -3351,7 +3416,7 @@ pub fn from_can<'a>(
         _ => {
             let symbol = env.unique_symbol();
             let hole = env.arena.alloc(Stmt::Ret(symbol));
-            with_hole(env, can_expr, procs, layout_cache, symbol, hole)
+            with_hole(env, can_expr, variable, procs, layout_cache, symbol, hole)
         }
     }
 }
@@ -3471,13 +3536,13 @@ fn from_can_when<'a>(
         .into_iter()
         .map(|(pattern, opt_guard, can_expr)| {
             let branch_stmt = match join_point {
-                None => from_can(env, can_expr, procs, layout_cache),
+                None => from_can(env, expr_var, can_expr, procs, layout_cache),
                 Some(id) => {
                     let symbol = env.unique_symbol();
                     let arguments = bumpalo::vec![in env.arena; symbol].into_bump_slice();
                     let jump = env.arena.alloc(Stmt::Jump(id, arguments));
 
-                    with_hole(env, can_expr, procs, layout_cache, symbol, jump)
+                    with_hole(env, can_expr, expr_var, procs, layout_cache, symbol, jump)
                 }
             };
 
@@ -3487,7 +3552,15 @@ fn from_can_when<'a>(
                 let symbol = env.unique_symbol();
                 let jump = env.arena.alloc(Stmt::Jump(id, env.arena.alloc([symbol])));
 
-                let guard_stmt = with_hole(env, loc_expr.value, procs, layout_cache, symbol, jump);
+                let guard_stmt = with_hole(
+                    env,
+                    loc_expr.value,
+                    cond_var,
+                    procs,
+                    layout_cache,
+                    symbol,
+                    jump,
+                );
 
                 match store_pattern(env, procs, layout_cache, &pattern, cond_symbol, guard_stmt) {
                     Ok(new_guard_stmt) => (
@@ -4033,6 +4106,7 @@ fn store_record_destruct<'a>(
             stmt = with_hole(
                 env,
                 expr.clone(),
+                destruct.variable,
                 procs,
                 layout_cache,
                 destruct.symbol,
@@ -4257,6 +4331,7 @@ fn assign_to_symbol<'a>(
         with_hole(
             env,
             loc_arg.value,
+            arg_var,
             procs,
             layout_cache,
             symbol,
@@ -4280,6 +4355,24 @@ where
     }
 
     result
+}
+
+fn add_needed_external<'a>(
+    procs: &mut Procs<'a>,
+    env: &mut Env<'a, '_>,
+    fn_var: Variable,
+    name: Symbol,
+) {
+    // call of a function that is not in this module
+    use std::collections::hash_map::Entry::{Occupied, Vacant};
+
+    let existing = match procs.externals_we_need.entry(name.module_id()) {
+        Vacant(entry) => entry.insert(ExternalSpecializations::default()),
+        Occupied(entry) => entry.into_mut(),
+    };
+
+    let solved_type = SolvedType::from_var(env.subs, fn_var);
+    existing.insert(name, solved_type);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4365,13 +4458,20 @@ fn call_by_name<'a>(
                 // exactly once.
                 match &mut procs.pending_specializations {
                     Some(pending_specializations) => {
-                        // register the pending specialization, so this gets code genned later
-                        add_pending(
-                            pending_specializations,
-                            proc_name,
-                            full_layout.clone(),
-                            pending,
-                        );
+                        let is_imported = assigned.module_id() != proc_name.module_id();
+                        // builtins are currently (re)defined in each module, so not really imported
+                        let is_builtin = proc_name.is_builtin();
+                        if is_imported && !is_builtin {
+                            add_needed_external(procs, env, original_fn_var, proc_name);
+                        } else {
+                            // register the pending specialization, so this gets code genned later
+                            add_pending(
+                                pending_specializations,
+                                proc_name,
+                                full_layout.clone(),
+                                pending,
+                            );
+                        }
 
                         let call = Expr::FunctionCall {
                             call_type: CallType::ByName(proc_name),
@@ -4411,7 +4511,8 @@ fn call_by_name<'a>(
                                 ) {
                                     Ok((proc, layout)) => {
                                         debug_assert_eq!(full_layout, layout);
-                                        let function_layout = FunctionLayouts::from_layout(layout);
+                                        let function_layout =
+                                            FunctionLayouts::from_layout(env.arena, layout);
 
                                         procs.specialized.remove(&(proc_name, full_layout));
 
@@ -4453,21 +4554,7 @@ fn call_by_name<'a>(
                             }
 
                             None if assigned.module_id() != proc_name.module_id() => {
-                                let fn_var = original_fn_var;
-
-                                // call of a function that is not not in this module
-                                use std::collections::hash_map::Entry::{Occupied, Vacant};
-
-                                let existing =
-                                    match procs.externals_we_need.entry(proc_name.module_id()) {
-                                        Vacant(entry) => {
-                                            entry.insert(ExternalSpecializations::default())
-                                        }
-                                        Occupied(entry) => entry.into_mut(),
-                                    };
-
-                                let solved_type = SolvedType::from_var(env.subs, fn_var);
-                                existing.insert(proc_name, solved_type);
+                                add_needed_external(procs, env, original_fn_var, proc_name);
 
                                 let call = Expr::FunctionCall {
                                     call_type: CallType::ByName(proc_name),
@@ -4487,9 +4574,9 @@ fn call_by_name<'a>(
                             None => {
                                 // This must have been a runtime error.
                                 match procs.runtime_errors.get(&proc_name) {
-                                    Some(error) => {
-                                        Stmt::RuntimeError(env.arena.alloc(format!("{:?}", error)))
-                                    }
+                                    Some(error) => Stmt::RuntimeError(
+                                        env.arena.alloc(format!("runtime error {:?}", error)),
+                                    ),
                                     None => unreachable!("Proc name {:?} is invalid", proc_name),
                                 }
                             }
@@ -4498,10 +4585,19 @@ fn call_by_name<'a>(
                 }
             }
         }
-        Err(e) => {
-            // This function code gens to a runtime error,
-            // so attempting to call it will immediately crash.
-            Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e)))
+        Err(LayoutProblem::UnresolvedTypeVar(var)) => {
+            let msg = format!(
+                "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
+                var, proc_name, fn_var
+            );
+            Stmt::RuntimeError(env.arena.alloc(msg))
+        }
+        Err(LayoutProblem::Erroneous) => {
+            let msg = format!(
+                "Hit an erroneous type when creating a layout for {:?}",
+                proc_name
+            );
+            Stmt::RuntimeError(env.arena.alloc(msg))
         }
     }
 }
@@ -4545,6 +4641,7 @@ pub enum Pattern<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecordDestruct<'a> {
     pub label: Lowercase,
+    pub variable: Variable,
     pub layout: Layout<'a>,
     pub symbol: Symbol,
     pub typ: DestructType<'a>,
@@ -4599,7 +4696,10 @@ pub fn from_can_pattern<'a>(
             let variant = crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs);
 
             match variant {
-                Never => unreachable!("there is no pattern of type `[]`"),
+                Never => unreachable!(
+                    "there is no pattern of type `[]`, union var {:?}",
+                    *whole_var
+                ),
                 Unit => Pattern::EnumLiteral {
                     tag_id: 0,
                     tag_name: tag_name.clone(),
@@ -4768,7 +4868,7 @@ pub fn from_can_pattern<'a>(
 
             loop {
                 match (opt_sorted, opt_destruct) {
-                    (Some((label, Ok(field_layout))), Some(destruct)) => {
+                    (Some((label, variable, Ok(field_layout))), Some(destruct)) => {
                         if destruct.value.label == label {
                             mono_destructs.push(from_can_record_destruct(
                                 env,
@@ -4784,6 +4884,7 @@ pub fn from_can_pattern<'a>(
                             mono_destructs.push(RecordDestruct {
                                 label: label.clone(),
                                 symbol: env.unique_symbol(),
+                                variable,
                                 layout: field_layout.clone(),
                                 typ: DestructType::Guard(Pattern::Underscore),
                             });
@@ -4792,7 +4893,7 @@ pub fn from_can_pattern<'a>(
                         }
                         field_layouts.push(field_layout);
                     }
-                    (Some((label, Err(field_layout))), Some(destruct)) => {
+                    (Some((label, variable, Err(field_layout))), Some(destruct)) => {
                         if destruct.value.label == label {
                             opt_destruct = it2.next();
 
@@ -4800,6 +4901,7 @@ pub fn from_can_pattern<'a>(
                                 label: destruct.value.label.clone(),
                                 symbol: destruct.value.symbol,
                                 layout: field_layout,
+                                variable,
                                 typ: match &destruct.value.typ {
                                     roc_can::pattern::DestructType::Optional(_, loc_expr) => {
                                         // if we reach this stage, the optional field is not present
@@ -4815,12 +4917,13 @@ pub fn from_can_pattern<'a>(
                         opt_sorted = it1.next();
                     }
 
-                    (Some((label, Err(field_layout))), None) => {
+                    (Some((label, variable, Err(field_layout))), None) => {
                         // the remainder of the fields (from the type) is not matched on in
                         // this pattern; to fill it out, we put underscores
                         mono_destructs.push(RecordDestruct {
                             label: label.clone(),
                             symbol: env.unique_symbol(),
+                            variable,
                             layout: field_layout.clone(),
                             typ: DestructType::Guard(Pattern::Underscore),
                         });
@@ -4828,12 +4931,13 @@ pub fn from_can_pattern<'a>(
                         opt_sorted = it1.next();
                     }
 
-                    (Some((label, Ok(field_layout))), None) => {
+                    (Some((label, variable, Ok(field_layout))), None) => {
                         // the remainder of the fields (from the type) is not matched on in
                         // this pattern; to fill it out, we put underscores
                         mono_destructs.push(RecordDestruct {
                             label: label.clone(),
                             symbol: env.unique_symbol(),
+                            variable,
                             layout: field_layout.clone(),
                             typ: DestructType::Guard(Pattern::Underscore),
                         });
@@ -4855,6 +4959,7 @@ pub fn from_can_pattern<'a>(
                                 mono_destructs.push(RecordDestruct {
                                     label: destruct.value.label.clone(),
                                     symbol: destruct.value.symbol,
+                                    variable: destruct.value.var,
                                     layout: field_layout,
                                     typ: DestructType::Optional(loc_expr.value.clone()),
                                 })
@@ -4888,6 +4993,7 @@ fn from_can_record_destruct<'a>(
     RecordDestruct {
         label: can_rd.label.clone(),
         symbol: can_rd.symbol,
+        variable: can_rd.var,
         layout: field_layout,
         typ: match &can_rd.typ {
             roc_can::pattern::DestructType::Required => DestructType::Required,
