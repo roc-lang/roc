@@ -397,12 +397,12 @@ mod test_can {
     fn correct_nested_annotated_body() {
         let src = indoc!(
             r#"
-                f : Int -> Int
+                f : Int
                 f =
                     g : Int
                     g = 42
 
-                    \ a -> a + g + h
+                    g + 1
 
                 f
             "#
