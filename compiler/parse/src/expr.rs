@@ -446,39 +446,40 @@ pub fn assigned_pattern_field_to_pattern<'a>(
 /// Note: Parenthetical patterns are a shorthand convenience, and may not have type annotations.
 /// It would be too weird to parse; imagine `(UserId userId) : ...` above `(UserId userId) = ...`
 /// !!!! THIS IS NOT USED !!!!
-fn loc_parenthetical_def<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
-    move |arena, state| {
-        let (loc_tuple, state) = loc!(and!(
-            space0_after(
-                between!(
-                    ascii_char(b'('),
-                    space0_around(loc_pattern(min_indent), min_indent),
-                    ascii_char(b')')
-                ),
-                min_indent,
-            ),
-            equals_with_indent()
-        ))
-        .parse(arena, state)?;
+// fn loc_parenthetical_def<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>> {
+//     move |arena, state| {
+//         let (loc_tuple, state) = loc!(and!(
+//             space0_after(
+//                 between!(
+//                     ascii_char(b'('),
+//                     space0_around(loc_pattern(min_indent), min_indent),
+//                     ascii_char(b')')
+//                 ),
+//                 min_indent,
+//             ),
+//             equals_with_indent()
+//         ))
+//         .parse(arena, state)?;
 
-        let region = loc_tuple.region;
-        let (loc_first_pattern, equals_sign_indent) = loc_tuple.value;
+//         let region = loc_tuple.region;
+//         let (loc_first_pattern, equals_sign_indent) = loc_tuple.value;
 
-        // Continue parsing the expression as a Def.
-        let (spaces_after_equals, state) = space0(min_indent).parse(arena, state)?;
-        let (value, state) = parse_def_expr(
-            region.start_col,
-            min_indent,
-            equals_sign_indent,
-            arena,
-            state,
-            loc_first_pattern,
-            spaces_after_equals,
-        )?;
+//         // Continue parsing the expression as a Def.
+//         let (spaces_after_equals, state) = space0(min_indent).parse(arena, state)?;
+//         let (value, state) = parse_def_expr(
+//             region.start_col,
+//             min_indent,
+//             equals_sign_indent,
+//             arena,
+//             state,
+//             loc_first_pattern,
+//             spaces_after_equals,
+//         )?;
 
-        Ok((Located { value, region }, state))
-    }
-}
+//         Ok((Located { value, region }, state))
+//     }
+// }
+
 
 /// The '=' used in a def can't be followed by another '=' (or else it's actually
 /// an "==") and also it can't be followed by '>' (or else it's actually an "=>")
@@ -835,7 +836,7 @@ fn parse_def_signature<'a>(
             )
         )
         .parse(arena, state)
-        .and_then(
+        .map(
             move |(((loc_first_annotation, opt_body), (mut defs, loc_ret)), state)| {
                 let loc_first_def: Located<Def<'a>> = match opt_body {
                     None => Located {
@@ -869,7 +870,7 @@ fn parse_def_signature<'a>(
 
                 let defs = defs.into_bump_slice();
 
-                Ok((Expr::Defs(defs, arena.alloc(loc_ret)), state))
+               (Expr::Defs(defs, arena.alloc(loc_ret)), state)
             },
         )
     }
