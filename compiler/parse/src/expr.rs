@@ -9,8 +9,9 @@ use crate::ident::{global_tag_or_ident, ident, lowercase_ident, Ident};
 use crate::keyword;
 use crate::number_literal::number_literal;
 use crate::parser::{
-    self, allocated, ascii_char, ascii_string, fail, not, not_followed_by, optional, sep_by1, then,
-    unexpected, unexpected_eof, Either, Fail, FailReason, ParseResult, Parser, State,
+    self, allocated, ascii_char, ascii_string, fail, newline_char, not, not_followed_by, optional,
+    sep_by1, then, unexpected, unexpected_eof, Either, Fail, FailReason, ParseResult, Parser,
+    State,
 };
 use crate::type_annotation;
 use bumpalo::collections::string::String;
@@ -552,7 +553,7 @@ fn spaces_then_comment_or_newline<'a>() -> impl Parser<'a, Option<&'a str>> {
     skip_first!(
         zero_or_more!(ascii_char(' ')),
         map!(
-            either!(ascii_char('\n'), line_comment()),
+            either!(newline_char(), line_comment()),
             |either_comment_or_newline| match either_comment_or_newline {
                 Either::First(_) => None,
                 Either::Second(comment) => Some(comment),
@@ -1444,8 +1445,11 @@ fn unary_negate_function_arg<'a>(min_indent: u16) -> impl Parser<'a, Located<Exp
             one_of!(
                 ascii_char(b' '),
                 ascii_char(b'#'),
-                ascii_char(b'\n'),
+                newline_char(),
                 ascii_char(b'>')
+                ascii_char(' '),
+                ascii_char('#'),
+                ascii_char('>')
             ),
         ),
         move |arena, state, (spaces, num_or_minus_char)| {

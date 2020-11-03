@@ -432,10 +432,25 @@ fn line_too_long(attempting: Attempting, state: State<'_>) -> (Fail, State<'_>) 
     (fail, state)
 }
 
-/// A single ASCII char.
+/// A single ASCII char that isn't a newline.
+/// (For newlines, use newline_char(), which handles line numbers)
 pub fn ascii_char<'a>(expected: u8) -> impl Parser<'a, ()> {
+    // Make sure this really is not a newline!
+    debug_assert_ne!(expected, '\n');
+
     move |_arena, state: State<'a>| match state.bytes.first() {
         Some(&actual) if expected == actual => Ok(((), state.advance_without_indenting(1)?)),
+        Some(_) => Err(unexpected(0, state, Attempting::Keyword)),
+        _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
+    }
+}
+
+/// A single '\n' character.
+/// Use this instead of ascii_char('\n') because it properly handles
+/// incrementing the line number.
+pub fn newline_char<'a>() -> impl Parser<'a, ()> {
+    move |_arena, state: State<'a>| match state.bytes.first() {
+        Some(b'\n') => Ok(((), state.newline()?)),
         Some(_) => Err(unexpected(0, state, Attempting::Keyword)),
         _ => Err(unexpected_eof(0, Attempting::Keyword, state)),
     }
