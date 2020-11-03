@@ -514,8 +514,8 @@ fn to_def<'a>(
             (ann_pattern, ann_type),
             Some((opt_comment, (body_pattern, body_expr))),
         )) => Def::AnnotatedBody {
-            ann_pattern: ann_pattern,
-            ann_type: ann_type,
+            ann_pattern,
+            ann_type,
             comment: opt_comment,
             body_pattern: arena.alloc(body_pattern),
             body_expr: arena.alloc(body_expr),
@@ -858,7 +858,7 @@ fn parse_def_signature<'a>(
                                 body_pattern: arena.alloc(body_pattern),
                                 body_expr: arena.alloc(body_expr),
                             },
-                            region: region,
+                            region,
                         }
                     }
                 };
