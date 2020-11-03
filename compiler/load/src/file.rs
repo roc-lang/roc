@@ -16,8 +16,7 @@ use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::ir::{
-    CapturedSymbols, ExternalSpecializations, MonoProblem, PartialProc, PendingSpecialization,
-    Proc, Procs,
+    CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
@@ -353,7 +352,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 module_timing,
                 solved_subs,
                 decls,
-                finished_info,
                 ident_ids,
             } = typechecked;
 
@@ -363,7 +361,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 module_timing,
                 solved_subs,
                 decls,
-                finished_info,
                 ident_ids,
                 exposed_to_host: state.exposed_to_host.clone(),
             }
@@ -387,7 +384,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 subs,
                 procs,
                 layout_cache,
-                finished_info,
             } = found_specializations;
 
             BuildTask::MakeSpecializations {
@@ -397,7 +393,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 procs,
                 layout_cache,
                 specializations_we_must_make,
-                finished_info,
             }
         }
     }
@@ -412,7 +407,7 @@ pub struct LoadedModule {
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
-    pub src: Box<str>,
+    pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub documentation: MutMap<ModuleId, ModuleDocumentation>,
 }
@@ -456,7 +451,6 @@ pub struct TypeCheckedModule<'a> {
     pub solved_subs: Solved<Subs>,
     pub decls: Vec<Declaration>,
     pub ident_ids: IdentIds,
-    pub finished_info: FinishedInfo<'a>,
 }
 
 #[derive(Debug)]
@@ -466,7 +460,6 @@ pub struct FoundSpecializationsModule<'a> {
     pub layout_cache: LayoutCache<'a>,
     pub procs: Procs<'a>,
     pub subs: Subs,
-    pub finished_info: FinishedInfo<'a>,
 }
 
 #[derive(Debug)]
@@ -514,7 +507,6 @@ enum Msg<'a> {
         module_docs: ModuleDocumentation,
     },
     SolvedTypes {
-        src: &'a str,
         module_id: ModuleId,
         ident_ids: IdentIds,
         solved_module: SolvedModule,
@@ -526,7 +518,6 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
-        src: &'a str,
     },
     FoundSpecializations {
         module_id: ModuleId,
@@ -535,7 +526,6 @@ enum Msg<'a> {
         procs: Procs<'a>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         solved_subs: Solved<Subs>,
-        finished_info: FinishedInfo<'a>,
     },
     MadeSpecializations {
         module_id: ModuleId,
@@ -545,7 +535,6 @@ enum Msg<'a> {
         procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         subs: Subs,
-        finished_info: FinishedInfo<'a>,
     },
 
     /// The task is to only typecheck AND monomorphize modules
@@ -553,14 +542,7 @@ enum Msg<'a> {
     FinishedAllSpecialization {
         subs: Subs,
         exposed_to_host: MutMap<Symbol, Variable>,
-        src: &'a str,
     },
-}
-
-#[derive(Debug)]
-pub struct FinishedInfo<'a> {
-    exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
-    src: &'a str,
 }
 
 #[derive(Debug)]
@@ -719,7 +701,6 @@ enum BuildTask<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         decls: Vec<Declaration>,
-        finished_info: FinishedInfo<'a>,
         exposed_to_host: MutMap<Symbol, Variable>,
     },
     MakeSpecializations {
@@ -728,7 +709,6 @@ enum BuildTask<'a> {
         subs: Subs,
         procs: Procs<'a>,
         layout_cache: LayoutCache<'a>,
-        finished_info: FinishedInfo<'a>,
         specializations_we_must_make: ExternalSpecializations,
     },
 }
@@ -1145,7 +1125,6 @@ where
                         solved_subs,
                         exposed_vars_by_symbol,
                         documentation,
-                        src,
                     } => {
                         // We're done! There should be no more messages pending.
                         debug_assert!(msg_rx.is_empty());
@@ -1162,13 +1141,11 @@ where
                             solved_subs,
                             exposed_vars_by_symbol,
                             documentation,
-                            src,
                         )));
                     }
                     Msg::FinishedAllSpecialization {
                         subs,
                         exposed_to_host,
-                        src,
                     } => {
                         // We're done! There should be no more messages pending.
                         debug_assert!(msg_rx.is_empty());
@@ -1184,7 +1161,6 @@ where
                             state,
                             subs,
                             exposed_to_host,
-                            src,
                         )));
                     }
                     msg => {
@@ -1331,7 +1307,6 @@ fn update<'a>(
             Ok(state)
         }
         SolvedTypes {
-            src,
             module_id,
             ident_ids,
             solved_module,
@@ -1373,7 +1348,6 @@ fn update<'a>(
                         solved_subs,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
                         documentation,
-                        src,
                     })
                     .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
@@ -1398,11 +1372,6 @@ fn update<'a>(
                 if state.goal_phase > Phase::SolveTypes {
                     let layout_cache = state.layout_caches.pop().unwrap_or_default();
 
-                    let finished_info = FinishedInfo {
-                        src,
-                        exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
-                    };
-
                     let typechecked = TypeCheckedModule {
                         module_id,
                         decls,
@@ -1410,7 +1379,6 @@ fn update<'a>(
                         ident_ids,
                         module_timing,
                         layout_cache,
-                        finished_info,
                     };
 
                     state
@@ -1433,7 +1401,6 @@ fn update<'a>(
         FoundSpecializations {
             module_id,
             procs,
-            finished_info,
             solved_subs,
             ident_ids,
             layout_cache,
@@ -1459,7 +1426,6 @@ fn update<'a>(
                 layout_cache,
                 module_id,
                 procs,
-                finished_info,
                 ident_ids,
                 subs,
             };
@@ -1484,7 +1450,6 @@ fn update<'a>(
             module_id,
             ident_ids,
             subs,
-            finished_info,
             procedures,
             external_specializations_requested,
             problems,
@@ -1528,7 +1493,6 @@ fn update<'a>(
                         subs,
                         // TODO thread through mono problems
                         exposed_to_host: state.exposed_to_host.clone(),
-                        src: finished_info.src,
                     })
                     .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
@@ -1558,7 +1522,6 @@ fn finish_specialization<'a>(
     state: State<'a>,
     subs: Subs,
     exposed_to_host: MutMap<Symbol, Variable>,
-    src: &'a str,
 ) -> MonomorphizedModule<'a> {
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
@@ -1608,7 +1571,6 @@ fn finish<'a>(
     solved: Solved<Subs>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
-    src: &'a str,
 ) -> LoadedModule {
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
@@ -1619,6 +1581,13 @@ fn finish<'a>(
         all_ident_ids: state.constrained_ident_ids,
     };
 
+    let sources = state
+        .module_cache
+        .sources
+        .into_iter()
+        .map(|(id, (path, src))| (id, (path, src.into())))
+        .collect();
+
     LoadedModule {
         module_id: state.root_id,
         interns,
@@ -1627,7 +1596,7 @@ fn finish<'a>(
         type_problems: state.module_cache.type_problems,
         declarations_by_id: state.declarations_by_id,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
-        src: src.into(),
+        sources,
         timings: state.timings,
         documentation,
     }
@@ -2044,7 +2013,6 @@ fn run_solve<'a>(
 
     // Send the subs to the main thread for processing,
     Msg::SolvedTypes {
-        src,
         module_id,
         solved_subs,
         ident_ids,
@@ -2236,7 +2204,6 @@ fn make_specializations<'a>(
     mut procs: Procs<'a>,
     mut layout_cache: LayoutCache<'a>,
     specializations_we_must_make: ExternalSpecializations,
-    finished_info: FinishedInfo<'a>,
 ) -> Msg<'a> {
     let mut mono_problems = Vec::new();
     // do the thing
@@ -2272,7 +2239,6 @@ fn make_specializations<'a>(
         procedures,
         problems: mono_problems,
         subs,
-        finished_info,
         external_specializations_requested,
     }
 }
@@ -2289,7 +2255,6 @@ fn build_pending_specializations<'a>(
     mut layout_cache: LayoutCache<'a>,
     // TODO remove
     exposed_to_host: MutMap<Symbol, Variable>,
-    finished_info: FinishedInfo<'a>,
 ) -> Msg<'a> {
     let mut procs = Procs::default();
 
@@ -2343,7 +2308,6 @@ fn build_pending_specializations<'a>(
         layout_cache,
         procs,
         problems,
-        finished_info,
     }
 }
 
@@ -2509,7 +2473,6 @@ fn run_task<'a>(
             module_timing,
             layout_cache,
             solved_subs,
-            finished_info,
             exposed_to_host,
         } => Ok(build_pending_specializations(
             arena,
@@ -2520,7 +2483,6 @@ fn run_task<'a>(
             module_timing,
             layout_cache,
             exposed_to_host,
-            finished_info,
         )),
         MakeSpecializations {
             module_id,
@@ -2529,7 +2491,6 @@ fn run_task<'a>(
             procs,
             layout_cache,
             specializations_we_must_make,
-            finished_info,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -2538,7 +2499,6 @@ fn run_task<'a>(
             procs,
             layout_cache,
             specializations_we_must_make,
-            finished_info,
         )),
     }?;
 

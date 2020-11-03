@@ -216,6 +216,10 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
 
         let error_count = can_problems.len() + type_problems.len() + mono_problems.len();
 
+        if error_count == 0 {
+            continue;
+        }
+
         let src_lines: Vec<&str> = src.split('\n').collect();
         let palette = DEFAULT_PALETTE;
 
