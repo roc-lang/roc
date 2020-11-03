@@ -194,42 +194,37 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
         exposed_types,
     );
 
-    let loaded = loaded.expect("failed to load module");
+    let mut loaded = loaded.expect("failed to load module");
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
-        can_problems,
-        type_problems,
-        mono_problems,
         mut procedures,
         interns,
         exposed_to_host,
         mut subs,
         module_id: home,
+        sources,
         ..
     } = loaded;
 
-    let error_count = can_problems.len() + type_problems.len() + mono_problems.len();
+    let mut lines = Vec::new();
 
-    if error_count > 0 {
-        // There were problems; report them and return.
-        let src_lines: Vec<&str> = module_src.split('\n').collect();
+    for (home, (module_path, src)) in sources {
+        let can_problems = loaded.can_problems.remove(&home).unwrap_or_default();
+        let type_problems = loaded.type_problems.remove(&home).unwrap_or_default();
+        let mono_problems = loaded.mono_problems.remove(&home).unwrap_or_default();
 
-        // Used for reporting where an error came from.
-        //
-        // TODO: maybe Reporting should have this be an Option?
-        let path = PathBuf::new();
+        let error_count = can_problems.len() + type_problems.len() + mono_problems.len();
 
-        // Report problems
+        let src_lines: Vec<&str> = src.split('\n').collect();
         let palette = DEFAULT_PALETTE;
 
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
-        let mut lines = Vec::with_capacity(error_count);
-
-        for problem in can_problems.into_iter() {
-            let report = can_problem(&alloc, path.clone(), problem);
+        let problems = loaded.can_problems.remove(&home).unwrap_or_default();
+        for problem in problems.into_iter() {
+            let report = can_problem(&alloc, module_path.clone(), problem);
             let mut buf = String::new();
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -237,8 +232,9 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             lines.push(buf);
         }
 
-        for problem in type_problems.into_iter() {
-            let report = type_problem(&alloc, path.clone(), problem);
+        let problems = loaded.type_problems.remove(&home).unwrap_or_default();
+        for problem in problems {
+            let report = type_problem(&alloc, module_path.clone(), problem);
             let mut buf = String::new();
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
@@ -246,15 +242,18 @@ fn gen(src: &[u8], target: Triple, opt_level: OptLevel) -> Result<ReplOutput, Fa
             lines.push(buf);
         }
 
-        for problem in mono_problems.into_iter() {
-            let report = mono_problem(&alloc, path.clone(), problem);
+        let problems = loaded.mono_problems.remove(&home).unwrap_or_default();
+        for problem in problems {
+            let report = mono_problem(&alloc, module_path.clone(), problem);
             let mut buf = String::new();
 
             report.render_color_terminal(&mut buf, &alloc, &palette);
 
             lines.push(buf);
         }
+    }
 
+    if !lines.is_empty() {
         Ok(ReplOutput::Problems(lines))
     } else {
         let context = Context::create();
