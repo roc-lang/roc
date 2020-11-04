@@ -75,12 +75,15 @@ mod solve_expr {
         let LoadedModule {
             module_id: home,
             mut can_problems,
-            type_problems,
+            mut type_problems,
             interns,
             mut solved,
             exposed_to_host,
             ..
         } = loaded;
+
+        let mut can_problems = can_problems.remove(&home).unwrap_or_default();
+        let type_problems = type_problems.remove(&home).unwrap_or_default();
 
         let mut subs = solved.inner_mut();
 

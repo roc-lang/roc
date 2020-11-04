@@ -62,17 +62,19 @@ mod test_mono {
             exposed_types,
         );
 
-        let loaded = loaded.expect("failed to load module");
+        let mut loaded = loaded.expect("failed to load module");
 
         use roc_load::file::MonomorphizedModule;
         let MonomorphizedModule {
-            can_problems,
-            type_problems,
-            mono_problems,
+            module_id: home,
             procedures,
             exposed_to_host,
             ..
         } = loaded;
+
+        let can_problems = loaded.can_problems.remove(&home).unwrap_or_default();
+        let type_problems = loaded.type_problems.remove(&home).unwrap_or_default();
+        let mono_problems = loaded.mono_problems.remove(&home).unwrap_or_default();
 
         if !can_problems.is_empty() {
             println!("Ignoring {} canonicalization problems", can_problems.len());

@@ -14,38 +14,52 @@ use target_lexicon::Triple;
 #[allow(clippy::cognitive_complexity)]
 pub fn gen_from_mono_module(
     arena: &Bump,
-    loaded: MonomorphizedModule,
-    file_path: PathBuf,
+    mut loaded: MonomorphizedModule,
+    _file_path: PathBuf,
     target: Triple,
     app_o_file: &Path,
     opt_level: OptLevel,
 ) {
-    use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
+    use roc_reporting::report::{
+        can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
+    };
 
-    let src = loaded.src;
-    let home = loaded.module_id;
-    let src_lines: Vec<&str> = src.split('\n').collect();
-    let palette = DEFAULT_PALETTE;
+    for (home, (module_path, src)) in loaded.sources {
+        let src_lines: Vec<&str> = src.split('\n').collect();
+        let palette = DEFAULT_PALETTE;
 
-    // Report parsing and canonicalization problems
-    let alloc = RocDocAllocator::new(&src_lines, home, &loaded.interns);
+        // Report parsing and canonicalization problems
+        let alloc = RocDocAllocator::new(&src_lines, home, &loaded.interns);
 
-    for problem in loaded.can_problems.into_iter() {
-        let report = can_problem(&alloc, file_path.clone(), problem);
-        let mut buf = String::new();
+        let problems = loaded.can_problems.remove(&home).unwrap_or_default();
+        for problem in problems.into_iter() {
+            let report = can_problem(&alloc, module_path.clone(), problem);
+            let mut buf = String::new();
 
-        report.render_color_terminal(&mut buf, &alloc, &palette);
+            report.render_color_terminal(&mut buf, &alloc, &palette);
 
-        println!("\n{}\n", buf);
-    }
+            println!("\n{}\n", buf);
+        }
 
-    for problem in loaded.type_problems.into_iter() {
-        let report = type_problem(&alloc, file_path.clone(), problem);
-        let mut buf = String::new();
+        let problems = loaded.type_problems.remove(&home).unwrap_or_default();
+        for problem in problems {
+            let report = type_problem(&alloc, module_path.clone(), problem);
+            let mut buf = String::new();
 
-        report.render_color_terminal(&mut buf, &alloc, &palette);
+            report.render_color_terminal(&mut buf, &alloc, &palette);
 
-        println!("\n{}\n", buf);
+            println!("\n{}\n", buf);
+        }
+
+        let problems = loaded.mono_problems.remove(&home).unwrap_or_default();
+        for problem in problems {
+            let report = mono_problem(&alloc, module_path.clone(), problem);
+            let mut buf = String::new();
+
+            report.render_color_terminal(&mut buf, &alloc, &palette);
+
+            println!("\n{}\n", buf);
+        }
     }
 
     // Generate the binary

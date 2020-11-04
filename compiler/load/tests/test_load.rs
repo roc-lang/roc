@@ -43,10 +43,21 @@ mod test_load {
             src_dir.as_path(),
             subs_by_module,
         );
-        let loaded_module = loaded.expect("Test module failed to load");
+        let mut loaded_module = loaded.expect("Test module failed to load");
 
-        assert_eq!(loaded_module.can_problems, Vec::new());
-        assert_eq!(loaded_module.type_problems, Vec::new());
+        let home = loaded_module.module_id;
+
+        assert_eq!(
+            loaded_module.can_problems.remove(&home).unwrap_or_default(),
+            Vec::new()
+        );
+        assert_eq!(
+            loaded_module
+                .type_problems
+                .remove(&home)
+                .unwrap_or_default(),
+            Vec::new()
+        );
 
         let expected_name = loaded_module
             .interns
@@ -87,8 +98,17 @@ mod test_load {
         let home = loaded_module.module_id;
         let mut subs = loaded_module.solved.into_inner();
 
-        assert_eq!(loaded_module.can_problems, Vec::new());
-        assert_eq!(loaded_module.type_problems, Vec::new());
+        assert_eq!(
+            loaded_module.can_problems.remove(&home).unwrap_or_default(),
+            Vec::new()
+        );
+        assert_eq!(
+            loaded_module
+                .type_problems
+                .remove(&home)
+                .unwrap_or_default(),
+            Vec::new()
+        );
 
         for decl in loaded_module.declarations_by_id.remove(&home).unwrap() {
             match decl {
@@ -141,9 +161,19 @@ mod test_load {
         );
 
         let mut loaded_module = loaded.expect("Test module failed to load");
+        let home = loaded_module.module_id;
 
-        assert_eq!(loaded_module.can_problems, Vec::new());
-        assert_eq!(loaded_module.type_problems, Vec::new());
+        assert_eq!(
+            loaded_module.can_problems.remove(&home).unwrap_or_default(),
+            Vec::new()
+        );
+        assert_eq!(
+            loaded_module
+                .type_problems
+                .remove(&home)
+                .unwrap_or_default(),
+            Vec::new()
+        );
 
         let def_count: usize = loaded_module
             .declarations_by_id
