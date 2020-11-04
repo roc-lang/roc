@@ -394,6 +394,27 @@ mod test_can {
     }
 
     #[test]
+    fn correct_nested_unannotated_body() {
+        let src = indoc!(
+            r#"
+                f : Int
+                f =
+                    g = 42
+
+                    g + 1
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
+    // LOCALS
+
+    #[test]
     fn correct_nested_annotated_body() {
         let src = indoc!(
             r#"
