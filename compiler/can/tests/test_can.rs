@@ -305,6 +305,32 @@ mod test_can {
     //     );
     // }
 
+    // OPTIONAL RECORDS
+    #[test]
+    fn incorrect_optional_value() {
+        let src = indoc!(
+            r#"
+                { x ? 42 }                
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            problems, loc_expr, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 1);
+        assert!(problems.iter().all(|problem| match problem {
+            Problem::InvalidOptionalValue { .. } => true,
+            _ => false,
+        }));
+
+        assert!(match loc_expr.value {
+            Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue { .. }) => true,
+            _ => false,
+        });
+    }
+
+    // TAIL CALLS
     fn get_closure(expr: &Expr, i: usize) -> roc_can::expr::Recursive {
         match expr {
             LetRec(assignments, body, _) => {
