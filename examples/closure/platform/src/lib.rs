@@ -1,9 +1,7 @@
 use roc_std::alloca;
+use roc_std::RocCallResult;
 use std::alloc::Layout;
-use std::ffi::CString;
-use std::os::raw::c_char;
 use std::time::SystemTime;
-use RocCallResult::*;
 
 extern "C" {
     #[link_name = "makeClosure_1_exposed"]
@@ -53,10 +51,10 @@ pub fn rust_main() -> isize {
 
         make_closure(buffer);
 
-        let output = &*(buffer as *mut RocCallResult<((), ())>);
+        let output = &*(buffer as *mut RocCallResult<()>);
 
         match output.into() {
-            Ok((_, _)) => {
+            Ok(()) => {
                 let function_pointer = {
                     // this is a pointer to the location where the function pointer is stored
                     // we pass just the function pointer
@@ -88,46 +86,4 @@ pub fn rust_main() -> isize {
 
     // Exit code
     0
-}
-
-#[repr(u64)]
-pub enum RocCallResult<T> {
-    Success(T),
-    Failure(*mut c_char),
-}
-
-impl<T: Sized> Into<Result<T, String>> for RocCallResult<T> {
-    fn into(self) -> Result<T, String> {
-        match self {
-            Success(value) => Ok(value),
-            Failure(failure) => Err({
-                let raw = unsafe { CString::from_raw(failure) };
-
-                let result = format!("{:?}", raw);
-
-                // make sure rust does not try to free the Roc string
-                std::mem::forget(raw);
-
-                result
-            }),
-        }
-    }
-}
-
-impl<T: Sized + Copy> Into<Result<T, String>> for &RocCallResult<T> {
-    fn into(self) -> Result<T, String> {
-        match self {
-            Success(value) => Ok(*value),
-            Failure(failure) => Err({
-                let raw = unsafe { CString::from_raw(*failure) };
-
-                let result = format!("{:?}", raw);
-
-                // make sure rust does not try to free the Roc string
-                std::mem::forget(raw);
-
-                result
-            }),
-        }
-    }
 }

@@ -15,7 +15,6 @@ use crate::llvm::refcounting::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use either;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -1941,7 +1940,7 @@ where
     let catch_block = context.append_basic_block(parent, "catch_block");
     let cont_block = context.append_basic_block(parent, "cont_block");
 
-    let result_alloca = builder.build_alloca(call_result_type.clone(), "result");
+    let result_alloca = builder.build_alloca(call_result_type, "result");
 
     // invoke instead of call, so that we can catch any exeptions thrown in Roc code
     let call_result = {
@@ -2147,6 +2146,11 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
                     Layout::Closure(arguments, closure, result) => {
                         build_closure_caller(env, &fn_name, *name, arguments, closure, result)
                     }
+                    Layout::FunctionPointer(_arguments, _result) => {
+                        // TODO should this be considered a closure of size 0?
+                        // or do we let the host call it directly?
+                        // then we have no RocCallResult wrapping though
+                    }
                     _ => {
                         // TODO
                     }
@@ -2215,12 +2219,11 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     let function_pointer_type = {
         let function_layout =
             ClosureLayout::extend_function_layout(arena, arguments, closure.clone(), result);
-        let basic_type = basic_type_from_layout(arena, context, &function_layout, env.ptr_bytes);
 
         // this is already a (function) pointer type
-        basic_type
+        basic_type_from_layout(arena, context, &function_layout, env.ptr_bytes)
     };
-    argument_types.push(function_pointer_type.into());
+    argument_types.push(function_pointer_type);
 
     let closure_argument_type = {
         let basic_type = basic_type_from_layout(

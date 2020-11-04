@@ -1793,9 +1793,7 @@ fn introduce_solved_type_to_subs<'a>(env: &mut Env<'a, '_>, solved_type: &Solved
 
     env.subs.extend_by(variables_introduced as usize);
 
-    let result = insert_type_into_subs(env.subs, &normal_type);
-
-    result
+    insert_type_into_subs(env.subs, &normal_type)
 }
 
 fn specialize_solved_type<'a>(

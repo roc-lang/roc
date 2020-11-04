@@ -464,3 +464,30 @@ impl<T: Sized> Into<Result<T, &'static str>> for RocCallResult<T> {
         }
     }
 }
+
+impl<'a, T: Sized + Copy> Into<Result<T, &'a str>> for &'a RocCallResult<T> {
+    fn into(self) -> Result<T, &'a str> {
+        use RocCallResult::*;
+
+        match self {
+            Success(value) => Ok(*value),
+            Failure(failure) => Err({
+                let msg = unsafe {
+                    let mut null_byte_index = 0;
+                    loop {
+                        if *failure.offset(null_byte_index) == 0 {
+                            break;
+                        }
+                        null_byte_index += 1;
+                    }
+
+                    let bytes = core::slice::from_raw_parts(*failure, null_byte_index as usize);
+
+                    core::str::from_utf8_unchecked(bytes)
+                };
+
+                msg
+            }),
+        }
+    }
+}
