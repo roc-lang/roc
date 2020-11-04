@@ -1087,7 +1087,7 @@ fn canonicalize_field<'a>(
 
         OptionalValue(label, _, loc_expr) => Err(CanonicalizeFieldProblem::InvalidOptionalValue {
             field_name: Lowercase::from(label.value),
-            field_region: loc_expr.region,
+            field_region: Region::span_across(&label.region, &loc_expr.region),
         }),
 
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })

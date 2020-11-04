@@ -3812,6 +3812,32 @@ mod test_reporting {
     }
 
     #[test]
+    fn incorrect_optional_field() {
+        report_problem_as(
+            indoc!(
+                r#"
+                { x: 5, y ? 42 }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This record uses an optional value for the `.y` field in an incorrect
+                context!
+
+                1│  { x: 5, y ? 42 }
+                            ^^^^^^
+
+                You can only use optinal values in record destructuring, for example
+                in affectation:
+
+                    { answer ? 42, otherField } = myRecord
+                "#
+            ),
+        )
+    }
+    #[test]
     fn first_wildcard_is_required() {
         report_problem_as(
             indoc!(
