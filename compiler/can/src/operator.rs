@@ -61,8 +61,8 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
             body_pattern,
             body_expr,
         }) => AnnotatedBody {
-            ann_pattern: ann_pattern,
-            ann_type: ann_type,
+            ann_pattern,
+            ann_type,
             comment: *comment,
             body_pattern: *body_pattern,
             body_expr: desugar_expr(arena, body_expr),
