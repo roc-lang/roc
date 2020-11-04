@@ -410,9 +410,7 @@ mod test_can {
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems, Vec::new());
-    }
-
-    // LOCALS
+    }  
 
     #[test]
     fn correct_nested_annotated_body() {
@@ -434,6 +432,68 @@ mod test_can {
         assert_eq!(problems, Vec::new());
     }
 
+    #[test]
+    fn correct_nested_body_annotated_multiple_lines() {
+        let src = indoc!(
+            r#"
+                f : Int
+                f =
+                    g : Int
+                    g = 42
+                    h : Int
+                    h = 5
+                    z = 4
+                    g + h + z
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
+    #[test]
+    fn correct_nested_body_unannotated_multiple_lines() {
+        let src = indoc!(
+            r#"
+                f : Int
+                f =
+                    g = 42
+                    h : Int
+                    h = 5
+                    z = 4
+                    g + h + z
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+    #[test]
+    fn correct_double_nested_body() {
+        let src = indoc!(
+            r#"
+                f : Int
+                f =
+                    g =
+                        h = 42
+                        h + 1
+                    g + 1
+
+
+                f
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
     // LOCALS
 
     // TODO rewrite this test to check only for UnusedDef reports
