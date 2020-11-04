@@ -14,6 +14,7 @@ pub struct Annotation {
     pub introduced_variables: IntroducedVariables,
     pub references: MutSet<Symbol>,
     pub aliases: SendMap<Symbol, Alias>,
+    // pub host_exposed_aliases: SendMap<Symbol, Variable>,
     pub variably_sized_types: VariablySizedTypes,
 }
 

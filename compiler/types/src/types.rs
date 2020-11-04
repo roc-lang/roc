@@ -145,7 +145,6 @@ pub enum Type {
     Alias(Symbol, Vec<(Lowercase, Type)>, Box<Type>),
     HostExposedAlias {
         name: Symbol,
-        def_name: Symbol,
         arguments: Vec<(Lowercase, Type)>,
         actual_var: Variable,
         actual: Box<Type>,

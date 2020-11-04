@@ -2115,7 +2115,6 @@ fn annotation_to_attr_type(
         }
         HostExposedAlias {
             name: symbol,
-            def_name,
             arguments: fields,
             actual_var,
             actual,
@@ -2141,7 +2140,6 @@ fn annotation_to_attr_type(
 
                 let alias = Type::HostExposedAlias {
                     name: *symbol,
-                    def_name: *def_name,
                     arguments: new_fields,
                     actual_var: *actual_var,
                     actual: Box::new(actual_type),

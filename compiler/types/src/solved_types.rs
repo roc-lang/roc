@@ -55,7 +55,6 @@ pub enum SolvedType {
 
     HostExposedAlias {
         name: Symbol,
-        def_name: Symbol,
         arguments: Vec<(Lowercase, SolvedType)>,
         actual_var: VarId,
         actual: Box<SolvedType>,
@@ -204,7 +203,6 @@ impl SolvedType {
             }
             HostExposedAlias {
                 name,
-                def_name,
                 arguments,
                 actual_var,
                 actual,
@@ -218,7 +216,6 @@ impl SolvedType {
 
                 SolvedType::HostExposedAlias {
                     name: *name,
-                    def_name: *def_name,
                     arguments: solved_args,
                     actual_var: VarId::from_var(*actual_var, solved_subs.inner()),
                     actual: Box::new(solved_type),
@@ -518,7 +515,6 @@ pub fn to_type(
         }
         HostExposedAlias {
             name,
-            def_name,
             arguments: solved_type_variables,
             actual_var,
             actual: solved_actual,
@@ -533,7 +529,6 @@ pub fn to_type(
 
             Type::HostExposedAlias {
                 name: *name,
-                def_name: *def_name,
                 arguments: type_variables,
                 actual_var: var_id_to_flex_var(*actual_var, free_vars, var_store),
                 actual: Box::new(actual),
