@@ -278,8 +278,8 @@ pub enum Def<'a> {
     Body(&'a Loc<Pattern<'a>>, &'a Loc<Expr<'a>>),
 
     AnnotatedBody {
-        ann_pattern: Loc<Pattern<'a>>,
-        ann_type: Loc<TypeAnnotation<'a>>,
+        ann_pattern: &'a Loc<Pattern<'a>>,
+        ann_type: &'a Loc<TypeAnnotation<'a>>,
         comment: Option<&'a str>,
         body_pattern: &'a Loc<Pattern<'a>>,
         body_expr: &'a Loc<Expr<'a>>,

@@ -433,7 +433,7 @@ mod test_can {
 
         assert_eq!(problems, Vec::new());
     }
-    
+
     // LOCALS
 
     // TODO rewrite this test to check only for UnusedDef reports

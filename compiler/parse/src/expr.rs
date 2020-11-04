@@ -516,8 +516,8 @@ fn to_def<'a>(
             (ann_pattern, ann_type),
             Some((opt_comment, (body_pattern, body_expr))),
         )) => Def::AnnotatedBody {
-            ann_pattern,
-            ann_type,
+            ann_pattern: arena.alloc(ann_pattern),
+            ann_type: arena.alloc(ann_type),
             comment: opt_comment,
             body_pattern: arena.alloc(body_pattern),
             body_expr: arena.alloc(body_expr),
@@ -854,8 +854,8 @@ fn parse_def_signature<'a>(
                             Region::span_across(&loc_first_pattern.region, &body_expr.region);
                         Located {
                             value: Def::AnnotatedBody {
-                                ann_pattern: loc_first_pattern,
-                                ann_type: loc_first_annotation,
+                                ann_pattern: arena.alloc(loc_first_pattern),
+                                ann_type: arena.alloc(loc_first_annotation),
                                 comment: opt_comment,
                                 body_pattern: arena.alloc(body_pattern),
                                 body_expr: arena.alloc(body_expr),
