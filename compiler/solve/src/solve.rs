@@ -831,15 +831,24 @@ fn type_to_variable(
             }
 
             let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
-            let content = Content::Alias(*symbol, arg_vars, alias_var);
-
-            let result = register(subs, rank, pools, content);
 
             // unify the actual_var with the result var
             // this can be used to access the type of the actual_var
             // to determine its layout later
-            let descriptor = subs.get(result);
-            subs.union(*actual_var, result, descriptor);
+            // subs.set_content(*actual_var, descriptor.content);
+
+            //subs.set(*actual_var, descriptor.clone());
+            let content = Content::Alias(*symbol, arg_vars, alias_var);
+
+            let result = register(subs, rank, pools, content);
+
+            // We only want to unify the actual_var with the alias once
+            // if it's already redirected (and therefore, redundant)
+            // don't do it again
+            if !subs.redundant(*actual_var) {
+                let descriptor = subs.get(result);
+                subs.union(result, *actual_var, descriptor);
+            }
 
             result
         }

@@ -14,14 +14,6 @@ pub struct Annotation {
     pub introduced_variables: IntroducedVariables,
     pub references: MutSet<Symbol>,
     pub aliases: SendMap<Symbol, Alias>,
-    // pub host_exposed_aliases: SendMap<Symbol, Variable>,
-    pub variably_sized_types: VariablySizedTypes,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct VariablySizedTypes {
-    rigids: MutMap<Lowercase, ()>,
-    aliases: MutMap<Symbol, ()>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -39,6 +31,7 @@ pub struct IntroducedVariables {
     pub wildcards: Vec<Variable>,
     pub var_by_name: SendMap<Lowercase, Variable>,
     pub name_by_var: SendMap<Variable, Lowercase>,
+    pub host_exposed_aliases: MutMap<Symbol, Variable>,
 }
 
 impl IntroducedVariables {
@@ -49,6 +42,10 @@ impl IntroducedVariables {
 
     pub fn insert_wildcard(&mut self, var: Variable) {
         self.wildcards.push(var);
+    }
+
+    pub fn insert_host_exposed_alias(&mut self, symbol: Symbol, var: Variable) {
+        self.host_exposed_aliases.insert(symbol, var);
     }
 
     pub fn union(&mut self, other: &Self) {
@@ -76,7 +73,6 @@ pub fn canonicalize_annotation(
     let mut introduced_variables = IntroducedVariables::default();
     let mut references = MutSet::default();
     let mut aliases = SendMap::default();
-    let variably_sized_types = VariablySizedTypes::default();
     let typ = can_annotation_help(
         env,
         annotation,
@@ -93,7 +89,6 @@ pub fn canonicalize_annotation(
         introduced_variables,
         references,
         aliases,
-        variably_sized_types,
     }
 }
 
@@ -230,7 +225,15 @@ fn can_annotation_help(
                     // instantiate variables
                     actual.substitute(&substitutions);
 
-                    Type::Alias(symbol, vars, Box::new(actual))
+                    // Type::Alias(symbol, vars, Box::new(actual))
+                    let actual_var = var_store.fresh();
+                    introduced_variables.insert_host_exposed_alias(symbol, actual_var);
+                    Type::HostExposedAlias {
+                        name: symbol,
+                        arguments: vars,
+                        actual: Box::new(actual),
+                        actual_var,
+                    }
                 }
                 None => {
                     let mut args = Vec::new();
@@ -362,7 +365,16 @@ fn can_annotation_help(
                 let alias = scope.lookup_alias(symbol).unwrap();
                 local_aliases.insert(symbol, alias.clone());
 
-                Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
+                // Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
+
+                let actual_var = var_store.fresh();
+                introduced_variables.insert_host_exposed_alias(symbol, actual_var);
+                Type::HostExposedAlias {
+                    name: symbol,
+                    arguments: vars,
+                    actual: Box::new(alias.typ.clone()),
+                    actual_var,
+                }
             }
             _ => {
                 // This is a syntactically invalid type alias.
