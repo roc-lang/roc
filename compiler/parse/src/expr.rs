@@ -567,7 +567,7 @@ type Body<'a> = (Located<Pattern<'a>>, Located<Expr<'a>>);
 fn body<'a>(min_indent: u16) -> impl Parser<'a, Body<'a>> {
     let indented_more = min_indent + 1;
     and!(
-        pattern(min_indent),
+        skip_first!(space0(min_indent), pattern(min_indent)),
         skip_first!(
             equals_for_def(),
             // Spaces after the '=' (at a normal indentation level) and then the expr.
@@ -817,7 +817,7 @@ fn parse_def_signature<'a>(
                     type_annotation::located(indented_more),
                     // The first annotation may be followed by a body
                     // leading to an AnnotatedBody in this case
-                    optional(and!(spaces_then_comment_or_newline(), body(min_indent)))
+                    optional(and!(spaces_then_comment_or_newline(), body(indented_more)))
                 ),
                 and!(
                     // Optionally parse additional defs.
