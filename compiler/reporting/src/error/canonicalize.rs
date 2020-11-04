@@ -186,7 +186,7 @@ pub fn can_problem<'b>(
         } => alloc.stack(vec![
             alloc.concat(vec![
                 alloc.reflow("This record uses an optional value for the "),
-                alloc.record_field(field_name.clone()),
+                alloc.record_field(field_name),
                 alloc.reflow(" field in an incorrect context!"),
             ]),
             alloc.region_all_the_things(
@@ -560,7 +560,7 @@ fn pretty_runtime_error<'b>(
         } => alloc.stack(vec![
             alloc.concat(vec![
                 alloc.reflow("This record uses an optional value for the "),
-                alloc.record_field(field_name.clone()),
+                alloc.record_field(field_name),
                 alloc.reflow(" field in an incorrect context!"),
             ]),
             alloc.region_all_the_things(
