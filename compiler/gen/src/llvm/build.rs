@@ -15,6 +15,7 @@ use crate::llvm::refcounting::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use either;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -1913,6 +1914,161 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
     builder.build_return(Some(&size));
+}
+
+fn invoke_and_catch<'a, 'ctx, 'env, F, T>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    function: F,
+    arguments: &[BasicValueEnum<'ctx>],
+    return_type: T,
+) -> BasicValueEnum<'ctx>
+where
+    F: Into<either::Either<FunctionValue<'ctx>, PointerValue<'ctx>>>,
+    T: inkwell::types::BasicType<'ctx>,
+{
+    let context = env.context;
+    let builder = env.builder;
+
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let call_result_type = context.struct_type(
+        &[context.i64_type().into(), return_type.as_basic_type_enum()],
+        false,
+    );
+
+    // Add main's body
+    let basic_block = context.append_basic_block(parent, "entry");
+    let then_block = context.append_basic_block(parent, "then_block");
+    let catch_block = context.append_basic_block(parent, "catch_block");
+    let cont_block = context.append_basic_block(parent, "cont_block");
+
+    builder.position_at_end(basic_block);
+
+    let result_alloca = builder.build_alloca(call_result_type.clone(), "result");
+
+    // invoke instead of call, so that we can catch any exeptions thrown in Roc code
+    let call_result = {
+        let call = builder.build_invoke(
+            function,
+            &arguments,
+            then_block,
+            catch_block,
+            "call_roc_function",
+        );
+        call.set_call_convention(FAST_CALL_CONV);
+        call.try_as_basic_value().left().unwrap()
+    };
+
+    // exception handling
+    {
+        builder.position_at_end(catch_block);
+
+        let landing_pad_type = {
+            let exception_ptr = context.i8_type().ptr_type(AddressSpace::Generic).into();
+            let selector_value = context.i32_type().into();
+
+            context.struct_type(&[exception_ptr, selector_value], false)
+        };
+
+        let info = builder
+            .build_catch_all_landing_pad(
+                &landing_pad_type,
+                &BasicValueEnum::IntValue(context.i8_type().const_zero()),
+                context.i8_type().ptr_type(AddressSpace::Generic),
+                "main_landing_pad",
+            )
+            .into_struct_value();
+
+        let exception_ptr = builder
+            .build_extract_value(info, 0, "exception_ptr")
+            .unwrap();
+
+        let thrown = cxa_begin_catch(env, exception_ptr);
+
+        let error_msg = {
+            let exception_type = u8_ptr;
+            let ptr = builder.build_bitcast(
+                thrown,
+                exception_type.ptr_type(AddressSpace::Generic),
+                "cast",
+            );
+
+            builder.build_load(ptr.into_pointer_value(), "error_msg")
+        };
+
+        let return_type = context.struct_type(&[context.i64_type().into(), u8_ptr.into()], false);
+
+        let return_value = {
+            let v1 = return_type.const_zero();
+
+            // flag is non-zero, indicating failure
+            let flag = context.i64_type().const_int(1, false);
+
+            let v2 = builder
+                .build_insert_value(v1, flag, 0, "set_error")
+                .unwrap();
+
+            let v3 = builder
+                .build_insert_value(v2, error_msg, 1, "set_exception")
+                .unwrap();
+
+            v3
+        };
+
+        // bitcast result alloca so we can store our concrete type { flag, error_msg } in there
+        let result_alloca_bitcast = builder
+            .build_bitcast(
+                result_alloca,
+                return_type.ptr_type(AddressSpace::Generic),
+                "result_alloca_bitcast",
+            )
+            .into_pointer_value();
+
+        // store our return value
+        builder.build_store(result_alloca_bitcast, return_value);
+
+        cxa_end_catch(env);
+
+        builder.build_unconditional_branch(cont_block);
+    }
+
+    {
+        builder.position_at_end(then_block);
+
+        let return_value = {
+            let v1 = call_result_type.const_zero();
+
+            let v2 = builder
+                .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
+                .unwrap();
+            let v3 = builder
+                .build_insert_value(v2, call_result, 1, "set_call_result")
+                .unwrap();
+
+            v3
+        };
+
+        let ptr = builder.build_bitcast(
+            result_alloca,
+            call_result_type.ptr_type(AddressSpace::Generic),
+            "name",
+        );
+        builder.build_store(ptr.into_pointer_value(), return_value);
+
+        builder.build_unconditional_branch(cont_block);
+    }
+
+    builder.position_at_end(cont_block);
+
+    let result = builder.build_load(result_alloca, "result");
+
+    // MUST set the personality at the very end;
+    // doing it earlier can cause the personality to be ignored
+    let personality_func = get_gxx_personality_v0(env);
+    parent.set_personality_function(personality_func);
+
+    result
 }
 
 fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
