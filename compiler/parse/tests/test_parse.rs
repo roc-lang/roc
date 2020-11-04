@@ -24,8 +24,7 @@ mod test_parse {
     use roc_parse::ast::StrLiteral::*;
     use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{
-        self, Attempting, Def, EscapedChar, InterfaceHeader, Spaceable, TypeAnnotation,
-        WhenBranch,
+        self, Attempting, Def, EscapedChar, InterfaceHeader, Spaceable, TypeAnnotation, WhenBranch,
     };
     use roc_parse::header::ModuleName;
     use roc_parse::module::{interface_header, module_defs};
