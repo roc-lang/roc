@@ -813,6 +813,36 @@ fn type_to_variable(
 
             result
         }
+        HostExposedAlias {
+            name: symbol,
+            arguments: args,
+            actual: alias_type,
+            actual_var,
+            ..
+        } => {
+            let mut arg_vars = Vec::with_capacity(args.len());
+            let mut new_aliases = ImMap::default();
+
+            for (arg, arg_type) in args {
+                let arg_var = type_to_variable(subs, rank, pools, cached, arg_type);
+
+                arg_vars.push((arg.clone(), arg_var));
+                new_aliases.insert(arg.clone(), arg_var);
+            }
+
+            let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
+            let content = Content::Alias(*symbol, arg_vars, alias_var);
+
+            let result = register(subs, rank, pools, content);
+
+            // unify the actual_var with the result var
+            // this can be used to access the type of the actual_var
+            // to determine its layout later
+            let descriptor = subs.get(result);
+            subs.union(*actual_var, result, descriptor);
+
+            result
+        }
         Erroneous(problem) => {
             let content = Content::Structure(FlatType::Erroneous(problem.clone()));
 

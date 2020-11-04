@@ -2113,6 +2113,48 @@ fn annotation_to_attr_type(
                 panic!("lifted type is not Attr")
             }
         }
+        HostExposedAlias {
+            name: symbol,
+            def_name,
+            arguments: fields,
+            actual_var,
+            actual,
+        } => {
+            let (mut actual_vars, lifted_actual) =
+                annotation_to_attr_type(var_store, actual, rigids, change_var_kind);
+
+            if let Type::Apply(attr_symbol, args) = lifted_actual {
+                debug_assert!(attr_symbol == Symbol::ATTR_ATTR);
+
+                let uniq_type = args[0].clone();
+                let actual_type = args[1].clone();
+
+                let mut new_fields = Vec::with_capacity(fields.len());
+                for (name, tipe) in fields {
+                    let (lifted_vars, lifted) =
+                        annotation_to_attr_type(var_store, tipe, rigids, change_var_kind);
+
+                    actual_vars.extend(lifted_vars);
+
+                    new_fields.push((name.clone(), lifted));
+                }
+
+                let alias = Type::HostExposedAlias {
+                    name: *symbol,
+                    def_name: *def_name,
+                    arguments: new_fields,
+                    actual_var: *actual_var,
+                    actual: Box::new(actual_type),
+                };
+
+                (
+                    actual_vars,
+                    crate::builtins::builtin_type(Symbol::ATTR_ATTR, vec![uniq_type, alias]),
+                )
+            } else {
+                panic!("lifted type is not Attr")
+            }
+        }
     }
 }
 

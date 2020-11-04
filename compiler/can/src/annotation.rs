@@ -14,6 +14,13 @@ pub struct Annotation {
     pub introduced_variables: IntroducedVariables,
     pub references: MutSet<Symbol>,
     pub aliases: SendMap<Symbol, Alias>,
+    pub variably_sized_types: VariablySizedTypes,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VariablySizedTypes {
+    rigids: MutMap<Lowercase, ()>,
+    aliases: MutMap<Symbol, ()>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -58,12 +65,6 @@ impl IntroducedVariables {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct VariablySizedTypes {
-    rigids: MutMap<Lowercase, ()>,
-    aliases: MutMap<Symbol, ()>,
-}
-
 pub fn canonicalize_annotation(
     env: &mut Env,
     scope: &mut Scope,
@@ -74,6 +75,7 @@ pub fn canonicalize_annotation(
     let mut introduced_variables = IntroducedVariables::default();
     let mut references = MutSet::default();
     let mut aliases = SendMap::default();
+    let variably_sized_types = VariablySizedTypes::default();
     let typ = can_annotation_help(
         env,
         annotation,
@@ -90,6 +92,7 @@ pub fn canonicalize_annotation(
         introduced_variables,
         references,
         aliases,
+        variably_sized_types,
     }
 }
 

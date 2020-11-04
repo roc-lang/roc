@@ -5,7 +5,6 @@ use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::std::{Mode, StdLib};
-use roc_can::annotation::VariablySizedTypes;
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
@@ -14,7 +13,7 @@ use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
-use roc_module::ident::{Ident, ModuleName};
+use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, MonoProblem, PartialProc, PendingSpecialization,
@@ -211,7 +210,7 @@ struct ModuleCache<'a> {
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
-    host_exposed_variably_sized_types: MutMap<Symbol, VariablySizedTypes>,
+    variably_sized_layouts: MutMap<Symbol, VariablySizedLayouts<'a>>,
 }
 
 fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> BuildTask<'a> {
@@ -471,8 +470,15 @@ pub struct MonomorphizedModule<'a> {
     pub mono_problems: Vec<roc_mono::ir::MonoProblem>,
     pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
+    pub variably_sized_layouts: MutMap<Symbol, VariablySizedLayouts<'a>>,
     pub src: Box<str>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
+}
+
+#[derive(Debug, Default)]
+pub struct VariablySizedLayouts<'a> {
+    rigids: MutMap<Lowercase, Layout<'a>>,
+    aliases: MutMap<Symbol, Layout<'a>>,
 }
 
 #[derive(Debug)]
@@ -533,6 +539,7 @@ enum Msg<'a> {
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
         external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
+        variably_sized_layouts: MutMap<Symbol, VariablySizedLayouts<'a>>,
         procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         subs: Subs,
@@ -1473,12 +1480,18 @@ fn update<'a>(
             finished_info,
             procedures,
             external_specializations_requested,
+            variably_sized_layouts,
             problems,
             ..
         } => {
             log!("made specializations for {:?}", module_id);
 
             state.mono_problems.extend(problems);
+
+            state
+                .module_cache
+                .variably_sized_layouts
+                .extend(variably_sized_layouts);
 
             for (module_id, requested) in external_specializations_requested {
                 let existing = match state
@@ -1560,6 +1573,7 @@ fn finish_specialization<'a>(
         type_problems,
         can_problems,
         procedures,
+        module_cache,
         ..
     } = state;
 
@@ -1573,6 +1587,7 @@ fn finish_specialization<'a>(
         interns,
         procedures,
         src: src.into(),
+        variably_sized_layouts: module_cache.variably_sized_layouts,
         timings: state.timings,
     }
 }
@@ -2233,6 +2248,9 @@ fn make_specializations<'a>(
     let external_specializations_requested = procs.externals_we_need.clone();
     let procedures = procs.get_specialized_procs_without_rc(mono_env.arena);
 
+    // TODO
+    let variably_sized_layouts = MutMap::default();
+
     Msg::MadeSpecializations {
         module_id: home,
         ident_ids,
@@ -2242,6 +2260,7 @@ fn make_specializations<'a>(
         subs,
         finished_info,
         external_specializations_requested,
+        variably_sized_layouts,
     }
 }
 

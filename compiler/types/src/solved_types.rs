@@ -53,6 +53,14 @@ pub enum SolvedType {
     /// A type alias
     Alias(Symbol, Vec<(Lowercase, SolvedType)>, Box<SolvedType>),
 
+    HostExposedAlias {
+        name: Symbol,
+        def_name: Symbol,
+        arguments: Vec<(Lowercase, SolvedType)>,
+        actual_var: VarId,
+        actual: Box<SolvedType>,
+    },
+
     /// a boolean algebra Bool
     Boolean(SolvedBool),
 
@@ -193,6 +201,28 @@ impl SolvedType {
                 }
 
                 SolvedType::Alias(*symbol, solved_args, Box::new(solved_type))
+            }
+            HostExposedAlias {
+                name,
+                def_name,
+                arguments,
+                actual_var,
+                actual,
+            } => {
+                let solved_type = Self::from_type(solved_subs, actual);
+                let mut solved_args = Vec::with_capacity(arguments.len());
+
+                for (name, var) in arguments {
+                    solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
+                }
+
+                SolvedType::HostExposedAlias {
+                    name: *name,
+                    def_name: *def_name,
+                    arguments: solved_args,
+                    actual_var: VarId::from_var(*actual_var, solved_subs.inner()),
+                    actual: Box::new(solved_type),
+                }
             }
             Boolean(val) => SolvedType::Boolean(SolvedBool::from_bool(&val, solved_subs.inner())),
             Variable(var) => Self::from_var(solved_subs.inner(), *var),
@@ -485,6 +515,29 @@ pub fn to_type(
             let actual = to_type(solved_actual, free_vars, var_store);
 
             Type::Alias(*symbol, type_variables, Box::new(actual))
+        }
+        HostExposedAlias {
+            name,
+            def_name,
+            arguments: solved_type_variables,
+            actual_var,
+            actual: solved_actual,
+        } => {
+            let mut type_variables = Vec::with_capacity(solved_type_variables.len());
+
+            for (lowercase, solved_arg) in solved_type_variables {
+                type_variables.push((lowercase.clone(), to_type(solved_arg, free_vars, var_store)));
+            }
+
+            let actual = to_type(solved_actual, free_vars, var_store);
+
+            Type::HostExposedAlias {
+                name: *name,
+                def_name: *def_name,
+                arguments: type_variables,
+                actual_var: var_id_to_flex_var(*actual_var, free_vars, var_store),
+                actual: Box::new(actual),
+            }
         }
         Error => Type::Erroneous(Problem::SolvedTypeError),
         Erroneous(problem) => Type::Erroneous(problem.clone()),
