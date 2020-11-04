@@ -220,8 +220,16 @@ pub fn canonicalize_expr<'a>(
 
                         (answer, output)
                     }
-                    Err(CanonicalizeFieldProblem::InvalidOptionalValue) => (
-                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalRecord),
+                    Err(CanonicalizeRecordProblem::InvalidOptionalValue {
+                        field_name,
+                        field_region,
+                        record_region,
+                    }) => (
+                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
+                            field_name,
+                            field_region,
+                            record_region,
+                        }),
                         Output::default(),
                     ),
                 }
@@ -254,8 +262,16 @@ pub fn canonicalize_expr<'a>(
                         },
                         output,
                     ),
-                    Err(CanonicalizeFieldProblem::InvalidOptionalValue) => (
-                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalRecord),
+                    Err(CanonicalizeRecordProblem::InvalidOptionalValue {
+                        field_name,
+                        field_region,
+                        record_region,
+                    }) => (
+                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
+                            field_name,
+                            field_region,
+                            record_region,
+                        }),
                         Output::default(),
                     ),
                 }
@@ -979,13 +995,20 @@ where
     }
 }
 
+enum CanonicalizeRecordProblem {
+    InvalidOptionalValue {
+        field_name: Lowercase,
+        field_region: Region,
+        record_region: Region,
+    },
+}
 fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
     region: Region,
     fields: &'a [Located<ast::AssignedField<'a, ast::Expr<'a>>>],
-) -> Result<(SendMap<Lowercase, Field>, Output), CanonicalizeFieldProblem> {
+) -> Result<(SendMap<Lowercase, Field>, Output), CanonicalizeRecordProblem> {
     let mut can_fields = SendMap::default();
     let mut output = Output::default();
 
@@ -1011,9 +1034,20 @@ fn canonicalize_fields<'a>(
 
                 output.references = output.references.union(field_out.references);
             }
-            Err(invalid_optional_value @ CanonicalizeFieldProblem::InvalidOptionalValue) => {
-                env.problems.push(Problem::InvalidOptionalRecord);
-                return Err(invalid_optional_value);
+            Err(CanonicalizeFieldProblem::InvalidOptionalValue {
+                field_name,
+                field_region,
+            }) => {
+                env.problems.push(Problem::InvalidOptionalValue {
+                    field_name: field_name.clone(),
+                    field_region,
+                    record_region: region,
+                });
+                return Err(CanonicalizeRecordProblem::InvalidOptionalValue {
+                    field_name,
+                    field_region,
+                    record_region: region,
+                });
             }
         }
     }
@@ -1022,9 +1056,11 @@ fn canonicalize_fields<'a>(
 }
 
 enum CanonicalizeFieldProblem {
-    InvalidOptionalValue,
+    InvalidOptionalValue {
+        field_name: Lowercase,
+        field_region: Region,
+    },
 }
-
 fn canonicalize_field<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
@@ -1049,7 +1085,10 @@ fn canonicalize_field<'a>(
             ))
         }
 
-        OptionalValue(_, _, _) => Err(CanonicalizeFieldProblem::InvalidOptionalValue),
+        OptionalValue(label, _, loc_expr) => Err(CanonicalizeFieldProblem::InvalidOptionalValue {
+            field_name: Lowercase::from(label.value),
+            field_region: loc_expr.region,
+        }),
 
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {

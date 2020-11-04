@@ -179,8 +179,23 @@ pub fn can_problem<'b>(
                 alloc.reflow(" definitions from this record."),
             ]),
         ]),
-        Problem::InvalidOptionalRecord => alloc.stack(vec![
-            alloc.reflow("This record contains optional values, it shouldn't!")
+        Problem::InvalidOptionalValue {
+            field_name,
+            field_region,
+            record_region,
+        } => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("This record uses an optional value for the "),
+                alloc.record_field(field_name.clone()),
+                alloc.reflow(" field in an incorrect context!"),
+            ]),
+            alloc.region_all_the_things(
+                record_region,
+                field_region,
+                field_region,
+                Annotation::Error,
+            ),
+            alloc.reflow("You can only use optinal values in record destructuring."),
         ]),
         Problem::DuplicateRecordFieldType {
             field_name,
@@ -537,9 +552,24 @@ fn pretty_runtime_error<'b>(
                 tip,
             ])
         }
-        RuntimeError::InvalidOptionalRecord => {
-            alloc.reflow("There is an inappropriate  optional field in a record")
-        }
+        RuntimeError::InvalidOptionalValue {
+            field_name,
+            field_region,
+            record_region,
+        } => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("This record uses an optional value for the "),
+                alloc.record_field(field_name.clone()),
+                alloc.reflow(" field in an incorrect context!"),
+            ]),
+            alloc.region_all_the_things(
+                record_region,
+                field_region,
+                field_region,
+                Annotation::Error,
+            ),
+            alloc.reflow("You can only use optinal values in record destructuring."),
+        ]),
         RuntimeError::InvalidRecordUpdate { region } => alloc.stack(vec![
             alloc.concat(vec![
                 alloc.reflow("This expression cannot be updated"),
