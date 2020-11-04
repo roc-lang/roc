@@ -557,7 +557,7 @@ mod gen_num {
             indoc!(
                 r#"
                     always42 : Num.Num Num.Integer -> Num.Num Num.Integer
-                    always42 = \num -> 42
+                    always42 = \_ -> 42
 
                     always42 5
                 "#

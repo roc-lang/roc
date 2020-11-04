@@ -23,11 +23,12 @@ mod gen_tags {
                 x : Maybe Int
                 x = Nothing
 
-                0x1
+                x
                 "#
             ),
             1,
-            i64
+            (i64, i64),
+            |(tag, _)| tag
         );
     }
 
@@ -41,11 +42,12 @@ mod gen_tags {
                 x : Maybe Int
                 x = Nothing
 
-                0x1
+                x
                 "#
             ),
             1,
-            i64
+            (i64, i64),
+            |(tag, _)| tag
         );
     }
 
@@ -59,11 +61,11 @@ mod gen_tags {
                 y : Maybe Int
                 y = Just 0x4
 
-                0x1
+                y
                 "#
             ),
-            1,
-            i64
+            (0, 0x4),
+            (i64, i64)
         );
     }
 
@@ -77,11 +79,11 @@ mod gen_tags {
                 y : Maybe Int
                 y = Just 0x4
 
-                0x1
+                y
                 "#
             ),
-            1,
-            i64
+            (0, 0x4),
+            (i64, i64)
         );
     }
 
@@ -99,11 +101,11 @@ mod gen_tags {
                 y : Maybe Fruit
                 y = Just orange
 
-                0x1
+                y
                 "#
             ),
-            1,
-            i64
+            (0, 2),
+            (i64, i64)
         );
     }
 
@@ -350,7 +352,7 @@ mod gen_tags {
 
                 when x is
                     These a b -> a + b
-                    That v -> 8
+                    That v -> v
                     This v -> v
                 "#
             ),
@@ -616,10 +618,10 @@ mod gen_tags {
                 x : [ Pair Int ]
                 x = Pair 2
 
-                0x3
+                x
                 "#
             ),
-            3,
+            2,
             i64
         );
     }
@@ -637,11 +639,11 @@ mod gen_tags {
                 x = Just (Just 41)
 
                 main = 
-                    5
+                    x
                 "#
             ),
-            5,
-            i64
+            (0, (0, 41)),
+            (i64, (i64, i64))
         );
     }
     #[test]
@@ -654,11 +656,11 @@ mod gen_tags {
                 v : Unit
                 v = Unit
 
-                1
+                v
                 "#
             ),
-            1,
-            i64
+            (),
+            ()
         );
     }
 
@@ -667,8 +669,6 @@ mod gen_tags {
         assert_evals_to!(
             indoc!(
                 r#"
-                Maybe a : [ Nothing, Just a ]
-
                 x = { a : { b : 0x5 } }
 
                 y = x.a
