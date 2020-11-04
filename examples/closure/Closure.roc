@@ -1,7 +1,7 @@
-app Closure provides [ closure ] imports []
+app Closure provides [ makeClosure ] imports []
 
-closure : ({} -> Int) as MyClosure
-closure = 
+makeClosure : ({} -> Int) as MyClosure
+makeClosure = 
     x = 42
 
     \{} -> x

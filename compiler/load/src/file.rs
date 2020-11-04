@@ -2331,7 +2331,6 @@ fn add_def_to_module<'a>(
 ) {
     use roc_can::expr::Expr::*;
     use roc_can::pattern::Pattern::*;
-    use roc_mono::ir::HostExposedVariables;
 
     match def.loc_pattern.value {
         Identifier(symbol) => {
@@ -2425,7 +2424,6 @@ fn add_def_to_module<'a>(
                         body,
                         // This is a 0-arity thunk, so it cannot be recursive
                         is_self_recursive: false,
-                        host_exposed_variables: HostExposedVariables::default(),
                     };
 
                     procs.partial_procs.insert(symbol, proc);

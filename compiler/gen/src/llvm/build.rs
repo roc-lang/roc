@@ -34,7 +34,7 @@ use roc_collections::all::{ImMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{JoinPointId, Wrapped};
-use roc_mono::layout::{Builtin, Layout, MemoryMode};
+use roc_mono::layout::{Builtin, ClosureLayout, Layout, MemoryMode};
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -2099,6 +2099,27 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     let arena = env.arena;
     let context = &env.context;
 
+    let fn_name = layout_ids
+        .get(symbol, layout)
+        .to_symbol_string(symbol, &env.interns);
+
+    use roc_mono::ir::HostExposedLayouts;
+    match &proc.host_exposed_layouts {
+        HostExposedLayouts::NotHostExposed => {}
+        HostExposedLayouts::HostExposed { rigids: _, aliases } => {
+            for (name, layout) in aliases {
+                match layout {
+                    Layout::Closure(arguments, closure, result) => {
+                        build_closure_caller(env, &fn_name, *name, arguments, closure, result)
+                    }
+                    _ => {
+                        // TODO
+                    }
+                }
+            }
+        }
+    }
+
     let ret_type = basic_type_from_layout(arena, context, &proc.ret_layout, env.ptr_bytes);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
@@ -2110,9 +2131,6 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
 
     let fn_type = get_fn_type(&ret_type, &arg_basic_types);
 
-    let fn_name = layout_ids
-        .get(symbol, layout)
-        .to_symbol_string(symbol, &env.interns);
     let fn_val = env
         .module
         .add_function(fn_name.as_str(), fn_type, Some(Linkage::Private));
@@ -2126,8 +2144,113 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
     fn_val
 }
 
-#[allow(dead_code)]
 pub fn build_closure_caller<'a, 'ctx, 'env>(
+    env: &'a Env<'a, 'ctx, 'env>,
+    def_name: &str,
+    alias_symbol: Symbol,
+    arguments: &[Layout<'a>],
+    closure: &ClosureLayout<'a>,
+    result: &Layout<'a>,
+) {
+    use inkwell::types::BasicType;
+
+    let arena = env.arena;
+    let context = &env.context;
+    let builder = env.builder;
+
+    let function_name = format!(
+        "{}_{}_caller",
+        def_name,
+        alias_symbol.ident_string(&env.interns)
+    );
+
+    let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
+
+    for layout in arguments {
+        argument_types.push(basic_type_from_layout(
+            arena,
+            context,
+            layout,
+            env.ptr_bytes,
+        ));
+    }
+
+    let function_pointer_type = {
+        let function_layout =
+            ClosureLayout::extend_function_layout(arena, arguments, closure.clone(), result);
+        let basic_type = basic_type_from_layout(arena, context, &function_layout, env.ptr_bytes);
+
+        // this is already a (function) pointer type
+        basic_type
+    };
+    argument_types.push(function_pointer_type.into());
+
+    let closure_argument_type = {
+        let basic_type = basic_type_from_layout(
+            arena,
+            context,
+            &closure.as_block_of_memory_layout(),
+            env.ptr_bytes,
+        );
+
+        basic_type.ptr_type(AddressSpace::Generic)
+    };
+    argument_types.push(closure_argument_type.into());
+
+    let result_type = basic_type_from_layout(arena, context, result, env.ptr_bytes);
+
+    let roc_call_result_type =
+        context.struct_type(&[context.i64_type().into(), result_type], false);
+
+    let output_type = { roc_call_result_type.ptr_type(AddressSpace::Generic) };
+    argument_types.push(output_type.into());
+
+    let function_type = context.void_type().fn_type(&argument_types, false);
+
+    let function_value = env.module.add_function(
+        function_name.as_str(),
+        function_type,
+        Some(Linkage::External),
+    );
+
+    function_value.set_call_conventions(C_CALL_CONV);
+
+    // BUILD FUNCTION BODY
+
+    let entry = context.append_basic_block(function_value, "entry");
+
+    builder.position_at_end(entry);
+
+    let mut parameters = function_value.get_params();
+    let output = parameters.pop().unwrap().into_pointer_value();
+    let closure_data_ptr = parameters.pop().unwrap().into_pointer_value();
+    let function_ptr = parameters.pop().unwrap().into_pointer_value();
+
+    let closure_data = builder.build_load(closure_data_ptr, "load_closure_data");
+
+    let mut arguments = parameters;
+    arguments.push(closure_data);
+    let call = builder.build_call(function_ptr, &arguments, "call_closure");
+    call.set_call_convention(FAST_CALL_CONV);
+
+    let result = call.try_as_basic_value().left().unwrap();
+
+    unsafe {
+        let tag_ptr = builder.build_struct_gep(output, 0, "gep");
+        let result_ptr = builder.build_struct_gep(output, 1, "gep");
+
+        //        let v33 = context.i64_type().const_int(33, false);
+        //        builder.build_store(tag_ptr, v33);
+        builder.build_store(result_ptr, result);
+    }
+
+    //builder.build_store(output, roc_call_result);
+
+    builder.build_return(None);
+}
+
+#[allow(dead_code)]
+pub fn build_closure_caller_old<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     closure_function: FunctionValue<'ctx>,
 ) {

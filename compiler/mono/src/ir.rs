@@ -26,7 +26,6 @@ pub struct PartialProc<'a> {
     pub captured_symbols: CapturedSymbols<'a>,
     pub body: roc_can::expr::Expr,
     pub is_self_recursive: bool,
-    pub host_exposed_variables: HostExposedVariables,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -382,7 +381,6 @@ impl<'a> Procs<'a> {
                         captured_symbols,
                         body: body.value,
                         is_self_recursive,
-                        host_exposed_variables: HostExposedVariables::default(),
                     },
                 );
             }
@@ -456,7 +454,6 @@ impl<'a> Procs<'a> {
                                     captured_symbols,
                                     body: body.value,
                                     is_self_recursive,
-                                    host_exposed_variables: HostExposedVariables::default(),
                                 },
                             );
                         }
@@ -468,7 +465,6 @@ impl<'a> Procs<'a> {
                                 captured_symbols,
                                 body: body.value,
                                 is_self_recursive,
-                                host_exposed_variables: HostExposedVariables::default(),
                             };
 
                             // Mark this proc as in-progress, so if we're dealing with
@@ -1351,6 +1347,7 @@ pub fn specialize_all<'a>(
             name,
             layout_cache,
             solved_type,
+            MutMap::default(),
             partial_proc,
         ) {
             Ok((proc, layout)) => {
@@ -1436,6 +1433,7 @@ fn specialize_external<'a>(
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
+    host_exposed_variables: &[(Symbol, Variable)],
     partial_proc: PartialProc<'a>,
 ) -> Result<Proc<'a>, LayoutProblem> {
     let PartialProc {
@@ -1444,7 +1442,6 @@ fn specialize_external<'a>(
         captured_symbols,
         body,
         is_self_recursive,
-        host_exposed_variables,
     } = partial_proc;
 
     // unify the called function with the specialized signature, then specialize the function body
@@ -1501,12 +1498,23 @@ fn specialize_external<'a>(
         }
     }
 
-    //
-    let host_exposed_layouts = {
-        if host_exposed_variables == HostExposedVariables::default() {
-            HostExposedLayouts::NotHostExposed
-        } else {
-            todo!()
+    // TODO host exposed thngs
+    // host_exposed_variables: &[(Symbol, Variable)],
+    let host_exposed_layouts = if host_exposed_variables.is_empty() {
+        HostExposedLayouts::NotHostExposed
+    } else {
+        let mut aliases = MutMap::default();
+
+        for (symbol, variable) in host_exposed_variables {
+            let layout = layout_cache
+                .from_var(env.arena, *variable, env.subs)
+                .unwrap();
+            aliases.insert(*symbol, layout);
+        }
+
+        HostExposedLayouts::HostExposed {
+            rigids: MutMap::default(),
+            aliases,
         }
     };
 
@@ -1764,8 +1772,30 @@ fn specialize<'a>(
         proc_name,
         layout_cache,
         solved_type,
+        host_exposed_aliases,
         partial_proc,
     )
+}
+
+fn introduce_solved_type_to_subs<'a>(env: &mut Env<'a, '_>, solved_type: &SolvedType) -> Variable {
+    use roc_solve::solve::insert_type_into_subs;
+    use roc_types::solved_types::{to_type, FreeVars};
+    use roc_types::subs::VarStore;
+    let mut free_vars = FreeVars::default();
+    let mut var_store = VarStore::new_from_subs(env.subs);
+
+    let before = var_store.peek();
+
+    let normal_type = to_type(solved_type, &mut free_vars, &mut var_store);
+
+    let after = var_store.peek();
+    let variables_introduced = after - before;
+
+    env.subs.extend_by(variables_introduced as usize);
+
+    let result = insert_type_into_subs(env.subs, &normal_type);
+
+    result
 }
 
 fn specialize_solved_type<'a>(
@@ -1774,34 +1804,39 @@ fn specialize_solved_type<'a>(
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
     solved_type: SolvedType,
+    host_exposed_aliases: MutMap<Symbol, SolvedType>,
     partial_proc: PartialProc<'a>,
 ) -> Result<(Proc<'a>, Layout<'a>), LayoutProblem> {
     // add the specializations that other modules require of us
-    use roc_solve::solve::{insert_type_into_subs, instantiate_rigids};
-    use roc_types::solved_types::{to_type, FreeVars};
-    use roc_types::subs::VarStore;
+    use roc_solve::solve::instantiate_rigids;
 
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
 
-    let mut free_vars = FreeVars::default();
-    let mut var_store = VarStore::new_from_subs(env.subs);
-
-    let before = var_store.peek();
-
-    let normal_type = to_type(&solved_type, &mut free_vars, &mut var_store);
-
-    let after = var_store.peek();
-    let variables_introduced = after - before;
-
-    env.subs.extend_by(variables_introduced as usize);
-
-    let fn_var = insert_type_into_subs(env.subs, &normal_type);
+    let fn_var = introduce_solved_type_to_subs(env, &solved_type);
 
     // make sure rigid variables in the annotation are converted to flex variables
     instantiate_rigids(env.subs, partial_proc.annotation);
 
-    match specialize_external(env, procs, proc_name, layout_cache, fn_var, partial_proc) {
+    let mut host_exposed_variables = Vec::with_capacity_in(host_exposed_aliases.len(), env.arena);
+
+    for (symbol, solved_type) in host_exposed_aliases {
+        let alias_var = introduce_solved_type_to_subs(env, &solved_type);
+
+        host_exposed_variables.push((symbol, alias_var));
+    }
+
+    let specialized = specialize_external(
+        env,
+        procs,
+        proc_name,
+        layout_cache,
+        fn_var,
+        &host_exposed_variables,
+        partial_proc,
+    );
+
+    match specialized {
         Ok(proc) => {
             let layout = layout_cache
                 .from_var(&env.arena, fn_var, env.subs)
