@@ -16,8 +16,7 @@ use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
 use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::ir::{
-    CapturedSymbols, ExternalSpecializations, MonoProblem, PartialProc, PendingSpecialization,
-    Proc, Procs,
+    CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache};
 use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
@@ -201,15 +200,24 @@ impl Dependencies {
 #[derive(Debug, Default)]
 struct ModuleCache<'a> {
     module_names: MutMap<ModuleId, ModuleName>,
+
+    /// Phases
     headers: MutMap<ModuleId, ModuleHeader<'a>>,
     parsed: MutMap<ModuleId, ParsedModule<'a>>,
     canonicalized: MutMap<ModuleId, CanonicalizedModule<'a>>,
     aliases: MutMap<ModuleId, MutMap<Symbol, Alias>>,
-    constrained: MutMap<ModuleId, ConstrainedModule<'a>>,
+    constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
+
+    /// Various information
     documentation: MutMap<ModuleId, ModuleDocumentation>,
+    can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
+    type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
+    mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
+
+    sources: MutMap<ModuleId, (PathBuf, &'a str)>,
 }
 
 fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> BuildTask<'a> {
@@ -314,7 +322,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 module,
                 ident_ids,
                 module_timing,
-                src,
                 constraint,
                 var_store,
                 imported_modules,
@@ -326,7 +333,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 module,
                 ident_ids,
                 module_timing,
-                src,
                 constraint,
                 var_store,
                 imported_modules,
@@ -344,7 +350,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 module_timing,
                 solved_subs,
                 decls,
-                finished_info,
                 ident_ids,
             } = typechecked;
 
@@ -354,7 +359,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 module_timing,
                 solved_subs,
                 decls,
-                finished_info,
                 ident_ids,
                 exposed_to_host: state.exposed_to_host.clone(),
             }
@@ -378,7 +382,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 subs,
                 procs,
                 layout_cache,
-                finished_info,
             } = found_specializations;
 
             BuildTask::MakeSpecializations {
@@ -388,7 +391,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 procs,
                 layout_cache,
                 specializations_we_must_make,
-                finished_info,
             }
         }
     }
@@ -399,11 +401,11 @@ pub struct LoadedModule {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub solved: Solved<Subs>,
-    pub can_problems: Vec<roc_problem::can::Problem>,
-    pub type_problems: Vec<solve::TypeError>,
+    pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
+    pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
-    pub src: Box<str>,
+    pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub documentation: MutMap<ModuleId, ModuleDocumentation>,
 }
@@ -417,6 +419,7 @@ pub enum BuildProblem<'a> {
 struct ModuleHeader<'a> {
     module_id: ModuleId,
     module_name: ModuleName,
+    module_path: PathBuf,
     exposed_ident_ids: IdentIds,
     deps_by_name: MutMap<ModuleName, ModuleId>,
     imported_modules: MutSet<ModuleId>,
@@ -427,11 +430,10 @@ struct ModuleHeader<'a> {
 }
 
 #[derive(Debug)]
-struct ConstrainedModule<'a> {
+struct ConstrainedModule {
     module: Module,
     declarations: Vec<Declaration>,
     imported_modules: MutSet<ModuleId>,
-    src: &'a str,
     constraint: Constraint,
     ident_ids: IdentIds,
     var_store: VarStore,
@@ -446,7 +448,6 @@ pub struct TypeCheckedModule<'a> {
     pub solved_subs: Solved<Subs>,
     pub decls: Vec<Declaration>,
     pub ident_ids: IdentIds,
-    pub finished_info: FinishedInfo<'a>,
 }
 
 #[derive(Debug)]
@@ -456,7 +457,6 @@ pub struct FoundSpecializationsModule<'a> {
     pub layout_cache: LayoutCache<'a>,
     pub procs: Procs<'a>,
     pub subs: Subs,
-    pub finished_info: FinishedInfo<'a>,
 }
 
 #[derive(Debug)]
@@ -464,12 +464,12 @@ pub struct MonomorphizedModule<'a> {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub subs: Subs,
-    pub can_problems: Vec<roc_problem::can::Problem>,
-    pub type_problems: Vec<solve::TypeError>,
-    pub mono_problems: Vec<roc_mono::ir::MonoProblem>,
+    pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
+    pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
+    pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
     pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
-    pub src: Box<str>,
+    pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
 }
 
@@ -477,6 +477,7 @@ pub struct MonomorphizedModule<'a> {
 struct ParsedModule<'a> {
     module_id: ModuleId,
     module_name: ModuleName,
+    module_path: PathBuf,
     src: &'a str,
     module_timing: ModuleTiming,
     deps_by_name: MutMap<ModuleName, ModuleId>,
@@ -498,12 +499,11 @@ enum Msg<'a> {
     Header(ModuleHeader<'a>),
     Parsed(ParsedModule<'a>),
     CanonicalizedAndConstrained {
-        constrained_module: ConstrainedModule<'a>,
+        constrained_module: ConstrainedModule,
         canonicalization_problems: Vec<roc_problem::can::Problem>,
         module_docs: ModuleDocumentation,
     },
     SolvedTypes {
-        src: &'a str,
         module_id: ModuleId,
         ident_ids: IdentIds,
         solved_module: SolvedModule,
@@ -515,7 +515,6 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
-        src: &'a str,
     },
     FoundSpecializations {
         module_id: ModuleId,
@@ -524,7 +523,6 @@ enum Msg<'a> {
         procs: Procs<'a>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         solved_subs: Solved<Subs>,
-        finished_info: FinishedInfo<'a>,
     },
     MadeSpecializations {
         module_id: ModuleId,
@@ -534,7 +532,6 @@ enum Msg<'a> {
         procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         subs: Subs,
-        finished_info: FinishedInfo<'a>,
     },
 
     /// The task is to only typecheck AND monomorphize modules
@@ -542,14 +539,7 @@ enum Msg<'a> {
     FinishedAllSpecialization {
         subs: Subs,
         exposed_to_host: MutMap<Symbol, Variable>,
-        src: &'a str,
     },
-}
-
-#[derive(Debug)]
-pub struct FinishedInfo<'a> {
-    exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
-    src: &'a str,
 }
 
 #[derive(Debug)]
@@ -559,10 +549,7 @@ struct State<'a> {
     pub stdlib: StdLib,
     pub exposed_types: SubsByModule,
 
-    pub can_problems: std::vec::Vec<roc_problem::can::Problem>,
-    pub mono_problems: std::vec::Vec<MonoProblem>,
     pub headers_parsed: MutSet<ModuleId>,
-    pub type_problems: std::vec::Vec<solve::TypeError>,
 
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies,
@@ -702,7 +689,6 @@ enum BuildTask<'a> {
         constraint: Constraint,
         var_store: VarStore,
         declarations: Vec<Declaration>,
-        src: &'a str,
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
@@ -711,7 +697,6 @@ enum BuildTask<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         decls: Vec<Declaration>,
-        finished_info: FinishedInfo<'a>,
         exposed_to_host: MutMap<Symbol, Variable>,
     },
     MakeSpecializations {
@@ -720,7 +705,6 @@ enum BuildTask<'a> {
         subs: Subs,
         procs: Procs<'a>,
         layout_cache: LayoutCache<'a>,
-        finished_info: FinishedInfo<'a>,
         specializations_we_must_make: ExternalSpecializations,
     },
 }
@@ -1105,9 +1089,6 @@ where
                 exposed_types,
                 headers_parsed,
                 loading_started,
-                can_problems: std::vec::Vec::new(),
-                type_problems: std::vec::Vec::new(),
-                mono_problems: std::vec::Vec::new(),
                 arc_modules,
                 constrained_ident_ids: IdentIds::exposed_builtins(0),
                 ident_ids_by_module,
@@ -1140,7 +1121,6 @@ where
                         solved_subs,
                         exposed_vars_by_symbol,
                         documentation,
-                        src,
                     } => {
                         // We're done! There should be no more messages pending.
                         debug_assert!(msg_rx.is_empty());
@@ -1157,13 +1137,11 @@ where
                             solved_subs,
                             exposed_vars_by_symbol,
                             documentation,
-                            src,
                         )));
                     }
                     Msg::FinishedAllSpecialization {
                         subs,
                         exposed_to_host,
-                        src,
                     } => {
                         // We're done! There should be no more messages pending.
                         debug_assert!(msg_rx.is_empty());
@@ -1179,7 +1157,6 @@ where
                             state,
                             subs,
                             exposed_to_host,
-                            src,
                         )));
                     }
                     msg => {
@@ -1267,6 +1244,11 @@ fn update<'a>(
             Ok(state)
         }
         Parsed(parsed) => {
+            state
+                .module_cache
+                .sources
+                .insert(parsed.module_id, (parsed.module_path.clone(), parsed.src));
+
             let module_id = parsed.module_id;
 
             state.module_cache.parsed.insert(parsed.module_id, parsed);
@@ -1288,7 +1270,10 @@ fn update<'a>(
         } => {
             let module_id = constrained_module.module.module_id;
             log!("generated constraints for {:?}", module_id);
-            state.can_problems.extend(canonicalization_problems);
+            state
+                .module_cache
+                .can_problems
+                .insert(module_id, canonicalization_problems);
 
             state
                 .module_cache
@@ -1318,7 +1303,6 @@ fn update<'a>(
             Ok(state)
         }
         SolvedTypes {
-            src,
             module_id,
             ident_ids,
             solved_module,
@@ -1329,7 +1313,10 @@ fn update<'a>(
             log!("solved types for {:?}", module_id);
             module_timing.end_time = SystemTime::now();
 
-            state.type_problems.extend(solved_module.problems);
+            state
+                .module_cache
+                .type_problems
+                .insert(module_id, solved_module.problems);
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
@@ -1357,7 +1344,6 @@ fn update<'a>(
                         solved_subs,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
                         documentation,
-                        src,
                     })
                     .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
@@ -1382,11 +1368,6 @@ fn update<'a>(
                 if state.goal_phase > Phase::SolveTypes {
                     let layout_cache = state.layout_caches.pop().unwrap_or_default();
 
-                    let finished_info = FinishedInfo {
-                        src,
-                        exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
-                    };
-
                     let typechecked = TypeCheckedModule {
                         module_id,
                         decls,
@@ -1394,7 +1375,6 @@ fn update<'a>(
                         ident_ids,
                         module_timing,
                         layout_cache,
-                        finished_info,
                     };
 
                     state
@@ -1417,7 +1397,6 @@ fn update<'a>(
         FoundSpecializations {
             module_id,
             procs,
-            finished_info,
             solved_subs,
             ident_ids,
             layout_cache,
@@ -1443,7 +1422,6 @@ fn update<'a>(
                 layout_cache,
                 module_id,
                 procs,
-                finished_info,
                 ident_ids,
                 subs,
             };
@@ -1468,7 +1446,6 @@ fn update<'a>(
             module_id,
             ident_ids,
             subs,
-            finished_info,
             procedures,
             external_specializations_requested,
             problems,
@@ -1476,7 +1453,7 @@ fn update<'a>(
         } => {
             log!("made specializations for {:?}", module_id);
 
-            state.mono_problems.extend(problems);
+            state.module_cache.mono_problems.insert(module_id, problems);
 
             for (module_id, requested) in external_specializations_requested {
                 let existing = match state
@@ -1512,7 +1489,6 @@ fn update<'a>(
                         subs,
                         // TODO thread through mono problems
                         exposed_to_host: state.exposed_to_host.clone(),
-                        src: finished_info.src,
                     })
                     .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
@@ -1542,7 +1518,6 @@ fn finish_specialization<'a>(
     state: State<'a>,
     subs: Subs,
     exposed_to_host: MutMap<Symbol, Variable>,
-    src: &'a str,
 ) -> MonomorphizedModule<'a> {
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
@@ -1554,12 +1529,23 @@ fn finish_specialization<'a>(
     };
 
     let State {
+        procedures,
+        module_cache,
+        ..
+    } = state;
+
+    let ModuleCache {
         mono_problems,
         type_problems,
         can_problems,
-        procedures,
+        sources,
         ..
-    } = state;
+    } = module_cache;
+
+    let sources = sources
+        .into_iter()
+        .map(|(id, (path, src))| (id, (path, src.into())))
+        .collect();
 
     MonomorphizedModule {
         can_problems,
@@ -1570,7 +1556,8 @@ fn finish_specialization<'a>(
         subs,
         interns,
         procedures,
-        src: src.into(),
+        // src: src.into(),
+        sources,
         timings: state.timings,
     }
 }
@@ -1580,7 +1567,6 @@ fn finish<'a>(
     solved: Solved<Subs>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
-    src: &'a str,
 ) -> LoadedModule {
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
@@ -1591,15 +1577,22 @@ fn finish<'a>(
         all_ident_ids: state.constrained_ident_ids,
     };
 
+    let sources = state
+        .module_cache
+        .sources
+        .into_iter()
+        .map(|(id, (path, src))| (id, (path, src.into())))
+        .collect();
+
     LoadedModule {
         module_id: state.root_id,
         interns,
         solved,
-        can_problems: state.can_problems,
-        type_problems: state.type_problems,
+        can_problems: state.module_cache.can_problems,
+        type_problems: state.module_cache.type_problems,
         declarations_by_id: state.declarations_by_id,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
-        src: src.into(),
+        sources,
         timings: state.timings,
         documentation,
     }
@@ -1693,6 +1686,7 @@ fn parse_header<'a>(
     match parsed {
         Ok((ast::Module::Interface { header }, parse_state)) => Ok(send_header(
             header.name,
+            filename,
             header.exposes.into_bump_slice(),
             header.imports.into_bump_slice(),
             parse_state,
@@ -1702,6 +1696,7 @@ fn parse_header<'a>(
         )),
         Ok((ast::Module::App { header }, parse_state)) => Ok(send_header(
             header.name,
+            filename,
             header.provides.into_bump_slice(),
             header.imports.into_bump_slice(),
             parse_state,
@@ -1776,6 +1771,7 @@ fn load_from_str<'a>(
 #[allow(clippy::too_many_arguments)]
 fn send_header<'a>(
     name: Located<roc_parse::header::ModuleName<'a>>,
+    filename: PathBuf,
     exposes: &'a [Located<ExposesEntry<'a>>],
     imports: &'a [Located<ImportsEntry<'a>>],
     parse_state: parser::State<'a>,
@@ -1895,6 +1891,7 @@ fn send_header<'a>(
         home,
         Msg::Header(ModuleHeader {
             module_id: home,
+            module_path: filename,
             exposed_ident_ids: ident_ids,
             module_name: declared_name,
             imported_modules,
@@ -1914,7 +1911,6 @@ impl<'a> BuildTask<'a> {
         module: Module,
         ident_ids: IdentIds,
         module_timing: ModuleTiming,
-        src: &'a str,
         constraint: Constraint,
         var_store: VarStore,
         imported_modules: MutSet<ModuleId>,
@@ -1954,7 +1950,6 @@ impl<'a> BuildTask<'a> {
             imported_symbols,
             constraint,
             var_store,
-            src,
             declarations,
             module_timing,
         }
@@ -1970,7 +1965,6 @@ fn run_solve<'a>(
     constraint: Constraint,
     mut var_store: VarStore,
     decls: Vec<Declaration>,
-    src: &'a str,
 ) -> Msg<'a> {
     // We have more constraining work to do now, so we'll add it to our timings.
     let constrain_start = SystemTime::now();
@@ -2012,7 +2006,6 @@ fn run_solve<'a>(
 
     // Send the subs to the main thread for processing,
     Msg::SolvedTypes {
-        src,
         module_id,
         solved_subs,
         ident_ids,
@@ -2041,7 +2034,6 @@ fn canonicalize_and_constrain<'a>(
         exposed_imports,
         imported_modules,
         mut module_timing,
-        src,
         ..
     } = parsed;
 
@@ -2094,7 +2086,6 @@ fn canonicalize_and_constrain<'a>(
                 module,
                 declarations: module_output.declarations,
                 imported_modules,
-                src,
                 var_store,
                 constraint,
                 ident_ids: module_output.ident_ids,
@@ -2145,12 +2136,14 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         deps_by_name,
         exposed_ident_ids,
         exposed_imports,
+        module_path,
         ..
     } = header;
 
     let parsed = ParsedModule {
         module_id,
         module_name,
+        module_path,
         deps_by_name,
         exposed_ident_ids,
         exposed_imports,
@@ -2202,7 +2195,6 @@ fn make_specializations<'a>(
     mut procs: Procs<'a>,
     mut layout_cache: LayoutCache<'a>,
     specializations_we_must_make: ExternalSpecializations,
-    finished_info: FinishedInfo<'a>,
 ) -> Msg<'a> {
     let mut mono_problems = Vec::new();
     // do the thing
@@ -2238,7 +2230,6 @@ fn make_specializations<'a>(
         procedures,
         problems: mono_problems,
         subs,
-        finished_info,
         external_specializations_requested,
     }
 }
@@ -2255,7 +2246,6 @@ fn build_pending_specializations<'a>(
     mut layout_cache: LayoutCache<'a>,
     // TODO remove
     exposed_to_host: MutMap<Symbol, Variable>,
-    finished_info: FinishedInfo<'a>,
 ) -> Msg<'a> {
     let mut procs = Procs::default();
 
@@ -2309,7 +2299,6 @@ fn build_pending_specializations<'a>(
         layout_cache,
         procs,
         problems,
-        finished_info,
     }
 }
 
@@ -2457,7 +2446,6 @@ fn run_task<'a>(
             var_store,
             ident_ids,
             declarations,
-            src,
         } => Ok(run_solve(
             module,
             ident_ids,
@@ -2466,7 +2454,6 @@ fn run_task<'a>(
             constraint,
             var_store,
             declarations,
-            src,
         )),
         BuildPendingSpecializations {
             module_id,
@@ -2475,7 +2462,6 @@ fn run_task<'a>(
             module_timing,
             layout_cache,
             solved_subs,
-            finished_info,
             exposed_to_host,
         } => Ok(build_pending_specializations(
             arena,
@@ -2486,7 +2472,6 @@ fn run_task<'a>(
             module_timing,
             layout_cache,
             exposed_to_host,
-            finished_info,
         )),
         MakeSpecializations {
             module_id,
@@ -2495,7 +2480,6 @@ fn run_task<'a>(
             procs,
             layout_cache,
             specializations_we_must_make,
-            finished_info,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -2504,7 +2488,6 @@ fn run_task<'a>(
             procs,
             layout_cache,
             specializations_we_must_make,
-            finished_info,
         )),
     }?;
 
