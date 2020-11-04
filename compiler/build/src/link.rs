@@ -6,7 +6,7 @@ use libloading::{Error, Library};
 use roc_gen::llvm::build::OptLevel;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Output};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 use tempfile::tempdir;
 
@@ -47,7 +47,7 @@ pub fn rebuild_host(host_input_path: &Path) {
     let host_dest = host_input_path.with_file_name("host.o");
 
     // Compile host.c
-    Command::new("clang")
+    let output = Command::new("clang")
         .env_clear()
         .args(&[
             "-c",
@@ -58,18 +58,22 @@ pub fn rebuild_host(host_input_path: &Path) {
         .output()
         .unwrap();
 
+    validate_output("host.c", "clang", output);
+
     if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
         let libhost_dir = cargo_dir.join("target").join("release");
 
-        Command::new("cargo")
+        let output = Command::new("cargo")
             .args(&["build", "--release"])
             .current_dir(cargo_dir)
             .output()
             .unwrap();
 
-        Command::new("ld")
+        validate_output("host.rs", "cargo build --release", output);
+
+        let output = Command::new("ld")
             .env_clear()
             .args(&[
                 "-r",
@@ -82,9 +86,11 @@ pub fn rebuild_host(host_input_path: &Path) {
             ])
             .output()
             .unwrap();
+
+        validate_output("c_host.o", "ld", output);
     } else if rust_host_src.exists() {
         // Compile and link host.rs, if it exists
-        Command::new("rustc")
+        let output = Command::new("rustc")
             .args(&[
                 rust_host_src.to_str().unwrap(),
                 "-o",
@@ -93,7 +99,9 @@ pub fn rebuild_host(host_input_path: &Path) {
             .output()
             .unwrap();
 
-        Command::new("ld")
+        validate_output("host.rs", "rustc", output);
+
+        let output = Command::new("ld")
             .env_clear()
             .args(&[
                 "-r",
@@ -105,8 +113,10 @@ pub fn rebuild_host(host_input_path: &Path) {
             .output()
             .unwrap();
 
+        validate_output("rust_host.o", "ld", output);
+
         // Clean up rust_host.o
-        Command::new("rm")
+        let output = Command::new("rm")
             .env_clear()
             .args(&[
                 "-f",
@@ -115,13 +125,17 @@ pub fn rebuild_host(host_input_path: &Path) {
             ])
             .output()
             .unwrap();
+
+        validate_output("rust_host.o", "rm", output);
     } else {
         // Clean up rust_host.o
-        Command::new("mv")
+        let output = Command::new("mv")
             .env_clear()
             .args(&[c_host_dest, host_dest])
             .output()
             .unwrap();
+
+        validate_output("rust_host.o", "mv", output);
     }
 }
 
@@ -302,4 +316,19 @@ pub fn module_to_dylib(
     let path = dylib_path.as_path().to_str().unwrap();
 
     Library::new(path)
+}
+
+fn validate_output(file_name: &str, cmd_name: &str, output: Output) {
+    if !output.status.success() {
+        match std::str::from_utf8(&output.stderr) {
+            Ok(stderr) => panic!(
+                "Failed to rebuild {} - stderr of the `{}` command was:\n{}",
+                file_name, cmd_name, stderr
+            ),
+            Err(utf8_err) => panic!(
+                "Failed to rebuild {} - stderr of the `{}` command was invalid utf8 ({:?})",
+                file_name, cmd_name, utf8_err
+            ),
+        }
+    }
 }
