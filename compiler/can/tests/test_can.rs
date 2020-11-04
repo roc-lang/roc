@@ -410,7 +410,7 @@ mod test_can {
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems, Vec::new());
-    }  
+    }
 
     #[test]
     fn correct_nested_annotated_body() {
