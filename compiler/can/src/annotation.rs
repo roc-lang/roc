@@ -52,6 +52,8 @@ impl IntroducedVariables {
         self.wildcards.extend(other.wildcards.iter().cloned());
         self.var_by_name.extend(other.var_by_name.clone());
         self.name_by_var.extend(other.name_by_var.clone());
+        self.host_exposed_aliases
+            .extend(other.host_exposed_aliases.clone());
     }
 
     pub fn var_by_name(&self, name: &Lowercase) -> Option<&Variable> {

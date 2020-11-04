@@ -2331,6 +2331,7 @@ fn add_def_to_module<'a>(
 ) {
     use roc_can::expr::Expr::*;
     use roc_can::pattern::Pattern::*;
+    use roc_mono::ir::HostExposedVariables;
 
     match def.loc_pattern.value {
         Identifier(symbol) => {
@@ -2374,7 +2375,13 @@ fn add_def_to_module<'a>(
                             }
                         };
 
-                        procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
+                        procs.insert_exposed(
+                            symbol,
+                            layout,
+                            mono_env.subs,
+                            def.annotation,
+                            annotation,
+                        );
                     }
 
                     procs.insert_named(
@@ -2400,7 +2407,13 @@ fn add_def_to_module<'a>(
                                         todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
                                     );
 
-                        procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
+                        procs.insert_exposed(
+                            symbol,
+                            layout,
+                            mono_env.subs,
+                            def.annotation,
+                            annotation,
+                        );
                     }
 
                     let proc = PartialProc {
@@ -2412,6 +2425,7 @@ fn add_def_to_module<'a>(
                         body,
                         // This is a 0-arity thunk, so it cannot be recursive
                         is_self_recursive: false,
+                        host_exposed_variables: HostExposedVariables::default(),
                     };
 
                     procs.partial_procs.insert(symbol, proc);

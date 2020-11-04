@@ -1,6 +1,6 @@
 app Closure provides [ closure ] imports []
 
-closure : {} -> Int
+closure : ({} -> Int) as MyClosure
 closure = 
     x = 42
 

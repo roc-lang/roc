@@ -26,6 +26,13 @@ pub struct PartialProc<'a> {
     pub captured_symbols: CapturedSymbols<'a>,
     pub body: roc_can::expr::Expr,
     pub is_self_recursive: bool,
+    pub host_exposed_variables: HostExposedVariables,
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct HostExposedVariables {
+    rigids: MutMap<Lowercase, Variable>,
+    aliases: MutMap<Symbol, Variable>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -46,12 +53,34 @@ impl<'a> CapturedSymbols<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PendingSpecialization {
     solved_type: SolvedType,
+    host_exposed_aliases: MutMap<Symbol, SolvedType>,
 }
 
 impl PendingSpecialization {
     pub fn from_var(subs: &Subs, var: Variable) -> Self {
         let solved_type = SolvedType::from_var(subs, var);
-        PendingSpecialization { solved_type }
+        PendingSpecialization {
+            solved_type,
+            host_exposed_aliases: MutMap::default(),
+        }
+    }
+
+    pub fn from_var_host_exposed(
+        subs: &Subs,
+        var: Variable,
+        host_exposed_aliases: &MutMap<Symbol, Variable>,
+    ) -> Self {
+        let solved_type = SolvedType::from_var(subs, var);
+
+        let host_exposed_aliases = host_exposed_aliases
+            .iter()
+            .map(|(symbol, variable)| (*symbol, SolvedType::from_var(subs, *variable)))
+            .collect();
+
+        PendingSpecialization {
+            solved_type,
+            host_exposed_aliases,
+        }
     }
 }
 
@@ -63,6 +92,16 @@ pub struct Proc<'a> {
     pub closure_data_layout: Option<Layout<'a>>,
     pub ret_layout: Layout<'a>,
     pub is_self_recursive: SelfRecursive,
+    pub host_exposed_layouts: HostExposedLayouts<'a>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum HostExposedLayouts<'a> {
+    NotHostExposed,
+    HostExposed {
+        rigids: MutMap<Lowercase, Layout<'a>>,
+        aliases: MutMap<Symbol, Layout<'a>>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -343,6 +382,7 @@ impl<'a> Procs<'a> {
                         captured_symbols,
                         body: body.value,
                         is_self_recursive,
+                        host_exposed_variables: HostExposedVariables::default(),
                     },
                 );
             }
@@ -398,8 +438,7 @@ impl<'a> Procs<'a> {
                 // Changing it to use .entry() would necessarily make it incorrect.
                 #[allow(clippy::map_entry)]
                 if !already_specialized {
-                    let solved_type = SolvedType::from_var(env.subs, annotation);
-                    let pending = PendingSpecialization { solved_type };
+                    let pending = PendingSpecialization::from_var(env.subs, annotation);
 
                     let pattern_symbols = pattern_symbols.into_bump_slice();
                     match &mut self.pending_specializations {
@@ -417,6 +456,7 @@ impl<'a> Procs<'a> {
                                     captured_symbols,
                                     body: body.value,
                                     is_self_recursive,
+                                    host_exposed_variables: HostExposedVariables::default(),
                                 },
                             );
                         }
@@ -428,6 +468,7 @@ impl<'a> Procs<'a> {
                                 captured_symbols,
                                 body: body.value,
                                 is_self_recursive,
+                                host_exposed_variables: HostExposedVariables::default(),
                             };
 
                             // Mark this proc as in-progress, so if we're dealing with
@@ -478,6 +519,7 @@ impl<'a> Procs<'a> {
         name: Symbol,
         layout: Layout<'a>,
         subs: &Subs,
+        opt_annotation: Option<roc_can::def::Annotation>,
         fn_var: Variable,
     ) {
         let tuple = (name, layout);
@@ -489,7 +531,14 @@ impl<'a> Procs<'a> {
 
         // We're done with that tuple, so move layout back out to avoid cloning it.
         let (name, layout) = tuple;
-        let pending = PendingSpecialization::from_var(subs, fn_var);
+        let pending = match opt_annotation {
+            None => PendingSpecialization::from_var(subs, fn_var),
+            Some(annotation) => PendingSpecialization::from_var_host_exposed(
+                subs,
+                fn_var,
+                &annotation.introduced_variables.host_exposed_aliases,
+            ),
+        };
 
         // This should only be called when pending_specializations is Some.
         // Otherwise, it's being called in the wrong pass!
@@ -1395,6 +1444,7 @@ fn specialize_external<'a>(
         captured_symbols,
         body,
         is_self_recursive,
+        host_exposed_variables,
     } = partial_proc;
 
     // unify the called function with the specialized signature, then specialize the function body
@@ -1451,6 +1501,15 @@ fn specialize_external<'a>(
         }
     }
 
+    //
+    let host_exposed_layouts = {
+        if host_exposed_variables == HostExposedVariables::default() {
+            HostExposedLayouts::NotHostExposed
+        } else {
+            todo!()
+        }
+    };
+
     // reset subs, so we don't get type errors when specializing for a different signature
     layout_cache.rollback_to(cache_snapshot);
     env.subs.rollback_to(snapshot);
@@ -1473,6 +1532,7 @@ fn specialize_external<'a>(
         closure_data_layout,
         ret_layout,
         is_self_recursive: recursivity,
+        host_exposed_layouts,
     };
 
     Ok(proc)
@@ -1693,7 +1753,11 @@ fn specialize<'a>(
     pending: PendingSpecialization,
     partial_proc: PartialProc<'a>,
 ) -> Result<(Proc<'a>, Layout<'a>), LayoutProblem> {
-    let PendingSpecialization { solved_type } = pending;
+    let PendingSpecialization {
+        solved_type,
+        host_exposed_aliases,
+    } = pending;
+
     specialize_solved_type(
         env,
         procs,
