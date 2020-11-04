@@ -2158,6 +2158,8 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     let context = &env.context;
     let builder = env.builder;
 
+    // STEP 1: build function header
+
     let function_name = format!(
         "{}_{}_caller",
         def_name,
@@ -2215,7 +2217,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     function_value.set_call_conventions(C_CALL_CONV);
 
-    // BUILD FUNCTION BODY
+    // STEP 2: build function body
 
     let entry = context.append_basic_block(function_value, "entry");
 
@@ -2235,18 +2237,36 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     let result = call.try_as_basic_value().left().unwrap();
 
+    // TODO here we just assume success (first i64 is 0)
     unsafe {
-        let tag_ptr = builder.build_struct_gep(output, 0, "gep");
+        // let tag_ptr = builder.build_struct_gep(output, 0, "gep");
         let result_ptr = builder.build_struct_gep(output, 1, "gep");
 
-        //        let v33 = context.i64_type().const_int(33, false);
-        //        builder.build_store(tag_ptr, v33);
         builder.build_store(result_ptr, result);
     }
 
-    //builder.build_store(output, roc_call_result);
-
     builder.build_return(None);
+
+    // STEP 3: build a {} -> u64 function that gives the size of the return type
+    let size_function_type = env.context.i64_type().fn_type(&[], false);
+    let size_function_name: String = format!(
+        "{}_{}_size",
+        def_name,
+        alias_symbol.ident_string(&env.interns)
+    );
+
+    let size_function = env.module.add_function(
+        size_function_name.as_str(),
+        size_function_type,
+        Some(Linkage::External),
+    );
+
+    let entry = context.append_basic_block(size_function, "entry");
+
+    builder.position_at_end(entry);
+
+    let size: BasicValueEnum = roc_call_result_type.size_of().unwrap().into();
+    builder.build_return(Some(&size));
 }
 
 #[allow(dead_code)]

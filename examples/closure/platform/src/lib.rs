@@ -1,6 +1,6 @@
+use roc_std::alloca;
 use std::alloc::Layout;
 use std::ffi::CString;
-use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 use std::time::SystemTime;
 use RocCallResult::*;
@@ -9,40 +9,36 @@ extern "C" {
     #[link_name = "makeClosure_1_exposed"]
     fn make_closure(output: *mut u8) -> ();
 
-    #[link_name = "makeClosure_1_MyClosure_caller"]
-    fn call_MyClosure(
-        unit: (),
-        function_pointer: *const u8,
-        closure_data: *const u8,
-        output: *mut u8,
-    ) -> ();
-
     #[link_name = "makeClosure_1_size"]
     fn closure_size() -> i64;
+
+    #[link_name = "makeClosure_1_MyClosure_caller"]
+    fn call_MyClosure(function_pointer: *const u8, closure_data: *const u8, output: *mut u8) -> ();
+
+    #[link_name = "makeClosure_1_MyClosure_size"]
+    fn size_MyClosure() -> i64;
 }
 
 unsafe fn call_the_closure(function_pointer: *const u8, closure_data_ptr: *const u8) -> i64 {
-    // wow
-    let layout = Layout::array::<u8>(100).unwrap();
-    // let buffer = std::alloc::alloc(layout);
-    let mut foo = (0, 0);
-    let buffer: *mut (i64, i64) = &mut foo;
+    let size = size_MyClosure() as usize;
 
-    call_MyClosure(
-        (),
-        function_pointer,
-        closure_data_ptr as *const u8,
-        buffer as *mut u8,
-    );
+    alloca::with_stack_bytes(size, |buffer| {
+        let buffer: *mut std::ffi::c_void = buffer;
+        let buffer: *mut u8 = buffer as *mut u8;
 
-    dbg!(*buffer);
+        call_MyClosure(
+            function_pointer,
+            closure_data_ptr as *const u8,
+            buffer as *mut u8,
+        );
 
-    let output = &*(buffer as *mut RocCallResult<i64>);
+        let output = &*(buffer as *mut RocCallResult<i64>);
 
-    match output.into() {
-        Ok(v) => v,
-        Err(e) => panic!("failed with {}", e),
-    }
+        match output.into() {
+            Ok(v) => v,
+            Err(e) => panic!("failed with {}", e),
+        }
+    })
 }
 
 #[no_mangle]
@@ -57,12 +53,19 @@ pub fn rust_main() -> isize {
 
         make_closure(buffer);
 
-        let output = &*(buffer as *mut RocCallResult<(*const u8, ())>);
+        let output = &*(buffer as *mut RocCallResult<((), ())>);
 
         match output.into() {
-            Ok((function_pointer, _)) => {
+            Ok((_, _)) => {
+                let function_pointer = {
+                    // this is a pointer to the location where the function pointer is stored
+                    // we pass just the function pointer
+                    let temp = buffer.offset(8) as *const i64;
+
+                    (*temp) as *const u8
+                };
+
                 let closure_data_ptr = buffer.offset(16);
-                dbg!(*closure_data_ptr);
 
                 call_the_closure(function_pointer as *const u8, closure_data_ptr as *const u8)
             }
