@@ -674,6 +674,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
+    // contains : Attr * (List a)
+    //          , Attr Shared a
+    //          -> Attr * Bool
+    add_type(Symbol::LIST_CONTAINS, {
+        let_tvars! { a, star1, star2 };
+
+        unique_function(vec![list_type(star1, a), shared(flex(a))], bool_type(star2))
+    });
+
     // join : Attr * (List (Attr * (List a)))
     //     -> Attr * (List a)
     add_type(Symbol::LIST_JOIN, {
