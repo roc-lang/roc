@@ -852,7 +852,15 @@ pub fn list_contains<'a, 'ctx, 'env>(
 
     let length = list_len(builder, list.into_struct_value());
 
-    list_contains_help(env, parent, length, list_ptr, elem, elem_layout)
+    list_contains_help(
+        env,
+        parent,
+        length,
+        list_ptr,
+        list_elem_layout,
+        elem,
+        elem_layout,
+    )
 }
 
 pub fn list_contains_help<'a, 'ctx, 'env>(
@@ -860,6 +868,7 @@ pub fn list_contains_help<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     length: IntValue<'ctx>,
     source_ptr: PointerValue<'ctx>,
+    list_elem_layout: &Layout<'a>,
     elem: BasicValueEnum<'ctx>,
     elem_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -893,7 +902,7 @@ pub fn list_contains_help<'a, 'ctx, 'env>(
 
     let current_elem = builder.build_load(current_elem_ptr, "load_elem");
 
-    let has_found = build_eq(env, current_elem, elem, elem_layout, elem_layout);
+    let has_found = build_eq(env, current_elem, elem, list_elem_layout, elem_layout);
 
     builder.build_store(bool_alloca, has_found.into_int_value());
 
