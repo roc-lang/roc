@@ -3432,7 +3432,9 @@ fn get_foreign_symbol<'a, 'ctx, 'env>(
         None => {
             let foreign_function = module.add_function(
                 foreign_symbol.as_str(),
-                context.i64_type().fn_type(&[], false),
+                context
+                    .struct_type(&[], false)
+                    .fn_type(&[context.struct_type(&[], false).into()], false),
                 Some(Linkage::External),
             );
             foreign_function.set_call_conventions(C_CALL_CONV);
