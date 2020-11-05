@@ -3252,6 +3252,12 @@ pub fn with_hole<'a>(
             }
         }
 
+        ForeignCall {
+            foreign_symbol,
+            args,
+            ret_var,
+        } => todo!(),
+
         RunLowLevel { op, args, ret_var } => {
             let op = optimize_low_level(env.subs, op, &args);
 

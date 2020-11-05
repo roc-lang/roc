@@ -966,6 +966,10 @@ pub enum Reason {
         op: LowLevel,
         arg_index: Index,
     },
+    ForeignCallArg {
+        foreign_symbol: InlinableString,
+        arg_index: Index,
+    },
     FloatLiteral,
     IntLiteral,
     NumLiteral,
@@ -992,6 +996,7 @@ pub enum Category {
     Lookup(Symbol),
     CallResult(Option<Symbol>),
     LowLevelOpResult(LowLevel),
+    ForeignCall,
     TagApply {
         tag_name: TagName,
         args_count: usize,

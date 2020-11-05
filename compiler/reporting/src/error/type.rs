@@ -777,6 +777,16 @@ fn to_expr_report<'b>(
                     op
                 );
             }
+            Reason::ForeignCallArg {
+                foreign_symbol,
+                arg_index,
+            } => {
+                panic!(
+                    "Compiler bug: argument #{} to foreign symbol {:?} was the wrong type!",
+                    arg_index.ordinal(),
+                    foreign_symbol
+                );
+            }
             Reason::FloatLiteral | Reason::IntLiteral | Reason::NumLiteral => {
                 unreachable!("I don't think these can be reached")
             }
@@ -953,6 +963,9 @@ fn add_category<'b>(
                 "Compiler bug: invalid return type from low-level op {:?}",
                 op
             );
+        }
+        ForeignCall => {
+            panic!("Compiler bug: invalid return type from foreign call",);
         }
 
         Uniqueness => alloc.concat(vec![

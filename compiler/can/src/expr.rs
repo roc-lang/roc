@@ -98,6 +98,11 @@ pub enum Expr {
         args: Vec<(Variable, Expr)>,
         ret_var: Variable,
     },
+    ForeignCall {
+        foreign_symbol: InlinableString,
+        args: Vec<(Variable, Expr)>,
+        ret_var: Variable,
+    },
 
     Closure {
         function_type: Variable,
@@ -1116,7 +1121,8 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ Accessor { .. }
         | other @ Update { .. }
         | other @ Var(_)
-        | other @ RunLowLevel { .. } => other,
+        | other @ RunLowLevel { .. }
+        | other @ ForeignCall { .. } => other,
 
         List {
             list_var,
