@@ -109,10 +109,8 @@ impl<'a> ClosureLayout<'a> {
 
                 use UnionVariant::*;
                 match variant {
-                    Never | Unit => {
-                        // a max closure size of 0 means this is a standard top-level function
-                        Ok(None)
-                    }
+                    Never => Ok(None),
+                    Unit => Ok(None),
                     BoolUnion { .. } => {
                         let closure_layout = ClosureLayout::from_bool(arena);
 

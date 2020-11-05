@@ -2239,17 +2239,21 @@ fn fabricate_effects_module<'a>(
 
         module_ids.get_or_insert(&declared_name)
     };
+    let mut scope = roc_can::scope::Scope::new(module_id, &mut var_store);
 
     let effect_symbol = {
         let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
         let ident_ids: &mut IdentIds = ident_ids_by_module.get_mut(&module_id).unwrap();
+        //let ident_id = ident_ids.get_or_insert(&declared_name);
+        //Symbol::new(module_id, ident_id)
 
-        let ident_id = ident_ids.get_or_insert(&declared_name);
-        Symbol::new(module_id, ident_id)
+        let ident = declared_name.clone().into();
+        scope
+            .introduce(ident, &(ident_ids.clone()), ident_ids, Region::zero())
+            .unwrap()
     };
 
-    let mut scope = roc_can::scope::Scope::new(module_id, &mut var_store);
     let mut aliases = MutMap::default();
     let alias = {
         let a_var = var_store.fresh();
@@ -2273,14 +2277,14 @@ fn fabricate_effects_module<'a>(
             actual,
         );
 
-        scope.lookup_alias(effect_symbol).clone()
+        scope.lookup_alias(effect_symbol).unwrap().clone()
     };
 
     aliases.insert(effect_symbol, alias);
 
     let mut declarations = Vec::new();
 
-    let exposed_symbols = {
+    let exposed_vars_by_symbol = {
         let module_ids = (*module_ids).lock();
         let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
@@ -2289,7 +2293,7 @@ fn fabricate_effects_module<'a>(
         let ident_id = ident_ids.get_or_insert(&declared_name);
         let effect_symbol = Symbol::new(module_id, ident_id);
 
-        let mut exposed = MutSet::default();
+        let mut exposed_vars_by_symbol = Vec::new();
 
         {
             use bumpalo::collections::Vec;
@@ -2316,8 +2320,6 @@ fn fabricate_effects_module<'a>(
                         let ident_id = ident_ids.get_or_insert(&as_inlinable_string);
                         let symbol = Symbol::new(module_id, ident_id);
 
-                        exposed.insert(symbol);
-
                         let annotation = roc_can::annotation::canonicalize_annotation(
                             &mut can_env,
                             &mut scope,
@@ -2335,6 +2337,8 @@ fn fabricate_effects_module<'a>(
                             annotation,
                         );
 
+                        exposed_vars_by_symbol.push((symbol, def.expr_var));
+
                         declarations.push(Declaration::Declare(def));
                     }
                     EffectsEntry::SpaceAfter(nested, _) | EffectsEntry::SpaceBefore(nested, _) => {
@@ -2344,19 +2348,19 @@ fn fabricate_effects_module<'a>(
             }
         }
 
-        exposed
+        exposed_vars_by_symbol
     };
 
     use roc_can::module::ModuleOutput;
     let module_output = ModuleOutput {
-        aliases: MutMap::default(),
+        aliases,
         rigid_variables: MutMap::default(),
         declarations,
         exposed_imports: MutMap::default(),
         lookups: Vec::new(),
         problems: Vec::new(),
         ident_ids: IdentIds::default(),
-        exposed_vars_by_symbol: Vec::new(),
+        exposed_vars_by_symbol,
         references: MutSet::default(),
     };
 

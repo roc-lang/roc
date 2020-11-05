@@ -3,7 +3,7 @@ use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::{default_hasher, MutMap, MutSet};
+use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -1427,6 +1427,62 @@ pub fn specialize_all<'a>(
     procs
 }
 
+fn hacky_hacky_hack_hack<'a>(
+    env: &mut Env<'a, '_>,
+    fn_var: Variable,
+    body: roc_can::expr::Expr,
+    arg_symbols: &[Symbol],
+) -> roc_can::expr::Expr {
+    match env.subs.get(fn_var).content {
+        Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
+            let temp = env.unique_symbol();
+
+            let pattern = roc_can::pattern::Pattern::Identifier(temp);
+            let mut pattern_vars = SendMap::default();
+            pattern_vars.insert(temp, fn_var);
+            let def = roc_can::def::Def {
+                loc_pattern: Located::at_zero(pattern),
+                loc_expr: Located::at_zero(body),
+                expr_var: fn_var,
+                pattern_vars,
+                annotation: None,
+            };
+
+            let mut arguments: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)> =
+                std::vec::Vec::new();
+
+            for (symbol, var) in arg_symbols.iter().zip(args.iter()) {
+                arguments.push((*var, Located::at_zero(roc_can::expr::Expr::Var(*symbol))));
+            }
+
+            use roc_module::operator::CalledVia;
+            // Box<(Variable, Located<Expr>, Variable, Variable)>,
+            let boxed = (
+                fn_var,
+                Located::at_zero(roc_can::expr::Expr::Var(temp)),
+                closure_var,
+                ret_var,
+            );
+            let call_temp = roc_can::expr::Expr::Call(Box::new(boxed), arguments, CalledVia::Space);
+
+            roc_can::expr::Expr::LetNonRec(
+                Box::new(def),
+                Box::new(Located::at_zero(call_temp)),
+                ret_var,
+            )
+        }
+        Content::Alias(_, _, actual) => hacky_hacky_hack_hack(env, actual, body, arg_symbols),
+        Content::Structure(FlatType::TagUnion(tags, _)) => {
+            let mut it = tags.iter();
+            let (_, args) = it.next().unwrap();
+            let mut it = args.iter();
+            let var = it.next().unwrap();
+            hacky_hacky_hack_hack(env, *var, body, arg_symbols)
+        }
+        other => unreachable!("{:?}", other),
+    }
+}
+
 fn specialize_external<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
@@ -1453,8 +1509,6 @@ fn specialize_external<'a>(
     let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
     debug_assert!(is_valid);
 
-    let mut specialized_body = from_can(env, fn_var, body, procs, layout_cache);
-
     // if this is a closure, add the closure record argument
     let pattern_symbols = if let CapturedSymbols::Captured(_) = captured_symbols {
         let mut temp = Vec::from_iter_in(pattern_symbols.iter().copied(), env.arena);
@@ -1464,92 +1518,162 @@ fn specialize_external<'a>(
         pattern_symbols
     };
 
-    let (proc_args, opt_closure_layout, ret_layout) =
+    let spec_proc =
         build_specialized_proc_from_var(env, layout_cache, proc_name, pattern_symbols, fn_var)?;
 
-    // unpack the closure symbols, if any
-    if let CapturedSymbols::Captured(captured) = captured_symbols {
-        let mut layouts = Vec::with_capacity_in(captured.len(), env.arena);
+    match spec_proc {
+        SpecializedLayout::EmptyClosure(arg_layouts, ret_layout) => {
+            let mut arg_symbols = Vec::new_in(env.arena);
+            for _ in arg_layouts.iter() {
+                arg_symbols.push(env.unique_symbol());
+            }
 
-        for (_, variable) in captured.iter() {
-            let layout = layout_cache.from_var(env.arena, *variable, env.subs)?;
-            layouts.push(layout);
-        }
+            let new_body = hacky_hacky_hack_hack(env, fn_var, body, &arg_symbols);
 
-        let field_layouts = layouts.into_bump_slice();
+            let specialized_body = from_can(env, fn_var, new_body, procs, layout_cache);
+            // determine the layout of aliases/rigids exposed to the host
+            let host_exposed_layouts = if host_exposed_variables.is_empty() {
+                HostExposedLayouts::NotHostExposed
+            } else {
+                let mut aliases = MutMap::default();
 
-        let wrapped = match &opt_closure_layout {
-            Some(x) => x.get_wrapped(),
-            None => unreachable!("symbols are captured, so this must be a closure"),
-        };
+                for (symbol, variable) in host_exposed_variables {
+                    let layout = layout_cache
+                        .from_var(env.arena, *variable, env.subs)
+                        .unwrap();
+                    aliases.insert(*symbol, layout);
+                }
 
-        for (index, (symbol, variable)) in captured.iter().enumerate() {
-            let expr = Expr::AccessAtIndex {
-                index: index as _,
-                field_layouts,
-                structure: Symbol::ARG_CLOSURE,
-                wrapped,
+                HostExposedLayouts::HostExposed {
+                    rigids: MutMap::default(),
+                    aliases,
+                }
             };
 
-            // layout is cached anyway, re-using the one found above leads to
-            // issues (combining by-ref and by-move in pattern match
-            let layout = layout_cache.from_var(env.arena, *variable, env.subs)?;
-            specialized_body = Stmt::Let(*symbol, expr, layout, env.arena.alloc(specialized_body));
+            // reset subs, so we don't get type errors when specializing for a different signature
+            layout_cache.rollback_to(cache_snapshot);
+            env.subs.rollback_to(snapshot);
+
+            let recursivity = if is_self_recursive {
+                SelfRecursive::SelfRecursive(JoinPointId(env.unique_symbol()))
+            } else {
+                SelfRecursive::NotSelfRecursive
+            };
+
+            let closure_data_layout = None;
+
+            let proc_args = Vec::from_iter_in(
+                arg_symbols
+                    .iter()
+                    .zip(arg_layouts.into_iter())
+                    .map(|(s, l)| (l.clone(), *s)),
+                env.arena,
+            );
+            let proc_args = proc_args.into_bump_slice();
+
+            let proc = Proc {
+                name: proc_name,
+                args: proc_args,
+                body: specialized_body,
+                closure_data_layout,
+                ret_layout,
+                is_self_recursive: recursivity,
+                host_exposed_layouts,
+            };
+
+            Ok(proc)
+        }
+        SpecializedLayout::Normal(proc_args, opt_closure_layout, ret_layout) => {
+            let mut specialized_body = from_can(env, fn_var, body, procs, layout_cache);
+            // unpack the closure symbols, if any
+            if let CapturedSymbols::Captured(captured) = captured_symbols {
+                let mut layouts = Vec::with_capacity_in(captured.len(), env.arena);
+
+                for (_, variable) in captured.iter() {
+                    let layout = layout_cache.from_var(env.arena, *variable, env.subs)?;
+                    layouts.push(layout);
+                }
+
+                let field_layouts = layouts.into_bump_slice();
+
+                let wrapped = match &opt_closure_layout {
+                    Some(x) => x.get_wrapped(),
+                    None => unreachable!("symbols are captured, so this must be a closure"),
+                };
+
+                for (index, (symbol, variable)) in captured.iter().enumerate() {
+                    let expr = Expr::AccessAtIndex {
+                        index: index as _,
+                        field_layouts,
+                        structure: Symbol::ARG_CLOSURE,
+                        wrapped,
+                    };
+
+                    // layout is cached anyway, re-using the one found above leads to
+                    // issues (combining by-ref and by-move in pattern match
+                    let layout = layout_cache.from_var(env.arena, *variable, env.subs)?;
+                    specialized_body =
+                        Stmt::Let(*symbol, expr, layout, env.arena.alloc(specialized_body));
+                }
+            }
+
+            // determine the layout of aliases/rigids exposed to the host
+            let host_exposed_layouts = if host_exposed_variables.is_empty() {
+                HostExposedLayouts::NotHostExposed
+            } else {
+                let mut aliases = MutMap::default();
+
+                for (symbol, variable) in host_exposed_variables {
+                    let layout = layout_cache
+                        .from_var(env.arena, *variable, env.subs)
+                        .unwrap();
+                    aliases.insert(*symbol, layout);
+                }
+
+                HostExposedLayouts::HostExposed {
+                    rigids: MutMap::default(),
+                    aliases,
+                }
+            };
+
+            // reset subs, so we don't get type errors when specializing for a different signature
+            layout_cache.rollback_to(cache_snapshot);
+            env.subs.rollback_to(snapshot);
+
+            let recursivity = if is_self_recursive {
+                SelfRecursive::SelfRecursive(JoinPointId(env.unique_symbol()))
+            } else {
+                SelfRecursive::NotSelfRecursive
+            };
+
+            let closure_data_layout = match opt_closure_layout {
+                Some(closure_layout) => Some(closure_layout.as_named_layout(proc_name)),
+                None => None,
+            };
+
+            let proc = Proc {
+                name: proc_name,
+                args: proc_args,
+                body: specialized_body,
+                closure_data_layout,
+                ret_layout,
+                is_self_recursive: recursivity,
+                host_exposed_layouts,
+            };
+
+            Ok(proc)
         }
     }
-
-    // determine the layout of aliases/rigids exposed to the host
-    let host_exposed_layouts = if host_exposed_variables.is_empty() {
-        HostExposedLayouts::NotHostExposed
-    } else {
-        let mut aliases = MutMap::default();
-
-        for (symbol, variable) in host_exposed_variables {
-            let layout = layout_cache
-                .from_var(env.arena, *variable, env.subs)
-                .unwrap();
-            aliases.insert(*symbol, layout);
-        }
-
-        HostExposedLayouts::HostExposed {
-            rigids: MutMap::default(),
-            aliases,
-        }
-    };
-
-    // reset subs, so we don't get type errors when specializing for a different signature
-    layout_cache.rollback_to(cache_snapshot);
-    env.subs.rollback_to(snapshot);
-
-    let recursivity = if is_self_recursive {
-        SelfRecursive::SelfRecursive(JoinPointId(env.unique_symbol()))
-    } else {
-        SelfRecursive::NotSelfRecursive
-    };
-
-    let closure_data_layout = match opt_closure_layout {
-        Some(closure_layout) => Some(closure_layout.as_named_layout(proc_name)),
-        None => None,
-    };
-
-    let proc = Proc {
-        name: proc_name,
-        args: proc_args,
-        body: specialized_body,
-        closure_data_layout,
-        ret_layout,
-        is_self_recursive: recursivity,
-        host_exposed_layouts,
-    };
-
-    Ok(proc)
 }
 
-type SpecializedLayout<'a> = (
-    &'a [(Layout<'a>, Symbol)],
-    Option<ClosureLayout<'a>>,
-    Layout<'a>,
-);
+enum SpecializedLayout<'a> {
+    Normal(
+        &'a [(Layout<'a>, Symbol)],
+        Option<ClosureLayout<'a>>,
+        Layout<'a>,
+    ),
+    EmptyClosure(&'a [Layout<'a>], Layout<'a>),
+}
 
 #[allow(clippy::type_complexity)]
 fn build_specialized_proc_from_var<'a>(
@@ -1669,14 +1793,17 @@ fn build_specialized_proc_adapter<'a>(
 #[allow(clippy::type_complexity)]
 fn build_specialized_proc<'a>(
     arena: &'a Bump,
-    _proc_name: Symbol,
+    proc_name: Symbol,
     pattern_symbols: &[Symbol],
-    pattern_layouts: Vec<Layout<'a>>,
+    pattern_layouts: Vec<'a, Layout<'a>>,
     opt_closure_layout: Option<ClosureLayout<'a>>,
     ret_layout: Layout<'a>,
 ) -> Result<SpecializedLayout<'a>, LayoutProblem> {
+    use SpecializedLayout::*;
+
     let mut proc_args = Vec::with_capacity_in(pattern_layouts.len(), arena);
 
+    let pattern_layouts_slice = pattern_layouts.clone().into_bump_slice();
     let pattern_layouts_len = pattern_layouts.len();
 
     for (arg_layout, arg_name) in pattern_layouts.into_iter().zip(pattern_symbols.iter()) {
@@ -1714,7 +1841,7 @@ fn build_specialized_proc<'a>(
 
             let proc_args = proc_args.into_bump_slice();
 
-            Ok((proc_args, Some(layout), ret_layout))
+            Ok(Normal(proc_args, Some(layout), ret_layout))
         }
         Some(layout) => {
             // else if there is a closure layout, we're building the `f_closure` value
@@ -1729,7 +1856,7 @@ fn build_specialized_proc<'a>(
             let closure_layout =
                 Layout::Struct(arena.alloc([function_ptr_layout, closure_data_layout]));
 
-            Ok((&[], None, closure_layout))
+            Ok(Normal(&[], None, closure_layout))
         }
         None => {
             // else we're making a normal function, no closure problems to worry about
@@ -1738,16 +1865,15 @@ fn build_specialized_proc<'a>(
             // make sure there is not arg_closure argument without a closure layout
             debug_assert!(pattern_symbols.last() != Some(&Symbol::ARG_CLOSURE));
 
-            // since this is not a closure, the number of arguments should match between symbols
-            // and layout
-            debug_assert_eq!(
-                pattern_layouts_len,
-                pattern_symbols.len(),
-                "Tried to zip two vecs with different lengths!"
-            );
-            let proc_args = proc_args.into_bump_slice();
+            match pattern_layouts_len - pattern_symbols.len() {
+                0 => {
+                    let proc_args = proc_args.into_bump_slice();
 
-            Ok((proc_args, None, ret_layout))
+                    Ok(Normal(proc_args, None, ret_layout))
+                }
+                1 => Ok(EmptyClosure(pattern_layouts_slice, ret_layout)),
+                _ => panic!(),
+            }
         }
     }
 }
