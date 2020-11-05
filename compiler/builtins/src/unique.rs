@@ -675,7 +675,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     });
 
     // contains : Attr * (List a)
-    //          , Attr * a
+    //          , a
     //          -> Attr * Bool
     add_type(Symbol::LIST_CONTAINS, {
         let_tvars! { a, star1, star2 };
