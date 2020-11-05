@@ -131,6 +131,36 @@ impl Dependencies {
         output
     }
 
+    pub fn add_platform_module(
+        &mut self,
+        module_id: ModuleId,
+        // NOTE we assume for now a platform module has no imports
+        _dependencies: &MutSet<ModuleId>,
+        goal_phase: Phase,
+    ) -> MutSet<(ModuleId, Phase)> {
+        // add dependencies for self
+        // phase i + 1 of a file always depends on phase i being completed
+        {
+            let mut i = 2;
+
+            // platform modules should only start at CanonicalizeAndConstrain
+            debug_assert!(PHASES[i] == Phase::CanonicalizeAndConstrain);
+            while PHASES[i] < goal_phase {
+                self.add_dependency_help(module_id, module_id, PHASES[i + 1], PHASES[i]);
+                i += 1;
+            }
+        }
+
+        let output = MutSet::default();
+
+        //        // all the dependencies can be loaded
+        //        for dep in dependencies {
+        //            output.insert((*dep, LoadHeader));
+        //        }
+
+        output
+    }
+
     /// Propagate a notification, return (module, phase) pairs that can make progress
     pub fn notify(&mut self, module_id: ModuleId, phase: Phase) -> MutSet<(ModuleId, Phase)> {
         let mut output = MutSet::default();
@@ -1208,8 +1238,6 @@ fn update<'a>(
 ) -> Result<State<'a>, LoadingProblem> {
     use self::Msg::*;
 
-    dbg!(&msg);
-
     match msg {
         Header(header) => {
             log!("loaded header for {:?}", header.module_id);
@@ -1348,7 +1376,13 @@ fn update<'a>(
                 .constrained
                 .insert(module_id, constrained_module);
 
-            let mut work = state.dependencies.notify(module_id, Phase::LoadHeader);
+            let mut work = state.dependencies.add_platform_module(
+                module_id,
+                &MutSet::default(),
+                state.goal_phase,
+            );
+
+            work.extend(state.dependencies.notify(module_id, Phase::LoadHeader));
 
             work.extend(state.dependencies.notify(module_id, Phase::Parse));
 
@@ -1357,8 +1391,6 @@ fn update<'a>(
                     .dependencies
                     .notify(module_id, Phase::CanonicalizeAndConstrain),
             );
-
-            dbg!(&work, &state.dependencies);
 
             for (module_id, phase) in work {
                 let task = start_phase(module_id, phase, &mut state);
