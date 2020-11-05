@@ -204,7 +204,6 @@ struct ModuleCache<'a> {
     /// Phases
     headers: MutMap<ModuleId, ModuleHeader<'a>>,
     parsed: MutMap<ModuleId, ParsedModule<'a>>,
-    canonicalized: MutMap<ModuleId, CanonicalizedModule<'a>>,
     aliases: MutMap<ModuleId, MutMap<Symbol, Alias>>,
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
@@ -491,13 +490,6 @@ struct ParsedModule<'a> {
     exposed_ident_ids: IdentIds,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parsed_defs: &'a [Located<roc_parse::ast::Def<'a>>],
-}
-
-#[derive(Debug)]
-struct CanonicalizedModule<'a> {
-    module: Module,
-    src: &'a str,
-    module_timing: ModuleTiming,
 }
 
 #[derive(Debug)]
