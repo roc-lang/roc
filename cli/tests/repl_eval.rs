@@ -176,6 +176,13 @@ mod repl_eval {
     }
 
     #[test]
+    fn list_contains() {
+        expect_success("List.contains [] 0", "False : Bool");
+        expect_success("List.contains [ 1, 2, 3 ] 2", "True : Bool");
+        expect_success("List.contains [ 1, 2, 3 ] 4", "False : Bool");
+    }
+
+    #[test]
     fn basic_1_field_i64_record() {
         // Even though this gets unwrapped at runtime, the repl should still
         // report it as a record
