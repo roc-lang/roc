@@ -829,6 +829,7 @@ pub enum Expr<'a> {
         args: &'a [Symbol],
     },
     RunLowLevel(LowLevel, &'a [Symbol]),
+    ForeignCall(String, &'a [Symbol]),
 
     Tag {
         tag_layout: Layout<'a>,
