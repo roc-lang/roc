@@ -1498,8 +1498,7 @@ fn specialize_external<'a>(
         }
     }
 
-    // TODO host exposed thngs
-    // host_exposed_variables: &[(Symbol, Variable)],
+    // determine the layout of aliases/rigids exposed to the host
     let host_exposed_layouts = if host_exposed_variables.is_empty() {
         HostExposedLayouts::NotHostExposed
     } else {
