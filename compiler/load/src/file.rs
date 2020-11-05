@@ -13,7 +13,7 @@ use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
-use roc_module::ident::{Ident, Lowercase, ModuleName};
+use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
@@ -27,7 +27,7 @@ use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
-use roc_types::types::Alias;
+use roc_types::types::{Alias, Type};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -497,6 +497,11 @@ enum Msg<'a> {
     Header(ModuleHeader<'a>),
     Parsed(ParsedModule<'a>),
     CanonicalizedAndConstrained {
+        constrained_module: ConstrainedModule,
+        canonicalization_problems: Vec<roc_problem::can::Problem>,
+        module_docs: ModuleDocumentation,
+    },
+    MadeEffectModule {
         constrained_module: ConstrainedModule,
         canonicalization_problems: Vec<roc_problem::can::Problem>,
         module_docs: ModuleDocumentation,
@@ -1203,6 +1208,8 @@ fn update<'a>(
 ) -> Result<State<'a>, LoadingProblem> {
     use self::Msg::*;
 
+    dbg!(&msg);
+
     match msg {
         Header(header) => {
             log!("loaded header for {:?}", header.module_id);
@@ -1274,6 +1281,7 @@ fn update<'a>(
 
             Ok(state)
         }
+
         CanonicalizedAndConstrained {
             constrained_module,
             canonicalization_problems,
@@ -1304,6 +1312,53 @@ fn update<'a>(
             let work = state
                 .dependencies
                 .notify(module_id, Phase::CanonicalizeAndConstrain);
+
+            for (module_id, phase) in work {
+                let task = start_phase(module_id, phase, &mut state);
+
+                enqueue_task(&injector, worker_listeners, task)?
+            }
+
+            Ok(state)
+        }
+        MadeEffectModule {
+            constrained_module,
+            canonicalization_problems,
+            module_docs,
+        } => {
+            let module_id = constrained_module.module.module_id;
+            log!("made effect module for {:?}", module_id);
+            state
+                .module_cache
+                .can_problems
+                .insert(module_id, canonicalization_problems);
+
+            state
+                .module_cache
+                .documentation
+                .insert(module_id, module_docs);
+
+            state
+                .module_cache
+                .aliases
+                .insert(module_id, constrained_module.module.aliases.clone());
+
+            state
+                .module_cache
+                .constrained
+                .insert(module_id, constrained_module);
+
+            let mut work = state.dependencies.notify(module_id, Phase::LoadHeader);
+
+            work.extend(state.dependencies.notify(module_id, Phase::Parse));
+
+            work.extend(
+                state
+                    .dependencies
+                    .notify(module_id, Phase::CanonicalizeAndConstrain),
+            );
+
+            dbg!(&work, &state.dependencies);
 
             for (module_id, phase) in work {
                 let task = start_phase(module_id, phase, &mut state);
@@ -2038,16 +2093,63 @@ fn fabricate_effects_module<'a>(
 
     //    exposed_symbols: MutSet<Symbol>,
     //    aliases: MutMap<Symbol, Alias>,
-    let start_time = SystemTime::now();
+    let mut var_store = VarStore::default();
 
+    let declared_name = "Effect".into();
     let module_id = {
         // Lock just long enough to perform the minimal operations necessary.
         let mut module_ids = (*module_ids).lock();
-        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
-        let declared_name = "Effect".into();
         module_ids.get_or_insert(&declared_name)
     };
+
+    let effect_symbol = {
+        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
+
+        let ident_ids: &mut IdentIds = ident_ids_by_module.get_mut(&module_id).unwrap();
+
+        let ident_id = ident_ids.get_or_insert(&declared_name);
+
+        Symbol::new(module_id, ident_id)
+    };
+
+    let mut aliases = MutMap::default();
+    let alias = {
+        let a_var = var_store.fresh();
+        let closure_var = var_store.fresh();
+        // pub struct Alias {
+        //     pub region: Region,
+        //     pub vars: Vec<Located<(Lowercase, Variable)>>,
+        //
+        //     /// hidden type variables, like the closure variable in `a -> b`
+        //     pub hidden_variables: MutSet<Variable>,
+        //
+        //     pub uniqueness: Option<boolean_algebra::Bool>,
+        //     pub typ: Type,
+        // }
+        let actual = Type::TagUnion(
+            vec![(
+                TagName::Private(effect_symbol),
+                vec![Type::Function(
+                    vec![Type::EmptyRec],
+                    Box::new(Type::Variable(closure_var)),
+                    Box::new(Type::Variable(a_var)),
+                )],
+            )],
+            Box::new(Type::EmptyTagUnion),
+        );
+        let mut hidden_variables = MutSet::default();
+        hidden_variables.insert(closure_var);
+        Alias {
+            region: Region::zero(),
+            vars: vec![Located::at_zero(("a".into(), a_var))],
+            hidden_variables,
+            uniqueness: None,
+            typ: actual,
+        }
+    };
+
+    aliases.insert(effect_symbol, alias);
 
     use roc_can::module::ModuleOutput;
     let module_output = ModuleOutput {
@@ -2061,8 +2163,6 @@ fn fabricate_effects_module<'a>(
         exposed_vars_by_symbol: Vec::new(),
         references: MutSet::default(),
     };
-
-    let mut var_store = VarStore::default();
 
     // Add builtin defs (e.g. List.get) to the module's defs
     //    let builtin_defs = roc_can::builtins::builtin_defs(&mut var_store);
@@ -2105,7 +2205,7 @@ fn fabricate_effects_module<'a>(
 
     Ok((
         module_id,
-        Msg::CanonicalizedAndConstrained {
+        Msg::MadeEffectModule {
             constrained_module,
             canonicalization_problems: module_output.problems,
             module_docs,
