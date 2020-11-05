@@ -864,14 +864,16 @@ pub fn list_contains_help<'a, 'ctx, 'env>(
     elem_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     match (elem, elem_layout) {
-        (BasicValueEnum::PointerValue(_), Layout::Pointer(_)) => {
+        (BasicValueEnum::IntValue(_), _) => {
             let builder = env.builder;
             let ctx = env.context;
 
+            let bool_alloca = builder.build_alloca(ctx.bool_type(), "bool_alloca");
             let index_alloca = builder.build_alloca(ctx.i64_type(), "index_alloca");
             let next_free_index_alloca =
                 builder.build_alloca(ctx.i64_type(), "next_free_index_alloca");
 
+            builder.build_store(bool_alloca, ctx.bool_type().const_zero());
             builder.build_store(index_alloca, ctx.i64_type().const_zero());
             builder.build_store(next_free_index_alloca, ctx.i64_type().const_zero());
 
@@ -897,11 +899,7 @@ pub fn list_contains_help<'a, 'ctx, 'env>(
 
             let has_found = build_eq(env, current_elem, elem, elem_layout, elem_layout);
 
-            let keep_going_bb = ctx.append_basic_block(parent, "loop");
-            let stop_bb = ctx.append_basic_block(parent, "break");
-
-            builder.build_conditional_branch(has_found.into_int_value(), stop_bb, keep_going_bb);
-            builder.position_at_end(stop_bb);
+            builder.build_store(bool_alloca, has_found.into_int_value());
 
             let one = ctx.i64_type().const_int(1, false);
 
@@ -914,9 +912,6 @@ pub fn list_contains_help<'a, 'ctx, 'env>(
                 builder.build_int_add(next_free_index, one, "incremented_next_free_index"),
             );
 
-            builder.build_unconditional_branch(keep_going_bb);
-            builder.position_at_end(keep_going_bb);
-
             builder.build_store(
                 index_alloca,
                 builder.build_int_add(index, one, "incremented_index"),
@@ -924,13 +919,15 @@ pub fn list_contains_help<'a, 'ctx, 'env>(
 
             builder.build_unconditional_branch(condition_bb);
 
+            builder.build_conditional_branch(has_found.into_int_value(), cont_bb, condition_bb);
+
             // continuation
             builder.position_at_end(cont_bb);
 
-            has_found
+            builder.build_load(bool_alloca, "answer")
         }
         _ => unreachable!(
-            "Invalid element basic value enum or layout for List.keepIf : {:?}",
+            "Invalid element basic value enum or layout for List.contains : {:?}",
             (elem, elem_layout)
         ),
     }
