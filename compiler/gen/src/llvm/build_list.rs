@@ -917,8 +917,6 @@ pub fn list_contains_help<'a, 'ctx, 'env>(
                 builder.build_int_add(index, one, "incremented_index"),
             );
 
-            builder.build_unconditional_branch(condition_bb);
-
             builder.build_conditional_branch(has_found.into_int_value(), cont_bb, condition_bb);
 
             // continuation
