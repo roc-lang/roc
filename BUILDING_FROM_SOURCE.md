@@ -34,7 +34,7 @@ We use a specific version of Zig, a build off the the commit `0088efc4b`. The la
   tar xvf zig-linux-x86_64-0.6.0+0088efc4b.tar
   # move the files into /opt:
   sudo mkdir -p /opt/zig
-  sudo mv tar xvf zig-linux-x86_64-0.6.0+0088efc4b.tar/* /opt/zig/
+  sudo mv zig-linux-x86_64-0.6.0+0088efc4b/* /opt/zig/
   ```
   Then add `/opt/zig/` to your `PATH` (e.g. in `~/.bashrc`).
   
