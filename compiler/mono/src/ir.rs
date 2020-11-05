@@ -4,7 +4,7 @@ use crate::layout::{Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
-use roc_module::ident::{Ident, Lowercase, TagName};
+use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -829,7 +829,7 @@ pub enum Expr<'a> {
         args: &'a [Symbol],
     },
     RunLowLevel(LowLevel, &'a [Symbol]),
-    ForeignCall(String, &'a [Symbol]),
+    ForeignCall(ForeignSymbol, &'a [Symbol]),
 
     Tag {
         tag_layout: Layout<'a>,
@@ -942,6 +942,13 @@ impl<'a> Expr<'a> {
 
                 alloc
                     .text(format!("lowlevel {:?} ", lowlevel))
+                    .append(alloc.intersperse(it, " "))
+            }
+            ForeignCall(symbol, args) => {
+                let it = args.iter().map(|s| symbol_to_doc(alloc, *s));
+
+                alloc
+                    .text(format!("foreign {:?} ", symbol.as_str()))
                     .append(alloc.intersperse(it, " "))
             }
             Tag {
@@ -4085,6 +4092,27 @@ fn substitute_in_expr<'a>(
                 let args = new_args.into_bump_slice();
 
                 Some(RunLowLevel(*op, args))
+            } else {
+                None
+            }
+        }
+        ForeignCall(symbol, args) => {
+            let mut did_change = false;
+            let new_args = Vec::from_iter_in(
+                args.iter().map(|s| match substitute(subs, *s) {
+                    None => *s,
+                    Some(s) => {
+                        did_change = true;
+                        s
+                    }
+                }),
+                arena,
+            );
+
+            if did_change {
+                let args = new_args.into_bump_slice();
+
+                Some(ForeignCall(symbol.clone(), args))
             } else {
                 None
             }
