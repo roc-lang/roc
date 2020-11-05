@@ -222,8 +222,15 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                 // Vertex Buffer for drawing rectangles
                 let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Vertex Buffer"),
-                    contents: bytemuck::cast_slice(&vertex::test()),
+                    contents: bytemuck::cast_slice(&vertex::vertex_buffer_test()),
                     usage: wgpu::BufferUsage::VERTEX,
+                });
+
+                // Index Buffer for drawing rectangles
+                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Index Buffer"),
+                    contents: bytemuck::cast_slice(&vertex::index_buffer_test()),
+                    usage: wgpu::BufferUsage::INDEX,
                 });
 
                 // Clear frame
@@ -251,9 +258,13 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                         0,                       // The buffer slot to use for this vertex buffer.
                         vertex_buffer.slice(..), // Use the entire buffer.
                     );
-                    render_pass.draw(
-                        0..((&vertex::test()).len() as u32), // Draw all of the vertices from our test data.
-                        0..1,                                // Instances
+
+                    render_pass.set_index_buffer(index_buffer.slice(..));
+
+                    render_pass.draw_indexed(
+                        0..((&vertex::index_buffer_test()).len() as u32), // Draw all of the vertices from our test data.
+                        0,                                                // Base Vertex
+                        0..1,                                             // Instances
                     );
                 }
 
