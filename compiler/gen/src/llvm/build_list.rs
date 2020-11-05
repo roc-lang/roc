@@ -863,72 +863,62 @@ pub fn list_contains_help<'a, 'ctx, 'env>(
     elem: BasicValueEnum<'ctx>,
     elem_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    match (elem, elem_layout) {
-        (BasicValueEnum::IntValue(_), _) => {
-            let builder = env.builder;
-            let ctx = env.context;
+    let builder = env.builder;
+    let ctx = env.context;
 
-            let bool_alloca = builder.build_alloca(ctx.bool_type(), "bool_alloca");
-            let index_alloca = builder.build_alloca(ctx.i64_type(), "index_alloca");
-            let next_free_index_alloca =
-                builder.build_alloca(ctx.i64_type(), "next_free_index_alloca");
+    let bool_alloca = builder.build_alloca(ctx.bool_type(), "bool_alloca");
+    let index_alloca = builder.build_alloca(ctx.i64_type(), "index_alloca");
+    let next_free_index_alloca = builder.build_alloca(ctx.i64_type(), "next_free_index_alloca");
 
-            builder.build_store(bool_alloca, ctx.bool_type().const_zero());
-            builder.build_store(index_alloca, ctx.i64_type().const_zero());
-            builder.build_store(next_free_index_alloca, ctx.i64_type().const_zero());
+    builder.build_store(bool_alloca, ctx.bool_type().const_zero());
+    builder.build_store(index_alloca, ctx.i64_type().const_zero());
+    builder.build_store(next_free_index_alloca, ctx.i64_type().const_zero());
 
-            let condition_bb = ctx.append_basic_block(parent, "condition");
-            builder.build_unconditional_branch(condition_bb);
-            builder.position_at_end(condition_bb);
+    let condition_bb = ctx.append_basic_block(parent, "condition");
+    builder.build_unconditional_branch(condition_bb);
+    builder.position_at_end(condition_bb);
 
-            let index = builder.build_load(index_alloca, "index").into_int_value();
+    let index = builder.build_load(index_alloca, "index").into_int_value();
 
-            let condition = builder.build_int_compare(IntPredicate::SGT, length, index, "loopcond");
+    let condition = builder.build_int_compare(IntPredicate::SGT, length, index, "loopcond");
 
-            let body_bb = ctx.append_basic_block(parent, "body");
-            let cont_bb = ctx.append_basic_block(parent, "cont");
-            builder.build_conditional_branch(condition, body_bb, cont_bb);
+    let body_bb = ctx.append_basic_block(parent, "body");
+    let cont_bb = ctx.append_basic_block(parent, "cont");
+    builder.build_conditional_branch(condition, body_bb, cont_bb);
 
-            // loop body
-            builder.position_at_end(body_bb);
+    // loop body
+    builder.position_at_end(body_bb);
 
-            let current_elem_ptr =
-                unsafe { builder.build_in_bounds_gep(source_ptr, &[index], "elem_ptr") };
+    let current_elem_ptr = unsafe { builder.build_in_bounds_gep(source_ptr, &[index], "elem_ptr") };
 
-            let current_elem = builder.build_load(current_elem_ptr, "load_elem");
+    let current_elem = builder.build_load(current_elem_ptr, "load_elem");
 
-            let has_found = build_eq(env, current_elem, elem, elem_layout, elem_layout);
+    let has_found = build_eq(env, current_elem, elem, elem_layout, elem_layout);
 
-            builder.build_store(bool_alloca, has_found.into_int_value());
+    builder.build_store(bool_alloca, has_found.into_int_value());
 
-            let one = ctx.i64_type().const_int(1, false);
+    let one = ctx.i64_type().const_int(1, false);
 
-            let next_free_index = builder
-                .build_load(next_free_index_alloca, "load_next_free")
-                .into_int_value();
+    let next_free_index = builder
+        .build_load(next_free_index_alloca, "load_next_free")
+        .into_int_value();
 
-            builder.build_store(
-                next_free_index_alloca,
-                builder.build_int_add(next_free_index, one, "incremented_next_free_index"),
-            );
+    builder.build_store(
+        next_free_index_alloca,
+        builder.build_int_add(next_free_index, one, "incremented_next_free_index"),
+    );
 
-            builder.build_store(
-                index_alloca,
-                builder.build_int_add(index, one, "incremented_index"),
-            );
+    builder.build_store(
+        index_alloca,
+        builder.build_int_add(index, one, "incremented_index"),
+    );
 
-            builder.build_conditional_branch(has_found.into_int_value(), cont_bb, condition_bb);
+    builder.build_conditional_branch(has_found.into_int_value(), cont_bb, condition_bb);
 
-            // continuation
-            builder.position_at_end(cont_bb);
+    // continuation
+    builder.position_at_end(cont_bb);
 
-            builder.build_load(bool_alloca, "answer")
-        }
-        _ => unreachable!(
-            "Invalid element basic value enum or layout for List.contains : {:?}",
-            (elem, elem_layout)
-        ),
-    }
+    builder.build_load(bool_alloca, "answer")
 }
 
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
