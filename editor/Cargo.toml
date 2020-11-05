@@ -56,6 +56,7 @@ zerocopy = "0.3"
 env_logger = "0.7"
 futures = "0.3"
 wgpu_glyph = "0.10"
+bytemuck = "1.4"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"

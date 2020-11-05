@@ -11,15 +11,18 @@
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
 
+use crate::vertex::Vertex;
 use std::error::Error;
 use std::io;
 use std::path::Path;
+use wgpu::util::DeviceExt;
 use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Section, Text};
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 use winit::event_loop::ControlFlow;
 
 pub mod ast;
 pub mod text_state;
+mod vertex;
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
 /// or if you provide it 1 or more files or directories to open on launch.
@@ -117,7 +120,7 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
         depth_stencil_state: None,
         vertex_state: wgpu::VertexStateDescriptor {
             index_format: wgpu::IndexFormat::Uint16,
-            vertex_buffers: &[],
+            vertex_buffers: &[Vertex::buffer_descriptor()],
         },
         sample_count: 1,
         sample_mask: !0,
@@ -216,6 +219,13 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     .expect("Failed to acquire next swap chain texture")
                     .output;
 
+                // Vertex Buffer for drawing rectangles
+                let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Vertex Buffer"),
+                    contents: bytemuck::cast_slice(&vertex::test()),
+                    usage: wgpu::BufferUsage::VERTEX,
+                });
+
                 // Clear frame
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -236,7 +246,15 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     });
 
                     render_pass.set_pipeline(&triangle_pipeline);
-                    render_pass.draw(0..3, 0..1);
+
+                    render_pass.set_vertex_buffer(
+                        0,                       // The buffer slot to use for this vertex buffer.
+                        vertex_buffer.slice(..), // Use the entire buffer.
+                    );
+                    render_pass.draw(
+                        0..((&vertex::test()).len() as u32), // Draw all of the vertices from our test data.
+                        0..1,                                // Instances
+                    );
                 }
 
                 glyph_brush.queue(Section {
