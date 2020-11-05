@@ -8,7 +8,7 @@ use roc_builtins::std::{Mode, StdLib};
 use roc_can::constraint::Constraint;
 use roc_can::def::Declaration;
 use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::all::{default_hasher, MutMap, MutSet};
+use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
 use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
@@ -2077,6 +2077,109 @@ fn run_solve<'a>(
     }
 }
 
+fn fabricate_host_exposed_def<'a>(
+    module_id: ModuleId,
+    ident_ids: &mut IdentIds,
+    symbol: Symbol,
+    effect_tag_name: TagName,
+    var_store: &mut VarStore,
+    annotation: roc_can::annotation::Annotation,
+) -> roc_can::def::Def {
+    use roc_can::pattern::Pattern;
+    let expr_var = var_store.fresh();
+    let pattern = Pattern::Identifier(symbol);
+    let mut pattern_vars = SendMap::default();
+    pattern_vars.insert(symbol, expr_var);
+
+    use roc_can::expr::Expr;
+    use roc_can::expr::Recursive;
+
+    let mut arguments: Vec<(Variable, Located<Pattern>)> = Vec::new();
+    let mut linked_symbol_arguments: Vec<(Variable, Expr)> = Vec::new();
+
+    match annotation.typ.shallow_dealias() {
+        Type::Function(args, _, _) => {
+            for _ in 0..args.len() {
+                let ident_id = ident_ids.gen_unique();
+                module_id.register_debug_idents(&ident_ids);
+                let arg_symbol = Symbol::new(module_id, ident_id);
+                let arg_var = var_store.fresh();
+
+                arguments.push((arg_var, Located::at_zero(Pattern::Identifier(arg_symbol))));
+
+                linked_symbol_arguments.push((arg_var, Expr::Var(arg_symbol)));
+            }
+        }
+        _ => todo!(),
+    }
+
+    // TODO figure out something better for run lowlevel
+    use roc_module::low_level::LowLevel;
+    let low_level_call = Expr::RunLowLevel {
+        op: LowLevel::Not,
+        args: linked_symbol_arguments,
+        ret_var: var_store.fresh(),
+    };
+
+    let effect_closure_symbol = {
+        let ident_id = ident_ids.gen_unique();
+        module_id.register_debug_idents(&ident_ids);
+        Symbol::new(module_id, ident_id)
+    };
+
+    let empty_record_pattern = Pattern::RecordDestructure {
+        whole_var: var_store.fresh(),
+        ext_var: var_store.fresh(),
+        destructs: vec![],
+    };
+
+    let effect_closure = Expr::Closure {
+        function_type: var_store.fresh(),
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: var_store.fresh(),
+        name: effect_closure_symbol,
+        captured_symbols: std::vec::Vec::new(),
+        recursive: Recursive::NotRecursive,
+        arguments: vec![(var_store.fresh(), Located::at_zero(empty_record_pattern))],
+        loc_body: Box::new(Located::at_zero(low_level_call)),
+    };
+
+    let body = Expr::Tag {
+        variant_var: var_store.fresh(),
+        ext_var: var_store.fresh(),
+        name: effect_tag_name,
+        arguments: vec![(var_store.fresh(), Located::at_zero(effect_closure))],
+    };
+
+    let expr = Expr::Closure {
+        function_type: var_store.fresh(),
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: var_store.fresh(),
+        name: symbol,
+        captured_symbols: std::vec::Vec::new(),
+        recursive: Recursive::NotRecursive,
+        arguments,
+        loc_body: Box::new(Located::at_zero(body)),
+    };
+
+    let def_annotation = roc_can::def::Annotation {
+        signature: annotation.typ,
+        introduced_variables: annotation.introduced_variables,
+        aliases: annotation.aliases,
+        region: Region::zero(),
+    };
+
+    roc_can::def::Def {
+        loc_pattern: Located::at_zero(pattern),
+        loc_expr: Located::at_zero(expr),
+        expr_var,
+        pattern_vars,
+        annotation: Some(def_annotation),
+    }
+}
+
 fn fabricate_effects_module<'a>(
     arena: &'a Bump,
     module_ids: Arc<Mutex<ModuleIds>>,
@@ -2095,6 +2198,8 @@ fn fabricate_effects_module<'a>(
     //    aliases: MutMap<Symbol, Alias>,
     let mut var_store = VarStore::default();
 
+    let PlatformHeader { effects, .. } = header;
+
     let declared_name = "Effect".into();
     let module_id = {
         // Lock just long enough to perform the minimal operations necessary.
@@ -2109,24 +2214,15 @@ fn fabricate_effects_module<'a>(
         let ident_ids: &mut IdentIds = ident_ids_by_module.get_mut(&module_id).unwrap();
 
         let ident_id = ident_ids.get_or_insert(&declared_name);
-
         Symbol::new(module_id, ident_id)
     };
 
+    let mut scope = roc_can::scope::Scope::new(module_id, &mut var_store);
     let mut aliases = MutMap::default();
     let alias = {
         let a_var = var_store.fresh();
         let closure_var = var_store.fresh();
-        // pub struct Alias {
-        //     pub region: Region,
-        //     pub vars: Vec<Located<(Lowercase, Variable)>>,
-        //
-        //     /// hidden type variables, like the closure variable in `a -> b`
-        //     pub hidden_variables: MutSet<Variable>,
-        //
-        //     pub uniqueness: Option<boolean_algebra::Bool>,
-        //     pub typ: Type,
-        // }
+
         let actual = Type::TagUnion(
             vec![(
                 TagName::Private(effect_symbol),
@@ -2138,24 +2234,92 @@ fn fabricate_effects_module<'a>(
             )],
             Box::new(Type::EmptyTagUnion),
         );
-        let mut hidden_variables = MutSet::default();
-        hidden_variables.insert(closure_var);
-        Alias {
-            region: Region::zero(),
-            vars: vec![Located::at_zero(("a".into(), a_var))],
-            hidden_variables,
-            uniqueness: None,
-            typ: actual,
-        }
+        scope.add_alias(
+            effect_symbol,
+            Region::zero(),
+            vec![Located::at_zero(("a".into(), a_var))],
+            actual,
+        );
+
+        scope.lookup_alias(effect_symbol).clone()
     };
 
     aliases.insert(effect_symbol, alias);
+
+    let mut declarations = Vec::new();
+
+    let exposed_symbols = {
+        let module_ids = (*module_ids).lock();
+        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
+
+        let ident_ids: &mut IdentIds = ident_ids_by_module.get_mut(&module_id).unwrap();
+
+        let ident_id = ident_ids.get_or_insert(&declared_name);
+        let effect_symbol = Symbol::new(module_id, ident_id);
+
+        let mut exposed = MutSet::default();
+
+        {
+            use bumpalo::collections::Vec;
+
+            let mut stack: Vec<&EffectsEntry> = Vec::with_capacity_in(effects.len(), arena);
+
+            for entry in &effects {
+                stack.push(&entry.value);
+            }
+
+            use roc_parse::ast::EffectsEntry;
+
+            // TODO this clone is almost certainly wrong
+            let exposed_ident_ids = ident_ids.clone();
+            let dep_idents: MutMap<ModuleId, IdentIds> = MutMap::default();
+            let mut can_env =
+                roc_can::env::Env::new(module_id, dep_idents, &module_ids, exposed_ident_ids);
+
+            while let Some(effects_entry) = stack.pop() {
+                match effects_entry {
+                    EffectsEntry::Effect { ident, ann } => {
+                        let as_inlinable_string: inlinable_string::InlinableString =
+                            ident.value.into();
+                        let ident_id = ident_ids.get_or_insert(&as_inlinable_string);
+                        let symbol = Symbol::new(module_id, ident_id);
+
+                        exposed.insert(symbol);
+
+                        let annotation = roc_can::annotation::canonicalize_annotation(
+                            &mut can_env,
+                            &mut scope,
+                            &ann.value,
+                            Region::zero(),
+                            &mut var_store,
+                        );
+
+                        let def = fabricate_host_exposed_def(
+                            module_id,
+                            ident_ids,
+                            symbol,
+                            TagName::Private(effect_symbol),
+                            &mut var_store,
+                            annotation,
+                        );
+
+                        declarations.push(Declaration::Declare(def));
+                    }
+                    EffectsEntry::SpaceAfter(nested, _) | EffectsEntry::SpaceBefore(nested, _) => {
+                        stack.push(nested);
+                    }
+                }
+            }
+        }
+
+        exposed
+    };
 
     use roc_can::module::ModuleOutput;
     let module_output = ModuleOutput {
         aliases: MutMap::default(),
         rigid_variables: MutMap::default(),
-        declarations: Vec::new(),
+        declarations,
         exposed_imports: MutMap::default(),
         lookups: Vec::new(),
         problems: Vec::new(),
