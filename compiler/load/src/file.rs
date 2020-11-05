@@ -218,7 +218,6 @@ struct ModuleCache<'a> {
     mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
 
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
-    variably_sized_layouts: MutMap<Symbol, VariablySizedLayouts<'a>>,
 }
 
 fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> BuildTask<'a> {
@@ -470,7 +469,6 @@ pub struct MonomorphizedModule<'a> {
     pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
     pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
-    pub variably_sized_layouts: MutMap<Symbol, VariablySizedLayouts<'a>>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
 }
@@ -537,7 +535,6 @@ enum Msg<'a> {
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
         external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
-        variably_sized_layouts: MutMap<Symbol, VariablySizedLayouts<'a>>,
         procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         subs: Subs,
@@ -1457,18 +1454,12 @@ fn update<'a>(
             subs,
             procedures,
             external_specializations_requested,
-            variably_sized_layouts,
             problems,
             ..
         } => {
             log!("made specializations for {:?}", module_id);
 
             state.module_cache.mono_problems.insert(module_id, problems);
-
-            state
-                .module_cache
-                .variably_sized_layouts
-                .extend(variably_sized_layouts);
 
             for (module_id, requested) in external_specializations_requested {
                 let existing = match state
@@ -1571,7 +1562,6 @@ fn finish_specialization<'a>(
         subs,
         interns,
         procedures,
-        variably_sized_layouts: module_cache.variably_sized_layouts,
         sources,
         timings: state.timings,
     }
@@ -2238,9 +2228,6 @@ fn make_specializations<'a>(
     let external_specializations_requested = procs.externals_we_need.clone();
     let procedures = procs.get_specialized_procs_without_rc(mono_env.arena);
 
-    // TODO
-    let variably_sized_layouts = MutMap::default();
-
     Msg::MadeSpecializations {
         module_id: home,
         ident_ids,
@@ -2249,7 +2236,6 @@ fn make_specializations<'a>(
         problems: mono_problems,
         subs,
         external_specializations_requested,
-        variably_sized_layouts,
     }
 }
 
