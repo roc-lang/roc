@@ -3264,7 +3264,33 @@ pub fn with_hole<'a>(
             foreign_symbol,
             args,
             ret_var,
-        } => todo!(),
+        } => {
+            let mut arg_symbols = Vec::with_capacity_in(args.len(), env.arena);
+
+            for (_, arg_expr) in args.iter() {
+                arg_symbols.push(possible_reuse_symbol(env, procs, &arg_expr));
+            }
+            let arg_symbols = arg_symbols.into_bump_slice();
+
+            // layout of the return type
+            let layout = layout_cache
+                .from_var(env.arena, ret_var, env.subs)
+                .unwrap_or_else(|err| todo!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+            let result = Stmt::Let(
+                assigned,
+                Expr::ForeignCall(foreign_symbol.clone(), arg_symbols),
+                layout,
+                hole,
+            );
+
+            let iter = args
+                .into_iter()
+                .rev()
+                .map(|(a, b)| (a, Located::at_zero(b)))
+                .zip(arg_symbols.iter().rev());
+            assign_to_symbols(env, procs, layout_cache, iter, result)
+        }
 
         RunLowLevel { op, args, ret_var } => {
             let op = optimize_low_level(env.subs, op, &args);

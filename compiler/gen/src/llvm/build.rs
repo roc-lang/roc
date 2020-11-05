@@ -810,6 +810,24 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Literal(literal) => build_exp_literal(env, literal),
         RunLowLevel(op, symbols) => run_low_level(env, scope, parent, layout, *op, symbols),
 
+        ForeignCall(foreign_symbol, symbols) => {
+            let function = get_foreign_symbol(env, foreign_symbol.clone());
+
+            let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(symbols.len(), env.arena);
+
+            for arg in symbols.iter() {
+                arg_vals.push(load_symbol(env, scope, arg));
+            }
+
+            let call = env.builder.build_call(function, arg_vals.as_slice(), "tmp");
+
+            // this is a foreign function, use c calling convention
+            call.set_call_convention(C_CALL_CONV);
+
+            call.try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
+        }
         FunctionCall {
             call_type: ByName(name),
             full_layout,
@@ -3400,6 +3418,28 @@ fn cxa_rethrow_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
 
     call.set_call_convention(C_CALL_CONV);
     call.try_as_basic_value().left().unwrap()
+}
+
+fn get_foreign_symbol<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    foreign_symbol: roc_module::ident::ForeignSymbol,
+) -> FunctionValue<'ctx> {
+    let module = env.module;
+    let context = env.context;
+
+    match module.get_function(foreign_symbol.as_str()) {
+        Some(gvalue) => gvalue,
+        None => {
+            let foreign_function = module.add_function(
+                foreign_symbol.as_str(),
+                context.i64_type().fn_type(&[], false),
+                Some(Linkage::External),
+            );
+            foreign_function.set_call_conventions(C_CALL_CONV);
+
+            foreign_function
+        }
+    }
 }
 
 fn get_gxx_personality_v0<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> FunctionValue<'ctx> {

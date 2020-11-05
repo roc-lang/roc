@@ -2146,9 +2146,8 @@ fn fabricate_host_exposed_def<'a>(
     }
 
     // TODO figure out something better for run lowlevel
-    use roc_module::low_level::LowLevel;
-    let low_level_call = Expr::RunLowLevel {
-        op: LowLevel::Not,
+    let low_level_call = Expr::ForeignCall {
+        foreign_symbol: "roc_fx_put_char".into(),
         args: linked_symbol_arguments,
         ret_var: var_store.fresh(),
     };
