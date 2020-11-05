@@ -11,6 +11,7 @@
 // re-enable this when working on performance optimizations than have it block PRs.
 #![allow(clippy::large_enum_variant)]
 
+use crate::rect::Rect;
 use crate::vertex::Vertex;
 use std::error::Error;
 use std::io;
@@ -21,6 +22,7 @@ use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 use winit::event_loop::ControlFlow;
 
 pub mod ast;
+mod rect;
 pub mod text_state;
 mod vertex;
 
@@ -219,17 +221,39 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     .expect("Failed to acquire next swap chain texture")
                     .output;
 
+                // Test Rectangle
+                let test_rect_1 = Rect {
+                    top: 0.9,
+                    left: -0.8,
+                    width: 0.2,
+                    height: 0.3,
+                    color: [0.0, 1.0, 1.0],
+                };
+                let test_rect_2 = Rect {
+                    top: 0.0,
+                    left: 0.0,
+                    width: 0.5,
+                    height: 0.5,
+                    color: [1.0, 1.0, 0.0],
+                };
+                let mut rectangles = Vec::new();
+                rectangles.extend_from_slice(&test_rect_1.as_array());
+                rectangles.extend_from_slice(&test_rect_2.as_array());
+
+                let mut rect_index_buffers = Vec::new();
+                rect_index_buffers.extend_from_slice(&Rect::INDEX_BUFFER);
+                rect_index_buffers.extend_from_slice(&Rect::INDEX_BUFFER);
                 // Vertex Buffer for drawing rectangles
                 let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Vertex Buffer"),
-                    contents: bytemuck::cast_slice(&vertex::vertex_buffer_test()),
+                    contents: bytemuck::cast_slice(&rectangles),
                     usage: wgpu::BufferUsage::VERTEX,
                 });
 
                 // Index Buffer for drawing rectangles
                 let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Index Buffer"),
-                    contents: bytemuck::cast_slice(&vertex::index_buffer_test()),
+                    contents: bytemuck::cast_slice(&rect_index_buffers),
                     usage: wgpu::BufferUsage::INDEX,
                 });
 
@@ -262,9 +286,9 @@ fn run_event_loop() -> Result<(), Box<dyn Error>> {
                     render_pass.set_index_buffer(index_buffer.slice(..));
 
                     render_pass.draw_indexed(
-                        0..((&vertex::index_buffer_test()).len() as u32), // Draw all of the vertices from our test data.
-                        0,                                                // Base Vertex
-                        0..1,                                             // Instances
+                        0..((&rect_index_buffers).len() as u32), // Draw all of the vertices from our test data.
+                        0,                                       // Base Vertex
+                        0..1,                                    // Instances
                     );
                 }
 
