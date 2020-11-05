@@ -834,15 +834,15 @@ pub fn list_contains<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let wrapper_struct = list.into_struct_value();
-    let list_elem_layout = match list_layout.clone() {
+    let list_elem_layout = match &list_layout {
         // this pointer will never actually be dereferenced
-        Layout::Builtin(Builtin::EmptyList) => Layout::Builtin(Builtin::Int64),
-        Layout::Builtin(Builtin::List(_, element_layout)) => element_layout.clone(),
+        Layout::Builtin(Builtin::EmptyList) => &Layout::Builtin(Builtin::Int64),
+        Layout::Builtin(Builtin::List(_, element_layout)) => element_layout,
         _ => unreachable!("Invalid layout {:?} in List.contains", list_layout),
     };
 
     let list_elem_type =
-        basic_type_from_layout(env.arena, env.context, &list_elem_layout, env.ptr_bytes);
+        basic_type_from_layout(env.arena, env.context, list_elem_layout, env.ptr_bytes);
 
     let list_ptr = load_list_ptr(
         builder,
