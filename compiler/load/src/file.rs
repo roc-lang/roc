@@ -19,7 +19,7 @@ use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache};
-use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry};
+use roc_parse::ast::{self, Attempting, ExposesEntry, ImportsEntry, PlatformHeader};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{self, Fail, Parser};
 use roc_region::all::{Located, Region};
@@ -624,6 +624,19 @@ pub struct ModuleTiming {
 }
 
 impl ModuleTiming {
+    pub fn new(start_time: SystemTime) -> Self {
+        ModuleTiming {
+            read_roc_file: Duration::default(),
+            parse_header: Duration::default(),
+            parse_body: Duration::default(),
+            canonicalize: Duration::default(),
+            constrain: Duration::default(),
+            solve: Duration::default(),
+            start_time,
+            end_time: start_time, // just for now; we'll overwrite this at the end
+        }
+    }
+
     pub fn total(&self) -> Duration {
         self.end_time.duration_since(self.start_time).unwrap()
     }
@@ -1701,13 +1714,15 @@ fn parse_header<'a>(
             ident_ids_by_module,
             module_timing,
         )),
-        Ok((ast::Module::Platform { header }, parse_state)) => {
-            todo!(
-                "TODO load a platform with {:?} and {:?}",
-                header,
-                parse_state
-            );
-        }
+        Ok((ast::Module::Platform { header }, parse_state)) => fabricate_effects_module(
+            arena,
+            module_ids,
+            dep_idents,
+            exposed_symbols,
+            aliases,
+            mode,
+            header,
+        ),
         Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
     }
 }
@@ -2011,6 +2026,103 @@ fn run_solve<'a>(
         module_timing,
     }
 }
+
+fn fabricate_effects_module<'a>(
+    arena: &'a Bump,
+    module_ids: &mut ModuleIds,
+    dep_idents: IdentIdsByModule,
+    exposed_symbols: MutSet<Symbol>,
+    aliases: MutMap<Symbol, Alias>,
+    mode: Mode,
+    header: PlatformHeader<'a>,
+) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
+    //    pub name: Loc<PackageName<'a>>,
+    //    pub provides: Vec<'a, Loc<ExposesEntry<'a>>>,
+    //    pub requires: Vec<'a, Loc<ExposesEntry<'a>>>,
+    //    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
+    //    pub effects: Vec<'a, Loc<EffectsEntry<'a>>>,
+
+    let start_time = SystemTime::now();
+
+    let module_id = module_ids.get_or_insert(&"Effects".into());
+
+    use roc_can::module::ModuleOutput;
+    let module_output = ModuleOutput {
+        aliases: MutMap::default(),
+        rigid_variables: MutMap::default(),
+        declarations: Vec::new(),
+        exposed_imports: MutMap::default(),
+        lookups: Vec::new(),
+        problems: Vec::new(),
+        ident_ids: IdentIds::default(),
+        exposed_vars_by_symbol: Vec::new(),
+        references: MutSet::default(),
+    };
+
+    let mut var_store = VarStore::default();
+
+    // Add builtin defs (e.g. List.get) to the module's defs
+    //    let builtin_defs = roc_can::builtins::builtin_defs(&mut var_store);
+    //    let references = &module_output.references;
+    //
+    //    for (symbol, def) in builtin_defs {
+    //        if references.contains(&symbol) {
+    //            module_output.declarations.push(Declaration::Builtin(def));
+    //        }
+    //    }
+
+    let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
+
+    let module = Module {
+        module_id,
+        exposed_imports: module_output.exposed_imports,
+        exposed_vars_by_symbol: module_output.exposed_vars_by_symbol,
+        references: module_output.references,
+        aliases: module_output.aliases,
+        rigid_variables: module_output.rigid_variables,
+    };
+
+    let imported_modules = MutSet::default();
+    let module_timing = ModuleTiming::new(start_time);
+
+    let module_docs = ModuleDocumentation {
+        name: String::from("Effect"),
+        docs: String::from("idk fix this later"),
+        entries: Vec::new(),
+    };
+
+    let constrained_module = ConstrainedModule {
+        module,
+        declarations: module_output.declarations,
+        imported_modules,
+        var_store,
+        constraint,
+        ident_ids: module_output.ident_ids,
+        module_timing,
+    };
+
+    Ok((
+        module_id,
+        Msg::CanonicalizedAndConstrained {
+            constrained_module,
+            canonicalization_problems: module_output.problems,
+            module_docs,
+        },
+    ))
+}
+
+// #[derive(Debug)]
+// pub struct ModuleOutput {
+//     pub aliases: MutMap<Symbol, Alias>,
+//     pub rigid_variables: MutMap<Variable, Lowercase>,
+//     pub declarations: Vec<Declaration>,
+//     pub exposed_imports: MutMap<Symbol, Variable>,
+//     pub lookups: Vec<(Symbol, Variable, Region)>,
+//     pub problems: Vec<Problem>,
+//     pub ident_ids: IdentIds,
+//     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+//     pub references: MutSet<Symbol>,
+// }
 
 fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
