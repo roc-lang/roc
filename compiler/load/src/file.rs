@@ -1679,16 +1679,7 @@ fn parse_header<'a>(
     let parse_header_duration = parse_start.elapsed().unwrap();
 
     // Insert the first entries for this module's timings
-    let mut module_timing = ModuleTiming {
-        read_roc_file: Duration::default(),
-        parse_header: Duration::default(),
-        parse_body: Duration::default(),
-        canonicalize: Duration::default(),
-        constrain: Duration::default(),
-        solve: Duration::default(),
-        start_time,
-        end_time: start_time, // just for now; we'll overwrite this at the end
-    };
+    let mut module_timing = ModuleTiming::new(start_time);
 
     module_timing.read_roc_file = read_file_duration;
     module_timing.parse_header = parse_header_duration;
@@ -1714,15 +1705,19 @@ fn parse_header<'a>(
             ident_ids_by_module,
             module_timing,
         )),
-        Ok((ast::Module::Platform { header }, parse_state)) => fabricate_effects_module(
-            arena,
-            module_ids,
-            dep_idents,
-            exposed_symbols,
-            aliases,
-            mode,
-            header,
-        ),
+        Ok((ast::Module::Platform { header }, _parse_state)) => {
+            // TODO don't hardcode the mode
+            let mode = Mode::Standard;
+
+            fabricate_effects_module(
+                arena,
+                module_ids,
+                ident_ids_by_module,
+                mode,
+                header,
+                module_timing,
+            )
+        }
         Err((fail, _)) => Err(LoadingProblem::ParsingFailed { filename, fail }),
     }
 }
@@ -2029,12 +2024,11 @@ fn run_solve<'a>(
 
 fn fabricate_effects_module<'a>(
     arena: &'a Bump,
-    module_ids: &mut ModuleIds,
-    dep_idents: IdentIdsByModule,
-    exposed_symbols: MutSet<Symbol>,
-    aliases: MutMap<Symbol, Alias>,
+    module_ids: Arc<Mutex<ModuleIds>>,
+    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
     mode: Mode,
     header: PlatformHeader<'a>,
+    module_timing: ModuleTiming,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     //    pub name: Loc<PackageName<'a>>,
     //    pub provides: Vec<'a, Loc<ExposesEntry<'a>>>,
@@ -2042,9 +2036,18 @@ fn fabricate_effects_module<'a>(
     //    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
     //    pub effects: Vec<'a, Loc<EffectsEntry<'a>>>,
 
+    //    exposed_symbols: MutSet<Symbol>,
+    //    aliases: MutMap<Symbol, Alias>,
     let start_time = SystemTime::now();
 
-    let module_id = module_ids.get_or_insert(&"Effects".into());
+    let module_id = {
+        // Lock just long enough to perform the minimal operations necessary.
+        let mut module_ids = (*module_ids).lock();
+        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
+
+        let declared_name = "Effect".into();
+        module_ids.get_or_insert(&declared_name)
+    };
 
     use roc_can::module::ModuleOutput;
     let module_output = ModuleOutput {
@@ -2083,7 +2086,6 @@ fn fabricate_effects_module<'a>(
     };
 
     let imported_modules = MutSet::default();
-    let module_timing = ModuleTiming::new(start_time);
 
     let module_docs = ModuleDocumentation {
         name: String::from("Effect"),
