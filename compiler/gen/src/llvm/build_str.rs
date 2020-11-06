@@ -1,4 +1,4 @@
-use crate::llvm::build::{ptr_from_symbol, Env, InPlace, Scope};
+use crate::llvm::build::{ptr_from_symbol, Env, InPlace, Scope, call_bitcode_fn};
 use crate::llvm::build_list::{
     allocate_list, build_basic_phi2, empty_list, incrementing_elem_loop, load_list_ptr, store_list,
 };
@@ -29,19 +29,19 @@ pub fn str_concat<'a, 'ctx, 'env>(
     let second_str_ptr = ptr_from_symbol(scope, second_str_symbol);
     let first_str_ptr = ptr_from_symbol(scope, first_str_symbol);
 
-    let str_wrapper_type = BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes));
+    let ret_type = BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes));
 
     load_str(
         env,
         parent,
         *second_str_ptr,
-        str_wrapper_type,
+        ret_type,
         |second_str_ptr, second_str_len, second_str_smallness| {
             load_str(
                 env,
                 parent,
                 *first_str_ptr,
-                str_wrapper_type,
+                ret_type,
                 |first_str_ptr, first_str_len, first_str_smallness| {
                     // first_str_len > 0
                     // We do this check to avoid allocating memory. If the first input
@@ -74,7 +74,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
                             second_str_length_comparison,
                             if_second_str_is_nonempty,
                             if_second_str_is_empty,
-                            str_wrapper_type,
+                            ret_type,
                         )
                     };
 
@@ -604,13 +604,13 @@ pub fn str_count_graphemes<'a, 'ctx, 'env>(
     let ctx = env.context;
 
     let sym_str_ptr = ptr_from_symbol(scope, str_symbol);
-    let str_wrapper_type = BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes));
+    let ret_type = BasicTypeEnum::IntType(ctx.i64_type());
 
     load_str(
         env,
         parent,
         *sym_str_ptr,
-        str_wrapper_type,
+        ret_type,
         |str_ptr, str_len, _str_smallness| {
             call_bitcode_fn(
                 LowLevel::StrCountGraphemes,
@@ -623,25 +623,4 @@ pub fn str_count_graphemes<'a, 'ctx, 'env>(
             )
         },
     )
-}
-
-// Duplicated from build.rs for now, once it's all working I'll delete this and import it form a
-// common place
-fn call_bitcode_fn<'a, 'ctx, 'env>(
-    op: LowLevel,
-    env: &Env<'a, 'ctx, 'env>,
-    args: &[BasicValueEnum<'ctx>],
-    fn_name: &str,
-) -> BasicValueEnum<'ctx> {
-    let fn_val = env
-                .module
-                .get_function(fn_name)
-                .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
-    let call = env.builder.build_call(fn_val, args, "call_builtin");
-
-    call.set_call_convention(fn_val.get_call_conventions());
-
-    call.try_as_basic_value()
-        .left()
-        .unwrap_or_else(|| panic!("LLVM error: Invalid call for low-level op {:?}", op))
 }

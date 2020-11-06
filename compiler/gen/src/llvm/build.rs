@@ -3033,7 +3033,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
             NumPowInt,
             env,
             &[lhs.into(), rhs.into()],
-            &bitcode::MATH_POW_INT,
+            &bitcode::NUM_POW_INT,
         ),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
@@ -3041,7 +3041,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
     }
 }
 
-fn call_bitcode_fn<'a, 'ctx, 'env>(
+pub fn call_bitcode_fn<'a, 'ctx, 'env>(
     op: LowLevel,
     env: &Env<'a, 'ctx, 'env>,
     args: &[BasicValueEnum<'ctx>],
@@ -3082,7 +3082,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(NumIsFinite, env, &[result.into()], &bitcode::MATH_IS_FINITE)
+                call_bitcode_fn(NumIsFinite, env, &[result.into()], &bitcode::NUM_IS_FINITE)
                     .into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
@@ -3104,7 +3104,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(NumIsFinite, env, &[result.into()], &bitcode::MATH_IS_FINITE)
+                call_bitcode_fn(NumIsFinite, env, &[result.into()], &bitcode::NUM_IS_FINITE)
                     .into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
@@ -3234,10 +3234,10 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             env.context.i64_type(),
             "num_floor",
         ),
-        NumIsFinite => call_bitcode_fn(NumIsFinite, env, &[arg.into()], &bitcode::MATH_IS_FINITE),
-        NumAtan => call_bitcode_fn(NumAtan, env, &[arg.into()], &bitcode::MATH_ATAN),
-        NumAcos => call_bitcode_fn(NumAcos, env, &[arg.into()], &bitcode::MATH_ACOS),
-        NumAsin => call_bitcode_fn(NumAsin, env, &[arg.into()], &bitcode::MATH_ASIN),
+        NumIsFinite => call_bitcode_fn(NumIsFinite, env, &[arg.into()], &bitcode::NUM_IS_FINITE),
+        NumAtan => call_bitcode_fn(NumAtan, env, &[arg.into()], &bitcode::NUM_ATAN),
+        NumAcos => call_bitcode_fn(NumAcos, env, &[arg.into()], &bitcode::NUM_ACOS),
+        NumAsin => call_bitcode_fn(NumAsin, env, &[arg.into()], &bitcode::NUM_ASIN),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }

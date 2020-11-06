@@ -111,6 +111,14 @@ mod repl_eval {
     }
 
     #[test]
+    fn str_count_graphemes() {
+        expect_success(
+            "Str.concat \"å🤔\"",
+            "2 : Int",
+        );
+    }
+
+    #[test]
     fn literal_empty_list() {
         expect_success("[]", "[] : List *");
     }

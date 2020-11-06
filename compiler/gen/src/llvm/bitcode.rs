@@ -1,7 +1,7 @@
 use inkwell::types::BasicTypeEnum;
 use roc_module::low_level::LowLevel;
 
-fn call_bitcode_fn<'a, 'ctx, 'env>(
+pub fn call_bitcode_fn<'a, 'ctx, 'env>(
     op: LowLevel,
     env: &Env<'a, 'ctx, 'env>,
     args: &[BasicValueEnum<'ctx>],

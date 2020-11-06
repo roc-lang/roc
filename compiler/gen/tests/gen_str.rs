@@ -204,7 +204,12 @@ mod gen_str {
     }
 
     #[test]
-    fn str_count_graphemes() {
-        assert_evals_to!(r#"Str.countGraphemes "6🤔å🤔e¥🤔çpp""#, 10, usize);
+    fn str_count_graphemes_small_str() {
+        assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
+    }
+
+    #[test]
+    fn str_count_graphemes_big_str() {
+        assert_evals_to!(r#"Str.countGraphemes "6🤔å🤔e¥🤔çppkd🙃1jdal🦯asdfa∆ltråø˚waia8918.,🏅jjc""#, 45, usize);
     }
 }
