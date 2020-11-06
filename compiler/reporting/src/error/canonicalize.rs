@@ -195,7 +195,7 @@ pub fn can_problem<'b>(
                 field_region,
                 Annotation::Error,
             ),
-            alloc.reflow("You can only use optinal values in record destructuring, for example in affectation:"),
+            alloc.reflow("You can only use optional values in record destructuring, for example in affectation:"),
             alloc.reflow("{ answer ? 42, otherField } = myRecord").indent(4),
         ]),
         Problem::DuplicateRecordFieldType {
@@ -569,7 +569,7 @@ fn pretty_runtime_error<'b>(
                 field_region,
                 Annotation::Error,
             ),
-            alloc.reflow("You can only use optinal values in record destructuring, for exemple in affectation:"),
+            alloc.reflow("You can only use optional values in record destructuring, for exemple in affectation:"),
             alloc.reflow("{ answer ? 42, otherField } = myRecord"),
         ]),
         RuntimeError::InvalidRecordUpdate { region } => alloc.stack(vec![
