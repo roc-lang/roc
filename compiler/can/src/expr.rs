@@ -212,19 +212,32 @@ pub fn canonicalize_expr<'a>(
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
             if let Var(symbol) = &can_update.value {
-                let (can_fields, mut output) =
-                    canonicalize_fields(env, var_store, scope, region, fields);
+                match canonicalize_fields(env, var_store, scope, region, fields) {
+                    Ok((can_fields, mut output)) => {
+                        output.references = output.references.union(update_out.references);
 
-                output.references = output.references.union(update_out.references);
+                        let answer = Update {
+                            record_var: var_store.fresh(),
+                            ext_var: var_store.fresh(),
+                            symbol: *symbol,
+                            updates: can_fields,
+                        };
 
-                let answer = Update {
-                    record_var: var_store.fresh(),
-                    ext_var: var_store.fresh(),
-                    symbol: *symbol,
-                    updates: can_fields,
-                };
-
-                (answer, output)
+                        (answer, output)
+                    }
+                    Err(CanonicalizeRecordProblem::InvalidOptionalValue {
+                        field_name,
+                        field_region,
+                        record_region,
+                    }) => (
+                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
+                            field_name,
+                            field_region,
+                            record_region,
+                        }),
+                        Output::default(),
+                    ),
+                }
             } else {
                 // only (optionally qualified) variables can be updated, not arbitrary expressions
 
@@ -246,16 +259,27 @@ pub fn canonicalize_expr<'a>(
             if fields.is_empty() {
                 (EmptyRecord, Output::default())
             } else {
-                let (can_fields, output) =
-                    canonicalize_fields(env, var_store, scope, region, fields);
-
-                (
-                    Record {
-                        record_var: var_store.fresh(),
-                        fields: can_fields,
-                    },
-                    output,
-                )
+                match canonicalize_fields(env, var_store, scope, region, fields) {
+                    Ok((can_fields, output)) => (
+                        Record {
+                            record_var: var_store.fresh(),
+                            fields: can_fields,
+                        },
+                        output,
+                    ),
+                    Err(CanonicalizeRecordProblem::InvalidOptionalValue {
+                        field_name,
+                        field_region,
+                        record_region,
+                    }) => (
+                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
+                            field_name,
+                            field_region,
+                            record_region,
+                        }),
+                        Output::default(),
+                    ),
+                }
             }
         }
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
@@ -976,50 +1000,79 @@ where
     }
 }
 
+enum CanonicalizeRecordProblem {
+    InvalidOptionalValue {
+        field_name: Lowercase,
+        field_region: Region,
+        record_region: Region,
+    },
+}
 fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
     region: Region,
     fields: &'a [Located<ast::AssignedField<'a, ast::Expr<'a>>>],
-) -> (SendMap<Lowercase, Field>, Output) {
+) -> Result<(SendMap<Lowercase, Field>, Output), CanonicalizeRecordProblem> {
     let mut can_fields = SendMap::default();
     let mut output = Output::default();
 
     for loc_field in fields.iter() {
-        let (label, field_expr, field_out, field_var) =
-            canonicalize_field(env, var_store, scope, &loc_field.value, loc_field.region);
+        match canonicalize_field(env, var_store, scope, &loc_field.value, loc_field.region) {
+            Ok((label, field_expr, field_out, field_var)) => {
+                let field = Field {
+                    var: field_var,
+                    region: loc_field.region,
+                    loc_expr: Box::new(field_expr),
+                };
 
-        let field = Field {
-            var: field_var,
-            region: loc_field.region,
-            loc_expr: Box::new(field_expr),
-        };
+                let replaced = can_fields.insert(label.clone(), field);
 
-        let replaced = can_fields.insert(label.clone(), field);
+                if let Some(old) = replaced {
+                    env.problems.push(Problem::DuplicateRecordFieldValue {
+                        field_name: label,
+                        field_region: loc_field.region,
+                        record_region: region,
+                        replaced_region: old.region,
+                    });
+                }
 
-        if let Some(old) = replaced {
-            env.problems.push(Problem::DuplicateRecordFieldValue {
-                field_name: label,
-                field_region: loc_field.region,
-                record_region: region,
-                replaced_region: old.region,
-            });
+                output.references = output.references.union(field_out.references);
+            }
+            Err(CanonicalizeFieldProblem::InvalidOptionalValue {
+                field_name,
+                field_region,
+            }) => {
+                env.problems.push(Problem::InvalidOptionalValue {
+                    field_name: field_name.clone(),
+                    field_region,
+                    record_region: region,
+                });
+                return Err(CanonicalizeRecordProblem::InvalidOptionalValue {
+                    field_name,
+                    field_region,
+                    record_region: region,
+                });
+            }
         }
-
-        output.references = output.references.union(field_out.references);
     }
 
-    (can_fields, output)
+    Ok((can_fields, output))
 }
 
+enum CanonicalizeFieldProblem {
+    InvalidOptionalValue {
+        field_name: Lowercase,
+        field_region: Region,
+    },
+}
 fn canonicalize_field<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
     field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
     region: Region,
-) -> (Lowercase, Located<Expr>, Output, Variable) {
+) -> Result<(Lowercase, Located<Expr>, Output, Variable), CanonicalizeFieldProblem> {
     use roc_parse::ast::AssignedField::*;
 
     match field {
@@ -1029,17 +1082,18 @@ fn canonicalize_field<'a>(
             let (loc_can_expr, output) =
                 canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
 
-            (
+            Ok((
                 Lowercase::from(label.value),
                 loc_can_expr,
                 output,
                 field_var,
-            )
+            ))
         }
 
-        OptionalValue(_, _, _) => {
-            todo!("TODO gracefully handle an optional field being used in an Expr");
-        }
+        OptionalValue(label, _, loc_expr) => Err(CanonicalizeFieldProblem::InvalidOptionalValue {
+            field_name: Lowercase::from(label.value),
+            field_region: Region::span_across(&label.region, &loc_expr.region),
+        }),
 
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {

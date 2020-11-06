@@ -644,6 +644,8 @@ dependencies = [
  "bumpalo",
  "fs_extra",
  "handlebars",
+ "maplit",
+ "pretty_assertions",
  "pulldown-cmark",
  "roc_builtins",
  "roc_collections",

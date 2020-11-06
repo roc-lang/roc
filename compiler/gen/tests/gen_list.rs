@@ -1603,4 +1603,13 @@ mod gen_list {
             RocList<i64>
         );
     }
+
+    #[test]
+    fn list_contains() {
+        assert_evals_to!(indoc!("List.contains [1,2,3] 1"), true, bool);
+
+        assert_evals_to!(indoc!("List.contains [1,2,3] 4"), false, bool);
+
+        assert_evals_to!(indoc!("List.contains [] 4"), false, bool);
+    }
 }
