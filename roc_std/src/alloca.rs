@@ -63,7 +63,8 @@ unsafe fn malloc_or_alloca(bytes: usize) -> *mut c_void {
 #[cfg(not(debug_assertions))]
 #[inline(always)]
 unsafe fn malloc_or_alloca(bytes: usize) -> *mut c_void {
-    c_alloca(bytes)
+    // c_alloca(bytes)
+    libc::malloc(bytes)
 }
 
 #[cfg(debug_assertions)]
