@@ -6,6 +6,12 @@ use std::time::SystemTime;
 extern "C" {
     #[link_name = "main_1_exposed"]
     fn roc_main(output: *mut u8) -> ();
+
+    #[link_name = "main_1_Fx_caller"]
+    fn call_Fx(function_pointer: *const u8, closure_data: *const u8, output: *mut u8) -> ();
+
+    #[link_name = "main_1_Fx_size"]
+    fn size_Fx() -> i64;
 }
 
 #[no_mangle]
@@ -17,27 +23,27 @@ pub fn roc_fx_put_char(foo: i64) -> () {
     ()
 }
 
-//unsafe fn call_the_closure(function_pointer: *const u8, closure_data_ptr: *const u8) -> i64 {
-//    let size = 32; //size_MyClosure() as usize;
-//
-//    alloca::with_stack_bytes(size, |buffer| {
-//        let buffer: *mut std::ffi::c_void = buffer;
-//        let buffer: *mut u8 = buffer as *mut u8;
-//
-//        call_MyClosure(
-//            function_pointer,
-//            closure_data_ptr as *const u8,
-//            buffer as *mut u8,
-//        );
-//
-//        let output = &*(buffer as *mut RocCallResult<i64>);
-//
-//        match output.into() {
-//            Ok(v) => v,
-//            Err(e) => panic!("failed with {}", e),
-//        }
-//    })
-//}
+unsafe fn call_the_closure(function_pointer: *const u8, closure_data_ptr: *const u8) -> i64 {
+    let size = 32; //size_MyClosure() as usize;
+
+    alloca::with_stack_bytes(size, |buffer| {
+        let buffer: *mut std::ffi::c_void = buffer;
+        let buffer: *mut u8 = buffer as *mut u8;
+
+        call_Fx(
+            function_pointer,
+            closure_data_ptr as *const u8,
+            buffer as *mut u8,
+        );
+
+        let output = &*(buffer as *mut RocCallResult<i64>);
+
+        match output.into() {
+            Ok(v) => v,
+            Err(e) => panic!("failed with {}", e),
+        }
+    })
+}
 
 #[no_mangle]
 pub fn rust_main() -> isize {
@@ -51,10 +57,22 @@ pub fn rust_main() -> isize {
 
         roc_main(buffer);
 
-        let output = &*(buffer as *mut RocCallResult<(fn(i64) -> (), i64)>);
+        let output = &*(buffer as *mut RocCallResult<()>);
 
         match output.into() {
-            Ok((function, closure_val)) => function(closure_val),
+            Ok(()) => {
+                let function_pointer = {
+                    // this is a pointer to the location where the function pointer is stored
+                    // we pass just the function pointer
+                    let temp = buffer.offset(8) as *const i64;
+
+                    (*temp) as *const u8
+                };
+
+                let closure_data_ptr = buffer.offset(16);
+
+                call_the_closure(function_pointer as *const u8, closure_data_ptr as *const u8)
+            }
             Err(msg) => {
                 std::alloc::dealloc(buffer, layout);
 
