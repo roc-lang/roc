@@ -2288,6 +2288,7 @@ fn fabricate_host_exposed_def<'a>(
     scope: &mut roc_can::scope::Scope,
     module_id: ModuleId,
     symbol: Symbol,
+    ident: &str,
     effect_tag_name: TagName,
     var_store: &mut VarStore,
     annotation: roc_can::annotation::Annotation,
@@ -2334,8 +2335,9 @@ fn fabricate_host_exposed_def<'a>(
     }
 
     // TODO figure out something better for run lowlevel
+    let foreign_symbol_name = format!("roc_fx_{}", ident);
     let low_level_call = Expr::ForeignCall {
-        foreign_symbol: "roc_fx_put_char".into(),
+        foreign_symbol: foreign_symbol_name.into(),
         args: linked_symbol_arguments,
         ret_var: var_store.fresh(),
     };
@@ -2622,6 +2624,7 @@ fn fabricate_effects_module<'a>(
                     &mut scope,
                     module_id,
                     symbol,
+                    ident.value,
                     TagName::Private(effect_symbol),
                     &mut var_store,
                     annotation,

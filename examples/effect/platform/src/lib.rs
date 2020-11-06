@@ -18,7 +18,7 @@ extern "C" {
 }
 
 #[no_mangle]
-pub fn roc_fx_put_char(foo: i64) -> () {
+pub fn roc_fx_putChar(foo: i64) -> () {
     let character = foo as u8 as char;
     print!("{}", character);
 
