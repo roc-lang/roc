@@ -1344,12 +1344,14 @@ pub fn specialize_all<'a>(
     mut procs: Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
-    dbg!(&procs.externals_others_need);
     let it = procs.externals_others_need.specs.clone();
     let it = it
         .into_iter()
         .map(|(symbol, solved_types)| {
+            // for some unclear reason, the MutSet does not deduplicate according to the hash
+            // instance. So we do it manually here
             let mut as_vec: std::vec::Vec<_> = solved_types.into_iter().collect();
+
             use std::collections::hash_map::DefaultHasher;
             use std::hash::{Hash, Hasher};
 
@@ -1365,6 +1367,7 @@ pub fn specialize_all<'a>(
             as_vec.into_iter().map(move |s| (symbol, s))
         })
         .flatten();
+
     for (name, solved_type) in it.into_iter() {
         let partial_proc = match procs.partial_procs.get(&name) {
             Some(v) => v.clone(),

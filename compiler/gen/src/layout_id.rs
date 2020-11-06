@@ -14,13 +14,12 @@ impl LayoutId {
     }
 }
 
-#[derive(Debug)]
 struct IdsByLayout<'a> {
     by_id: MutMap<Layout<'a>, u32>,
     next_id: u32,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct LayoutIds<'a> {
     by_symbol: MutMap<Symbol, IdsByLayout<'a>>,
 }

@@ -3441,7 +3441,6 @@ fn get_foreign_symbol<'a, 'ctx, 'env>(
     function_type: FunctionType<'ctx>,
 ) -> FunctionValue<'ctx> {
     let module = env.module;
-    let context = env.context;
 
     match module.get_function(foreign_symbol.as_str()) {
         Some(gvalue) => gvalue,

@@ -26,6 +26,12 @@ impl<T> Solved<T> {
     }
 }
 
+/// A custom hash instance, that treats flex vars specially, so that
+///
+/// `Foo 100 200 100` hashes to the same as `Foo 300 100 300`
+///
+/// i.e., we can rename the flex variables, so long as it happens consistently.
+/// this is important so we don't generate the same PartialProc twice.
 impl Hash for SolvedType {
     fn hash<H: Hasher>(&self, state: &mut H) {
         hash_solved_type_help(self, &mut Vec::new(), state);
