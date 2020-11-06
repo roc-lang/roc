@@ -317,11 +317,26 @@ fn spaces<'a>(
                                 '\n' => {
                                     state = state.newline()?;
 
-                                    // This was a newline, so end this line comment.
-                                    space_list.push(LineComment(comment_line_buf.into_bump_str()));
-                                    comment_line_buf = String::new_in(arena);
+                                    match (comment_line_buf.len(), comment_line_buf.chars().next())
+                                    {
+                                        (1, Some('#')) => {
+                                            // This is a line with `##` - that is,
+                                            // a doc comment new line.
+                                            space_list.push(DocComment(""));
+                                            comment_line_buf = String::new_in(arena);
 
-                                    line_state = LineState::Normal;
+                                            line_state = LineState::Normal;
+                                        }
+                                        _ => {
+                                            // This was a newline, so end this line comment.
+                                            space_list.push(LineComment(
+                                                comment_line_buf.into_bump_str(),
+                                            ));
+                                            comment_line_buf = String::new_in(arena);
+
+                                            line_state = LineState::Normal;
+                                        }
+                                    }
                                 }
                                 nonblank => {
                                     // Chars can have btye lengths of more than 1!
