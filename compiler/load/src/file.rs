@@ -279,7 +279,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
 
             let deps_by_name = &parsed.deps_by_name;
             let num_deps = deps_by_name.len();
-            let mut dep_idents: IdentIdsByModule = IdentIds::exposed_builtins(num_deps);
+            let mut dep_idents: MutMap<ModuleId, IdentIds> = IdentIds::exposed_builtins(num_deps);
 
             let State {
                 ident_ids_by_module,
@@ -596,7 +596,7 @@ struct State<'a> {
     /// From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
     pub arc_modules: Arc<Mutex<ModuleIds>>,
 
-    pub ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    pub ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
 
     /// All the dependent modules we've already begun loading -
     /// meaning we should never kick off another load_module on them!
@@ -714,7 +714,7 @@ enum BuildTask<'a> {
     LoadModule {
         module_name: ModuleName,
         module_ids: Arc<Mutex<ModuleIds>>,
-        ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+        ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     },
     Parse {
         header: ModuleHeader<'a>,
@@ -722,7 +722,7 @@ enum BuildTask<'a> {
     CanonicalizeAndConstrain {
         parsed: ParsedModule<'a>,
         module_ids: ModuleIds,
-        dep_idents: IdentIdsByModule,
+        dep_idents: MutMap<ModuleId, IdentIds>,
         mode: Mode,
         exposed_symbols: MutSet<Symbol>,
         aliases: MutMap<Symbol, Alias>,
@@ -782,7 +782,6 @@ pub enum Phases {
     Monomorphize,
 }
 
-type IdentIdsByModule = MutMap<ModuleId, IdentIds>;
 type MsgSender<'a> = Sender<Msg<'a>>;
 
 /// Add a task to the queue, and notify all the listeners.
@@ -877,7 +876,7 @@ pub fn load_and_monomorphize_from_str<'a>(
 
 struct LoadStart<'a> {
     pub arc_modules: Arc<Mutex<ModuleIds>>,
-    pub ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    pub ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     pub root_id: ModuleId,
     pub root_msg: Msg<'a>,
 }
@@ -1701,7 +1700,7 @@ fn load_module<'a>(
     src_dir: &Path,
     module_name: ModuleName,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let module_start_time = SystemTime::now();
     let mut filename = PathBuf::new();
@@ -1756,7 +1755,7 @@ fn parse_header<'a>(
     read_file_duration: Duration,
     filename: PathBuf,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     src_bytes: &'a [u8],
     start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
@@ -1814,7 +1813,7 @@ fn load_filename<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let file_io_start = SystemTime::now();
@@ -1845,7 +1844,7 @@ fn load_from_str<'a>(
     filename: PathBuf,
     src: &'a str,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
     let file_io_start = SystemTime::now();
@@ -1870,7 +1869,7 @@ fn send_header<'a>(
     imports: &'a [Located<ImportsEntry<'a>>],
     parse_state: parser::State<'a>,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
     let declared_name: ModuleName = name.value.as_str().into();
@@ -2109,9 +2108,185 @@ fn run_solve<'a>(
     }
 }
 
-fn fabricate_host_exposed_def<'a>(
+fn fabricate_effect_after<'a>(
+    env: &mut roc_can::env::Env,
+    scope: &mut roc_can::scope::Scope,
     module_id: ModuleId,
-    ident_ids: &mut IdentIds,
+    effect_symbol: Symbol,
+    effect_tag_name: TagName,
+    var_store: &mut VarStore,
+) -> (Symbol, roc_can::def::Def) {
+    use roc_can::expr::Expr;
+    use roc_can::expr::Recursive;
+    use roc_module::operator::CalledVia;
+
+    let thunk_symbol = {
+        scope
+            .introduce(
+                "thunk".into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                Region::zero(),
+            )
+            .unwrap()
+    };
+
+    let to_effect_symbol = {
+        scope
+            .introduce(
+                "toEffect".into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                Region::zero(),
+            )
+            .unwrap()
+    };
+
+    let after_symbol = {
+        scope
+            .introduce(
+                "after".into(),
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                Region::zero(),
+            )
+            .unwrap()
+    };
+
+    // `thunk {}`
+    let force_thunk_call = {
+        let boxed = (
+            var_store.fresh(),
+            Located::at_zero(Expr::Var(thunk_symbol)),
+            var_store.fresh(),
+            var_store.fresh(),
+        );
+
+        let arguments = vec![(var_store.fresh(), Located::at_zero(Expr::EmptyRecord))];
+        Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
+    };
+
+    // `toEffect (thunk {})`
+    let to_effect_call = {
+        let boxed = (
+            var_store.fresh(),
+            Located::at_zero(Expr::Var(to_effect_symbol)),
+            var_store.fresh(),
+            var_store.fresh(),
+        );
+
+        let arguments = vec![(var_store.fresh(), Located::at_zero(force_thunk_call))];
+        Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
+    };
+
+    use roc_can::pattern::Pattern;
+    let arguments = vec![
+        (
+            var_store.fresh(),
+            Located::at_zero(Pattern::AppliedTag {
+                whole_var: var_store.fresh(),
+                ext_var: var_store.fresh(),
+                tag_name: effect_tag_name.clone(),
+                arguments: vec![(
+                    var_store.fresh(),
+                    Located::at_zero(Pattern::Identifier(thunk_symbol)),
+                )],
+            }),
+        ),
+        (
+            var_store.fresh(),
+            Located::at_zero(Pattern::Identifier(to_effect_symbol)),
+        ),
+    ];
+
+    let function_var = var_store.fresh();
+    let after_closure = Expr::Closure {
+        function_type: function_var,
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: var_store.fresh(),
+        name: after_symbol,
+        captured_symbols: Vec::new(),
+        recursive: Recursive::NotRecursive,
+        arguments,
+        loc_body: Box::new(Located::at_zero(to_effect_call)),
+    };
+
+    use roc_can::annotation::IntroducedVariables;
+
+    let mut introduced_variables = IntroducedVariables::default();
+
+    let signature = {
+        let var_a = var_store.fresh();
+        let var_b = var_store.fresh();
+
+        introduced_variables.insert_named("a".into(), var_a);
+        introduced_variables.insert_named("b".into(), var_b);
+
+        let effect_a = {
+            let actual =
+                build_effect_actual(effect_tag_name.clone(), Type::Variable(var_a), var_store);
+
+            Type::Alias(
+                effect_symbol,
+                vec![("a".into(), Type::Variable(var_a))],
+                Box::new(actual),
+            )
+        };
+
+        let effect_b = {
+            let actual =
+                build_effect_actual(effect_tag_name.clone(), Type::Variable(var_b), var_store);
+
+            Type::Alias(
+                effect_symbol,
+                vec![("b".into(), Type::Variable(var_b))],
+                Box::new(actual),
+            )
+        };
+
+        let closure_var = var_store.fresh();
+        introduced_variables.insert_wildcard(closure_var);
+        let a_to_effect_b = Type::Function(
+            vec![Type::Variable(var_a)],
+            Box::new(Type::Variable(closure_var)),
+            Box::new(effect_b.clone()),
+        );
+
+        let closure_var = var_store.fresh();
+        introduced_variables.insert_wildcard(closure_var);
+        Type::Function(
+            vec![effect_a, a_to_effect_b],
+            Box::new(Type::Variable(closure_var)),
+            Box::new(effect_b),
+        )
+    };
+
+    let def_annotation = roc_can::def::Annotation {
+        signature,
+        introduced_variables,
+        aliases: SendMap::default(),
+        region: Region::zero(),
+    };
+
+    let pattern = Pattern::Identifier(after_symbol);
+    let mut pattern_vars = SendMap::default();
+    pattern_vars.insert(after_symbol, function_var);
+    let def = roc_can::def::Def {
+        loc_pattern: Located::at_zero(pattern),
+        loc_expr: Located::at_zero(after_closure),
+        expr_var: function_var,
+        pattern_vars,
+        annotation: Some(def_annotation),
+    };
+
+    (after_symbol, def)
+}
+
+fn fabricate_host_exposed_def<'a>(
+    env: &mut roc_can::env::Env,
+    scope: &mut roc_can::scope::Scope,
+    module_id: ModuleId,
     symbol: Symbol,
     effect_tag_name: TagName,
     var_store: &mut VarStore,
@@ -2132,11 +2307,21 @@ fn fabricate_host_exposed_def<'a>(
 
     match annotation.typ.shallow_dealias() {
         Type::Function(args, _, _) => {
-            for _ in 0..args.len() {
-                // let ident_id = ident_ids.gen_unique();
-                let ident_id = ident_ids.get_or_insert(&"mything".into());
-                module_id.register_debug_idents(&ident_ids);
-                let arg_symbol = Symbol::new(module_id, ident_id);
+            for i in 0..args.len() {
+                let name = format!("closure_arg_{}", i);
+
+                let arg_symbol = {
+                    let ident = name.clone().into();
+                    scope
+                        .introduce(
+                            ident,
+                            &env.exposed_ident_ids,
+                            &mut env.ident_ids,
+                            Region::zero(),
+                        )
+                        .unwrap()
+                };
+
                 let arg_var = var_store.fresh();
 
                 arguments.push((arg_var, Located::at_zero(Pattern::Identifier(arg_symbol))));
@@ -2156,9 +2341,17 @@ fn fabricate_host_exposed_def<'a>(
     };
 
     let effect_closure_symbol = {
-        let ident_id = ident_ids.gen_unique();
-        module_id.register_debug_idents(&ident_ids);
-        Symbol::new(module_id, ident_id)
+        let name = "effect_closure";
+
+        let ident = name.clone().into();
+        scope
+            .introduce(
+                ident,
+                &env.exposed_ident_ids,
+                &mut env.ident_ids,
+                Region::zero(),
+            )
+            .unwrap()
     };
 
     let empty_record_pattern = Pattern::RecordDestructure {
@@ -2214,10 +2407,60 @@ fn fabricate_host_exposed_def<'a>(
     }
 }
 
+fn build_effect_actual(effect_tag_name: TagName, a_type: Type, var_store: &mut VarStore) -> Type {
+    let closure_var = var_store.fresh();
+
+    Type::TagUnion(
+        vec![(
+            effect_tag_name,
+            vec![Type::Function(
+                vec![Type::EmptyRec],
+                Box::new(Type::Variable(closure_var)),
+                Box::new(a_type),
+            )],
+        )],
+        Box::new(Type::EmptyTagUnion),
+    )
+}
+
+fn unpack_exposes_entries<'a>(
+    arena: &'a Bump,
+    entries: &'a [Located<roc_parse::ast::EffectsEntry<'a>>],
+) -> bumpalo::collections::Vec<
+    'a,
+    (
+        &'a Located<&'a str>,
+        &'a Located<roc_parse::ast::TypeAnnotation<'a>>,
+    ),
+> {
+    use bumpalo::collections::Vec;
+    use roc_parse::ast::EffectsEntry;
+
+    let mut stack: Vec<&EffectsEntry> = Vec::with_capacity_in(entries.len(), arena);
+    let mut output = Vec::with_capacity_in(entries.len(), arena);
+
+    for entry in entries.iter() {
+        stack.push(&entry.value);
+    }
+
+    while let Some(effects_entry) = stack.pop() {
+        match effects_entry {
+            EffectsEntry::Effect { ident, ann } => {
+                output.push((ident, ann));
+            }
+            EffectsEntry::SpaceAfter(nested, _) | EffectsEntry::SpaceBefore(nested, _) => {
+                stack.push(nested);
+            }
+        }
+    }
+
+    output
+}
+
 fn fabricate_effects_module<'a>(
     arena: &'a Bump,
     module_ids: Arc<Mutex<ModuleIds>>,
-    ident_ids_by_module: Arc<Mutex<IdentIdsByModule>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     mode: Mode,
     header: PlatformHeader<'a>,
     module_timing: ModuleTiming,
@@ -2230,48 +2473,112 @@ fn fabricate_effects_module<'a>(
 
     //    exposed_symbols: MutSet<Symbol>,
     //    aliases: MutMap<Symbol, Alias>,
-    let mut var_store = VarStore::default();
+
+    let num_exposes = header.provides.len() + 1;
+    let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
+
+    let module_id: ModuleId;
+
+    let name = "Effect";
+    let declared_name: ModuleName = name.into();
 
     let PlatformHeader { effects, .. } = header;
+    let effect_entries = unpack_exposes_entries(arena, &effects);
 
-    let declared_name = "Effect".into();
-    let module_id = {
+    let hardcoded_exposed_functions = vec![name, "after"];
+
+    let exposed_ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
         let mut module_ids = (*module_ids).lock();
-
-        module_ids.get_or_insert(&declared_name)
-    };
-    let mut scope = roc_can::scope::Scope::new(module_id, &mut var_store);
-
-    let effect_symbol = {
         let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
-        let ident_ids: &mut IdentIds = ident_ids_by_module.get_mut(&module_id).unwrap();
-        //let ident_id = ident_ids.get_or_insert(&declared_name);
-        //Symbol::new(module_id, ident_id)
+        module_id = module_ids.get_or_insert(&declared_name.as_inline_str());
 
-        let ident = declared_name.clone().into();
+        // Ensure this module has an entry in the exposed_ident_ids map.
+        ident_ids_by_module
+            .entry(module_id)
+            .or_insert_with(IdentIds::default);
+
+        let ident_ids = ident_ids_by_module.get_mut(&module_id).unwrap();
+
+        // Generate IdentIds entries for all values this module exposes.
+        // This way, when we encounter them in Defs later, they already
+        // have an IdentIds entry.
+        //
+        // We must *not* add them to scope yet, or else the Defs will
+        // incorrectly think they're shadowing them!
+        for (loc_exposed, _) in effect_entries.iter() {
+            // Use get_or_insert here because the ident_ids may already
+            // created an IdentId for this, when it was imported exposed
+            // in a dependent module.
+            //
+            // For example, if module A has [ B.{ foo } ], then
+            // when we get here for B, `foo` will already have
+            // an IdentId. We must reuse that!
+            let ident_id = ident_ids.get_or_insert(&loc_exposed.value.into());
+            let symbol = Symbol::new(module_id, ident_id);
+
+            exposed.push(symbol);
+        }
+
+        for hardcoded in hardcoded_exposed_functions {
+            // Use get_or_insert here because the ident_ids may already
+            // created an IdentId for this, when it was imported exposed
+            // in a dependent module.
+            //
+            // For example, if module A has [ B.{ foo } ], then
+            // when we get here for B, `foo` will already have
+            // an IdentId. We must reuse that!
+            let ident_id = ident_ids.get_or_insert(&hardcoded.into());
+            let symbol = Symbol::new(module_id, ident_id);
+
+            exposed.push(symbol);
+        }
+
+        if cfg!(debug_assertions) {
+            module_id.register_debug_idents(&ident_ids);
+        }
+
+        ident_ids.clone()
+    };
+
+    // a platform module has no dependencies, hence empty
+    let dep_idents: MutMap<ModuleId, IdentIds> = IdentIds::exposed_builtins(0);
+
+    let mut var_store = VarStore::default();
+
+    let module_ids = { (*module_ids).lock().clone() };
+
+    let mut scope = roc_can::scope::Scope::new(module_id, &mut var_store);
+    let mut can_env = roc_can::env::Env::new(module_id, dep_idents, &module_ids, exposed_ident_ids);
+
+    let mut ident_ids_by_module = (*ident_ids_by_module).lock();
+    let ident_ids: &mut IdentIds = ident_ids_by_module.get_mut(&module_id).unwrap();
+
+    let effect_symbol = {
+        let ident = name.clone().into();
         scope
-            .introduce(ident, &(ident_ids.clone()), ident_ids, Region::zero())
+            .introduce(
+                ident,
+                &can_env.exposed_ident_ids,
+                &mut can_env.ident_ids,
+                Region::zero(),
+            )
             .unwrap()
     };
+
+    let effect_tag_name = TagName::Private(effect_symbol);
 
     let mut aliases = MutMap::default();
     let alias = {
         let a_var = var_store.fresh();
-        let closure_var = var_store.fresh();
 
-        let actual = Type::TagUnion(
-            vec![(
-                TagName::Private(effect_symbol),
-                vec![Type::Function(
-                    vec![Type::EmptyRec],
-                    Box::new(Type::Variable(closure_var)),
-                    Box::new(Type::Variable(a_var)),
-                )],
-            )],
-            Box::new(Type::EmptyTagUnion),
+        let actual = build_effect_actual(
+            effect_tag_name.clone(),
+            Type::Variable(a_var),
+            &mut var_store,
         );
+
         scope.add_alias(
             effect_symbol,
             Region::zero(),
@@ -2287,68 +2594,55 @@ fn fabricate_effects_module<'a>(
     let mut declarations = Vec::new();
 
     let exposed_vars_by_symbol = {
-        let module_ids = (*module_ids).lock();
-        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
-
-        let ident_ids: &mut IdentIds = ident_ids_by_module.get_mut(&module_id).unwrap();
-
-        let ident_id = ident_ids.get_or_insert(&declared_name);
-        let effect_symbol = Symbol::new(module_id, ident_id);
-
         let mut exposed_vars_by_symbol = Vec::new();
 
         {
-            use bumpalo::collections::Vec;
-
-            let mut stack: Vec<&EffectsEntry> = Vec::with_capacity_in(effects.len(), arena);
-
-            for entry in &effects {
-                stack.push(&entry.value);
-            }
-
-            use roc_parse::ast::EffectsEntry;
-
-            // TODO this clone is almost certainly wrong
-            let exposed_ident_ids = ident_ids.clone();
-            let dep_idents: MutMap<ModuleId, IdentIds> = MutMap::default();
-            let mut can_env =
-                roc_can::env::Env::new(module_id, dep_idents, &module_ids, exposed_ident_ids);
-
-            while let Some(effects_entry) = stack.pop() {
-                match effects_entry {
-                    EffectsEntry::Effect { ident, ann } => {
-                        let as_inlinable_string: inlinable_string::InlinableString =
-                            ident.value.into();
-                        let ident_id = ident_ids.get_or_insert(&as_inlinable_string);
-                        let symbol = Symbol::new(module_id, ident_id);
-
-                        let annotation = roc_can::annotation::canonicalize_annotation(
-                            &mut can_env,
-                            &mut scope,
-                            &ann.value,
+            for (ident, ann) in effect_entries {
+                let symbol = {
+                    scope
+                        .introduce(
+                            ident.value.into(),
+                            &can_env.exposed_ident_ids,
+                            &mut can_env.ident_ids,
                             Region::zero(),
-                            &mut var_store,
-                        );
+                        )
+                        .unwrap()
+                };
 
-                        let def = fabricate_host_exposed_def(
-                            module_id,
-                            ident_ids,
-                            symbol,
-                            TagName::Private(effect_symbol),
-                            &mut var_store,
-                            annotation,
-                        );
+                let annotation = roc_can::annotation::canonicalize_annotation(
+                    &mut can_env,
+                    &mut scope,
+                    &ann.value,
+                    Region::zero(),
+                    &mut var_store,
+                );
 
-                        exposed_vars_by_symbol.push((symbol, def.expr_var));
+                let def = fabricate_host_exposed_def(
+                    &mut can_env,
+                    &mut scope,
+                    module_id,
+                    symbol,
+                    TagName::Private(effect_symbol),
+                    &mut var_store,
+                    annotation,
+                );
 
-                        declarations.push(Declaration::Declare(def));
-                    }
-                    EffectsEntry::SpaceAfter(nested, _) | EffectsEntry::SpaceBefore(nested, _) => {
-                        stack.push(nested);
-                    }
-                }
+                exposed_vars_by_symbol.push((symbol, def.expr_var));
+
+                declarations.push(Declaration::Declare(def));
             }
         }
+
+        let (effect_after_symbol, def) = fabricate_effect_after(
+            &mut can_env,
+            &mut scope,
+            module_id,
+            effect_symbol,
+            effect_tag_name,
+            &mut var_store,
+        );
+        exposed_vars_by_symbol.push((effect_after_symbol, def.expr_var));
+        declarations.push(Declaration::Declare(def));
 
         exposed_vars_by_symbol
     };
@@ -2360,8 +2654,8 @@ fn fabricate_effects_module<'a>(
         declarations,
         exposed_imports: MutMap::default(),
         lookups: Vec::new(),
-        problems: Vec::new(),
-        ident_ids: IdentIds::default(),
+        problems: can_env.problems,
+        ident_ids: can_env.ident_ids,
         exposed_vars_by_symbol,
         references: MutSet::default(),
     };
@@ -2377,6 +2671,7 @@ fn fabricate_effects_module<'a>(
     //    }
 
     let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
+    dbg!(&module_output.aliases);
 
     let module = Module {
         module_id,
@@ -2431,7 +2726,7 @@ fn fabricate_effects_module<'a>(
 fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
     module_ids: &ModuleIds,
-    dep_idents: IdentIdsByModule,
+    dep_idents: MutMap<ModuleId, IdentIds>,
     exposed_symbols: MutSet<Symbol>,
     aliases: MutMap<Symbol, Alias>,
     mode: Mode,
@@ -2741,6 +3036,8 @@ fn add_def_to_module<'a>(
                 } => {
                     // this is a top-level definition, it should not capture anything
                     debug_assert!(captured_symbols.is_empty());
+
+                    dbg!(symbol, &loc_body.value);
 
                     // If this is an exposed symbol, we need to
                     // register it as such. Otherwise, since it

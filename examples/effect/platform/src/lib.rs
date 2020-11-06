@@ -20,7 +20,7 @@ extern "C" {
 #[no_mangle]
 pub fn roc_fx_put_char(foo: i64) -> () {
     let character = foo as u8 as char;
-    println!("{}", character);
+    print!("{}", character);
 
     ()
 }

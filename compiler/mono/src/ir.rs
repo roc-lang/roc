@@ -3,7 +3,7 @@ use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{Builtin, ClosureLayout, Layout, LayoutCache, LayoutProblem};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::{default_hasher, MutMap, MutSet, SendMap};
+use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -419,6 +419,7 @@ impl<'a> Procs<'a> {
 
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
+                dbg!(symbol, &pattern_symbols, &body);
                 // an anonymous closure. These will always be specialized already
                 // by the surrounding context, so we can add pending specializations
                 // for them immediately.
@@ -587,12 +588,12 @@ impl<'a> Procs<'a> {
                 self.specialized
                     .insert((symbol, layout.clone()), InProgress);
 
+                dbg!(symbol, &pending);
                 match specialize(env, self, symbol, layout_cache, pending, partial_proc) {
                     Ok((proc, _ignore_layout)) => {
                         // the `layout` is a function pointer, while `_ignore_layout` can be a
                         // closure. We only specialize functions, storing this value with a closure
                         // layout will give trouble.
-                        dbg!(symbol, &layout);
                         self.specialized.insert((symbol, layout), Done(proc));
                     }
                     Err(error) => {
@@ -614,6 +615,7 @@ fn add_pending<'a>(
     layout: Layout<'a>,
     pending: PendingSpecialization,
 ) {
+    // dbg!(symbol, &layout, &pending);
     let all_pending = pending_specializations
         .entry(symbol)
         .or_insert_with(|| HashMap::with_capacity_and_hasher(1, default_hasher()));
@@ -1337,6 +1339,7 @@ pub fn specialize_all<'a>(
     mut procs: Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
+    dbg!(&procs.externals_others_need);
     let it = procs.externals_others_need.specs.clone();
     let it = it
         .into_iter()
@@ -1360,7 +1363,6 @@ pub fn specialize_all<'a>(
             partial_proc,
         ) {
             Ok((proc, layout)) => {
-                dbg!(name, &layout);
                 procs.specialized.insert((name, layout), Done(proc));
             }
             Err(error) => {
@@ -1406,7 +1408,7 @@ pub fn specialize_all<'a>(
                 procs
                     .specialized
                     .insert((name, outside_layout.clone()), InProgress);
-
+                dbg!(name);
                 match specialize(
                     env,
                     &mut procs,
@@ -1417,9 +1419,6 @@ pub fn specialize_all<'a>(
                 ) {
                     Ok((proc, layout)) => {
                         debug_assert_eq!(outside_layout, layout);
-                        //                        procs.specialized.remove(&(name, outside_layout));
-                        //                        dbg!(name, &layout);
-                        //                        procs.specialized.insert((name, layout), Done(proc));
 
                         if let Layout::Closure(args, closure, ret) = layout {
                             procs.specialized.remove(&(name, outside_layout));
@@ -1457,6 +1456,8 @@ fn specialize_external<'a>(
     host_exposed_variables: &[(Symbol, Variable)],
     partial_proc: PartialProc<'a>,
 ) -> Result<Proc<'a>, LayoutProblem> {
+    println!("------- SPECIALIZE EXTERNAL {:?}", proc_name);
+
     let PartialProc {
         annotation,
         pattern_symbols,
@@ -1465,6 +1466,8 @@ fn specialize_external<'a>(
         is_self_recursive,
     } = partial_proc;
 
+    dbg!(&body);
+
     // unify the called function with the specialized signature, then specialize the function body
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
@@ -1472,7 +1475,7 @@ fn specialize_external<'a>(
     let unified = roc_unify::unify::unify(env.subs, annotation, fn_var);
 
     let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
-    debug_assert!(is_valid);
+    debug_assert!(is_valid, "unificaton failure for {:?}", proc_name);
 
     // if this is a closure, add the closure record argument
     let pattern_symbols = if let CapturedSymbols::Captured(_) = captured_symbols {
@@ -1558,7 +1561,8 @@ fn specialize_external<'a>(
                 None => None,
             };
 
-            dbg!(proc_name, &proc_args, &ret_layout);
+            println!("Done for {:?}\n\n", proc_name);
+
             let proc = Proc {
                 name: proc_name,
                 args: proc_args,
@@ -2977,16 +2981,19 @@ pub fn with_hole<'a>(
             };
 
             match loc_expr.value {
-                roc_can::expr::Expr::Var(proc_name) if is_known(&proc_name) => call_by_name(
-                    env,
-                    procs,
-                    fn_var,
-                    proc_name,
-                    loc_args,
-                    layout_cache,
-                    assigned,
-                    hole,
-                ),
+                roc_can::expr::Expr::Var(proc_name) if is_known(&proc_name) => {
+                    // a call by a known name
+                    call_by_name(
+                        env,
+                        procs,
+                        fn_var,
+                        proc_name,
+                        loc_args,
+                        layout_cache,
+                        assigned,
+                        hole,
+                    )
+                }
                 _ => {
                     // Call by pointer - the closure was anonymous, e.g.
                     //
@@ -3184,6 +3191,7 @@ pub fn with_hole<'a>(
                 hole,
             );
 
+            let (var, _) = args[0];
             let iter = args
                 .into_iter()
                 .rev()
@@ -4699,7 +4707,6 @@ fn call_by_name<'a>(
 
                                         procs.specialized.remove(&(proc_name, full_layout));
 
-                                        dbg!(proc_name, &function_layout.full);
                                         procs.specialized.insert(
                                             (proc_name, function_layout.full.clone()),
                                             Done(proc),

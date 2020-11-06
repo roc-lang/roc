@@ -1134,9 +1134,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         env.arena.alloc(format!("closure_field_access_{}_", index)),
                     )
                     .unwrap(),
-                (other, layout) => {
-                    unreachable!("can only index into struct layout {:?} {:?}", other, layout)
-                }
+                (other, layout) => unreachable!(
+                    "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
+                    other, layout, index
+                ),
             }
         }
 
