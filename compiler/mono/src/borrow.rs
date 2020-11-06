@@ -374,13 +374,13 @@ impl<'a> BorrowInfState<'a> {
                 self.own_args_using_bools(args, ps);
             }
 
-            ForeignCall(_, args) => {
+            ForeignCall { arguments, .. } => {
                 // very unsure what demand ForeignCall should place upon its arguments
                 self.own_var(z);
 
-                let ps = foreign_borrow_signature(self.arena, args.len());
+                let ps = foreign_borrow_signature(self.arena, arguments.len());
 
-                self.own_args_using_bools(args, ps);
+                self.own_args_using_bools(arguments, ps);
             }
 
             Literal(_) | FunctionPointer(_, _) | RuntimeErrorFunction(_) => {}

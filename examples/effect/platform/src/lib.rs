@@ -1,5 +1,6 @@
 use roc_std::alloca;
 use roc_std::RocCallResult;
+use roc_std::RocStr;
 use std::alloc::Layout;
 use std::time::SystemTime;
 
@@ -21,6 +22,15 @@ extern "C" {
 pub fn roc_fx_putChar(foo: i64) -> () {
     let character = foo as u8 as char;
     print!("{}", character);
+
+    ()
+}
+
+#[no_mangle]
+pub fn roc_fx_putLine(line: RocStr) -> () {
+    let bytes = line.as_slice();
+    let string = unsafe { std::str::from_utf8_unchecked(bytes) };
+    println!("{}", string);
 
     ()
 }

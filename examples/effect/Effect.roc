@@ -3,4 +3,4 @@ platform folkertdev/foo
     requires [ main ]
     imports []
     effects
-        { putChar Int -> Effect {} }
+        { putChar Int -> Effect {}, putLine Str -> Effect {} }

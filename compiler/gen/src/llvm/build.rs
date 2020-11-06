@@ -810,14 +810,28 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Literal(literal) => build_exp_literal(env, literal),
         RunLowLevel(op, symbols) => run_low_level(env, scope, parent, layout, *op, symbols),
 
-        ForeignCall(foreign_symbol, symbols) => {
-            let function = get_foreign_symbol(env, foreign_symbol.clone());
+        ForeignCall {
+            foreign_symbol,
+            arguments,
+            ret_layout,
+        } => {
+            let mut arg_vals: Vec<BasicValueEnum> =
+                Vec::with_capacity_in(arguments.len(), env.arena);
 
-            let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(symbols.len(), env.arena);
+            let mut arg_types = Vec::with_capacity_in(arguments.len(), env.arena);
 
-            for arg in symbols.iter() {
-                arg_vals.push(load_symbol(env, scope, arg));
+            for arg in arguments.iter() {
+                let (value, layout) = load_symbol_and_layout(env, scope, arg);
+                arg_vals.push(value);
+                let arg_type =
+                    basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+                arg_types.push(arg_type);
             }
+
+            let ret_type =
+                basic_type_from_layout(env.arena, env.context, ret_layout, env.ptr_bytes);
+            let function_type = get_fn_type(&ret_type, &arg_types);
+            let function = get_foreign_symbol(env, foreign_symbol.clone(), function_type);
 
             let call = env.builder.build_call(function, arg_vals.as_slice(), "tmp");
 
@@ -3424,6 +3438,7 @@ fn cxa_rethrow_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
 fn get_foreign_symbol<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     foreign_symbol: roc_module::ident::ForeignSymbol,
+    function_type: FunctionType<'ctx>,
 ) -> FunctionValue<'ctx> {
     let module = env.module;
     let context = env.context;
@@ -3433,9 +3448,7 @@ fn get_foreign_symbol<'a, 'ctx, 'env>(
         None => {
             let foreign_function = module.add_function(
                 foreign_symbol.as_str(),
-                context
-                    .struct_type(&[], false)
-                    .fn_type(&[context.i64_type().into()], false),
+                function_type,
                 Some(Linkage::External),
             );
             foreign_function.set_call_conventions(C_CALL_CONV);

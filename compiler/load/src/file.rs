@@ -2309,7 +2309,7 @@ fn fabricate_host_exposed_def<'a>(
     match annotation.typ.shallow_dealias() {
         Type::Function(args, _, _) => {
             for i in 0..args.len() {
-                let name = format!("closure_arg_{}", i);
+                let name = format!("closure_arg_{}_{}", ident, i);
 
                 let arg_symbol = {
                     let ident = name.clone().into();
@@ -2343,7 +2343,7 @@ fn fabricate_host_exposed_def<'a>(
     };
 
     let effect_closure_symbol = {
-        let name = "effect_closure";
+        let name = format!("effect_closure_{}", ident);
 
         let ident = name.clone().into();
         scope

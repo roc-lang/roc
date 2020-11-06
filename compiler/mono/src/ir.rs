@@ -829,7 +829,11 @@ pub enum Expr<'a> {
         args: &'a [Symbol],
     },
     RunLowLevel(LowLevel, &'a [Symbol]),
-    ForeignCall(ForeignSymbol, &'a [Symbol]),
+    ForeignCall {
+        foreign_symbol: ForeignSymbol,
+        arguments: &'a [Symbol],
+        ret_layout: Layout<'a>,
+    },
 
     Tag {
         tag_layout: Layout<'a>,
@@ -944,11 +948,15 @@ impl<'a> Expr<'a> {
                     .text(format!("lowlevel {:?} ", lowlevel))
                     .append(alloc.intersperse(it, " "))
             }
-            ForeignCall(symbol, args) => {
-                let it = args.iter().map(|s| symbol_to_doc(alloc, *s));
+            ForeignCall {
+                foreign_symbol,
+                arguments,
+                ..
+            } => {
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
                 alloc
-                    .text(format!("foreign {:?} ", symbol.as_str()))
+                    .text(format!("foreign {:?} ", foreign_symbol.as_str()))
                     .append(alloc.intersperse(it, " "))
             }
             Tag {
@@ -3191,7 +3199,11 @@ pub fn with_hole<'a>(
 
             let result = Stmt::Let(
                 assigned,
-                Expr::ForeignCall(foreign_symbol.clone(), arg_symbols),
+                Expr::ForeignCall {
+                    foreign_symbol: foreign_symbol.clone(),
+                    arguments: arg_symbols,
+                    ret_layout: layout.clone(),
+                },
                 layout,
                 hole,
             );
@@ -4035,10 +4047,14 @@ fn substitute_in_expr<'a>(
                 None
             }
         }
-        ForeignCall(symbol, args) => {
+        ForeignCall {
+            foreign_symbol,
+            arguments,
+            ret_layout,
+        } => {
             let mut did_change = false;
             let new_args = Vec::from_iter_in(
-                args.iter().map(|s| match substitute(subs, *s) {
+                arguments.iter().map(|s| match substitute(subs, *s) {
                     None => *s,
                     Some(s) => {
                         did_change = true;
@@ -4051,7 +4067,11 @@ fn substitute_in_expr<'a>(
             if did_change {
                 let args = new_args.into_bump_slice();
 
-                Some(ForeignCall(symbol.clone(), args))
+                Some(ForeignCall {
+                    foreign_symbol: foreign_symbol.clone(),
+                    arguments: args,
+                    ret_layout: ret_layout.clone(),
+                })
             } else {
                 None
             }

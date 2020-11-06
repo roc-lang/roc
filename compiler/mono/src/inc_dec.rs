@@ -125,8 +125,8 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
         RunLowLevel(_, args) => {
             result.extend(args.iter());
         }
-        ForeignCall(_, args) => {
-            result.extend(args.iter());
+        ForeignCall { arguments, .. } => {
+            result.extend(arguments.iter());
         }
 
         EmptyArray | RuntimeErrorFunction(_) | Literal(_) => {}
@@ -466,9 +466,9 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            ForeignCall(_, args) => {
-                let ps = crate::borrow::foreign_borrow_signature(self.arena, args.len());
-                let b = self.add_dec_after_lowlevel(args, ps, b, b_live_vars);
+            ForeignCall { arguments, .. } => {
+                let ps = crate::borrow::foreign_borrow_signature(self.arena, arguments.len());
+                let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
 
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
