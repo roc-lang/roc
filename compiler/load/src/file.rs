@@ -2476,15 +2476,6 @@ fn fabricate_effects_module<'a>(
     header: PlatformHeader<'a>,
     module_timing: ModuleTiming,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem> {
-    //    pub name: Loc<PackageName<'a>>,
-    //    pub provides: Vec<'a, Loc<ExposesEntry<'a>>>,
-    //    pub requires: Vec<'a, Loc<ExposesEntry<'a>>>,
-    //    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
-    //    pub effects: Vec<'a, Loc<EffectsEntry<'a>>>,
-
-    //    exposed_symbols: MutSet<Symbol>,
-    //    aliases: MutMap<Symbol, Alias>,
-
     let num_exposes = header.provides.len() + 1;
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
@@ -2667,16 +2658,6 @@ fn fabricate_effects_module<'a>(
         references: MutSet::default(),
     };
 
-    // Add builtin defs (e.g. List.get) to the module's defs
-    //    let builtin_defs = roc_can::builtins::builtin_defs(&mut var_store);
-    //    let references = &module_output.references;
-    //
-    //    for (symbol, def) in builtin_defs {
-    //        if references.contains(&symbol) {
-    //            module_output.declarations.push(Declaration::Builtin(def));
-    //        }
-    //    }
-
     let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
 
     let module = Module {
@@ -2690,6 +2671,7 @@ fn fabricate_effects_module<'a>(
 
     let imported_modules = MutSet::default();
 
+    // Should a effect module ever have a ModuleDocumentation?
     let module_docs = ModuleDocumentation {
         name: String::from("Effect"),
         docs: String::from("idk fix this later"),
@@ -2715,19 +2697,6 @@ fn fabricate_effects_module<'a>(
         },
     ))
 }
-
-// #[derive(Debug)]
-// pub struct ModuleOutput {
-//     pub aliases: MutMap<Symbol, Alias>,
-//     pub rigid_variables: MutMap<Variable, Lowercase>,
-//     pub declarations: Vec<Declaration>,
-//     pub exposed_imports: MutMap<Symbol, Variable>,
-//     pub lookups: Vec<(Symbol, Variable, Region)>,
-//     pub problems: Vec<Problem>,
-//     pub ident_ids: IdentIds,
-//     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
-//     pub references: MutSet<Symbol>,
-// }
 
 fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
