@@ -3194,7 +3194,7 @@ pub fn with_hole<'a>(
             let result = Stmt::Let(
                 assigned,
                 Expr::ForeignCall {
-                    foreign_symbol: foreign_symbol.clone(),
+                    foreign_symbol,
                     arguments: arg_symbols,
                     ret_layout: layout.clone(),
                 },

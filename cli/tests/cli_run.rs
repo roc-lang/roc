@@ -162,16 +162,16 @@ mod cli_run {
         );
     }
 
-    #[test]
-    #[serial(effect)]
-    fn run_effect_unoptimized() {
-        check_output(
-            &example_file("effect", "Main.roc"),
-            &[],
-            "I am Dep2.str2\n",
-            true,
-        );
-    }
+//    #[test]
+//    #[serial(effect)]
+//    fn run_effect_unoptimized() {
+//        check_output(
+//            &example_file("effect", "Main.roc"),
+//            &[],
+//            "I am Dep2.str2\n",
+//            true,
+//        );
+//    }
 
     #[test]
     #[serial(multi_dep_str)]

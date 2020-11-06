@@ -38,6 +38,22 @@ impl Hash for SolvedType {
     }
 }
 
+impl PartialEq for SolvedType {
+    fn eq(&self, other: &Self) -> bool {
+        use std::collections::hash_map::DefaultHasher;
+
+        let mut state = DefaultHasher::new();
+        hash_solved_type_help(self, &mut Vec::new(), &mut state);
+        let hash1 = state.finish();
+
+        let mut state = DefaultHasher::new();
+        hash_solved_type_help(other, &mut Vec::new(), &mut state);
+        let hash2 = state.finish();
+
+        hash1 == hash2
+    }
+}
+
 fn hash_solved_type_help<H: Hasher>(
     solved_type: &SolvedType,
     flex_vars: &mut Vec<VarId>,
@@ -139,7 +155,7 @@ fn var_id_hash_help<H: Hasher>(var_id: VarId, flex_vars: &mut Vec<VarId>, state:
 }
 
 /// This is a fully solved type, with no Variables remaining in it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Eq)]
 pub enum SolvedType {
     /// A function. The types of its arguments, then the type of its return value.
     Func(Vec<SolvedType>, Box<SolvedType>, Box<SolvedType>),

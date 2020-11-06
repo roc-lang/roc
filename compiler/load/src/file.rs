@@ -2245,8 +2245,7 @@ fn fabricate_effect_after<'a>(
         };
 
         let effect_b = {
-            let actual =
-                build_effect_actual(effect_tag_name.clone(), Type::Variable(var_b), var_store);
+            let actual = build_effect_actual(effect_tag_name, Type::Variable(var_b), var_store);
 
             Type::Alias(
                 effect_symbol,
@@ -2293,7 +2292,7 @@ fn fabricate_effect_after<'a>(
     (after_symbol, def)
 }
 
-fn fabricate_host_exposed_def<'a>(
+fn fabricate_host_exposed_def(
     env: &mut roc_can::env::Env,
     scope: &mut roc_can::scope::Scope,
     symbol: Symbol,
@@ -2354,7 +2353,7 @@ fn fabricate_host_exposed_def<'a>(
     let effect_closure_symbol = {
         let name = format!("effect_closure_{}", ident);
 
-        let ident = name.clone().into();
+        let ident = name.into();
         scope
             .introduce(
                 ident,
@@ -2554,17 +2553,14 @@ fn fabricate_effects_module<'a>(
     let mut scope = roc_can::scope::Scope::new(module_id, &mut var_store);
     let mut can_env = roc_can::env::Env::new(module_id, dep_idents, &module_ids, exposed_ident_ids);
 
-    let effect_symbol = {
-        let ident = name.clone().into();
-        scope
-            .introduce(
-                ident,
-                &can_env.exposed_ident_ids,
-                &mut can_env.ident_ids,
-                Region::zero(),
-            )
-            .unwrap()
-    };
+    let effect_symbol = scope
+        .introduce(
+            name.into(),
+            &can_env.exposed_ident_ids,
+            &mut can_env.ident_ids,
+            Region::zero(),
+        )
+        .unwrap();
 
     let effect_tag_name = TagName::Private(effect_symbol);
 
