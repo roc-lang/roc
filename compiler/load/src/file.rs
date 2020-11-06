@@ -2671,7 +2671,6 @@ fn fabricate_effects_module<'a>(
     //    }
 
     let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
-    dbg!(&module_output.aliases);
 
     let module = Module {
         module_id,
@@ -3036,8 +3035,6 @@ fn add_def_to_module<'a>(
                 } => {
                     // this is a top-level definition, it should not capture anything
                     debug_assert!(captured_symbols.is_empty());
-
-                    dbg!(symbol, &loc_body.value);
 
                     // If this is an exposed symbol, we need to
                     // register it as such. Otherwise, since it

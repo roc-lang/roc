@@ -419,7 +419,6 @@ impl<'a> Procs<'a> {
 
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
-                dbg!(symbol, &pattern_symbols, &body);
                 // an anonymous closure. These will always be specialized already
                 // by the surrounding context, so we can add pending specializations
                 // for them immediately.
@@ -588,7 +587,6 @@ impl<'a> Procs<'a> {
                 self.specialized
                     .insert((symbol, layout.clone()), InProgress);
 
-                dbg!(symbol, &pending);
                 match specialize(env, self, symbol, layout_cache, pending, partial_proc) {
                     Ok((proc, _ignore_layout)) => {
                         // the `layout` is a function pointer, while `_ignore_layout` can be a
@@ -615,7 +613,6 @@ fn add_pending<'a>(
     layout: Layout<'a>,
     pending: PendingSpecialization,
 ) {
-    // dbg!(symbol, &layout, &pending);
     let all_pending = pending_specializations
         .entry(symbol)
         .or_insert_with(|| HashMap::with_capacity_and_hasher(1, default_hasher()));
@@ -1339,7 +1336,6 @@ pub fn specialize_all<'a>(
     mut procs: Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
-    dbg!(&procs.externals_others_need);
     let it = procs.externals_others_need.specs.clone();
     let it = it
         .into_iter()
@@ -1408,7 +1404,6 @@ pub fn specialize_all<'a>(
                 procs
                     .specialized
                     .insert((name, outside_layout.clone()), InProgress);
-                dbg!(name);
                 match specialize(
                     env,
                     &mut procs,
@@ -1456,8 +1451,6 @@ fn specialize_external<'a>(
     host_exposed_variables: &[(Symbol, Variable)],
     partial_proc: PartialProc<'a>,
 ) -> Result<Proc<'a>, LayoutProblem> {
-    println!("------- SPECIALIZE EXTERNAL {:?}", proc_name);
-
     let PartialProc {
         annotation,
         pattern_symbols,
@@ -1465,8 +1458,6 @@ fn specialize_external<'a>(
         body,
         is_self_recursive,
     } = partial_proc;
-
-    dbg!(&body);
 
     // unify the called function with the specialized signature, then specialize the function body
     let snapshot = env.subs.snapshot();
@@ -1560,8 +1551,6 @@ fn specialize_external<'a>(
                 Some(closure_layout) => Some(closure_layout.as_named_layout(proc_name)),
                 None => None,
             };
-
-            println!("Done for {:?}\n\n", proc_name);
 
             let proc = Proc {
                 name: proc_name,
