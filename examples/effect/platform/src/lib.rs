@@ -7,6 +7,9 @@ extern "C" {
     #[link_name = "main_1_exposed"]
     fn roc_main(output: *mut u8) -> ();
 
+    #[link_name = "main_1_size"]
+    fn roc_main_size() -> i64;
+
     #[link_name = "main_1_Fx_caller"]
     fn call_Fx(function_pointer: *const u8, closure_data: *const u8, output: *mut u8) -> ();
 
@@ -17,14 +20,13 @@ extern "C" {
 #[no_mangle]
 pub fn roc_fx_put_char(foo: i64) -> () {
     let character = foo as u8 as char;
-    println!("HELLO WORLD");
     println!("{}", character);
 
     ()
 }
 
 unsafe fn call_the_closure(function_pointer: *const u8, closure_data_ptr: *const u8) -> i64 {
-    let size = 32; //size_MyClosure() as usize;
+    let size = size_Fx() as usize;
 
     alloca::with_stack_bytes(size, |buffer| {
         let buffer: *mut std::ffi::c_void = buffer;
@@ -50,7 +52,7 @@ pub fn rust_main() -> isize {
     println!("Running Roc closure");
     let start_time = SystemTime::now();
 
-    let size = 32; // unsafe { closure_size() } as usize;
+    let size = unsafe { roc_main_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
     let answer = unsafe {
         let buffer = std::alloc::alloc(layout);
