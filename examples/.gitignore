@@ -1,4 +1,5 @@
 app
 host.o
 c_host.o
+roc_app.o
 app.dSYM
