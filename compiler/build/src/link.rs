@@ -47,8 +47,10 @@ pub fn rebuild_host(host_input_path: &Path) {
     let host_dest = host_input_path.with_file_name("host.o");
 
     // Compile host.c
+    let env_path = std::env::var("PATH").unwrap_or("".to_string());
     let output = Command::new("clang")
         .env_clear()
+        .env("PATH", &env_path)
         .args(&[
             "-c",
             c_host_src.to_str().unwrap(),
@@ -75,6 +77,7 @@ pub fn rebuild_host(host_input_path: &Path) {
 
         let output = Command::new("ld")
             .env_clear()
+            .env("PATH", &env_path)
             .args(&[
                 "-r",
                 "-L",
@@ -103,6 +106,7 @@ pub fn rebuild_host(host_input_path: &Path) {
 
         let output = Command::new("ld")
             .env_clear()
+            .env("PATH", &env_path)
             .args(&[
                 "-r",
                 c_host_dest.to_str().unwrap(),
@@ -118,6 +122,7 @@ pub fn rebuild_host(host_input_path: &Path) {
         // Clean up rust_host.o
         let output = Command::new("rm")
             .env_clear()
+            .env("PATH", &env_path)
             .args(&[
                 "-f",
                 rust_host_dest.to_str().unwrap(),
@@ -131,6 +136,7 @@ pub fn rebuild_host(host_input_path: &Path) {
         // Clean up rust_host.o
         let output = Command::new("mv")
             .env_clear()
+            .env("PATH", &env_path)
             .args(&[c_host_dest, host_dest])
             .output()
             .unwrap();
@@ -196,10 +202,12 @@ fn link_linux(
 
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
+    let env_path = std::env::var("PATH").unwrap_or("".to_string());
     Ok((
         Command::new("ld")
             // Don't allow LD_ env vars to affect this
             .env_clear()
+            .env("PATH", &env_path)
             .args(&[
                 "-arch",
                 arch_str(target),
@@ -248,12 +256,14 @@ fn link_macos(
         }
     };
 
+    let env_path = std::env::var("PATH").unwrap_or("".to_string());
     Ok((
         // NOTE: order of arguments to `ld` matters here!
         // The `-l` flags should go after the `.o` arguments
         Command::new("ld")
             // Don't allow LD_ env vars to affect this
             .env_clear()
+            .env("PATH", &env_path)
             .args(&[
                 link_type_arg,
                 "-arch",
