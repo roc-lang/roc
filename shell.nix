@@ -29,18 +29,25 @@ let
       [ ];
   llvm = pkgs.llvm_10;
   lld = pkgs.lld_10; # this should match llvm's version
+  clang = pkgs.clang_10; # this should match llvm's version
   zig = import ./nix/zig.nix { inherit pkgs isMacOS; };
   inputs =
     [
       # build libraries
-      pkgs.rustup
+      pkgs.rustc
       pkgs.cargo
+      pkgs.cmake
+      pkgs.git
+      pkgs.python3
       llvm
+      clang
       pkgs.valgrind
+      pkgs.pkg-config
       zig
       # llb deps
       pkgs.libffi
       pkgs.libxml2
+      pkgs.xorg.libX11
       pkgs.zlib
       # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
       lld

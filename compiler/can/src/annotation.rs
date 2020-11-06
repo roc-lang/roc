@@ -1,6 +1,6 @@
 use crate::env::Env;
 use crate::scope::Scope;
-use roc_collections::all::{ImMap, MutSet, SendMap};
+use roc_collections::all::{ImMap, MutMap, MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{AssignedField, Tag, TypeAnnotation};
@@ -31,6 +31,7 @@ pub struct IntroducedVariables {
     pub wildcards: Vec<Variable>,
     pub var_by_name: SendMap<Lowercase, Variable>,
     pub name_by_var: SendMap<Variable, Lowercase>,
+    pub host_exposed_aliases: MutMap<Symbol, Variable>,
 }
 
 impl IntroducedVariables {
@@ -43,10 +44,16 @@ impl IntroducedVariables {
         self.wildcards.push(var);
     }
 
+    pub fn insert_host_exposed_alias(&mut self, symbol: Symbol, var: Variable) {
+        self.host_exposed_aliases.insert(symbol, var);
+    }
+
     pub fn union(&mut self, other: &Self) {
         self.wildcards.extend(other.wildcards.iter().cloned());
         self.var_by_name.extend(other.var_by_name.clone());
         self.name_by_var.extend(other.name_by_var.clone());
+        self.host_exposed_aliases
+            .extend(other.host_exposed_aliases.clone());
     }
 
     pub fn var_by_name(&self, name: &Lowercase) -> Option<&Variable> {
@@ -220,7 +227,15 @@ fn can_annotation_help(
                     // instantiate variables
                     actual.substitute(&substitutions);
 
-                    Type::Alias(symbol, vars, Box::new(actual))
+                    // Type::Alias(symbol, vars, Box::new(actual))
+                    let actual_var = var_store.fresh();
+                    introduced_variables.insert_host_exposed_alias(symbol, actual_var);
+                    Type::HostExposedAlias {
+                        name: symbol,
+                        arguments: vars,
+                        actual: Box::new(actual),
+                        actual_var,
+                    }
                 }
                 None => {
                     let mut args = Vec::new();
@@ -352,7 +367,16 @@ fn can_annotation_help(
                 let alias = scope.lookup_alias(symbol).unwrap();
                 local_aliases.insert(symbol, alias.clone());
 
-                Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
+                // Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
+
+                let actual_var = var_store.fresh();
+                introduced_variables.insert_host_exposed_alias(symbol, actual_var);
+                Type::HostExposedAlias {
+                    name: symbol,
+                    arguments: vars,
+                    actual: Box::new(alias.typ.clone()),
+                    actual_var,
+                }
             }
             _ => {
                 // This is a syntactically invalid type alias.

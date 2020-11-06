@@ -1,13 +1,13 @@
 # Building the Roc compiler from source
 
 
-## Installing LLVM, Python 2.7, Zig, valgrind, libunwind, and libc++-dev
+## Installing LLVM, Python, Zig, valgrind, libunwind, and libc++-dev
 
 To build the compiler, you need these installed:
 
 * `libunwind` (macOS should already have this one installed)
 * `libc++-dev`
-* Python 2.7
+* Python 2.7 (Windows only), `python-is-python3` (Ubuntu)
 * a particular version of Zig (see below)
 * a particular version of LLVM (see below)
 
@@ -34,7 +34,7 @@ We use a specific version of Zig, a build off the the commit `0088efc4b`. The la
   tar xvf zig-linux-x86_64-0.6.0+0088efc4b.tar
   # move the files into /opt:
   sudo mkdir -p /opt/zig
-  sudo mv tar xvf zig-linux-x86_64-0.6.0+0088efc4b.tar/* /opt/zig/
+  sudo mv zig-linux-x86_64-0.6.0+0088efc4b/* /opt/zig/
   ```
   Then add `/opt/zig/` to your `PATH` (e.g. in `~/.bashrc`).
   

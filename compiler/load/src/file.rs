@@ -13,7 +13,7 @@ use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
 use roc_constrain::module::{constrain_module, ExposedModuleTypes, SubsByModule};
-use roc_module::ident::{Ident, ModuleName};
+use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
@@ -471,6 +471,12 @@ pub struct MonomorphizedModule<'a> {
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
+}
+
+#[derive(Debug, Default)]
+pub struct VariablySizedLayouts<'a> {
+    rigids: MutMap<Lowercase, Layout<'a>>,
+    aliases: MutMap<Symbol, Layout<'a>>,
 }
 
 #[derive(Debug)]
@@ -1556,7 +1562,6 @@ fn finish_specialization<'a>(
         subs,
         interns,
         procedures,
-        // src: src.into(),
         sources,
         timings: state.timings,
     }
@@ -2355,7 +2360,13 @@ fn add_def_to_module<'a>(
                             }
                         };
 
-                        procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
+                        procs.insert_exposed(
+                            symbol,
+                            layout,
+                            mono_env.subs,
+                            def.annotation,
+                            annotation,
+                        );
                     }
 
                     procs.insert_named(
@@ -2381,7 +2392,13 @@ fn add_def_to_module<'a>(
                                         todo!("TODO gracefully handle the situation where we expose a function to the host which doesn't have a valid layout (e.g. maybe the function wasn't monomorphic): {:?}", err)
                                     );
 
-                        procs.insert_exposed(symbol, layout, mono_env.subs, annotation);
+                        procs.insert_exposed(
+                            symbol,
+                            layout,
+                            mono_env.subs,
+                            def.annotation,
+                            annotation,
+                        );
                     }
 
                     let proc = PartialProc {
