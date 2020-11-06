@@ -2111,7 +2111,6 @@ fn run_solve<'a>(
 fn fabricate_effect_after<'a>(
     env: &mut roc_can::env::Env,
     scope: &mut roc_can::scope::Scope,
-    module_id: ModuleId,
     effect_symbol: Symbol,
     effect_tag_name: TagName,
     var_store: &mut VarStore,
@@ -2286,7 +2285,6 @@ fn fabricate_effect_after<'a>(
 fn fabricate_host_exposed_def<'a>(
     env: &mut roc_can::env::Env,
     scope: &mut roc_can::scope::Scope,
-    module_id: ModuleId,
     symbol: Symbol,
     ident: &str,
     effect_tag_name: TagName,
@@ -2554,9 +2552,6 @@ fn fabricate_effects_module<'a>(
     let mut scope = roc_can::scope::Scope::new(module_id, &mut var_store);
     let mut can_env = roc_can::env::Env::new(module_id, dep_idents, &module_ids, exposed_ident_ids);
 
-    let mut ident_ids_by_module = (*ident_ids_by_module).lock();
-    let ident_ids: &mut IdentIds = ident_ids_by_module.get_mut(&module_id).unwrap();
-
     let effect_symbol = {
         let ident = name.clone().into();
         scope
@@ -2622,7 +2617,6 @@ fn fabricate_effects_module<'a>(
                 let def = fabricate_host_exposed_def(
                     &mut can_env,
                     &mut scope,
-                    module_id,
                     symbol,
                     ident.value,
                     TagName::Private(effect_symbol),
@@ -2639,7 +2633,6 @@ fn fabricate_effects_module<'a>(
         let (effect_after_symbol, def) = fabricate_effect_after(
             &mut can_env,
             &mut scope,
-            module_id,
             effect_symbol,
             effect_tag_name,
             &mut var_store,

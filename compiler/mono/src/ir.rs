@@ -1764,7 +1764,8 @@ fn build_specialized_proc<'a>(
             debug_assert_eq!(
                 pattern_layouts_len + 1,
                 pattern_symbols.len(),
-                "Tried to zip two vecs with different lengths!"
+                "Tried to zip two vecs with different lengths in {:?}!",
+                proc_name,
             );
 
             let proc_args = proc_args.into_bump_slice();
@@ -3211,7 +3212,6 @@ pub fn with_hole<'a>(
                 hole,
             );
 
-            let (var, _) = args[0];
             let iter = args
                 .into_iter()
                 .rev()
