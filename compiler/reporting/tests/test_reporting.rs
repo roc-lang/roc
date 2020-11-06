@@ -3828,8 +3828,8 @@ mod test_reporting {
 
                 1│  { x: 5, y ? 42 }
                             ^^^^^^
-
-                You can only use optinal values in record destructuring, for example
+                            
+                You can only use optional values in record destructuring, for example
                 in affectation:
 
                     { answer ? 42, otherField } = myRecord
