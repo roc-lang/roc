@@ -241,7 +241,7 @@ fn markdown_to_html(markdown: String) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+mod test_docs {
     use super::*;
 
     #[test]
@@ -259,18 +259,15 @@ mod tests {
             modules: files_docs,
         };
 
-        let expected_entries = vec![ModuleEntry {
+        let expected_entries = vec![
+            ModuleEntry {
                 name: "singleline".to_string(),
                 docs: "<p>Single line documentation.</p>\n".to_string(),
-            }, ModuleEntry {
+            },
+            ModuleEntry {
                 name: "multiline".to_string(),
-                docs: "<p>Multiline documentation.\nWithout any complex syntax yet!</p>\n".to_string(),
-            }, ModuleEntry {
-                name: "multiparagraph".to_string(),
-                docs: "<p>Multiparagraph documentation.</p>\n<p>Without any complex syntax yet!</p>\n".to_string(),
-            }, ModuleEntry {
-                name: "codeblock".to_string(),
-                docs: "<p>Turns &gt;&gt;&gt; into code block for now.</p>\n<pre><code class=\"language-roc\">codeblock</code></pre>\n".to_string(),
+                docs: "<p>Multiline documentation.\nWithout any complex syntax yet!</p>\n"
+                    .to_string(),
             },
         ];
 
